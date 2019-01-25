@@ -6,6 +6,8 @@
 
 * Added Clone impl for Either service
 
+* Added Clone impl for Timeout service factory
+
 * Added Service and NewService for Stream dispatcher
 
 

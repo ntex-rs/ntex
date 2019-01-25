@@ -43,6 +43,18 @@ impl<T> Timeout<T> {
     }
 }
 
+impl<T> Clone for Timeout<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        Timeout {
+            inner: self.inner.clone(),
+            timeout: self.timeout,
+        }
+    }
+}
+
 impl<T, Request> NewService<Request> for Timeout<T>
 where
     T: NewService<Request> + Clone,
