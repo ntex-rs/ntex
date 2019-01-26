@@ -1,6 +1,5 @@
-use std::time::{Duration, Instant};
+use std::time::{self, Duration, Instant};
 
-use actix_rt::spawn;
 use actix_service::{NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
@@ -66,22 +65,24 @@ impl LowResTimeService {
     /// Get current time. This function has to be called from
     /// future's poll method, otherwise it panics.
     pub fn now(&self) -> Instant {
-        let cur = self.0.borrow().current;
+        let cur = self.0.get_ref().current;
         if let Some(cur) = cur {
             cur
         } else {
             let now = Instant::now();
-            let inner = self.0.clone();
+            let mut inner = self.0.clone();
             let interval = {
-                let mut b = inner.borrow_mut();
+                let mut b = inner.get_mut();
                 b.current = Some(now);
                 b.resolution
             };
 
-            spawn(sleep(interval).map_err(|_| panic!()).and_then(move |_| {
-                inner.borrow_mut().current.take();
-                Ok(())
-            }));
+            tokio_current_thread::spawn(sleep(interval).map_err(|_| panic!()).and_then(
+                move |_| {
+                    inner.get_mut().current.take();
+                    Ok(())
+                },
+            ));
             now
         }
     }
@@ -98,5 +99,57 @@ impl Service<()> for LowResTimeService {
 
     fn call(&mut self, _: ()) -> Self::Future {
         ok(self.now())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SystemTime(Cell<SystemTimeInner>);
+
+#[derive(Debug)]
+struct SystemTimeInner {
+    resolution: Duration,
+    current: Option<time::SystemTime>,
+}
+
+impl SystemTimeInner {
+    fn new(resolution: Duration) -> Self {
+        SystemTimeInner {
+            resolution,
+            current: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SystemTimeService(Cell<SystemTimeInner>);
+
+impl SystemTimeService {
+    pub fn with(resolution: Duration) -> SystemTimeService {
+        SystemTimeService(Cell::new(SystemTimeInner::new(resolution)))
+    }
+
+    /// Get current time. This function has to be called from
+    /// future's poll method, otherwise it panics.
+    pub fn now(&self) -> time::SystemTime {
+        let cur = self.0.get_ref().current.clone();
+        if let Some(cur) = cur {
+            cur
+        } else {
+            let now = time::SystemTime::now();
+            let mut inner = self.0.clone();
+            let interval = {
+                let mut b = inner.get_mut();
+                b.current = Some(now);
+                b.resolution
+            };
+
+            tokio_current_thread::spawn(sleep(interval).map_err(|_| panic!()).and_then(
+                move |_| {
+                    inner.get_mut().current.take();
+                    Ok(())
+                },
+            ));
+            now
+        }
     }
 }
