@@ -25,3 +25,6 @@ futures = "0.1"
 tokio-timer = "0.2.8"
 tokio-current-thread = "0.1"
 log = "0.4"
+
+[dev-dependencies]
+actix-rt = "0.1"
