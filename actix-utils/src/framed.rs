@@ -3,7 +3,6 @@ use std::marker::PhantomData;
 use std::mem;
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
-use actix_rt::Arbiter;
 use actix_service::{IntoNewService, IntoService, NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::unsync::mpsc;
@@ -251,7 +250,7 @@ where
             Ok(Async::Ready(_)) => {
                 if let Some(item) = self.request.take() {
                     let sender = self.write_tx.clone();
-                    Arbiter::spawn(
+                    tokio_current_thread::spawn(
                         self.service
                             .call(item)
                             .then(|item| sender.send(item).map(|_| ()).map_err(|_| ())),
@@ -276,7 +275,7 @@ where
                     match self.service.poll_ready() {
                         Ok(Async::Ready(_)) => {
                             let sender = self.write_tx.clone();
-                            Arbiter::spawn(
+                            tokio_current_thread::spawn(
                                 self.service
                                     .call(item)
                                     .then(|item| sender.send(item).map(|_| ()).map_err(|_| ())),

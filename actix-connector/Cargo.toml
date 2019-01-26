@@ -1,6 +1,6 @@
 [package]
 name = "actix-connector"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix Connector - tcp connector service"
 keywords = ["network", "framework", "async", "futures"]
@@ -27,13 +27,12 @@ default = []
 ssl = ["openssl", "tokio-openssl"]
 
 [dependencies]
-actix-service = "0.1.1"
+actix-service = "0.1.6"
 actix-codec = "0.1.0"
-actix-rt = "0.1.0"
 futures = "0.1"
 tokio-tcp = "0.1"
-trust-dns-proto = "0.6.2"
-trust-dns-resolver = "0.10.2"
+tokio-current-thread = "0.1"
+trust-dns-resolver = { version="0.11.0-alpha.1", default-features = false }
 
 # openssl
 openssl = { version="0.10", optional = true }

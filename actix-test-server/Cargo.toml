@@ -51,7 +51,7 @@ native-tls = { version="0.2", optional = true }
 openssl = { version="0.10", optional = true }
 
 #rustls
-rustls = { version = "^0.14", optional = true }
-tokio-rustls = { version = "^0.8", optional = true }
-webpki = { version = "0.18", optional = true }
-webpki-roots = { version = "0.15", optional = true }
+rustls = { version = "^0.15", optional = true }
+tokio-rustls = { version = "^0.9", optional = true }
+webpki = { version = "0.19", optional = true }
+webpki-roots = { version = "0.16", optional = true }

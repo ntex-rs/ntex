@@ -1,5 +1,12 @@
 # Changes
 
+## [0.1.4] - 2018-12-xx
+
+## Changes
+
+* Updated rustls dependency
+
+
 ## [0.1.3] - 2018-12-21
 
 ## Fixed

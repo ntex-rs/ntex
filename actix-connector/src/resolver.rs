@@ -42,7 +42,7 @@ impl<T: RequestHost> Resolver<T> {
     /// Create new resolver instance with custom configuration and options.
     pub fn new(cfg: ResolverConfig, opts: ResolverOpts) -> Self {
         let (resolver, bg) = AsyncResolver::new(cfg, opts);
-        actix_rt::Arbiter::spawn(bg);
+        tokio_current_thread::spawn(bg);
         Resolver {
             resolver,
             req: PhantomData,

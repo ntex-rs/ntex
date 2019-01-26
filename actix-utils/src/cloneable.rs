@@ -42,10 +42,10 @@ where
     type Future = T::Future;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.service.borrow_mut().poll_ready()
+        self.service.get_mut().poll_ready()
     }
 
     fn call(&mut self, req: Request) -> Self::Future {
-        self.service.borrow_mut().call(req)
+        self.service.get_mut().call(req)
     }
 }

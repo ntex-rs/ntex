@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use actix_rt::spawn;
 use actix_service::{IntoNewService, IntoService, NewService, Service};
 use futures::future::{ok, Future, FutureResult};
 use futures::unsync::mpsc;
@@ -162,11 +161,13 @@ where
         loop {
             match self.service.poll_ready()? {
                 Async::Ready(_) => match self.stream.poll() {
-                    Ok(Async::Ready(Some(item))) => spawn(StreamDispatcherService {
-                        fut: self.service.call(Ok(item)),
-                        stop: self.err_tx.clone(),
-                    }),
-                    Err(err) => spawn(StreamDispatcherService {
+                    Ok(Async::Ready(Some(item))) => {
+                        tokio_current_thread::spawn(StreamDispatcherService {
+                            fut: self.service.call(Ok(item)),
+                            stop: self.err_tx.clone(),
+                        })
+                    }
+                    Err(err) => tokio_current_thread::spawn(StreamDispatcherService {
                         fut: self.service.call(Err(err)),
                         stop: self.err_tx.clone(),
                     }),
