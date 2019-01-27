@@ -23,9 +23,11 @@ pub struct FramedNewService<S, T, U> {
 impl<S, T, U> FramedNewService<S, T, U>
 where
     S: NewService<Request<U>, Response = Response<U>>,
-    S::Service: 'static,
-    T: AsyncRead + AsyncWrite + 'static,
-    U: Decoder + Encoder + 'static,
+    S::Error: 'static,
+    <S::Service as Service<Request<U>>>::Future: 'static,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
+    <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
     pub fn new<F1: IntoNewService<S, Request<U>>>(factory: F1) -> Self {
@@ -51,9 +53,11 @@ where
 impl<S, T, U> NewService<Framed<T, U>> for FramedNewService<S, T, U>
 where
     S: NewService<Request<U>, Response = Response<U>> + Clone,
-    S::Service: 'static,
-    T: AsyncRead + AsyncWrite + 'static,
-    U: Decoder + Encoder + 'static,
+    S::Error: 'static,
+    <S::Service as Service<Request<U>>>::Future: 'static,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
+    <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
     type Response = FramedTransport<S::Service, T, U>;
@@ -90,9 +94,11 @@ where
 impl<S, T, U> Service<Framed<T, U>> for FramedService<S, T, U>
 where
     S: NewService<Request<U>, Response = Response<U>>,
-    S::Service: 'static,
-    T: AsyncRead + AsyncWrite + 'static,
-    U: Decoder + Encoder + 'static,
+    S::Error: 'static,
+    <S::Service as Service<Request<U>>>::Future: 'static,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
+    <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
     type Response = FramedTransport<S::Service, T, U>;
@@ -116,9 +122,11 @@ where
 pub struct FramedServiceResponseFuture<S, T, U>
 where
     S: NewService<Request<U>, Response = Response<U>>,
-    S::Service: 'static,
-    T: AsyncRead + AsyncWrite + 'static,
-    U: Decoder + Encoder + 'static,
+    S::Error: 'static,
+    <S::Service as Service<Request<U>>>::Future: 'static,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
+    <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
     fut: S::Future,
@@ -128,9 +136,11 @@ where
 impl<S, T, U> Future for FramedServiceResponseFuture<S, T, U>
 where
     S: NewService<Request<U>, Response = Response<U>>,
-    S::Service: 'static,
-    T: AsyncRead + AsyncWrite + 'static,
-    U: Decoder + Encoder + 'static,
+    S::Error: 'static,
+    <S::Service as Service<Request<U>>>::Future: 'static,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
+    <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
     type Item = FramedTransport<S::Service, T, U>;
@@ -164,13 +174,18 @@ impl<E, U: Encoder + Decoder> From<E> for FramedTransportError<E, U> {
 /// and pass then to the service.
 pub struct FramedTransport<S, T, U>
 where
-    S: Service<Request<U>, Response = Response<U>> + 'static,
-    T: AsyncRead + AsyncWrite + 'static,
-    U: Encoder + Decoder + 'static,
+    S: Service<Request<U>, Response = Response<U>>,
+    S::Error: 'static,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite,
+    U: Encoder + Decoder,
+    <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
-    inner: Cell<FramedTransportInner<S, T, U>>,
-    inner2: Cell<FramedTransportInner<S, T, U>>,
+    service: S,
+    state: TransportState<S, U>,
+    framed: Framed<T, U>,
+    inner: Cell<FramedTransportInner<<U as Encoder>::Item, S::Error>>,
 }
 
 enum TransportState<S: Service<Request<U>>, U: Encoder + Decoder> {
@@ -180,28 +195,22 @@ enum TransportState<S: Service<Request<U>>, U: Encoder + Decoder> {
     Stopping,
 }
 
-struct FramedTransportInner<S, T, U>
-where
-    S: Service<Request<U>, Response = Response<U>> + 'static,
-    T: AsyncRead + AsyncWrite + 'static,
-    U: Encoder + Decoder + 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
-{
-    service: S,
-    state: TransportState<S, U>,
-    framed: Framed<T, U>,
-    buf: VecDeque<Result<Response<U>, S::Error>>,
+struct FramedTransportInner<I, E> {
+    buf: VecDeque<Result<I, E>>,
     task: AtomicTask,
 }
 
-impl<S, T, U> FramedTransportInner<S, T, U>
+impl<S, T, U> FramedTransport<S, T, U>
 where
-    S: Service<Request<U>, Response = Response<U>> + 'static,
-    T: AsyncRead + AsyncWrite + 'static,
-    U: Decoder + Encoder + 'static,
+    S: Service<Request<U>, Response = Response<U>>,
+    S::Error: 'static,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
+    <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
-    fn poll_service(&mut self, cell: &Cell<FramedTransportInner<S, T, U>>) -> bool {
+    fn poll_service(&mut self) -> bool {
         loop {
             match self.service.poll_ready() {
                 Ok(Async::Ready(_)) => loop {
@@ -219,8 +228,8 @@ where
                         }
                     };
 
-                    self.task.register();
-                    let mut cell = cell.clone();
+                    let mut cell = self.inner.clone();
+                    cell.get_mut().task.register();
                     tokio_current_thread::spawn(self.service.call(item).then(move |item| {
                         let inner = cell.get_mut();
                         inner.buf.push_back(item);
@@ -239,9 +248,10 @@ where
 
     /// write to sink
     fn poll_response(&mut self) -> bool {
+        let inner = self.inner.get_mut();
         loop {
             while !self.framed.is_write_buf_full() {
-                if let Some(msg) = self.buf.pop_front() {
+                if let Some(msg) = inner.buf.pop_front() {
                     match msg {
                         Ok(msg) => {
                             if let Err(err) = self.framed.force_send(msg) {
@@ -284,78 +294,79 @@ where
 
 impl<S, T, U> FramedTransport<S, T, U>
 where
-    S: Service<Request<U>, Response = Response<U>> + 'static,
-    T: AsyncRead + AsyncWrite + 'static,
-    U: Decoder + Encoder + 'static,
+    S: Service<Request<U>, Response = Response<U>>,
+    S::Error: 'static,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
+    <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
     pub fn new<F: IntoService<S, Request<U>>>(framed: Framed<T, U>, service: F) -> Self {
-        let inner = Cell::new(FramedTransportInner {
+        FramedTransport {
             framed,
             service: service.into_service(),
             state: TransportState::Processing,
-            buf: VecDeque::new(),
-            task: AtomicTask::new(),
-        });
-
-        FramedTransport {
-            inner2: inner.clone(),
-            inner,
+            inner: Cell::new(FramedTransportInner {
+                buf: VecDeque::new(),
+                task: AtomicTask::new(),
+            }),
         }
     }
 
     /// Get reference to a service wrapped by `FramedTransport` instance.
     pub fn get_ref(&self) -> &S {
-        &self.inner.get_ref().service
+        &self.service
     }
 
     /// Get mutable reference to a service wrapped by `FramedTransport`
     /// instance.
     pub fn get_mut(&mut self) -> &mut S {
-        &mut self.inner.get_mut().service
+        &mut self.service
     }
 
     /// Get reference to a framed instance wrapped by `FramedTransport`
     /// instance.
     pub fn get_framed(&self) -> &Framed<T, U> {
-        &self.inner.get_ref().framed
+        &self.framed
     }
 
     /// Get mutable reference to a framed instance wrapped by `FramedTransport`
     /// instance.
     pub fn get_framed_mut(&mut self) -> &mut Framed<T, U> {
-        &mut self.inner.get_mut().framed
+        &mut self.framed
     }
 }
 
 impl<S, T, U> Future for FramedTransport<S, T, U>
 where
-    S: Service<Request<U>, Response = Response<U>> + 'static,
-    T: AsyncRead + AsyncWrite + 'static,
-    U: Decoder + Encoder + 'static,
+    S: Service<Request<U>, Response = Response<U>>,
+    S::Error: 'static,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
+    <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
     type Item = ();
     type Error = FramedTransportError<S::Error, U>;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let inner = self.inner.get_mut();
-
-        match mem::replace(&mut inner.state, TransportState::Processing) {
+        match mem::replace(&mut self.state, TransportState::Processing) {
             TransportState::Processing => {
-                if inner.poll_service(&self.inner2) || inner.poll_response() {
+                if self.poll_service() || self.poll_response() {
                     self.poll()
                 } else {
                     Ok(Async::NotReady)
                 }
             }
             TransportState::Error(err) => {
-                if inner.framed.is_write_buf_empty()
-                    || (inner.poll_response() || inner.framed.is_write_buf_empty())
+                if self.framed.is_write_buf_empty()
+                    || (self.poll_response() || self.framed.is_write_buf_empty())
                 {
                     Err(err)
                 } else {
-                    inner.state = TransportState::Error(err);
+                    self.state = TransportState::Error(err);
                     Ok(Async::NotReady)
                 }
             }
