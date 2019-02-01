@@ -106,11 +106,12 @@ where
     type Future = InFlightServiceResponse<T, Request>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        let res = self.service.poll_ready();
-        if res.is_ok() && !self.count.available() {
+        let res = self.service.poll_ready()?;
+        if res.is_ready() && !self.count.available() {
+            log::trace!("InFlight limit exceeded");
             return Ok(Async::NotReady);
         }
-        res
+        Ok(res)
     }
 
     fn call(&mut self, req: Request) -> Self::Future {
