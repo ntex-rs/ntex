@@ -47,7 +47,7 @@ where
     type Future = FromErrFuture<A, E, Request>;
 
     fn poll_ready(&mut self) -> Poll<(), E> {
-        Ok(self.service.poll_ready().map_err(E::from)?)
+        self.service.poll_ready().map_err(E::from)
     }
 
     fn call(&mut self, req: Request) -> Self::Future {

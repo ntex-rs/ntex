@@ -210,7 +210,7 @@ where
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
-    fn poll_service(&mut self) -> bool {
+    fn poll_read(&mut self) -> bool {
         loop {
             match self.service.poll_ready() {
                 Ok(Async::Ready(_)) => loop {
@@ -246,8 +246,8 @@ where
         }
     }
 
-    /// write to sink
-    fn poll_response(&mut self) -> bool {
+    /// write to framed object
+    fn poll_write(&mut self) -> bool {
         let inner = self.inner.get_mut();
         loop {
             while !self.framed.is_write_buf_full() {
@@ -354,7 +354,7 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match mem::replace(&mut self.state, TransportState::Processing) {
             TransportState::Processing => {
-                if self.poll_service() || self.poll_response() {
+                if self.poll_read() || self.poll_write() {
                     self.poll()
                 } else {
                     Ok(Async::NotReady)
@@ -362,7 +362,7 @@ where
             }
             TransportState::Error(err) => {
                 if self.framed.is_write_buf_empty()
-                    || (self.poll_response() || self.framed.is_write_buf_empty())
+                    || (self.poll_write() || self.framed.is_write_buf_empty())
                 {
                     Err(err)
                 } else {
