@@ -1,6 +1,6 @@
 # Changes
 
-## [0.2.0] - 2019-01-xx
+## [0.2.0] - 2019-02-01
 
 ### Changes
 
@@ -8,7 +8,7 @@
 
 * Upgrade trust-dns-resolver
 
-* Use tokio-current-thread instead of diract actix-rt dipendency
+* Use tokio-current-thread instead of direct actix-rt dipendency
 
 
 ## [0.1.1] - 2019-01-13
