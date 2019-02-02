@@ -44,10 +44,11 @@ where
     }
 }
 
-impl<R, E, F> NewService<R> for KeepAlive<R, E, F>
+impl<R, E, F> NewService for KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
+    type Request = R;
     type Response = R;
     type Error = E;
     type InitError = Never;
@@ -89,10 +90,11 @@ where
     }
 }
 
-impl<R, E, F> Service<R> for KeepAliveService<R, E, F>
+impl<R, E, F> Service for KeepAliveService<R, E, F>
 where
     F: Fn() -> E,
 {
+    type Request = R;
     type Response = R;
     type Error = E;
     type Future = FutureResult<R, E>;

@@ -13,9 +13,9 @@ pub struct MapInitErr<A, F, E> {
 
 impl<A, F, E> MapInitErr<A, F, E> {
     /// Create new `MapInitErr` combinator
-    pub fn new<Request>(a: A, f: F) -> Self
+    pub fn new(a: A, f: F) -> Self
     where
-        A: NewService<Request>,
+        A: NewService,
         F: Fn(A::InitError) -> E,
     {
         Self {
@@ -40,35 +40,36 @@ where
     }
 }
 
-impl<A, F, E, Request> NewService<Request> for MapInitErr<A, F, E>
+impl<A, F, E> NewService for MapInitErr<A, F, E>
 where
-    A: NewService<Request>,
+    A: NewService,
     F: Fn(A::InitError) -> E + Clone,
 {
+    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
     type Service = A::Service;
 
     type InitError = E;
-    type Future = MapInitErrFuture<A, F, E, Request>;
+    type Future = MapInitErrFuture<A, F, E>;
 
     fn new_service(&self) -> Self::Future {
         MapInitErrFuture::new(self.a.new_service(), self.f.clone())
     }
 }
 
-pub struct MapInitErrFuture<A, F, E, Request>
+pub struct MapInitErrFuture<A, F, E>
 where
-    A: NewService<Request>,
+    A: NewService,
     F: Fn(A::InitError) -> E,
 {
     f: F,
     fut: A::Future,
 }
 
-impl<A, F, E, Request> MapInitErrFuture<A, F, E, Request>
+impl<A, F, E> MapInitErrFuture<A, F, E>
 where
-    A: NewService<Request>,
+    A: NewService,
     F: Fn(A::InitError) -> E,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -76,9 +77,9 @@ where
     }
 }
 
-impl<A, F, E, Request> Future for MapInitErrFuture<A, F, E, Request>
+impl<A, F, E> Future for MapInitErrFuture<A, F, E>
 where
-    A: NewService<Request>,
+    A: NewService,
     F: Fn(A::InitError) -> E,
 {
     type Item = A::Service;

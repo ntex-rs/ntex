@@ -1,5 +1,30 @@
 # Changes
 
+## [0.2.0] - 2019-02-01
+
+### Changed
+
+* Use associated type instead of generic for Service definition.
+
+  * Before:
+
+    ```rust
+    impl Service<Request> for Client {
+        type Response = Response;
+        // ...
+    }
+    ```
+  * After:
+
+    ```rust
+    impl Service for Client {
+        type Request = Request;
+        type Response = Response;
+        // ...
+    }
+    ```
+
+
 ## [0.1.6] - 2019-01-24
 
 ### Changed

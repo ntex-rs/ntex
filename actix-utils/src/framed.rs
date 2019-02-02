@@ -22,15 +22,15 @@ pub struct FramedNewService<S, T, U> {
 
 impl<S, T, U> FramedNewService<S, T, U>
 where
-    S: NewService<Request<U>, Response = Response<U>>,
+    S: NewService<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
-    <S::Service as Service<Request<U>>>::Future: 'static,
+    <S::Service as Service>::Future: 'static,
     T: AsyncRead + AsyncWrite,
     U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
-    pub fn new<F1: IntoNewService<S, Request<U>>>(factory: F1) -> Self {
+    pub fn new<F1: IntoNewService<S>>(factory: F1) -> Self {
         Self {
             factory: factory.into_new_service(),
             _t: PhantomData,
@@ -50,16 +50,17 @@ where
     }
 }
 
-impl<S, T, U> NewService<Framed<T, U>> for FramedNewService<S, T, U>
+impl<S, T, U> NewService for FramedNewService<S, T, U>
 where
-    S: NewService<Request<U>, Response = Response<U>> + Clone,
+    S: NewService<Request = Request<U>, Response = Response<U>> + Clone,
     S::Error: 'static,
-    <S::Service as Service<Request<U>>>::Future: 'static,
+    <S::Service as Service>::Future: 'static,
     T: AsyncRead + AsyncWrite,
     U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
+    type Request = Framed<T, U>;
     type Response = FramedTransport<S::Service, T, U>;
     type Error = S::InitError;
     type InitError = S::InitError;
@@ -91,16 +92,17 @@ where
     }
 }
 
-impl<S, T, U> Service<Framed<T, U>> for FramedService<S, T, U>
+impl<S, T, U> Service for FramedService<S, T, U>
 where
-    S: NewService<Request<U>, Response = Response<U>>,
+    S: NewService<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
-    <S::Service as Service<Request<U>>>::Future: 'static,
+    <S::Service as Service>::Future: 'static,
     T: AsyncRead + AsyncWrite,
     U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
+    type Request = Framed<T, U>;
     type Response = FramedTransport<S::Service, T, U>;
     type Error = S::InitError;
     type Future = FramedServiceResponseFuture<S, T, U>;
@@ -121,9 +123,9 @@ where
 #[doc(hidden)]
 pub struct FramedServiceResponseFuture<S, T, U>
 where
-    S: NewService<Request<U>, Response = Response<U>>,
+    S: NewService<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
-    <S::Service as Service<Request<U>>>::Future: 'static,
+    <S::Service as Service>::Future: 'static,
     T: AsyncRead + AsyncWrite,
     U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
@@ -135,9 +137,9 @@ where
 
 impl<S, T, U> Future for FramedServiceResponseFuture<S, T, U>
 where
-    S: NewService<Request<U>, Response = Response<U>>,
+    S: NewService<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
-    <S::Service as Service<Request<U>>>::Future: 'static,
+    <S::Service as Service>::Future: 'static,
     T: AsyncRead + AsyncWrite,
     U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
@@ -174,7 +176,7 @@ impl<E, U: Encoder + Decoder> From<E> for FramedTransportError<E, U> {
 /// and pass then to the service.
 pub struct FramedTransport<S, T, U>
 where
-    S: Service<Request<U>, Response = Response<U>>,
+    S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
     T: AsyncRead + AsyncWrite,
@@ -188,7 +190,7 @@ where
     inner: Cell<FramedTransportInner<<U as Encoder>::Item, S::Error>>,
 }
 
-enum TransportState<S: Service<Request<U>>, U: Encoder + Decoder> {
+enum TransportState<S: Service, U: Encoder + Decoder> {
     Processing,
     Error(FramedTransportError<S::Error, U>),
     FramedError(FramedTransportError<S::Error, U>),
@@ -202,7 +204,7 @@ struct FramedTransportInner<I, E> {
 
 impl<S, T, U> FramedTransport<S, T, U>
 where
-    S: Service<Request<U>, Response = Response<U>>,
+    S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
     T: AsyncRead + AsyncWrite,
@@ -294,7 +296,7 @@ where
 
 impl<S, T, U> FramedTransport<S, T, U>
 where
-    S: Service<Request<U>, Response = Response<U>>,
+    S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
     T: AsyncRead + AsyncWrite,
@@ -302,7 +304,7 @@ where
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
-    pub fn new<F: IntoService<S, Request<U>>>(framed: Framed<T, U>, service: F) -> Self {
+    pub fn new<F: IntoService<S>>(framed: Framed<T, U>, service: F) -> Self {
         FramedTransport {
             framed,
             service: service.into_service(),
@@ -340,7 +342,7 @@ where
 
 impl<S, T, U> Future for FramedTransport<S, T, U>
 where
-    S: Service<Request<U>, Response = Response<U>>,
+    S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
     T: AsyncRead + AsyncWrite,
@@ -400,12 +402,13 @@ where
     }
 }
 
-impl<T, U, F> NewService<T> for IntoFramed<T, U, F>
+impl<T, U, F> NewService for IntoFramed<T, U, F>
 where
     T: AsyncRead + AsyncWrite,
     F: Fn() -> U + Send + Clone + 'static,
     U: Encoder + Decoder,
 {
+    type Request = T;
     type Response = Framed<T, U>;
     type Error = ();
     type InitError = ();
@@ -430,12 +433,13 @@ where
     _t: PhantomData<(T,)>,
 }
 
-impl<T, U, F> Service<T> for IntoFramedService<T, U, F>
+impl<T, U, F> Service for IntoFramedService<T, U, F>
 where
     T: AsyncRead + AsyncWrite,
     F: Fn() -> U + Send + Clone + 'static,
     U: Encoder + Decoder,
 {
+    type Request = T;
     type Response = Framed<T, U>;
     type Error = ();
     type Future = FutureResult<Self::Response, Self::Error>;

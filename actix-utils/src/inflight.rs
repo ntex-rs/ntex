@@ -13,10 +13,10 @@ pub struct InFlight<T> {
 }
 
 impl<T> InFlight<T> {
-    pub fn new<F, Request>(factory: F) -> Self
+    pub fn new<F>(factory: F) -> Self
     where
-        T: NewService<Request>,
-        F: IntoNewService<T, Request>,
+        T: NewService,
+        F: IntoNewService<T>,
     {
         Self {
             factory: factory.into_new_service(),
@@ -33,15 +33,16 @@ impl<T> InFlight<T> {
     }
 }
 
-impl<T, Request> NewService<Request> for InFlight<T>
+impl<T> NewService for InFlight<T>
 where
-    T: NewService<Request>,
+    T: NewService,
 {
+    type Request = T::Request;
     type Response = T::Response;
     type Error = T::Error;
     type InitError = T::InitError;
     type Service = InFlightService<T::Service>;
-    type Future = InFlightResponseFuture<T, Request>;
+    type Future = InFlightResponseFuture<T>;
 
     fn new_service(&self) -> Self::Future {
         InFlightResponseFuture {
@@ -51,12 +52,12 @@ where
     }
 }
 
-pub struct InFlightResponseFuture<T: NewService<Request>, Request> {
+pub struct InFlightResponseFuture<T: NewService> {
     fut: T::Future,
     max_inflight: usize,
 }
 
-impl<T: NewService<Request>, Request> Future for InFlightResponseFuture<T, Request> {
+impl<T: NewService> Future for InFlightResponseFuture<T> {
     type Item = InFlightService<T::Service>;
     type Error = T::InitError;
 
@@ -74,10 +75,10 @@ pub struct InFlightService<T> {
 }
 
 impl<T> InFlightService<T> {
-    pub fn new<F, Request>(service: F) -> Self
+    pub fn new<F>(service: F) -> Self
     where
-        T: Service<Request>,
-        F: IntoService<T, Request>,
+        T: Service,
+        F: IntoService<T>,
     {
         Self {
             service: service.into_service(),
@@ -85,10 +86,10 @@ impl<T> InFlightService<T> {
         }
     }
 
-    pub fn with_max_inflight<F, Request>(max: usize, service: F) -> Self
+    pub fn with_max_inflight<F>(max: usize, service: F) -> Self
     where
-        T: Service<Request>,
-        F: IntoService<T, Request>,
+        T: Service,
+        F: IntoService<T>,
     {
         Self {
             service: service.into_service(),
@@ -97,13 +98,14 @@ impl<T> InFlightService<T> {
     }
 }
 
-impl<T, Request> Service<Request> for InFlightService<T>
+impl<T> Service for InFlightService<T>
 where
-    T: Service<Request>,
+    T: Service,
 {
+    type Request = T::Request;
     type Response = T::Response;
     type Error = T::Error;
-    type Future = InFlightServiceResponse<T, Request>;
+    type Future = InFlightServiceResponse<T>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         let res = self.service.poll_ready()?;
@@ -114,7 +116,7 @@ where
         Ok(res)
     }
 
-    fn call(&mut self, req: Request) -> Self::Future {
+    fn call(&mut self, req: T::Request) -> Self::Future {
         InFlightServiceResponse {
             fut: self.service.call(req),
             _guard: self.count.get(),
@@ -123,12 +125,12 @@ where
 }
 
 #[doc(hidden)]
-pub struct InFlightServiceResponse<T: Service<Request>, Request> {
+pub struct InFlightServiceResponse<T: Service> {
     fut: T::Future,
     _guard: CounterGuard,
 }
 
-impl<T: Service<Request>, Request> Future for InFlightServiceResponse<T, Request> {
+impl<T: Service> Future for InFlightServiceResponse<T> {
     type Item = T::Response;
     type Error = T::Error;
 

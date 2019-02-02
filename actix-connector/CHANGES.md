@@ -1,6 +1,10 @@
 # Changes
 
-## [0.1.2] - 2019-01-xx
+## [0.2.0] - 2019-01-xx
+
+### Changes
+
+* Migrate to actix-service 0.2
 
 * Upgrade trust-dns-resolver
 

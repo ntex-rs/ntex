@@ -15,9 +15,9 @@ pub struct Map<A, F, Response> {
 
 impl<A, F, Response> Map<A, F, Response> {
     /// Create new `Map` combinator
-    pub fn new<Request>(service: A, f: F) -> Self
+    pub fn new(service: A, f: F) -> Self
     where
-        A: Service<Request>,
+        A: Service,
         F: FnMut(A::Response) -> Response,
     {
         Self {
@@ -42,36 +42,37 @@ where
     }
 }
 
-impl<A, F, Request, Response> Service<Request> for Map<A, F, Response>
+impl<A, F, Response> Service for Map<A, F, Response>
 where
-    A: Service<Request>,
+    A: Service,
     F: FnMut(A::Response) -> Response + Clone,
 {
+    type Request = A::Request;
     type Response = Response;
     type Error = A::Error;
-    type Future = MapFuture<A, F, Request, Response>;
+    type Future = MapFuture<A, F, Response>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         self.service.poll_ready()
     }
 
-    fn call(&mut self, req: Request) -> Self::Future {
+    fn call(&mut self, req: A::Request) -> Self::Future {
         MapFuture::new(self.service.call(req), self.f.clone())
     }
 }
 
-pub struct MapFuture<A, F, Request, Response>
+pub struct MapFuture<A, F, Response>
 where
-    A: Service<Request>,
+    A: Service,
     F: FnMut(A::Response) -> Response,
 {
     f: F,
     fut: A::Future,
 }
 
-impl<A, F, Request, Response> MapFuture<A, F, Request, Response>
+impl<A, F, Response> MapFuture<A, F, Response>
 where
-    A: Service<Request>,
+    A: Service,
     F: FnMut(A::Response) -> Response,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -79,9 +80,9 @@ where
     }
 }
 
-impl<A, F, Request, Response> Future for MapFuture<A, F, Request, Response>
+impl<A, F, Response> Future for MapFuture<A, F, Response>
 where
-    A: Service<Request>,
+    A: Service,
     F: FnMut(A::Response) -> Response,
 {
     type Item = Response;
@@ -104,9 +105,9 @@ pub struct MapNewService<A, F, Response> {
 
 impl<A, F, Response> MapNewService<A, F, Response> {
     /// Create new `Map` new service instance
-    pub fn new<Request>(a: A, f: F) -> Self
+    pub fn new(a: A, f: F) -> Self
     where
-        A: NewService<Request>,
+        A: NewService,
         F: FnMut(A::Response) -> Response,
     {
         Self {
@@ -131,35 +132,36 @@ where
     }
 }
 
-impl<A, F, Request, Response> NewService<Request> for MapNewService<A, F, Response>
+impl<A, F, Response> NewService for MapNewService<A, F, Response>
 where
-    A: NewService<Request>,
+    A: NewService,
     F: FnMut(A::Response) -> Response + Clone,
 {
+    type Request = A::Request;
     type Response = Response;
     type Error = A::Error;
     type Service = Map<A::Service, F, Response>;
 
     type InitError = A::InitError;
-    type Future = MapNewServiceFuture<A, F, Request, Response>;
+    type Future = MapNewServiceFuture<A, F, Response>;
 
     fn new_service(&self) -> Self::Future {
         MapNewServiceFuture::new(self.a.new_service(), self.f.clone())
     }
 }
 
-pub struct MapNewServiceFuture<A, F, Request, Response>
+pub struct MapNewServiceFuture<A, F, Response>
 where
-    A: NewService<Request>,
+    A: NewService,
     F: FnMut(A::Response) -> Response,
 {
     fut: A::Future,
     f: Option<F>,
 }
 
-impl<A, F, Request, Response> MapNewServiceFuture<A, F, Request, Response>
+impl<A, F, Response> MapNewServiceFuture<A, F, Response>
 where
-    A: NewService<Request>,
+    A: NewService,
     F: FnMut(A::Response) -> Response,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -167,9 +169,9 @@ where
     }
 }
 
-impl<A, F, Request, Response> Future for MapNewServiceFuture<A, F, Request, Response>
+impl<A, F, Response> Future for MapNewServiceFuture<A, F, Response>
 where
-    A: NewService<Request>,
+    A: NewService,
     F: FnMut(A::Response) -> Response,
 {
     type Item = Map<A::Service, F, Response>;
@@ -192,7 +194,8 @@ mod tests {
     use crate::{IntoNewService, Service, ServiceExt};
 
     struct Srv;
-    impl Service<()> for Srv {
+    impl Service for Srv {
+        type Request = ();
         type Response = ();
         type Error = ();
         type Future = FutureResult<(), ()>;

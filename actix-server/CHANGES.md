@@ -1,8 +1,10 @@
 # Changes
 
-## [0.1.4] - 2018-12-xx
+## [0.2.0] - 2019-02-xx
 
 ## Changes
+
+* Migrate to actix-service 0.2
 
 * Updated rustls dependency
 

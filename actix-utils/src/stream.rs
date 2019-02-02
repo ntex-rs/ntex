@@ -37,12 +37,12 @@ pub struct StreamNewService<S, T, E> {
 impl<S, T, E> StreamNewService<S, T, E>
 where
     S: IntoStream,
-    T: NewService<Request<S>, Response = (), Error = E, InitError = E>,
+    T: NewService<Request = Request<S>, Response = (), Error = E, InitError = E>,
     T::Future: 'static,
     T::Service: 'static,
-    <T::Service as Service<Request<S>>>::Future: 'static,
+    <T::Service as Service>::Future: 'static,
 {
-    pub fn new<F: IntoNewService<T, Request<S>>>(factory: F) -> Self {
+    pub fn new<F: IntoNewService<T>>(factory: F) -> Self {
         Self {
             factory: Rc::new(factory.into_new_service()),
             _t: PhantomData,
@@ -59,14 +59,15 @@ impl<S, T, E> Clone for StreamNewService<S, T, E> {
     }
 }
 
-impl<S, T, E> NewService<S> for StreamNewService<S, T, E>
+impl<S, T, E> NewService for StreamNewService<S, T, E>
 where
     S: IntoStream + 'static,
-    T: NewService<Request<S>, Response = (), Error = E, InitError = E>,
+    T: NewService<Request = Request<S>, Response = (), Error = E, InitError = E>,
     T::Future: 'static,
     T::Service: 'static,
-    <T::Service as Service<Request<S>>>::Future: 'static,
+    <T::Service as Service>::Future: 'static,
 {
+    type Request = S;
     type Response = ();
     type Error = E;
     type InitError = E;
@@ -86,14 +87,15 @@ pub struct StreamService<S, T, E> {
     _t: PhantomData<(S, E)>,
 }
 
-impl<S, T, E> Service<S> for StreamService<S, T, E>
+impl<S, T, E> Service for StreamService<S, T, E>
 where
     S: IntoStream + 'static,
-    T: NewService<Request<S>, Response = (), Error = E, InitError = E>,
+    T: NewService<Request = Request<S>, Response = (), Error = E, InitError = E>,
     T::Future: 'static,
     T::Service: 'static,
-    <T::Service as Service<Request<S>>>::Future: 'static,
+    <T::Service as Service>::Future: 'static,
 {
+    type Request = S;
     type Response = ();
     type Error = E;
     type Future = Box<Future<Item = (), Error = E>>;
@@ -114,7 +116,7 @@ where
 pub struct StreamDispatcher<S, T>
 where
     S: IntoStream + 'static,
-    T: Service<Request<S>, Response = ()> + 'static,
+    T: Service<Request = Request<S>, Response = ()> + 'static,
     T::Future: 'static,
 {
     stream: S,
@@ -126,13 +128,13 @@ where
 impl<S, T> StreamDispatcher<S, T>
 where
     S: Stream,
-    T: Service<Request<S>, Response = ()>,
+    T: Service<Request = Request<S>, Response = ()>,
     T::Future: 'static,
 {
     pub fn new<F1, F2>(stream: F1, service: F2) -> Self
     where
         F1: IntoStream<Stream = S, Item = S::Item, Error = S::Error>,
-        F2: IntoService<T, Request<S>>,
+        F2: IntoService<T>,
     {
         let (err_tx, err_rx) = mpsc::unbounded();
         StreamDispatcher {
@@ -147,7 +149,7 @@ where
 impl<S, T> Future for StreamDispatcher<S, T>
 where
     S: Stream,
-    T: Service<Request<S>, Response = ()>,
+    T: Service<Request = Request<S>, Response = ()>,
     T::Future: 'static,
 {
     type Item = ();
@@ -225,7 +227,8 @@ impl<T> Clone for TakeItem<T> {
     }
 }
 
-impl<T: Stream> NewService<T> for TakeItem<T> {
+impl<T: Stream> NewService for TakeItem<T> {
+    type Request = T;
     type Response = (Option<T::Item>, T);
     type Error = T::Error;
     type InitError = ();
@@ -248,7 +251,8 @@ impl<T> Clone for TakeItemService<T> {
     }
 }
 
-impl<T: Stream> Service<T> for TakeItemService<T> {
+impl<T: Stream> Service for TakeItemService<T> {
+    type Request = T;
     type Response = (Option<T::Item>, T);
     type Error = T::Error;
     type Future = TakeItemServiceResponse<T>;
