@@ -28,8 +28,8 @@ members = [
 [dev-dependencies]
 actix-service = "0.2.0"
 actix-codec = "0.1.0"
-actix-rt = { path="actix-rt" }
-actix-server = { path="actix-server", features=["ssl"] }
+actix-rt = { version="0.1.0" }
+actix-server = { version="0.2.0", features=["ssl"] }
 env_logger = "0.5"
 futures = "0.1.24"
 openssl = { version="0.10" }
