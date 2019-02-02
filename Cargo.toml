@@ -26,8 +26,7 @@ members = [
 ]
 
 [dev-dependencies]
-#actix-service = "0.2.0"
-actix-service = { path="actix-service" }
+actix-service = "0.2.0"
 actix-codec = "0.1.0"
 actix-rt = { path="actix-rt" }
 actix-server = { path="actix-server", features=["ssl"] }
