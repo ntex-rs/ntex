@@ -3,6 +3,7 @@
 //! If the response does not complete within the specified timeout, the response
 //! will be aborted.
 use std::fmt;
+use std::marker::PhantomData;
 use std::time::Duration;
 
 use actix_service::{NewTransform, Service, Transform};
@@ -12,8 +13,9 @@ use tokio_timer::{clock, Delay};
 
 /// Applies a timeout to requests.
 #[derive(Debug, Clone)]
-pub struct Timeout {
+pub struct Timeout<E = ()> {
     timeout: Duration,
+    _t: PhantomData<E>,
 }
 
 /// Timeout error
@@ -54,20 +56,23 @@ impl<E: PartialEq> PartialEq for TimeoutError<E> {
     }
 }
 
-impl Timeout {
+impl<E> Timeout<E> {
     pub fn new(timeout: Duration) -> Self {
-        Timeout { timeout }
+        Timeout {
+            timeout,
+            _t: PhantomData,
+        }
     }
 }
 
-impl<S> NewTransform<S> for Timeout
+impl<S, E> NewTransform<S> for Timeout<E>
 where
     S: Service,
 {
     type Request = S::Request;
     type Response = S::Response;
     type Error = TimeoutError<S::Error>;
-    type InitError = ();
+    type InitError = E;
     type Transform = TimeoutService;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 
