@@ -1,125 +1,120 @@
-use std::marker::PhantomData;
+use futures::{Async, Future, Poll};
 
-use futures::{try_ready, Async, Future, IntoFuture, Poll};
-
-use super::{IntoNewService, IntoService, NewService, Service};
+use super::{NewService, NewTransform, Service, Transform};
 use crate::cell::Cell;
 
 /// `Apply` service combinator
-pub struct AndThenApply<A, B, F, Out>
+pub struct AndThenTransform<T, A, B>
 where
     A: Service,
     B: Service<Error = A::Error>,
-    F: FnMut(A::Response, &mut B) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    T: Transform<B, Request = A::Response>,
+    T::Error: From<A::Error>,
 {
     a: A,
     b: Cell<B>,
-    f: Cell<F>,
-    r: PhantomData<(Out,)>,
+    t: Cell<T>,
 }
 
-impl<A, B, F, Out> AndThenApply<A, B, F, Out>
+impl<T, A, B> AndThenTransform<T, A, B>
 where
     A: Service,
     B: Service<Error = A::Error>,
-    F: FnMut(A::Response, &mut B) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    T: Transform<B, Request = A::Response>,
+    T::Error: From<A::Error>,
 {
     /// Create new `Apply` combinator
-    pub fn new<A1: IntoService<A>, B1: IntoService<B>>(a: A1, b: B1, f: F) -> Self {
+    pub fn new(t: T, a: A, b: B) -> Self {
         Self {
-            f: Cell::new(f),
-            a: a.into_service(),
-            b: Cell::new(b.into_service()),
-            r: PhantomData,
+            a,
+            b: Cell::new(b),
+            t: Cell::new(t),
         }
     }
 }
 
-impl<A, B, F, Out> Clone for AndThenApply<A, B, F, Out>
+impl<T, A, B> Clone for AndThenTransform<T, A, B>
 where
     A: Service + Clone,
     B: Service<Error = A::Error>,
-    F: FnMut(A::Response, &mut B) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    T: Transform<B, Request = A::Response>,
+    T::Error: From<A::Error>,
 {
     fn clone(&self) -> Self {
-        AndThenApply {
+        AndThenTransform {
             a: self.a.clone(),
             b: self.b.clone(),
-            f: self.f.clone(),
-            r: PhantomData,
+            t: self.t.clone(),
         }
     }
 }
 
-impl<A, B, F, Out> Service for AndThenApply<A, B, F, Out>
+impl<T, A, B> Service for AndThenTransform<T, A, B>
 where
     A: Service,
     B: Service<Error = A::Error>,
-    F: FnMut(A::Response, &mut B) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    T: Transform<B, Request = A::Response>,
+    T::Error: From<A::Error>,
 {
     type Request = A::Request;
-    type Response = Out::Item;
-    type Error = A::Error;
-    type Future = AndThenApplyFuture<A, B, F, Out>;
+    type Response = T::Response;
+    type Error = T::Error;
+    type Future = AndThenTransformFuture<T, A, B>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        try_ready!(self.a.poll_ready());
-        self.b.get_mut().poll_ready().map_err(|e| e.into())
+        let notready = Async::NotReady == self.a.poll_ready()?;
+        let notready = Async::NotReady == self.b.get_mut().poll_ready()? || notready;
+        let notready = Async::NotReady == self.t.get_mut().poll_ready()? || notready;
+
+        if notready {
+            Ok(Async::NotReady)
+        } else {
+            Ok(Async::Ready(()))
+        }
     }
 
     fn call(&mut self, req: A::Request) -> Self::Future {
-        AndThenApplyFuture {
+        AndThenTransformFuture {
             b: self.b.clone(),
-            f: self.f.clone(),
-            fut_b: None,
+            t: self.t.clone(),
+            fut_t: None,
             fut_a: Some(self.a.call(req)),
         }
     }
 }
 
-pub struct AndThenApplyFuture<A, B, F, Out>
+pub struct AndThenTransformFuture<T, A, B>
 where
     A: Service,
     B: Service<Error = A::Error>,
-    F: FnMut(A::Response, &mut B) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    T: Transform<B, Request = A::Response>,
+    T::Error: From<A::Error>,
 {
     b: Cell<B>,
-    f: Cell<F>,
+    t: Cell<T>,
     fut_a: Option<A::Future>,
-    fut_b: Option<Out::Future>,
+    fut_t: Option<T::Future>,
 }
 
-impl<A, B, F, Out> Future for AndThenApplyFuture<A, B, F, Out>
+impl<T, A, B> Future for AndThenTransformFuture<T, A, B>
 where
     A: Service,
     B: Service<Error = A::Error>,
-    F: FnMut(A::Response, &mut B) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    T: Transform<B, Request = A::Response>,
+    T::Error: From<A::Error>,
 {
-    type Item = Out::Item;
-    type Error = A::Error;
+    type Item = T::Response;
+    type Error = T::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Some(ref mut fut) = self.fut_b {
+        if let Some(ref mut fut) = self.fut_t {
             return fut.poll().map_err(|e| e.into());
         }
 
         match self.fut_a.as_mut().expect("Bug in actix-service").poll() {
             Ok(Async::Ready(resp)) => {
                 let _ = self.fut_a.take();
-                self.fut_b =
-                    Some((&mut *self.f.get_mut())(resp, self.b.get_mut()).into_future());
+                self.fut_t = Some(self.t.get_mut().call(resp, self.b.get_mut()));
                 self.poll()
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),
@@ -128,102 +123,100 @@ where
     }
 }
 
-/// `ApplyNewService` new service combinator
-pub struct AndThenApplyNewService<A, B, F, Out> {
+/// `Apply` new service combinator
+pub struct AndThenTransformNewService<T, A, B> {
     a: A,
     b: B,
-    f: Cell<F>,
-    r: PhantomData<(Out)>,
+    t: T,
 }
 
-impl<A, B, F, Out> AndThenApplyNewService<A, B, F, Out>
+impl<T, A, B> AndThenTransformNewService<T, A, B>
 where
     A: NewService,
     B: NewService<Error = A::Error, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
+    T::Error: From<A::Error>,
 {
     /// Create new `ApplyNewService` new service instance
-    pub fn new<A1: IntoNewService<A>, B1: IntoNewService<B>>(a: A1, b: B1, f: F) -> Self {
-        Self {
-            f: Cell::new(f),
-            a: a.into_new_service(),
-            b: b.into_new_service(),
-            r: PhantomData,
-        }
+    pub fn new(t: T, a: A, b: B) -> Self {
+        Self { a, b, t }
     }
 }
 
-impl<A, B, F, Out> Clone for AndThenApplyNewService<A, B, F, Out>
+impl<T, A, B> Clone for AndThenTransformNewService<T, A, B>
 where
     A: Clone,
     B: Clone,
+    T: Clone,
 {
     fn clone(&self) -> Self {
         Self {
             a: self.a.clone(),
             b: self.b.clone(),
-            f: self.f.clone(),
-            r: PhantomData,
+            t: self.t.clone(),
         }
     }
 }
 
-impl<A, B, F, Out> NewService for AndThenApplyNewService<A, B, F, Out>
+impl<T, A, B> NewService for AndThenTransformNewService<T, A, B>
 where
     A: NewService,
     B: NewService<Error = A::Error, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
+    T::Error: From<A::Error>,
 {
     type Request = A::Request;
-    type Response = Out::Item;
-    type Error = A::Error;
+    type Response = T::Response;
+    type Error = T::Error;
 
-    type InitError = A::InitError;
-    type Service = AndThenApply<A::Service, B::Service, F, Out>;
-    type Future = AndThenApplyNewServiceFuture<A, B, F, Out>;
+    type InitError = T::InitError;
+    type Service = AndThenTransform<T::Transform, A::Service, B::Service>;
+    type Future = AndThenTransformNewServiceFuture<T, A, B>;
 
     fn new_service(&self) -> Self::Future {
-        AndThenApplyNewServiceFuture {
+        AndThenTransformNewServiceFuture {
             a: None,
             b: None,
-            f: self.f.clone(),
+            t: None,
             fut_a: self.a.new_service(),
             fut_b: self.b.new_service(),
+            fut_t: self.t.new_transform(),
         }
     }
 }
 
-pub struct AndThenApplyNewServiceFuture<A, B, F, Out>
+pub struct AndThenTransformNewServiceFuture<T, A, B>
 where
     A: NewService,
     B: NewService<Error = A::Error, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
+    T::Error: From<A::Error>,
 {
     fut_b: B::Future,
     fut_a: A::Future,
-    f: Cell<F>,
+    fut_t: T::Future,
     a: Option<A::Service>,
     b: Option<B::Service>,
+    t: Option<T::Transform>,
 }
 
-impl<A, B, F, Out> Future for AndThenApplyNewServiceFuture<A, B, F, Out>
+impl<T, A, B> Future for AndThenTransformNewServiceFuture<T, A, B>
 where
     A: NewService,
     B: NewService<Error = A::Error, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
+    T::Error: From<A::Error>,
 {
-    type Item = AndThenApply<A::Service, B::Service, F, Out>;
-    type Error = A::InitError;
+    type Item = AndThenTransform<T::Transform, A::Service, B::Service>;
+    type Error = T::InitError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if self.t.is_none() {
+            if let Async::Ready(transform) = self.fut_t.poll()? {
+                self.t = Some(transform);
+            }
+        }
+
         if self.a.is_none() {
             if let Async::Ready(service) = self.fut_a.poll()? {
                 self.a = Some(service);
@@ -236,12 +229,11 @@ where
             }
         }
 
-        if self.a.is_some() && self.b.is_some() {
-            Ok(Async::Ready(AndThenApply {
-                f: self.f.clone(),
+        if self.a.is_some() && self.b.is_some() && self.t.is_some() {
+            Ok(Async::Ready(AndThenTransform {
                 a: self.a.take().unwrap(),
+                t: Cell::new(self.t.take().unwrap()),
                 b: Cell::new(self.b.take().unwrap()),
-                r: PhantomData,
             }))
         } else {
             Ok(Async::NotReady)
@@ -274,12 +266,13 @@ mod tests {
     }
 
     #[test]
-    fn test_call() {
+    fn test_apply() {
         let blank = |req| Ok(req);
 
-        let mut srv = blank.into_service().apply(Srv, |req: &'static str, srv| {
-            srv.call(()).map(move |res| (req, res))
-        });
+        let mut srv = blank.into_service().apply(
+            |req: &'static str, srv: &mut Srv| srv.call(()).map(move |res| (req, res)),
+            Srv,
+        );
         assert!(srv.poll_ready().is_ok());
         let res = srv.call("srv").poll();
         assert!(res.is_ok());
@@ -291,8 +284,8 @@ mod tests {
         let blank = || Ok::<_, ()>((|req| Ok(req)).into_service());
 
         let new_srv = blank.into_new_service().apply(
+            |req: &'static str, srv: &mut Srv| srv.call(()).map(move |res| (req, res)),
             || Ok(Srv),
-            |req: &'static str, srv| srv.call(()).map(move |res| (req, res)),
         );
         if let Async::Ready(mut srv) = new_srv.new_service().poll().unwrap() {
             assert!(srv.poll_ready().is_ok());

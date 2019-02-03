@@ -2,24 +2,32 @@ use futures::{Future, IntoFuture, Poll};
 
 mod and_then;
 mod and_then_apply;
+mod and_then_apply_fn;
 mod apply;
+mod blank;
 mod cell;
 mod fn_service;
+mod fn_transform;
 mod from_err;
 mod map;
 mod map_err;
 mod map_init_err;
 mod then;
+mod transform;
 
 pub use self::and_then::{AndThen, AndThenNewService};
-pub use self::and_then_apply::{AndThenApply, AndThenApplyNewService};
+use self::and_then_apply::{AndThenTransform, AndThenTransformNewService};
+use self::and_then_apply_fn::{AndThenApply, AndThenApplyNewService};
 pub use self::apply::{Apply, ApplyNewService};
+pub use self::blank::{Blank, BlankNewService};
 pub use self::fn_service::{FnNewService, FnService};
+pub use self::fn_transform::{FnNewTransform, FnTransform};
 pub use self::from_err::{FromErr, FromErrNewService};
 pub use self::map::{Map, MapNewService};
 pub use self::map_err::{MapErr, MapErrNewService};
 pub use self::map_init_err::MapInitErr;
 pub use self::then::{Then, ThenNewService};
+pub use self::transform::{IntoNewTransform, IntoTransform, NewTransform, Transform};
 
 /// An asynchronous function from `Request` to a `Response`.
 pub trait Service {
@@ -61,16 +69,30 @@ pub trait Service {
 /// An extension trait for `Service`s that provides a variety of convenient
 /// adapters
 pub trait ServiceExt: Service {
-    /// Apply function to specified service and use it as a next service in
+    /// Apply tranformation to specified service and use it as a next service in
     /// chain.
-    fn apply<B, I, F, Out, Req>(self, service: I, f: F) -> AndThenApply<Self, B, F, Out>
+    fn apply<T, T1, B, B1>(self, transform: T1, service: B1) -> AndThenTransform<T, Self, B>
     where
         Self: Sized,
-        B: Service<Request = Req, Error = Self::Error>,
-        I: IntoService<B>,
+        T: Transform<B, Request = Self::Response>,
+        T::Error: From<Self::Error>,
+        T1: IntoTransform<T, B>,
+        B: Service<Error = Self::Error>,
+        B1: IntoService<B>,
+    {
+        AndThenTransform::new(transform.into_transform(), self, service.into_service())
+    }
+
+    /// Apply function to specified service and use it as a next service in
+    /// chain.
+    fn apply_fn<F, B, B1, Out>(self, service: B1, f: F) -> AndThenApply<Self, B, F, Out>
+    where
+        Self: Sized,
         F: FnMut(Self::Response, &mut B) -> Out,
         Out: IntoFuture,
         Out::Error: Into<Self::Error>,
+        B: Service<Error = Self::Error>,
+        B1: IntoService<B>,
     {
         AndThenApply::new(self, service, f)
     }
@@ -190,14 +212,32 @@ pub trait NewService {
 
     /// Apply function to specified service and use it as a next service in
     /// chain.
-    fn apply<B, I, F, Out, Req>(
+    fn apply<T, T1, B, B1>(
         self,
-        service: I,
-        f: F,
-    ) -> AndThenApplyNewService<Self, B, F, Out>
+        transform: T1,
+        service: B1,
+    ) -> AndThenTransformNewService<T, Self, B>
     where
         Self: Sized,
-        B: NewService<Request = Req, Error = Self::Error, InitError = Self::InitError>,
+        T: NewTransform<B::Service, Request = Self::Response, InitError = Self::InitError>,
+        T::Error: From<Self::Error>,
+        T1: IntoNewTransform<T, B::Service>,
+        B: NewService<Error = Self::Error, InitError = Self::InitError>,
+        B1: IntoNewService<B>,
+    {
+        AndThenTransformNewService::new(
+            transform.into_new_transform(),
+            self,
+            service.into_new_service(),
+        )
+    }
+
+    /// Apply function to specified service and use it as a next service in
+    /// chain.
+    fn apply_fn<B, I, F, Out>(self, service: I, f: F) -> AndThenApplyNewService<Self, B, F, Out>
+    where
+        Self: Sized,
+        B: NewService<Error = Self::Error, InitError = Self::InitError>,
         I: IntoNewService<B>,
         F: FnMut(Self::Response, &mut B::Service) -> Out,
         Out: IntoFuture,
@@ -345,7 +385,7 @@ where
     fn into_service(self) -> T;
 }
 
-/// Trait for types that can be converted to a Service
+/// Trait for types that can be converted to a `NewService`
 pub trait IntoNewService<T>
 where
     T: NewService,

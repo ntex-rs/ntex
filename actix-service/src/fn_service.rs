@@ -1,56 +1,51 @@
-use std::marker;
+use std::marker::PhantomData;
 
-use futures::{
-    future::{ok, FutureResult},
-    Async, IntoFuture, Poll,
-};
+use futures::future::{ok, FutureResult};
+use futures::{Async, IntoFuture, Poll};
 
 use super::{IntoNewService, IntoService, NewService, Service};
 
-pub struct FnService<F, Req, Resp, E, Fut>
+pub struct FnService<F, Req, Out>
 where
-    F: FnMut(Req) -> Fut,
-    Fut: IntoFuture<Item = Resp, Error = E>,
+    F: FnMut(Req) -> Out,
+    Out: IntoFuture,
 {
     f: F,
-    _t: marker::PhantomData<(Req, Resp, E)>,
+    _t: PhantomData<(Req,)>,
 }
 
-impl<F, Req, Resp, E, Fut> FnService<F, Req, Resp, E, Fut>
+impl<F, Req, Out> FnService<F, Req, Out>
 where
-    F: FnMut(Req) -> Fut,
-    Fut: IntoFuture<Item = Resp, Error = E>,
+    F: FnMut(Req) -> Out,
+    Out: IntoFuture,
 {
     pub fn new(f: F) -> Self {
-        FnService {
-            f,
-            _t: marker::PhantomData,
-        }
+        FnService { f, _t: PhantomData }
     }
 }
 
-impl<F, Req, Resp, E, Fut> Clone for FnService<F, Req, Resp, E, Fut>
+impl<F, Req, Out> Clone for FnService<F, Req, Out>
 where
-    F: FnMut(Req) -> Fut + Clone,
-    Fut: IntoFuture<Item = Resp, Error = E>,
+    F: FnMut(Req) -> Out + Clone,
+    Out: IntoFuture,
 {
     fn clone(&self) -> Self {
         FnService {
             f: self.f.clone(),
-            _t: marker::PhantomData,
+            _t: PhantomData,
         }
     }
 }
 
-impl<F, Req, Resp, E, Fut> Service for FnService<F, Req, Resp, E, Fut>
+impl<F, Req, Out> Service for FnService<F, Req, Out>
 where
-    F: FnMut(Req) -> Fut,
-    Fut: IntoFuture<Item = Resp, Error = E>,
+    F: FnMut(Req) -> Out,
+    Out: IntoFuture,
 {
     type Request = Req;
-    type Response = Resp;
-    type Error = E;
-    type Future = Fut::Future;
+    type Response = Out::Item;
+    type Error = Out::Error;
+    type Future = Out::Future;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
@@ -61,47 +56,44 @@ where
     }
 }
 
-impl<F, Req, Resp, Err, Fut> IntoService<FnService<F, Req, Resp, Err, Fut>> for F
+impl<F, Req, Out> IntoService<FnService<F, Req, Out>> for F
 where
-    F: FnMut(Req) -> Fut + 'static,
-    Fut: IntoFuture<Item = Resp, Error = Err>,
+    F: FnMut(Req) -> Out + 'static,
+    Out: IntoFuture,
 {
-    fn into_service(self) -> FnService<F, Req, Resp, Err, Fut> {
+    fn into_service(self) -> FnService<F, Req, Out> {
         FnService::new(self)
     }
 }
 
-pub struct FnNewService<F, Req, Resp, Err, Fut>
+pub struct FnNewService<F, Req, Out>
 where
-    F: FnMut(Req) -> Fut,
-    Fut: IntoFuture<Item = Resp, Error = Err>,
+    F: FnMut(Req) -> Out,
+    Out: IntoFuture,
 {
     f: F,
-    _t: marker::PhantomData<(Req, Resp, Err)>,
+    _t: PhantomData<(Req,)>,
 }
 
-impl<F, Req, Resp, Err, Fut> FnNewService<F, Req, Resp, Err, Fut>
+impl<F, Req, Out> FnNewService<F, Req, Out>
 where
-    F: FnMut(Req) -> Fut + Clone,
-    Fut: IntoFuture<Item = Resp, Error = Err>,
+    F: FnMut(Req) -> Out + Clone,
+    Out: IntoFuture,
 {
     pub fn new(f: F) -> Self {
-        FnNewService {
-            f,
-            _t: marker::PhantomData,
-        }
+        FnNewService { f, _t: PhantomData }
     }
 }
 
-impl<F, Req, Resp, Err, Fut> NewService for FnNewService<F, Req, Resp, Err, Fut>
+impl<F, Req, Out> NewService for FnNewService<F, Req, Out>
 where
-    F: FnMut(Req) -> Fut + Clone,
-    Fut: IntoFuture<Item = Resp, Error = Err>,
+    F: FnMut(Req) -> Out + Clone,
+    Out: IntoFuture,
 {
     type Request = Req;
-    type Response = Resp;
-    type Error = Err;
-    type Service = FnService<F, Req, Resp, Err, Fut>;
+    type Response = Out::Item;
+    type Error = Out::Error;
+    type Service = FnService<F, Req, Out>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
@@ -110,20 +102,20 @@ where
     }
 }
 
-impl<F, Req, Resp, Err, Fut> IntoNewService<FnNewService<F, Req, Resp, Err, Fut>> for F
+impl<F, Req, Out> IntoNewService<FnNewService<F, Req, Out>> for F
 where
-    F: FnMut(Req) -> Fut + Clone + 'static,
-    Fut: IntoFuture<Item = Resp, Error = Err>,
+    F: FnMut(Req) -> Out + Clone + 'static,
+    Out: IntoFuture,
 {
-    fn into_new_service(self) -> FnNewService<F, Req, Resp, Err, Fut> {
+    fn into_new_service(self) -> FnNewService<F, Req, Out> {
         FnNewService::new(self)
     }
 }
 
-impl<F, Req, Resp, Err, Fut> Clone for FnNewService<F, Req, Resp, Err, Fut>
+impl<F, Req, Out> Clone for FnNewService<F, Req, Out>
 where
-    F: FnMut(Req) -> Fut + Clone,
-    Fut: IntoFuture<Item = Resp, Error = Err>,
+    F: FnMut(Req) -> Out + Clone,
+    Out: IntoFuture,
 {
     fn clone(&self) -> Self {
         Self::new(self.f.clone())

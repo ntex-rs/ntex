@@ -1,5 +1,12 @@
 # Changes
 
+## [0.2.1] - 2019-02-xx
+
+### Changed
+
+* Generalize `.apply` combinator with Transform trait
+
+
 ## [0.2.0] - 2019-02-01
 
 ### Changed

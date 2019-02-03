@@ -1,5 +1,12 @@
 # Changes
 
+## [0.2.1] - 2019-02-xx
+
+### Changed
+
+* Convert `Timeout` and `InFlight` services to a transforms
+
+
 ## [0.2.0] - 2019-02-01
 
 * Fix framed transport error handling
