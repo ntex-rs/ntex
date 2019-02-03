@@ -212,7 +212,7 @@ mod tests {
         let wait_time = Duration::from_millis(150);
 
         let res = actix_rt::System::new("test").block_on(lazy(|| {
-            let timeout = BlankNewService::default()
+            let timeout = BlankNewService::<_, _, ()>::default()
                 .apply(Timeout::new(resolution), || Ok(SleepService(wait_time)));
             if let Async::Ready(mut to) = timeout.new_service().poll().unwrap() {
                 to.call(())

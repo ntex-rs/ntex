@@ -2,6 +2,11 @@
 
 ## [0.2.1] - 2019-02-xx
 
+### Added
+
+* Add `InOrder` service. the service yields responses as they become available,
+  in the order that their originating requests were submitted to the service.
+
 ### Changed
 
 * Convert `Timeout` and `InFlight` services to a transforms
