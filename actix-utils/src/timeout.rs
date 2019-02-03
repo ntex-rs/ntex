@@ -12,7 +12,7 @@ use futures::{Async, Future, Poll};
 use tokio_timer::{clock, Delay};
 
 /// Applies a timeout to requests.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Timeout<E = ()> {
     timeout: Duration,
     _t: PhantomData<E>,
@@ -62,6 +62,12 @@ impl<E> Timeout<E> {
             timeout,
             _t: PhantomData,
         }
+    }
+}
+
+impl<E> Clone for Timeout<E> {
+    fn clone(&self) -> Self {
+        Timeout::new(self.timeout)
     }
 }
 
