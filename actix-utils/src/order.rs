@@ -43,17 +43,34 @@ pub struct InOrder<S> {
     _t: PhantomData<S>,
 }
 
-impl<S> InOrder<S> {
+impl<S> InOrder<S>
+where
+    S: Service,
+    S::Response: 'static,
+    S::Future: 'static,
+    S::Error: 'static,
+{
     pub fn new() -> Self {
         Self { _t: PhantomData }
     }
 
-    pub fn service() -> Self {
-        Self { _t: PhantomData }
+    pub fn service() -> impl Transform<
+        S,
+        Request = S::Request,
+        Response = S::Response,
+        Error = InOrderError<S::Error>,
+    > {
+        InOrderService::new()
     }
 }
 
-impl<S> Default for InOrder<S> {
+impl<S> Default for InOrder<S>
+where
+    S: Service,
+    S::Response: 'static,
+    S::Future: 'static,
+    S::Error: 'static,
+{
     fn default() -> Self {
         Self::new()
     }
