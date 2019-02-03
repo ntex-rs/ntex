@@ -242,10 +242,9 @@ mod tests {
 
     #[test]
     fn test_apply() {
-        let mut srv = Apply::new_fn(
-            |req: &'static str, srv| srv.call(()).map(move |res| (req, res)),
-            Srv,
-        );
+        let mut srv = Apply::new_fn(Srv, |req: &'static str, srv| {
+            srv.call(()).map(move |res| (req, res))
+        });
         assert!(srv.poll_ready().is_ok());
         let res = srv.call("srv").poll();
         assert!(res.is_ok());
@@ -268,19 +267,19 @@ mod tests {
         }
     }
 
-    // #[test]
-    // fn test_new_service_fn() {
-    //     let new_srv = ApplyNewService::new_fn(
-    //         || Ok(Srv),
-    //         |req: &'static str, srv| srv.call(()).map(move |res| (req, res)),
-    //     );
-    //     if let Async::Ready(mut srv) = new_srv.new_service().poll().unwrap() {
-    //         assert!(srv.poll_ready().is_ok());
-    //         let res = srv.call("srv").poll();
-    //         assert!(res.is_ok());
-    //         assert_eq!(res.unwrap(), Async::Ready(("srv", ())));
-    //     } else {
-    //         panic!()
-    //     }
-    // }
+    #[test]
+    fn test_new_service_fn() {
+        let new_srv = ApplyNewService::new_fn(
+            || Ok::<_, ()>(Srv),
+            |req: &'static str, srv| srv.call(()).map(move |res| (req, res)),
+        );
+        if let Async::Ready(mut srv) = new_srv.new_service().poll().unwrap() {
+            assert!(srv.poll_ready().is_ok());
+            let res = srv.call("srv").poll();
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), Async::Ready(("srv", ())));
+        } else {
+            panic!()
+        }
+    }
 }
