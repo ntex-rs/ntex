@@ -43,10 +43,10 @@ where
     S: Service,
 {
     /// Create new `Apply` combinator
-    pub fn new_fn<S1: IntoService<S>>(transform: F, service: S1) -> Self {
+    pub fn new_fn<S1: IntoService<S>>(service: S1, transform: F) -> Self {
         Self {
-            transform: transform.into_transform(),
             service: service.into_service(),
+            transform: transform.into_transform(),
         }
     }
 }
