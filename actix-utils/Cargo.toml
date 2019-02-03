@@ -19,7 +19,7 @@ path = "src/lib.rs"
 
 [dependencies]
 #actix-service = "0.2.0"
-actix-service = { path="../actix-service" }
+actix-service = { git = "https://github.com/actix/actix-net.git" }
 actix-codec = "0.1.0"
 bytes = "0.4"
 futures = "0.1"

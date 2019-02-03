@@ -89,9 +89,9 @@ where
 /// `ApplyNewService` new service combinator
 pub struct ApplyNewService<T, S>
 where
-    T::Error: From<S::Error>,
     // T::InitError: From<S::InitError>,
     T: NewTransform<S::Service, InitError = S::InitError>,
+    T::Error: From<S::Error>,
     S: NewService,
 {
     transform: T,
@@ -116,9 +116,9 @@ where
     }
 }
 
-impl<F, S, Req, Out> ApplyNewService<FnNewTransform<F, S::Service, Req, Out, S::InitError>, S>
+impl<F, S, In, Out> ApplyNewService<FnNewTransform<F, S::Service, In, Out, S::InitError>, S>
 where
-    F: FnMut(Req, &mut S::Service) -> Out + Clone,
+    F: FnMut(In, &mut S::Service) -> Out + Clone,
     Out: IntoFuture,
     Out::Error: From<S::Error>,
     S: NewService,

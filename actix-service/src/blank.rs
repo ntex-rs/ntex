@@ -12,10 +12,6 @@ pub struct Blank<R, E> {
 }
 
 impl<R, E> Blank<R, E> {
-    //pub fn new() -> Blank<R, E> {
-    //    Blank { _t: PhantomData }
-    //}
-
     pub fn err<E1>(self) -> Blank<R, E1> {
         Blank { _t: PhantomData }
     }
