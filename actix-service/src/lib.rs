@@ -14,6 +14,7 @@ mod map_err;
 mod map_init_err;
 mod then;
 mod transform;
+mod transform_map_err;
 
 pub use self::and_then::{AndThen, AndThenNewService};
 use self::and_then_apply::{AndThenTransform, AndThenTransformNewService};
