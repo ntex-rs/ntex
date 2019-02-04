@@ -61,9 +61,9 @@ where
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         if !self.count.available() {
             log::trace!("InFlight limit exceeded");
-            return Ok(Async::NotReady);
+            Ok(Async::NotReady)
         } else {
-            return Ok(Async::Ready(()));
+            Ok(Async::Ready(()))
         }
     }
 

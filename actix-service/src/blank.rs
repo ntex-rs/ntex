@@ -18,6 +18,7 @@ impl<R, E> Blank<R, E> {
 }
 
 impl<R> Blank<R, ()> {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new<E>() -> Blank<R, E> {
         Blank { _t: PhantomData }
     }

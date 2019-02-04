@@ -72,7 +72,7 @@ where
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         try_ready!(self.a.poll_ready());
-        self.b.get_mut().poll_ready().map_err(|e| e.into())
+        self.b.get_mut().poll_ready()
     }
 
     fn call(&mut self, req: A::Request) -> Self::Future {
@@ -123,7 +123,7 @@ where
                 self.poll()
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(err),
         }
     }
 }

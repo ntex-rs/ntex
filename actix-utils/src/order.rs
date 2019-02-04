@@ -115,6 +115,18 @@ where
     }
 }
 
+impl<S> Default for InOrderService<S>
+where
+    S: Service,
+    S::Response: 'static,
+    S::Future: 'static,
+    S::Error: 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<S> Transform<S> for InOrderService<S>
 where
     S: Service,

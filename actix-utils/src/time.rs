@@ -133,7 +133,7 @@ impl SystemTimeService {
     /// Get current time. This function has to be called from
     /// future's poll method, otherwise it panics.
     pub fn now(&self) -> time::SystemTime {
-        let cur = self.0.get_ref().current.clone();
+        let cur = self.0.get_ref().current;
         if let Some(cur) = cur {
             cur
         } else {

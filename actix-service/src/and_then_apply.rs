@@ -108,7 +108,7 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         if let Some(ref mut fut) = self.fut_t {
-            return fut.poll().map_err(|e| e.into());
+            return fut.poll();
         }
 
         match self.fut_a.as_mut().expect("Bug in actix-service").poll() {

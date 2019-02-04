@@ -112,7 +112,7 @@ where
                 }
             }
             Ok(Async::NotReady) => Ok(Async::Ready(())),
-            Err(_) => panic!(),
+            Err(_e) => panic!(),
         }
     }
 

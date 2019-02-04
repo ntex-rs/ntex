@@ -78,7 +78,7 @@ where
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         try_ready!(self.service.poll_ready());
-        self.transform.poll_ready().map_err(|e| e.into())
+        self.transform.poll_ready()
     }
 
     fn call(&mut self, req: Self::Request) -> Self::Future {
