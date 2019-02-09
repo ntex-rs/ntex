@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::path::Path;
-use crate::pattern::Pattern;
-use crate::RequestPath;
+use crate::resource::ResourceDef;
+use crate::ResourcePath;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub(crate) enum ResourceId {
@@ -20,15 +20,15 @@ pub struct ResourceInfo {
 
 #[derive(Default, Debug)]
 pub(crate) struct ResourceMap {
-    root: Option<Pattern>,
-    named: HashMap<String, Pattern>,
-    patterns: Vec<Pattern>,
+    root: Option<ResourceDef>,
+    named: HashMap<String, ResourceDef>,
+    patterns: Vec<ResourceDef>,
 }
 
 /// Resource router.
 pub struct Router<T> {
     rmap: Rc<ResourceMap>,
-    named: HashMap<String, Pattern>,
+    named: HashMap<String, ResourceDef>,
     resources: Vec<T>,
 }
 
@@ -41,7 +41,7 @@ impl<T> Router<T> {
         }
     }
 
-    pub fn recognize<U: RequestPath>(&self, path: &mut Path<U>) -> Option<(&T, ResourceInfo)> {
+    pub fn recognize<U: ResourcePath>(&self, path: &mut Path<U>) -> Option<(&T, ResourceInfo)> {
         if !path.path().is_empty() {
             for (idx, resource) in self.rmap.patterns.iter().enumerate() {
                 if resource.match_path(path) {
@@ -56,7 +56,7 @@ impl<T> Router<T> {
         None
     }
 
-    pub fn recognize_mut<U: RequestPath>(
+    pub fn recognize_mut<U: ResourcePath>(
         &mut self,
         path: &mut Path<U>,
     ) -> Option<(&mut T, ResourceInfo)> {
@@ -94,11 +94,11 @@ impl<'a, T> IntoIterator for &'a mut Router<T> {
 }
 
 impl ResourceMap {
-    fn register(&mut self, pattern: Pattern) {
+    fn register(&mut self, pattern: ResourceDef) {
         self.patterns.push(pattern);
     }
 
-    fn register_named(&mut self, name: String, pattern: Pattern) {
+    fn register_named(&mut self, name: String, pattern: ResourceDef) {
         self.patterns.push(pattern.clone());
         self.named.insert(name, pattern);
     }
@@ -110,18 +110,18 @@ impl ResourceMap {
 
 pub struct RouterBuilder<T> {
     rmap: ResourceMap,
-    named: HashMap<String, Pattern>,
+    named: HashMap<String, ResourceDef>,
     resources: Vec<T>,
 }
 
 impl<T> RouterBuilder<T> {
     pub fn path(&mut self, path: &str, resource: T) {
-        self.rmap.register(Pattern::new(path));
+        self.rmap.register(ResourceDef::new(path));
         self.resources.push(resource);
     }
 
     pub fn prefix(&mut self, prefix: &str, resource: T) {
-        self.rmap.register(Pattern::prefix(prefix));
+        self.rmap.register(ResourceDef::prefix(prefix));
         self.resources.push(resource);
     }
 

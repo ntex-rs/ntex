@@ -1,31 +1,31 @@
 //! Resource path matching library.
 mod de;
 mod path;
-mod pattern;
+mod resource;
 mod router;
 
 pub use self::de::PathDeserializer;
 pub use self::path::Path;
-pub use self::pattern::Pattern;
+pub use self::resource::ResourceDef;
 pub use self::router::{ResourceInfo, Router, RouterBuilder};
 
-pub trait RequestPath {
+pub trait ResourcePath {
     fn path(&self) -> &str;
 }
 
-impl RequestPath for String {
+impl ResourcePath for String {
     fn path(&self) -> &str {
         self.as_str()
     }
 }
 
-impl<'a> RequestPath for &'a str {
+impl<'a> ResourcePath for &'a str {
     fn path(&self) -> &str {
         self
     }
 }
 
-impl<T: AsRef<[u8]>> RequestPath for string::String<T> {
+impl<T: AsRef<[u8]>> ResourcePath for string::String<T> {
     fn path(&self) -> &str {
         &*self
     }
@@ -39,10 +39,10 @@ pub use self::url::Url;
 
 #[cfg(feature = "http")]
 mod http_support {
-    use super::RequestPath;
+    use super::ResourcePath;
     use http::Uri;
 
-    impl RequestPath for Uri {
+    impl ResourcePath for Uri {
         fn path(&self) -> &str {
             self.path()
         }

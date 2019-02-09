@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::RequestPath;
+use crate::ResourcePath;
 
 #[allow(dead_code)]
 const GEN_DELIMS: &[u8] = b":/?#[]@";
@@ -67,7 +67,7 @@ impl Url {
     }
 }
 
-impl RequestPath for Url {
+impl ResourcePath for Url {
     fn path(&self) -> &str {
         self.path()
     }
@@ -190,11 +190,11 @@ mod tests {
     use http::{HttpTryFrom, Uri};
 
     use super::*;
-    use crate::{Path, Pattern};
+    use crate::{Path, ResourceDef};
 
     #[test]
     fn test_parse_url() {
-        let re = Pattern::new("/user/{id}/test");
+        let re = ResourceDef::new("/user/{id}/test");
 
         let url = Uri::try_from("/user/2345/test").unwrap();
         let mut path = Path::new(Url::new(url));
