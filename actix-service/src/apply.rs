@@ -89,7 +89,6 @@ where
 /// `ApplyNewService` new service combinator
 pub struct ApplyNewService<T, S>
 where
-    // T::InitError: From<S::InitError>,
     T: NewTransform<S::Service, InitError = S::InitError>,
     T::Error: From<S::Error>,
     S: NewService,

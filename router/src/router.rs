@@ -115,16 +115,25 @@ pub struct RouterBuilder<T> {
 }
 
 impl<T> RouterBuilder<T> {
+    /// Register resource for specified path.
     pub fn path(&mut self, path: &str, resource: T) {
         self.rmap.register(ResourceDef::new(path));
         self.resources.push(resource);
     }
 
+    /// Register resource for specified path prefix.
     pub fn prefix(&mut self, prefix: &str, resource: T) {
         self.rmap.register(ResourceDef::prefix(prefix));
         self.resources.push(resource);
     }
 
+    /// Register resource for ResourceDef
+    pub fn rdef(&mut self, rdef: ResourceDef, resource: T) {
+        self.rmap.register(rdef);
+        self.resources.push(resource);
+    }
+
+    /// Finish configuration and create router instance.
     pub fn finish(self) -> Router<T> {
         Router {
             rmap: Rc::new(self.rmap),
