@@ -1,8 +1,15 @@
 # Changes
 
+## [0.2.1] - 2019-02-09
+
+### Changes
+
+* Drop service response
+
+
 ## [0.2.0] - 2019-02-01
 
-## Changes
+### Changes
 
 * Migrate to actix-service 0.2
 
@@ -11,14 +18,14 @@
 
 ## [0.1.3] - 2018-12-21
 
-## Fixed
+### Fixed
 
 * Fix max concurrent connections handling
 
 
 ## [0.1.2] - 2018-12-12
 
-## Changed
+### Changed
 
 * rename ServiceConfig::rt() to ServiceConfig::apply()
 

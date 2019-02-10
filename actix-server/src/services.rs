@@ -23,13 +23,13 @@ pub enum ServerMessage {
 }
 
 pub trait StreamServiceFactory: Send + Clone + 'static {
-    type NewService: NewService<Request = TcpStream, Response = ()>;
+    type NewService: NewService<Request = TcpStream>;
 
     fn create(&self) -> Self::NewService;
 }
 
 pub trait ServiceFactory: Send + Clone + 'static {
-    type NewService: NewService<Request = ServerMessage, Response = ()>;
+    type NewService: NewService<Request = ServerMessage>;
 
     fn create(&self) -> Self::NewService;
 }
@@ -63,7 +63,7 @@ impl<T> StreamService<T> {
 
 impl<T> Service for StreamService<T>
 where
-    T: Service<Request = TcpStream, Response = ()>,
+    T: Service<Request = TcpStream>,
     T::Future: 'static,
     T::Error: 'static,
 {
@@ -86,7 +86,7 @@ where
                 if let Ok(stream) = stream {
                     spawn(self.service.call(stream).then(move |res| {
                         drop(guard);
-                        res.map_err(|_| ())
+                        res.map_err(|_| ()).map(|_| ())
                     }));
                     ok(())
                 } else {
@@ -110,7 +110,7 @@ impl<T> ServerService<T> {
 
 impl<T> Service for ServerService<T>
 where
-    T: Service<Request = ServerMessage, Response = ()>,
+    T: Service<Request = ServerMessage>,
     T::Future: 'static,
     T::Error: 'static,
 {
@@ -126,7 +126,7 @@ where
     fn call(&mut self, (guard, req): (Option<CounterGuard>, ServerMessage)) -> Self::Future {
         spawn(self.service.call(req).then(move |res| {
             drop(guard);
-            res.map_err(|_| ())
+            res.map_err(|_| ()).map(|_| ())
         }));
         ok(())
     }
@@ -241,7 +241,7 @@ impl InternalServiceFactory for Box<InternalServiceFactory> {
 impl<F, T> ServiceFactory for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: NewService<Request = ServerMessage, Response = ()>,
+    T: NewService<Request = ServerMessage>,
 {
     type NewService = T;
 
@@ -253,7 +253,7 @@ where
 impl<F, T> StreamServiceFactory for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: NewService<Request = TcpStream, Response = ()>,
+    T: NewService<Request = TcpStream>,
 {
     type NewService = T;
 
