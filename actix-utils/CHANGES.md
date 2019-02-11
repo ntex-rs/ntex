@@ -6,6 +6,8 @@
 
 * Add `Display` impl for `TimeoutError`
 
+* Add `Display` impl for `InOrderError`
+
 
 ## [0.2.1] - 2019-02-06
 

@@ -37,6 +37,15 @@ impl<E: fmt::Debug> fmt::Debug for InOrderError<E> {
     }
 }
 
+impl<E: fmt::Display> fmt::Display for InOrderError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            InOrderError::Service(e) => e.fmt(f),
+            InOrderError::Disconnected => write!(f, "InOrder service disconnected"),
+        }
+    }
+}
+
 /// InOrder - The service will yield responses as they become available,
 /// in the order that their originating requests were submitted to the service.
 pub struct InOrder<S> {
