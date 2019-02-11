@@ -41,6 +41,15 @@ impl<E: fmt::Debug> fmt::Debug for TimeoutError<E> {
     }
 }
 
+impl<E: fmt::Display> fmt::Display for TimeoutError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TimeoutError::Service(e) => e.fmt(f),
+            TimeoutError::Timeout => write!(f, "Service call timeout"),
+        }
+    }
+}
+
 impl<E: PartialEq> PartialEq for TimeoutError<E> {
     fn eq(&self, other: &TimeoutError<E>) -> bool {
         match self {

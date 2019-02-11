@@ -1,6 +1,6 @@
 [package]
 name = "actix-utils"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix utils - various actix net related services"
 keywords = ["network", "framework", "async", "futures"]
