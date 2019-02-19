@@ -1,3 +1,6 @@
+use std::rc::Rc;
+use std::sync::Arc;
+
 use futures::{Future, IntoFuture, Poll};
 
 mod and_then;
@@ -374,6 +377,38 @@ where
 
     fn new_service(&self) -> Self::Future {
         (*self)().into_future()
+    }
+}
+
+impl<S> NewService for Rc<S>
+where
+    S: NewService,
+{
+    type Request = S::Request;
+    type Response = S::Response;
+    type Error = S::Error;
+    type Service = S::Service;
+    type InitError = S::InitError;
+    type Future = S::Future;
+
+    fn new_service(&self) -> S::Future {
+        self.as_ref().new_service()
+    }
+}
+
+impl<S> NewService for Arc<S>
+where
+    S: NewService,
+{
+    type Request = S::Request;
+    type Response = S::Response;
+    type Error = S::Error;
+    type Service = S::Service;
+    type InitError = S::InitError;
+    type Future = S::Future;
+
+    fn new_service(&self) -> S::Future {
+        self.as_ref().new_service()
     }
 }
 

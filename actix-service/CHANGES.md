@@ -1,5 +1,14 @@
 # Changes
 
+## [0.2.2] - 2019-02-19
+
+### Added
+
+* Added `NewService` impl for `Rc<S> where S: NewService`
+
+* Added `NewService` impl for `Arc<S> where S: NewService`
+
+
 ## [0.2.1] - 2019-02-03
 
 ### Changed
