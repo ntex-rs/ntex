@@ -1,5 +1,12 @@
 # Changes
 
+## [0.2.3] - 2019-02-21
+
+### Added
+
+* Add `BoxedNewService` and `BoxedService`
+
+
 ## [0.2.2] - 2019-02-11
 
 ### Added
