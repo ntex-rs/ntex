@@ -1,5 +1,12 @@
 # Changes
 
+## [0.2.4] - 2019-02-21
+
+### Changed
+
+* Custom `BoxedNewService` implementation.
+
+
 ## [0.2.3] - 2019-02-21
 
 ### Added

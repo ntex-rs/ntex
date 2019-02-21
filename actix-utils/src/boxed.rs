@@ -10,7 +10,27 @@ pub type BoxedService<Req, Res, Err> = Box<
     >,
 >;
 
-pub type BoxedNewService<Req, Res, Err, InitErr> = Box<
+/// Create boxed new service
+pub fn new_service<T>(
+    service: T,
+) -> BoxedNewService<T::Request, T::Response, T::Error, T::InitError>
+where
+    T: NewService + 'static,
+    T::Service: 'static,
+{
+    BoxedNewService(Box::new(NewServiceWrapper(service)))
+}
+
+/// Create boxed service
+pub fn service<T>(service: T) -> BoxedService<T::Request, T::Response, T::Error>
+where
+    T: Service + 'static,
+    T::Future: 'static,
+{
+    Box::new(ServiceWrapper(service))
+}
+
+type Inner<Req, Res, Err, InitErr> = Box<
     NewService<
         Request = Req,
         Response = Res,
@@ -21,24 +41,25 @@ pub type BoxedNewService<Req, Res, Err, InitErr> = Box<
     >,
 >;
 
-/// Create boxed new service
-pub fn new_service<T>(
-    service: T,
-) -> BoxedNewService<T::Request, T::Response, T::Error, T::InitError>
-where
-    T: NewService + 'static,
-    T::Service: 'static,
-{
-    Box::new(NewServiceWrapper(service))
-}
+pub struct BoxedNewService<Req, Res, Err, InitErr>(Inner<Req, Res, Err, InitErr>);
 
-/// Create boxed service
-pub fn service<T>(service: T) -> BoxedService<T::Request, T::Response, T::Error>
+impl<Req, Res, Err, InitErr> NewService for BoxedNewService<Req, Res, Err, InitErr>
 where
-    T: Service + 'static,
-    T::Future: 'static,
+    Req: 'static,
+    Res: 'static,
+    Err: 'static,
+    InitErr: 'static,
 {
-    Box::new(ServiceWrapper(service))
+    type Request = Req;
+    type Response = Res;
+    type Error = Err;
+    type InitError = InitErr;
+    type Service = BoxedService<Req, Res, Err>;
+    type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
+
+    fn new_service(&self) -> Self::Future {
+        self.0.new_service()
+    }
 }
 
 struct NewServiceWrapper<T: NewService>(T);
