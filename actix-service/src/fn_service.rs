@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use futures::future::{ok, FutureResult};
 use futures::{Async, IntoFuture, Poll};
 
-use super::{IntoNewService, IntoService, NewService, Service};
+use super::{IntoConfigurableNewService, IntoNewService, IntoService, NewService, Service};
 
 /// Create `NewService` for function that can act as Service
 pub fn fn_service<F, Req, Out>(f: F) -> FnNewService<F, Req, Out, ()>
@@ -266,13 +266,13 @@ where
     }
 }
 
-// impl<F, C, R, S, E> IntoNewService<FnNewServiceConfig<F, C, R, S, E>, C> for F
-// where
-//     F: Fn(&C) -> R,
-//     R: IntoFuture<Item = S, Error = E>,
-//     S: Service,
-// {
-//     fn into_new_service(self) -> FnNewServiceConfig<F, C, R, S, E> {
-//         FnNewServiceConfig::new(self)
-//     }
-// }
+impl<F, C, R, S, E> IntoConfigurableNewService<FnNewServiceConfig<F, C, R, S, E>, C> for F
+where
+    F: Fn(&C) -> R,
+    R: IntoFuture<Item = S, Error = E>,
+    S: Service,
+{
+    fn into_new_service(self) -> FnNewServiceConfig<F, C, R, S, E> {
+        FnNewServiceConfig::new(self)
+    }
+}

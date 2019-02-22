@@ -437,3 +437,21 @@ where
         self
     }
 }
+
+/// Trait for types that can be converted to a configurable `NewService`
+pub trait IntoConfigurableNewService<T, C>
+where
+    T: NewService<C>,
+{
+    /// Convert to an `NewService`
+    fn into_new_service(self) -> T;
+}
+
+impl<T, C> IntoConfigurableNewService<T, C> for T
+where
+    T: NewService<C>,
+{
+    fn into_new_service(self) -> T {
+        self
+    }
+}
