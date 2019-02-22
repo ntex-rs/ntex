@@ -24,7 +24,7 @@ use self::and_then_apply::{AndThenTransform, AndThenTransformNewService};
 use self::and_then_apply_fn::{AndThenApply, AndThenApplyNewService};
 pub use self::apply::{Apply, ApplyNewService};
 pub use self::blank::{Blank, BlankNewService};
-pub use self::fn_service::{fn_nservice, FnNewService, FnService};
+pub use self::fn_service::{fn_cfg_factory, fn_factory, fn_service, FnService};
 pub use self::fn_transform::{FnNewTransform, FnTransform};
 pub use self::from_err::{FromErr, FromErrNewService};
 pub use self::map::{Map, MapNewService};
@@ -367,24 +367,6 @@ where
 
     fn call(&mut self, request: Self::Request) -> S::Future {
         (**self).call(request)
-    }
-}
-
-impl<F, R, E, S, C> NewService<C> for F
-where
-    F: Fn(&C) -> R,
-    R: IntoFuture<Item = S, Error = E>,
-    S: Service,
-{
-    type Request = S::Request;
-    type Response = S::Response;
-    type Error = S::Error;
-    type Service = S;
-    type InitError = E;
-    type Future = R::Future;
-
-    fn new_service(&self, cfg: &C) -> Self::Future {
-        (*self)(cfg).into_future()
     }
 }
 

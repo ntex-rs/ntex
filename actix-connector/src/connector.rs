@@ -4,8 +4,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use std::{fmt, io};
 
-use actix_service::{NewService, Service};
-use futures::future::{ok, Either, FutureResult};
+use actix_service::{fn_factory, NewService, Service};
+use futures::future::{ok, Either};
 use futures::{try_ready, Async, Future, Poll};
 use tokio_tcp::{ConnectFuture, TcpStream};
 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
@@ -183,7 +183,7 @@ impl Connector {
         Error = ConnectorError,
         InitError = E,
     > + Clone {
-        move |_: &()| -> FutureResult<Connector, E> { ok(Connector::new(cfg.clone(), opts)) }
+        fn_factory(move || ok(Connector::new(cfg.clone(), opts)))
     }
 }
 
