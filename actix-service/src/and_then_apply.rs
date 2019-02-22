@@ -124,26 +124,32 @@ where
 }
 
 /// `Apply` new service combinator
-pub struct AndThenTransformNewService<T, A, B> {
+pub struct AndThenTransformNewService<T, A, B, C> {
     a: A,
     b: B,
     t: T,
+    _t: std::marker::PhantomData<C>,
 }
 
-impl<T, A, B> AndThenTransformNewService<T, A, B>
+impl<T, A, B, C> AndThenTransformNewService<T, A, B, C>
 where
-    A: NewService,
-    B: NewService<Error = A::Error, InitError = A::InitError>,
+    A: NewService<C>,
+    B: NewService<C, Error = A::Error, InitError = A::InitError>,
     T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
     /// Create new `ApplyNewService` new service instance
     pub fn new(t: T, a: A, b: B) -> Self {
-        Self { a, b, t }
+        Self {
+            a,
+            b,
+            t,
+            _t: std::marker::PhantomData,
+        }
     }
 }
 
-impl<T, A, B> Clone for AndThenTransformNewService<T, A, B>
+impl<T, A, B, C> Clone for AndThenTransformNewService<T, A, B, C>
 where
     A: Clone,
     B: Clone,
@@ -154,14 +160,15 @@ where
             a: self.a.clone(),
             b: self.b.clone(),
             t: self.t.clone(),
+            _t: std::marker::PhantomData,
         }
     }
 }
 
-impl<T, A, B> NewService for AndThenTransformNewService<T, A, B>
+impl<T, A, B, C> NewService<C> for AndThenTransformNewService<T, A, B, C>
 where
-    A: NewService,
-    B: NewService<Error = A::Error, InitError = A::InitError>,
+    A: NewService<C>,
+    B: NewService<C, Error = A::Error, InitError = A::InitError>,
     T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
@@ -171,24 +178,24 @@ where
 
     type InitError = T::InitError;
     type Service = AndThenTransform<T::Transform, A::Service, B::Service>;
-    type Future = AndThenTransformNewServiceFuture<T, A, B>;
+    type Future = AndThenTransformNewServiceFuture<T, A, B, C>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, cfg: &C) -> Self::Future {
         AndThenTransformNewServiceFuture {
             a: None,
             b: None,
             t: None,
-            fut_a: self.a.new_service(),
-            fut_b: self.b.new_service(),
+            fut_a: self.a.new_service(cfg),
+            fut_b: self.b.new_service(cfg),
             fut_t: self.t.new_transform(),
         }
     }
 }
 
-pub struct AndThenTransformNewServiceFuture<T, A, B>
+pub struct AndThenTransformNewServiceFuture<T, A, B, C>
 where
-    A: NewService,
-    B: NewService<Error = A::Error, InitError = A::InitError>,
+    A: NewService<C>,
+    B: NewService<C, Error = A::Error, InitError = A::InitError>,
     T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
@@ -200,10 +207,10 @@ where
     t: Option<T::Transform>,
 }
 
-impl<T, A, B> Future for AndThenTransformNewServiceFuture<T, A, B>
+impl<T, A, B, C> Future for AndThenTransformNewServiceFuture<T, A, B, C>
 where
-    A: NewService,
-    B: NewService<Error = A::Error, InitError = A::InitError>,
+    A: NewService<C>,
+    B: NewService<C, Error = A::Error, InitError = A::InitError>,
     T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
@@ -287,7 +294,7 @@ mod tests {
             |req: &'static str, srv: &mut Srv| srv.call(()).map(move |res| (req, res)),
             || Ok(Srv),
         );
-        if let Async::Ready(mut srv) = new_srv.new_service().poll().unwrap() {
+        if let Async::Ready(mut srv) = new_srv.new_service(&()).poll().unwrap() {
             assert!(srv.poll_ready().is_ok());
             let res = srv.call("srv").poll();
             assert!(res.is_ok());

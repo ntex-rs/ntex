@@ -5,17 +5,17 @@ use futures::{Future, Poll};
 use super::NewService;
 
 /// `MapInitErr` service combinator
-pub struct MapInitErr<A, F, E> {
+pub struct MapInitErr<A, F, E, C> {
     a: A,
     f: F,
-    e: PhantomData<E>,
+    e: PhantomData<(E, C)>,
 }
 
-impl<A, F, E> MapInitErr<A, F, E> {
+impl<A, F, E, C> MapInitErr<A, F, E, C> {
     /// Create new `MapInitErr` combinator
     pub fn new(a: A, f: F) -> Self
     where
-        A: NewService,
+        A: NewService<C>,
         F: Fn(A::InitError) -> E,
     {
         Self {
@@ -26,7 +26,7 @@ impl<A, F, E> MapInitErr<A, F, E> {
     }
 }
 
-impl<A, F, E> Clone for MapInitErr<A, F, E>
+impl<A, F, E, C> Clone for MapInitErr<A, F, E, C>
 where
     A: Clone,
     F: Clone,
@@ -40,9 +40,9 @@ where
     }
 }
 
-impl<A, F, E> NewService for MapInitErr<A, F, E>
+impl<A, F, E, C> NewService<C> for MapInitErr<A, F, E, C>
 where
-    A: NewService,
+    A: NewService<C>,
     F: Fn(A::InitError) -> E + Clone,
 {
     type Request = A::Request;
@@ -51,25 +51,25 @@ where
     type Service = A::Service;
 
     type InitError = E;
-    type Future = MapInitErrFuture<A, F, E>;
+    type Future = MapInitErrFuture<A, F, E, C>;
 
-    fn new_service(&self) -> Self::Future {
-        MapInitErrFuture::new(self.a.new_service(), self.f.clone())
+    fn new_service(&self, cfg: &C) -> Self::Future {
+        MapInitErrFuture::new(self.a.new_service(cfg), self.f.clone())
     }
 }
 
-pub struct MapInitErrFuture<A, F, E>
+pub struct MapInitErrFuture<A, F, E, C>
 where
-    A: NewService,
+    A: NewService<C>,
     F: Fn(A::InitError) -> E,
 {
     f: F,
     fut: A::Future,
 }
 
-impl<A, F, E> MapInitErrFuture<A, F, E>
+impl<A, F, E, C> MapInitErrFuture<A, F, E, C>
 where
-    A: NewService,
+    A: NewService<C>,
     F: Fn(A::InitError) -> E,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -77,9 +77,9 @@ where
     }
 }
 
-impl<A, F, E> Future for MapInitErrFuture<A, F, E>
+impl<A, F, E, C> Future for MapInitErrFuture<A, F, E, C>
 where
-    A: NewService,
+    A: NewService<C>,
     F: Fn(A::InitError) -> E,
 {
     type Item = A::Service;

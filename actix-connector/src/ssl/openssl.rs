@@ -44,7 +44,9 @@ impl<R, T, E> Clone for OpensslConnector<R, T, E> {
     }
 }
 
-impl<R: RequestHost, T: AsyncRead + AsyncWrite, E> NewService for OpensslConnector<R, T, E> {
+impl<R: RequestHost, T: AsyncRead + AsyncWrite, E> NewService<()>
+    for OpensslConnector<R, T, E>
+{
     type Request = (R, T);
     type Response = (R, SslStream<T>);
     type Error = HandshakeError<T>;
@@ -52,7 +54,7 @@ impl<R: RequestHost, T: AsyncRead + AsyncWrite, E> NewService for OpensslConnect
     type InitError = E;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, _: &()) -> Self::Future {
         ok(OpensslConnectorService {
             connector: self.connector.clone(),
             _t: PhantomData,

@@ -46,7 +46,7 @@ impl<T: AsyncRead + AsyncWrite> NewService for RustlsAcceptor<T> {
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, _: &()) -> Self::Future {
         MAX_CONN_COUNTER.with(|conns| {
             ok(RustlsAcceptorService {
                 acceptor: self.config.clone().into(),

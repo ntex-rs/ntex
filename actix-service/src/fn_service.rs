@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use futures::future::{ok, FutureResult};
 use futures::{Async, IntoFuture, Poll};
 
-use super::{IntoNewService, IntoService, NewService, Service};
+use super::{IntoService, NewService, Service};
 
 pub struct FnService<F, Req, Out>
 where
@@ -66,16 +66,16 @@ where
     }
 }
 
-pub struct FnNewService<F, Req, Out>
+pub struct FnNewService<F, Req, Out, Cfg>
 where
     F: FnMut(Req) -> Out,
     Out: IntoFuture,
 {
     f: F,
-    _t: PhantomData<(Req,)>,
+    _t: PhantomData<(Req, Cfg)>,
 }
 
-impl<F, Req, Out> FnNewService<F, Req, Out>
+impl<F, Req, Out, Cfg> FnNewService<F, Req, Out, Cfg>
 where
     F: FnMut(Req) -> Out + Clone,
     Out: IntoFuture,
@@ -85,7 +85,7 @@ where
     }
 }
 
-impl<F, Req, Out> NewService for FnNewService<F, Req, Out>
+impl<F, Req, Out, Cfg> NewService<Cfg> for FnNewService<F, Req, Out, Cfg>
 where
     F: FnMut(Req) -> Out + Clone,
     Out: IntoFuture,
@@ -94,25 +94,16 @@ where
     type Response = Out::Item;
     type Error = Out::Error;
     type Service = FnService<F, Req, Out>;
+
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, _: &Cfg) -> Self::Future {
         ok(FnService::new(self.f.clone()))
     }
 }
 
-impl<F, Req, Out> IntoNewService<FnNewService<F, Req, Out>> for F
-where
-    F: FnMut(Req) -> Out + Clone + 'static,
-    Out: IntoFuture,
-{
-    fn into_new_service(self) -> FnNewService<F, Req, Out> {
-        FnNewService::new(self)
-    }
-}
-
-impl<F, Req, Out> Clone for FnNewService<F, Req, Out>
+impl<F, Req, Out, Cfg> Clone for FnNewService<F, Req, Out, Cfg>
 where
     F: FnMut(Req) -> Out + Clone,
     Out: IntoFuture,

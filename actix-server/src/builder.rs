@@ -15,7 +15,6 @@ use crate::accept::{AcceptLoop, AcceptNotify, Command};
 use crate::config::{ConfiguredService, ServiceConfig};
 use crate::server::{Server, ServerCommand};
 use crate::services::{InternalServiceFactory, StreamNewService, StreamServiceFactory};
-use crate::services::{ServiceFactory, ServiceNewService};
 use crate::signals::{Signal, Signals};
 use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use crate::Token;
@@ -168,26 +167,6 @@ impl ServerBuilder {
     {
         let token = self.token.next();
         self.services.push(StreamNewService::create(
-            name.as_ref().to_string(),
-            token,
-            factory,
-        ));
-        self.sockets.push((token, lst));
-        self
-    }
-
-    /// Add new service to the server.
-    pub fn listen2<F, N: AsRef<str>>(
-        mut self,
-        name: N,
-        lst: net::TcpListener,
-        factory: F,
-    ) -> Self
-    where
-        F: ServiceFactory,
-    {
-        let token = self.token.next();
-        self.services.push(ServiceNewService::create(
             name.as_ref().to_string(),
             token,
             factory,

@@ -44,7 +44,7 @@ impl<T: AsyncRead + AsyncWrite> NewService for NativeTlsAcceptor<T> {
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, _: &()) -> Self::Future {
         MAX_CONN_COUNTER.with(|conns| {
             ok(NativeTlsAcceptorService {
                 acceptor: self.acceptor.clone(),

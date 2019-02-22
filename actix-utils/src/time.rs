@@ -42,7 +42,7 @@ impl Default for LowResTime {
     }
 }
 
-impl NewService for LowResTime {
+impl NewService<()> for LowResTime {
     type Request = ();
     type Response = Instant;
     type Error = Never;
@@ -50,7 +50,7 @@ impl NewService for LowResTime {
     type Service = LowResTimeService;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, _: &()) -> Self::Future {
         ok(self.timer())
     }
 }

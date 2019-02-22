@@ -29,20 +29,21 @@ where
     }
 }
 
-pub struct StreamNewService<S, T, E> {
+pub struct StreamNewService<S, T, E, C> {
     factory: Rc<T>,
-    _t: PhantomData<(S, E)>,
+    _t: PhantomData<(S, E, C)>,
 }
 
-impl<S, T, E> StreamNewService<S, T, E>
+impl<S, T, E, C> StreamNewService<S, T, E, C>
 where
+    C: Clone,
     S: IntoStream,
-    T: NewService<Request = Request<S>, Response = (), Error = E, InitError = E>,
+    T: NewService<C, Request = Request<S>, Response = (), Error = E, InitError = E>,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
 {
-    pub fn new<F: IntoNewService<T>>(factory: F) -> Self {
+    pub fn new<F: IntoNewService<T, C>>(factory: F) -> Self {
         Self {
             factory: Rc::new(factory.into_new_service()),
             _t: PhantomData,
@@ -50,7 +51,7 @@ where
     }
 }
 
-impl<S, T, E> Clone for StreamNewService<S, T, E> {
+impl<S, T, E, C> Clone for StreamNewService<S, T, E, C> {
     fn clone(&self) -> Self {
         Self {
             factory: self.factory.clone(),
@@ -59,10 +60,11 @@ impl<S, T, E> Clone for StreamNewService<S, T, E> {
     }
 }
 
-impl<S, T, E> NewService for StreamNewService<S, T, E>
+impl<S, T, E, C> NewService<C> for StreamNewService<S, T, E, C>
 where
+    C: Clone,
     S: IntoStream + 'static,
-    T: NewService<Request = Request<S>, Response = (), Error = E, InitError = E>,
+    T: NewService<C, Request = Request<S>, Response = (), Error = E, InitError = E>,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
@@ -71,29 +73,32 @@ where
     type Response = ();
     type Error = E;
     type InitError = E;
-    type Service = StreamService<S, T, E>;
+    type Service = StreamService<S, T, E, C>;
     type Future = FutureResult<Self::Service, E>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, cfg: &C) -> Self::Future {
         ok(StreamService {
             factory: self.factory.clone(),
+            config: cfg.clone(),
             _t: PhantomData,
         })
     }
 }
 
-pub struct StreamService<S, T, E> {
+pub struct StreamService<S, T, E, C = ()> {
     factory: Rc<T>,
+    config: C,
     _t: PhantomData<(S, E)>,
 }
 
-impl<S, T, E> Service for StreamService<S, T, E>
+impl<S, T, E, C> Service for StreamService<S, T, E, C>
 where
     S: IntoStream + 'static,
-    T: NewService<Request = Request<S>, Response = (), Error = E, InitError = E>,
+    T: NewService<C, Request = Request<S>, Response = (), Error = E, InitError = E>,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
+    C: Clone,
 {
     type Request = S;
     type Response = ();
@@ -107,7 +112,7 @@ where
     fn call(&mut self, req: S) -> Self::Future {
         Box::new(
             self.factory
-                .new_service()
+                .new_service(&self.config)
                 .and_then(move |srv| StreamDispatcher::new(req, srv)),
         )
     }
@@ -227,7 +232,7 @@ impl<T> Clone for TakeItem<T> {
     }
 }
 
-impl<T: Stream> NewService for TakeItem<T> {
+impl<T: Stream> NewService<()> for TakeItem<T> {
     type Request = T;
     type Response = (Option<T::Item>, T);
     type Error = T::Error;
@@ -235,7 +240,7 @@ impl<T: Stream> NewService for TakeItem<T> {
     type Service = TakeItemService<T>;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, _: &()) -> Self::Future {
         ok(TakeItemService { _t: PhantomData })
     }
 }

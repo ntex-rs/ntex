@@ -44,7 +44,7 @@ where
     }
 }
 
-impl<R, E, F> NewService for KeepAlive<R, E, F>
+impl<R, E, F> NewService<()> for KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
@@ -55,7 +55,7 @@ where
     type Service = KeepAliveService<R, E, F>;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, _: &()) -> Self::Future {
         ok(KeepAliveService::new(
             self.ka,
             self.time.timer(),

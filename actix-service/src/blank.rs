@@ -68,15 +68,16 @@ impl<R, E1, E2> Default for BlankNewService<R, E1, E2> {
     }
 }
 
-impl<R, E1, E2> NewService for BlankNewService<R, E1, E2> {
+impl<R, E1, E2> NewService<()> for BlankNewService<R, E1, E2> {
     type Request = R;
     type Response = R;
     type Error = E1;
-    type InitError = E2;
     type Service = Blank<R, E1>;
+
+    type InitError = E2;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, _: &()) -> Self::Future {
         ok(Blank::default())
     }
 }

@@ -13,7 +13,7 @@ use super::Token;
 use crate::counter::CounterGuard;
 
 /// Server message
-pub enum ServerMessage {
+pub(crate) enum ServerMessage {
     /// New stream
     Connect(net::TcpStream),
     /// Gracefull shutdown
@@ -24,12 +24,6 @@ pub enum ServerMessage {
 
 pub trait StreamServiceFactory: Send + Clone + 'static {
     type NewService: NewService<Request = TcpStream>;
-
-    fn create(&self) -> Self::NewService;
-}
-
-pub trait ServiceFactory: Send + Clone + 'static {
-    type NewService: NewService<Request = ServerMessage>;
 
     fn create(&self) -> Self::NewService;
 }
@@ -98,86 +92,6 @@ where
     }
 }
 
-pub(crate) struct ServerService<T> {
-    service: T,
-}
-
-impl<T> ServerService<T> {
-    fn new(service: T) -> Self {
-        ServerService { service }
-    }
-}
-
-impl<T> Service for ServerService<T>
-where
-    T: Service<Request = ServerMessage>,
-    T::Future: 'static,
-    T::Error: 'static,
-{
-    type Request = (Option<CounterGuard>, ServerMessage);
-    type Response = ();
-    type Error = ();
-    type Future = FutureResult<(), ()>;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.service.poll_ready().map_err(|_| ())
-    }
-
-    fn call(&mut self, (guard, req): (Option<CounterGuard>, ServerMessage)) -> Self::Future {
-        spawn(self.service.call(req).then(move |res| {
-            drop(guard);
-            res.map_err(|_| ()).map(|_| ())
-        }));
-        ok(())
-    }
-}
-
-pub(crate) struct ServiceNewService<F: ServiceFactory> {
-    name: String,
-    inner: F,
-    token: Token,
-}
-
-impl<F> ServiceNewService<F>
-where
-    F: ServiceFactory,
-{
-    pub(crate) fn create(name: String, token: Token, inner: F) -> Box<InternalServiceFactory> {
-        Box::new(Self { name, inner, token })
-    }
-}
-
-impl<F> InternalServiceFactory for ServiceNewService<F>
-where
-    F: ServiceFactory,
-{
-    fn name(&self, _: Token) -> &str {
-        &self.name
-    }
-
-    fn clone_factory(&self) -> Box<InternalServiceFactory> {
-        Box::new(Self {
-            name: self.name.clone(),
-            inner: self.inner.clone(),
-            token: self.token,
-        })
-    }
-
-    fn create(&self) -> Box<Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>> {
-        let token = self.token;
-        Box::new(
-            self.inner
-                .create()
-                .new_service()
-                .map_err(|_| ())
-                .map(move |inner| {
-                    let service: BoxedServerService = Box::new(ServerService::new(inner));
-                    vec![(token, service)]
-                }),
-        )
-    }
-}
-
 pub(crate) struct StreamNewService<F: StreamServiceFactory> {
     name: String,
     inner: F,
@@ -214,7 +128,7 @@ where
         Box::new(
             self.inner
                 .create()
-                .new_service()
+                .new_service(&())
                 .map_err(|_| ())
                 .map(move |inner| {
                     let service: BoxedServerService = Box::new(StreamService::new(inner));
@@ -235,18 +149,6 @@ impl InternalServiceFactory for Box<InternalServiceFactory> {
 
     fn create(&self) -> Box<Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>> {
         self.as_ref().create()
-    }
-}
-
-impl<F, T> ServiceFactory for F
-where
-    F: Fn() -> T + Send + Clone + 'static,
-    T: NewService<Request = ServerMessage>,
-{
-    type NewService = T;
-
-    fn create(&self) -> T {
-        (self)()
     }
 }
 

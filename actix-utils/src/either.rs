@@ -53,10 +53,11 @@ pub enum Either<A, B> {
 }
 
 impl<A, B> Either<A, B> {
-    pub fn new_a(srv: A) -> Self
+    pub fn new_a<C>(srv: A) -> Self
     where
-        A: NewService,
+        A: NewService<C>,
         B: NewService<
+            C,
             Request = A::Request,
             Response = A::Response,
             Error = A::Error,
@@ -66,10 +67,11 @@ impl<A, B> Either<A, B> {
         Either::A(srv)
     }
 
-    pub fn new_b(srv: B) -> Self
+    pub fn new_b<C>(srv: B) -> Self
     where
-        A: NewService,
+        A: NewService<C>,
         B: NewService<
+            C,
             Request = A::Request,
             Response = A::Response,
             Error = A::Error,
@@ -80,10 +82,11 @@ impl<A, B> Either<A, B> {
     }
 }
 
-impl<A, B> NewService for Either<A, B>
+impl<A, B, C> NewService<C> for Either<A, B>
 where
-    A: NewService,
+    A: NewService<C>,
     B: NewService<
+        C,
         Request = A::Request,
         Response = A::Response,
         Error = A::Error,
@@ -95,12 +98,12 @@ where
     type Error = A::Error;
     type InitError = A::InitError;
     type Service = EitherService<A::Service, B::Service>;
-    type Future = EitherNewService<A, B>;
+    type Future = EitherNewService<A, B, C>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, cfg: &C) -> Self::Future {
         match self {
-            Either::A(ref inner) => EitherNewService::A(inner.new_service()),
-            Either::B(ref inner) => EitherNewService::B(inner.new_service()),
+            Either::A(ref inner) => EitherNewService::A(inner.new_service(cfg)),
+            Either::B(ref inner) => EitherNewService::B(inner.new_service(cfg)),
         }
     }
 }
@@ -115,15 +118,16 @@ impl<A: Clone, B: Clone> Clone for Either<A, B> {
 }
 
 #[doc(hidden)]
-pub enum EitherNewService<A: NewService, B: NewService> {
+pub enum EitherNewService<A: NewService<C>, B: NewService<C>, C> {
     A(A::Future),
     B(B::Future),
 }
 
-impl<A, B> Future for EitherNewService<A, B>
+impl<A, B, C> Future for EitherNewService<A, B, C>
 where
-    A: NewService,
+    A: NewService<C>,
     B: NewService<
+        C,
         Request = A::Request,
         Response = A::Response,
         Error = A::Error,

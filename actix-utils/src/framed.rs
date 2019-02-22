@@ -15,14 +15,15 @@ use crate::cell::Cell;
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;
 
-pub struct FramedNewService<S, T, U> {
+pub struct FramedNewService<S, T, U, C> {
     factory: S,
-    _t: PhantomData<(T, U)>,
+    _t: PhantomData<(T, U, C)>,
 }
 
-impl<S, T, U> FramedNewService<S, T, U>
+impl<S, T, U, C> FramedNewService<S, T, U, C>
 where
-    S: NewService<Request = Request<U>, Response = Response<U>>,
+    C: Clone,
+    S: NewService<C, Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     <S::Service as Service>::Future: 'static,
     T: AsyncRead + AsyncWrite,
@@ -30,7 +31,7 @@ where
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
-    pub fn new<F1: IntoNewService<S>>(factory: F1) -> Self {
+    pub fn new<F1: IntoNewService<S, C>>(factory: F1) -> Self {
         Self {
             factory: factory.into_new_service(),
             _t: PhantomData,
@@ -38,7 +39,7 @@ where
     }
 }
 
-impl<S, T, U> Clone for FramedNewService<S, T, U>
+impl<S, T, U, C> Clone for FramedNewService<S, T, U, C>
 where
     S: Clone,
 {
@@ -50,9 +51,10 @@ where
     }
 }
 
-impl<S, T, U> NewService for FramedNewService<S, T, U>
+impl<S, T, U, C> NewService<C> for FramedNewService<S, T, U, C>
 where
-    S: NewService<Request = Request<U>, Response = Response<U>> + Clone,
+    C: Clone,
+    S: NewService<C, Request = Request<U>, Response = Response<U>> + Clone,
     S::Error: 'static,
     <S::Service as Service>::Future: 'static,
     T: AsyncRead + AsyncWrite,
@@ -64,48 +66,53 @@ where
     type Response = FramedTransport<S::Service, T, U>;
     type Error = S::InitError;
     type InitError = S::InitError;
-    type Service = FramedService<S, T, U>;
+    type Service = FramedService<S, T, U, C>;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, cfg: &C) -> Self::Future {
         ok(FramedService {
             factory: self.factory.clone(),
+            config: cfg.clone(),
             _t: PhantomData,
         })
     }
 }
 
-pub struct FramedService<S, T, U> {
+pub struct FramedService<S, T, U, C> {
     factory: S,
+    config: C,
     _t: PhantomData<(T, U)>,
 }
 
-impl<S, T, U> Clone for FramedService<S, T, U>
+impl<S, T, U, C> Clone for FramedService<S, T, U, C>
 where
     S: Clone,
+    C: Clone,
 {
     fn clone(&self) -> Self {
         Self {
             factory: self.factory.clone(),
+            config: self.config.clone(),
             _t: PhantomData,
         }
     }
 }
 
-impl<S, T, U> Service for FramedService<S, T, U>
+impl<S, T, U, C> Service for FramedService<S, T, U, C>
 where
-    S: NewService<Request = Request<U>, Response = Response<U>>,
+    S: NewService<C, Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     <S::Service as Service>::Future: 'static,
     T: AsyncRead + AsyncWrite,
     U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
+    C: Clone,
 {
     type Request = Framed<T, U>;
     type Response = FramedTransport<S::Service, T, U>;
     type Error = S::InitError;
-    type Future = FramedServiceResponseFuture<S, T, U>;
+    type Future = FramedServiceResponseFuture<S, T, U, C>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
@@ -113,17 +120,16 @@ where
 
     fn call(&mut self, req: Framed<T, U>) -> Self::Future {
         FramedServiceResponseFuture {
-            fut: self.factory.new_service(),
-
+            fut: self.factory.new_service(&self.config),
             framed: Some(req),
         }
     }
 }
 
 #[doc(hidden)]
-pub struct FramedServiceResponseFuture<S, T, U>
+pub struct FramedServiceResponseFuture<S, T, U, C>
 where
-    S: NewService<Request = Request<U>, Response = Response<U>>,
+    S: NewService<C, Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     <S::Service as Service>::Future: 'static,
     T: AsyncRead + AsyncWrite,
@@ -135,9 +141,9 @@ where
     framed: Option<Framed<T, U>>,
 }
 
-impl<S, T, U> Future for FramedServiceResponseFuture<S, T, U>
+impl<S, T, U, C> Future for FramedServiceResponseFuture<S, T, U, C>
 where
-    S: NewService<Request = Request<U>, Response = Response<U>>,
+    S: NewService<C, Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     <S::Service as Service>::Future: 'static,
     T: AsyncRead + AsyncWrite,
@@ -402,7 +408,7 @@ where
     }
 }
 
-impl<T, U, F> NewService for IntoFramed<T, U, F>
+impl<T, U, F> NewService<()> for IntoFramed<T, U, F>
 where
     T: AsyncRead + AsyncWrite,
     F: Fn() -> U + Send + Clone + 'static,
@@ -415,7 +421,7 @@ where
     type Service = IntoFramedService<T, U, F>;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self) -> Self::Future {
+    fn new_service(&self, _: &()) -> Self::Future {
         ok(IntoFramedService {
             factory: self.factory.clone(),
             _t: PhantomData,

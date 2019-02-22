@@ -177,12 +177,13 @@ impl Connector {
         cfg: ResolverConfig,
         opts: ResolverOpts,
     ) -> impl NewService<
+        (),
         Request = Connect,
         Response = (Connect, TcpStream),
         Error = ConnectorError,
         InitError = E,
     > + Clone {
-        move || -> FutureResult<Connector, E> { ok(Connector::new(cfg.clone(), opts)) }
+        move |_: &()| -> FutureResult<Connector, E> { ok(Connector::new(cfg.clone(), opts)) }
     }
 }
 

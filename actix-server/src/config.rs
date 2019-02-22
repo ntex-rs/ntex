@@ -114,7 +114,7 @@ impl InternalServiceFactory for ConfiguredService {
         // construct services
         let mut fut = Vec::new();
         for (token, ns) in rt.services {
-            fut.push(ns.new_service().map(move |service| (token, service)));
+            fut.push(ns.new_service(&()).map(move |service| (token, service)));
         }
 
         Box::new(join_all(fut).map_err(|e| {
@@ -219,8 +219,8 @@ where
     type Service = BoxedServerService;
     type Future = Box<Future<Item = BoxedServerService, Error = ()>>;
 
-    fn new_service(&self) -> Self::Future {
-        Box::new(self.inner.new_service().map_err(|_| ()).map(|s| {
+    fn new_service(&self, _: &()) -> Self::Future {
+        Box::new(self.inner.new_service(&()).map_err(|_| ()).map(|s| {
             let service: BoxedServerService = Box::new(StreamService::new(s));
             service
         }))

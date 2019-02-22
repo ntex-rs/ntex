@@ -1,5 +1,12 @@
 # Changes
 
+## [0.3.0] - 2019-02-xx
+
+## Changed
+
+* Added `Config` argument to `NewService` trait.
+
+
 ## [0.2.2] - 2019-02-19
 
 ### Added
