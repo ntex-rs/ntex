@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_new_service() {
-        let blank = || Ok::<_, ()>(Srv);
+        let blank = |_: &()| Ok::<_, ()>(Srv);
         let new_srv = blank.into_new_service().map_err(|_| "error");
         if let Async::Ready(mut srv) = new_srv.new_service(&()).poll().unwrap() {
             let res = srv.call(()).poll();

@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use futures::future::{ok, FutureResult};
 use futures::{Async, IntoFuture, Poll};
 
-use super::{IntoService, NewService, Service};
+use super::{IntoNewService, IntoService, NewService, Service};
 
 pub struct FnService<F, Req, Out>
 where
@@ -107,6 +107,67 @@ impl<F, Req, Out, Cfg> Clone for FnNewService<F, Req, Out, Cfg>
 where
     F: FnMut(Req) -> Out + Clone,
     Out: IntoFuture,
+{
+    fn clone(&self) -> Self {
+        Self::new(self.f.clone())
+    }
+}
+
+impl<F, R, S, E> IntoNewService<FnNewServiceNoConfig<F, R, S, E>, ()> for F
+where
+    F: Fn() -> R + Clone,
+    R: IntoFuture<Item = S, Error = E>,
+    S: Service,
+{
+    fn into_new_service(self) -> FnNewServiceNoConfig<F, R, S, E> {
+        FnNewServiceNoConfig::new(self)
+    }
+}
+
+pub struct FnNewServiceNoConfig<F, R, S, E>
+where
+    F: Fn() -> R + Clone,
+    R: IntoFuture<Item = S, Error = E>,
+    S: Service,
+{
+    f: F,
+}
+
+impl<F, R, S, E> FnNewServiceNoConfig<F, R, S, E>
+where
+    F: Fn() -> R + Clone,
+    R: IntoFuture<Item = S, Error = E>,
+    S: Service,
+{
+    pub fn new(f: F) -> Self {
+        FnNewServiceNoConfig { f }
+    }
+}
+
+impl<F, R, S, E> NewService<()> for FnNewServiceNoConfig<F, R, S, E>
+where
+    F: Fn() -> R + Clone,
+    R: IntoFuture<Item = S, Error = E>,
+    S: Service,
+{
+    type Request = S::Request;
+    type Response = S::Response;
+    type Error = S::Error;
+    type Service = S;
+
+    type InitError = E;
+    type Future = R::Future;
+
+    fn new_service(&self, _: &()) -> Self::Future {
+        (self.f)().into_future()
+    }
+}
+
+impl<F, R, S, E> Clone for FnNewServiceNoConfig<F, R, S, E>
+where
+    F: Fn() -> R + Clone,
+    R: IntoFuture<Item = S, Error = E>,
+    S: Service,
 {
     fn clone(&self) -> Self {
         Self::new(self.f.clone())

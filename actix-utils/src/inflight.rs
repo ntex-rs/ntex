@@ -142,7 +142,7 @@ mod tests {
             let srv =
                 BlankNewService::new().apply(InFlight::new(1), || Ok(SleepService(wait_time)));
 
-            if let Async::Ready(mut srv) = srv.new_service().poll().unwrap() {
+            if let Async::Ready(mut srv) = srv.new_service(&()).poll().unwrap() {
                 assert_eq!(srv.poll_ready(), Ok(Async::Ready(())));
 
                 let mut res = srv.call(());
