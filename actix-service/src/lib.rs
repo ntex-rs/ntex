@@ -24,7 +24,7 @@ use self::and_then_apply::{AndThenTransform, AndThenTransformNewService};
 use self::and_then_apply_fn::{AndThenApply, AndThenApplyNewService};
 pub use self::apply::{Apply, ApplyNewService};
 pub use self::blank::{Blank, BlankNewService};
-pub use self::fn_service::{FnNewService, FnService};
+pub use self::fn_service::{fn_nservice, FnNewService, FnService};
 pub use self::fn_transform::{FnNewTransform, FnTransform};
 pub use self::from_err::{FromErr, FromErrNewService};
 pub use self::map::{Map, MapNewService};

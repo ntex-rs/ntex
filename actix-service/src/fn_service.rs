@@ -66,6 +66,15 @@ where
     }
 }
 
+/// Create `NewService` for function that can act as Service
+pub fn fn_nservice<F, Req, Out>(f: F) -> FnNewService<F, Req, Out, ()>
+where
+    F: FnMut(Req) -> Out + Clone,
+    Out: IntoFuture,
+{
+    FnNewService::new(f)
+}
+
 pub struct FnNewService<F, Req, Out, Cfg>
 where
     F: FnMut(Req) -> Out,
@@ -113,17 +122,7 @@ where
     }
 }
 
-impl<F, R, S, E> IntoNewService<FnNewServiceNoConfig<F, R, S, E>, ()> for F
-where
-    F: Fn() -> R + Clone,
-    R: IntoFuture<Item = S, Error = E>,
-    S: Service,
-{
-    fn into_new_service(self) -> FnNewServiceNoConfig<F, R, S, E> {
-        FnNewServiceNoConfig::new(self)
-    }
-}
-
+/// Converter for `Fn() -> Future<Service>` fn
 pub struct FnNewServiceNoConfig<F, R, S, E>
 where
     F: Fn() -> R + Clone,
@@ -171,5 +170,16 @@ where
 {
     fn clone(&self) -> Self {
         Self::new(self.f.clone())
+    }
+}
+
+impl<F, R, S, E> IntoNewService<FnNewServiceNoConfig<F, R, S, E>, ()> for F
+where
+    F: Fn() -> R + Clone,
+    R: IntoFuture<Item = S, Error = E>,
+    S: Service,
+{
+    fn into_new_service(self) -> FnNewServiceNoConfig<F, R, S, E> {
+        FnNewServiceNoConfig::new(self)
     }
 }
