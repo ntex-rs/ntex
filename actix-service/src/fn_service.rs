@@ -142,6 +142,16 @@ where
     }
 }
 
+impl<F, Req, Out, Cfg> IntoNewService<FnNewService<F, Req, Out, Cfg>, Cfg> for F
+where
+    F: Fn(Req) -> Out + Clone,
+    Out: IntoFuture,
+{
+    fn into_new_service(self) -> FnNewService<F, Req, Out, Cfg> {
+        FnNewService::new(self)
+    }
+}
+
 /// Converter for `Fn() -> Future<Service>` fn
 pub struct FnNewServiceNoConfig<F, R, S, E>
 where
@@ -256,13 +266,13 @@ where
     }
 }
 
-impl<F, C, R, S, E> IntoNewService<FnNewServiceConfig<F, C, R, S, E>, C> for F
-where
-    F: Fn(&C) -> R,
-    R: IntoFuture<Item = S, Error = E>,
-    S: Service,
-{
-    fn into_new_service(self) -> FnNewServiceConfig<F, C, R, S, E> {
-        FnNewServiceConfig::new(self)
-    }
-}
+// impl<F, C, R, S, E> IntoNewService<FnNewServiceConfig<F, C, R, S, E>, C> for F
+// where
+//     F: Fn(&C) -> R,
+//     R: IntoFuture<Item = S, Error = E>,
+//     S: Service,
+// {
+//     fn into_new_service(self) -> FnNewServiceConfig<F, C, R, S, E> {
+//         FnNewServiceConfig::new(self)
+//     }
+// }
