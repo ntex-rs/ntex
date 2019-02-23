@@ -1,4 +1,4 @@
-use actix_service::{NewService, Service};
+use crate::{NewService, Service};
 use futures::{Future, Poll};
 
 pub type BoxedService<Req, Res, Err> = Box<

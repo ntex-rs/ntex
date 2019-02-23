@@ -1,5 +1,4 @@
 //! Actix utils - various helper services
-pub mod boxed;
 mod cell;
 pub mod cloneable;
 pub mod counter;

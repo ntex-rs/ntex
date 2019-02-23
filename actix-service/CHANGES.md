@@ -2,6 +2,10 @@
 
 ## [0.3.0] - 2019-02-xx
 
+## Added
+
+* Added boxed NewService and Service.
+
 ## Changed
 
 * Added `Config` argument to `NewService` trait.

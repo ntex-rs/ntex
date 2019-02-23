@@ -1,5 +1,14 @@
 # Changes
 
+## [0.3.0] - 2019-02-xx
+
+### Changed
+
+* Use new `NewService` trait
+
+* BoxedNewService` and `BoxedService` types moved to actix-service crate.
+
+
 ## [0.2.4] - 2019-02-21
 
 ### Changed
