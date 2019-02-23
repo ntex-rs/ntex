@@ -170,7 +170,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use actix_service::{Blank, BlankNewService, NewService, Service, ServiceExt};
+    use actix_service::blank::{Blank, BlankNewService};
+    use actix_service::{NewService, Service, ServiceExt};
 
     struct SleepService(Duration);
 

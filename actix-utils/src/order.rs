@@ -210,7 +210,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use actix_service::{Blank, Service, ServiceExt};
+    use actix_service::blank::Blank;
+    use actix_service::{Service, ServiceExt};
 
     struct Srv;
 
