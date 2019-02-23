@@ -6,7 +6,7 @@ use futures::{Async, IntoFuture, Poll};
 use super::{IntoConfigurableNewService, IntoNewService, IntoService, NewService, Service};
 
 /// Create `NewService` for function that can act as Service
-pub fn fn_service<F, Req, Out>(f: F) -> FnNewService<F, Req, Out, ()>
+pub fn fn_service<F, Req, Out, Cfg>(f: F) -> FnNewService<F, Req, Out, Cfg>
 where
     F: FnMut(Req) -> Out + Clone,
     Out: IntoFuture,
