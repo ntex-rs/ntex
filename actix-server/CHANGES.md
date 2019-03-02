@@ -1,15 +1,22 @@
 # Changes
 
+## [0.3.0] - 2019-03-02
+
+### Changed
+
+* Use new `NewService` trait
+
+
 ## [0.2.1] - 2019-02-09
 
-### Changes
+### Changed
 
 * Drop service response
 
 
 ## [0.2.0] - 2019-02-01
 
-### Changes
+### Changed
 
 * Migrate to actix-service 0.2
 

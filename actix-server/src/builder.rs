@@ -183,9 +183,6 @@ impl ServerBuilder {
     /// This methods panics if no socket addresses get bound.
     ///
     /// ```rust,ignore
-    /// # extern crate futures;
-    /// # extern crate actix_web;
-    /// # use futures::Future;
     /// use actix_web::*;
     ///
     /// fn main() {

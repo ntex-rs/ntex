@@ -28,6 +28,6 @@ impl Token {
 }
 
 /// Start server building process
-pub fn build() -> ServerBuilder {
+pub fn new() -> ServerBuilder {
     ServerBuilder::default()
 }
