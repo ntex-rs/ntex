@@ -1,4 +1,4 @@
-use actix_service::{NewTransform, Service, Transform};
+use actix_service::{NewTransform, Service, Transform, Void};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 
@@ -24,15 +24,15 @@ impl Default for InFlight {
     }
 }
 
-impl<T: Service> NewTransform<T> for InFlight {
+impl<T: Service, C> NewTransform<T, C> for InFlight {
     type Request = T::Request;
     type Response = T::Response;
     type Error = T::Error;
-    type InitError = ();
+    type InitError = Void;
     type Transform = InFlightService;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self) -> Self::Future {
+    fn new_transform(&self, _: &C) -> Self::Future {
         ok(InFlightService::new(self.max_inflight))
     }
 }

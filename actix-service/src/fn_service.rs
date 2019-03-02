@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use futures::future::{ok, FutureResult};
 use futures::{Async, IntoFuture, Poll};
 
-use crate::Never;
+use crate::Void;
 use crate::{IntoConfigurableNewService, IntoNewService, IntoService, NewService, Service};
 
 /// Create `NewService` for function that can act as Service
@@ -125,7 +125,7 @@ where
     type Error = Out::Error;
     type Service = FnService<F, Req, Out>;
 
-    type InitError = Never;
+    type InitError = Void;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: &Cfg) -> Self::Future {

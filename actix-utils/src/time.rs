@@ -1,12 +1,11 @@
 use std::time::{self, Duration, Instant};
 
-use actix_service::{NewService, Service};
+use actix_service::{NewService, Service, Void};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 use tokio_timer::sleep;
 
 use super::cell::Cell;
-use super::Never;
 
 #[derive(Clone, Debug)]
 pub struct LowResTime(Cell<Inner>);
@@ -45,8 +44,8 @@ impl Default for LowResTime {
 impl NewService<()> for LowResTime {
     type Request = ();
     type Response = Instant;
-    type Error = Never;
-    type InitError = Never;
+    type Error = Void;
+    type InitError = Void;
     type Service = LowResTimeService;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
@@ -92,7 +91,7 @@ impl LowResTimeService {
 impl Service for LowResTimeService {
     type Request = ();
     type Response = Instant;
-    type Error = Never;
+    type Error = Void;
     type Future = FutureResult<Self::Response, Self::Error>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {

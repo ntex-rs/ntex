@@ -80,7 +80,7 @@ impl<E> Clone for Timeout<E> {
     }
 }
 
-impl<S, E> NewTransform<S> for Timeout<E>
+impl<S, C, E> NewTransform<S, C> for Timeout<E>
 where
     S: Service,
 {
@@ -91,7 +91,7 @@ where
     type Transform = TimeoutService;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self) -> Self::Future {
+    fn new_transform(&self, _: &C) -> Self::Future {
         ok(TimeoutService {
             timeout: self.timeout,
         })

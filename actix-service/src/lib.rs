@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use futures::{Future, IntoFuture, Poll};
 
+pub use void::Void;
+
 mod and_then;
 mod and_then_apply;
 mod and_then_apply_fn;
@@ -19,6 +21,7 @@ mod map_init_err;
 mod then;
 mod transform;
 mod transform_map_err;
+mod transform_map_init_err;
 
 pub use self::and_then::{AndThen, AndThenNewService};
 use self::and_then_apply::{AndThenTransform, AndThenTransformNewService};
@@ -32,9 +35,6 @@ pub use self::map_err::{MapErr, MapErrNewService};
 pub use self::map_init_err::MapInitErr;
 pub use self::then::{Then, ThenNewService};
 pub use self::transform::{IntoNewTransform, IntoTransform, NewTransform, Transform};
-
-#[derive(Copy, Clone, Debug)]
-pub enum Never {}
 
 /// An asynchronous function from `Request` to a `Response`.
 pub trait Service {

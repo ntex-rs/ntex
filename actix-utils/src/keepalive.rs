@@ -1,13 +1,12 @@
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
-use actix_service::{NewService, Service};
+use actix_service::{NewService, Service, Void};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 use tokio_timer::Delay;
 
 use super::time::{LowResTime, LowResTimeService};
-use super::Never;
 
 pub struct KeepAlive<R, E, F> {
     f: F,
@@ -51,7 +50,7 @@ where
     type Request = R;
     type Response = R;
     type Error = E;
-    type InitError = Never;
+    type InitError = Void;
     type Service = KeepAliveService<R, E, F>;
     type Future = FutureResult<Self::Service, Self::InitError>;
 

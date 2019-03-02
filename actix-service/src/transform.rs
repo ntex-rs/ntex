@@ -4,6 +4,7 @@ use std::sync::Arc;
 use futures::{Future, Poll};
 
 use crate::transform_map_err::{TransformMapErr, TransformMapErrNewTransform};
+use crate::transform_map_init_err::TransformMapInitErr;
 use crate::Service;
 
 /// An asynchronous function for transforming service call result.
@@ -84,6 +85,16 @@ pub trait NewTransform<Service, Config = ()> {
         F: Fn(Self::Error) -> E,
     {
         TransformMapErrNewTransform::new(self, f)
+    }
+
+    /// Map this service's factory init error to a different error,
+    /// returning a new transform service factory.
+    fn map_init_err<F, E>(self, f: F) -> TransformMapInitErr<Self, Service, Config, F, E>
+    where
+        Self: Sized,
+        F: Fn(Self::InitError) -> E,
+    {
+        TransformMapInitErr::new(self, f)
     }
 }
 

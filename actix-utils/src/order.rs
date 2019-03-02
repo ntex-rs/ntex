@@ -3,7 +3,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use actix_service::{NewTransform, Service, Transform};
+use actix_service::{NewTransform, Service, Transform, Void};
 use futures::future::{ok, FutureResult};
 use futures::task::AtomicTask;
 use futures::unsync::oneshot;
@@ -85,7 +85,7 @@ where
     }
 }
 
-impl<S> NewTransform<S> for InOrder<S>
+impl<S, C> NewTransform<S, C> for InOrder<S>
 where
     S: Service,
     S::Response: 'static,
@@ -95,11 +95,11 @@ where
     type Request = S::Request;
     type Response = S::Response;
     type Error = InOrderError<S::Error>;
-    type InitError = ();
+    type InitError = Void;
     type Transform = InOrderService<S>;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self) -> Self::Future {
+    fn new_transform(&self, _: &C) -> Self::Future {
         ok(InOrderService::new())
     }
 }
