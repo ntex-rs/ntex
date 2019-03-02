@@ -1,6 +1,6 @@
 [package]
 name = "actix-utils"
-version = "0.2.4"
+version = "0.3.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix utils - various actix net related services"
 keywords = ["network", "framework", "async", "futures"]
@@ -11,15 +11,14 @@ categories = ["network-programming", "asynchronous"]
 license = "MIT/Apache-2.0"
 exclude = [".gitignore", ".travis.yml", ".cargo/config", "appveyor.yml"]
 edition = "2018"
-workspace = "../"
+workspace = ".."
 
 [lib]
 name = "actix_utils"
 path = "src/lib.rs"
 
 [dependencies]
-# actix-service = "0.2.2"
-actix-service = { path = "../actix-service" }
+actix-service = "0.3.0"
 actix-codec = "0.1.0"
 bytes = "0.4"
 futures = "0.1.24"
