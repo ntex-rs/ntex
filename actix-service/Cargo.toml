@@ -1,6 +1,6 @@
 [package]
 name = "actix-service"
-version = "0.2.2"
+version = "0.3.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix Service"
 keywords = ["network", "framework", "async", "futures"]
@@ -11,7 +11,7 @@ categories = ["network-programming", "asynchronous"]
 license = "MIT/Apache-2.0"
 exclude = [".gitignore", ".travis.yml", ".cargo/config", "appveyor.yml"]
 edition = "2018"
-workspace = "../"
+workspace = ".."
 
 [badges]
 travis-ci = { repository = "actix/actix-service", branch = "master" }

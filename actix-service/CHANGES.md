@@ -1,6 +1,6 @@
 # Changes
 
-## [0.3.0] - 2019-02-xx
+## [0.3.0] - 2019-03-02
 
 ## Added
 
@@ -8,7 +8,9 @@
 
 ## Changed
 
-* Added `Config` argument to `NewService` trait.
+* Added `Config` parameter to `NewService` trait.
+
+* Added `Config` parameter to `NewTransform` trait.
 
 
 ## [0.2.2] - 2019-02-19
