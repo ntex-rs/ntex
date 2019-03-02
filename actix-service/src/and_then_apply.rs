@@ -169,7 +169,7 @@ impl<T, A, B, C> NewService<C> for AndThenTransformNewService<T, A, B, C>
 where
     A: NewService<C>,
     B: NewService<C, Error = A::Error, InitError = A::InitError>,
-    T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
+    T: NewTransform<B::Service, C, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
     type Request = A::Request;
@@ -187,7 +187,7 @@ where
             t: None,
             fut_a: self.a.new_service(cfg),
             fut_b: self.b.new_service(cfg),
-            fut_t: self.t.new_transform(),
+            fut_t: self.t.new_transform(cfg),
         }
     }
 }
@@ -196,7 +196,7 @@ pub struct AndThenTransformNewServiceFuture<T, A, B, C>
 where
     A: NewService<C>,
     B: NewService<C, Error = A::Error, InitError = A::InitError>,
-    T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
+    T: NewTransform<B::Service, C, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
     fut_b: B::Future,
@@ -211,7 +211,7 @@ impl<T, A, B, C> Future for AndThenTransformNewServiceFuture<T, A, B, C>
 where
     A: NewService<C>,
     B: NewService<C, Error = A::Error, InitError = A::InitError>,
-    T: NewTransform<B::Service, Request = A::Response, InitError = A::InitError>,
+    T: NewTransform<B::Service, C, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
     type Item = AndThenTransform<T::Transform, A::Service, B::Service>;

@@ -98,17 +98,17 @@ where
 /// transform's error.
 ///
 /// This is created by the `NewTransform::map_err` method.
-pub struct TransformMapErrNewTransform<T, S, F, E> {
+pub struct TransformMapErrNewTransform<T, S, C, F, E> {
     t: T,
     f: F,
-    e: PhantomData<(S, E)>,
+    e: PhantomData<(S, C, E)>,
 }
 
-impl<T, S, F, E> TransformMapErrNewTransform<T, S, F, E> {
+impl<T, S, C, F, E> TransformMapErrNewTransform<T, S, C, F, E> {
     /// Create new `MapErr` new service instance
     pub fn new(t: T, f: F) -> Self
     where
-        T: NewTransform<S>,
+        T: NewTransform<S, C>,
         F: Fn(T::Error) -> E,
     {
         Self {
@@ -119,7 +119,7 @@ impl<T, S, F, E> TransformMapErrNewTransform<T, S, F, E> {
     }
 }
 
-impl<T, S, F, E> Clone for TransformMapErrNewTransform<T, S, F, E>
+impl<T, S, C, F, E> Clone for TransformMapErrNewTransform<T, S, C, F, E>
 where
     T: Clone,
     F: Clone,
@@ -133,9 +133,9 @@ where
     }
 }
 
-impl<T, S, F, E> NewTransform<S> for TransformMapErrNewTransform<T, S, F, E>
+impl<T, S, C, F, E> NewTransform<S, C> for TransformMapErrNewTransform<T, S, C, F, E>
 where
-    T: NewTransform<S>,
+    T: NewTransform<S, C>,
     F: Fn(T::Error) -> E + Clone,
 {
     type Request = T::Request;
@@ -144,25 +144,25 @@ where
     type Transform = TransformMapErr<T::Transform, S, F, E>;
 
     type InitError = T::InitError;
-    type Future = TransformMapErrNewTransformFuture<T, S, F, E>;
+    type Future = TransformMapErrNewTransformFuture<T, S, C, F, E>;
 
-    fn new_transform(&self) -> Self::Future {
-        TransformMapErrNewTransformFuture::new(self.t.new_transform(), self.f.clone())
+    fn new_transform(&self, cfg: &C) -> Self::Future {
+        TransformMapErrNewTransformFuture::new(self.t.new_transform(cfg), self.f.clone())
     }
 }
 
-pub struct TransformMapErrNewTransformFuture<T, S, F, E>
+pub struct TransformMapErrNewTransformFuture<T, S, C, F, E>
 where
-    T: NewTransform<S>,
+    T: NewTransform<S, C>,
     F: Fn(T::Error) -> E,
 {
     fut: T::Future,
     f: F,
 }
 
-impl<T, S, F, E> TransformMapErrNewTransformFuture<T, S, F, E>
+impl<T, S, C, F, E> TransformMapErrNewTransformFuture<T, S, C, F, E>
 where
-    T: NewTransform<S>,
+    T: NewTransform<S, C>,
     F: Fn(T::Error) -> E,
 {
     fn new(fut: T::Future, f: F) -> Self {
@@ -170,9 +170,9 @@ where
     }
 }
 
-impl<T, S, F, E> Future for TransformMapErrNewTransformFuture<T, S, F, E>
+impl<T, S, C, F, E> Future for TransformMapErrNewTransformFuture<T, S, C, F, E>
 where
-    T: NewTransform<S>,
+    T: NewTransform<S, C>,
     F: Fn(T::Error) -> E + Clone,
 {
     type Item = TransformMapErr<T::Transform, S, F, E>;

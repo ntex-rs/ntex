@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use futures::future::{ok, FutureResult};
 use futures::{Async, IntoFuture, Poll};
 
-use super::{IntoNewTransform, IntoTransform, NewTransform, Transform};
+use crate::{IntoNewTransform, IntoTransform, NewTransform, Transform};
 
 pub struct FnTransform<F, S, Req, Res>
 where
@@ -66,16 +66,16 @@ where
     }
 }
 
-pub struct FnNewTransform<F, S, Req, Out, Err>
+pub struct FnNewTransform<F, S, Req, Out, Err, Cfg>
 where
     F: FnMut(Req, &mut S) -> Out + Clone,
     Out: IntoFuture,
 {
     f: F,
-    _t: PhantomData<(S, Req, Out, Err)>,
+    _t: PhantomData<(S, Req, Out, Err, Cfg)>,
 }
 
-impl<F, S, Req, Res, Err> FnNewTransform<F, S, Req, Res, Err>
+impl<F, S, Req, Res, Err, Cfg> FnNewTransform<F, S, Req, Res, Err, Cfg>
 where
     F: FnMut(Req, &mut S) -> Res + Clone,
     Res: IntoFuture,
@@ -85,7 +85,7 @@ where
     }
 }
 
-impl<F, S, Req, Res, Err> NewTransform<S> for FnNewTransform<F, S, Req, Res, Err>
+impl<F, S, Req, Res, Err, Cfg> NewTransform<S, Cfg> for FnNewTransform<F, S, Req, Res, Err, Cfg>
 where
     F: FnMut(Req, &mut S) -> Res + Clone,
     Res: IntoFuture,
@@ -97,22 +97,23 @@ where
     type InitError = Err;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self) -> Self::Future {
+    fn new_transform(&self, _: &Cfg) -> Self::Future {
         ok(FnTransform::new(self.f.clone()))
     }
 }
 
-impl<F, S, Req, Res, Err> IntoNewTransform<FnNewTransform<F, S, Req, Res, Err>, S> for F
+impl<F, S, Req, Res, Err, Cfg>
+    IntoNewTransform<FnNewTransform<F, S, Req, Res, Err, Cfg>, S, Cfg> for F
 where
     F: FnMut(Req, &mut S) -> Res + Clone,
     Res: IntoFuture,
 {
-    fn into_new_transform(self) -> FnNewTransform<F, S, Req, Res, Err> {
+    fn into_new_transform(self) -> FnNewTransform<F, S, Req, Res, Err, Cfg> {
         FnNewTransform::new(self)
     }
 }
 
-impl<F, S, Req, Res, Err> Clone for FnNewTransform<F, S, Req, Res, Err>
+impl<F, S, Req, Res, Err, Cfg> Clone for FnNewTransform<F, S, Req, Res, Err, Cfg>
 where
     F: FnMut(Req, &mut S) -> Res + Clone,
     Res: IntoFuture,

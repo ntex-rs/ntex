@@ -33,6 +33,9 @@ pub use self::map_init_err::MapInitErr;
 pub use self::then::{Then, ThenNewService};
 pub use self::transform::{IntoNewTransform, IntoTransform, NewTransform, Transform};
 
+#[derive(Copy, Clone, Debug)]
+pub enum Never {}
+
 /// An asynchronous function from `Request` to a `Response`.
 pub trait Service {
     /// Requests handled by the service.
@@ -189,7 +192,7 @@ impl<T: ?Sized> ServiceExt for T where T: Service {}
 /// `NewService` trait, and uses that new `Service` value to process inbound
 /// requests on that new TCP stream.
 ///
-/// `Config` parameter defines service factory configuration type.
+/// `Config` is a service factory configuration type.
 pub trait NewService<Config = ()> {
     /// Requests handled by the service.
     type Request;

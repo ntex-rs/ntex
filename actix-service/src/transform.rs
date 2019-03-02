@@ -1,3 +1,6 @@
+use std::rc::Rc;
+use std::sync::Arc;
+
 use futures::{Future, Poll};
 
 use crate::transform_map_err::{TransformMapErr, TransformMapErrNewTransform};
@@ -44,7 +47,9 @@ pub trait Transform<Service> {
 }
 
 /// `Transform` service factory
-pub trait NewTransform<Service> {
+///
+/// `Config` is a service factory configuration type.
+pub trait NewTransform<Service, Config = ()> {
     /// Requests handled by the service.
     type Request;
 
@@ -69,11 +74,11 @@ pub trait NewTransform<Service> {
     type Future: Future<Item = Self::Transform, Error = Self::InitError>;
 
     /// Create and return a new service value asynchronously.
-    fn new_transform(&self) -> Self::Future;
+    fn new_transform(&self, cfg: &Config) -> Self::Future;
 
     /// Map this transforms's output to a different type, returning a new transform
     /// of the resulting type.
-    fn map_err<F, E>(self, f: F) -> TransformMapErrNewTransform<Self, Service, F, E>
+    fn map_err<F, E>(self, f: F) -> TransformMapErrNewTransform<Self, Service, Config, F, E>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E,
@@ -120,6 +125,38 @@ where
     }
 }
 
+impl<S, C, T> NewTransform<S, C> for Rc<T>
+where
+    T: NewTransform<S, C>,
+{
+    type Request = T::Request;
+    type Response = T::Response;
+    type Error = T::Error;
+    type Transform = T::Transform;
+    type InitError = T::InitError;
+    type Future = T::Future;
+
+    fn new_transform(&self, cfg: &C) -> T::Future {
+        self.as_ref().new_transform(cfg)
+    }
+}
+
+impl<S, C, T> NewTransform<S, C> for Arc<T>
+where
+    T: NewTransform<S, C>,
+{
+    type Request = T::Request;
+    type Response = T::Response;
+    type Error = T::Error;
+    type Transform = T::Transform;
+    type InitError = T::InitError;
+    type Future = T::Future;
+
+    fn new_transform(&self, cfg: &C) -> T::Future {
+        self.as_ref().new_transform(cfg)
+    }
+}
+
 /// Trait for types that can be converted to a `TransformService`
 pub trait IntoTransform<T, S>
 where
@@ -130,9 +167,9 @@ where
 }
 
 /// Trait for types that can be converted to a TransfromNewService
-pub trait IntoNewTransform<T, S>
+pub trait IntoNewTransform<T, S, C = ()>
 where
-    T: NewTransform<S>,
+    T: NewTransform<S, C>,
 {
     /// Convert to an `TranformNewService`
     fn into_new_transform(self) -> T;
@@ -147,9 +184,9 @@ where
     }
 }
 
-impl<T, S> IntoNewTransform<T, S> for T
+impl<T, S, C> IntoNewTransform<T, S, C> for T
 where
-    T: NewTransform<S>,
+    T: NewTransform<S, C>,
 {
     fn into_new_transform(self) -> T {
         self

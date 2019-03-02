@@ -89,7 +89,7 @@ where
 /// `ApplyNewService` new service combinator
 pub struct ApplyNewService<T, S, C>
 where
-    T: NewTransform<S::Service, InitError = S::InitError>,
+    T: NewTransform<S::Service, C, InitError = S::InitError>,
     T::Error: From<S::Error>,
     S: NewService<C>,
 {
@@ -100,12 +100,12 @@ where
 
 impl<T, S, C> ApplyNewService<T, S, C>
 where
-    T: NewTransform<S::Service, InitError = S::InitError>,
+    T: NewTransform<S::Service, C, InitError = S::InitError>,
     T::Error: From<S::Error>,
     S: NewService<C>,
 {
     /// Create new `ApplyNewService` new service instance
-    pub fn new<T1: IntoNewTransform<T, S::Service>, S1: IntoNewService<S, C>>(
+    pub fn new<T1: IntoNewTransform<T, S::Service, C>, S1: IntoNewService<S, C>>(
         transform: T1,
         service: S1,
     ) -> Self {
@@ -118,7 +118,7 @@ where
 }
 
 impl<F, S, In, Out, Cfg>
-    ApplyNewService<FnNewTransform<F, S::Service, In, Out, S::InitError>, S, Cfg>
+    ApplyNewService<FnNewTransform<F, S::Service, In, Out, S::InitError, Cfg>, S, Cfg>
 where
     F: FnMut(In, &mut S::Service) -> Out + Clone,
     Out: IntoFuture,
@@ -137,7 +137,7 @@ where
 
 impl<T, S, C> Clone for ApplyNewService<T, S, C>
 where
-    T: NewTransform<S::Service, InitError = S::InitError> + Clone,
+    T: NewTransform<S::Service, C, InitError = S::InitError> + Clone,
     T::Error: From<S::Error>,
     S: NewService<C> + Clone,
 {
@@ -152,7 +152,7 @@ where
 
 impl<T, S, C> NewService<C> for ApplyNewService<T, S, C>
 where
-    T: NewTransform<S::Service, InitError = S::InitError>,
+    T: NewTransform<S::Service, C, InitError = S::InitError>,
     T::Error: From<S::Error>,
     S: NewService<C>,
 {
@@ -166,7 +166,7 @@ where
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         ApplyNewServiceFuture {
-            fut_t: self.transform.new_transform(),
+            fut_t: self.transform.new_transform(cfg),
             fut_s: self.service.new_service(cfg),
             service: None,
             transform: None,
@@ -176,7 +176,7 @@ where
 
 pub struct ApplyNewServiceFuture<T, S, C>
 where
-    T: NewTransform<S::Service, InitError = S::InitError>,
+    T: NewTransform<S::Service, C, InitError = S::InitError>,
     T::Error: From<S::Error>,
     S: NewService<C>,
 {
@@ -188,7 +188,7 @@ where
 
 impl<T, S, C> Future for ApplyNewServiceFuture<T, S, C>
 where
-    T: NewTransform<S::Service, InitError = S::InitError>,
+    T: NewTransform<S::Service, C, InitError = S::InitError>,
     T::Error: From<S::Error>,
     S: NewService<C>,
 {

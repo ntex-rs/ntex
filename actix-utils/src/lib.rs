@@ -10,6 +10,3 @@ pub mod order;
 pub mod stream;
 pub mod time;
 pub mod timeout;
-
-#[derive(Copy, Clone, Debug)]
-pub enum Never {}
