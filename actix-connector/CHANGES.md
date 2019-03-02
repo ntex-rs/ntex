@@ -1,8 +1,15 @@
 # Changes
 
+## [0.3.0] - 2019-03-02
+
+### Changed
+
+* Migrate to actix-service 0.3
+
+
 ## [0.2.0] - 2019-02-01
 
-### Changes
+### Changed
 
 * Migrate to actix-service 0.2
 
