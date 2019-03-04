@@ -4,7 +4,7 @@ use std::rc::Rc;
 use serde::de;
 
 use crate::de::PathDeserializer;
-use crate::ResourcePath;
+use crate::{Resource, ResourcePath};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PathItem {
@@ -200,5 +200,11 @@ impl<T: ResourcePath> Index<usize> for Path<T> {
             PathItem::Static(ref s) => &s,
             PathItem::Segment(s, e) => &self.path.path()[(s as usize)..(e as usize)],
         }
+    }
+}
+
+impl<T: ResourcePath> Resource<T> for Path<T> {
+    fn resource_path(&mut self) -> &mut Self {
+        self
     }
 }
