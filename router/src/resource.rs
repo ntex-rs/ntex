@@ -5,7 +5,7 @@ use std::rc::Rc;
 use regex::{escape, Regex};
 
 use crate::path::{Path, PathItem};
-use crate::ResourcePath;
+use crate::Resource;
 
 const MAX_DYNAMIC_SEGMENTS: usize = 16;
 
@@ -119,7 +119,7 @@ impl ResourceDef {
     }
 
     /// Is the given path and parameters a match against this pattern?
-    pub fn match_path<T: ResourcePath>(&self, path: &mut Path<T>) -> bool {
+    pub fn match_path<T: Resource>(&self, path: &mut Path<T>) -> bool {
         match self.tp {
             PatternType::Static(ref s) => {
                 if s == path.path() {

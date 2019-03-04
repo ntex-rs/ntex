@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::ResourcePath;
+use crate::Resource;
 
 #[allow(dead_code)]
 const GEN_DELIMS: &[u8] = b":/?#[]@";
@@ -67,7 +67,7 @@ impl Url {
     }
 }
 
-impl ResourcePath for Url {
+impl Resource for Url {
     fn path(&self) -> &str {
         self.path()
     }

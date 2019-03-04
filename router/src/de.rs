@@ -2,7 +2,7 @@ use serde::de::{self, Deserializer, Error as DeError, Visitor};
 use serde::forward_to_deserialize_any;
 
 use crate::path::{Path, PathIter};
-use crate::ResourcePath;
+use crate::Resource;
 
 macro_rules! unsupported_type {
     ($trait_fn:ident, $name:expr) => {
@@ -33,17 +33,17 @@ macro_rules! parse_single_value {
     }
 }
 
-pub struct PathDeserializer<'de, T: ResourcePath + 'de> {
+pub struct PathDeserializer<'de, T: Resource + 'de> {
     path: &'de Path<T>,
 }
 
-impl<'de, T: ResourcePath + 'de> PathDeserializer<'de, T> {
+impl<'de, T: Resource + 'de> PathDeserializer<'de, T> {
     pub fn new(path: &'de Path<T>) -> Self {
         PathDeserializer { path }
     }
 }
 
-impl<'de, T: ResourcePath + 'de> Deserializer<'de> for PathDeserializer<'de, T> {
+impl<'de, T: Resource + 'de> Deserializer<'de> for PathDeserializer<'de, T> {
     type Error = de::value::Error;
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -206,12 +206,12 @@ impl<'de, T: ResourcePath + 'de> Deserializer<'de> for PathDeserializer<'de, T> 
     parse_single_value!(deserialize_char, visit_char, "char");
 }
 
-struct ParamsDeserializer<'de, T: ResourcePath> {
+struct ParamsDeserializer<'de, T: Resource> {
     params: PathIter<'de, T>,
     current: Option<(&'de str, &'de str)>,
 }
 
-impl<'de, T: ResourcePath> de::MapAccess<'de> for ParamsDeserializer<'de, T> {
+impl<'de, T: Resource> de::MapAccess<'de> for ParamsDeserializer<'de, T> {
     type Error = de::value::Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
@@ -406,11 +406,11 @@ impl<'de> Deserializer<'de> for Value<'de> {
     unsupported_type!(deserialize_identifier, "identifier");
 }
 
-struct ParamsSeq<'de, T: ResourcePath> {
+struct ParamsSeq<'de, T: Resource> {
     params: PathIter<'de, T>,
 }
 
-impl<'de, T: ResourcePath> de::SeqAccess<'de> for ParamsSeq<'de, T> {
+impl<'de, T: Resource> de::SeqAccess<'de> for ParamsSeq<'de, T> {
     type Error = de::value::Error;
 
     fn next_element_seed<U>(&mut self, seed: U) -> Result<Option<U::Value>, Self::Error>

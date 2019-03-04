@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::path::Path;
 use crate::resource::ResourceDef;
-use crate::ResourcePath;
+use crate::Resource;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub(crate) enum ResourceId {
@@ -41,34 +41,30 @@ impl<T> Router<T> {
         }
     }
 
-    pub fn recognize<U: ResourcePath>(&self, path: &mut Path<U>) -> Option<(&T, ResourceInfo)> {
-        if !path.path().is_empty() {
-            for (idx, resource) in self.rmap.patterns.iter().enumerate() {
-                if resource.match_path(path) {
-                    let info = ResourceInfo {
-                        rmap: self.rmap.clone(),
-                        resource: ResourceId::Normal(idx as u16),
-                    };
-                    return Some((&self.resources[idx], info));
-                }
+    pub fn recognize<U: Resource>(&self, path: &mut Path<U>) -> Option<(&T, ResourceInfo)> {
+        for (idx, resource) in self.rmap.patterns.iter().enumerate() {
+            if resource.match_path(path) {
+                let info = ResourceInfo {
+                    rmap: self.rmap.clone(),
+                    resource: ResourceId::Normal(idx as u16),
+                };
+                return Some((&self.resources[idx], info));
             }
         }
         None
     }
 
-    pub fn recognize_mut<U: ResourcePath>(
+    pub fn recognize_mut<U: Resource>(
         &mut self,
         path: &mut Path<U>,
     ) -> Option<(&mut T, ResourceInfo)> {
-        if !path.path().is_empty() {
-            for (idx, resource) in self.rmap.patterns.iter().enumerate() {
-                if resource.match_path(path) {
-                    let info = ResourceInfo {
-                        rmap: self.rmap.clone(),
-                        resource: ResourceId::Normal(idx as u16),
-                    };
-                    return Some((&mut self.resources[idx], info));
-                }
+        for (idx, resource) in self.rmap.patterns.iter().enumerate() {
+            if resource.match_path(path) {
+                let info = ResourceInfo {
+                    rmap: self.rmap.clone(),
+                    resource: ResourceId::Normal(idx as u16),
+                };
+                return Some((&mut self.resources[idx], info));
             }
         }
         None
