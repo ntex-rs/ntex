@@ -17,7 +17,7 @@ use crate::server::{Server, ServerCommand};
 use crate::services::{InternalServiceFactory, ServiceFactory, StreamNewService};
 use crate::signals::{Signal, Signals};
 use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
-use crate::Token;
+use crate::{ssl, Token};
 
 /// Server builder
 pub struct ServerBuilder {
@@ -81,9 +81,18 @@ impl ServerBuilder {
         self
     }
 
-    /// Stop actix system.
+    /// Sets the maximum per-worker concurrent connection establish process.
     ///
-    /// `SystemExit` message stops currently running system.
+    /// All listeners will stop accepting connections when this limit is reached. It
+    /// can be used to limit the global SSL CPU usage.
+    ///
+    /// By default max connections is set to a 256.
+    pub fn maxconnrate(mut self, num: usize) -> Self {
+        ssl::max_concurrent_ssl_connect(num);
+        self
+    }
+
+    /// Stop actix system.
     pub fn system_exit(mut self) -> Self {
         self.exit = true;
         self
