@@ -14,7 +14,7 @@ use tokio_timer::sleep;
 use crate::accept::{AcceptLoop, AcceptNotify, Command};
 use crate::config::{ConfiguredService, ServiceConfig};
 use crate::server::{Server, ServerCommand};
-use crate::services::{InternalServiceFactory, StreamNewService, StreamServiceFactory};
+use crate::services::{InternalServiceFactory, ServiceFactory, StreamNewService};
 use crate::signals::{Signal, Signals};
 use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use crate::Token;
@@ -137,7 +137,7 @@ impl ServerBuilder {
     /// Add new service to the server.
     pub fn bind<F, U, N: AsRef<str>>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
-        F: StreamServiceFactory,
+        F: ServiceFactory,
         U: net::ToSocketAddrs,
     {
         let sockets = bind_addr(addr)?;
@@ -163,7 +163,7 @@ impl ServerBuilder {
         factory: F,
     ) -> Self
     where
-        F: StreamServiceFactory,
+        F: ServiceFactory,
     {
         let token = self.token.next();
         self.services.push(StreamNewService::create(

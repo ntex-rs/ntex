@@ -13,7 +13,10 @@ mod worker;
 pub use self::builder::ServerBuilder;
 pub use self::config::{ServiceConfig, ServiceRuntime};
 pub use self::server::Server;
-pub use self::services::StreamServiceFactory;
+pub use self::services::ServiceFactory;
+
+#[doc(hidden)]
+pub use self::services::ServiceFactory as StreamServiceFactory;
 
 /// Socket id token
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

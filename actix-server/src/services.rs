@@ -22,7 +22,7 @@ pub(crate) enum ServerMessage {
     ForceShutdown,
 }
 
-pub trait StreamServiceFactory: Send + Clone + 'static {
+pub trait ServiceFactory: Send + Clone + 'static {
     type NewService: NewService<Request = TcpStream>;
 
     fn create(&self) -> Self::NewService;
@@ -92,7 +92,7 @@ where
     }
 }
 
-pub(crate) struct StreamNewService<F: StreamServiceFactory> {
+pub(crate) struct StreamNewService<F: ServiceFactory> {
     name: String,
     inner: F,
     token: Token,
@@ -100,7 +100,7 @@ pub(crate) struct StreamNewService<F: StreamServiceFactory> {
 
 impl<F> StreamNewService<F>
 where
-    F: StreamServiceFactory,
+    F: ServiceFactory,
 {
     pub(crate) fn create(name: String, token: Token, inner: F) -> Box<InternalServiceFactory> {
         Box::new(Self { name, token, inner })
@@ -109,7 +109,7 @@ where
 
 impl<F> InternalServiceFactory for StreamNewService<F>
 where
-    F: StreamServiceFactory,
+    F: ServiceFactory,
 {
     fn name(&self, _: Token) -> &str {
         &self.name
@@ -152,7 +152,7 @@ impl InternalServiceFactory for Box<InternalServiceFactory> {
     }
 }
 
-impl<F, T> StreamServiceFactory for F
+impl<F, T> ServiceFactory for F
 where
     F: Fn() -> T + Send + Clone + 'static,
     T: NewService<Request = TcpStream>,

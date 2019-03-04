@@ -1,5 +1,14 @@
 # Changes
 
+## [0.3.1] - 2019-03-xx
+
+### Changed
+
+* Rename `StreamServiceFactory` to `ServiceFactory`
+
+* Deprecate `StreamServiceFactory`
+
+
 ## [0.3.0] - 2019-03-02
 
 ### Changed
