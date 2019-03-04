@@ -2,6 +2,11 @@
 
 ## [0.3.1] - 2019-03-xx
 
+### Added
+
+* Add `ServerBuilder::maxconnrate` sets the maximum per-worker number of concurrent connections
+
+
 ### Changed
 
 * Rename `StreamServiceFactory` to `ServiceFactory`
