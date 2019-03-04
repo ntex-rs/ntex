@@ -126,7 +126,7 @@ impl ResourceMap {
     }
 }
 
-pub struct RouterBuilder<T, U> {
+pub struct RouterBuilder<T, U = ()> {
     rmap: ResourceMap,
     named: HashMap<String, ResourceDef>,
     resources: Vec<(T, Option<U>)>,
