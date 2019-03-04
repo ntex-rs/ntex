@@ -4,7 +4,7 @@ use std::rc::Rc;
 use serde::de;
 
 use crate::de::PathDeserializer;
-use crate::Resource;
+use crate::ResourcePath;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PathItem {
@@ -42,7 +42,7 @@ impl<T: Clone> Clone for Path<T> {
     }
 }
 
-impl<T: Resource> Path<T> {
+impl<T: ResourcePath> Path<T> {
     pub fn new(path: T) -> Path<T> {
         Path {
             path,
@@ -165,7 +165,7 @@ pub struct PathIter<'a, T> {
     params: &'a Path<T>,
 }
 
-impl<'a, T: Resource> Iterator for PathIter<'a, T> {
+impl<'a, T: ResourcePath> Iterator for PathIter<'a, T> {
     type Item = (&'a str, &'a str);
 
     #[inline]
@@ -183,7 +183,7 @@ impl<'a, T: Resource> Iterator for PathIter<'a, T> {
     }
 }
 
-impl<'a, T: Resource> Index<&'a str> for Path<T> {
+impl<'a, T: ResourcePath> Index<&'a str> for Path<T> {
     type Output = str;
 
     fn index(&self, name: &'a str) -> &str {
@@ -192,7 +192,7 @@ impl<'a, T: Resource> Index<&'a str> for Path<T> {
     }
 }
 
-impl<T: Resource> Index<usize> for Path<T> {
+impl<T: ResourcePath> Index<usize> for Path<T> {
     type Output = str;
 
     fn index(&self, idx: usize) -> &str {

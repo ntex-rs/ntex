@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::path::Path;
 use crate::resource::ResourceDef;
-use crate::Resource;
+use crate::{Resource, ResourcePath};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub(crate) enum ResourceId {
@@ -26,14 +25,14 @@ pub(crate) struct ResourceMap {
 }
 
 /// Resource router.
-pub struct Router<T> {
+pub struct Router<T, U = ()> {
     rmap: Rc<ResourceMap>,
     named: HashMap<String, ResourceDef>,
-    resources: Vec<T>,
+    resources: Vec<(T, Option<U>)>,
 }
 
-impl<T> Router<T> {
-    pub fn build() -> RouterBuilder<T> {
+impl<T, U> Router<T, U> {
+    pub fn build() -> RouterBuilder<T, U> {
         RouterBuilder {
             rmap: ResourceMap::default(),
             named: HashMap::new(),
@@ -41,48 +40,71 @@ impl<T> Router<T> {
         }
     }
 
-    pub fn recognize<U: Resource>(&self, path: &mut Path<U>) -> Option<(&T, ResourceInfo)> {
+    pub fn recognize<R: Resource<P>, P: ResourcePath>(
+        &self,
+        res: &mut R,
+    ) -> Option<(&T, ResourceInfo)> {
         for (idx, resource) in self.rmap.patterns.iter().enumerate() {
-            if resource.match_path(path) {
+            if resource.match_path(res.resource_path()) {
                 let info = ResourceInfo {
                     rmap: self.rmap.clone(),
                     resource: ResourceId::Normal(idx as u16),
                 };
-                return Some((&self.resources[idx], info));
+                return Some((&self.resources[idx].0, info));
             }
         }
         None
     }
 
-    pub fn recognize_mut<U: Resource>(
+    pub fn recognize_mut<R: Resource<P>, P: ResourcePath>(
         &mut self,
-        path: &mut Path<U>,
+        res: &mut R,
     ) -> Option<(&mut T, ResourceInfo)> {
         for (idx, resource) in self.rmap.patterns.iter().enumerate() {
-            if resource.match_path(path) {
+            if resource.match_path(res.resource_path()) {
                 let info = ResourceInfo {
                     rmap: self.rmap.clone(),
                     resource: ResourceId::Normal(idx as u16),
                 };
-                return Some((&mut self.resources[idx], info));
+                return Some((&mut self.resources[idx].0, info));
+            }
+        }
+        None
+    }
+
+    pub fn recognize_mut_checked<R: Resource<P>, P: ResourcePath, F>(
+        &mut self,
+        res: &mut R,
+        check: F,
+    ) -> Option<(&mut T, ResourceInfo)>
+    where
+        F: Fn(&R, &Option<U>) -> bool,
+    {
+        for (idx, resource) in self.rmap.patterns.iter().enumerate() {
+            if resource.match_path(res.resource_path()) && check(res, &self.resources[idx].1) {
+                let info = ResourceInfo {
+                    rmap: self.rmap.clone(),
+                    resource: ResourceId::Normal(idx as u16),
+                };
+                return Some((&mut self.resources[idx].0, info));
             }
         }
         None
     }
 }
 
-impl<'a, T> IntoIterator for &'a Router<T> {
-    type Item = &'a T;
-    type IntoIter = std::slice::Iter<'a, T>;
+impl<'a, T, U> IntoIterator for &'a Router<T, U> {
+    type Item = &'a (T, Option<U>);
+    type IntoIter = std::slice::Iter<'a, (T, Option<U>)>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.resources.iter()
     }
 }
 
-impl<'a, T> IntoIterator for &'a mut Router<T> {
-    type Item = &'a mut T;
-    type IntoIter = std::slice::IterMut<'a, T>;
+impl<'a, T, U> IntoIterator for &'a mut Router<T, U> {
+    type Item = &'a mut (T, Option<U>);
+    type IntoIter = std::slice::IterMut<'a, (T, Option<U>)>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.resources.iter_mut()
@@ -104,33 +126,40 @@ impl ResourceMap {
     }
 }
 
-pub struct RouterBuilder<T> {
+pub struct RouterBuilder<T, U> {
     rmap: ResourceMap,
     named: HashMap<String, ResourceDef>,
-    resources: Vec<T>,
+    resources: Vec<(T, Option<U>)>,
 }
 
-impl<T> RouterBuilder<T> {
+impl<T, U> RouterBuilder<T, U> {
     /// Register resource for specified path.
     pub fn path(&mut self, path: &str, resource: T) {
         self.rmap.register(ResourceDef::new(path));
-        self.resources.push(resource);
+        self.resources.push((resource, None));
     }
 
     /// Register resource for specified path prefix.
     pub fn prefix(&mut self, prefix: &str, resource: T) {
         self.rmap.register(ResourceDef::prefix(prefix));
-        self.resources.push(resource);
+        self.resources.push((resource, None));
     }
 
     /// Register resource for ResourceDef
     pub fn rdef(&mut self, rdef: ResourceDef, resource: T) {
         self.rmap.register(rdef);
-        self.resources.push(resource);
+        self.resources.push((resource, None));
+    }
+
+    /// Method attachs user data to lastly added resource.
+    ///
+    /// This panics if no resources were added.
+    pub fn set_user_data(&mut self, userdata: Option<U>) {
+        self.resources.last_mut().unwrap().1 = userdata;
     }
 
     /// Finish configuration and create router instance.
-    pub fn finish(self) -> Router<T> {
+    pub fn finish(self) -> Router<T, U> {
         Router {
             rmap: Rc::new(self.rmap),
             named: self.named,
