@@ -1,10 +1,10 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use futures::IntoFuture;
+use futures::{Async, Future, IntoFuture, Poll};
 
 use crate::transform_map_init_err::TransformMapInitErr;
-use crate::Service;
+use crate::{NewService, Service};
 
 /// `Transform` service factory.
 ///
@@ -94,5 +94,82 @@ where
 {
     fn into_transform(self) -> T {
         self
+    }
+}
+
+/// `Apply` transform new service
+#[derive(Clone)]
+pub struct ApplyTransform<T, A, C> {
+    a: A,
+    t: Rc<T>,
+    _t: std::marker::PhantomData<C>,
+}
+
+impl<T, A, C> ApplyTransform<T, A, C>
+where
+    A: NewService<C>,
+    T: Transform<A::Service, Error = A::Error, InitError = A::InitError>,
+{
+    /// Create new `ApplyNewService` new service instance
+    pub fn new<F: IntoTransform<T, A::Service>>(t: F, a: A) -> Self {
+        Self {
+            a,
+            t: Rc::new(t.into_transform()),
+            _t: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T, A, C> NewService<C> for ApplyTransform<T, A, C>
+where
+    A: NewService<C>,
+    T: Transform<A::Service, Error = A::Error, InitError = A::InitError>,
+{
+    type Request = T::Request;
+    type Response = T::Response;
+    type Error = T::Error;
+
+    type Service = T::Transform;
+    type InitError = T::InitError;
+    type Future = ApplyTransformFuture<T, A, C>;
+
+    fn new_service(&self, cfg: &C) -> Self::Future {
+        ApplyTransformFuture {
+            t_cell: self.t.clone(),
+            fut_a: self.a.new_service(cfg).into_future(),
+            fut_t: None,
+        }
+    }
+}
+
+pub struct ApplyTransformFuture<T, A, C>
+where
+    A: NewService<C>,
+    T: Transform<A::Service, Error = A::Error, InitError = A::InitError>,
+{
+    fut_a: <A::Future as IntoFuture>::Future,
+    fut_t: Option<<T::Future as IntoFuture>::Future>,
+    t_cell: Rc<T>,
+}
+
+impl<T, A, C> Future for ApplyTransformFuture<T, A, C>
+where
+    A: NewService<C>,
+    T: Transform<A::Service, Error = A::Error, InitError = A::InitError>,
+{
+    type Item = T::Transform;
+    type Error = T::InitError;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if self.fut_t.is_none() {
+            if let Async::Ready(service) = self.fut_a.poll()? {
+                self.fut_t = Some(self.t_cell.new_transform(service).into_future());
+            }
+        }
+        if let Some(ref mut fut) = self.fut_t {
+            fut.poll()
+        } else {
+            Ok(Async::NotReady)
+        }
     }
 }

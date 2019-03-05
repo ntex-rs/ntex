@@ -23,7 +23,7 @@ mod transform;
 mod transform_map_init_err;
 
 pub use self::and_then::{AndThen, AndThenNewService};
-pub use self::and_then_apply::AndThenTransform;
+use self::and_then_apply::AndThenTransform;
 use self::and_then_apply_fn::{AndThenApply, AndThenApplyNewService};
 pub use self::apply::{Apply, ApplyNewService};
 pub use self::fn_service::{fn_cfg_factory, fn_factory, fn_service, FnService};
@@ -33,7 +33,7 @@ pub use self::map::{Map, MapNewService};
 pub use self::map_err::{MapErr, MapErrNewService};
 pub use self::map_init_err::MapInitErr;
 pub use self::then::{Then, ThenNewService};
-pub use self::transform::{IntoTransform, Transform};
+pub use self::transform::{ApplyTransform, IntoTransform, Transform};
 
 /// An asynchronous function from `Request` to a `Response`.
 pub trait Service {

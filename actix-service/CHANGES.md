@@ -1,5 +1,12 @@
 # Changes
 
+## [0.3.2] - 2019-03-xx
+
+### Added
+
+* Add `ApplyTransform` new service for transform and new service.
+
+
 ## [0.3.2] - 2019-03-04
 
 ### Changed
