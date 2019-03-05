@@ -4,7 +4,7 @@ use std::rc::Rc;
 use actix_service::{IntoNewService, IntoService, NewService, Service};
 use futures::future::{ok, Future, FutureResult};
 use futures::unsync::mpsc;
-use futures::{Async, IntoFuture, Poll, Stream};
+use futures::{Async, Poll, Stream};
 
 type Request<T> = Result<<T as IntoStream>::Item, <T as IntoStream>::Error>;
 
@@ -113,7 +113,6 @@ where
         Box::new(
             self.factory
                 .new_service(&self.config)
-                .into_future()
                 .and_then(move |srv| StreamDispatcher::new(req, srv)),
         )
     }

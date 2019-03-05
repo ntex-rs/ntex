@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use futures::{Async, Future, IntoFuture, Poll};
+use futures::{Async, Future, Poll};
 
 use crate::and_then::AndThen;
 use crate::from_err::FromErr;
@@ -67,8 +67,8 @@ where
             a: None,
             t: None,
             t_cell: self.t.clone(),
-            fut_a: self.a.new_service(cfg).into_future(),
-            fut_b: self.b.new_service(cfg).into_future(),
+            fut_a: self.a.new_service(cfg),
+            fut_b: self.b.new_service(cfg),
             fut_t: None,
         }
     }
@@ -81,9 +81,9 @@ where
     T: Transform<B::Service, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
-    fut_a: <A::Future as IntoFuture>::Future,
-    fut_b: <B::Future as IntoFuture>::Future,
-    fut_t: Option<<T::Future as IntoFuture>::Future>,
+    fut_a: A::Future,
+    fut_b: B::Future,
+    fut_t: Option<T::Future>,
     a: Option<A::Service>,
     t: Option<T::Transform>,
     t_cell: Rc<T>,
@@ -102,7 +102,7 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         if self.fut_t.is_none() {
             if let Async::Ready(service) = self.fut_b.poll()? {
-                self.fut_t = Some(self.t_cell.new_transform(service).into_future());
+                self.fut_t = Some(self.t_cell.new_transform(service));
             }
         }
 

@@ -31,7 +31,7 @@ pub trait Transform<S> {
     type InitError;
 
     /// The future response value.
-    type Future: IntoFuture<Item = Self::Transform, Error = Self::InitError>;
+    type Future: Future<Item = Self::Transform, Error = Self::InitError>;
 
     /// Create and return a new service value asynchronously.
     fn new_transform(&self, service: S) -> Self::Future;
@@ -147,7 +147,7 @@ where
     A: NewService<C>,
     T: Transform<A::Service, Error = A::Error, InitError = A::InitError>,
 {
-    fut_a: <A::Future as IntoFuture>::Future,
+    fut_a: A::Future,
     fut_t: Option<<T::Future as IntoFuture>::Future>,
     t_cell: Rc<T>,
 }

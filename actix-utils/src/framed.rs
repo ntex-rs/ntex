@@ -120,7 +120,7 @@ where
 
     fn call(&mut self, req: Framed<T, U>) -> Self::Future {
         FramedServiceResponseFuture {
-            fut: self.factory.new_service(&self.config).into_future(),
+            fut: self.factory.new_service(&self.config),
             framed: Some(req),
         }
     }

@@ -6,6 +6,10 @@
 
 * Add `ApplyTransform` new service for transform and new service.
 
+### Changed
+
+* Revert IntoFuture change
+
 
 ## [0.3.2] - 2019-03-04
 

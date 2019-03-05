@@ -18,7 +18,8 @@ name = "actix_utils"
 path = "src/lib.rs"
 
 [dependencies]
-actix-service = "0.3.2"
+#actix-service = "0.3.2"
+actix-service = { path="../actix-service" }
 actix-codec = "0.1.0"
 bytes = "0.4"
 futures = "0.1.24"

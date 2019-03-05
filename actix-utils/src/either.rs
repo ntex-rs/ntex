@@ -102,8 +102,8 @@ where
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         match self {
-            Either::A(ref inner) => EitherNewService::A(inner.new_service(cfg).into_future()),
-            Either::B(ref inner) => EitherNewService::B(inner.new_service(cfg).into_future()),
+            Either::A(ref inner) => EitherNewService::A(inner.new_service(cfg)),
+            Either::B(ref inner) => EitherNewService::B(inner.new_service(cfg)),
         }
     }
 }

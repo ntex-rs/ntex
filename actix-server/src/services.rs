@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use actix_rt::spawn;
 use actix_service::{NewService, Service};
-use futures::future::{err, ok, FutureResult, IntoFuture};
+use futures::future::{err, ok, FutureResult};
 use futures::{Future, Poll};
 use log::error;
 use tokio_reactor::Handle;
@@ -129,7 +129,6 @@ where
             self.inner
                 .create()
                 .new_service(&())
-                .into_future()
                 .map_err(|_| ())
                 .map(move |inner| {
                     let service: BoxedServerService = Box::new(StreamService::new(inner));

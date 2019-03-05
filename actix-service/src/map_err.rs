@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use futures::{Async, Future, IntoFuture, Poll};
+use futures::{Async, Future, Poll};
 
 use super::{NewService, Service};
 
@@ -147,7 +147,7 @@ where
     type Future = MapErrNewServiceFuture<A, F, E, C>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
-        MapErrNewServiceFuture::new(self.a.new_service(cfg).into_future(), self.f.clone())
+        MapErrNewServiceFuture::new(self.a.new_service(cfg), self.f.clone())
     }
 }
 
@@ -156,7 +156,7 @@ where
     A: NewService<C>,
     F: Fn(A::Error) -> E,
 {
-    fut: <A::Future as IntoFuture>::Future,
+    fut: A::Future,
     f: F,
 }
 
@@ -165,7 +165,7 @@ where
     A: NewService<C>,
     F: Fn(A::Error) -> E,
 {
-    fn new(fut: <A::Future as IntoFuture>::Future, f: F) -> Self {
+    fn new(fut: A::Future, f: F) -> Self {
         MapErrNewServiceFuture { f, fut }
     }
 }

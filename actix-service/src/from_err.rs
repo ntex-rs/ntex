@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use futures::{Async, Future, IntoFuture, Poll};
+use futures::{Async, Future, Poll};
 
 use super::{NewService, Service};
 
@@ -124,7 +124,7 @@ where
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         FromErrNewServiceFuture {
-            fut: self.a.new_service(cfg).into_future(),
+            fut: self.a.new_service(cfg),
             e: PhantomData,
         }
     }
@@ -135,7 +135,7 @@ where
     A: NewService<C>,
     E: From<A::Error>,
 {
-    fut: <A::Future as IntoFuture>::Future,
+    fut: A::Future,
     e: PhantomData<E>,
 }
 

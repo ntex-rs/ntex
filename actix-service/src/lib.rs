@@ -199,7 +199,7 @@ pub trait NewService<Config = ()> {
     type InitError;
 
     /// The future of the `Service` instance.
-    type Future: IntoFuture<Item = Self::Service, Error = Self::InitError>;
+    type Future: Future<Item = Self::Service, Error = Self::InitError>;
 
     /// Create and return a new service value asynchronously.
     fn new_service(&self, cfg: &Config) -> Self::Future;

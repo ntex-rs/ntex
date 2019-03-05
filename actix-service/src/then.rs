@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use futures::{try_ready, Async, Future, IntoFuture, Poll};
+use futures::{try_ready, Async, Future, Poll};
 
 use super::{IntoNewService, NewService, Service};
 use crate::cell::Cell;
@@ -157,10 +157,7 @@ where
     type Future = ThenNewServiceFuture<A, B, C>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
-        ThenNewServiceFuture::new(
-            self.a.new_service(cfg).into_future(),
-            self.b.new_service(cfg).into_future(),
-        )
+        ThenNewServiceFuture::new(self.a.new_service(cfg), self.b.new_service(cfg))
     }
 }
 
@@ -188,8 +185,8 @@ where
         InitError = A::InitError,
     >,
 {
-    fut_b: <B::Future as IntoFuture>::Future,
-    fut_a: <A::Future as IntoFuture>::Future,
+    fut_b: B::Future,
+    fut_a: A::Future,
     a: Option<A::Service>,
     b: Option<B::Service>,
 }
@@ -204,10 +201,7 @@ where
         InitError = A::InitError,
     >,
 {
-    fn new(
-        fut_a: <A::Future as IntoFuture>::Future,
-        fut_b: <B::Future as IntoFuture>::Future,
-    ) -> Self {
+    fn new(fut_a: A::Future, fut_b: B::Future) -> Self {
         ThenNewServiceFuture {
             fut_a,
             fut_b,

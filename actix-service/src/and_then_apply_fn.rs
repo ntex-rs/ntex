@@ -209,8 +209,8 @@ where
     Out: IntoFuture,
     Out::Error: Into<A::Error>,
 {
-    fut_b: <B::Future as IntoFuture>::Future,
-    fut_a: <A::Future as IntoFuture>::Future,
+    fut_b: B::Future,
+    fut_a: A::Future,
     f: Cell<F>,
     a: Option<A::Service>,
     b: Option<B::Service>,
