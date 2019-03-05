@@ -24,7 +24,7 @@ impl Default for InFlight {
     }
 }
 
-impl<S: Service<R>, R> Transform<R, S> for InFlight {
+impl<S: Service<R>, R> Transform<S, R> for InFlight {
     type Response = S::Response;
     type Error = S::Error;
     type InitError = Void;

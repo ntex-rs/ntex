@@ -80,7 +80,7 @@ impl<E> Clone for Timeout<E> {
     }
 }
 
-impl<S, R, E> Transform<R, S> for Timeout<E>
+impl<S, R, E> Transform<S, R> for Timeout<E>
 where
     S: Service<R>,
 {

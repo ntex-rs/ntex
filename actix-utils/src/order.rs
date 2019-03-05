@@ -74,7 +74,7 @@ impl<S> InOrder<S> {
     }
 }
 
-impl<S, R> Transform<R, S> for InOrder<S>
+impl<S, R> Transform<S, R> for InOrder<S>
 where
     S: Service<R>,
     S::Response: 'static,

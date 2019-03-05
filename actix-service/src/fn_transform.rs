@@ -24,7 +24,7 @@ where
     }
 }
 
-impl<F, S, R, In, Out, Err> Transform<In, S> for FnTransform<F, S, R, In, Out, Err>
+impl<F, S, R, In, Out, Err> Transform<S, In> for FnTransform<F, S, R, In, Out, Err>
 where
     S: Service<R>,
     F: FnMut(In, &mut S) -> Out + Clone,
@@ -42,7 +42,7 @@ where
     }
 }
 
-impl<F, S, R, In, Out, Err> IntoTransform<FnTransform<F, S, R, In, Out, Err>, In, S> for F
+impl<F, S, R, In, Out, Err> IntoTransform<FnTransform<F, S, R, In, Out, Err>, S, In> for F
 where
     S: Service<R>,
     F: FnMut(In, &mut S) -> Out + Clone,

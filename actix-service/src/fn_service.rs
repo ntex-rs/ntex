@@ -277,16 +277,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::Future;
-
-    use super::*;
-    use crate::{IntoService, NewService, Service, ServiceExt};
+    use crate::{IntoService, Service, ServiceExt};
 
     #[test]
     fn test_fn_service() {
         let mut rt = actix_rt::Runtime::new().unwrap();
 
-        let srv = (|t: &str| -> Result<usize, ()> { Ok(1) }).into_service();
+        let srv = (|_t: &str| -> Result<usize, ()> { Ok(1) }).into_service();
         let mut srv = srv.and_then(|test: usize| Ok(test));
 
         let s = "HELLO".to_owned();

@@ -21,7 +21,7 @@ impl<T, A, B, BR> AndThenTransform<T, A, B, BR> {
     where
         A: NewService<AR, C>,
         B: NewService<BR, C, InitError = A::InitError>,
-        T: Transform<A::Response, B::Service, InitError = A::InitError>,
+        T: Transform<B::Service, A::Response, InitError = A::InitError>,
         T::Error: From<A::Error>,
     {
         Self {
@@ -52,7 +52,7 @@ impl<T, A, B, AR, BR, C> NewService<AR, C> for AndThenTransform<T, A, B, BR>
 where
     A: NewService<AR, C>,
     B: NewService<BR, C, InitError = A::InitError>,
-    T: Transform<A::Response, B::Service, InitError = A::InitError>,
+    T: Transform<B::Service, A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
     type Response = T::Response;
@@ -78,7 +78,7 @@ pub struct AndThenTransformFuture<T, A, B, AR, BR, C>
 where
     A: NewService<AR, C>,
     B: NewService<BR, C, InitError = A::InitError>,
-    T: Transform<A::Response, B::Service, InitError = A::InitError>,
+    T: Transform<B::Service, A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
     fut_a: A::Future,
@@ -93,7 +93,7 @@ impl<T, A, B, AR, BR, C> Future for AndThenTransformFuture<T, A, B, AR, BR, C>
 where
     A: NewService<AR, C>,
     B: NewService<BR, C, InitError = A::InitError>,
-    T: Transform<A::Response, B::Service, InitError = A::InitError>,
+    T: Transform<B::Service, A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
     type Item = AndThen<FromErr<A::Service, T::Error>, T::Transform>;

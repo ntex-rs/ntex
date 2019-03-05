@@ -210,9 +210,9 @@ pub trait NewService<Request, Config = ()> {
     ) -> AndThenTransform<T, Self, B, Req>
     where
         Self: Sized,
-        T: Transform<Self::Response, B::Service, InitError = Self::InitError>,
+        T: Transform<B::Service, Self::Response, InitError = Self::InitError>,
         T::Error: From<Self::Error>,
-        T1: IntoTransform<T, Self::Response, B::Service>,
+        T1: IntoTransform<T, B::Service, Self::Response>,
         B: NewService<Req, Config, InitError = Self::InitError>,
         B1: IntoNewService<B, Req, Config>,
     {

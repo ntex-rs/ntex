@@ -12,7 +12,7 @@ use crate::{NewService, Service};
 ///
 /// * `S` is a wrapped service.
 /// * `R` requests handled by this transform service.
-pub trait Transform<R, S> {
+pub trait Transform<S, R> {
     /// Responses given by the service.
     type Response;
 
@@ -42,9 +42,9 @@ pub trait Transform<R, S> {
     }
 }
 
-impl<T, R, S> Transform<R, S> for Rc<T>
+impl<T, S, R> Transform<S, R> for Rc<T>
 where
-    T: Transform<R, S>,
+    T: Transform<S, R>,
 {
     type Response = T::Response;
     type Error = T::Error;
@@ -57,9 +57,9 @@ where
     }
 }
 
-impl<T, R, S> Transform<R, S> for Arc<T>
+impl<T, S, R> Transform<S, R> for Arc<T>
 where
-    T: Transform<R, S>,
+    T: Transform<S, R>,
 {
     type Response = T::Response;
     type Error = T::Error;
@@ -73,9 +73,9 @@ where
 }
 
 /// Trait for types that can be converted to a *transform service*
-pub trait IntoTransform<T, R, S>
+pub trait IntoTransform<T, S, R>
 where
-    T: Transform<R, S>,
+    T: Transform<S, R>,
 {
     /// Convert to a `TransformService`
     fn into_transform(self) -> T;
@@ -92,19 +92,19 @@ where
 
 /// `Apply` transform new service
 #[derive(Clone)]
-pub struct ApplyTransform<T, R, S, Req, Cfg> {
+pub struct ApplyTransform<T, S, R, Req, Cfg> {
     a: S,
     t: Rc<T>,
     _t: std::marker::PhantomData<(R, Req, Cfg)>,
 }
 
-impl<T, R, S, Req, Cfg> ApplyTransform<T, R, S, Req, Cfg>
+impl<T, S, R, Req, Cfg> ApplyTransform<T, S, R, Req, Cfg>
 where
     S: NewService<Req, Cfg>,
-    T: Transform<R, S::Service, Error = S::Error, InitError = S::InitError>,
+    T: Transform<S::Service, R, Error = S::Error, InitError = S::InitError>,
 {
     /// Create new `ApplyNewService` new service instance
-    pub fn new<F: IntoTransform<T, R, S::Service>>(t: F, a: S) -> Self {
+    pub fn new<F: IntoTransform<T, S::Service, R>>(t: F, a: S) -> Self {
         Self {
             a,
             t: Rc::new(t.into_transform()),
@@ -113,17 +113,17 @@ where
     }
 }
 
-impl<T, R, S, Req, Cfg> NewService<R, Cfg> for ApplyTransform<T, R, S, Req, Cfg>
+impl<T, S, R, Req, Cfg> NewService<R, Cfg> for ApplyTransform<T, S, R, Req, Cfg>
 where
     S: NewService<Req, Cfg>,
-    T: Transform<R, S::Service, Error = S::Error, InitError = S::InitError>,
+    T: Transform<S::Service, R, Error = S::Error, InitError = S::InitError>,
 {
     type Response = T::Response;
     type Error = T::Error;
 
     type Service = T::Transform;
     type InitError = T::InitError;
-    type Future = ApplyTransformFuture<T, R, S, Req, Cfg>;
+    type Future = ApplyTransformFuture<T, S, R, Req, Cfg>;
 
     fn new_service(&self, cfg: &Cfg) -> Self::Future {
         ApplyTransformFuture {
@@ -134,20 +134,20 @@ where
     }
 }
 
-pub struct ApplyTransformFuture<T, R, S, Req, Cfg>
+pub struct ApplyTransformFuture<T, S, R, Req, Cfg>
 where
     S: NewService<Req, Cfg>,
-    T: Transform<R, S::Service, Error = S::Error, InitError = S::InitError>,
+    T: Transform<S::Service, R, Error = S::Error, InitError = S::InitError>,
 {
     fut_a: S::Future,
     fut_t: Option<T::Future>,
     t_cell: Rc<T>,
 }
 
-impl<T, R, S, Req, Cfg> Future for ApplyTransformFuture<T, R, S, Req, Cfg>
+impl<T, S, R, Req, Cfg> Future for ApplyTransformFuture<T, S, R, Req, Cfg>
 where
     S: NewService<Req, Cfg>,
-    T: Transform<R, S::Service, Error = S::Error, InitError = S::InitError>,
+    T: Transform<S::Service, R, Error = S::Error, InitError = S::InitError>,
 {
     type Item = T::Transform;
     type Error = T::InitError;
