@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use futures::Future;
+use futures::IntoFuture;
 
 use crate::transform_map_init_err::TransformMapInitErr;
 use crate::Service;
@@ -31,7 +31,7 @@ pub trait Transform<S> {
     type InitError;
 
     /// The future response value.
-    type Future: Future<Item = Self::Transform, Error = Self::InitError>;
+    type Future: IntoFuture<Item = Self::Transform, Error = Self::InitError>;
 
     /// Create and return a new service value asynchronously.
     fn new_transform(&self, service: S) -> Self::Future;

@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use futures::{try_ready, Async, Future, Poll};
+use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
 use super::{IntoNewService, NewService, Service};
 use crate::cell::Cell;
@@ -142,7 +142,10 @@ where
     type Future = AndThenNewServiceFuture<A, B, C>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
-        AndThenNewServiceFuture::new(self.a.new_service(cfg), self.b.new_service(cfg))
+        AndThenNewServiceFuture::new(
+            self.a.new_service(cfg).into_future(),
+            self.b.new_service(cfg).into_future(),
+        )
     }
 }
 
@@ -165,8 +168,8 @@ where
     A: NewService<C>,
     B: NewService<C, Request = A::Response>,
 {
-    fut_b: B::Future,
-    fut_a: A::Future,
+    fut_b: <B::Future as IntoFuture>::Future,
+    fut_a: <A::Future as IntoFuture>::Future,
     a: Option<A::Service>,
     b: Option<B::Service>,
 }
@@ -176,7 +179,10 @@ where
     A: NewService<C>,
     B: NewService<C, Request = A::Response>,
 {
-    fn new(fut_a: A::Future, fut_b: B::Future) -> Self {
+    fn new(
+        fut_a: <A::Future as IntoFuture>::Future,
+        fut_b: <B::Future as IntoFuture>::Future,
+    ) -> Self {
         AndThenNewServiceFuture {
             fut_a,
             fut_b,

@@ -124,7 +124,7 @@ where
     type Future = ApplyNewServiceFuture<T, F, In, Out, Cfg>;
 
     fn new_service(&self, cfg: &Cfg) -> Self::Future {
-        ApplyNewServiceFuture::new(self.service.new_service(cfg), self.f.clone())
+        ApplyNewServiceFuture::new(self.service.new_service(cfg).into_future(), self.f.clone())
     }
 }
 
@@ -134,7 +134,7 @@ where
     F: FnMut(In, &mut T::Service) -> Out + Clone,
     Out: IntoFuture,
 {
-    fut: T::Future,
+    fut: <T::Future as IntoFuture>::Future,
     f: Option<F>,
     r: PhantomData<(In, Out)>,
 }
@@ -145,7 +145,7 @@ where
     F: FnMut(In, &mut T::Service) -> Out + Clone,
     Out: IntoFuture,
 {
-    fn new(fut: T::Future, f: F) -> Self {
+    fn new(fut: <T::Future as IntoFuture>::Future, f: F) -> Self {
         ApplyNewServiceFuture {
             f: Some(f),
             fut,

@@ -1,5 +1,5 @@
 use crate::{NewService, Service};
-use futures::{Future, Poll};
+use futures::{Future, IntoFuture, Poll};
 
 pub type BoxedService<Req, Res, Err> = Box<
     Service<
@@ -96,7 +96,12 @@ where
     type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
-        Box::new(self.service.new_service(cfg).map(ServiceWrapper::boxed))
+        Box::new(
+            self.service
+                .new_service(cfg)
+                .into_future()
+                .map(ServiceWrapper::boxed),
+        )
     }
 }
 

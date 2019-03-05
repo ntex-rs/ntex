@@ -1,5 +1,14 @@
 # Changes
 
+## [0.3.2] - 2019-03-04
+
+### Changed
+
+* Change `NewService::Future` and `Transform::Future` to the `IntoFuture` trait.
+
+* Export `AndThenTransform` type
+
+
 ## [0.3.1] - 2019-03-04
 
 ### Changed

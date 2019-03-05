@@ -23,7 +23,7 @@ mod transform;
 mod transform_map_init_err;
 
 pub use self::and_then::{AndThen, AndThenNewService};
-use self::and_then_apply::AndThenTransformNewService;
+pub use self::and_then_apply::AndThenTransform;
 use self::and_then_apply_fn::{AndThenApply, AndThenApplyNewService};
 pub use self::apply::{Apply, ApplyNewService};
 pub use self::fn_service::{fn_cfg_factory, fn_factory, fn_service, FnService};
@@ -199,7 +199,7 @@ pub trait NewService<Config = ()> {
     type InitError;
 
     /// The future of the `Service` instance.
-    type Future: Future<Item = Self::Service, Error = Self::InitError>;
+    type Future: IntoFuture<Item = Self::Service, Error = Self::InitError>;
 
     /// Create and return a new service value asynchronously.
     fn new_service(&self, cfg: &Config) -> Self::Future;
@@ -210,7 +210,7 @@ pub trait NewService<Config = ()> {
         self,
         transform: T1,
         service: B1,
-    ) -> AndThenTransformNewService<T, Self, B, Config>
+    ) -> AndThenTransform<T, Self, B, Config>
     where
         Self: Sized,
         T: Transform<B::Service, Request = Self::Response, InitError = Self::InitError>,
@@ -219,11 +219,7 @@ pub trait NewService<Config = ()> {
         B: NewService<Config, InitError = Self::InitError>,
         B1: IntoNewService<B, Config>,
     {
-        AndThenTransformNewService::new(
-            transform.into_transform(),
-            self,
-            service.into_new_service(),
-        )
+        AndThenTransform::new(transform.into_transform(), self, service.into_new_service())
     }
 
     /// Apply function to specified service and use it as a next service in

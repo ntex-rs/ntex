@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use futures::{Future, Poll};
+use futures::{Future, IntoFuture, Poll};
 
 use super::Transform;
 
@@ -57,7 +57,10 @@ where
     type Future = TransformMapInitErrFuture<T, S, F, E>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        TransformMapInitErrFuture::new(self.t.new_transform(service), self.f.clone())
+        TransformMapInitErrFuture::new(
+            self.t.new_transform(service).into_future(),
+            self.f.clone(),
+        )
     }
 }
 
@@ -66,7 +69,7 @@ where
     T: Transform<S>,
     F: Fn(T::InitError) -> E,
 {
-    fut: T::Future,
+    fut: <T::Future as IntoFuture>::Future,
     f: F,
 }
 
@@ -75,7 +78,7 @@ where
     T: Transform<S>,
     F: Fn(T::InitError) -> E,
 {
-    fn new(fut: T::Future, f: F) -> Self {
+    fn new(fut: <T::Future as IntoFuture>::Future, f: F) -> Self {
         TransformMapInitErrFuture { f, fut }
     }
 }

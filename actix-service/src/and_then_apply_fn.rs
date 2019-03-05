@@ -195,8 +195,8 @@ where
             a: None,
             b: None,
             f: self.f.clone(),
-            fut_a: self.a.new_service(cfg),
-            fut_b: self.b.new_service(cfg),
+            fut_a: self.a.new_service(cfg).into_future(),
+            fut_b: self.b.new_service(cfg).into_future(),
         }
     }
 }
@@ -209,8 +209,8 @@ where
     Out: IntoFuture,
     Out::Error: Into<A::Error>,
 {
-    fut_b: B::Future,
-    fut_a: A::Future,
+    fut_b: <B::Future as IntoFuture>::Future,
+    fut_a: <A::Future as IntoFuture>::Future,
     f: Cell<F>,
     a: Option<A::Service>,
     b: Option<B::Service>,

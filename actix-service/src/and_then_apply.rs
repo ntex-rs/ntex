@@ -1,20 +1,20 @@
 use std::rc::Rc;
 
-use futures::{Async, Future, Poll};
+use futures::{Async, Future, IntoFuture, Poll};
 
 use crate::and_then::AndThen;
 use crate::from_err::FromErr;
 use crate::{NewService, Transform};
 
 /// `Apply` new service combinator
-pub struct AndThenTransformNewService<T, A, B, C> {
+pub struct AndThenTransform<T, A, B, C> {
     a: A,
     b: B,
     t: Rc<T>,
     _t: std::marker::PhantomData<C>,
 }
 
-impl<T, A, B, C> AndThenTransformNewService<T, A, B, C>
+impl<T, A, B, C> AndThenTransform<T, A, B, C>
 where
     A: NewService<C>,
     B: NewService<C, InitError = A::InitError>,
@@ -32,7 +32,7 @@ where
     }
 }
 
-impl<T, A, B, C> Clone for AndThenTransformNewService<T, A, B, C>
+impl<T, A, B, C> Clone for AndThenTransform<T, A, B, C>
 where
     A: Clone,
     B: Clone,
@@ -47,7 +47,7 @@ where
     }
 }
 
-impl<T, A, B, C> NewService<C> for AndThenTransformNewService<T, A, B, C>
+impl<T, A, B, C> NewService<C> for AndThenTransform<T, A, B, C>
 where
     A: NewService<C>,
     B: NewService<C, InitError = A::InitError>,
@@ -60,36 +60,36 @@ where
 
     type InitError = T::InitError;
     type Service = AndThen<FromErr<A::Service, T::Error>, T::Transform>;
-    type Future = AndThenTransformNewServiceFuture<T, A, B, C>;
+    type Future = AndThenTransformFuture<T, A, B, C>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
-        AndThenTransformNewServiceFuture {
+        AndThenTransformFuture {
             a: None,
             t: None,
             t_cell: self.t.clone(),
-            fut_a: self.a.new_service(cfg),
-            fut_b: self.b.new_service(cfg),
+            fut_a: self.a.new_service(cfg).into_future(),
+            fut_b: self.b.new_service(cfg).into_future(),
             fut_t: None,
         }
     }
 }
 
-pub struct AndThenTransformNewServiceFuture<T, A, B, C>
+pub struct AndThenTransformFuture<T, A, B, C>
 where
     A: NewService<C>,
     B: NewService<C, InitError = A::InitError>,
     T: Transform<B::Service, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
-    fut_a: A::Future,
-    fut_b: B::Future,
-    fut_t: Option<T::Future>,
+    fut_a: <A::Future as IntoFuture>::Future,
+    fut_b: <B::Future as IntoFuture>::Future,
+    fut_t: Option<<T::Future as IntoFuture>::Future>,
     a: Option<A::Service>,
     t: Option<T::Transform>,
     t_cell: Rc<T>,
 }
 
-impl<T, A, B, C> Future for AndThenTransformNewServiceFuture<T, A, B, C>
+impl<T, A, B, C> Future for AndThenTransformFuture<T, A, B, C>
 where
     A: NewService<C>,
     B: NewService<C, InitError = A::InitError>,
@@ -102,7 +102,7 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         if self.fut_t.is_none() {
             if let Async::Ready(service) = self.fut_b.poll()? {
-                self.fut_t = Some(self.t_cell.new_transform(service));
+                self.fut_t = Some(self.t_cell.new_transform(service).into_future());
             }
         }
 
