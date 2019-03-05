@@ -1,4 +1,4 @@
-use actix_service::{NewTransform, Service, Transform, Void};
+use actix_service::{Service, Transform, Void};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 
@@ -24,32 +24,34 @@ impl Default for InFlight {
     }
 }
 
-impl<T: Service, C> NewTransform<T, C> for InFlight {
-    type Request = T::Request;
-    type Response = T::Response;
-    type Error = T::Error;
+impl<S: Service> Transform<S> for InFlight {
+    type Request = S::Request;
+    type Response = S::Response;
+    type Error = S::Error;
     type InitError = Void;
-    type Transform = InFlightService;
+    type Transform = InFlightService<S>;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self, _: &C) -> Self::Future {
-        ok(InFlightService::new(self.max_inflight))
+    fn new_transform(&self, service: S) -> Self::Future {
+        ok(InFlightService::new(self.max_inflight, service))
     }
 }
 
-pub struct InFlightService {
+pub struct InFlightService<S> {
     count: Counter,
+    service: S,
 }
 
-impl InFlightService {
-    pub fn new(max: usize) -> Self {
+impl<S> InFlightService<S> {
+    pub fn new(max: usize, service: S) -> Self {
         Self {
+            service,
             count: Counter::new(max),
         }
     }
 }
 
-impl<T> Transform<T> for InFlightService
+impl<T> Service for InFlightService<T>
 where
     T: Service,
 {
@@ -59,6 +61,8 @@ where
     type Future = InFlightServiceResponse<T>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        self.service.poll_ready()?;
+
         if !self.count.available() {
             log::trace!("InFlight limit exceeded");
             Ok(Async::NotReady)
@@ -67,9 +71,9 @@ where
         }
     }
 
-    fn call(&mut self, req: T::Request, service: &mut T) -> Self::Future {
+    fn call(&mut self, req: T::Request) -> Self::Future {
         InFlightServiceResponse {
-            fut: service.call(req),
+            fut: self.service.call(req),
             _guard: self.count.get(),
         }
     }
@@ -122,7 +126,8 @@ mod tests {
     fn test_transform() {
         let wait_time = Duration::from_millis(50);
         let _ = actix_rt::System::new("test").block_on(lazy(|| {
-            let mut srv = Blank::new().apply(InFlightService::new(1), SleepService(wait_time));
+            let mut srv =
+                Blank::new().and_then(InFlightService::new(1, SleepService(wait_time)));
             assert_eq!(srv.poll_ready(), Ok(Async::Ready(())));
 
             let mut res = srv.call(());

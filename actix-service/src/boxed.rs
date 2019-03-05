@@ -96,11 +96,7 @@ where
     type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
-        Box::new(
-            self.service
-                .new_service(cfg)
-                .map(|service| ServiceWrapper::boxed(service)),
-        )
+        Box::new(self.service.new_service(cfg).map(ServiceWrapper::boxed))
     }
 }
 

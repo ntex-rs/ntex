@@ -1,5 +1,12 @@
 # Changes
 
+## [0.3.1] - 2019-03-04
+
+### Changed
+
+* Simplify Transform trait
+
+
 ## [0.3.0] - 2019-03-02
 
 ## Added

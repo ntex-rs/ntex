@@ -6,7 +6,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use actix_service::{NewTransform, Service, Transform};
+use actix_service::{Service, Transform};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 use tokio_timer::{clock, Delay};
@@ -80,7 +80,7 @@ impl<E> Clone for Timeout<E> {
     }
 }
 
-impl<S, C, E> NewTransform<S, C> for Timeout<E>
+impl<S, E> Transform<S> for Timeout<E>
 where
     S: Service,
 {
@@ -88,11 +88,12 @@ where
     type Response = S::Response;
     type Error = TimeoutError<S::Error>;
     type InitError = E;
-    type Transform = TimeoutService;
+    type Transform = TimeoutService<S>;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self, _: &C) -> Self::Future {
+    fn new_transform(&self, service: S) -> Self::Future {
         ok(TimeoutService {
+            service,
             timeout: self.timeout,
         })
     }
@@ -100,17 +101,18 @@ where
 
 /// Applies a timeout to requests.
 #[derive(Debug, Clone)]
-pub struct TimeoutService {
+pub struct TimeoutService<S> {
+    service: S,
     timeout: Duration,
 }
 
-impl TimeoutService {
-    pub fn new(timeout: Duration) -> Self {
-        TimeoutService { timeout }
+impl<S> TimeoutService<S> {
+    pub fn new(timeout: Duration, service: S) -> Self {
+        TimeoutService { service, timeout }
     }
 }
 
-impl<S> Transform<S> for TimeoutService
+impl<S> Service for TimeoutService<S>
 where
     S: Service,
 {
@@ -120,12 +122,12 @@ where
     type Future = TimeoutServiceResponse<S>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        Ok(Async::Ready(()))
+        self.service.poll_ready().map_err(TimeoutError::Service)
     }
 
-    fn call(&mut self, request: S::Request, service: &mut S) -> Self::Future {
+    fn call(&mut self, request: S::Request) -> Self::Future {
         TimeoutServiceResponse {
-            fut: service.call(request),
+            fut: self.service.call(request),
             sleep: Delay::new(clock::now() + self.timeout),
         }
     }
@@ -197,7 +199,7 @@ mod tests {
 
         let res = actix_rt::System::new("test").block_on(lazy(|| {
             let mut timeout = Blank::default()
-                .apply(TimeoutService::new(resolution), SleepService(wait_time));
+                .and_then(TimeoutService::new(resolution, SleepService(wait_time)));
             timeout.call(())
         }));
         assert_eq!(res, Ok(()));
@@ -210,7 +212,7 @@ mod tests {
 
         let res = actix_rt::System::new("test").block_on(lazy(|| {
             let mut timeout = Blank::default()
-                .apply(TimeoutService::new(resolution), SleepService(wait_time));
+                .and_then(TimeoutService::new(resolution, SleepService(wait_time)));
             timeout.call(())
         }));
         assert_eq!(res, Err(TimeoutError::Timeout));

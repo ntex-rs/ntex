@@ -2,23 +2,23 @@ use std::marker::PhantomData;
 
 use futures::{Future, Poll};
 
-use super::NewTransform;
+use super::Transform;
 
 /// NewTransform for the `map_init_err` combinator, changing the type of a new
 /// transform's error.
 ///
 /// This is created by the `NewTransform::map_init_err` method.
-pub struct TransformMapInitErr<T, S, C, F, E> {
+pub struct TransformMapInitErr<T, S, F, E> {
     t: T,
     f: F,
-    e: PhantomData<(S, C, E)>,
+    e: PhantomData<(S, E)>,
 }
 
-impl<T, S, C, F, E> TransformMapInitErr<T, S, C, F, E> {
+impl<T, S, F, E> TransformMapInitErr<T, S, F, E> {
     /// Create new `MapInitErr` new transform instance
     pub fn new(t: T, f: F) -> Self
     where
-        T: NewTransform<S, C>,
+        T: Transform<S>,
         F: Fn(T::InitError) -> E,
     {
         Self {
@@ -29,7 +29,7 @@ impl<T, S, C, F, E> TransformMapInitErr<T, S, C, F, E> {
     }
 }
 
-impl<T, S, C, F, E> Clone for TransformMapInitErr<T, S, C, F, E>
+impl<T, S, F, E> Clone for TransformMapInitErr<T, S, F, E>
 where
     T: Clone,
     F: Clone,
@@ -43,9 +43,9 @@ where
     }
 }
 
-impl<T, S, C, F, E> NewTransform<S, C> for TransformMapInitErr<T, S, C, F, E>
+impl<T, S, F, E> Transform<S> for TransformMapInitErr<T, S, F, E>
 where
-    T: NewTransform<S, C>,
+    T: Transform<S>,
     F: Fn(T::InitError) -> E + Clone,
 {
     type Request = T::Request;
@@ -54,25 +54,25 @@ where
     type Transform = T::Transform;
 
     type InitError = E;
-    type Future = TransformMapInitErrFuture<T, S, C, F, E>;
+    type Future = TransformMapInitErrFuture<T, S, F, E>;
 
-    fn new_transform(&self, cfg: &C) -> Self::Future {
-        TransformMapInitErrFuture::new(self.t.new_transform(cfg), self.f.clone())
+    fn new_transform(&self, service: S) -> Self::Future {
+        TransformMapInitErrFuture::new(self.t.new_transform(service), self.f.clone())
     }
 }
 
-pub struct TransformMapInitErrFuture<T, S, C, F, E>
+pub struct TransformMapInitErrFuture<T, S, F, E>
 where
-    T: NewTransform<S, C>,
+    T: Transform<S>,
     F: Fn(T::InitError) -> E,
 {
     fut: T::Future,
     f: F,
 }
 
-impl<T, S, C, F, E> TransformMapInitErrFuture<T, S, C, F, E>
+impl<T, S, F, E> TransformMapInitErrFuture<T, S, F, E>
 where
-    T: NewTransform<S, C>,
+    T: Transform<S>,
     F: Fn(T::InitError) -> E,
 {
     fn new(fut: T::Future, f: F) -> Self {
@@ -80,15 +80,15 @@ where
     }
 }
 
-impl<T, S, C, F, E> Future for TransformMapInitErrFuture<T, S, C, F, E>
+impl<T, S, F, E> Future for TransformMapInitErrFuture<T, S, F, E>
 where
-    T: NewTransform<S, C>,
+    T: Transform<S>,
     F: Fn(T::InitError) -> E + Clone,
 {
     type Item = T::Transform;
     type Error = E;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.fut.poll().map_err(|e| (self.f)(e))
+        self.fut.poll().map_err(&self.f)
     }
 }

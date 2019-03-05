@@ -20,21 +20,20 @@ mod map_err;
 mod map_init_err;
 mod then;
 mod transform;
-mod transform_map_err;
 mod transform_map_init_err;
 
 pub use self::and_then::{AndThen, AndThenNewService};
-use self::and_then_apply::{AndThenTransform, AndThenTransformNewService};
+use self::and_then_apply::AndThenTransformNewService;
 use self::and_then_apply_fn::{AndThenApply, AndThenApplyNewService};
 pub use self::apply::{Apply, ApplyNewService};
 pub use self::fn_service::{fn_cfg_factory, fn_factory, fn_service, FnService};
-pub use self::fn_transform::{FnNewTransform, FnTransform};
+pub use self::fn_transform::FnTransform;
 pub use self::from_err::{FromErr, FromErrNewService};
 pub use self::map::{Map, MapNewService};
 pub use self::map_err::{MapErr, MapErrNewService};
 pub use self::map_init_err::MapInitErr;
 pub use self::then::{Then, ThenNewService};
-pub use self::transform::{IntoNewTransform, IntoTransform, NewTransform, Transform};
+pub use self::transform::{IntoTransform, Transform};
 
 /// An asynchronous function from `Request` to a `Response`.
 pub trait Service {
@@ -76,20 +75,6 @@ pub trait Service {
 /// An extension trait for `Service`s that provides a variety of convenient
 /// adapters
 pub trait ServiceExt: Service {
-    /// Apply tranformation to specified service and use it as a next service in
-    /// chain.
-    fn apply<T, T1, B, B1>(self, transform: T1, service: B1) -> AndThenTransform<T, Self, B>
-    where
-        Self: Sized,
-        T: Transform<B, Request = Self::Response>,
-        T::Error: From<Self::Error>,
-        T1: IntoTransform<T, B>,
-        B: Service<Error = Self::Error>,
-        B1: IntoService<B>,
-    {
-        AndThenTransform::new(transform.into_transform(), self, service.into_service())
-    }
-
     /// Apply function to specified service and use it as a next service in
     /// chain.
     fn apply_fn<F, B, B1, Out>(self, service: B1, f: F) -> AndThenApply<Self, B, F, Out>
@@ -228,14 +213,14 @@ pub trait NewService<Config = ()> {
     ) -> AndThenTransformNewService<T, Self, B, Config>
     where
         Self: Sized,
-        T: NewTransform<B::Service, Request = Self::Response, InitError = Self::InitError>,
+        T: Transform<B::Service, Request = Self::Response, InitError = Self::InitError>,
         T::Error: From<Self::Error>,
-        T1: IntoNewTransform<T, B::Service>,
-        B: NewService<Config, Error = Self::Error, InitError = Self::InitError>,
+        T1: IntoTransform<T, B::Service>,
+        B: NewService<Config, InitError = Self::InitError>,
         B1: IntoNewService<B, Config>,
     {
         AndThenTransformNewService::new(
-            transform.into_new_transform(),
+            transform.into_transform(),
             self,
             service.into_new_service(),
         )

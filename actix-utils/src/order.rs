@@ -3,7 +3,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use actix_service::{NewTransform, Service, Transform, Void};
+use actix_service::{Service, Transform, Void};
 use futures::future::{ok, FutureResult};
 use futures::task::AtomicTask;
 use futures::unsync::oneshot;
@@ -63,13 +63,8 @@ where
         Self { _t: PhantomData }
     }
 
-    pub fn service() -> impl Transform<
-        S,
-        Request = S::Request,
-        Response = S::Response,
-        Error = InOrderError<S::Error>,
-    > {
-        InOrderService::new()
+    pub fn service(service: S) -> InOrderService<S> {
+        InOrderService::new(service)
     }
 }
 
@@ -85,7 +80,7 @@ where
     }
 }
 
-impl<S, C> NewTransform<S, C> for InOrder<S>
+impl<S> Transform<S> for InOrder<S>
 where
     S: Service,
     S::Response: 'static,
@@ -99,12 +94,13 @@ where
     type Transform = InOrderService<S>;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self, _: &C) -> Self::Future {
-        ok(InOrderService::new())
+    fn new_transform(&self, service: S) -> Self::Future {
+        ok(InOrderService::new(service))
     }
 }
 
 pub struct InOrderService<S: Service> {
+    service: S,
     task: Rc<AtomicTask>,
     acks: VecDeque<Record<S::Response, S::Error>>,
 }
@@ -116,27 +112,16 @@ where
     S::Future: 'static,
     S::Error: 'static,
 {
-    pub fn new() -> Self {
+    pub fn new(service: S) -> Self {
         Self {
+            service,
             acks: VecDeque::new(),
             task: Rc::new(AtomicTask::new()),
         }
     }
 }
 
-impl<S> Default for InOrderService<S>
-where
-    S: Service,
-    S::Response: 'static,
-    S::Future: 'static,
-    S::Error: 'static,
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<S> Transform<S> for InOrderService<S>
+impl<S> Service for InOrderService<S>
 where
     S: Service,
     S::Response: 'static,
@@ -149,7 +134,11 @@ where
     type Future = InOrderServiceResponse<S>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        // poll_ready could be called from different task
         self.task.register();
+
+        // check nested service
+        self.service.poll_ready().map_err(InOrderError::Service)?;
 
         // check acks
         while !self.acks.is_empty() {
@@ -167,13 +156,13 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, request: S::Request, service: &mut S) -> Self::Future {
+    fn call(&mut self, request: S::Request) -> Self::Future {
         let (tx1, rx1) = oneshot::channel();
         let (tx2, rx2) = oneshot::channel();
         self.acks.push_back(Record { rx: rx1, tx: tx2 });
 
         let task = self.task.clone();
-        tokio_current_thread::spawn(service.call(request).then(move |res| {
+        tokio_current_thread::spawn(self.service.call(request).then(move |res| {
             task.notify();
             let _ = tx1.send(res);
             Ok(())
@@ -257,7 +246,7 @@ mod tests {
             let rx3 = rx3;
             let tx_stop = tx_stop;
             let _ = actix_rt::System::new("test").block_on(lazy(move || {
-                let mut srv = Blank::new().apply(InOrderService::new(), Srv);
+                let mut srv = Blank::new().and_then(InOrderService::new(Srv));
 
                 let res1 = srv.call(rx1);
                 let res2 = srv.call(rx2);
