@@ -87,7 +87,7 @@ impl ServerBuilder {
     /// can be used to limit the global SSL CPU usage.
     ///
     /// By default max connections is set to a 256.
-    pub fn maxconnrate(mut self, num: usize) -> Self {
+    pub fn maxconnrate(self, num: usize) -> Self {
         ssl::max_concurrent_ssl_connect(num);
         self
     }

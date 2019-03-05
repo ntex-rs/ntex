@@ -33,3 +33,9 @@ pub(crate) static MAX_CONN: AtomicUsize = AtomicUsize::new(256);
 thread_local! {
     static MAX_CONN_COUNTER: Counter = Counter::new(MAX_CONN.load(Ordering::Relaxed));
 }
+
+/// Ssl error combinded with service error.
+pub enum SslError<E1, E2> {
+    Ssl(E1),
+    Service(E2),
+}

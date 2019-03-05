@@ -6,6 +6,8 @@
 
 * Add `ServerBuilder::maxconnrate` sets the maximum per-worker number of concurrent connections
 
+* Add helper ssl error `SslError`
+
 
 ### Changed
 
