@@ -7,7 +7,7 @@ use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use actix_service::{IntoNewService, IntoService, NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::task::AtomicTask;
-use futures::{Async, Future, Poll, Sink, Stream};
+use futures::{Async, Future, IntoFuture, Poll, Sink, Stream};
 use log::debug;
 
 use crate::cell::Cell;
@@ -120,7 +120,7 @@ where
 
     fn call(&mut self, req: Framed<T, U>) -> Self::Future {
         FramedServiceResponseFuture {
-            fut: self.factory.new_service(&self.config),
+            fut: self.factory.new_service(&self.config).into_future(),
             framed: Some(req),
         }
     }
@@ -137,7 +137,7 @@ where
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
-    fut: S::Future,
+    fut: <S::Future as IntoFuture>::Future,
     framed: Option<Framed<T, U>>,
 }
 

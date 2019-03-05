@@ -1,6 +1,6 @@
 //! Contains `Either` service and related types and functions.
 use actix_service::{NewService, Service};
-use futures::{future, try_ready, Async, Future, Poll};
+use futures::{future, try_ready, Async, Future, IntoFuture, Poll};
 
 /// Combine two different service types into a single type.
 ///
@@ -102,8 +102,8 @@ where
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         match self {
-            Either::A(ref inner) => EitherNewService::A(inner.new_service(cfg)),
-            Either::B(ref inner) => EitherNewService::B(inner.new_service(cfg)),
+            Either::A(ref inner) => EitherNewService::A(inner.new_service(cfg).into_future()),
+            Either::B(ref inner) => EitherNewService::B(inner.new_service(cfg).into_future()),
         }
     }
 }
@@ -119,8 +119,8 @@ impl<A: Clone, B: Clone> Clone for Either<A, B> {
 
 #[doc(hidden)]
 pub enum EitherNewService<A: NewService<C>, B: NewService<C>, C> {
-    A(A::Future),
-    B(B::Future),
+    A(<A::Future as IntoFuture>::Future),
+    B(<B::Future as IntoFuture>::Future),
 }
 
 impl<A, B, C> Future for EitherNewService<A, B, C>
