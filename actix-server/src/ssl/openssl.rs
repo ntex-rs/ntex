@@ -36,8 +36,7 @@ impl<T: AsyncRead + AsyncWrite> Clone for OpensslAcceptor<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite> NewService for OpensslAcceptor<T> {
-    type Request = T;
+impl<T: AsyncRead + AsyncWrite> NewService<T> for OpensslAcceptor<T> {
     type Response = SslStream<T>;
     type Error = HandshakeError<T>;
     type Service = OpensslAcceptorService<T>;
@@ -61,8 +60,7 @@ pub struct OpensslAcceptorService<T> {
     conns: Counter,
 }
 
-impl<T: AsyncRead + AsyncWrite> Service for OpensslAcceptorService<T> {
-    type Request = T;
+impl<T: AsyncRead + AsyncWrite> Service<T> for OpensslAcceptorService<T> {
     type Response = SslStream<T>;
     type Error = HandshakeError<T>;
     type Future = OpensslAcceptorServiceFut<T>;

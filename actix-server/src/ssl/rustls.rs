@@ -38,8 +38,7 @@ impl<T> Clone for RustlsAcceptor<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite> NewService for RustlsAcceptor<T> {
-    type Request = T;
+impl<T: AsyncRead + AsyncWrite> NewService<T> for RustlsAcceptor<T> {
     type Response = TlsStream<T, ServerSession>;
     type Error = io::Error;
     type Service = RustlsAcceptorService<T>;
@@ -63,8 +62,7 @@ pub struct RustlsAcceptorService<T> {
     conns: Counter,
 }
 
-impl<T: AsyncRead + AsyncWrite> Service for RustlsAcceptorService<T> {
-    type Request = T;
+impl<T: AsyncRead + AsyncWrite> Service<T> for RustlsAcceptorService<T> {
     type Response = TlsStream<T, ServerSession>;
     type Error = io::Error;
     type Future = RustlsAcceptorServiceFut<T>;
