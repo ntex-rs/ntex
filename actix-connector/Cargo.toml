@@ -27,7 +27,8 @@ default = []
 ssl = ["openssl", "tokio-openssl"]
 
 [dependencies]
-actix-service = "0.3.0"
+#actix-service = "0.3.0"
+actix-service = { path="../actix-service" }
 actix-codec = "0.1.0"
 futures = "0.1"
 tokio-tcp = "0.1"

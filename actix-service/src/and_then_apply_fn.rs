@@ -6,30 +6,23 @@ use super::{IntoNewService, IntoService, NewService, Service};
 use crate::cell::Cell;
 
 /// `Apply` service combinator
-pub struct AndThenApply<A, B, F, Out>
-where
-    A: Service,
-    B: Service<Error = A::Error>,
-    F: FnMut(A::Response, &mut B) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
-{
+pub struct AndThenApply<A, B, F, Out, AReq, BReq> {
     a: A,
     b: Cell<B>,
     f: Cell<F>,
-    r: PhantomData<(Out,)>,
+    r: PhantomData<(Out, AReq, BReq)>,
 }
 
-impl<A, B, F, Out> AndThenApply<A, B, F, Out>
+impl<A, B, F, Out, AReq, BReq> AndThenApply<A, B, F, Out, AReq, BReq>
 where
-    A: Service,
-    B: Service<Error = A::Error>,
+    A: Service<AReq>,
+    B: Service<BReq, Error = A::Error>,
     F: FnMut(A::Response, &mut B) -> Out,
     Out: IntoFuture,
     Out::Error: Into<A::Error>,
 {
     /// Create new `Apply` combinator
-    pub fn new<A1: IntoService<A>, B1: IntoService<B>>(a: A1, b: B1, f: F) -> Self {
+    pub fn new<A1: IntoService<A, AReq>, B1: IntoService<B, BReq>>(a: A1, b: B1, f: F) -> Self {
         Self {
             f: Cell::new(f),
             a: a.into_service(),
@@ -39,13 +32,9 @@ where
     }
 }
 
-impl<A, B, F, Out> Clone for AndThenApply<A, B, F, Out>
+impl<A, B, F, Out, AReq, BReq> Clone for AndThenApply<A, B, F, Out, AReq, BReq>
 where
-    A: Service + Clone,
-    B: Service<Error = A::Error>,
-    F: FnMut(A::Response, &mut B) -> Out,
-    Out: IntoFuture,
-    Out::Error: Into<A::Error>,
+    A: Clone,
 {
     fn clone(&self) -> Self {
         AndThenApply {
@@ -57,38 +46,38 @@ where
     }
 }
 
-impl<A, B, F, Out> Service for AndThenApply<A, B, F, Out>
+impl<A, B, F, Out, AReq, BReq> Service<AReq> for AndThenApply<A, B, F, Out, AReq, BReq>
 where
-    A: Service,
-    B: Service<Error = A::Error>,
+    A: Service<AReq>,
+    B: Service<BReq, Error = A::Error>,
     F: FnMut(A::Response, &mut B) -> Out,
     Out: IntoFuture,
     Out::Error: Into<A::Error>,
 {
-    type Request = A::Request;
     type Response = Out::Item;
     type Error = A::Error;
-    type Future = AndThenApplyFuture<A, B, F, Out>;
+    type Future = AndThenApplyFuture<A, B, F, Out, AReq, BReq>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         try_ready!(self.a.poll_ready());
         self.b.get_mut().poll_ready()
     }
 
-    fn call(&mut self, req: A::Request) -> Self::Future {
+    fn call(&mut self, req: AReq) -> Self::Future {
         AndThenApplyFuture {
             b: self.b.clone(),
             f: self.f.clone(),
             fut_b: None,
             fut_a: Some(self.a.call(req)),
+            _t: PhantomData,
         }
     }
 }
 
-pub struct AndThenApplyFuture<A, B, F, Out>
+pub struct AndThenApplyFuture<A, B, F, Out, AReq, BReq>
 where
-    A: Service,
-    B: Service<Error = A::Error>,
+    A: Service<AReq>,
+    B: Service<BReq, Error = A::Error>,
     F: FnMut(A::Response, &mut B) -> Out,
     Out: IntoFuture,
     Out::Error: Into<A::Error>,
@@ -97,12 +86,13 @@ where
     f: Cell<F>,
     fut_a: Option<A::Future>,
     fut_b: Option<Out::Future>,
+    _t: PhantomData<(AReq, BReq)>,
 }
 
-impl<A, B, F, Out> Future for AndThenApplyFuture<A, B, F, Out>
+impl<A, B, F, Out, AReq, BReq> Future for AndThenApplyFuture<A, B, F, Out, AReq, BReq>
 where
-    A: Service,
-    B: Service<Error = A::Error>,
+    A: Service<AReq>,
+    B: Service<BReq, Error = A::Error>,
     F: FnMut(A::Response, &mut B) -> Out,
     Out: IntoFuture,
     Out::Error: Into<A::Error>,
@@ -129,23 +119,23 @@ where
 }
 
 /// `ApplyNewService` new service combinator
-pub struct AndThenApplyNewService<A, B, F, Out, Cfg> {
+pub struct AndThenApplyNewService<A, B, F, Out, AReq, BReq, Cfg> {
     a: A,
     b: B,
     f: Cell<F>,
-    r: PhantomData<(Out, Cfg)>,
+    r: PhantomData<(Out, AReq, BReq, Cfg)>,
 }
 
-impl<A, B, F, Out, Cfg> AndThenApplyNewService<A, B, F, Out, Cfg>
+impl<A, B, F, Out, AReq, BReq, Cfg> AndThenApplyNewService<A, B, F, Out, AReq, BReq, Cfg>
 where
-    A: NewService<Cfg>,
-    B: NewService<Cfg, Error = A::Error, InitError = A::InitError>,
+    A: NewService<AReq, Cfg>,
+    B: NewService<BReq, Cfg, Error = A::Error, InitError = A::InitError>,
     F: FnMut(A::Response, &mut B::Service) -> Out,
     Out: IntoFuture,
     Out::Error: Into<A::Error>,
 {
     /// Create new `ApplyNewService` new service instance
-    pub fn new<A1: IntoNewService<A, Cfg>, B1: IntoNewService<B, Cfg>>(
+    pub fn new<A1: IntoNewService<A, AReq, Cfg>, B1: IntoNewService<B, BReq, Cfg>>(
         a: A1,
         b: B1,
         f: F,
@@ -159,7 +149,8 @@ where
     }
 }
 
-impl<A, B, F, Out, Cfg> Clone for AndThenApplyNewService<A, B, F, Out, Cfg>
+impl<A, B, F, Out, AReq, BReq, Cfg> Clone
+    for AndThenApplyNewService<A, B, F, Out, AReq, BReq, Cfg>
 where
     A: Clone,
     B: Clone,
@@ -174,21 +165,21 @@ where
     }
 }
 
-impl<A, B, F, Out, Cfg> NewService<Cfg> for AndThenApplyNewService<A, B, F, Out, Cfg>
+impl<A, B, F, Out, AReq, BReq, Cfg> NewService<AReq, Cfg>
+    for AndThenApplyNewService<A, B, F, Out, AReq, BReq, Cfg>
 where
-    A: NewService<Cfg>,
-    B: NewService<Cfg, Error = A::Error, InitError = A::InitError>,
+    A: NewService<AReq, Cfg>,
+    B: NewService<BReq, Cfg, Error = A::Error, InitError = A::InitError>,
     F: FnMut(A::Response, &mut B::Service) -> Out,
     Out: IntoFuture,
     Out::Error: Into<A::Error>,
 {
-    type Request = A::Request;
     type Response = Out::Item;
     type Error = A::Error;
-    type Service = AndThenApply<A::Service, B::Service, F, Out>;
+    type Service = AndThenApply<A::Service, B::Service, F, Out, AReq, BReq>;
 
     type InitError = A::InitError;
-    type Future = AndThenApplyNewServiceFuture<A, B, F, Out, Cfg>;
+    type Future = AndThenApplyNewServiceFuture<A, B, F, Out, AReq, BReq, Cfg>;
 
     fn new_service(&self, cfg: &Cfg) -> Self::Future {
         AndThenApplyNewServiceFuture {
@@ -201,10 +192,10 @@ where
     }
 }
 
-pub struct AndThenApplyNewServiceFuture<A, B, F, Out, Cfg>
+pub struct AndThenApplyNewServiceFuture<A, B, F, Out, AReq, BReq, Cfg>
 where
-    A: NewService<Cfg>,
-    B: NewService<Cfg, Error = A::Error, InitError = A::InitError>,
+    A: NewService<AReq, Cfg>,
+    B: NewService<BReq, Cfg, Error = A::Error, InitError = A::InitError>,
     F: FnMut(A::Response, &mut B::Service) -> Out,
     Out: IntoFuture,
     Out::Error: Into<A::Error>,
@@ -216,15 +207,16 @@ where
     b: Option<B::Service>,
 }
 
-impl<A, B, F, Out, Cfg> Future for AndThenApplyNewServiceFuture<A, B, F, Out, Cfg>
+impl<A, B, F, Out, AReq, BReq, Cfg> Future
+    for AndThenApplyNewServiceFuture<A, B, F, Out, AReq, BReq, Cfg>
 where
-    A: NewService<Cfg>,
-    B: NewService<Cfg, Error = A::Error, InitError = A::InitError>,
+    A: NewService<AReq, Cfg>,
+    B: NewService<BReq, Cfg, Error = A::Error, InitError = A::InitError>,
     F: FnMut(A::Response, &mut B::Service) -> Out,
     Out: IntoFuture,
     Out::Error: Into<A::Error>,
 {
-    type Item = AndThenApply<A::Service, B::Service, F, Out>;
+    type Item = AndThenApply<A::Service, B::Service, F, Out, AReq, BReq>;
     type Error = A::InitError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -263,8 +255,7 @@ mod tests {
 
     #[derive(Clone)]
     struct Srv;
-    impl Service for Srv {
-        type Request = ();
+    impl Service<()> for Srv {
         type Response = ();
         type Error = ();
         type Future = FutureResult<(), ()>;

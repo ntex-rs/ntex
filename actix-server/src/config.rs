@@ -169,8 +169,8 @@ impl ServiceRuntime {
 
     pub fn service<T, F>(&mut self, name: &str, service: F)
     where
-        F: IntoNewService<T>,
-        T: NewService<Request = TcpStream, Response = ()> + 'static,
+        F: IntoNewService<T, TcpStream>,
+        T: NewService<TcpStream, Response = ()> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -191,7 +191,7 @@ impl ServiceRuntime {
 
 type BoxedNewService = Box<
     NewService<
-        Request = (Option<CounterGuard>, ServerMessage),
+        (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
         InitError = (),
@@ -204,15 +204,14 @@ struct ServiceFactory<T> {
     inner: T,
 }
 
-impl<T> NewService for ServiceFactory<T>
+impl<T> NewService<(Option<CounterGuard>, ServerMessage)> for ServiceFactory<T>
 where
-    T: NewService<Request = TcpStream, Response = ()>,
+    T: NewService<TcpStream, Response = ()>,
     T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,
     T::InitError: fmt::Debug + 'static,
 {
-    type Request = (Option<CounterGuard>, ServerMessage);
     type Response = ();
     type Error = ();
     type InitError = ();
@@ -220,14 +219,9 @@ where
     type Future = Box<Future<Item = BoxedServerService, Error = ()>>;
 
     fn new_service(&self, _: &()) -> Self::Future {
-        Box::new(
-            self.inner
-                .new_service(&())
-                .map_err(|_| ())
-                .map(|s| {
-                    let service: BoxedServerService = Box::new(StreamService::new(s));
-                    service
-                }),
-        )
+        Box::new(self.inner.new_service(&()).map_err(|_| ()).map(|s| {
+            let service: BoxedServerService = Box::new(StreamService::new(s));
+            service
+        }))
     }
 }

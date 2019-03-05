@@ -15,9 +15,9 @@ pub struct Map<A, F, Response> {
 
 impl<A, F, Response> Map<A, F, Response> {
     /// Create new `Map` combinator
-    pub fn new(service: A, f: F) -> Self
+    pub fn new<R>(service: A, f: F) -> Self
     where
-        A: Service,
+        A: Service<R>,
         F: FnMut(A::Response) -> Response,
     {
         Self {
@@ -42,37 +42,36 @@ where
     }
 }
 
-impl<A, F, Response> Service for Map<A, F, Response>
+impl<A, F, R, Response> Service<R> for Map<A, F, Response>
 where
-    A: Service,
+    A: Service<R>,
     F: FnMut(A::Response) -> Response + Clone,
 {
-    type Request = A::Request;
     type Response = Response;
     type Error = A::Error;
-    type Future = MapFuture<A, F, Response>;
+    type Future = MapFuture<A, F, R, Response>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         self.service.poll_ready()
     }
 
-    fn call(&mut self, req: A::Request) -> Self::Future {
+    fn call(&mut self, req: R) -> Self::Future {
         MapFuture::new(self.service.call(req), self.f.clone())
     }
 }
 
-pub struct MapFuture<A, F, Response>
+pub struct MapFuture<A, F, R, Response>
 where
-    A: Service,
+    A: Service<R>,
     F: FnMut(A::Response) -> Response,
 {
     f: F,
     fut: A::Future,
 }
 
-impl<A, F, Response> MapFuture<A, F, Response>
+impl<A, F, R, Response> MapFuture<A, F, R, Response>
 where
-    A: Service,
+    A: Service<R>,
     F: FnMut(A::Response) -> Response,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -80,9 +79,9 @@ where
     }
 }
 
-impl<A, F, Response> Future for MapFuture<A, F, Response>
+impl<A, F, R, Response> Future for MapFuture<A, F, R, Response>
 where
-    A: Service,
+    A: Service<R>,
     F: FnMut(A::Response) -> Response,
 {
     type Item = Response;
@@ -105,9 +104,9 @@ pub struct MapNewService<A, F, Res, Cfg> {
 
 impl<A, F, Res, Cfg> MapNewService<A, F, Res, Cfg> {
     /// Create new `Map` new service instance
-    pub fn new(a: A, f: F) -> Self
+    pub fn new<Req>(a: A, f: F) -> Self
     where
-        A: NewService<Cfg>,
+        A: NewService<Req, Cfg>,
         F: FnMut(A::Response) -> Res,
     {
         Self {
@@ -132,36 +131,35 @@ where
     }
 }
 
-impl<A, F, Res, Cfg> NewService<Cfg> for MapNewService<A, F, Res, Cfg>
+impl<A, F, Req, Res, Cfg> NewService<Req, Cfg> for MapNewService<A, F, Res, Cfg>
 where
-    A: NewService<Cfg>,
+    A: NewService<Req, Cfg>,
     F: FnMut(A::Response) -> Res + Clone,
 {
-    type Request = A::Request;
     type Response = Res;
     type Error = A::Error;
     type Service = Map<A::Service, F, Res>;
 
     type InitError = A::InitError;
-    type Future = MapNewServiceFuture<A, F, Res, Cfg>;
+    type Future = MapNewServiceFuture<A, F, Req, Res, Cfg>;
 
     fn new_service(&self, cfg: &Cfg) -> Self::Future {
         MapNewServiceFuture::new(self.a.new_service(cfg), self.f.clone())
     }
 }
 
-pub struct MapNewServiceFuture<A, F, Res, Cfg>
+pub struct MapNewServiceFuture<A, F, Req, Res, Cfg>
 where
-    A: NewService<Cfg>,
+    A: NewService<Req, Cfg>,
     F: FnMut(A::Response) -> Res,
 {
     fut: A::Future,
     f: Option<F>,
 }
 
-impl<A, F, Res, Cfg> MapNewServiceFuture<A, F, Res, Cfg>
+impl<A, F, Req, Res, Cfg> MapNewServiceFuture<A, F, Req, Res, Cfg>
 where
-    A: NewService<Cfg>,
+    A: NewService<Req, Cfg>,
     F: FnMut(A::Response) -> Res,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -169,9 +167,9 @@ where
     }
 }
 
-impl<A, F, Res, Cfg> Future for MapNewServiceFuture<A, F, Res, Cfg>
+impl<A, F, Req, Res, Cfg> Future for MapNewServiceFuture<A, F, Req, Res, Cfg>
 where
-    A: NewService<Cfg>,
+    A: NewService<Req, Cfg>,
     F: FnMut(A::Response) -> Res,
 {
     type Item = Map<A::Service, F, Res>;
@@ -194,8 +192,7 @@ mod tests {
     use crate::{IntoNewService, Service, ServiceExt};
 
     struct Srv;
-    impl Service for Srv {
-        type Request = ();
+    impl Service<()> for Srv {
         type Response = ();
         type Error = ();
         type Future = FutureResult<(), ()>;

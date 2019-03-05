@@ -67,8 +67,7 @@ impl<T> Clone for Resolver<T> {
     }
 }
 
-impl<T: RequestHost> Service for Resolver<T> {
-    type Request = T;
+impl<T: RequestHost> Service<T> for Resolver<T> {
     type Response = (T, VecDeque<IpAddr>);
     type Error = ResolveError;
     type Future = ResolverFuture<T>;

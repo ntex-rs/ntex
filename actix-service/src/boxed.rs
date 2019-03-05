@@ -1,48 +1,49 @@
+use std::marker::PhantomData;
+
 use crate::{NewService, Service};
 use futures::{Future, IntoFuture, Poll};
 
 pub type BoxedService<Req, Res, Err> = Box<
-    Service<
-        Request = Req,
-        Response = Res,
-        Error = Err,
-        Future = Box<Future<Item = Res, Error = Err>>,
-    >,
+    Service<Req, Response = Res, Error = Err, Future = Box<Future<Item = Res, Error = Err>>>,
 >;
 
 /// Create boxed new service
-pub fn new_service<T, C>(
+pub fn new_service<T, R, C>(
     service: T,
-) -> BoxedNewService<C, T::Request, T::Response, T::Error, T::InitError>
+) -> BoxedNewService<C, R, T::Response, T::Error, T::InitError>
 where
     C: 'static,
-    T: NewService<C> + 'static,
-    T::Request: 'static,
+    T: NewService<R, C> + 'static,
     T::Response: 'static,
     T::Service: 'static,
     T::Future: 'static,
     T::Error: 'static,
     T::InitError: 'static,
+    R: 'static,
 {
     BoxedNewService(Box::new(NewServiceWrapper {
         service,
-        _t: std::marker::PhantomData,
+        _t: PhantomData,
     }))
 }
 
 /// Create boxed service
-pub fn service<T>(service: T) -> BoxedService<T::Request, T::Response, T::Error>
+pub fn service<T, R>(service: T) -> BoxedService<R, T::Response, T::Error>
 where
-    T: Service + 'static,
+    T: Service<R> + 'static,
     T::Future: 'static,
+    R: 'static,
 {
-    Box::new(ServiceWrapper(service))
+    Box::new(ServiceWrapper {
+        service,
+        _t: PhantomData,
+    })
 }
 
 type Inner<C, Req, Res, Err, InitErr> = Box<
     NewService<
+        Req,
         C,
-        Request = Req,
         Response = Res,
         Error = Err,
         InitError = InitErr,
@@ -53,14 +54,14 @@ type Inner<C, Req, Res, Err, InitErr> = Box<
 
 pub struct BoxedNewService<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
 
-impl<C, Req, Res, Err, InitErr> NewService<C> for BoxedNewService<C, Req, Res, Err, InitErr>
+impl<C, Req, Res, Err, InitErr> NewService<Req, C>
+    for BoxedNewService<C, Req, Res, Err, InitErr>
 where
     Req: 'static,
     Res: 'static,
     Err: 'static,
     InitErr: 'static,
 {
-    type Request = Req;
     type Response = Res;
     type Error = Err;
     type InitError = InitErr;
@@ -72,23 +73,22 @@ where
     }
 }
 
-struct NewServiceWrapper<C, T: NewService<C>> {
+struct NewServiceWrapper<T: NewService<R, C>, R, C> {
     service: T,
-    _t: std::marker::PhantomData<C>,
+    _t: std::marker::PhantomData<(R, C)>,
 }
 
-impl<C, T, Req, Res, Err, InitErr> NewService<C> for NewServiceWrapper<C, T>
+impl<C, T, Req, Res, Err, InitErr> NewService<Req, C> for NewServiceWrapper<T, Req, C>
 where
     Req: 'static,
     Res: 'static,
     Err: 'static,
     InitErr: 'static,
-    T: NewService<C, Request = Req, Response = Res, Error = Err, InitError = InitErr>,
+    T: NewService<Req, C, Response = Res, Error = Err, InitError = InitErr>,
     T::Future: 'static,
     T::Service: 'static,
-    <T::Service as Service>::Future: 'static,
+    <T::Service as Service<Req>>::Future: 'static,
 {
-    type Request = Req;
     type Response = Res;
     type Error = Err;
     type InitError = InitErr;
@@ -105,33 +105,40 @@ where
     }
 }
 
-struct ServiceWrapper<T: Service>(T);
+struct ServiceWrapper<T: Service<R>, R> {
+    service: T,
+    _t: PhantomData<R>,
+}
 
-impl<T> ServiceWrapper<T>
+impl<T, R> ServiceWrapper<T, R>
 where
-    T: Service + 'static,
+    T: Service<R> + 'static,
     T::Future: 'static,
+    R: 'static,
 {
-    fn boxed(service: T) -> BoxedService<T::Request, T::Response, T::Error> {
-        Box::new(ServiceWrapper(service))
+    fn boxed(service: T) -> BoxedService<R, T::Response, T::Error> {
+        Box::new(ServiceWrapper {
+            service,
+            _t: PhantomData,
+        })
     }
 }
 
-impl<T, Req, Res, Err> Service for ServiceWrapper<T>
+impl<T, Req, Res, Err> Service<Req> for ServiceWrapper<T, Req>
 where
-    T: Service<Request = Req, Response = Res, Error = Err>,
+    T: Service<Req, Response = Res, Error = Err>,
     T::Future: 'static,
+    Req: 'static,
 {
-    type Request = Req;
     type Response = Res;
     type Error = Err;
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.0.poll_ready()
+        self.service.poll_ready()
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
-        Box::new(self.0.call(req))
+    fn call(&mut self, req: Req) -> Self::Future {
+        Box::new(self.service.call(req))
     }
 }

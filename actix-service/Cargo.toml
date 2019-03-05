@@ -25,3 +25,6 @@ path = "src/lib.rs"
 [dependencies]
 futures = "0.1.24"
 void = "1.0.2"
+
+[dev-dependencies]
+actix-rt = "0.1"

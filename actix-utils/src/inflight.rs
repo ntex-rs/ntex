@@ -24,8 +24,7 @@ impl Default for InFlight {
     }
 }
 
-impl<S: Service> Transform<S> for InFlight {
-    type Request = S::Request;
+impl<S: Service<R>, R> Transform<R, S> for InFlight {
     type Response = S::Response;
     type Error = S::Error;
     type InitError = Void;
@@ -51,14 +50,13 @@ impl<S> InFlightService<S> {
     }
 }
 
-impl<T> Service for InFlightService<T>
+impl<T, R> Service<R> for InFlightService<T>
 where
-    T: Service,
+    T: Service<R>,
 {
-    type Request = T::Request;
     type Response = T::Response;
     type Error = T::Error;
-    type Future = InFlightServiceResponse<T>;
+    type Future = InFlightServiceResponse<T, R>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         self.service.poll_ready()?;
@@ -71,7 +69,7 @@ where
         }
     }
 
-    fn call(&mut self, req: T::Request) -> Self::Future {
+    fn call(&mut self, req: R) -> Self::Future {
         InFlightServiceResponse {
             fut: self.service.call(req),
             _guard: self.count.get(),
@@ -80,12 +78,12 @@ where
 }
 
 #[doc(hidden)]
-pub struct InFlightServiceResponse<T: Service> {
+pub struct InFlightServiceResponse<T: Service<R>, R> {
     fut: T::Future,
     _guard: CounterGuard,
 }
 
-impl<T: Service> Future for InFlightServiceResponse<T> {
+impl<T: Service<R>, R> Future for InFlightServiceResponse<T, R> {
     type Item = T::Response;
     type Error = T::Error;
 
@@ -107,8 +105,7 @@ mod tests {
 
     struct SleepService(Duration);
 
-    impl Service for SleepService {
-        type Request = ();
+    impl Service<()> for SleepService {
         type Response = ();
         type Error = ();
         type Future = Box<Future<Item = (), Error = ()>>;

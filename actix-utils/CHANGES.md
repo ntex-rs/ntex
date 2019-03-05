@@ -1,5 +1,10 @@
 # Changes
 
+## [0.4.0] - 2019-03-xx
+
+* Upgrade actix-service
+
+
 ## [0.3.2] - 2019-03-04
 
 ### Changed

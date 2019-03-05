@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use futures::{try_ready, Async, Future, Poll};
 
-use super::{IntoNewService, NewService, Service};
+use super::{NewService, Service};
 use crate::cell::Cell;
 
 /// Service for the `then` combinator, chaining a computation onto the end of
@@ -16,10 +16,10 @@ pub struct Then<A, B> {
 
 impl<A, B> Then<A, B> {
     /// Create new `Then` combinator
-    pub fn new(a: A, b: B) -> Then<A, B>
+    pub fn new<R>(a: A, b: B) -> Then<A, B>
     where
-        A: Service,
-        B: Service<Request = Result<A::Response, A::Error>, Error = A::Error>,
+        A: Service<R>,
+        B: Service<Result<A::Response, A::Error>, Error = A::Error>,
     {
         Then { a, b: Cell::new(b) }
     }
@@ -37,40 +37,39 @@ where
     }
 }
 
-impl<A, B> Service for Then<A, B>
+impl<A, B, R> Service<R> for Then<A, B>
 where
-    A: Service,
-    B: Service<Request = Result<A::Response, A::Error>, Error = A::Error>,
+    A: Service<R>,
+    B: Service<Result<A::Response, A::Error>, Error = A::Error>,
 {
-    type Request = A::Request;
     type Response = B::Response;
     type Error = B::Error;
-    type Future = ThenFuture<A, B>;
+    type Future = ThenFuture<A, B, R>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         try_ready!(self.a.poll_ready());
         self.b.get_mut().poll_ready()
     }
 
-    fn call(&mut self, req: A::Request) -> Self::Future {
+    fn call(&mut self, req: R) -> Self::Future {
         ThenFuture::new(self.a.call(req), self.b.clone())
     }
 }
 
-pub struct ThenFuture<A, B>
+pub struct ThenFuture<A, B, R>
 where
-    A: Service,
-    B: Service<Request = Result<A::Response, A::Error>>,
+    A: Service<R>,
+    B: Service<Result<A::Response, A::Error>>,
 {
     b: Cell<B>,
     fut_b: Option<B::Future>,
     fut_a: Option<A::Future>,
 }
 
-impl<A, B> ThenFuture<A, B>
+impl<A, B, R> ThenFuture<A, B, R>
 where
-    A: Service,
-    B: Service<Request = Result<A::Response, A::Error>>,
+    A: Service<R>,
+    B: Service<Result<A::Response, A::Error>>,
 {
     fn new(a: A::Future, b: Cell<B>) -> Self {
         ThenFuture {
@@ -81,10 +80,10 @@ where
     }
 }
 
-impl<A, B> Future for ThenFuture<A, B>
+impl<A, B, R> Future for ThenFuture<A, B, R>
 where
-    A: Service,
-    B: Service<Request = Result<A::Response, A::Error>>,
+    A: Service<R>,
+    B: Service<Result<A::Response, A::Error>>,
 {
     type Item = B::Response;
     type Error = B::Error;
@@ -119,42 +118,35 @@ pub struct ThenNewService<A, B, C> {
 
 impl<A, B, C> ThenNewService<A, B, C> {
     /// Create new `AndThen` combinator
-    pub fn new<F>(a: A, f: F) -> Self
+    pub fn new<R>(a: A, f: B) -> Self
     where
-        A: NewService<C>,
+        A: NewService<R, C>,
         B: NewService<
+            Result<A::Response, A::Error>,
             C,
-            Request = Result<A::Response, A::Error>,
             Error = A::Error,
             InitError = A::InitError,
         >,
-        F: IntoNewService<B, C>,
     {
         Self {
             a,
-            b: f.into_new_service(),
+            b: f,
             _t: PhantomData,
         }
     }
 }
 
-impl<A, B, C> NewService<C> for ThenNewService<A, B, C>
+impl<A, B, R, C> NewService<R, C> for ThenNewService<A, B, C>
 where
-    A: NewService<C>,
-    B: NewService<
-        C,
-        Request = Result<A::Response, A::Error>,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
+    A: NewService<R, C>,
+    B: NewService<Result<A::Response, A::Error>, C, Error = A::Error, InitError = A::InitError>,
 {
-    type Request = A::Request;
     type Response = B::Response;
     type Error = A::Error;
     type Service = Then<A::Service, B::Service>;
 
     type InitError = A::InitError;
-    type Future = ThenNewServiceFuture<A, B, C>;
+    type Future = ThenNewServiceFuture<A, B, R, C>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         ThenNewServiceFuture::new(self.a.new_service(cfg), self.b.new_service(cfg))
@@ -175,15 +167,10 @@ where
     }
 }
 
-pub struct ThenNewServiceFuture<A, B, C>
+pub struct ThenNewServiceFuture<A, B, R, C>
 where
-    A: NewService<C>,
-    B: NewService<
-        C,
-        Request = Result<A::Response, A::Error>,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
+    A: NewService<R, C>,
+    B: NewService<Result<A::Response, A::Error>, C, Error = A::Error, InitError = A::InitError>,
 {
     fut_b: B::Future,
     fut_a: A::Future,
@@ -191,15 +178,10 @@ where
     b: Option<B::Service>,
 }
 
-impl<A, B, C> ThenNewServiceFuture<A, B, C>
+impl<A, B, R, C> ThenNewServiceFuture<A, B, R, C>
 where
-    A: NewService<C>,
-    B: NewService<
-        C,
-        Request = Result<A::Response, A::Error>,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
+    A: NewService<R, C>,
+    B: NewService<Result<A::Response, A::Error>, C, Error = A::Error, InitError = A::InitError>,
 {
     fn new(fut_a: A::Future, fut_b: B::Future) -> Self {
         ThenNewServiceFuture {
@@ -211,15 +193,10 @@ where
     }
 }
 
-impl<A, B, C> Future for ThenNewServiceFuture<A, B, C>
+impl<A, B, R, C> Future for ThenNewServiceFuture<A, B, R, C>
 where
-    A: NewService<C>,
-    B: NewService<
-        C,
-        Request = Result<A::Response, A::Error>,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
+    A: NewService<R, C>,
+    B: NewService<Result<A::Response, A::Error>, C, Error = A::Error, InitError = A::InitError>,
 {
     type Item = Then<A::Service, B::Service>;
     type Error = A::InitError;
@@ -259,8 +236,7 @@ mod tests {
 
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>);
-    impl Service for Srv1 {
-        type Request = Result<&'static str, &'static str>;
+    impl Service<Result<&'static str, &'static str>> for Srv1 {
         type Response = &'static str;
         type Error = ();
         type Future = FutureResult<Self::Response, Self::Error>;
@@ -280,8 +256,7 @@ mod tests {
 
     struct Srv2(Rc<Cell<usize>>);
 
-    impl Service for Srv2 {
-        type Request = Result<&'static str, ()>;
+    impl Service<Result<&'static str, ()>> for Srv2 {
         type Response = (&'static str, &'static str);
         type Error = ();
         type Future = FutureResult<Self::Response, ()>;

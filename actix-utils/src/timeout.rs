@@ -80,11 +80,10 @@ impl<E> Clone for Timeout<E> {
     }
 }
 
-impl<S, E> Transform<S> for Timeout<E>
+impl<S, R, E> Transform<R, S> for Timeout<E>
 where
-    S: Service,
+    S: Service<R>,
 {
-    type Request = S::Request;
     type Response = S::Response;
     type Error = TimeoutError<S::Error>;
     type InitError = E;
@@ -112,20 +111,19 @@ impl<S> TimeoutService<S> {
     }
 }
 
-impl<S> Service for TimeoutService<S>
+impl<S, R> Service<R> for TimeoutService<S>
 where
-    S: Service,
+    S: Service<R>,
 {
-    type Request = S::Request;
     type Response = S::Response;
     type Error = TimeoutError<S::Error>;
-    type Future = TimeoutServiceResponse<S>;
+    type Future = TimeoutServiceResponse<S, R>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         self.service.poll_ready().map_err(TimeoutError::Service)
     }
 
-    fn call(&mut self, request: S::Request) -> Self::Future {
+    fn call(&mut self, request: R) -> Self::Future {
         TimeoutServiceResponse {
             fut: self.service.call(request),
             sleep: Delay::new(clock::now() + self.timeout),
@@ -135,14 +133,14 @@ where
 
 /// `TimeoutService` response future
 #[derive(Debug)]
-pub struct TimeoutServiceResponse<T: Service> {
+pub struct TimeoutServiceResponse<T: Service<R>, R> {
     fut: T::Future,
     sleep: Delay,
 }
 
-impl<T> Future for TimeoutServiceResponse<T>
+impl<T, R> Future for TimeoutServiceResponse<T, R>
 where
-    T: Service,
+    T: Service<R>,
 {
     type Item = T::Response;
     type Error = TimeoutError<T::Error>;
@@ -177,8 +175,7 @@ mod tests {
 
     struct SleepService(Duration);
 
-    impl Service for SleepService {
-        type Request = ();
+    impl Service<()> for SleepService {
         type Response = ();
         type Error = ();
         type Future = Box<Future<Item = (), Error = ()>>;
