@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::{fmt, io, net};
 
 use actix_service::{IntoNewService, NewService};
-use futures::future::{join_all, Future};
+use futures::future::{join_all, Future, IntoFuture};
 use log::error;
 use tokio_tcp::TcpStream;
 
@@ -220,9 +220,15 @@ where
     type Future = Box<Future<Item = BoxedServerService, Error = ()>>;
 
     fn new_service(&self, _: &()) -> Self::Future {
-        Box::new(self.inner.new_service(&()).map_err(|_| ()).map(|s| {
-            let service: BoxedServerService = Box::new(StreamService::new(s));
-            service
-        }))
+        Box::new(
+            self.inner
+                .new_service(&())
+                .into_future()
+                .map_err(|_| ())
+                .map(|s| {
+                    let service: BoxedServerService = Box::new(StreamService::new(s));
+                    service
+                }),
+        )
     }
 }
