@@ -64,6 +64,17 @@ impl ResourceDef {
         ResourceDef::with_prefix(path, true)
     }
 
+    /// Parse path pattern and create new `Pattern` instance.
+    /// Inserts `/` to begging of the pattern.
+    ///
+    ///
+    /// Use `prefix` type instead of `static`.
+    ///
+    /// Panics if path regex pattern is wrong.
+    pub fn root_prefix(path: &str) -> Self {
+        ResourceDef::with_prefix(&insert_slash(path), true)
+    }
+
     /// Construct external resource def
     ///
     /// Panics if path pattern is malformed.
@@ -313,6 +324,14 @@ impl From<String> for ResourceDef {
     }
 }
 
+pub(crate) fn insert_slash(path: &str) -> String {
+    let mut path = path.to_owned();
+    if !path.is_empty() && !path.starts_with('/') {
+        path.insert(0, '/');
+    };
+    path
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,6 +424,11 @@ mod tests {
         assert!(re.is_match("/name~"));
 
         let re = ResourceDef::prefix("/name/");
+        assert!(re.is_match("/name/"));
+        assert!(re.is_match("/name/gs"));
+        assert!(!re.is_match("/name"));
+
+        let re = ResourceDef::root_prefix("name/");
         assert!(re.is_match("/name/"));
         assert!(re.is_match("/name/gs"));
         assert!(!re.is_match("/name"));
