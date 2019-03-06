@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::io;
 
 use futures::sync::mpsc::UnboundedSender;
 
@@ -109,7 +110,7 @@ impl System {
     /// This function will start tokio runtime and will finish once the
     /// `System::stop()` message get called.
     /// Function `f` get called within tokio runtime context.
-    pub fn run<F>(f: F) -> i32
+    pub fn run<F>(f: F) -> io::Result<()>
     where
         F: FnOnce() + 'static,
     {

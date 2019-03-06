@@ -72,7 +72,7 @@ impl Builder {
     /// This function will start tokio runtime and will finish once the
     /// `System::stop()` message get called.
     /// Function `f` get called within tokio runtime context.
-    pub fn run<F>(self, f: F) -> i32
+    pub fn run<F>(self, f: F) -> io::Result<()>
     where
         F: FnOnce() + 'static,
     {
@@ -140,7 +140,7 @@ pub struct SystemRunner {
 impl SystemRunner {
     /// This function will start event loop and will finish once the
     /// `System::stop()` function is called.
-    pub fn run(self) -> i32 {
+    pub fn run(self) -> io::Result<()> {
         let SystemRunner { mut rt, stop, .. } = self;
 
         // run loop
@@ -148,12 +148,21 @@ impl SystemRunner {
             Arbiter::run_system();
             Ok::<_, ()>(())
         }));
-        let code = match rt.block_on(stop) {
-            Ok(code) => code,
-            Err(_) => 1,
+        let result = match rt.block_on(stop) {
+            Ok(code) => {
+                if code != 0 {
+                    Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Non-zero exit code: {}", code),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
         };
         Arbiter::stop_system();
-        code
+        result
     }
 
     /// Execute a future and wait for result.

@@ -1,9 +1,7 @@
 use std::error::Error;
-use std::fmt;
-use std::io;
+use std::{fmt, io};
 
-use futures::{future, Future};
-use tokio_current_thread::Handle as ExecutorHandle;
+use futures::Future;
 use tokio_current_thread::{self as current_thread, CurrentThread};
 use tokio_executor;
 use tokio_reactor::{self, Reactor};
@@ -24,58 +22,6 @@ pub struct Runtime {
     timer_handle: timer::Handle,
     clock: Clock,
     executor: CurrentThread<Timer<Reactor>>,
-}
-
-/// Handle to spawn a future on the corresponding `CurrentThread` runtime instance
-#[derive(Debug, Clone)]
-pub struct Handle(ExecutorHandle);
-
-impl Handle {
-    /// Spawn a future onto the `CurrentThread` runtime instance corresponding to this handle
-    ///
-    /// # Panics
-    ///
-    /// This function panics if the spawn fails. Failure occurs if the `CurrentThread`
-    /// instance of the `Handle` does not exist anymore.
-    pub fn spawn<F>(&self, future: F) -> Result<(), tokio_executor::SpawnError>
-    where
-        F: Future<Item = (), Error = ()> + Send + 'static,
-    {
-        self.0.spawn(future)
-    }
-
-    /// Provides a best effort **hint** to whether or not `spawn` will succeed.
-    ///
-    /// This function may return both false positives **and** false negatives.
-    /// If `status` returns `Ok`, then a call to `spawn` will *probably*
-    /// succeed, but may fail. If `status` returns `Err`, a call to `spawn` will
-    /// *probably* fail, but may succeed.
-    ///
-    /// This allows a caller to avoid creating the task if the call to `spawn`
-    /// has a high likelihood of failing.
-    pub fn status(&self) -> Result<(), tokio_executor::SpawnError> {
-        self.0.status()
-    }
-}
-
-impl<T> future::Executor<T> for Handle
-where
-    T: Future<Item = (), Error = ()> + Send + 'static,
-{
-    fn execute(&self, future: T) -> Result<(), future::ExecuteError<T>> {
-        if let Err(e) = self.status() {
-            let kind = if e.is_at_capacity() {
-                future::ExecuteErrorKind::NoCapacity
-            } else {
-                future::ExecuteErrorKind::Shutdown
-            };
-
-            return Err(future::ExecuteError::new(kind, future));
-        }
-
-        let _ = self.spawn(future);
-        Ok(())
-    }
 }
 
 /// Error returned by the `run` function.
@@ -118,14 +64,6 @@ impl Runtime {
             clock,
             executor,
         }
-    }
-
-    /// Get a new handle to spawn futures on the single-threaded Tokio runtime
-    ///
-    /// Different to the runtime itself, the handle can be sent to different
-    /// threads.
-    pub fn handle(&self) -> Handle {
-        Handle(self.executor.handle().clone())
     }
 
     /// Spawn a future onto the single-threaded Tokio runtime.

@@ -7,7 +7,7 @@ mod system;
 
 pub use self::arbiter::Arbiter;
 pub use self::builder::{Builder, SystemRunner};
-pub use self::runtime::{Handle, Runtime};
+pub use self::runtime::Runtime;
 pub use self::system::System;
 
 /// Spawns a future on the current arbiter.
