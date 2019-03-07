@@ -349,4 +349,17 @@ impl<T, U> FramedParts<T, U> {
             _priv: (),
         }
     }
+
+    /// Create a new `FramedParts` with read buffer
+    pub fn with_read_buf(io: T, codec: U, read_buf: BytesMut) -> FramedParts<T, U> {
+        FramedParts {
+            io,
+            codec,
+            read_buf,
+            write_buf: BytesMut::new(),
+            write_buf_lw: LW,
+            write_buf_hw: HW,
+            _priv: (),
+        }
+    }
 }
