@@ -5,12 +5,12 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use std::{env, fmt};
+use std::{env, fmt, io};
 
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_rt::System;
 use actix_server::Server;
-use actix_service::{IntoNewService, NewService};
+use actix_service::{fn_service, NewService};
 use futures::{future, Future};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use tokio_openssl::SslAcceptorExt;
@@ -23,7 +23,7 @@ fn logger<T: AsyncRead + AsyncWrite + fmt::Debug>(
     future::ok(stream)
 }
 
-fn main() {
+fn main() -> io::Result<()> {
     env::set_var("RUST_LOG", "actix_net=trace");
     env_logger::init();
 
@@ -54,16 +54,14 @@ fn main() {
                 let acceptor = acceptor.clone();
 
                 // service for converting incoming TcpStream to a SslStream<TcpStream>
-                (move |stream| {
+                fn_service(move |stream: tokio_tcp::TcpStream| {
                     SslAcceptorExt::accept_async(&acceptor, stream)
                         .map_err(|e| println!("Openssl error: {}", e))
                 })
-                // convert closure to a `NewService`
-                .into_new_service()
                 // .and_then() combinator uses other service to convert incoming `Request` to a
                 // `Response` and then uses that response as an input for next
                 // service. in this case, on success we use `logger` service
-                .and_then(logger)
+                .and_then(fn_service(logger))
                 // Next service counts number of connections
                 .and_then(move |_| {
                     let num = num.fetch_add(1, Ordering::Relaxed);
@@ -75,5 +73,5 @@ fn main() {
         .unwrap()
         .start();
 
-    sys.run();
+    sys.run()
 }

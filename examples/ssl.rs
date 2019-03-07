@@ -1,13 +1,13 @@
+use std::io;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
 
-use actix_codec::{AsyncRead, AsyncWrite};
 use actix_rt::System;
 use actix_server::{ssl, Server};
 use actix_service::NewService;
-use futures::{future, Future};
+use futures::future;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 
 #[derive(Debug)]
@@ -15,16 +15,7 @@ struct ServiceState {
     num: Arc<AtomicUsize>,
 }
 
-fn service<T: AsyncRead + AsyncWrite>(
-    st: &mut ServiceState,
-    _: T,
-) -> impl Future<Item = (), Error = ()> {
-    let num = st.num.fetch_add(1, Ordering::Relaxed);
-    println!("got ssl connection {:?}", num);
-    future::ok(())
-}
-
-fn main() {
+fn main() -> io::Result<()> {
     let sys = System::new("test");
 
     // load ssl keys
@@ -53,9 +44,8 @@ fn main() {
                     println!("got ssl connection {:?}", num);
                     future::ok(())
                 })
-        })
-        .unwrap()
+        })?
         .start();
 
-    sys.run();
+    sys.run()
 }
