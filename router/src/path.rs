@@ -159,6 +159,25 @@ impl<T: ResourcePath> Path<T> {
     }
 }
 
+#[cfg(feature = "http")]
+use std::borrow::Cow;
+
+#[cfg(feature = "http")]
+impl Path<crate::Url> {
+    /// Get URL-decoded matched parameter by name without type conversion
+    pub fn get_decoded(&self, key: &str) -> Option<Cow<str>> {
+        use crate::url::RESERVED_QUOTER;
+
+        self.get(key).map(|value| {
+            if let Some(value) = RESERVED_QUOTER.with(|q| q.requote(value.as_bytes())) {
+                Cow::Owned(value)
+            } else {
+                Cow::Borrowed(value)
+            }
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct PathIter<'a, T> {
     idx: usize,
@@ -206,5 +225,34 @@ impl<T: ResourcePath> Index<usize> for Path<T> {
 impl<T: ResourcePath> Resource<T> for Path<T> {
     fn resource_path(&mut self) -> &mut Self {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_get_param_by_name() {
+        use crate::Url;
+        use http::{HttpTryFrom, Uri};
+
+        let mut params = Path::new(Url::new(Uri::try_from("/").unwrap()));
+        params.add_static("item1", "path");
+        params.add_static("item2", "http%3A%2F%2Flocalhost%3A80%2Ffoo");
+
+        assert_eq!(params.get("item0"), None);
+        assert_eq!(params.get_decoded("item0"), None);
+        assert_eq!(params.get("item1"), Some("path"));
+        assert_eq!(params.get_decoded("item1").unwrap().to_owned(), "path");
+        assert_eq!(
+            params.get("item2"),
+            Some("http%3A%2F%2Flocalhost%3A80%2Ffoo")
+        );
+        assert_eq!(
+            params.get_decoded("item2").unwrap().to_owned(),
+            "http://localhost:80/foo"
+        );
     }
 }

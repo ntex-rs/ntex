@@ -1,26 +1,13 @@
+use http::Uri;
 use std::rc::Rc;
 
 use crate::ResourcePath;
 
-#[allow(dead_code)]
-const GEN_DELIMS: &[u8] = b":/?#[]@";
-#[allow(dead_code)]
-const SUB_DELIMS_WITHOUT_QS: &[u8] = b"!$'()*,";
-#[allow(dead_code)]
-const SUB_DELIMS: &[u8] = b"!$'()*,+?=;";
-#[allow(dead_code)]
-const RESERVED: &[u8] = b":/?#[]@!$'()*,+?=;";
-#[allow(dead_code)]
-const UNRESERVED: &[u8] = b"abcdefghijklmnopqrstuvwxyz
-    ABCDEFGHIJKLMNOPQRSTUVWXYZ
-    1234567890
-    -._~";
-const ALLOWED: &[u8] = b"abcdefghijklmnopqrstuvwxyz
-    ABCDEFGHIJKLMNOPQRSTUVWXYZ
-    1234567890
-    -._~
-    !$'()*,";
-const QS: &[u8] = b"+&=;b";
+// https://tools.ietf.org/html/rfc3986#section-2.2
+const RESERVED_PLUS_EXTRA: &[u8] = b":/?#[]@!$&'()*,+?;=%^ <>\"\\`{}|";
+
+// https://tools.ietf.org/html/rfc3986#section-2.3
+const UNRESERVED: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-._~";
 
 #[inline]
 fn bit_at(array: &[u8], ch: u8) -> bool {
@@ -33,23 +20,26 @@ fn set_bit(array: &mut [u8], ch: u8) {
 }
 
 thread_local! {
-    static DEFAULT_QUOTER: Quoter = { Quoter::new(b"@:", b"/+") };
+    static UNRESERVED_QUOTER: Quoter = { Quoter::new(UNRESERVED) };
+    pub(crate) static RESERVED_QUOTER: Quoter = { Quoter::new(RESERVED_PLUS_EXTRA) };
 }
 
 #[derive(Default, Clone, Debug)]
 pub struct Url {
-    uri: http::Uri,
+    uri: Uri,
     path: Option<Rc<String>>,
 }
 
 impl Url {
-    pub fn new(uri: http::Uri) -> Url {
-        let path = DEFAULT_QUOTER.with(|q| q.requote(uri.path().as_bytes()));
+    pub fn new(uri: Uri) -> Url {
+        let path = UNRESERVED_QUOTER
+            .with(|q| q.requote(uri.path().as_bytes()))
+            .map(Rc::new);
 
         Url { uri, path }
     }
 
-    pub fn uri(&self) -> &http::Uri {
+    pub fn uri(&self) -> &Uri {
         &self.uri
     }
 
@@ -63,7 +53,9 @@ impl Url {
 
     pub fn update(&mut self, uri: &http::Uri) {
         self.uri = uri.clone();
-        self.path = DEFAULT_QUOTER.with(|q| q.requote(uri.path().as_bytes()));
+        self.path = UNRESERVED_QUOTER
+            .with(|q| q.requote(uri.path().as_bytes()))
+            .map(Rc::new);
     }
 }
 
@@ -75,40 +67,23 @@ impl ResourcePath for Url {
 
 pub(crate) struct Quoter {
     safe_table: [u8; 16],
-    protected_table: [u8; 16],
 }
 
 impl Quoter {
-    pub fn new(safe: &[u8], protected: &[u8]) -> Quoter {
+    pub fn new(safe: &[u8]) -> Quoter {
         let mut q = Quoter {
             safe_table: [0; 16],
-            protected_table: [0; 16],
         };
 
         // prepare safe table
-        for i in 0..128 {
-            if ALLOWED.contains(&i) {
-                set_bit(&mut q.safe_table, i);
-            }
-            if QS.contains(&i) {
-                set_bit(&mut q.safe_table, i);
-            }
-        }
-
         for ch in safe {
             set_bit(&mut q.safe_table, *ch)
-        }
-
-        // prepare protected table
-        for ch in protected {
-            set_bit(&mut q.safe_table, *ch);
-            set_bit(&mut q.protected_table, *ch);
         }
 
         q
     }
 
-    pub fn requote(&self, val: &[u8]) -> Option<Rc<String>> {
+    pub fn requote(&self, val: &[u8]) -> Option<String> {
         let mut has_pct = 0;
         let mut pct = [b'%', 0, 0];
         let mut idx = 0;
@@ -127,19 +102,17 @@ impl Quoter {
 
                     if let Some(ch) = restore_ch(pct[1], pct[2]) {
                         if ch < 128 {
-                            if bit_at(&self.protected_table, ch) {
-                                buf.extend_from_slice(&pct);
-                                idx += 1;
-                                continue;
-                            }
-
                             if bit_at(&self.safe_table, ch) {
                                 buf.push(ch);
                                 idx += 1;
                                 continue;
                             }
+
+                            buf.extend_from_slice(&pct);
+                        } else {
+                            // Not ASCII, decode it
+                            buf.push(ch);
                         }
-                        buf.push(ch);
                     } else {
                         buf.extend_from_slice(&pct[..]);
                     }
@@ -160,7 +133,7 @@ impl Quoter {
         if let Some(data) = cloned {
             // Unsafe: we get data from http::Uri, which does utf-8 checks already
             // this code only decodes valid pct encoded values
-            Some(Rc::new(unsafe { String::from_utf8_unchecked(data) }))
+            Some(unsafe { String::from_utf8_unchecked(data) })
         } else {
             None
         }
@@ -187,28 +160,36 @@ fn restore_ch(d1: u8, d2: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use http::{HttpTryFrom, Uri};
-
     use super::*;
-    use crate::{Path, ResourceDef};
 
     #[test]
-    fn test_parse_url() {
-        let re = ResourceDef::new("/user/{id}/test");
+    fn decode_path() {
+        assert_eq!(
+            UNRESERVED_QUOTER.with(|q| q.requote(b"https://localhost:80/foo")),
+            None
+        );
 
-        let url = Uri::try_from("/user/2345/test").unwrap();
-        let mut path = Path::new(Url::new(url));
-        assert!(re.match_path(&mut path));
-        assert_eq!(path.get("id").unwrap(), "2345");
+        assert_eq!(
+            UNRESERVED_QUOTER
+                .with(|q| q.requote(b"https://localhost:80/foo%25"))
+                .unwrap(),
+            "https://localhost:80/foo%25"
+        );
 
-        let url = Uri::try_from("/user/qwe%25/test").unwrap();
-        let mut path = Path::new(Url::new(url));
-        assert!(re.match_path(&mut path));
-        assert_eq!(path.get("id").unwrap(), "qwe%");
+        assert_eq!(
+            UNRESERVED_QUOTER
+                .with(|q| q.requote(b"http://cache-service/http%3A%2F%2Flocalhost%3A80%2Ffoo"))
+                .unwrap(),
+            "http://cache-service/http%3A%2F%2Flocalhost%3A80%2Ffoo".to_string()
+        );
 
-        let url = Uri::try_from("/user/qwe%25rty/test").unwrap();
-        let mut path = Path::new(Url::new(url));
-        assert!(re.match_path(&mut path));
-        assert_eq!(path.get("id").unwrap(), "qwe%rty");
+        assert_eq!(
+            UNRESERVED_QUOTER
+                .with(|q| q.requote(
+                    b"http://cache/http%3A%2F%2Flocal%3A80%2Ffile%2F%252Fvar%252Flog%0A"
+                ))
+                .unwrap(),
+            "http://cache/http%3A%2F%2Flocal%3A80%2Ffile%2F%252Fvar%252Flog%0A".to_string()
+        );
     }
 }
