@@ -14,24 +14,11 @@ const MAX_DYNAMIC_SEGMENTS: usize = 16;
 /// Resource definition can contain only 16 dynamic segments
 #[derive(Clone, Debug)]
 pub struct ResourceDef {
+    id: u16,
     tp: PatternType,
-    rtp: ResourceType,
     name: String,
     pattern: String,
     elements: Vec<PatternElement>,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-/// Resource type
-pub enum ResourceType {
-    /// Normal resource
-    Normal,
-    /// Resource for application default handler
-    Default,
-    /// External resource
-    External,
-    /// Unknown resource type
-    Unset,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,13 +62,14 @@ impl ResourceDef {
         ResourceDef::with_prefix(&insert_slash(path), true)
     }
 
-    /// Construct external resource def
-    ///
-    /// Panics if path pattern is malformed.
-    pub fn external(path: &str) -> Self {
-        let mut resource = ResourceDef::with_prefix(path, false);
-        resource.rtp = ResourceType::External;
-        resource
+    /// Resource id
+    pub fn id(&self) -> u16 {
+        self.id
+    }
+
+    /// Set resource id
+    pub fn set_id(&mut self, id: u16) {
+        self.id = id;
     }
 
     /// Parse path pattern and create new `Pattern` instance with custom prefix
@@ -109,10 +97,20 @@ impl ResourceDef {
         ResourceDef {
             tp,
             elements,
+            id: 0,
             name: String::new(),
-            rtp: ResourceType::Normal,
             pattern: path.to_owned(),
         }
+    }
+
+    /// Resource pattern name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Mutable reference to a name of a resource definition.
+    pub fn name_mut(&mut self) -> &mut String {
+        &mut self.name
     }
 
     /// Path pattern of the resource
