@@ -127,6 +127,57 @@ impl ResourceDef {
         }
     }
 
+    /// Is prefix path a match against this resource?
+    pub fn is_prefix_match(&self, path: &str) -> Option<usize> {
+        let plen = path.len();
+        let path = if path.is_empty() { "/" } else { path };
+
+        match self.tp {
+            PatternType::Static(ref s) => {
+                if s == path {
+                    Some(plen)
+                } else {
+                    None
+                }
+            }
+            PatternType::Dynamic(ref re, _, len) => {
+                if let Some(captures) = re.captures(path) {
+                    let mut pos = 0;
+                    let mut passed = false;
+                    for capture in captures.iter() {
+                        if let Some(ref m) = capture {
+                            if !passed {
+                                passed = true;
+                                continue;
+                            }
+
+                            pos = m.end();
+                        }
+                    }
+                    Some(pos + len)
+                } else {
+                    None
+                }
+            }
+            PatternType::Prefix(ref s) => {
+                let len = if path == s {
+                    s.len()
+                } else if path.starts_with(s)
+                    && (s.ends_with('/') || path.split_at(s.len()).1.starts_with('/'))
+                {
+                    if s.ends_with('/') {
+                        s.len() - 1
+                    } else {
+                        s.len()
+                    }
+                } else {
+                    return None;
+                };
+                Some(min(plen, len))
+            }
+        }
+    }
+
     /// Is the given path and parameters a match against this pattern?
     pub fn match_path<T: ResourcePath>(&self, path: &mut Path<T>) -> bool {
         match self.tp {
@@ -189,34 +240,32 @@ impl ResourceDef {
         }
     }
 
-    // /// Build resource path.
-    // pub fn resource_path<U, I>(
-    //     &self, path: &mut String, elements: &mut U,
-    // ) -> Result<(), UrlGenerationError>
-    // where
-    //     U: Iterator<Item = I>,
-    //     I: AsRef<str>,
-    // {
-    //     match self.tp {
-    //         PatternType::Prefix(ref p) => path.push_str(p),
-    //         PatternType::Static(ref p) => path.push_str(p),
-    //         PatternType::Dynamic(..) => {
-    //             for el in &self.elements {
-    //                 match *el {
-    //                     PatternElement::Str(ref s) => path.push_str(s),
-    //                     PatternElement::Var(_) => {
-    //                         if let Some(val) = elements.next() {
-    //                             path.push_str(val.as_ref())
-    //                         } else {
-    //                             return Err(UrlGenerationError::NotEnoughElements);
-    //                         }
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     };
-    //     Ok(())
-    // }
+    /// Build resource path from elements. Returns `true` on success.
+    pub fn resource_path<U, I>(&self, path: &mut String, elements: &mut U) -> bool
+    where
+        U: Iterator<Item = I>,
+        I: AsRef<str>,
+    {
+        match self.tp {
+            PatternType::Prefix(ref p) => path.push_str(p),
+            PatternType::Static(ref p) => path.push_str(p),
+            PatternType::Dynamic(..) => {
+                for el in &self.elements {
+                    match *el {
+                        PatternElement::Str(ref s) => path.push_str(s),
+                        PatternElement::Var(_) => {
+                            if let Some(val) = elements.next() {
+                                path.push_str(val.as_ref())
+                            } else {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        true
+    }
 
     fn parse_param(pattern: &str) -> (PatternElement, String, &str) {
         const DEFAULT_PATTERN: &str = "[^/]+";
@@ -347,6 +396,11 @@ mod tests {
         assert!(!re.is_match("/name/"));
         assert!(!re.is_match("/name~"));
 
+        assert_eq!(re.is_prefix_match("/name"), Some(5));
+        assert_eq!(re.is_prefix_match("/name1"), None);
+        assert_eq!(re.is_prefix_match("/name/"), None);
+        assert_eq!(re.is_prefix_match("/name~"), None);
+
         let re = ResourceDef::new("/name/");
         assert!(re.is_match("/name/"));
         assert!(!re.is_match("/name"));
@@ -421,6 +475,12 @@ mod tests {
         assert!(re.is_match("/name1"));
         assert!(re.is_match("/name~"));
 
+        assert_eq!(re.is_prefix_match("/name"), Some(5));
+        assert_eq!(re.is_prefix_match("/name/"), Some(5));
+        assert_eq!(re.is_prefix_match("/name/test/test"), Some(5));
+        assert_eq!(re.is_prefix_match("/name1"), None);
+        assert_eq!(re.is_prefix_match("/name~"), None);
+
         let re = ResourceDef::prefix("/name/");
         assert!(re.is_match("/name/"));
         assert!(re.is_match("/name/gs"));
@@ -438,6 +498,10 @@ mod tests {
         assert!(re.is_match("/name/"));
         assert!(re.is_match("/name/gs"));
         assert!(!re.is_match("/name"));
+
+        assert_eq!(re.is_prefix_match("/name/"), Some(6));
+        assert_eq!(re.is_prefix_match("/name/gs"), Some(6));
+        assert_eq!(re.is_prefix_match("/name"), None);
 
         let mut path = Path::new("/test2/");
         assert!(re.match_path(&mut path));
