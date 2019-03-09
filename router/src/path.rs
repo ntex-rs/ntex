@@ -208,32 +208,3 @@ impl<T: ResourcePath> Resource<T> for Path<T> {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(feature = "http")]
-    #[test]
-    fn test_get_param_by_name() {
-        use crate::Url;
-        use http::{HttpTryFrom, Uri};
-
-        let mut params = Path::new(Url::new(Uri::try_from("/").unwrap()));
-        params.add_static("item1", "path");
-        params.add_static("item2", "http%3A%2F%2Flocalhost%3A80%2Ffoo");
-
-        assert_eq!(params.get("item0"), None);
-        assert_eq!(params.get_decoded("item0"), None);
-        assert_eq!(params.get("item1"), Some("path"));
-        assert_eq!(params.get_decoded("item1").unwrap().to_owned(), "path");
-        assert_eq!(
-            params.get("item2"),
-            Some("http%3A%2F%2Flocalhost%3A80%2Ffoo")
-        );
-        assert_eq!(
-            params.get_decoded("item2").unwrap().to_owned(),
-            "http://localhost:80/foo"
-        );
-    }
-}
