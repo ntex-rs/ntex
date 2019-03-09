@@ -13,27 +13,24 @@ use tokio_tcp::TcpStream;
 /// The `TestServer` type.
 ///
 /// `TestServer` is very simple test server that simplify process of writing
-/// integration tests cases for actix applications.
+/// integration tests for actix-net applications.
 ///
 /// # Examples
 ///
 /// ```rust
-/// # extern crate actix_test_server;
-/// # use actix_web::*;
-/// #
-/// # fn my_handler(req: &HttpRequest) -> HttpResponse {
-/// #     HttpResponse::Ok().into()
-/// # }
-/// #
-/// # fn main() {
+/// use actix_service::{fn_service, IntoNewService};
 /// use actix_test_server::TestServer;
 ///
-/// let mut srv = TestServer::new(|app| app.handler(my_handler));
+/// fn main() {
+///     let srv = TestServer::with(|| fn_service(
+///         |sock| {
+///             println!("New connection: {:?}", sock);
+///             Ok::<_, ()>(())
+///         }
+///     ));
 ///
-/// let req = srv.get().finish().unwrap();
-/// let response = srv.execute(req.send()).unwrap();
-/// assert!(response.status().is_success());
-/// # }
+///     println!("SOCKET: {:?}", srv.connect());
+/// }
 /// ```
 pub struct TestServer;
 
@@ -57,13 +54,13 @@ impl TestServer {
             let local_addr = tcp.local_addr().unwrap();
 
             Server::build()
-                .listen("test", tcp, factory)
+                .listen("test", tcp, factory)?
                 .workers(1)
                 .disable_signals()
                 .start();
 
             tx.send((System::current(), local_addr)).unwrap();
-            sys.run();
+            sys.run()
         });
 
         let (system, addr) = rx.recv().unwrap();

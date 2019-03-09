@@ -14,5 +14,4 @@ name = "actix_server_config"
 path = "src/lib.rs"
 
 [dependencies]
-actix-service = { path="../actix-service" }
 futures = "0.1.25"

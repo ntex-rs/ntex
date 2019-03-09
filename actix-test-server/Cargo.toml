@@ -33,8 +33,8 @@ ssl = ["openssl", "actix-server/ssl"]
 rust-tls = ["rustls", "tokio-rustls", "webpki", "webpki-roots"]
 
 [dependencies]
-actix-rt = "0.1.0"
-#actix-server = "0.3.0"
+actix-rt = "0.2.0"
+# actix-server = "0.3.3"
 actix-server = { path="../actix-server" }
 
 log = "0.4"
@@ -54,3 +54,6 @@ rustls = { version = "^0.15", optional = true }
 tokio-rustls = { version = "^0.9", optional = true }
 webpki = { version = "0.19", optional = true }
 webpki-roots = { version = "0.16", optional = true }
+
+[dev-dependencies]
+actix-service = "0.3.3"
