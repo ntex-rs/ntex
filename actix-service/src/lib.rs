@@ -27,7 +27,7 @@ pub use self::and_then::{AndThen, AndThenNewService};
 use self::and_then_apply::AndThenTransform;
 use self::and_then_apply_fn::{AndThenApply, AndThenApplyNewService};
 pub use self::apply::{Apply, ApplyNewService};
-use self::apply_cfg::ApplyConfig;
+pub use self::apply_cfg::ApplyConfig;
 pub use self::fn_service::{fn_cfg_factory, fn_factory, fn_service, FnService};
 pub use self::fn_transform::FnTransform;
 pub use self::from_err::{FromErr, FromErrNewService};
