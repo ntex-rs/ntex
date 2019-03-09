@@ -36,7 +36,6 @@ rust-tls = ["rustls", "tokio-rustls", "webpki", "webpki-roots"]
 actix-rt = "0.2.0"
 #actix-service = "0.3.2"
 actix-service = { path="../actix-service" }
-actix-server-config = { path="../actix-server-config" }
 
 log = "0.4"
 num_cpus = "1.0"

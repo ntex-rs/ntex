@@ -20,7 +20,6 @@ members = [
   "actix-rt",
   "actix-service",
   "actix-server",
-  "actix-server-config",
   "actix-test-server",
   "actix-utils",
   "router",
