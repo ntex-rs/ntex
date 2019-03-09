@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
-use futures::future::{ok, FutureResult};
-use futures::{Async, IntoFuture, Poll};
+use futures::future::{ok, Future, FutureResult};
+use futures::{try_ready, Async, IntoFuture, Poll};
 
 use crate::{IntoConfigurableNewService, IntoNewService, IntoService, NewService, Service};
 
@@ -216,7 +216,8 @@ where
 pub struct FnNewServiceConfig<F, C, R, S, E, Req>
 where
     F: Fn(&C) -> R,
-    R: IntoFuture<Item = S, Error = E>,
+    R: IntoFuture<Error = E>,
+    R::Item: IntoService<S, Req>,
     S: Service<Req>,
 {
     f: F,
@@ -226,7 +227,8 @@ where
 impl<F, C, R, S, E, Req> FnNewServiceConfig<F, C, R, S, E, Req>
 where
     F: Fn(&C) -> R,
-    R: IntoFuture<Item = S, Error = E>,
+    R: IntoFuture<Error = E>,
+    R::Item: IntoService<S, Req>,
     S: Service<Req>,
 {
     pub fn new(f: F) -> Self {
@@ -237,7 +239,8 @@ where
 impl<F, C, R, S, E, Req> NewService<Req, C> for FnNewServiceConfig<F, C, R, S, E, Req>
 where
     F: Fn(&C) -> R,
-    R: IntoFuture<Item = S, Error = E>,
+    R: IntoFuture<Error = E>,
+    R::Item: IntoService<S, Req>,
     S: Service<Req>,
 {
     type Response = S::Response;
@@ -245,17 +248,45 @@ where
     type Service = S;
 
     type InitError = E;
-    type Future = R::Future;
+    type Future = FnNewServiceConfigFut<R, S, E, Req>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
-        (self.f)(cfg).into_future()
+        FnNewServiceConfigFut {
+            fut: (self.f)(cfg).into_future(),
+            _t: PhantomData,
+        }
+    }
+}
+
+pub struct FnNewServiceConfigFut<R, S, E, Req>
+where
+    R: IntoFuture<Error = E>,
+    R::Item: IntoService<S, Req>,
+    S: Service<Req>,
+{
+    fut: R::Future,
+    _t: PhantomData<(S, Req)>,
+}
+
+impl<R, S, E, Req> Future for FnNewServiceConfigFut<R, S, E, Req>
+where
+    R: IntoFuture<Error = E>,
+    R::Item: IntoService<S, Req>,
+    S: Service<Req>,
+{
+    type Item = S;
+    type Error = R::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        Ok(Async::Ready(try_ready!(self.fut.poll()).into_service()))
     }
 }
 
 impl<F, C, R, S, E, Req> Clone for FnNewServiceConfig<F, C, R, S, E, Req>
 where
     F: Fn(&C) -> R + Clone,
-    R: IntoFuture<Item = S, Error = E>,
+    R: IntoFuture<Error = E>,
+    R::Item: IntoService<S, Req>,
     S: Service<Req>,
 {
     fn clone(&self) -> Self {
@@ -267,7 +298,8 @@ impl<F, C, R, S, E, Req>
     IntoConfigurableNewService<FnNewServiceConfig<F, C, R, S, E, Req>, Req, C> for F
 where
     F: Fn(&C) -> R,
-    R: IntoFuture<Item = S, Error = E>,
+    R: IntoFuture<Error = E>,
+    R::Item: IntoService<S, Req>,
     S: Service<Req>,
 {
     fn into_new_service(self) -> FnNewServiceConfig<F, C, R, S, E, Req> {
