@@ -5,16 +5,16 @@ use futures::IntoFuture;
 
 use crate::{Apply, IntoTransform, Service, Transform};
 
-pub struct FnTransform<F, S, R, In, Out, Err>
+pub struct FnTransform<F, S, In, Out, Err>
 where
     F: FnMut(In, &mut S) -> Out + Clone,
     Out: IntoFuture,
 {
     f: F,
-    _t: PhantomData<(S, R, In, Out, Err)>,
+    _t: PhantomData<(S, In, Out, Err)>,
 }
 
-impl<F, S, R, In, Out, Err> FnTransform<F, S, R, In, Out, Err>
+impl<F, S, In, Out, Err> FnTransform<F, S, In, Out, Err>
 where
     F: FnMut(In, &mut S) -> Out + Clone,
     Out: IntoFuture,
@@ -24,16 +24,17 @@ where
     }
 }
 
-impl<F, S, R, In, Out, Err> Transform<S, In> for FnTransform<F, S, R, In, Out, Err>
+impl<F, S, In, Out, Err> Transform<S> for FnTransform<F, S, In, Out, Err>
 where
-    S: Service<R>,
+    S: Service,
     F: FnMut(In, &mut S) -> Out + Clone,
     Out: IntoFuture,
     Out::Error: From<S::Error>,
 {
+    type Request = In;
     type Response = Out::Item;
     type Error = Out::Error;
-    type Transform = Apply<S, R, F, In, Out>;
+    type Transform = Apply<S, F, In, Out>;
     type InitError = Err;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 
@@ -42,19 +43,19 @@ where
     }
 }
 
-impl<F, S, R, In, Out, Err> IntoTransform<FnTransform<F, S, R, In, Out, Err>, S, In> for F
+impl<F, S, In, Out, Err> IntoTransform<FnTransform<F, S, In, Out, Err>, S> for F
 where
-    S: Service<R>,
+    S: Service,
     F: FnMut(In, &mut S) -> Out + Clone,
     Out: IntoFuture,
     Out::Error: From<S::Error>,
 {
-    fn into_transform(self) -> FnTransform<F, S, R, In, Out, Err> {
+    fn into_transform(self) -> FnTransform<F, S, In, Out, Err> {
         FnTransform::new(self)
     }
 }
 
-impl<F, S, R, In, Out, Err> Clone for FnTransform<F, S, R, In, Out, Err>
+impl<F, S, In, Out, Err> Clone for FnTransform<F, S, In, Out, Err>
 where
     F: FnMut(In, &mut S) -> Out + Clone,
     Out: IntoFuture,

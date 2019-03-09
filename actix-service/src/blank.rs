@@ -30,7 +30,8 @@ impl<R, E> Default for Blank<R, E> {
     }
 }
 
-impl<R, E> Service<R> for Blank<R, E> {
+impl<R, E> Service for Blank<R, E> {
+    type Request = R;
     type Response = R;
     type Error = E;
     type Future = FutureResult<R, E>;
@@ -67,7 +68,8 @@ impl<R, E1, E2> Default for BlankNewService<R, E1, E2> {
     }
 }
 
-impl<R, E1, E2> NewService<R, ()> for BlankNewService<R, E1, E2> {
+impl<R, E1, E2> NewService<()> for BlankNewService<R, E1, E2> {
+    type Request = R;
     type Response = R;
     type Error = E1;
     type Service = Blank<R, E1>;

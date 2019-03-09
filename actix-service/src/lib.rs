@@ -36,9 +36,10 @@ pub use self::then::{Then, ThenNewService};
 pub use self::transform::{ApplyTransform, IntoTransform, Transform};
 
 /// An asynchronous function from `Request` to a `Response`.
-///
-/// `Request` - requests handled by the service.
-pub trait Service<Request> {
+pub trait Service {
+    /// Requests handled by the service.
+    type Request;
+
     /// Responses given by the service.
     type Response;
 
@@ -68,26 +69,22 @@ pub trait Service<Request> {
     ///
     /// Calling `call` without calling `poll_ready` is permitted. The
     /// implementation must be resilient to this fact.
-    fn call(&mut self, req: Request) -> Self::Future;
+    fn call(&mut self, req: Self::Request) -> Self::Future;
 }
 
 /// An extension trait for `Service`s that provides a variety of convenient
 /// adapters
-pub trait ServiceExt<Request>: Service<Request> {
+pub trait ServiceExt: Service {
     /// Apply function to specified service and use it as a next service in
     /// chain.
-    fn apply_fn<F, B, B1, Out, Req>(
-        self,
-        service: B1,
-        f: F,
-    ) -> AndThenApply<Self, B, F, Out, Request, Req>
+    fn apply_fn<F, B, B1, Out>(self, service: B1, f: F) -> AndThenApply<Self, B, F, Out>
     where
         Self: Sized,
         F: FnMut(Self::Response, &mut B) -> Out,
         Out: IntoFuture,
         Out::Error: Into<Self::Error>,
-        B: Service<Req, Error = Self::Error>,
-        B1: IntoService<B, Req>,
+        B: Service<Error = Self::Error>,
+        B1: IntoService<B>,
     {
         AndThenApply::new(self, service, f)
     }
@@ -104,8 +101,8 @@ pub trait ServiceExt<Request>: Service<Request> {
     fn and_then<F, B>(self, service: F) -> AndThen<Self, B>
     where
         Self: Sized,
-        F: IntoService<B, Self::Response>,
-        B: Service<Self::Response, Error = Self::Error>,
+        F: IntoService<B>,
+        B: Service<Request = Self::Response, Error = Self::Error>,
     {
         AndThen::new(self, service.into_service())
     }
@@ -131,7 +128,7 @@ pub trait ServiceExt<Request>: Service<Request> {
     fn then<B>(self, service: B) -> Then<Self, B>
     where
         Self: Sized,
-        B: Service<Result<Self::Response, Self::Error>, Error = Self::Error>,
+        B: Service<Request = Result<Self::Response, Self::Error>, Error = Self::Error>,
     {
         Then::new(self, service)
     }
@@ -170,7 +167,7 @@ pub trait ServiceExt<Request>: Service<Request> {
     }
 }
 
-impl<T: ?Sized, R> ServiceExt<R> for T where T: Service<R> {}
+impl<T: ?Sized> ServiceExt for T where T: Service {}
 
 /// Creates new `Service` values.
 ///
@@ -180,9 +177,11 @@ impl<T: ?Sized, R> ServiceExt<R> for T where T: Service<R> {}
 /// `NewService` trait, and uses that new `Service` value to process inbound
 /// requests on that new TCP stream.
 ///
-/// * `Request` - requests handled by the service.
-/// * `Config` - is a service factory configuration type.
-pub trait NewService<Request, Config = ()> {
+/// `Config` is a service factory configuration type.
+pub trait NewService<Config = ()> {
+    /// Requests handled by the service.
+    type Request;
+
     /// Responses given by the service
     type Response;
 
@@ -190,7 +189,11 @@ pub trait NewService<Request, Config = ()> {
     type Error;
 
     /// The `Service` value created by this factory
-    type Service: Service<Request, Response = Self::Response, Error = Self::Error>;
+    type Service: Service<
+        Request = Self::Request,
+        Response = Self::Response,
+        Error = Self::Error,
+    >;
 
     /// Errors produced while building a service.
     type InitError;
@@ -203,33 +206,33 @@ pub trait NewService<Request, Config = ()> {
 
     /// Apply function to specified service and use it as a next service in
     /// chain.
-    fn apply<T, T1, B, B1, Req>(
+    fn apply<T, T1, B, B1>(
         self,
         transform: T1,
         service: B1,
-    ) -> AndThenTransform<T, Self, B, Req>
+    ) -> AndThenTransform<T, Self, B, Config>
     where
         Self: Sized,
-        T: Transform<B::Service, Self::Response, InitError = Self::InitError>,
+        T: Transform<B::Service, Request = Self::Response, InitError = Self::InitError>,
         T::Error: From<Self::Error>,
-        T1: IntoTransform<T, B::Service, Self::Response>,
-        B: NewService<Req, Config, InitError = Self::InitError>,
-        B1: IntoNewService<B, Req, Config>,
+        T1: IntoTransform<T, B::Service>,
+        B: NewService<Config, InitError = Self::InitError>,
+        B1: IntoNewService<B, Config>,
     {
         AndThenTransform::new(transform.into_transform(), self, service.into_new_service())
     }
 
     /// Apply function to specified service and use it as a next service in
     /// chain.
-    fn apply_fn<B, I, F, Out, Req>(
+    fn apply_fn<B, I, F, Out>(
         self,
         service: I,
         f: F,
-    ) -> AndThenApplyNewService<Self, B, F, Out, Request, Req, Config>
+    ) -> AndThenApplyNewService<Self, B, F, Out, Config>
     where
         Self: Sized,
-        B: NewService<Req, Config, Error = Self::Error, InitError = Self::InitError>,
-        I: IntoNewService<B, Req, Config>,
+        B: NewService<Config, Error = Self::Error, InitError = Self::InitError>,
+        I: IntoNewService<B, Config>,
         F: FnMut(Self::Response, &mut B::Service) -> Out,
         Out: IntoFuture,
         Out::Error: Into<Self::Error>,
@@ -238,11 +241,16 @@ pub trait NewService<Request, Config = ()> {
     }
 
     /// Call another service after call to this one has resolved successfully.
-    fn and_then<F, B>(self, new_service: F) -> AndThenNewService<Self, B>
+    fn and_then<F, B>(self, new_service: F) -> AndThenNewService<Self, B, Config>
     where
         Self: Sized,
-        F: IntoNewService<B, Self::Response, Config>,
-        B: NewService<Self::Response, Config, Error = Self::Error, InitError = Self::InitError>,
+        F: IntoNewService<B, Config>,
+        B: NewService<
+            Config,
+            Request = Self::Response,
+            Error = Self::Error,
+            InitError = Self::InitError,
+        >,
     {
         AndThenNewService::new(self, new_service)
     }
@@ -270,15 +278,15 @@ pub trait NewService<Request, Config = ()> {
     fn then<F, B>(self, new_service: F) -> ThenNewService<Self, B, Config>
     where
         Self: Sized,
-        F: IntoNewService<B, Result<Self::Response, Self::Error>, Config>,
+        F: IntoNewService<B, Config>,
         B: NewService<
-            Result<Self::Response, Self::Error>,
             Config,
+            Request = Result<Self::Response, Self::Error>,
             Error = Self::Error,
             InitError = Self::InitError,
         >,
     {
-        ThenNewService::new(self, new_service.into_new_service())
+        ThenNewService::new(self, new_service)
     }
 
     /// Map this service's output to a different type, returning a new service
@@ -310,10 +318,11 @@ pub trait NewService<Request, Config = ()> {
     }
 }
 
-impl<'a, S, R> Service<R> for &'a mut S
+impl<'a, S> Service for &'a mut S
 where
-    S: Service<R> + 'a,
+    S: Service + 'a,
 {
+    type Request = S::Request;
     type Response = S::Response;
     type Error = S::Error;
     type Future = S::Future;
@@ -322,15 +331,16 @@ where
         (**self).poll_ready()
     }
 
-    fn call(&mut self, request: R) -> S::Future {
+    fn call(&mut self, request: Self::Request) -> S::Future {
         (**self).call(request)
     }
 }
 
-impl<S, R> Service<R> for Box<S>
+impl<S> Service for Box<S>
 where
-    S: Service<R> + ?Sized,
+    S: Service + ?Sized,
 {
+    type Request = S::Request;
     type Response = S::Response;
     type Error = S::Error;
     type Future = S::Future;
@@ -339,15 +349,16 @@ where
         (**self).poll_ready()
     }
 
-    fn call(&mut self, request: R) -> S::Future {
+    fn call(&mut self, request: Self::Request) -> S::Future {
         (**self).call(request)
     }
 }
 
-impl<S, R, C> NewService<R, C> for Rc<S>
+impl<S, C> NewService<C> for Rc<S>
 where
-    S: NewService<R, C>,
+    S: NewService<C>,
 {
+    type Request = S::Request;
     type Response = S::Response;
     type Error = S::Error;
     type Service = S::Service;
@@ -359,10 +370,11 @@ where
     }
 }
 
-impl<S, R, C> NewService<R, C> for Arc<S>
+impl<S, C> NewService<C> for Arc<S>
 where
-    S: NewService<R, C>,
+    S: NewService<C>,
 {
+    type Request = S::Request;
     type Response = S::Response;
     type Error = S::Error;
     type Service = S::Service;
@@ -375,35 +387,35 @@ where
 }
 
 /// Trait for types that can be converted to a `Service`
-pub trait IntoService<T, R>
+pub trait IntoService<T>
 where
-    T: Service<R>,
+    T: Service,
 {
     /// Convert to a `Service`
     fn into_service(self) -> T;
 }
 
 /// Trait for types that can be converted to a `NewService`
-pub trait IntoNewService<T, R, C = ()>
+pub trait IntoNewService<T, C = ()>
 where
-    T: NewService<R, C>,
+    T: NewService<C>,
 {
     /// Convert to an `NewService`
     fn into_new_service(self) -> T;
 }
 
-impl<T, R> IntoService<T, R> for T
+impl<T> IntoService<T> for T
 where
-    T: Service<R>,
+    T: Service,
 {
     fn into_service(self) -> T {
         self
     }
 }
 
-impl<T, R, C> IntoNewService<T, R, C> for T
+impl<T, C> IntoNewService<T, C> for T
 where
-    T: NewService<R, C>,
+    T: NewService<C>,
 {
     fn into_new_service(self) -> T {
         self
@@ -411,17 +423,17 @@ where
 }
 
 /// Trait for types that can be converted to a configurable `NewService`
-pub trait IntoConfigurableNewService<T, R, C>
+pub trait IntoConfigurableNewService<T, C>
 where
-    T: NewService<R, C>,
+    T: NewService<C>,
 {
     /// Convert to an `NewService`
     fn into_new_service(self) -> T;
 }
 
-impl<T, R, C> IntoConfigurableNewService<T, R, C> for T
+impl<T, C> IntoConfigurableNewService<T, C> for T
 where
-    T: NewService<R, C>,
+    T: NewService<C>,
 {
     fn into_new_service(self) -> T {
         self

@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use futures::{Async, Future, Poll};
@@ -8,22 +7,22 @@ use crate::from_err::FromErr;
 use crate::{NewService, Transform};
 
 /// `Apply` new service combinator
-pub struct AndThenTransform<T, A, B, BR> {
+pub struct AndThenTransform<T, A, B, C> {
     a: A,
     b: B,
     t: Rc<T>,
-    _t: PhantomData<BR>,
+    _t: std::marker::PhantomData<C>,
 }
 
-impl<T, A, B, BR> AndThenTransform<T, A, B, BR> {
+impl<T, A, B, C> AndThenTransform<T, A, B, C>
+where
+    A: NewService<C>,
+    B: NewService<C, InitError = A::InitError>,
+    T: Transform<B::Service, Request = A::Response, InitError = A::InitError>,
+    T::Error: From<A::Error>,
+{
     /// Create new `ApplyNewService` new service instance
-    pub fn new<AR, C>(t: T, a: A, b: B) -> Self
-    where
-        A: NewService<AR, C>,
-        B: NewService<BR, C, InitError = A::InitError>,
-        T: Transform<B::Service, A::Response, InitError = A::InitError>,
-        T::Error: From<A::Error>,
-    {
+    pub fn new(t: T, a: A, b: B) -> Self {
         Self {
             a,
             b,
@@ -33,7 +32,7 @@ impl<T, A, B, BR> AndThenTransform<T, A, B, BR> {
     }
 }
 
-impl<T, A, B, BR> Clone for AndThenTransform<T, A, B, BR>
+impl<T, A, B, C> Clone for AndThenTransform<T, A, B, C>
 where
     A: Clone,
     B: Clone,
@@ -48,19 +47,20 @@ where
     }
 }
 
-impl<T, A, B, AR, BR, C> NewService<AR, C> for AndThenTransform<T, A, B, BR>
+impl<T, A, B, C> NewService<C> for AndThenTransform<T, A, B, C>
 where
-    A: NewService<AR, C>,
-    B: NewService<BR, C, InitError = A::InitError>,
-    T: Transform<B::Service, A::Response, InitError = A::InitError>,
+    A: NewService<C>,
+    B: NewService<C, InitError = A::InitError>,
+    T: Transform<B::Service, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
+    type Request = A::Request;
     type Response = T::Response;
     type Error = T::Error;
 
     type InitError = T::InitError;
     type Service = AndThen<FromErr<A::Service, T::Error>, T::Transform>;
-    type Future = AndThenTransformFuture<T, A, B, AR, BR, C>;
+    type Future = AndThenTransformFuture<T, A, B, C>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         AndThenTransformFuture {
@@ -74,11 +74,11 @@ where
     }
 }
 
-pub struct AndThenTransformFuture<T, A, B, AR, BR, C>
+pub struct AndThenTransformFuture<T, A, B, C>
 where
-    A: NewService<AR, C>,
-    B: NewService<BR, C, InitError = A::InitError>,
-    T: Transform<B::Service, A::Response, InitError = A::InitError>,
+    A: NewService<C>,
+    B: NewService<C, InitError = A::InitError>,
+    T: Transform<B::Service, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
     fut_a: A::Future,
@@ -89,11 +89,11 @@ where
     t_cell: Rc<T>,
 }
 
-impl<T, A, B, AR, BR, C> Future for AndThenTransformFuture<T, A, B, AR, BR, C>
+impl<T, A, B, C> Future for AndThenTransformFuture<T, A, B, C>
 where
-    A: NewService<AR, C>,
-    B: NewService<BR, C, InitError = A::InitError>,
-    T: Transform<B::Service, A::Response, InitError = A::InitError>,
+    A: NewService<C>,
+    B: NewService<C, InitError = A::InitError>,
+    T: Transform<B::Service, Request = A::Response, InitError = A::InitError>,
     T::Error: From<A::Error>,
 {
     type Item = AndThen<FromErr<A::Service, T::Error>, T::Transform>;
@@ -138,7 +138,8 @@ mod tests {
 
     #[derive(Clone)]
     struct Srv;
-    impl Service<()> for Srv {
+    impl Service for Srv {
+        type Request = ();
         type Response = ();
         type Error = ();
         type Future = FutureResult<(), ()>;
