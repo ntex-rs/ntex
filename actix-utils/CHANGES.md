@@ -1,5 +1,14 @@
 # Changes
 
+## [0.3.3] - 2019-03-09
+
+### Changed
+
+* Revert IntoFuture change
+
+* Add generic config param for IntoFramed and TakeOne new services
+
+
 ## [0.3.2] - 2019-03-04
 
 ### Changed
