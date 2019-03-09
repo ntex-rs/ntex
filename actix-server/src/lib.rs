@@ -2,17 +2,17 @@
 
 mod accept;
 mod builder;
-mod config;
 mod counter;
 mod server;
+mod service_config;
 mod services;
 mod signals;
 pub mod ssl;
 mod worker;
 
 pub use self::builder::ServerBuilder;
-pub use self::config::{ServiceConfig, ServiceRuntime};
 pub use self::server::Server;
+pub use self::service_config::{ServiceConfig, ServiceRuntime};
 pub use self::services::ServiceFactory;
 
 #[doc(hidden)]

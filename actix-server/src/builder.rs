@@ -12,8 +12,8 @@ use num_cpus;
 use tokio_timer::sleep;
 
 use crate::accept::{AcceptLoop, AcceptNotify, Command};
-use crate::config::{ConfiguredService, ServiceConfig};
 use crate::server::{Server, ServerCommand};
+use crate::service_config::{ConfiguredService, ServiceConfig};
 use crate::services::{InternalServiceFactory, ServiceFactory, StreamNewService};
 use crate::signals::{Signal, Signals};
 use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
@@ -194,19 +194,18 @@ impl ServerBuilder {
     /// ```rust,ignore
     /// use actix_web::*;
     ///
-    /// fn main() {
+    /// fn main() -> std::io::Result<()> {
     ///     Server::new().
     ///         .service(
-    ///            HttpServer::new(|| App::new().resource("/", |r| r.h(|_| HttpResponse::Ok())))
+    ///            HttpServer::new(|| App::new().service(web::service("/").to(|| HttpResponse::Ok())))
     ///                .bind("127.0.0.1:0")
-    ///                .expect("Can not bind to 127.0.0.1:0"))
-    ///         .run();
+    ///         .run()
     /// }
     /// ```
-    pub fn run(self) {
+    pub fn run(self) -> io::Result<()> {
         let sys = System::new("http-server");
         self.start();
-        sys.run();
+        sys.run()
     }
 
     /// Starts processing incoming connections and return server controller.
