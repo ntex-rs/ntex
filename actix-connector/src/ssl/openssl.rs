@@ -26,7 +26,8 @@ impl<R, T, E> OpensslConnector<R, T, E> {
 impl<R: RequestHost, T: AsyncRead + AsyncWrite> OpensslConnector<R, T, ()> {
     pub fn service(
         connector: SslConnector,
-    ) -> impl Service<(R, T), Response = (R, SslStream<T>), Error = HandshakeError<T>> {
+    ) -> impl Service<Request = (R, T), Response = (R, SslStream<T>), Error = HandshakeError<T>>
+    {
         OpensslConnectorService {
             connector: connector,
             _t: PhantomData,
@@ -43,9 +44,10 @@ impl<R, T, E> Clone for OpensslConnector<R, T, E> {
     }
 }
 
-impl<R: RequestHost, T: AsyncRead + AsyncWrite, E> NewService<(R, T), ()>
+impl<R: RequestHost, T: AsyncRead + AsyncWrite, E> NewService<()>
     for OpensslConnector<R, T, E>
 {
+    type Request = (R, T);
     type Response = (R, SslStream<T>);
     type Error = HandshakeError<T>;
     type Service = OpensslConnectorService<R, T>;
@@ -65,9 +67,8 @@ pub struct OpensslConnectorService<R, T> {
     _t: PhantomData<(R, T)>,
 }
 
-impl<R: RequestHost, T: AsyncRead + AsyncWrite> Service<(R, T)>
-    for OpensslConnectorService<R, T>
-{
+impl<R: RequestHost, T: AsyncRead + AsyncWrite> Service for OpensslConnectorService<R, T> {
+    type Request = (R, T);
     type Response = (R, SslStream<T>);
     type Error = HandshakeError<T>;
     type Future = ConnectAsyncExt<R, T>;

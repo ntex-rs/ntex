@@ -1,7 +1,8 @@
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use actix_rt::spawn;
+use actix_server_config::ServerConfig;
 use actix_service::{NewService, Service};
 use futures::future::{err, ok, FutureResult};
 use futures::{Future, Poll};
@@ -23,7 +24,7 @@ pub(crate) enum ServerMessage {
 }
 
 pub trait ServiceFactory: Send + Clone + 'static {
-    type NewService: NewService<TokioTcpStream>;
+    type NewService: NewService<ServerConfig, Request = TokioTcpStream>;
 
     fn create(&self) -> Self::NewService;
 }
@@ -38,7 +39,7 @@ pub(crate) trait InternalServiceFactory: Send {
 
 pub(crate) type BoxedServerService = Box<
     Service<
-        (Option<CounterGuard>, ServerMessage),
+        Request = (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
         Future = FutureResult<(), ()>,
@@ -55,12 +56,13 @@ impl<T> StreamService<T> {
     }
 }
 
-impl<T> Service<(Option<CounterGuard>, ServerMessage)> for StreamService<T>
+impl<T> Service for StreamService<T>
 where
-    T: Service<TokioTcpStream>,
+    T: Service<Request = TokioTcpStream>,
     T::Future: 'static,
     T::Error: 'static,
 {
+    type Request = (Option<CounterGuard>, ServerMessage);
     type Response = ();
     type Error = ();
     type Future = FutureResult<(), ()>;
@@ -96,14 +98,25 @@ pub(crate) struct StreamNewService<F: ServiceFactory> {
     name: String,
     inner: F,
     token: Token,
+    addr: SocketAddr,
 }
 
 impl<F> StreamNewService<F>
 where
     F: ServiceFactory,
 {
-    pub(crate) fn create(name: String, token: Token, inner: F) -> Box<InternalServiceFactory> {
-        Box::new(Self { name, token, inner })
+    pub(crate) fn create(
+        name: String,
+        token: Token,
+        inner: F,
+        addr: SocketAddr,
+    ) -> Box<InternalServiceFactory> {
+        Box::new(Self {
+            name,
+            token,
+            inner,
+            addr,
+        })
     }
 }
 
@@ -120,15 +133,17 @@ where
             name: self.name.clone(),
             inner: self.inner.clone(),
             token: self.token,
+            addr: self.addr,
         })
     }
 
     fn create(&self) -> Box<Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>> {
         let token = self.token;
+        let config = ServerConfig::new(self.addr);
         Box::new(
             self.inner
                 .create()
-                .new_service(&())
+                .new_service(&config)
                 .map_err(|_| ())
                 .map(move |inner| {
                     let service: BoxedServerService = Box::new(StreamService::new(inner));
@@ -155,7 +170,7 @@ impl InternalServiceFactory for Box<InternalServiceFactory> {
 impl<F, T> ServiceFactory for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: NewService<TokioTcpStream>,
+    T: NewService<ServerConfig, Request = TokioTcpStream>,
 {
     type NewService = T;
 

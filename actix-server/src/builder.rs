@@ -150,14 +150,15 @@ impl ServerBuilder {
         U: net::ToSocketAddrs,
     {
         let sockets = bind_addr(addr)?;
-        let token = self.token.next();
-        self.services.push(StreamNewService::create(
-            name.as_ref().to_string(),
-            token,
-            factory.clone(),
-        ));
 
         for lst in sockets {
+            let token = self.token.next();
+            self.services.push(StreamNewService::create(
+                name.as_ref().to_string(),
+                token,
+                factory.clone(),
+                lst.local_addr()?,
+            ));
             self.sockets.push((token, lst));
         }
         Ok(self)
@@ -178,6 +179,7 @@ impl ServerBuilder {
             name.as_ref().to_string(),
             token,
             factory,
+            lst.local_addr()?,
         ));
         self.sockets.push((token, lst));
         Ok(self)

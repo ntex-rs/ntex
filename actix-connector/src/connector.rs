@@ -167,8 +167,8 @@ impl Connector {
     /// Create new connector with custom resolver
     pub fn with_resolver(
         resolver: Resolver<Connect>,
-    ) -> impl Service<Connect, Response = (Connect, TcpStream), Error = ConnectorError> + Clone
-    {
+    ) -> impl Service<Request = Connect, Response = (Connect, TcpStream), Error = ConnectorError>
+                 + Clone {
         Connector { resolver }
     }
 
@@ -177,8 +177,8 @@ impl Connector {
         cfg: ResolverConfig,
         opts: ResolverOpts,
     ) -> impl NewService<
-        Connect,
         (),
+        Request = Connect,
         Response = (Connect, TcpStream),
         Error = ConnectorError,
         InitError = E,
@@ -195,7 +195,8 @@ impl Clone for Connector {
     }
 }
 
-impl Service<Connect> for Connector {
+impl Service for Connector {
+    type Request = Connect;
     type Response = (Connect, TcpStream);
     type Error = ConnectorError;
     type Future = Either<ConnectorFuture, ConnectorTcpFuture>;
@@ -272,7 +273,8 @@ impl<T: RequestPort> Default for TcpConnector<T> {
     }
 }
 
-impl<T: RequestPort> Service<(T, VecDeque<IpAddr>)> for TcpConnector<T> {
+impl<T: RequestPort> Service for TcpConnector<T> {
+    type Request = (T, VecDeque<IpAddr>);
     type Response = (T, TcpStream);
     type Error = io::Error;
     type Future = TcpConnectorResponse<T>;
@@ -352,7 +354,8 @@ impl DefaultConnector {
     }
 }
 
-impl Service<Connect> for DefaultConnector {
+impl Service for DefaultConnector {
+    type Request = Connect;
     type Response = TcpStream;
     type Error = ConnectorError;
     type Future = DefaultConnectorFuture;

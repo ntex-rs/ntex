@@ -1,0 +1,18 @@
+[package]
+name = "actix-server-config"
+version = "0.1.0"
+authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+description = "Actix server config utils"
+homepage = "https://actix.rs"
+repository = "https://github.com/actix/actix-net.git"
+license = "MIT/Apache-2.0"
+edition = "2018"
+workspace = ".."
+
+[lib]
+name = "actix_server_config"
+path = "src/lib.rs"
+
+[dependencies]
+actix-service = { path="../actix-service" }
+futures = "0.1.25"

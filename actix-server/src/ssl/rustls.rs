@@ -10,6 +10,7 @@ use tokio_rustls::{Accept, TlsAcceptor, TlsStream};
 
 use crate::counter::{Counter, CounterGuard};
 use crate::ssl::MAX_CONN_COUNTER;
+use crate::ServerConfig as SrvConfig;
 
 /// Support `SSL` connections via rustls package
 ///
@@ -38,14 +39,17 @@ impl<T> Clone for RustlsAcceptor<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite> NewService<T> for RustlsAcceptor<T> {
+impl<T: AsyncRead + AsyncWrite> NewService<SrvConfig> for RustlsAcceptor<T> {
+    type Request = T;
     type Response = TlsStream<T, ServerSession>;
     type Error = io::Error;
     type Service = RustlsAcceptorService<T>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self, _: &()) -> Self::Future {
+    fn new_service(&self, cfg: &SrvConfig) -> Self::Future {
+        cfg.set_secure();
+
         MAX_CONN_COUNTER.with(|conns| {
             ok(RustlsAcceptorService {
                 acceptor: self.config.clone().into(),
@@ -62,7 +66,8 @@ pub struct RustlsAcceptorService<T> {
     conns: Counter,
 }
 
-impl<T: AsyncRead + AsyncWrite> Service<T> for RustlsAcceptorService<T> {
+impl<T: AsyncRead + AsyncWrite> Service for RustlsAcceptorService<T> {
+    type Request = T;
     type Response = TlsStream<T, ServerSession>;
     type Error = io::Error;
     type Future = RustlsAcceptorServiceFut<T>;

@@ -1,6 +1,7 @@
 use std::io;
 use std::marker::PhantomData;
 
+use actix_server_config::ServerConfig;
 use actix_service::{NewService, Service};
 use futures::{future::ok, future::FutureResult, Async, Future, Poll};
 use native_tls::{self, Error, HandshakeError, TlsAcceptor};
@@ -36,14 +37,17 @@ impl<T: AsyncRead + AsyncWrite> Clone for NativeTlsAcceptor<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite> NewService<T> for NativeTlsAcceptor<T> {
+impl<T: AsyncRead + AsyncWrite> NewService<ServerConfig> for NativeTlsAcceptor<T> {
+    type Request = T;
     type Response = TlsStream<T>;
     type Error = Error;
     type Service = NativeTlsAcceptorService<T>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self, _: &()) -> Self::Future {
+    fn new_service(&self, cfg: &ServerConfig) -> Self::Future {
+        cfg.set_secure();
+
         MAX_CONN_COUNTER.with(|conns| {
             ok(NativeTlsAcceptorService {
                 acceptor: self.acceptor.clone(),
@@ -60,7 +64,8 @@ pub struct NativeTlsAcceptorService<T> {
     conns: Counter,
 }
 
-impl<T: AsyncRead + AsyncWrite> Service<T> for NativeTlsAcceptorService<T> {
+impl<T: AsyncRead + AsyncWrite> Service for NativeTlsAcceptorService<T> {
+    type Request = T;
     type Response = TlsStream<T>;
     type Error = Error;
     type Future = Accept<T>;
