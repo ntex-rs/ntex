@@ -28,7 +28,8 @@ where
 pub fn fn_cfg_factory<F, C, R, S, E, Req>(f: F) -> FnNewServiceConfig<F, C, R, S, E, Req>
 where
     F: Fn(&C) -> R,
-    R: IntoFuture<Item = S, Error = E>,
+    R: IntoFuture<Error = E>,
+    R::Item: IntoService<S, Req>,
     S: Service<Req>,
 {
     FnNewServiceConfig::new(f)
