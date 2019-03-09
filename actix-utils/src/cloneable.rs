@@ -13,9 +13,9 @@ pub struct CloneableService<T: 'static> {
 }
 
 impl<T: 'static> CloneableService<T> {
-    pub fn new<R>(service: T) -> Self
+    pub fn new(service: T) -> Self
     where
-        T: Service<R>,
+        T: Service,
     {
         Self {
             service: Cell::new(service),
@@ -33,10 +33,11 @@ impl<T: 'static> Clone for CloneableService<T> {
     }
 }
 
-impl<T, R> Service<R> for CloneableService<T>
+impl<T> Service for CloneableService<T>
 where
-    T: Service<R> + 'static,
+    T: Service + 'static,
 {
+    type Request = T::Request;
     type Response = T::Response;
     type Error = T::Error;
     type Future = T::Future;
@@ -45,7 +46,7 @@ where
         self.service.get_mut().poll_ready()
     }
 
-    fn call(&mut self, req: R) -> Self::Future {
+    fn call(&mut self, req: T::Request) -> Self::Future {
         self.service.get_mut().call(req)
     }
 }

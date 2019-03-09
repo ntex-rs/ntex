@@ -21,11 +21,12 @@ impl<A: Clone, B: Clone> Clone for EitherService<A, B> {
     }
 }
 
-impl<A, B, R> Service<R> for EitherService<A, B>
+impl<A, B> Service for EitherService<A, B>
 where
-    A: Service<R>,
-    B: Service<R, Response = A::Response, Error = A::Error>,
+    A: Service,
+    B: Service<Request = A::Request, Response = A::Response, Error = A::Error>,
 {
+    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
     type Future = future::Either<A::Future, B::Future>;
@@ -37,7 +38,7 @@ where
         }
     }
 
-    fn call(&mut self, req: R) -> Self::Future {
+    fn call(&mut self, req: A::Request) -> Self::Future {
         match self {
             EitherService::A(ref mut inner) => future::Either::A(inner.call(req)),
             EitherService::B(ref mut inner) => future::Either::B(inner.call(req)),
@@ -52,33 +53,52 @@ pub enum Either<A, B> {
 }
 
 impl<A, B> Either<A, B> {
-    pub fn new_a<R, C>(srv: A) -> Self
+    pub fn new_a<C>(srv: A) -> Self
     where
-        A: NewService<R, C>,
-        B: NewService<R, C, Response = A::Response, Error = A::Error, InitError = A::InitError>,
+        A: NewService<C>,
+        B: NewService<
+            C,
+            Request = A::Request,
+            Response = A::Response,
+            Error = A::Error,
+            InitError = A::InitError,
+        >,
     {
         Either::A(srv)
     }
 
-    pub fn new_b<R, C>(srv: B) -> Self
+    pub fn new_b<C>(srv: B) -> Self
     where
-        A: NewService<R, C>,
-        B: NewService<R, C, Response = A::Response, Error = A::Error, InitError = A::InitError>,
+        A: NewService<C>,
+        B: NewService<
+            C,
+            Request = A::Request,
+            Response = A::Response,
+            Error = A::Error,
+            InitError = A::InitError,
+        >,
     {
         Either::B(srv)
     }
 }
 
-impl<A, B, R, C> NewService<R, C> for Either<A, B>
+impl<A, B, C> NewService<C> for Either<A, B>
 where
-    A: NewService<R, C>,
-    B: NewService<R, C, Response = A::Response, Error = A::Error, InitError = A::InitError>,
+    A: NewService<C>,
+    B: NewService<
+        C,
+        Request = A::Request,
+        Response = A::Response,
+        Error = A::Error,
+        InitError = A::InitError,
+    >,
 {
+    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
     type InitError = A::InitError;
     type Service = EitherService<A::Service, B::Service>;
-    type Future = EitherNewService<A, B, R, C>;
+    type Future = EitherNewService<A, B, C>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         match self {
@@ -98,15 +118,21 @@ impl<A: Clone, B: Clone> Clone for Either<A, B> {
 }
 
 #[doc(hidden)]
-pub enum EitherNewService<A: NewService<R, C>, B: NewService<R, C>, R, C> {
+pub enum EitherNewService<A: NewService<C>, B: NewService<C>, C> {
     A(<A::Future as IntoFuture>::Future),
     B(<B::Future as IntoFuture>::Future),
 }
 
-impl<A, B, R, C> Future for EitherNewService<A, B, R, C>
+impl<A, B, C> Future for EitherNewService<A, B, C>
 where
-    A: NewService<R, C>,
-    B: NewService<R, C, Response = A::Response, Error = A::Error, InitError = A::InitError>,
+    A: NewService<C>,
+    B: NewService<
+        C,
+        Request = A::Request,
+        Response = A::Response,
+        Error = A::Error,
+        InitError = A::InitError,
+    >,
 {
     type Item = EitherService<A::Service, B::Service>;
     type Error = A::InitError;

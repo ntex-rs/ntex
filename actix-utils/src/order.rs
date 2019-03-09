@@ -52,39 +52,46 @@ pub struct InOrder<S> {
     _t: PhantomData<S>,
 }
 
-impl<S> InOrder<S> {
-    pub fn new<R>() -> Self
-    where
-        S: Service<R>,
-        S::Response: 'static,
-        S::Future: 'static,
-        S::Error: 'static,
-    {
-        Self { _t: PhantomData }
-    }
-
-    pub fn service<R>(service: S) -> InOrderService<S, R>
-    where
-        S: Service<R>,
-        S::Response: 'static,
-        S::Future: 'static,
-        S::Error: 'static,
-    {
-        InOrderService::new(service)
-    }
-}
-
-impl<S, R> Transform<S, R> for InOrder<S>
+impl<S> InOrder<S>
 where
-    S: Service<R>,
+    S: Service,
     S::Response: 'static,
     S::Future: 'static,
     S::Error: 'static,
 {
+    pub fn new() -> Self {
+        Self { _t: PhantomData }
+    }
+
+    pub fn service(service: S) -> InOrderService<S> {
+        InOrderService::new(service)
+    }
+}
+
+impl<S> Default for InOrder<S>
+where
+    S: Service,
+    S::Response: 'static,
+    S::Future: 'static,
+    S::Error: 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S> Transform<S> for InOrder<S>
+where
+    S: Service,
+    S::Response: 'static,
+    S::Future: 'static,
+    S::Error: 'static,
+{
+    type Request = S::Request;
     type Response = S::Response;
     type Error = InOrderError<S::Error>;
     type InitError = Void;
-    type Transform = InOrderService<S, R>;
+    type Transform = InOrderService<S>;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
@@ -92,15 +99,15 @@ where
     }
 }
 
-pub struct InOrderService<S: Service<R>, R> {
+pub struct InOrderService<S: Service> {
     service: S,
     task: Rc<AtomicTask>,
     acks: VecDeque<Record<S::Response, S::Error>>,
 }
 
-impl<S, R> InOrderService<S, R>
+impl<S> InOrderService<S>
 where
-    S: Service<R>,
+    S: Service,
     S::Response: 'static,
     S::Future: 'static,
     S::Error: 'static,
@@ -114,16 +121,17 @@ where
     }
 }
 
-impl<S, R> Service<R> for InOrderService<S, R>
+impl<S> Service for InOrderService<S>
 where
-    S: Service<R>,
+    S: Service,
     S::Response: 'static,
     S::Future: 'static,
     S::Error: 'static,
 {
+    type Request = S::Request;
     type Response = S::Response;
     type Error = InOrderError<S::Error>;
-    type Future = InOrderServiceResponse<S, R>;
+    type Future = InOrderServiceResponse<S>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         // poll_ready could be called from different task
@@ -148,7 +156,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, request: R) -> Self::Future {
+    fn call(&mut self, request: S::Request) -> Self::Future {
         let (tx1, rx1) = oneshot::channel();
         let (tx2, rx2) = oneshot::channel();
         self.acks.push_back(Record { rx: rx1, tx: tx2 });
@@ -165,11 +173,11 @@ where
 }
 
 #[doc(hidden)]
-pub struct InOrderServiceResponse<S: Service<R>, R> {
+pub struct InOrderServiceResponse<S: Service> {
     rx: oneshot::Receiver<Result<S::Response, S::Error>>,
 }
 
-impl<S: Service<R>, R> Future for InOrderServiceResponse<S, R> {
+impl<S: Service> Future for InOrderServiceResponse<S> {
     type Item = S::Response;
     type Error = InOrderError<S::Error>;
 
@@ -196,7 +204,8 @@ mod tests {
 
     struct Srv;
 
-    impl Service<oneshot::Receiver<usize>> for Srv {
+    impl Service for Srv {
+        type Request = oneshot::Receiver<usize>;
         type Response = usize;
         type Error = ();
         type Future = Box<Future<Item = usize, Error = ()>>;
@@ -210,11 +219,11 @@ mod tests {
         }
     }
 
-    struct SrvPoll<S: Service<oneshot::Receiver<usize>>> {
+    struct SrvPoll<S: Service> {
         s: S,
     }
 
-    impl<S: Service<oneshot::Receiver<usize>>> Future for SrvPoll<S> {
+    impl<S: Service> Future for SrvPoll<S> {
         type Item = ();
         type Error = ();
 
