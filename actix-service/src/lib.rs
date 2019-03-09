@@ -9,6 +9,7 @@ mod and_then;
 mod and_then_apply;
 mod and_then_apply_fn;
 mod apply;
+mod apply_cfg;
 pub mod blank;
 pub mod boxed;
 mod cell;
@@ -26,6 +27,7 @@ pub use self::and_then::{AndThen, AndThenNewService};
 use self::and_then_apply::AndThenTransform;
 use self::and_then_apply_fn::{AndThenApply, AndThenApplyNewService};
 pub use self::apply::{Apply, ApplyNewService};
+use self::apply_cfg::ApplyConfig;
 pub use self::fn_service::{fn_cfg_factory, fn_factory, fn_service, FnService};
 pub use self::fn_transform::FnTransform;
 pub use self::from_err::{FromErr, FromErrNewService};
@@ -204,7 +206,7 @@ pub trait NewService<Config = ()> {
     /// Create and return a new service value asynchronously.
     fn new_service(&self, cfg: &Config) -> Self::Future;
 
-    /// Apply function to specified service and use it as a next service in
+    /// Apply transform service to specified service and use it as a next service in
     /// chain.
     fn apply<T, T1, B, B1>(
         self,
@@ -238,6 +240,23 @@ pub trait NewService<Config = ()> {
         Out::Error: Into<Self::Error>,
     {
         AndThenApplyNewService::new(self, service, f)
+    }
+
+    /// Map this service's config type to a different config,
+    /// and use for nested service
+    fn apply_cfg<F, C, B, B1>(self, service: B1, f: F) -> ApplyConfig<F, Self, B, Config, C>
+    where
+        Self: Sized,
+        F: Fn(&Config) -> C,
+        B1: IntoNewService<B, C>,
+        B: NewService<
+            C,
+            Request = Self::Response,
+            Error = Self::Error,
+            InitError = Self::InitError,
+        >,
+    {
+        ApplyConfig::new(self, service, f)
     }
 
     /// Call another service after call to this one has resolved successfully.

@@ -1,10 +1,13 @@
 # Changes
 
-## [0.3.2] - 2019-03-xx
+## [0.3.3] - 2019-03-xx
 
 ### Added
 
 * Add `ApplyTransform` new service for transform and new service.
+
+* Add `NewService::apply_cfg()` combinator, it allows to use
+  nested `NewService` with different config parameter.
 
 ### Changed
 
