@@ -159,25 +159,6 @@ impl<T: ResourcePath> Path<T> {
     }
 }
 
-#[cfg(feature = "http")]
-use std::borrow::Cow;
-
-#[cfg(feature = "http")]
-impl Path<crate::Url> {
-    /// Get URL-decoded matched parameter by name without type conversion
-    pub fn get_decoded(&self, key: &str) -> Option<Cow<str>> {
-        use crate::url::RESERVED_QUOTER;
-
-        self.get(key).map(|value| {
-            if let Some(value) = RESERVED_QUOTER.with(|q| q.requote(value.as_bytes())) {
-                Cow::Owned(value)
-            } else {
-                Cow::Borrowed(value)
-            }
-        })
-    }
-}
-
 #[derive(Debug)]
 pub struct PathIter<'a, T> {
     idx: usize,
