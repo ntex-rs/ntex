@@ -1,13 +1,14 @@
-use std::net;
+use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use actix_rt::spawn;
+use actix_server_config::ServerConfig;
 use actix_service::{NewService, Service};
 use futures::future::{err, ok, FutureResult};
 use futures::{Future, Poll};
 use log::error;
 use tokio_reactor::Handle;
-use tokio_tcp::TcpStream;
+use tokio_tcp::TcpStream as TokioTcpStream;
 
 use super::Token;
 use crate::counter::CounterGuard;
@@ -15,7 +16,7 @@ use crate::counter::CounterGuard;
 /// Server message
 pub(crate) enum ServerMessage {
     /// New stream
-    Connect(net::TcpStream),
+    Connect(TcpStream),
     /// Gracefull shutdown
     Shutdown(Duration),
     /// Force shutdown
@@ -23,7 +24,7 @@ pub(crate) enum ServerMessage {
 }
 
 pub trait ServiceFactory: Send + Clone + 'static {
-    type NewService: NewService<TcpStream>;
+    type NewService: NewService<TokioTcpStream, ServerConfig>;
 
     fn create(&self) -> Self::NewService;
 }
@@ -57,7 +58,7 @@ impl<T> StreamService<T> {
 
 impl<T> Service<(Option<CounterGuard>, ServerMessage)> for StreamService<T>
 where
-    T: Service<TcpStream>,
+    T: Service<TokioTcpStream>,
     T::Future: 'static,
     T::Error: 'static,
 {
@@ -72,9 +73,10 @@ where
     fn call(&mut self, (guard, req): (Option<CounterGuard>, ServerMessage)) -> Self::Future {
         match req {
             ServerMessage::Connect(stream) => {
-                let stream = TcpStream::from_std(stream, &Handle::default()).map_err(|e| {
-                    error!("Can not convert to an async tcp stream: {}", e);
-                });
+                let stream =
+                    TokioTcpStream::from_std(stream, &Handle::default()).map_err(|e| {
+                        error!("Can not convert to an async tcp stream: {}", e);
+                    });
 
                 if let Ok(stream) = stream {
                     spawn(self.service.call(stream).then(move |res| {
@@ -95,14 +97,25 @@ pub(crate) struct StreamNewService<F: ServiceFactory> {
     name: String,
     inner: F,
     token: Token,
+    addr: SocketAddr,
 }
 
 impl<F> StreamNewService<F>
 where
     F: ServiceFactory,
 {
-    pub(crate) fn create(name: String, token: Token, inner: F) -> Box<InternalServiceFactory> {
-        Box::new(Self { name, token, inner })
+    pub(crate) fn create(
+        name: String,
+        token: Token,
+        inner: F,
+        addr: SocketAddr,
+    ) -> Box<InternalServiceFactory> {
+        Box::new(Self {
+            name,
+            token,
+            inner,
+            addr,
+        })
     }
 }
 
@@ -119,15 +132,17 @@ where
             name: self.name.clone(),
             inner: self.inner.clone(),
             token: self.token,
+            addr: self.addr,
         })
     }
 
     fn create(&self) -> Box<Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>> {
         let token = self.token;
+        let config = ServerConfig::new(self.addr);
         Box::new(
             self.inner
                 .create()
-                .new_service(&())
+                .new_service(&config)
                 .map_err(|_| ())
                 .map(move |inner| {
                     let service: BoxedServerService = Box::new(StreamService::new(inner));
@@ -154,7 +169,7 @@ impl InternalServiceFactory for Box<InternalServiceFactory> {
 impl<F, T> ServiceFactory for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: NewService<TcpStream>,
+    T: NewService<TokioTcpStream, ServerConfig>,
 {
     type NewService = T;
 

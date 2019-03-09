@@ -6,8 +6,9 @@ use openssl::ssl::{HandshakeError, SslAcceptor};
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::{AcceptAsync, SslAcceptorExt, SslStream};
 
-use super::MAX_CONN_COUNTER;
 use crate::counter::{Counter, CounterGuard};
+use crate::ssl::MAX_CONN_COUNTER;
+use crate::ServerConfig;
 
 /// Support `SSL` connections via openssl package
 ///
@@ -36,14 +37,16 @@ impl<T: AsyncRead + AsyncWrite> Clone for OpensslAcceptor<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite> NewService<T> for OpensslAcceptor<T> {
+impl<T: AsyncRead + AsyncWrite> NewService<T, ServerConfig> for OpensslAcceptor<T> {
     type Response = SslStream<T>;
     type Error = HandshakeError<T>;
     type Service = OpensslAcceptorService<T>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self, _: &()) -> Self::Future {
+    fn new_service(&self, cfg: &ServerConfig) -> Self::Future {
+        cfg.set_secure();
+
         MAX_CONN_COUNTER.with(|conns| {
             ok(OpensslAcceptorService {
                 acceptor: self.acceptor.clone(),

@@ -151,14 +151,14 @@ impl ServerBuilder {
     {
         let sockets = bind_addr(addr)?;
 
-        let token = self.token.next();
-        self.services.push(StreamNewService::create(
-            name.as_ref().to_string(),
-            token,
-            factory,
-        ));
-
         for lst in sockets {
+            let token = self.token.next();
+            self.services.push(StreamNewService::create(
+                name.as_ref().to_string(),
+                token,
+                factory.clone(),
+                lst.local_addr()?,
+            ));
             self.sockets.push((token, lst));
         }
         Ok(self)
@@ -170,7 +170,7 @@ impl ServerBuilder {
         name: N,
         lst: net::TcpListener,
         factory: F,
-    ) -> Self
+    ) -> io::Result<Self>
     where
         F: ServiceFactory,
     {
@@ -179,9 +179,10 @@ impl ServerBuilder {
             name.as_ref().to_string(),
             token,
             factory,
+            lst.local_addr()?,
         ));
         self.sockets.push((token, lst));
-        self
+        Ok(self)
     }
 
     /// Spawn new thread and start listening for incoming connections.

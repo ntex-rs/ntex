@@ -6,8 +6,9 @@ use futures::{future::ok, future::FutureResult, Async, Future, Poll};
 use native_tls::{self, Error, HandshakeError, TlsAcceptor};
 use tokio_io::{AsyncRead, AsyncWrite};
 
-use super::MAX_CONN_COUNTER;
 use crate::counter::{Counter, CounterGuard};
+use crate::ssl::MAX_CONN_COUNTER;
+use crate::ServerConfig;
 
 /// Support `SSL` connections via native-tls package
 ///
@@ -36,14 +37,16 @@ impl<T: AsyncRead + AsyncWrite> Clone for NativeTlsAcceptor<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite> NewService<T> for NativeTlsAcceptor<T> {
+impl<T: AsyncRead + AsyncWrite> NewService<T, ServerConfig> for NativeTlsAcceptor<T> {
     type Response = TlsStream<T>;
     type Error = Error;
     type Service = NativeTlsAcceptorService<T>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
-    fn new_service(&self, _: &()) -> Self::Future {
+    fn new_service(&self, cfg: &ServerConfig) -> Self::Future {
+        cfg.set_secure();
+
         MAX_CONN_COUNTER.with(|conns| {
             ok(NativeTlsAcceptorService {
                 acceptor: self.acceptor.clone(),
