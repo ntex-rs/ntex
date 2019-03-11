@@ -33,7 +33,7 @@ impl ServerConfig {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Protocol {
     Unknown,
     Http10,

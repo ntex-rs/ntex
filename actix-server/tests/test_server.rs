@@ -100,7 +100,7 @@ fn test_start() {
 
     // pause
     let _ = srv.pause();
-    thread::sleep(time::Duration::from_millis(200));
+    thread::sleep(time::Duration::from_millis(1000));
     assert!(net::TcpStream::connect_timeout(&addr, time::Duration::from_millis(100)).is_ok());
     assert!(net::TcpStream::connect_timeout(&addr, time::Duration::from_millis(100)).is_err());
 
