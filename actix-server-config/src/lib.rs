@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::fmt;
 use std::net::SocketAddr;
 use std::rc::Rc;
 
@@ -63,22 +64,27 @@ impl<T> Io<T, ()> {
 }
 
 impl<T, P> Io<T, P> {
+    /// Reconstruct from a parts.
     pub fn from_parts(io: T, params: P, proto: Protocol) -> Self {
         Self { io, params, proto }
     }
 
+    /// Deconstruct into a parts.
     pub fn into_parts(self) -> (T, P, Protocol) {
         (self.io, self.params, self.proto)
     }
 
-    pub fn io(&self) -> &T {
+    /// Returns a shared reference to the underlying stream.
+    pub fn get_ref(&self) -> &T {
         &self.io
     }
 
-    pub fn io_mut(&mut self) -> &mut T {
+    /// Returns a mutable reference to the underlying stream.
+    pub fn get_mut(&mut self) -> &mut T {
         &mut self.io
     }
 
+    /// Get selected protocol
     pub fn protocol(&self) -> Protocol {
         self.proto
     }
@@ -93,5 +99,11 @@ impl<T, P> Io<T, P> {
             proto: self.proto,
             params: op(self.params),
         }
+    }
+}
+
+impl<T: fmt::Debug, P> fmt::Debug for Io<T, P> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Io {{{:?}}}", self.io)
     }
 }
