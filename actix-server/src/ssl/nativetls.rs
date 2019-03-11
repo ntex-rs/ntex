@@ -1,7 +1,6 @@
 use std::io;
 use std::marker::PhantomData;
 
-use actix_server_config::ServerConfig;
 use actix_service::{NewService, Service};
 use futures::{future::ok, future::FutureResult, Async, Future, Poll};
 use native_tls::{self, Error, HandshakeError, TlsAcceptor};
@@ -9,16 +8,17 @@ use tokio_io::{AsyncRead, AsyncWrite};
 
 use crate::counter::{Counter, CounterGuard};
 use crate::ssl::MAX_CONN_COUNTER;
+use crate::{Io, Protocol, ServerConfig};
 
 /// Support `SSL` connections via native-tls package
 ///
 /// `tls` feature enables `NativeTlsAcceptor` type
-pub struct NativeTlsAcceptor<T> {
+pub struct NativeTlsAcceptor<T, P> {
     acceptor: TlsAcceptor,
-    io: PhantomData<T>,
+    io: PhantomData<(T, P)>,
 }
 
-impl<T: AsyncRead + AsyncWrite> NativeTlsAcceptor<T> {
+impl<T: AsyncRead + AsyncWrite, P> NativeTlsAcceptor<T, P> {
     /// Create `NativeTlsAcceptor` instance
     pub fn new(acceptor: TlsAcceptor) -> Self {
         NativeTlsAcceptor {
@@ -28,7 +28,7 @@ impl<T: AsyncRead + AsyncWrite> NativeTlsAcceptor<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite> Clone for NativeTlsAcceptor<T> {
+impl<T: AsyncRead + AsyncWrite, P> Clone for NativeTlsAcceptor<T, P> {
     fn clone(&self) -> Self {
         Self {
             acceptor: self.acceptor.clone(),
@@ -37,11 +37,11 @@ impl<T: AsyncRead + AsyncWrite> Clone for NativeTlsAcceptor<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite> NewService<ServerConfig> for NativeTlsAcceptor<T> {
-    type Request = T;
-    type Response = TlsStream<T>;
+impl<T: AsyncRead + AsyncWrite, P> NewService<ServerConfig> for NativeTlsAcceptor<T, P> {
+    type Request = Io<T, P>;
+    type Response = Io<TlsStream<T>, P>;
     type Error = Error;
-    type Service = NativeTlsAcceptorService<T>;
+    type Service = NativeTlsAcceptorService<T, P>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
@@ -58,17 +58,17 @@ impl<T: AsyncRead + AsyncWrite> NewService<ServerConfig> for NativeTlsAcceptor<T
     }
 }
 
-pub struct NativeTlsAcceptorService<T> {
+pub struct NativeTlsAcceptorService<T, P> {
     acceptor: TlsAcceptor,
-    io: PhantomData<T>,
+    io: PhantomData<(T, P)>,
     conns: Counter,
 }
 
-impl<T: AsyncRead + AsyncWrite> Service for NativeTlsAcceptorService<T> {
-    type Request = T;
-    type Response = TlsStream<T>;
+impl<T: AsyncRead + AsyncWrite, P> Service for NativeTlsAcceptorService<T, P> {
+    type Request = Io<T, P>;
+    type Response = Io<TlsStream<T>, P>;
     type Error = Error;
-    type Future = Accept<T>;
+    type Future = Accept<T, P>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         if self.conns.available() {
@@ -78,10 +78,12 @@ impl<T: AsyncRead + AsyncWrite> Service for NativeTlsAcceptorService<T> {
         }
     }
 
-    fn call(&mut self, req: T) -> Self::Future {
+    fn call(&mut self, req: Self::Request) -> Self::Future {
+        let (io, params, _) = req.into_parts();
         Accept {
             _guard: self.conns.get(),
-            inner: Some(self.acceptor.accept(req)),
+            inner: Some(self.acceptor.accept(io)),
+            params: Some(params),
         }
     }
 }
@@ -100,21 +102,30 @@ pub struct TlsStream<S> {
 
 /// Future returned from `NativeTlsAcceptor::accept` which will resolve
 /// once the accept handshake has finished.
-pub struct Accept<S> {
+pub struct Accept<S, P> {
     inner: Option<Result<native_tls::TlsStream<S>, HandshakeError<S>>>,
+    params: Option<P>,
     _guard: CounterGuard,
 }
 
-impl<Io: AsyncRead + AsyncWrite> Future for Accept<Io> {
-    type Item = TlsStream<Io>;
+impl<T: AsyncRead + AsyncWrite, P> Future for Accept<T, P> {
+    type Item = Io<TlsStream<T>, P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.inner.take().expect("cannot poll MidHandshake twice") {
-            Ok(stream) => Ok(TlsStream { inner: stream }.into()),
+            Ok(stream) => Ok(Async::Ready(Io::from_parts(
+                TlsStream { inner: stream },
+                self.params.take().unwrap(),
+                Protocol::Unknown,
+            ))),
             Err(HandshakeError::Failure(e)) => Err(e),
             Err(HandshakeError::WouldBlock(s)) => match s.handshake() {
-                Ok(stream) => Ok(TlsStream { inner: stream }.into()),
+                Ok(stream) => Ok(Async::Ready(Io::from_parts(
+                    TlsStream { inner: stream },
+                    self.params.take().unwrap(),
+                    Protocol::Unknown,
+                ))),
                 Err(HandshakeError::Failure(e)) => Err(e),
                 Err(HandshakeError::WouldBlock(s)) => {
                     self.inner = Some(Err(HandshakeError::WouldBlock(s)));

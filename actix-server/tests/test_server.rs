@@ -1,3 +1,4 @@
+use std::sync::mpsc;
 use std::{net, thread, time};
 
 use actix_server::{Server, ServerConfig};
@@ -67,4 +68,53 @@ fn test_listen() {
 
     thread::sleep(time::Duration::from_millis(500));
     assert!(net::TcpStream::connect(addr).is_ok());
+}
+
+#[test]
+#[cfg(unix)]
+fn test_start() {
+    let addr = unused_addr();
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let sys = actix_rt::System::new("test");
+
+        let srv = Server::build()
+            .backlog(1)
+            .bind("test", addr, move || {
+                fn_cfg_factory(move |cfg: &ServerConfig| {
+                    assert_eq!(cfg.local_addr(), addr);
+                    Ok::<_, ()>((|_| Ok::<_, ()>(())).into_service())
+                })
+            })
+            .unwrap()
+            .start();
+
+        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = sys.run();
+    });
+    let (srv, sys) = rx.recv().unwrap();
+    thread::sleep(time::Duration::from_millis(400));
+
+    assert!(net::TcpStream::connect(addr).is_ok());
+
+    // pause
+    let _ = srv.pause();
+    thread::sleep(time::Duration::from_millis(100));
+    assert!(net::TcpStream::connect_timeout(&addr, time::Duration::from_millis(100)).is_ok());
+    assert!(net::TcpStream::connect_timeout(&addr, time::Duration::from_millis(100)).is_err());
+
+    // resume
+    let _ = srv.resume();
+    thread::sleep(time::Duration::from_millis(100));
+    assert!(net::TcpStream::connect(addr).is_ok());
+    assert!(net::TcpStream::connect(addr).is_ok());
+    assert!(net::TcpStream::connect(addr).is_ok());
+
+    // stop
+    let _ = srv.stop(false);
+    thread::sleep(time::Duration::from_millis(100));
+    assert!(net::TcpStream::connect(addr).is_err());
+
+    let _ = sys.stop();
 }

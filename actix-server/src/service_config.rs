@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::{fmt, io, net};
 
+use actix_server_config::Io;
 use actix_service::{IntoNewService, NewService};
 use futures::future::{join_all, Future};
 use log::error;
@@ -18,12 +19,14 @@ pub struct ServiceConfig {
     pub(crate) services: Vec<(String, net::TcpListener)>,
     pub(crate) apply: Option<Box<ServiceRuntimeConfiguration>>,
     pub(crate) threads: usize,
+    pub(crate) backlog: i32,
 }
 
 impl ServiceConfig {
-    pub(super) fn new(threads: usize) -> ServiceConfig {
+    pub(super) fn new(threads: usize, backlog: i32) -> ServiceConfig {
         ServiceConfig {
             threads,
+            backlog,
             services: Vec::new(),
             apply: None,
         }
@@ -42,7 +45,7 @@ impl ServiceConfig {
     where
         U: net::ToSocketAddrs,
     {
-        let sockets = bind_addr(addr)?;
+        let sockets = bind_addr(addr, self.backlog)?;
 
         for lst in sockets {
             self.listen(name.as_ref(), lst);
@@ -170,7 +173,7 @@ impl ServiceRuntime {
     pub fn service<T, F>(&mut self, name: &str, service: F)
     where
         F: IntoNewService<T>,
-        T: NewService<Request = TcpStream, Response = ()> + 'static,
+        T: NewService<Request = Io<TcpStream>, Response = ()> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -206,7 +209,7 @@ struct ServiceFactory<T> {
 
 impl<T> NewService for ServiceFactory<T>
 where
-    T: NewService<Request = TcpStream, Response = ()>,
+    T: NewService<Request = Io<TcpStream>, Response = ()>,
     T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,

@@ -31,3 +31,67 @@ impl ServerConfig {
         self.secure.as_ref().set(true)
     }
 }
+
+#[derive(Copy, Clone, Debug)]
+pub enum Protocol {
+    Unknown,
+    Http10,
+    Http11,
+    Http2,
+    Proto1,
+    Proto2,
+    Proto3,
+    Proto4,
+    Proto5,
+    Proto6,
+}
+
+pub struct Io<T, P = ()> {
+    io: T,
+    proto: Protocol,
+    params: P,
+}
+
+impl<T> Io<T, ()> {
+    pub fn new(io: T) -> Self {
+        Self {
+            io,
+            proto: Protocol::Unknown,
+            params: (),
+        }
+    }
+}
+
+impl<T, P> Io<T, P> {
+    pub fn from_parts(io: T, params: P, proto: Protocol) -> Self {
+        Self { io, params, proto }
+    }
+
+    pub fn into_parts(self) -> (T, P, Protocol) {
+        (self.io, self.params, self.proto)
+    }
+
+    pub fn io(&self) -> &T {
+        &self.io
+    }
+
+    pub fn io_mut(&mut self) -> &mut T {
+        &mut self.io
+    }
+
+    pub fn protocol(&self) -> Protocol {
+        self.proto
+    }
+
+    /// Maps an Io<_, P> to Io<_, U> by applying a function to a contained value.
+    pub fn map<U, F>(self, op: F) -> Io<T, U>
+    where
+        F: FnOnce(P) -> U,
+    {
+        Io {
+            io: self.io,
+            proto: self.proto,
+            params: op(self.params),
+        }
+    }
+}

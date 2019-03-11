@@ -1,14 +1,14 @@
-use std::net::{SocketAddr, TcpStream};
+use std::net::{self, SocketAddr};
 use std::time::Duration;
 
 use actix_rt::spawn;
-use actix_server_config::ServerConfig;
+use actix_server_config::{Io, ServerConfig};
 use actix_service::{NewService, Service};
 use futures::future::{err, ok, FutureResult};
 use futures::{Future, Poll};
 use log::error;
 use tokio_reactor::Handle;
-use tokio_tcp::TcpStream as TokioTcpStream;
+use tokio_tcp::TcpStream;
 
 use super::Token;
 use crate::counter::CounterGuard;
@@ -16,7 +16,7 @@ use crate::counter::CounterGuard;
 /// Server message
 pub(crate) enum ServerMessage {
     /// New stream
-    Connect(TcpStream),
+    Connect(net::TcpStream),
     /// Gracefull shutdown
     Shutdown(Duration),
     /// Force shutdown
@@ -24,7 +24,7 @@ pub(crate) enum ServerMessage {
 }
 
 pub trait ServiceFactory: Send + Clone + 'static {
-    type NewService: NewService<ServerConfig, Request = TokioTcpStream>;
+    type NewService: NewService<ServerConfig, Request = Io<TcpStream>>;
 
     fn create(&self) -> Self::NewService;
 }
@@ -58,7 +58,7 @@ impl<T> StreamService<T> {
 
 impl<T> Service for StreamService<T>
 where
-    T: Service<Request = TokioTcpStream>,
+    T: Service<Request = Io<TcpStream>>,
     T::Future: 'static,
     T::Error: 'static,
 {
@@ -74,13 +74,12 @@ where
     fn call(&mut self, (guard, req): (Option<CounterGuard>, ServerMessage)) -> Self::Future {
         match req {
             ServerMessage::Connect(stream) => {
-                let stream =
-                    TokioTcpStream::from_std(stream, &Handle::default()).map_err(|e| {
-                        error!("Can not convert to an async tcp stream: {}", e);
-                    });
+                let stream = TcpStream::from_std(stream, &Handle::default()).map_err(|e| {
+                    error!("Can not convert to an async tcp stream: {}", e);
+                });
 
                 if let Ok(stream) = stream {
-                    spawn(self.service.call(stream).then(move |res| {
+                    spawn(self.service.call(Io::new(stream)).then(move |res| {
                         drop(guard);
                         res.map_err(|_| ()).map(|_| ())
                     }));
@@ -170,7 +169,7 @@ impl InternalServiceFactory for Box<InternalServiceFactory> {
 impl<F, T> ServiceFactory for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: NewService<ServerConfig, Request = TokioTcpStream>,
+    T: NewService<ServerConfig, Request = Io<TcpStream>>,
 {
     type NewService = T;
 

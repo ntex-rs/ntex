@@ -23,6 +23,7 @@ use crate::{ssl, Token};
 pub struct ServerBuilder {
     threads: usize,
     token: Token,
+    backlog: i32,
     workers: Vec<(usize, WorkerClient)>,
     services: Vec<Box<InternalServiceFactory>>,
     sockets: Vec<(Token, net::TcpListener)>,
@@ -53,6 +54,7 @@ impl ServerBuilder {
             services: Vec::new(),
             sockets: Vec::new(),
             accept: AcceptLoop::new(server.clone()),
+            backlog: 2048,
             exit: false,
             shutdown_timeout: Duration::from_secs(30),
             no_signals: false,
@@ -67,6 +69,21 @@ impl ServerBuilder {
     /// count.
     pub fn workers(mut self, num: usize) -> Self {
         self.threads = num;
+        self
+    }
+
+    /// Set the maximum number of pending connections.
+    ///
+    /// This refers to the number of clients that can be waiting to be served.
+    /// Exceeding this number results in the client getting an error when
+    /// attempting to connect. It should only affect servers under significant
+    /// load.
+    ///
+    /// Generally set in the 64-2048 range. Default value is 2048.
+    ///
+    /// This method should be called before `bind()` method call.
+    pub fn backlog(mut self, num: i32) -> Self {
+        self.backlog = num;
         self
     }
 
@@ -125,7 +142,7 @@ impl ServerBuilder {
     where
         F: Fn(&mut ServiceConfig) -> io::Result<()>,
     {
-        let mut cfg = ServiceConfig::new(self.threads);
+        let mut cfg = ServiceConfig::new(self.threads, self.backlog);
 
         f(&mut cfg)?;
 
@@ -149,7 +166,7 @@ impl ServerBuilder {
         F: ServiceFactory,
         U: net::ToSocketAddrs,
     {
-        let sockets = bind_addr(addr)?;
+        let sockets = bind_addr(addr, self.backlog)?;
 
         for lst in sockets {
             let token = self.token.next();
@@ -393,12 +410,15 @@ impl Future for ServerBuilder {
     }
 }
 
-pub(super) fn bind_addr<S: net::ToSocketAddrs>(addr: S) -> io::Result<Vec<net::TcpListener>> {
+pub(super) fn bind_addr<S: net::ToSocketAddrs>(
+    addr: S,
+    backlog: i32,
+) -> io::Result<Vec<net::TcpListener>> {
     let mut err = None;
     let mut succ = false;
     let mut sockets = Vec::new();
     for addr in addr.to_socket_addrs()? {
-        match create_tcp_listener(addr) {
+        match create_tcp_listener(addr, backlog) {
             Ok(lst) => {
                 succ = true;
                 sockets.push(lst);
@@ -421,12 +441,12 @@ pub(super) fn bind_addr<S: net::ToSocketAddrs>(addr: S) -> io::Result<Vec<net::T
     }
 }
 
-fn create_tcp_listener(addr: net::SocketAddr) -> io::Result<net::TcpListener> {
+fn create_tcp_listener(addr: net::SocketAddr, backlog: i32) -> io::Result<net::TcpListener> {
     let builder = match addr {
         net::SocketAddr::V4(_) => TcpBuilder::new_v4()?,
         net::SocketAddr::V6(_) => TcpBuilder::new_v6()?,
     };
     builder.reuse_address(true)?;
     builder.bind(addr)?;
-    Ok(builder.listen(1024)?)
+    Ok(builder.listen(backlog)?)
 }
