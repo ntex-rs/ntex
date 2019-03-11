@@ -94,15 +94,14 @@ fn test_start() {
         let _ = sys.run();
     });
     let (srv, sys) = rx.recv().unwrap();
-    thread::sleep(time::Duration::from_millis(400));
+    thread::sleep(time::Duration::from_millis(200));
 
     assert!(net::TcpStream::connect(addr).is_ok());
 
     // pause
     let _ = srv.pause();
-    thread::sleep(time::Duration::from_millis(100));
+    thread::sleep(time::Duration::from_millis(200));
     assert!(net::TcpStream::connect_timeout(&addr, time::Duration::from_millis(100)).is_ok());
-    thread::sleep(time::Duration::from_millis(400));
     assert!(net::TcpStream::connect_timeout(&addr, time::Duration::from_millis(100)).is_err());
 
     // resume
