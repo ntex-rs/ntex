@@ -1,9 +1,14 @@
+use std::io::Read;
 use std::sync::mpsc;
 use std::{net, thread, time};
 
-use actix_server::{Server, ServerConfig};
+use actix_codec::{BytesCodec, Framed};
+use actix_server::{Io, Server, ServerConfig};
 use actix_service::{fn_cfg_factory, fn_service, IntoService};
+use bytes::Bytes;
+use futures::{Future, Sink};
 use net2::TcpBuilder;
+use tokio_tcp::TcpStream;
 
 fn unused_addr() -> net::SocketAddr {
     let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -37,16 +42,20 @@ fn test_bind() {
 #[test]
 fn test_bind_no_config() {
     let addr = unused_addr();
+    let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        Server::build()
+        let sys = actix_rt::System::new("test");
+        let srv = Server::build()
             .bind("test", addr, move || fn_service(|_| Ok::<_, ()>(())))
             .unwrap()
-            .run()
+            .start();
+        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = sys.run();
     });
-
-    thread::sleep(time::Duration::from_millis(500));
+    let (_, sys) = rx.recv().unwrap();
     assert!(net::TcpStream::connect(addr).is_ok());
+    let _ = sys.stop();
 }
 
 #[test]
@@ -80,11 +89,18 @@ fn test_start() {
         let sys = actix_rt::System::new("test");
 
         let srv = Server::build()
-            .backlog(1)
+            .backlog(100)
             .bind("test", addr, move || {
                 fn_cfg_factory(move |cfg: &ServerConfig| {
                     assert_eq!(cfg.local_addr(), addr);
-                    Ok::<_, ()>((|_| Ok::<_, ()>(())).into_service())
+                    Ok::<_, ()>(
+                        (|io: Io<TcpStream>| {
+                            Framed::new(io.into_parts().0, BytesCodec)
+                                .send(Bytes::from_static(b"test"))
+                                .then(|_| Ok::<_, ()>(()))
+                        })
+                        .into_service(),
+                    )
                 })
             })
             .unwrap()
@@ -94,15 +110,20 @@ fn test_start() {
         let _ = sys.run();
     });
     let (srv, sys) = rx.recv().unwrap();
-    thread::sleep(time::Duration::from_millis(200));
 
-    assert!(net::TcpStream::connect(addr).is_ok());
+    let mut buf = [0u8; 4];
+    let mut conn = net::TcpStream::connect(addr).unwrap();
+    let _ = conn.read_exact(&mut buf);
+    assert_eq!(buf, b"test"[..]);
 
     // pause
     let _ = srv.pause();
-    thread::sleep(time::Duration::from_millis(1000));
-    assert!(net::TcpStream::connect_timeout(&addr, time::Duration::from_millis(100)).is_ok());
-    assert!(net::TcpStream::connect_timeout(&addr, time::Duration::from_millis(100)).is_err());
+    thread::sleep(time::Duration::from_millis(200));
+    let mut conn = net::TcpStream::connect(addr).unwrap();
+    conn.set_read_timeout(Some(time::Duration::from_millis(100)))
+        .unwrap();
+    let res = conn.read_exact(&mut buf);
+    assert!(res.is_err());
 
     // resume
     let _ = srv.resume();
@@ -111,10 +132,16 @@ fn test_start() {
     assert!(net::TcpStream::connect(addr).is_ok());
     assert!(net::TcpStream::connect(addr).is_ok());
 
+    let mut buf = [0u8; 4];
+    let mut conn = net::TcpStream::connect(addr).unwrap();
+    let _ = conn.read_exact(&mut buf);
+    assert_eq!(buf, b"test"[..]);
+
     // stop
     let _ = srv.stop(false);
     thread::sleep(time::Duration::from_millis(100));
     assert!(net::TcpStream::connect(addr).is_err());
 
+    thread::sleep(time::Duration::from_millis(100));
     let _ = sys.stop();
 }

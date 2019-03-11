@@ -64,5 +64,6 @@ webpki = { version = "0.19", optional = true }
 webpki-roots = { version = "0.16", optional = true }
 
 [dev-dependencies]
-env_logger = "0.6"
+bytes = "0.4"
 actix-codec = "0.1.0"
+env_logger = "0.6"

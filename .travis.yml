@@ -35,7 +35,7 @@ script:
     cargo test --features="ssl,tls,rust-tls" -- --nocapture
     cd actix-codec && cargo test && cd ..
     cd actix-service && cargo test && cd ..
-    cd actix-server && cargo test --features="ssl,tls,rust-tls" -- --nocapture && cd ..
+    cd actix-server && cargo test --all-features -- --nocapture && cd ..
     cd actix-rt && cargo test && cd ..
     cd actix-connector && cargo test && cd ..
     cd actix-utils && cargo test && cd ..
