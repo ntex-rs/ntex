@@ -15,7 +15,7 @@ use crate::{Io, Protocol, ServerConfig as SrvConfig};
 /// Support `SSL` connections via rustls package
 ///
 /// `rust-tls` feature enables `RustlsAcceptor` type
-pub struct RustlsAcceptor<T, P> {
+pub struct RustlsAcceptor<T, P = ()> {
     config: Arc<ServerConfig>,
     io: PhantomData<(T, P)>,
 }

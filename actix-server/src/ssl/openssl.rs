@@ -13,7 +13,7 @@ use crate::{Io, Protocol, ServerConfig};
 /// Support `SSL` connections via openssl package
 ///
 /// `ssl` feature enables `OpensslAcceptor` type
-pub struct OpensslAcceptor<T, P> {
+pub struct OpensslAcceptor<T, P = ()> {
     acceptor: SslAcceptor,
     io: PhantomData<(T, P)>,
 }

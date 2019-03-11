@@ -13,7 +13,7 @@ use crate::{Io, Protocol, ServerConfig};
 /// Support `SSL` connections via native-tls package
 ///
 /// `tls` feature enables `NativeTlsAcceptor` type
-pub struct NativeTlsAcceptor<T, P> {
+pub struct NativeTlsAcceptor<T, P = ()> {
     acceptor: TlsAcceptor,
     io: PhantomData<(T, P)>,
 }
