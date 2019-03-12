@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use futures::{try_ready, Async, Future, IntoFuture, Poll};
+use futures::{Async, Future, IntoFuture, Poll};
 
 use super::{IntoNewService, IntoService, NewService, Service};
 use crate::cell::Cell;
@@ -71,8 +71,12 @@ where
     type Future = AndThenApplyFuture<A, B, F, Out>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        try_ready!(self.a.poll_ready());
-        self.b.get_mut().poll_ready()
+        let not_ready = self.a.poll_ready()?.is_not_ready();
+        if self.b.get_mut().poll_ready()?.is_not_ready() || not_ready {
+            Ok(Async::NotReady)
+        } else {
+            Ok(Async::Ready(()))
+        }
     }
 
     fn call(&mut self, req: A::Request) -> Self::Future {
