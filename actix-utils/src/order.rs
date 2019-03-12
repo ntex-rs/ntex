@@ -140,9 +140,6 @@ where
         // poll_ready could be called from different task
         self.task.register();
 
-        // check nested service
-        self.service.poll_ready().map_err(InOrderError::Service)?;
-
         // check acks
         while !self.acks.is_empty() {
             let rec = self.acks.front_mut().unwrap();
@@ -156,7 +153,12 @@ where
             }
         }
 
-        Ok(Async::Ready(()))
+        // check nested service
+        if let Async::NotReady = self.service.poll_ready().map_err(InOrderError::Service)? {
+            Ok(Async::NotReady)
+        } else {
+            Ok(Async::Ready(()))
+        }
     }
 
     fn call(&mut self, request: S::Request) -> Self::Future {

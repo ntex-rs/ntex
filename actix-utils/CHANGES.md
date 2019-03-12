@@ -10,6 +10,8 @@
 
 * Fix `InFlightService::poll_ready()` nested service readiness check
 
+* Fix `InOrderService::poll_ready()` nested service readiness check
+
 
 ## [0.3.3] - 2019-03-09
 

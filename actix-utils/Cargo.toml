@@ -27,4 +27,4 @@ tokio-current-thread = "0.1.4"
 log = "0.4"
 
 [dev-dependencies]
-actix-rt = "0.2"
+actix-rt = "0.2.1"
