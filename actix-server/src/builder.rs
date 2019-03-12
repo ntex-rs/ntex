@@ -2,7 +2,6 @@ use std::time::Duration;
 use std::{io, mem, net};
 
 use actix_rt::{spawn, Arbiter, System};
-use actix_service::NewService;
 use futures::future::{lazy, ok};
 use futures::stream::futures_unordered;
 use futures::sync::mpsc::{unbounded, UnboundedReceiver};
@@ -10,7 +9,6 @@ use futures::{Async, Future, Poll, Stream};
 use log::{error, info};
 use net2::TcpBuilder;
 use num_cpus;
-use tokio_tcp::TcpStream;
 use tokio_timer::sleep;
 
 use crate::accept::{AcceptLoop, AcceptNotify, Command};
@@ -19,7 +17,7 @@ use crate::service_config::{ConfiguredService, ServiceConfig};
 use crate::services::{InternalServiceFactory, ServiceFactory, StreamNewService};
 use crate::signals::{Signal, Signals};
 use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
-use crate::{ssl, Io, ServerConfig, Token};
+use crate::{ssl, Token};
 
 /// Server builder
 pub struct ServerBuilder {
@@ -166,7 +164,6 @@ impl ServerBuilder {
     pub fn bind<F, U, N: AsRef<str>>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
         F: ServiceFactory,
-        F::NewService: NewService<ServerConfig, Request = Io<TcpStream>>,
         U: net::ToSocketAddrs,
     {
         let sockets = bind_addr(addr, self.backlog)?;
