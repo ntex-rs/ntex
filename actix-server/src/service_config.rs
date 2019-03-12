@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::{fmt, io, net};
 
-use actix_server_config::Io;
+use actix_server_config::{Io, ServerConfig};
 use actix_service::{IntoNewService, NewService};
 use futures::future::{join_all, Future};
 use log::error;
@@ -76,7 +76,7 @@ impl ServiceConfig {
 
 pub(super) struct ConfiguredService {
     rt: Box<ServiceRuntimeConfiguration>,
-    names: HashMap<Token, String>,
+    names: HashMap<Token, (String, net::SocketAddr)>,
     services: HashMap<String, Token>,
 }
 
@@ -89,15 +89,15 @@ impl ConfiguredService {
         }
     }
 
-    pub(super) fn stream(&mut self, token: Token, name: String) {
-        self.names.insert(token, name.clone());
+    pub(super) fn stream(&mut self, token: Token, name: String, addr: net::SocketAddr) {
+        self.names.insert(token, (name.clone(), addr));
         self.services.insert(name, token);
     }
 }
 
 impl InternalServiceFactory for ConfiguredService {
     fn name(&self, token: Token) -> &str {
-        &self.names[&token]
+        &self.names[&token].0
     }
 
     fn clone_factory(&self) -> Box<InternalServiceFactory> {
@@ -117,7 +117,8 @@ impl InternalServiceFactory for ConfiguredService {
         // construct services
         let mut fut = Vec::new();
         for (token, ns) in rt.services {
-            fut.push(ns.new_service(&()).map(move |service| (token, service)));
+            let config = ServerConfig::new(self.names[&token].1);
+            fut.push(ns.new_service(&config).map(move |service| (token, service)));
         }
 
         Box::new(join_all(fut).map_err(|e| {
@@ -172,8 +173,8 @@ impl ServiceRuntime {
 
     pub fn service<T, F>(&mut self, name: &str, service: F)
     where
-        F: IntoNewService<T>,
-        T: NewService<Request = Io<TcpStream>> + 'static,
+        F: IntoNewService<T, ServerConfig>,
+        T: NewService<ServerConfig, Request = Io<TcpStream>> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -183,7 +184,7 @@ impl ServiceRuntime {
             self.services.insert(
                 token.clone(),
                 Box::new(ServiceFactory {
-                    inner: service.into_new_service().map(|_| ()),
+                    inner: service.into_new_service(),
                 }),
             );
         } else {
@@ -194,6 +195,7 @@ impl ServiceRuntime {
 
 type BoxedNewService = Box<
     NewService<
+        ServerConfig,
         Request = (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
@@ -207,9 +209,9 @@ struct ServiceFactory<T> {
     inner: T,
 }
 
-impl<T> NewService for ServiceFactory<T>
+impl<T> NewService<ServerConfig> for ServiceFactory<T>
 where
-    T: NewService<Request = Io<TcpStream>, Response = ()>,
+    T: NewService<ServerConfig, Request = Io<TcpStream>>,
     T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,
@@ -222,8 +224,8 @@ where
     type Service = BoxedServerService;
     type Future = Box<Future<Item = BoxedServerService, Error = ()>>;
 
-    fn new_service(&self, _: &()) -> Self::Future {
-        Box::new(self.inner.new_service(&()).map_err(|_| ()).map(|s| {
+    fn new_service(&self, cfg: &ServerConfig) -> Self::Future {
+        Box::new(self.inner.new_service(cfg).map_err(|_| ()).map(|s| {
             let service: BoxedServerService = Box::new(StreamService::new(s));
             service
         }))

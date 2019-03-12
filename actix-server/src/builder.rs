@@ -150,7 +150,7 @@ impl ServerBuilder {
             let mut srv = ConfiguredService::new(apply);
             for (name, lst) in cfg.services {
                 let token = self.token.next();
-                srv.stream(token, name);
+                srv.stream(token, name, lst.local_addr()?);
                 self.sockets.push((token, lst));
             }
             self.services.push(Box::new(srv));
