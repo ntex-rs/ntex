@@ -98,19 +98,23 @@ where
 /// service's error.
 ///
 /// This is created by the `NewServiceExt::map_err` method.
-pub struct MapErrNewService<A, F, E, C> {
+pub struct MapErrNewService<A, F, E, C>
+where
+    A: NewService<C>,
+    F: Fn(A::Error) -> E + Clone,
+{
     a: A,
     f: F,
     e: PhantomData<(E, C)>,
 }
 
-impl<A, F, E, C> MapErrNewService<A, F, E, C> {
+impl<A, F, E, C> MapErrNewService<A, F, E, C>
+where
+    A: NewService<C>,
+    F: Fn(A::Error) -> E + Clone,
+{
     /// Create new `MapErr` new service instance
-    pub fn new(a: A, f: F) -> Self
-    where
-        A: NewService<C>,
-        F: Fn(A::Error) -> E,
-    {
+    pub fn new(a: A, f: F) -> Self {
         Self {
             a,
             f,
@@ -121,8 +125,8 @@ impl<A, F, E, C> MapErrNewService<A, F, E, C> {
 
 impl<A, F, E, C> Clone for MapErrNewService<A, F, E, C>
 where
-    A: Clone,
-    F: Clone,
+    A: NewService<C> + Clone,
+    F: Fn(A::Error) -> E + Clone,
 {
     fn clone(&self) -> Self {
         Self {

@@ -335,7 +335,7 @@ pub trait NewService<Config = ()> {
     fn map_err<F, E>(self, f: F) -> MapErrNewService<Self, F, E, Config>
     where
         Self: Sized,
-        F: Fn(Self::Error) -> E,
+        F: Fn(Self::Error) -> E + Clone,
     {
         MapErrNewService::new(self, f)
     }
