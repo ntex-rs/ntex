@@ -173,7 +173,7 @@ impl ServiceRuntime {
     pub fn service<T, F>(&mut self, name: &str, service: F)
     where
         F: IntoNewService<T>,
-        T: NewService<Request = Io<TcpStream>, Response = ()> + 'static,
+        T: NewService<Request = Io<TcpStream>> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -183,7 +183,7 @@ impl ServiceRuntime {
             self.services.insert(
                 token.clone(),
                 Box::new(ServiceFactory {
-                    inner: service.into_new_service(),
+                    inner: service.into_new_service().map(|_| ()),
                 }),
             );
         } else {
