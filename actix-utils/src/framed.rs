@@ -221,7 +221,7 @@ where
     fn poll_read(&mut self) -> bool {
         loop {
             match self.service.poll_ready() {
-                Ok(Async::Ready(_)) => loop {
+                Ok(Async::Ready(_)) => {
                     let item = match self.framed.poll() {
                         Ok(Async::Ready(Some(el))) => el,
                         Err(err) => {
@@ -244,7 +244,7 @@ where
                         inner.task.notify();
                         Ok(())
                     }));
-                },
+                }
                 Ok(Async::NotReady) => return false,
                 Err(err) => {
                     self.state = TransportState::Error(FramedTransportError::Service(err));
