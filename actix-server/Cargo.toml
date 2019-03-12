@@ -1,6 +1,6 @@
 [package]
 name = "actix-server"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix server - General purpose tcp server"
 keywords = ["network", "framework", "async", "futures"]
@@ -34,8 +34,8 @@ rust-tls = ["rustls", "tokio-rustls", "webpki", "webpki-roots"]
 
 [dependencies]
 actix-rt = "0.2.1"
-actix-service = "0.3.3"
-actix-server-config = { path="../actix-server-config" }
+actix-service = "0.3.4"
+actix-server-config = "0.1.0"
 
 log = "0.4"
 num_cpus = "1.0"

@@ -1,6 +1,12 @@
 # Changes
 
-## [0.4.0] - 2019-03-xx
+## [0.4.0] - 2019-03-12
+
+### Changed
+
+* Use `ServerConfig` for service factory
+
+* Wrap tcp socket to `Io` type
 
 * Upgrade actix-service
 
