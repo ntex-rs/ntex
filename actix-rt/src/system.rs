@@ -1,14 +1,18 @@
 use std::cell::RefCell;
 use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 
 use futures::sync::mpsc::UnboundedSender;
 
 use crate::arbiter::{Arbiter, SystemCommand};
 use crate::builder::{Builder, SystemRunner};
 
+static SYSTEM_COUNT: AtomicUsize = ATOMIC_USIZE_INIT;
+
 /// System is a runtime manager.
 #[derive(Clone, Debug)]
 pub struct System {
+    id: usize,
     sys: UnboundedSender<SystemCommand>,
     arbiter: Arbiter,
     stop_on_panic: bool,
@@ -29,6 +33,7 @@ impl System {
             sys,
             arbiter,
             stop_on_panic,
+            id: SYSTEM_COUNT.fetch_add(1, Ordering::SeqCst),
         };
         System::set_current(sys.clone());
         sys
@@ -80,6 +85,11 @@ impl System {
             Some(ref sys) => f(sys),
             None => panic!("System is not running"),
         })
+    }
+
+    /// System id
+    pub fn id(&self) -> usize {
+        self.id
     }
 
     /// Stop the system

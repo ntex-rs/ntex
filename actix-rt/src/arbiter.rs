@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{fmt, thread};
 
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::sync::oneshot::{channel, Sender};
+use futures::sync::oneshot::{channel, Canceled, Sender};
 use futures::{future, Async, Future, IntoFuture, Poll, Stream};
 use tokio_current_thread::spawn;
 
@@ -22,6 +22,7 @@ pub(crate) static COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) enum ArbiterCommand {
     Stop,
     Execute(Box<Future<Item = (), Error = ()> + Send>),
+    ExecuteFn(Box<FnExec>),
 }
 
 impl fmt::Debug for ArbiterCommand {
@@ -29,6 +30,7 @@ impl fmt::Debug for ArbiterCommand {
         match self {
             ArbiterCommand::Stop => write!(f, "ArbiterCommand::Stop"),
             ArbiterCommand::Execute(_) => write!(f, "ArbiterCommand::Execute"),
+            ArbiterCommand::ExecuteFn(_) => write!(f, "ArbiterCommand::ExecuteFn"),
         }
     }
 }
@@ -158,6 +160,35 @@ impl Arbiter {
             .0
             .unbounded_send(ArbiterCommand::Execute(Box::new(future)));
     }
+
+    /// Send a function to the arbiter's thread and exeute.
+    pub fn exec_fn<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let _ = self
+            .0
+            .unbounded_send(ArbiterCommand::ExecuteFn(Box::new(move || {
+                let _ = f();
+            })));
+    }
+
+    /// Send a function to the arbiter's thread, exeute and return result.
+    pub fn exec<F, R>(&self, f: F) -> impl Future<Item = R, Error = Canceled>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let (tx, rx) = channel();
+        let _ = self
+            .0
+            .unbounded_send(ArbiterCommand::ExecuteFn(Box::new(move || {
+                if !tx.is_canceled() {
+                    let _ = tx.send(f());
+                }
+            })));
+        rx
+    }
 }
 
 struct ArbiterController {
@@ -193,6 +224,9 @@ impl Future for ArbiterController {
                     }
                     ArbiterCommand::Execute(fut) => {
                         spawn(fut);
+                    }
+                    ArbiterCommand::ExecuteFn(f) => {
+                        f.call_box();
                     }
                 },
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
@@ -257,11 +291,16 @@ impl Future for SystemArbiter {
     }
 }
 
-// /// Execute function in arbiter's thread
-// impl<I: Send, E: Send> Handler<Execute<I, E>> for SystemArbiter {
-//     type Result = Result<I, E>;
+pub trait FnExec: Send + 'static {
+    fn call_box(self: Box<Self>);
+}
 
-//     fn handle(&mut self, msg: Execute<I, E>, _: &mut Context<Self>) -> Result<I, E> {
-//         msg.exec()
-//     }
-// }
+impl<F> FnExec for F
+where
+    F: FnOnce() + Send + 'static,
+{
+    #[cfg_attr(feature = "cargo-clippy", allow(boxed_local))]
+    fn call_box(self: Box<Self>) {
+        (*self)()
+    }
+}
