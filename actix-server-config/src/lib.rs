@@ -111,6 +111,20 @@ impl<T, P> Io<T, P> {
     }
 }
 
+impl<T, P> std::ops::Deref for Io<T, P> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.io
+    }
+}
+
+impl<T, P> std::ops::DerefMut for Io<T, P> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.io
+    }
+}
+
 impl<T: fmt::Debug, P> fmt::Debug for Io<T, P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Io {{{:?}}}", self.io)
