@@ -1,6 +1,7 @@
 //! A runtime implementation that runs everything on the current thread.
 
 mod arbiter;
+pub mod blocking;
 mod builder;
 mod runtime;
 mod system;

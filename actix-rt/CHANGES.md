@@ -4,10 +4,11 @@
 
 ### Added
 
+* Added `blocking` module
+
 * Arbiter::exec_fn - execute fn on the arbiter's thread
 
 * Arbiter::exec - execute fn on the arbiter's thread and wait result
-
 
 ## [0.2.0] - 2019-03-06
 
