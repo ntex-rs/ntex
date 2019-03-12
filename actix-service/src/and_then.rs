@@ -107,19 +107,23 @@ where
 }
 
 /// `AndThenNewService` new service combinator
-pub struct AndThenNewService<A, B, C> {
+pub struct AndThenNewService<A, B, C>
+where
+    A: NewService<C>,
+    B: NewService<C, Request = A::Response, Error = A::Error, InitError = A::InitError>,
+{
     a: A,
     b: B,
     _t: PhantomData<C>,
 }
 
-impl<A, B, C> AndThenNewService<A, B, C> {
+impl<A, B, C> AndThenNewService<A, B, C>
+where
+    A: NewService<C>,
+    B: NewService<C, Request = A::Response, Error = A::Error, InitError = A::InitError>,
+{
     /// Create new `AndThen` combinator
-    pub fn new<F: IntoNewService<B, C>>(a: A, f: F) -> Self
-    where
-        A: NewService<C>,
-        B: NewService<C, Request = A::Response, Error = A::Error, InitError = A::InitError>,
-    {
+    pub fn new<F: IntoNewService<B, C>>(a: A, f: F) -> Self {
         Self {
             a,
             b: f.into_new_service(),
@@ -148,8 +152,8 @@ where
 
 impl<A, B, C> Clone for AndThenNewService<A, B, C>
 where
-    A: Clone,
-    B: Clone,
+    A: NewService<C> + Clone,
+    B: NewService<C, Request = A::Response, Error = A::Error, InitError = A::InitError> + Clone,
 {
     fn clone(&self) -> Self {
         Self {
