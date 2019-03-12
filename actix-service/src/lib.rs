@@ -40,7 +40,8 @@ pub use self::and_then::{AndThen, AndThenNewService};
 use self::and_then_apply::AndThenTransform;
 use self::and_then_apply_fn::{AndThenApply, AndThenApplyNewService};
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::apply_cfg::ApplyConfig;
+pub use self::apply_cfg::apply_cfg;
+use self::apply_cfg::ApplyConfig;
 pub use self::fn_service::{fn_cfg_factory, fn_factory, fn_service, FnService};
 pub use self::fn_transform::fn_transform;
 pub use self::from_err::{FromErr, FromErrNewService};
@@ -257,19 +258,23 @@ pub trait NewService<Config = ()> {
 
     /// Map this service's config type to a different config,
     /// and use for nested service
-    fn apply_cfg<F, C, B, B1>(self, service: B1, f: F) -> ApplyConfig<F, Self, B, Config, C>
+    fn apply_cfg<F, C, S, U>(
+        self,
+        service: U,
+        f: F,
+    ) -> AndThenNewService<Self, ApplyConfig<F, S, Config, C>, Config>
     where
         Self: Sized,
         F: Fn(&Config) -> C,
-        B1: IntoNewService<B, C>,
-        B: NewService<
+        U: IntoNewService<S, C>,
+        S: NewService<
             C,
             Request = Self::Response,
             Error = Self::Error,
             InitError = Self::InitError,
         >,
     {
-        ApplyConfig::new(self, service, f)
+        self.and_then(ApplyConfig::new(service, f))
     }
 
     /// Call another service after call to this one has resolved successfully.

@@ -6,9 +6,13 @@
 
 * Add `Transform::from_err()` combinator
 
-* Add `apply_fn` and `apply_fn_factory` helpers
+* Add `apply_fn` helper
+
+* Add `apply_fn_factory` helper
 
 * Add `apply_transform` helper
+
+* Add `apply_cfg` helper
 
 
 ## [0.3.3] - 2019-03-09
