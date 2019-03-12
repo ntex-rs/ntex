@@ -1,4 +1,4 @@
-use actix_service::{Service, Transform, Void};
+use actix_service::{IntoService, Service, Transform, Void};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 
@@ -42,11 +42,17 @@ pub struct InFlightService<S> {
     service: S,
 }
 
-impl<S> InFlightService<S> {
-    pub fn new(max: usize, service: S) -> Self {
+impl<S> InFlightService<S>
+where
+    S: Service,
+{
+    pub fn new<U>(max: usize, service: U) -> Self
+    where
+        U: IntoService<S>,
+    {
         Self {
-            service,
             count: Counter::new(max),
+            service: service.into_service(),
         }
     }
 }

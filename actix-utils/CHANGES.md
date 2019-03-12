@@ -1,5 +1,11 @@
 # Changes
 
+## [0.3.4] - 2019-03-12
+
+### Changed
+
+* `TimeoutService`, `InOrderService`, `InFlightService` accepts generic IntoService services.
+
 ## [0.3.3] - 2019-03-09
 
 ### Changed

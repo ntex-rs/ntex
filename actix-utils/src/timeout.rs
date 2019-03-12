@@ -6,7 +6,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use actix_service::{Service, Transform};
+use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 use tokio_timer::{clock, Delay};
@@ -106,9 +106,18 @@ pub struct TimeoutService<S> {
     timeout: Duration,
 }
 
-impl<S> TimeoutService<S> {
-    pub fn new(timeout: Duration, service: S) -> Self {
-        TimeoutService { service, timeout }
+impl<S> TimeoutService<S>
+where
+    S: Service,
+{
+    pub fn new<U>(timeout: Duration, service: U) -> Self
+    where
+        U: IntoService<S>,
+    {
+        TimeoutService {
+            timeout,
+            service: service.into_service(),
+        }
     }
 }
 

@@ -3,7 +3,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use actix_service::{Service, Transform, Void};
+use actix_service::{IntoService, Service, Transform, Void};
 use futures::future::{ok, FutureResult};
 use futures::task::AtomicTask;
 use futures::unsync::oneshot;
@@ -112,9 +112,12 @@ where
     S::Future: 'static,
     S::Error: 'static,
 {
-    pub fn new(service: S) -> Self {
+    pub fn new<U>(service: U) -> Self
+    where
+        U: IntoService<S>,
+    {
         Self {
-            service,
+            service: service.into_service(),
             acks: VecDeque::new(),
             task: Rc::new(AtomicTask::new()),
         }
