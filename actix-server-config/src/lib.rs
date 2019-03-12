@@ -89,6 +89,15 @@ impl<T, P> Io<T, P> {
         self.proto
     }
 
+    /// Return new Io object with new parameter.
+    pub fn set<U>(self, params: U) -> Io<T, U> {
+        Io {
+            io: self.io,
+            proto: self.proto,
+            params: params,
+        }
+    }
+
     /// Maps an Io<_, P> to Io<_, U> by applying a function to a contained value.
     pub fn map<U, F>(self, op: F) -> Io<T, U>
     where
