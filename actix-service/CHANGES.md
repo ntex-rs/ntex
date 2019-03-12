@@ -1,5 +1,16 @@
 # Changes
 
+## [0.3.4] - 2019-03-12
+
+### Added
+
+* Add `Transform::from_err()` combinator
+
+* Add `apply_fn` and `apply_fn_factory` helpers
+
+* Add `apply_transform` helper
+
+
 ## [0.3.3] - 2019-03-09
 
 ### Added

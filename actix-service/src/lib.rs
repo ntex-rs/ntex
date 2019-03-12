@@ -21,21 +21,34 @@ mod map_err;
 mod map_init_err;
 mod then;
 mod transform;
-mod transform_map_init_err;
+mod transform_err;
+
+#[doc(hidden)]
+#[deprecated(since = "0.3.4", note = "please use `apply_fn` instead")]
+pub use self::apply::Apply;
+#[doc(hidden)]
+#[deprecated(since = "0.3.4", note = "please use `apply_fn_factory` instead")]
+pub use self::apply::ApplyNewService;
+#[doc(hidden)]
+#[deprecated(since = "0.3.4", note = "please use `fn_transform` instead")]
+pub use self::fn_transform::FnTransform;
+#[doc(hidden)]
+#[deprecated(since = "0.3.4", note = "please use `apply_transform` instead")]
+pub use self::transform::ApplyTransform;
 
 pub use self::and_then::{AndThen, AndThenNewService};
 use self::and_then_apply::AndThenTransform;
 use self::and_then_apply_fn::{AndThenApply, AndThenApplyNewService};
-pub use self::apply::{Apply, ApplyNewService};
+pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::apply_cfg::ApplyConfig;
 pub use self::fn_service::{fn_cfg_factory, fn_factory, fn_service, FnService};
-pub use self::fn_transform::FnTransform;
+pub use self::fn_transform::fn_transform;
 pub use self::from_err::{FromErr, FromErrNewService};
 pub use self::map::{Map, MapNewService};
 pub use self::map_err::{MapErr, MapErrNewService};
 pub use self::map_init_err::MapInitErr;
 pub use self::then::{Then, ThenNewService};
-pub use self::transform::{ApplyTransform, IntoTransform, Transform};
+pub use self::transform::{apply_transform, IntoTransform, Transform};
 
 /// An asynchronous function from `Request` to a `Response`.
 pub trait Service {

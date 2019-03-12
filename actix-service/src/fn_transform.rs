@@ -5,6 +5,19 @@ use futures::IntoFuture;
 
 use crate::{Apply, IntoTransform, Service, Transform};
 
+/// Use function as transform service
+pub fn fn_transform<F, S, In, Out, Err>(
+    f: F,
+) -> impl Transform<S, Request = In, Response = Out::Item, Error = Out::Error, InitError = Err>
+where
+    S: Service,
+    F: FnMut(In, &mut S) -> Out + Clone,
+    Out: IntoFuture,
+    Out::Error: From<S::Error>,
+{
+    FnTransform::new(f)
+}
+
 pub struct FnTransform<F, S, In, Out, Err>
 where
     F: FnMut(In, &mut S) -> Out + Clone,

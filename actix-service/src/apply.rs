@@ -4,6 +4,34 @@ use futures::{Async, Future, IntoFuture, Poll};
 
 use super::{IntoNewService, IntoService, NewService, Service};
 
+/// Apply tranform function to a service
+pub fn apply_fn<T, F, In, Out, U>(service: U, f: F) -> Apply<T, F, In, Out>
+where
+    T: Service,
+    F: FnMut(In, &mut T) -> Out,
+    Out: IntoFuture,
+    Out::Error: From<T::Error>,
+    U: IntoService<T>,
+{
+    Apply::new(service.into_service(), f)
+}
+
+/// Create fractory for `apply_fn` service.
+pub fn apply_fn_factory<T, F, In, Out, Cfg, U>(
+    service: U,
+    f: F,
+) -> ApplyNewService<T, F, In, Out, Cfg>
+where
+    T: NewService<Cfg>,
+    F: FnMut(In, &mut T::Service) -> Out + Clone,
+    Out: IntoFuture,
+    Out::Error: From<T::Error>,
+    U: IntoNewService<T, Cfg>,
+{
+    ApplyNewService::new(service.into_new_service(), f)
+}
+
+#[doc(hidden)]
 /// `Apply` service combinator
 pub struct Apply<T, F, In, Out>
 where

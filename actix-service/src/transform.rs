@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use futures::{Async, Future, IntoFuture, Poll};
 
-use crate::transform_map_init_err::TransformMapInitErr;
-use crate::{NewService, Service};
+use crate::transform_err::{TransformFromErr, TransformMapInitErr};
+use crate::{IntoNewService, NewService, Service};
 
 /// `Transform` service factory.
 ///
@@ -36,7 +36,7 @@ pub trait Transform<S> {
     /// Create and return a new service value asynchronously.
     fn new_transform(&self, service: S) -> Self::Future;
 
-    /// Map this service's factory init error to a different error,
+    /// Map this service's factory error to a different error,
     /// returning a new transform service factory.
     fn map_init_err<F, E>(self, f: F) -> TransformMapInitErr<Self, S, F, E>
     where
@@ -45,6 +45,32 @@ pub trait Transform<S> {
     {
         TransformMapInitErr::new(self, f)
     }
+
+    /// Map this service's init error to any error implementing `From` for
+    /// this service`s `Error`.
+    ///
+    /// Note that this function consumes the receiving transform and returns a
+    /// wrapped version of it.
+    fn from_err<E>(self) -> TransformFromErr<Self, S, E>
+    where
+        Self: Sized,
+        E: From<Self::InitError>,
+    {
+        TransformFromErr::new(self)
+    }
+
+    // /// Map this service's init error to service's init error
+    // /// if it is implementing `Into` to this service`s `InitError`.
+    // ///
+    // /// Note that this function consumes the receiving transform and returns a
+    // /// wrapped version of it.
+    // fn into_err<E>(self) -> TransformIntoErr<Self, S>
+    // where
+    //     Self: Sized,
+    //     Self::InitError: From<Self::InitError>,
+    // {
+    //     TransformFromErr::new(self)
+    // }
 }
 
 impl<T, S> Transform<S> for Rc<T>
@@ -97,33 +123,65 @@ where
     }
 }
 
-/// `Apply` transform new service
-#[derive(Clone)]
-pub struct ApplyTransform<T, A, C> {
-    a: A,
+/// Apply transform to service factory. Function returns
+/// services factory that in initialization creates
+/// service and applies transform to this service.
+pub fn apply_transform<T, S, C, F, U>(
+    t: F,
+    service: U,
+) -> impl NewService<
+    C,
+    Request = T::Request,
+    Response = T::Response,
+    Error = T::Error,
+    Service = T::Transform,
+    InitError = S::InitError,
+> + Clone
+where
+    S: NewService<C>,
+    T: Transform<S::Service, InitError = S::InitError>,
+    F: IntoTransform<T, S::Service>,
+    U: IntoNewService<S, C>,
+{
+    ApplyTransform::new(t.into_transform(), service.into_new_service())
+}
+
+/// `Apply` transform to new service
+pub struct ApplyTransform<T, S, C> {
+    s: Rc<S>,
     t: Rc<T>,
     _t: std::marker::PhantomData<C>,
 }
 
-impl<T, A, C> ApplyTransform<T, A, C>
+impl<T, S, C> ApplyTransform<T, S, C>
 where
-    A: NewService<C>,
-    T: Transform<A::Service, Error = A::Error, InitError = A::InitError>,
+    S: NewService<C>,
+    T: Transform<S::Service, InitError = S::InitError>,
 {
-    /// Create new `ApplyNewService` new service instance
-    pub fn new<F: IntoTransform<T, A::Service>>(t: F, a: A) -> Self {
+    /// Create new `ApplyTransform` new service instance
+    pub fn new<F: IntoTransform<T, S::Service>>(t: F, service: S) -> Self {
         Self {
-            a,
+            s: Rc::new(service),
             t: Rc::new(t.into_transform()),
             _t: std::marker::PhantomData,
         }
     }
 }
 
-impl<T, A, C> NewService<C> for ApplyTransform<T, A, C>
+impl<T, S, C> Clone for ApplyTransform<T, S, C> {
+    fn clone(&self) -> Self {
+        ApplyTransform {
+            s: self.s.clone(),
+            t: self.t.clone(),
+            _t: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T, S, C> NewService<C> for ApplyTransform<T, S, C>
 where
-    A: NewService<C>,
-    T: Transform<A::Service, Error = A::Error, InitError = A::InitError>,
+    S: NewService<C>,
+    T: Transform<S::Service, InitError = S::InitError>,
 {
     type Request = T::Request;
     type Response = T::Response;
@@ -131,31 +189,31 @@ where
 
     type Service = T::Transform;
     type InitError = T::InitError;
-    type Future = ApplyTransformFuture<T, A, C>;
+    type Future = ApplyTransformFuture<T, S, C>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         ApplyTransformFuture {
             t_cell: self.t.clone(),
-            fut_a: self.a.new_service(cfg).into_future(),
+            fut_a: self.s.new_service(cfg).into_future(),
             fut_t: None,
         }
     }
 }
 
-pub struct ApplyTransformFuture<T, A, C>
+pub struct ApplyTransformFuture<T, S, C>
 where
-    A: NewService<C>,
-    T: Transform<A::Service, Error = A::Error, InitError = A::InitError>,
+    S: NewService<C>,
+    T: Transform<S::Service, InitError = S::InitError>,
 {
-    fut_a: A::Future,
+    fut_a: S::Future,
     fut_t: Option<<T::Future as IntoFuture>::Future>,
     t_cell: Rc<T>,
 }
 
-impl<T, A, C> Future for ApplyTransformFuture<T, A, C>
+impl<T, S, C> Future for ApplyTransformFuture<T, S, C>
 where
-    A: NewService<C>,
-    T: Transform<A::Service, Error = A::Error, InitError = A::InitError>,
+    S: NewService<C>,
+    T: Transform<S::Service, InitError = S::InitError>,
 {
     type Item = T::Transform;
     type Error = T::InitError;
