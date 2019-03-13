@@ -54,9 +54,9 @@ impl Connect<(&'static str, u16)> {
 
 impl Connect<(String, u16)> {
     /// Create new `Connect` instance.
-    pub fn new<T: AsRef<str>>(host: T, port: u16) -> Connect<(String, u16)> {
+    pub fn new(host: String, port: u16) -> Connect<(String, u16)> {
         Connect {
-            req: (host.as_ref().to_owned(), port),
+            req: (host, port),
             addr: None,
         }
     }
