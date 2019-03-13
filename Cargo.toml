@@ -16,7 +16,7 @@ edition = "2018"
 [workspace]
 members = [
   "actix-codec",
-  "actix-connector",
+  "actix-connect",
   "actix-rt",
   "actix-service",
   "actix-server",
