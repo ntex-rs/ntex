@@ -37,7 +37,7 @@ script:
     cd actix-service && cargo test && cd ..
     cd actix-server && cargo test --all-features -- --nocapture && cd ..
     cd actix-rt && cargo test && cd ..
-    cd actix-connector && cargo test && cd ..
+    cd actix-connect && cargo test && cd ..
     cd actix-utils && cargo test && cd ..
     cd router && cargo test && cd ..
     fi
@@ -49,7 +49,7 @@ script:
     echo "Uploaded code coverage"
     cd actix-service && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
     cd actix-rt && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
-    cd actix-connector && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
+    cd actix-connect && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
     cd actix-codec && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
     cd actix-server && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
     cd actix-utils && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
