@@ -86,7 +86,7 @@ impl Connect<()> {
 
 impl<T: Address> Connect<T> {
     /// Create new `Connect` instance.
-    pub fn with_request(req: T) -> Connect<T> {
+    pub fn with(req: T) -> Connect<T> {
         Connect { req, addr: None }
     }
 
