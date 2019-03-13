@@ -1,32 +1,72 @@
 use std::collections::VecDeque;
-use std::marker::PhantomData;
-use std::net::IpAddr;
+use std::net::SocketAddr;
 
-use actix_service::Service;
+use actix_service::{NewService, Service};
+use futures::future::{ok, Either, FutureResult};
 use futures::{Async, Future, Poll};
 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
-pub use trust_dns_resolver::error::ResolveError;
 use trust_dns_resolver::lookup_ip::LookupIpFuture;
 use trust_dns_resolver::system_conf::read_system_conf;
 use trust_dns_resolver::{AsyncResolver, Background};
 
-/// Host name of the request
-pub trait RequestHost {
-    fn host(&self) -> &str;
+use crate::connect::Connect;
+use crate::error::ConnectError;
+
+/// DNS Resolver Service factory
+pub struct ResolverFactory {
+    resolver: AsyncResolver,
 }
 
-impl RequestHost for String {
-    fn host(&self) -> &str {
-        self.as_ref()
+impl Default for ResolverFactory {
+    fn default() -> Self {
+        let (cfg, opts) = if let Ok((cfg, opts)) = read_system_conf() {
+            (cfg, opts)
+        } else {
+            (ResolverConfig::default(), ResolverOpts::default())
+        };
+
+        ResolverFactory::new(cfg, opts)
     }
 }
 
-pub struct Resolver<T = String> {
-    resolver: AsyncResolver,
-    req: PhantomData<T>,
+impl ResolverFactory {
+    /// Create new resolver instance with custom configuration and options.
+    pub fn new(cfg: ResolverConfig, opts: ResolverOpts) -> Self {
+        let (resolver, bg) = AsyncResolver::new(cfg, opts);
+        tokio_current_thread::spawn(bg);
+        ResolverFactory { resolver }
+    }
 }
 
-impl<T: RequestHost> Default for Resolver<T> {
+impl Clone for ResolverFactory {
+    fn clone(&self) -> Self {
+        ResolverFactory {
+            resolver: self.resolver.clone(),
+        }
+    }
+}
+
+impl NewService for ResolverFactory {
+    type Request = Connect;
+    type Response = Connect;
+    type Error = ConnectError;
+    type Service = Resolver;
+    type InitError = ();
+    type Future = FutureResult<Self::Service, Self::InitError>;
+
+    fn new_service(&self, _: &()) -> Self::Future {
+        ok(Resolver {
+            resolver: self.resolver.clone(),
+        })
+    }
+}
+
+/// DNS Resolver Service
+pub struct Resolver {
+    resolver: AsyncResolver,
+}
+
+impl Default for Resolver {
     fn default() -> Self {
         let (cfg, opts) = if let Ok((cfg, opts)) = read_system_conf() {
             (cfg, opts)
@@ -38,91 +78,101 @@ impl<T: RequestHost> Default for Resolver<T> {
     }
 }
 
-impl<T: RequestHost> Resolver<T> {
+impl Resolver {
     /// Create new resolver instance with custom configuration and options.
     pub fn new(cfg: ResolverConfig, opts: ResolverOpts) -> Self {
         let (resolver, bg) = AsyncResolver::new(cfg, opts);
         tokio_current_thread::spawn(bg);
-        Resolver {
-            resolver,
-            req: PhantomData,
-        }
-    }
-
-    /// Change type of resolver request.
-    pub fn into_request<T2: RequestHost>(&self) -> Resolver<T2> {
-        Resolver {
-            resolver: self.resolver.clone(),
-            req: PhantomData,
-        }
+        Resolver { resolver }
     }
 }
 
-impl<T> Clone for Resolver<T> {
+impl Clone for Resolver {
     fn clone(&self) -> Self {
         Resolver {
             resolver: self.resolver.clone(),
-            req: PhantomData,
         }
     }
 }
 
-impl<T: RequestHost> Service for Resolver<T> {
-    type Request = T;
-    type Response = (T, VecDeque<IpAddr>);
-    type Error = ResolveError;
-    type Future = ResolverFuture<T>;
+impl Service for Resolver {
+    type Request = Connect;
+    type Response = Connect;
+    type Error = ConnectError;
+    type Future = Either<ResolverFuture, FutureResult<Connect, Self::Error>>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: T) -> Self::Future {
-        if let Ok(ip) = req.host().parse() {
-            let mut addrs = VecDeque::new();
-            addrs.push_back(ip);
-            ResolverFuture::new(req, &self.resolver, Some(addrs))
-        } else {
-            ResolverFuture::new(req, &self.resolver, None)
+    fn call(&mut self, req: Connect) -> Self::Future {
+        match req {
+            Connect::Host { host, port } => {
+                if let Ok(ip) = host.parse() {
+                    Either::B(ok(Connect::Addr {
+                        host: host,
+                        addr: either::Either::Left(SocketAddr::new(ip, port)),
+                    }))
+                } else {
+                    trace!("DNS resolver: resolving host {:?}", host);
+                    Either::A(ResolverFuture::new(host, port, &self.resolver))
+                }
+            }
+            other => Either::B(ok(other)),
         }
     }
 }
 
 #[doc(hidden)]
 /// Resolver future
-pub struct ResolverFuture<T> {
-    req: Option<T>,
+pub struct ResolverFuture {
+    host: Option<String>,
+    port: u16,
     lookup: Option<Background<LookupIpFuture>>,
-    addrs: Option<VecDeque<IpAddr>>,
 }
 
-impl<T: RequestHost> ResolverFuture<T> {
-    pub fn new(addr: T, resolver: &AsyncResolver, addrs: Option<VecDeque<IpAddr>>) -> Self {
-        // we need to do dns resolution
-        let lookup = Some(resolver.lookup_ip(addr.host()));
+impl ResolverFuture {
+    pub fn new(host: String, port: u16, resolver: &AsyncResolver) -> Self {
         ResolverFuture {
-            lookup,
-            addrs,
-            req: Some(addr),
+            lookup: Some(resolver.lookup_ip(host.as_str())),
+            host: Some(host),
+            port,
         }
     }
 }
 
-impl<T: RequestHost> Future for ResolverFuture<T> {
-    type Item = (T, VecDeque<IpAddr>);
-    type Error = ResolveError;
+impl Future for ResolverFuture {
+    type Item = Connect;
+    type Error = ConnectError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Some(addrs) = self.addrs.take() {
-            Ok(Async::Ready((self.req.take().unwrap(), addrs)))
-        } else {
-            match self.lookup.as_mut().unwrap().poll() {
-                Ok(Async::NotReady) => Ok(Async::NotReady),
-                Ok(Async::Ready(ips)) => Ok(Async::Ready((
-                    self.req.take().unwrap(),
-                    ips.iter().collect(),
-                ))),
-                Err(err) => Err(err),
+        match self.lookup.as_mut().unwrap().poll().map_err(|e| {
+            trace!(
+                "DNS resolver: failed to resolve host {:?} err: {}",
+                self.host.as_ref().unwrap(),
+                e
+            );
+            e
+        })? {
+            Async::NotReady => Ok(Async::NotReady),
+            Async::Ready(ips) => {
+                let host = self.host.take().unwrap();
+                let mut addrs: VecDeque<_> = ips
+                    .iter()
+                    .map(|ip| SocketAddr::new(ip, self.port))
+                    .collect();
+                trace!("DNS resolver: host {:?} resolved to {:?}", host, addrs);
+                if addrs.len() == 1 {
+                    Ok(Async::Ready(Connect::Addr {
+                        addr: either::Either::Left(addrs.pop_front().unwrap()),
+                        host,
+                    }))
+                } else {
+                    Ok(Async::Ready(Connect::Addr {
+                        addr: either::Either::Right(addrs),
+                        host,
+                    }))
+                }
             }
         }
     }
