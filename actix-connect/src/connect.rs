@@ -7,154 +7,161 @@ use either::Either;
 use crate::error::ConnectError;
 
 /// Connect request
-#[derive(Eq, PartialEq, Debug, Hash)]
-pub enum Connect {
-    /// Host name
-    Host { host: String, port: u16 },
-    /// Host name with address of this host
-    Addr {
-        host: String,
-        addr: Either<SocketAddr, VecDeque<SocketAddr>>,
-    },
+pub trait Address {
+    /// Host name of the request
+    fn host(&self) -> &str;
+
+    /// Port of the request
+    fn port(&self) -> u16;
 }
 
-impl Connect {
+impl Address for (String, u16) {
+    fn host(&self) -> &str {
+        &self.0
+    }
+
+    fn port(&self) -> u16 {
+        self.1
+    }
+}
+
+impl Address for (&'static str, u16) {
+    fn host(&self) -> &str {
+        self.0
+    }
+
+    fn port(&self) -> u16 {
+        self.1
+    }
+}
+
+/// Connect request
+#[derive(Eq, PartialEq, Debug, Hash)]
+pub struct Connect<T> {
+    pub(crate) req: T,
+    pub(crate) addr: Option<Either<SocketAddr, VecDeque<SocketAddr>>>,
+}
+
+impl Connect<(&'static str, u16)> {
     /// Create new `Connect` instance.
-    pub fn new<T: AsRef<str>>(host: T, port: u16) -> Connect {
-        Connect::Host {
-            host: host.as_ref().to_owned(),
-            port,
+    pub fn new(host: &'static str, port: u16) -> Connect<(&'static str, u16)> {
+        Connect {
+            req: (host, port),
+            addr: None,
+        }
+    }
+}
+
+impl Connect<(String, u16)> {
+    /// Create new `Connect` instance.
+    pub fn new<T: AsRef<str>>(host: T, port: u16) -> Connect<(String, u16)> {
+        Connect {
+            req: (host.as_ref().to_owned(), port),
+            addr: None,
         }
     }
 
     /// Create `Connect` instance by spliting the string by ':' and convert the second part to u16
-    pub fn with<T: AsRef<str>>(host: T) -> Result<Connect, ConnectError> {
+    pub fn with<T: AsRef<str>>(host: T) -> Result<Connect<(String, u16)>, ConnectError> {
         let mut parts_iter = host.as_ref().splitn(2, ':');
         let host = parts_iter.next().ok_or(ConnectError::InvalidInput)?;
         let port_str = parts_iter.next().unwrap_or("");
         let port = port_str
             .parse::<u16>()
             .map_err(|_| ConnectError::InvalidInput)?;
-        Ok(Connect::Host {
-            host: host.to_owned(),
-            port,
+        Ok(Connect {
+            req: (host.to_owned(), port),
+            addr: None,
         })
     }
+}
 
+impl<T: Address> Connect<T> {
     /// Create new `Connect` instance from host and address. Connector skips name resolution stage for such connect messages.
-    pub fn with_address<T: Into<String>>(host: T, addr: SocketAddr) -> Connect {
-        Connect::Addr {
-            addr: Either::Left(addr),
-            host: host.into(),
+    pub fn with_address(req: T, addr: SocketAddr) -> Connect<T> {
+        Connect {
+            req,
+            addr: Some(Either::Left(addr)),
         }
     }
 
     /// Host name
-    fn host(&self) -> &str {
-        match self {
-            Connect::Host { ref host, .. } => host,
-            Connect::Addr { ref host, .. } => host,
-        }
+    pub fn host(&self) -> &str {
+        self.req.host()
+    }
+
+    /// Port of the request
+    pub fn port(&self) -> u16 {
+        self.req.port()
     }
 }
 
-impl fmt::Display for Connect {
+impl<T: Address> fmt::Display for Connect<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}:{}", self.host(), 0)
+        write!(f, "{}:{}", self.host(), self.port())
     }
 }
 
-pub struct Stream<T, P = ()> {
-    io: T,
-    host: String,
-    params: P,
+pub struct Connection<T, U> {
+    io: U,
+    req: T,
 }
 
-impl<T> Stream<T, ()> {
-    pub fn new(io: T, host: String) -> Self {
-        Self {
-            io,
-            host,
-            params: (),
-        }
+impl<T, U> Connection<T, U> {
+    pub fn new(io: U, req: T) -> Self {
+        Self { io, req }
     }
 }
 
-impl<T, P> Stream<T, P> {
+impl<T, U> Connection<T, U> {
     /// Reconstruct from a parts.
-    pub fn from_parts(io: T, host: String, params: P) -> Self {
-        Self { io, params, host }
+    pub fn from_parts(io: U, req: T) -> Self {
+        Self { io, req }
     }
 
     /// Deconstruct into a parts.
-    pub fn into_parts(self) -> (T, String, P) {
-        (self.io, self.host, self.params)
+    pub fn into_parts(self) -> (U, T) {
+        (self.io, self.req)
     }
 
     /// Replace inclosed object, return new Stream and old object
-    pub fn replace<U>(self, io: U) -> (T, Stream<U, P>) {
-        (
-            self.io,
-            Stream {
-                io,
-                host: self.host,
-                params: self.params,
-            },
-        )
+    pub fn replace<Y>(self, io: Y) -> (U, Connection<T, Y>) {
+        (self.io, Connection { io, req: self.req })
     }
 
     /// Returns a shared reference to the underlying stream.
-    pub fn get_ref(&self) -> &T {
+    pub fn get_ref(&self) -> &U {
         &self.io
     }
 
     /// Returns a mutable reference to the underlying stream.
-    pub fn get_mut(&mut self) -> &mut T {
+    pub fn get_mut(&mut self) -> &mut U {
         &mut self.io
-    }
-
-    /// Get host name
-    pub fn host(&self) -> &str {
-        &self.host
-    }
-
-    /// Return new Io object with new parameter.
-    pub fn set<U>(self, params: U) -> Stream<T, U> {
-        Stream {
-            io: self.io,
-            host: self.host,
-            params: params,
-        }
-    }
-
-    /// Maps an Io<_, P> to Io<_, U> by applying a function to a contained value.
-    pub fn map<U, F>(self, op: F) -> Stream<T, U>
-    where
-        F: FnOnce(P) -> U,
-    {
-        Stream {
-            io: self.io,
-            host: self.host,
-            params: op(self.params),
-        }
     }
 }
 
-impl<T, P> std::ops::Deref for Stream<T, P> {
-    type Target = T;
+impl<T: Address, U> Connection<T, U> {
+    /// Get request
+    pub fn host(&self) -> &str {
+        &self.req.host()
+    }
+}
 
-    fn deref(&self) -> &T {
+impl<T, U> std::ops::Deref for Connection<T, U> {
+    type Target = U;
+
+    fn deref(&self) -> &U {
         &self.io
     }
 }
 
-impl<T, P> std::ops::DerefMut for Stream<T, P> {
-    fn deref_mut(&mut self) -> &mut T {
+impl<T, U> std::ops::DerefMut for Connection<T, U> {
+    fn deref_mut(&mut self) -> &mut U {
         &mut self.io
     }
 }
 
-impl<T: fmt::Debug, P> fmt::Debug for Stream<T, P> {
+impl<T, U: fmt::Debug> fmt::Debug for Connection<T, U> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Stream {{{:?}}}", self.io)
     }

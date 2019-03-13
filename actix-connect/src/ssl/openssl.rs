@@ -7,15 +7,15 @@ use futures::{future::ok, future::FutureResult, Async, Future, Poll};
 use openssl::ssl::{HandshakeError, SslConnector};
 use tokio_openssl::{ConnectAsync, SslConnectorExt, SslStream};
 
-use crate::Stream;
+use crate::{Address, Connection};
 
 /// Openssl connector factory
-pub struct OpensslConnector<T, P, E> {
+pub struct OpensslConnector<T, U, E> {
     connector: SslConnector,
-    _t: PhantomData<(T, P, E)>,
+    _t: PhantomData<(T, U, E)>,
 }
 
-impl<T, P, E> OpensslConnector<T, P, E> {
+impl<T, U, E> OpensslConnector<T, U, E> {
     pub fn new(connector: SslConnector) -> Self {
         OpensslConnector {
             connector,
@@ -24,13 +24,17 @@ impl<T, P, E> OpensslConnector<T, P, E> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + fmt::Debug, P> OpensslConnector<T, P, ()> {
+impl<T, U, E> OpensslConnector<T, U, E>
+where
+    T: Address,
+    U: AsyncRead + AsyncWrite + fmt::Debug,
+{
     pub fn service(
         connector: SslConnector,
     ) -> impl Service<
-        Request = Stream<T, P>,
-        Response = Stream<SslStream<T>, P>,
-        Error = HandshakeError<T>,
+        Request = Connection<T, U>,
+        Response = Connection<T, SslStream<U>>,
+        Error = HandshakeError<U>,
     > {
         OpensslConnectorService {
             connector: connector,
@@ -39,7 +43,7 @@ impl<T: AsyncRead + AsyncWrite + fmt::Debug, P> OpensslConnector<T, P, ()> {
     }
 }
 
-impl<T, P, E> Clone for OpensslConnector<T, P, E> {
+impl<T, U, E> Clone for OpensslConnector<T, U, E> {
     fn clone(&self) -> Self {
         Self {
             connector: self.connector.clone(),
@@ -48,14 +52,14 @@ impl<T, P, E> Clone for OpensslConnector<T, P, E> {
     }
 }
 
-impl<T, P, E> NewService<()> for OpensslConnector<T, P, E>
+impl<T: Address, U, E> NewService<()> for OpensslConnector<T, U, E>
 where
-    T: AsyncRead + AsyncWrite + fmt::Debug,
+    U: AsyncRead + AsyncWrite + fmt::Debug,
 {
-    type Request = Stream<T, P>;
-    type Response = Stream<SslStream<T>, P>;
-    type Error = HandshakeError<T>;
-    type Service = OpensslConnectorService<T, P>;
+    type Request = Connection<T, U>;
+    type Response = Connection<T, SslStream<U>>;
+    type Error = HandshakeError<U>;
+    type Service = OpensslConnectorService<T, U>;
     type InitError = E;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
@@ -67,25 +71,25 @@ where
     }
 }
 
-pub struct OpensslConnectorService<T, P> {
+pub struct OpensslConnectorService<T, U> {
     connector: SslConnector,
-    _t: PhantomData<(T, P)>,
+    _t: PhantomData<(T, U)>,
 }
 
-impl<T, P> Service for OpensslConnectorService<T, P>
+impl<T: Address, U> Service for OpensslConnectorService<T, U>
 where
-    T: AsyncRead + AsyncWrite + fmt::Debug,
+    U: AsyncRead + AsyncWrite + fmt::Debug,
 {
-    type Request = Stream<T, P>;
-    type Response = Stream<SslStream<T>, P>;
-    type Error = HandshakeError<T>;
-    type Future = ConnectAsyncExt<T, P>;
+    type Request = Connection<T, U>;
+    type Response = Connection<T, SslStream<U>>;
+    type Error = HandshakeError<U>;
+    type Future = ConnectAsyncExt<T, U>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, stream: Stream<T, P>) -> Self::Future {
+    fn call(&mut self, stream: Connection<T, U>) -> Self::Future {
         trace!("SSL Handshake start for: {:?}", stream.host());
         let (io, stream) = stream.replace(());
         ConnectAsyncExt {
@@ -95,17 +99,17 @@ where
     }
 }
 
-pub struct ConnectAsyncExt<T, P> {
-    fut: ConnectAsync<T>,
-    stream: Option<Stream<(), P>>,
+pub struct ConnectAsyncExt<T, U> {
+    fut: ConnectAsync<U>,
+    stream: Option<Connection<T, ()>>,
 }
 
-impl<T, P> Future for ConnectAsyncExt<T, P>
+impl<T: Address, U> Future for ConnectAsyncExt<T, U>
 where
-    T: AsyncRead + AsyncWrite + fmt::Debug,
+    U: AsyncRead + AsyncWrite + fmt::Debug,
 {
-    type Item = Stream<SslStream<T>, P>;
-    type Error = HandshakeError<T>;
+    type Item = Connection<T, SslStream<U>>;
+    type Error = HandshakeError<U>;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.fut.poll().map_err(|e| {
