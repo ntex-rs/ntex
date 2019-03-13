@@ -52,9 +52,17 @@ impl Connect<(&'static str, u16)> {
     }
 }
 
-impl Connect<(String, u16)> {
+impl Connect<()> {
     /// Create new `Connect` instance.
-    pub fn new(host: String, port: u16) -> Connect<(String, u16)> {
+    pub fn from_string(host: String, port: u16) -> Connect<(String, u16)> {
+        Connect {
+            req: (host, port),
+            addr: None,
+        }
+    }
+
+    /// Create new `Connect` instance.
+    pub fn from_static(host: &'static str, port: u16) -> Connect<(&'static str, u16)> {
         Connect {
             req: (host, port),
             addr: None,
@@ -62,7 +70,7 @@ impl Connect<(String, u16)> {
     }
 
     /// Create `Connect` instance by spliting the string by ':' and convert the second part to u16
-    pub fn with<T: AsRef<str>>(host: T) -> Result<Connect<(String, u16)>, ConnectError> {
+    pub fn from_str<T: AsRef<str>>(host: T) -> Result<Connect<(String, u16)>, ConnectError> {
         let mut parts_iter = host.as_ref().splitn(2, ':');
         let host = parts_iter.next().ok_or(ConnectError::InvalidInput)?;
         let port_str = parts_iter.next().unwrap_or("");
