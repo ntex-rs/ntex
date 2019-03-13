@@ -1,6 +1,6 @@
 [package]
 name = "actix-test-server"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix test server"
 keywords = ["network", "framework", "async", "futures"]
@@ -33,9 +33,8 @@ ssl = ["openssl", "actix-server/ssl"]
 rust-tls = ["rustls", "tokio-rustls", "webpki", "webpki-roots"]
 
 [dependencies]
-actix-rt = "0.2.0"
-# actix-server = "0.3.3"
-actix-server = { path="../actix-server" }
+actix-rt = "0.2.1"
+actix-server = "0.4.0"
 
 log = "0.4"
 net2 = "0.2"
@@ -56,4 +55,4 @@ webpki = { version = "0.19", optional = true }
 webpki-roots = { version = "0.16", optional = true }
 
 [dev-dependencies]
-actix-service = "0.3.3"
+actix-service = "0.3.4"
