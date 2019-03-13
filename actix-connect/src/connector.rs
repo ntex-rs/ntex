@@ -96,7 +96,7 @@ impl Future for ConnectorResponse {
                             "TCP connector - successfully connected to connecting to {:?} - {:?}",
                             host, sock.peer_addr()
                         );
-                        return Ok(Async::Ready(Stream::new(sock, self.host.take().unwrap())));
+                        return Ok(Async::Ready(Stream::new(sock, host)));
                     }
                     Ok(Async::NotReady) => return Ok(Async::NotReady),
                     Err(err) => {

@@ -17,7 +17,7 @@ workspace = ".."
 features = ["ssl"]
 
 [lib]
-name = "actix_connector"
+name = "actix_connect"
 path = "src/lib.rs"
 
 [features]

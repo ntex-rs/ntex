@@ -13,10 +13,6 @@ pub enum ConnectError {
     #[display(fmt = "No dns records found for the input")]
     NoRecords,
 
-    /// Connecting took too long
-    #[display(fmt = "Timeout out while establishing connection")]
-    Timeout,
-
     /// Invalid input
     InvalidInput,
 
@@ -26,5 +22,5 @@ pub enum ConnectError {
 
     /// Connection io error
     #[display(fmt = "{}", _0)]
-    IoError(io::Error),
+    Io(io::Error),
 }
