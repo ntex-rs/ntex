@@ -10,12 +10,12 @@ use tokio_openssl::{ConnectAsync, SslConnectorExt, SslStream};
 use crate::{Address, Connection};
 
 /// Openssl connector factory
-pub struct OpensslConnector<T, U, E> {
+pub struct OpensslConnector<T, U> {
     connector: SslConnector,
-    _t: PhantomData<(T, U, E)>,
+    _t: PhantomData<(T, U)>,
 }
 
-impl<T, U, E> OpensslConnector<T, U, E> {
+impl<T, U> OpensslConnector<T, U> {
     pub fn new(connector: SslConnector) -> Self {
         OpensslConnector {
             connector,
@@ -24,7 +24,7 @@ impl<T, U, E> OpensslConnector<T, U, E> {
     }
 }
 
-impl<T, U, E> OpensslConnector<T, U, E>
+impl<T, U> OpensslConnector<T, U>
 where
     T: Address,
     U: AsyncRead + AsyncWrite + fmt::Debug,
@@ -43,7 +43,7 @@ where
     }
 }
 
-impl<T, U, E> Clone for OpensslConnector<T, U, E> {
+impl<T, U> Clone for OpensslConnector<T, U> {
     fn clone(&self) -> Self {
         Self {
             connector: self.connector.clone(),
@@ -52,7 +52,7 @@ impl<T, U, E> Clone for OpensslConnector<T, U, E> {
     }
 }
 
-impl<T: Address, U, E> NewService<()> for OpensslConnector<T, U, E>
+impl<T: Address, U> NewService<()> for OpensslConnector<T, U>
 where
     U: AsyncRead + AsyncWrite + fmt::Debug,
 {
@@ -60,7 +60,7 @@ where
     type Response = Connection<T, SslStream<U>>;
     type Error = HandshakeError<U>;
     type Service = OpensslConnectorService<T, U>;
-    type InitError = E;
+    type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: &()) -> Self::Future {
