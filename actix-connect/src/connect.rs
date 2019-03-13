@@ -77,6 +77,11 @@ impl Connect<(String, u16)> {
 }
 
 impl<T: Address> Connect<T> {
+    /// Create new `Connect` instance.
+    pub fn with_request(req: T) -> Connect<T> {
+        Connect { req, addr: None }
+    }
+
     /// Create new `Connect` instance from host and address. Connector skips name resolution stage for such connect messages.
     pub fn with_address(req: T, addr: SocketAddr) -> Connect<T> {
         Connect {
