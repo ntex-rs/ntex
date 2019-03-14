@@ -24,6 +24,11 @@ before_install:
   - sudo apt-get update -qq
   - sudo apt-get install -y openssl libssl-dev libelf-dev libdw-dev cmake gcc binutils-dev libiberty-dev
 
+before_cache: |
+  if [[ "$TRAVIS_RUST_VERSION" == "nightly-2019-03-02" ]]; then
+    RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin
+  fi
+
 # Add clippy
 before_script:
   - export PATH=$PATH:~/.cargo/bin
@@ -41,11 +46,28 @@ script:
     cd actix-utils && cargo test && cd ..
     cd router && cargo test && cd ..
     fi
+
+after_success:
   - |
     if [[ "$TRAVIS_RUST_VERSION" == "nightly-2019-03-02" ]]; then
-    RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install -f --git https://github.com/xd009642/tarpaulin.git --branch develop
-    cargo tarpaulin --features="ssl,tls,rust-tls" --out Xml
-    bash <(curl -s https://codecov.io/bash)
+    RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin
+    #cd actix-service && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
+    #cd actix-rt && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
+    #cd actix-connect && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
+    #cd actix-codec && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
+    #cd actix-server && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
+    #cd actix-utils && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
+    #cd router && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
+
+    cd actix-service && cargo tarpaulin --out Xml && cd ..
+    #cd actix-rt && cargo tarpaulin --out Xml && cd ..
+    cd actix-connect && cargo tarpaulin --out Xml && cd ..
+    #cd actix-codec && cargo tarpaulin --out Xml && cd ..
+    #cd actix-server && cargo tarpaulin --out Xml && cd ..
+    cd actix-utils && cargo tarpaulin --out Xml && cd ..
+    cd router && cargo tarpaulin --out Xml && cd ..
+
+    # cargo tarpaulin --all --all-features --out Xml
     echo "Uploaded code coverage"
-    cargo tarpaulin --all --all-features --out Xml && bash <(curl -s https://codecov.io/bash)
+    bash <(curl -s https://codecov.io/bash)
     fi
