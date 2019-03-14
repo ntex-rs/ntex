@@ -1,13 +1,13 @@
 use std::cell::RefCell;
 use std::io;
-use std::sync::atomic::{AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::sync::mpsc::UnboundedSender;
 
 use crate::arbiter::{Arbiter, SystemCommand};
 use crate::builder::{Builder, SystemRunner};
 
-static SYSTEM_COUNT: AtomicUsize = ATOMIC_USIZE_INIT;
+static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// System is a runtime manager.
 #[derive(Clone, Debug)]

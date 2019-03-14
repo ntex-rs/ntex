@@ -41,7 +41,7 @@ impl Error for RunError {
         self.inner.description()
     }
     fn cause(&self) -> Option<&Error> {
-        self.inner.cause()
+        self.inner.source()
     }
 }
 
