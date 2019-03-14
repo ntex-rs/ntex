@@ -10,9 +10,9 @@ matrix:
   include:
     - rust: stable
     - rust: beta
-    - rust: nightly
+    - rust: nightly-2019-03-02
   allow_failures:
-    - rust: nightly
+    - rust: nightly-2019-03-02
 
 env:
   global:
@@ -30,7 +30,7 @@ before_script:
 
 script:
   - |
-    if [[ "$TRAVIS_RUST_VERSION" != "nightly" ]]; then
+    if [[ "$TRAVIS_RUST_VERSION" != "nightly-2019-03-02" ]]; then
     cargo clean
     cargo test --features="ssl,tls,rust-tls" -- --nocapture
     cd actix-codec && cargo test && cd ..
@@ -42,8 +42,8 @@ script:
     cd router && cargo test && cd ..
     fi
   - |
-    if [[ "$TRAVIS_RUST_VERSION" == "nightly" ]]; then
-    RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install -f cargo-tarpaulin
+    if [[ "$TRAVIS_RUST_VERSION" == "nightly-2019-03-02" ]]; then
+    RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin
     cargo tarpaulin --features="ssl,tls,rust-tls" --out Xml
     bash <(curl -s https://codecov.io/bash)
     echo "Uploaded code coverage"
