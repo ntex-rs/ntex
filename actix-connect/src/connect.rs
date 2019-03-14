@@ -61,6 +61,12 @@ impl<T: Address> Connect<T> {
         }
     }
 
+    /// Set port
+    pub fn set_port(mut self, port: u16) -> Self {
+        self.port = port;
+        self
+    }
+
     /// Host name
     pub fn host(&self) -> &str {
         self.req.host()
