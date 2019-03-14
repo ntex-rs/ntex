@@ -43,7 +43,7 @@ script:
     fi
   - |
     if [[ "$TRAVIS_RUST_VERSION" == "nightly-2019-03-02" ]]; then
-    RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin
+    RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install --git https://github.com/xd009642/tarpaulin.git --branch develop
     cargo tarpaulin --features="ssl,tls,rust-tls" --out Xml
     bash <(curl -s https://codecov.io/bash)
     echo "Uploaded code coverage"

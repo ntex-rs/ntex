@@ -61,7 +61,9 @@ impl<T: Address> Connect<T> {
         }
     }
 
-    /// Set port
+    /// Use port if address does not provide one.
+    ///
+    /// By default it set to 0
     pub fn set_port(mut self, port: u16) -> Self {
         self.port = port;
         self

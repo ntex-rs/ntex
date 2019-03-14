@@ -14,6 +14,9 @@ mod error;
 mod resolver;
 pub mod ssl;
 
+#[cfg(feature = "uri")]
+mod uri;
+
 pub use trust_dns_resolver::{error::ResolveError, AsyncResolver};
 
 pub use self::connect::{Address, Connect, Connection};
