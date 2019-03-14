@@ -47,11 +47,5 @@ script:
     cargo tarpaulin --features="ssl,tls,rust-tls" --out Xml
     bash <(curl -s https://codecov.io/bash)
     echo "Uploaded code coverage"
-    cd actix-service && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
-    cd actix-rt && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
-    cd actix-connect && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
-    cd actix-codec && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
-    cd actix-server && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
-    cd actix-utils && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
-    cd router && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
+    cargo tarpaulin --all --all-features --out Xml && bash <(curl -s https://codecov.io/bash)
     fi
