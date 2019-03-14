@@ -4,6 +4,7 @@ use std::{net, thread};
 
 use actix_rt::{Runtime, System};
 use actix_server::{Server, StreamServiceFactory};
+pub use actix_server_config::{Io, ServerConfig};
 
 use futures::Future;
 use net2::TcpBuilder;

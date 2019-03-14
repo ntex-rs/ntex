@@ -66,10 +66,11 @@ impl<T: Address> Service for Connector<T> {
     }
 
     fn call(&mut self, req: Connect<T>) -> Self::Future {
-        let Connect { req, addr } = req;
+        let port = req.port();
+        let Connect { req, addr, .. } = req;
 
         if let Some(addr) = addr {
-            Either::A(ConnectorResponse::new(req, addr))
+            Either::A(ConnectorResponse::new(req, port, addr))
         } else {
             error!("TCP connector: got unresolved address");
             Either::B(err(ConnectError::Unresolverd))
@@ -81,6 +82,7 @@ impl<T: Address> Service for Connector<T> {
 /// Tcp stream connector response future
 pub struct ConnectorResponse<T> {
     req: Option<T>,
+    port: u16,
     addrs: Option<VecDeque<SocketAddr>>,
     stream: Option<ConnectFuture>,
 }
@@ -88,18 +90,25 @@ pub struct ConnectorResponse<T> {
 impl<T: Address> ConnectorResponse<T> {
     pub fn new(
         req: T,
+        port: u16,
         addr: either::Either<SocketAddr, VecDeque<SocketAddr>>,
     ) -> ConnectorResponse<T> {
-        trace!("TCP connector - connecting to {:?}", req.host());
+        trace!(
+            "TCP connector - connecting to {:?} port:{}",
+            req.host(),
+            port
+        );
 
         match addr {
             either::Either::Left(addr) => ConnectorResponse {
                 req: Some(req),
+                port,
                 addrs: None,
                 stream: Some(TcpStream::connect(&addr)),
             },
             either::Either::Right(addrs) => ConnectorResponse {
                 req: Some(req),
+                port,
                 addrs: Some(addrs),
                 stream: None,
             },
@@ -129,7 +138,7 @@ impl<T: Address> Future for ConnectorResponse<T> {
                         trace!(
                             "TCP connector - failed to connect to connecting to {:?} port: {}",
                             self.req.as_ref().unwrap().host(),
-                            self.req.as_ref().unwrap().port(),
+                            self.port,
                         );
                         if self.addrs.as_ref().unwrap().is_empty() {
                             return Err(err.into());
@@ -145,49 +154,3 @@ impl<T: Address> Future for ConnectorResponse<T> {
         }
     }
 }
-
-// #[derive(Clone)]
-// pub struct DefaultConnector(Connector);
-
-// impl Default for DefaultConnector {
-//     fn default() -> Self {
-//         DefaultConnector(Connector::default())
-//     }
-// }
-
-// impl DefaultConnector {
-//     pub fn new(cfg: ResolverConfig, opts: ResolverOpts) -> Self {
-//         DefaultConnector(Connector::new(cfg, opts))
-//     }
-// }
-
-// impl Service for DefaultConnector {
-//     type Request = Connect;
-//     type Response = TcpStream;
-//     type Error = ConnectorError;
-//     type Future = DefaultConnectorFuture;
-
-//     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-//         self.0.poll_ready()
-//     }
-
-//     fn call(&mut self, req: Connect) -> Self::Future {
-//         DefaultConnectorFuture {
-//             fut: self.0.call(req),
-//         }
-//     }
-// }
-
-// #[doc(hidden)]
-// pub struct DefaultConnectorFuture {
-//     fut: Either<ConnectorFuture, ConnectorTcpFuture>,
-// }
-
-// impl Future for DefaultConnectorFuture {
-//     type Item = TcpStream;
-//     type Error = ConnectorError;
-
-//     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-//         Ok(Async::Ready(try_ready!(self.fut.poll()).1))
-//     }
-// }

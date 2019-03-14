@@ -4,34 +4,32 @@ use std::net::SocketAddr;
 
 use either::Either;
 
-use crate::error::ConnectError;
-
 /// Connect request
 pub trait Address {
     /// Host name of the request
     fn host(&self) -> &str;
 
     /// Port of the request
-    fn port(&self) -> u16;
+    fn port(&self) -> Option<u16>;
 }
 
-impl Address for (String, u16) {
+impl Address for String {
     fn host(&self) -> &str {
-        &self.0
+        &self
     }
 
-    fn port(&self) -> u16 {
-        self.1
+    fn port(&self) -> Option<u16> {
+        None
     }
 }
 
-impl Address for (&'static str, u16) {
+impl Address for &'static str {
     fn host(&self) -> &str {
-        self.0
+        self
     }
 
-    fn port(&self) -> u16 {
-        self.1
+    fn port(&self) -> Option<u16> {
+        None
     }
 }
 
@@ -39,61 +37,26 @@ impl Address for (&'static str, u16) {
 #[derive(Eq, PartialEq, Debug, Hash)]
 pub struct Connect<T> {
     pub(crate) req: T,
+    pub(crate) port: u16,
     pub(crate) addr: Option<Either<SocketAddr, VecDeque<SocketAddr>>>,
 }
 
-impl Connect<(&'static str, u16)> {
-    /// Create new `Connect` instance.
-    pub fn new(host: &'static str, port: u16) -> Connect<(&'static str, u16)> {
-        Connect {
-            req: (host, port),
-            addr: None,
-        }
-    }
-}
-
-impl Connect<()> {
-    /// Create new `Connect` instance.
-    pub fn from_string(host: String, port: u16) -> Connect<(String, u16)> {
-        Connect {
-            req: (host, port),
-            addr: None,
-        }
-    }
-
-    /// Create new `Connect` instance.
-    pub fn from_static(host: &'static str, port: u16) -> Connect<(&'static str, u16)> {
-        Connect {
-            req: (host, port),
-            addr: None,
-        }
-    }
-
-    /// Create `Connect` instance by spliting the string by ':' and convert the second part to u16
-    pub fn from_str<T: AsRef<str>>(host: T) -> Result<Connect<(String, u16)>, ConnectError> {
-        let mut parts_iter = host.as_ref().splitn(2, ':');
-        let host = parts_iter.next().ok_or(ConnectError::InvalidInput)?;
-        let port_str = parts_iter.next().unwrap_or("");
-        let port = port_str
-            .parse::<u16>()
-            .map_err(|_| ConnectError::InvalidInput)?;
-        Ok(Connect {
-            req: (host.to_owned(), port),
-            addr: None,
-        })
-    }
-}
-
 impl<T: Address> Connect<T> {
-    /// Create new `Connect` instance.
-    pub fn with(req: T) -> Connect<T> {
-        Connect { req, addr: None }
+    /// Create `Connect` instance by spliting the string by ':' and convert the second part to u16
+    pub fn new(req: T) -> Connect<T> {
+        let (_, port) = parse(req.host());
+        Connect {
+            req,
+            port: port.unwrap_or(0),
+            addr: None,
+        }
     }
 
     /// Create new `Connect` instance from host and address. Connector skips name resolution stage for such connect messages.
-    pub fn with_address(req: T, addr: SocketAddr) -> Connect<T> {
+    pub fn with(req: T, addr: SocketAddr) -> Connect<T> {
         Connect {
             req,
+            port: 0,
             addr: Some(Either::Left(addr)),
         }
     }
@@ -105,13 +68,33 @@ impl<T: Address> Connect<T> {
 
     /// Port of the request
     pub fn port(&self) -> u16 {
-        self.req.port()
+        self.req.port().unwrap_or(self.port)
+    }
+}
+
+impl<T: Address> From<T> for Connect<T> {
+    fn from(addr: T) -> Self {
+        Connect::new(addr)
     }
 }
 
 impl<T: Address> fmt::Display for Connect<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}:{}", self.host(), self.port())
+    }
+}
+
+fn parse(host: &str) -> (&str, Option<u16>) {
+    let mut parts_iter = host.splitn(2, ':');
+    if let Some(host) = parts_iter.next() {
+        let port_str = parts_iter.next().unwrap_or("");
+        if let Ok(port) = port_str.parse::<u16>() {
+            (host, Some(port))
+        } else {
+            (host, None)
+        }
+    } else {
+        (host, None)
     }
 }
 

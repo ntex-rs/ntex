@@ -41,3 +41,11 @@ trust-dns-resolver = { version="0.11.0-alpha.2", default-features = false }
 # openssl
 openssl = { version="0.10", optional = true }
 tokio-openssl = { version="0.3", optional = true }
+
+[dev-dependencies]
+bytes = "0.4"
+actix-connect = { path=".", features=["ssl"] }
+actix-test-server = { version="0.2.0", features=["ssl"] }
+actix-server-config = "0.1.0"
+actix-utils = "0.3.4"
+tokio-tcp = "0.1"

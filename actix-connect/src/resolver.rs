@@ -5,9 +5,7 @@ use std::net::SocketAddr;
 use actix_service::{NewService, Service};
 use futures::future::{ok, Either, FutureResult};
 use futures::{Async, Future, Poll};
-use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 use trust_dns_resolver::lookup_ip::LookupIpFuture;
-use trust_dns_resolver::system_conf::read_system_conf;
 use trust_dns_resolver::{AsyncResolver, Background};
 
 use crate::connect::{Address, Connect};
@@ -19,27 +17,17 @@ pub struct ResolverFactory<T> {
     _t: PhantomData<T>,
 }
 
-impl<T> Default for ResolverFactory<T> {
-    fn default() -> Self {
-        let (cfg, opts) = if let Ok((cfg, opts)) = read_system_conf() {
-            (cfg, opts)
-        } else {
-            (ResolverConfig::default(), ResolverOpts::default())
-        };
-
-        ResolverFactory::new(cfg, opts)
-    }
-}
-
 impl<T> ResolverFactory<T> {
     /// Create new resolver instance with custom configuration and options.
-    pub fn new(cfg: ResolverConfig, opts: ResolverOpts) -> Self {
-        let (resolver, bg) = AsyncResolver::new(cfg, opts);
-        tokio_current_thread::spawn(bg);
+    pub fn new(resolver: AsyncResolver) -> Self {
         ResolverFactory {
             resolver,
             _t: PhantomData,
         }
+    }
+
+    pub fn resolver(&self) -> &AsyncResolver {
+        &self.resolver
     }
 }
 
@@ -74,23 +62,9 @@ pub struct Resolver<T> {
     _t: PhantomData<T>,
 }
 
-impl<T> Default for Resolver<T> {
-    fn default() -> Self {
-        let (cfg, opts) = if let Ok((cfg, opts)) = read_system_conf() {
-            (cfg, opts)
-        } else {
-            (ResolverConfig::default(), ResolverOpts::default())
-        };
-
-        Resolver::new(cfg, opts)
-    }
-}
-
 impl<T> Resolver<T> {
     /// Create new resolver instance with custom configuration and options.
-    pub fn new(cfg: ResolverConfig, opts: ResolverOpts) -> Self {
-        let (resolver, bg) = AsyncResolver::new(cfg, opts);
-        tokio_current_thread::spawn(bg);
+    pub fn new(resolver: AsyncResolver) -> Self {
         Resolver {
             resolver,
             _t: PhantomData,
@@ -136,13 +110,19 @@ impl<T: Address> Service for Resolver<T> {
 /// Resolver future
 pub struct ResolverFuture<T: Address> {
     req: Option<Connect<T>>,
-    lookup: Option<Background<LookupIpFuture>>,
+    lookup: Background<LookupIpFuture>,
 }
 
 impl<T: Address> ResolverFuture<T> {
     pub fn new(req: Connect<T>, resolver: &AsyncResolver) -> Self {
+        let lookup = if let Some(host) = req.host().splitn(2, ':').next() {
+            resolver.lookup_ip(host)
+        } else {
+            resolver.lookup_ip(req.host())
+        };
+
         ResolverFuture {
-            lookup: Some(resolver.lookup_ip(req.host())),
+            lookup,
             req: Some(req),
         }
     }
@@ -153,7 +133,7 @@ impl<T: Address> Future for ResolverFuture<T> {
     type Error = ConnectError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.lookup.as_mut().unwrap().poll().map_err(|e| {
+        match self.lookup.poll().map_err(|e| {
             trace!(
                 "DNS resolver: failed to resolve host {:?} err: {}",
                 self.req.as_ref().unwrap().host(),

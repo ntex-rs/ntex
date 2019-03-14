@@ -35,6 +35,7 @@ rust-tls = ["rustls", "tokio-rustls", "webpki", "webpki-roots"]
 [dependencies]
 actix-rt = "0.2.1"
 actix-server = "0.4.0"
+actix-server-config = "0.1.0"
 
 log = "0.4"
 net2 = "0.2"
