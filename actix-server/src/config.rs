@@ -114,19 +114,23 @@ impl InternalServiceFactory for ConfiguredService {
         self.rt.configure(&mut rt);
         rt.validate();
 
-        // construct services
-        let mut fut = Vec::new();
-        for (token, ns) in rt.services {
-            let config = ServerConfig::new(self.names[&token].1);
-            fut.push(ns.new_service(&config).map(move |service| (token, service)));
-        }
+        let services = rt.services;
 
         // on start futures
         if rt.onstart.is_empty() {
+            // construct services
+            let mut fut = Vec::new();
+            for (token, ns) in services {
+                let config = ServerConfig::new(self.names[&token].1);
+                fut.push(ns.new_service(&config).map(move |service| (token, service)));
+            }
+
             Box::new(join_all(fut).map_err(|e| {
                 error!("Can not construct service: {:?}", e);
             }))
         } else {
+            let names = self.names.clone();
+
             // run onstart future and then construct services
             Box::new(
                 join_all(rt.onstart)
@@ -134,6 +138,14 @@ impl InternalServiceFactory for ConfiguredService {
                         error!("Can not construct service: {:?}", e);
                     })
                     .and_then(move |_| {
+                        // construct services
+                        let mut fut = Vec::new();
+                        for (token, ns) in services {
+                            let config = ServerConfig::new(names[&token].1);
+                            fut.push(
+                                ns.new_service(&config).map(move |service| (token, service)),
+                            );
+                        }
                         join_all(fut).map_err(|e| {
                             error!("Can not construct service: {:?}", e);
                         })
