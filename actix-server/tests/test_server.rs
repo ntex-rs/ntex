@@ -22,9 +22,11 @@ fn unused_addr() -> net::SocketAddr {
 #[test]
 fn test_bind() {
     let addr = unused_addr();
+    let (tx, rx) = mpsc::channel();
 
-    thread::spawn(move || {
-        Server::build()
+    let h = thread::spawn(move || {
+        let sys = actix_rt::System::new("test");
+        let srv = Server::build()
             .bind("test", addr, move || {
                 fn_cfg_factory(move |cfg: &ServerConfig| {
                     assert_eq!(cfg.local_addr(), addr);
@@ -32,11 +34,16 @@ fn test_bind() {
                 })
             })
             .unwrap()
-            .run()
+            .start();
+        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = sys.run();
     });
+    let (_, sys) = rx.recv().unwrap();
 
     thread::sleep(time::Duration::from_millis(500));
     assert!(net::TcpStream::connect(addr).is_ok());
+    let _ = sys.stop();
+    let _ = h.join();
 }
 
 #[test]
@@ -44,7 +51,7 @@ fn test_bind_no_config() {
     let addr = unused_addr();
     let (tx, rx) = mpsc::channel();
 
-    thread::spawn(move || {
+    let h = thread::spawn(move || {
         let sys = actix_rt::System::new("test");
         let srv = Server::build()
             .bind("test", addr, move || fn_service(|_| Ok::<_, ()>(())))
@@ -56,15 +63,18 @@ fn test_bind_no_config() {
     let (_, sys) = rx.recv().unwrap();
     assert!(net::TcpStream::connect(addr).is_ok());
     let _ = sys.stop();
+    let _ = h.join();
 }
 
 #[test]
 fn test_listen() {
     let addr = unused_addr();
+    let (tx, rx) = mpsc::channel();
 
-    thread::spawn(move || {
+    let h = thread::spawn(move || {
+        let sys = actix_rt::System::new("test");
         let lst = net::TcpListener::bind(addr).unwrap();
-        Server::build()
+        let srv = Server::build()
             .listen("test", lst, move || {
                 fn_cfg_factory(move |cfg: &ServerConfig| {
                     assert_eq!(cfg.local_addr(), addr);
@@ -72,11 +82,16 @@ fn test_listen() {
                 })
             })
             .unwrap()
-            .run()
+            .start();
+        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = sys.run();
     });
+    let (_, sys) = rx.recv().unwrap();
 
     thread::sleep(time::Duration::from_millis(500));
     assert!(net::TcpStream::connect(addr).is_ok());
+    let _ = sys.stop();
+    let _ = h.join();
 }
 
 #[test]
@@ -85,9 +100,8 @@ fn test_start() {
     let addr = unused_addr();
     let (tx, rx) = mpsc::channel();
 
-    thread::spawn(move || {
+    let h = thread::spawn(move || {
         let sys = actix_rt::System::new("test");
-
         let srv = Server::build()
             .backlog(100)
             .bind("test", addr, move || {
@@ -144,4 +158,5 @@ fn test_start() {
 
     thread::sleep(time::Duration::from_millis(100));
     let _ = sys.stop();
+    let _ = h.join();
 }

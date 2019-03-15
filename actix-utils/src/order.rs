@@ -245,7 +245,7 @@ mod tests {
         let (tx3, rx3) = oneshot::channel();
         let (tx_stop, rx_stop) = oneshot::channel();
 
-        std::thread::spawn(move || {
+        let h = std::thread::spawn(move || {
             let rx1 = rx1;
             let rx2 = rx2;
             let rx3 = rx3;
@@ -274,5 +274,6 @@ mod tests {
         let _ = tx1.send(1);
 
         let _ = rx_stop.wait();
+        let _ = h.join();
     }
 }

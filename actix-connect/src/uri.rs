@@ -25,6 +25,7 @@ fn port(scheme: Option<&str>) -> Option<u16> {
             "ws" => Some(80),
             "wss" => Some(443),
             "amqp" => Some(5672),
+            "amqps" => Some(5671),
             "mqtt" => Some(1883),
             "mqtts" => Some(8883),
             _ => None,
