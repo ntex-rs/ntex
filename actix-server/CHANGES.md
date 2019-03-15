@@ -1,5 +1,12 @@
 # Changes
 
+## [0.4.1] - 2019-03-13
+
+### Added
+
+* Allow to run future before server service initialization
+
+
 ## [0.4.0] - 2019-03-12
 
 ### Changed

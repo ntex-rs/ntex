@@ -121,9 +121,25 @@ impl InternalServiceFactory for ConfiguredService {
             fut.push(ns.new_service(&config).map(move |service| (token, service)));
         }
 
-        Box::new(join_all(fut).map_err(|e| {
-            error!("Can not construct service: {:?}", e);
-        }))
+        // on start futures
+        if rt.onstart.is_empty() {
+            Box::new(join_all(fut).map_err(|e| {
+                error!("Can not construct service: {:?}", e);
+            }))
+        } else {
+            // run onstart future and then construct services
+            Box::new(
+                join_all(rt.onstart)
+                    .map_err(|e| {
+                        error!("Can not construct service: {:?}", e);
+                    })
+                    .and_then(move |_| {
+                        join_all(fut).map_err(|e| {
+                            error!("Can not construct service: {:?}", e);
+                        })
+                    }),
+            )
+        }
     }
 }
 
@@ -153,6 +169,7 @@ fn not_configured(_: &mut ServiceRuntime) {
 pub struct ServiceRuntime {
     names: HashMap<String, Token>,
     services: HashMap<Token, BoxedNewService>,
+    onstart: Vec<Box<Future<Item = (), Error = ()>>>,
 }
 
 impl ServiceRuntime {
@@ -160,6 +177,7 @@ impl ServiceRuntime {
         ServiceRuntime {
             names,
             services: HashMap::new(),
+            onstart: Vec::new(),
         }
     }
 
@@ -171,6 +189,10 @@ impl ServiceRuntime {
         }
     }
 
+    /// Register service.
+    ///
+    /// Name of the service must be registered during configuration stage with
+    /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service<T, F>(&mut self, name: &str, service: F)
     where
         F: IntoNewService<T, ServerConfig>,
@@ -190,6 +212,14 @@ impl ServiceRuntime {
         } else {
             panic!("Unknown service: {:?}", name);
         }
+    }
+
+    /// Execute future before services initialization.
+    pub fn spawn<F>(&mut self, fut: F)
+    where
+        F: Future<Item = (), Error = ()> + 'static,
+    {
+        self.onstart.push(Box::new(fut))
     }
 }
 

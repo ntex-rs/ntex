@@ -12,8 +12,8 @@ use num_cpus;
 use tokio_timer::sleep;
 
 use crate::accept::{AcceptLoop, AcceptNotify, Command};
+use crate::config::{ConfiguredService, ServiceConfig};
 use crate::server::{Server, ServerCommand};
-use crate::service_config::{ConfiguredService, ServiceConfig};
 use crate::services::{InternalServiceFactory, ServiceFactory, StreamNewService};
 use crate::signals::{Signal, Signals};
 use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
