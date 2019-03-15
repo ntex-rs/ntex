@@ -263,6 +263,7 @@ mod tests {
                     .and_then(move |res: Vec<_>| {
                         assert_eq!(res, vec![1, 2, 3]);
                         let _ = tx_stop.send(());
+                        actix_rt::System::current().stop();
                         Ok(())
                     })
             }));
