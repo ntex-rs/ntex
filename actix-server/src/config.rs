@@ -215,7 +215,7 @@ impl ServiceRuntime {
     }
 
     /// Execute future before services initialization.
-    pub fn spawn<F>(&mut self, fut: F)
+    pub fn on_start<F>(&mut self, fut: F)
     where
         F: Future<Item = (), Error = ()> + 'static,
     {

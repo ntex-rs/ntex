@@ -4,7 +4,7 @@
 
 ### Added
 
-* Allow to run future before server service initialization
+* `SystemRuntime::on_start()` - allow to run future before server service initialization
 
 
 ## [0.4.0] - 2019-03-12
