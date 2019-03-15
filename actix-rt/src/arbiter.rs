@@ -36,6 +36,9 @@ impl fmt::Debug for ArbiterCommand {
 }
 
 #[derive(Debug, Clone)]
+/// Arbiters provide an asynchronous execution environment for actors, functions
+/// and futures. When an Arbiter is created, they spawn a new OS thread, and
+/// host an event loop. Some Arbiter functions execute on the current thread.
 pub struct Arbiter(UnboundedSender<ArbiterCommand>);
 
 impl Default for Arbiter {
@@ -56,7 +59,8 @@ impl Arbiter {
         arb
     }
 
-    /// Returns current arbiter's address
+    /// Returns the current thread's arbiter's address. If no Arbiter is present, then this
+    /// function will panic!
     pub fn current() -> Arbiter {
         ADDR.with(|cell| match *cell.borrow() {
             Some(ref addr) => addr.clone(),
@@ -64,7 +68,7 @@ impl Arbiter {
         })
     }
 
-    /// Stop arbiter
+    /// Stop arbiter from continuing it's event loop.
     pub fn stop(&self) {
         let _ = self.0.unbounded_send(ArbiterCommand::Stop);
     }
@@ -128,7 +132,9 @@ impl Arbiter {
         RUNNING.with(|cell| cell.set(false));
     }
 
-    /// Spawn a future on the current thread.
+    /// Spawn a future on the current thread. This does not create a new Arbiter
+    /// or Arbiter address, it is simply a helper for spawning futures on the current
+    /// thread.
     pub fn spawn<F>(future: F)
     where
         F: Future<Item = (), Error = ()> + 'static,
@@ -142,7 +148,9 @@ impl Arbiter {
         });
     }
 
-    /// Executes a future on the current thread.
+    /// Executes a future on the current thread. This does not create a new Arbiter
+    /// or Arbiter address, it is simply a helper for executing futures on the current
+    /// thread.
     pub fn spawn_fn<F, R>(f: F)
     where
         F: FnOnce() -> R + 'static,
@@ -151,7 +159,7 @@ impl Arbiter {
         Arbiter::spawn(future::lazy(f))
     }
 
-    /// Send a future on the arbiter's thread and spawn.
+    /// Send a future to the Arbiter's thread, and spawn it.
     pub fn send<F>(&self, future: F)
     where
         F: Future<Item = (), Error = ()> + Send + 'static,
@@ -161,7 +169,8 @@ impl Arbiter {
             .unbounded_send(ArbiterCommand::Execute(Box::new(future)));
     }
 
-    /// Send a function to the arbiter's thread and exeute.
+    /// Send a function to the Arbiter's thread, and execute it. Any result from the function
+    /// is discarded.
     pub fn exec_fn<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
@@ -173,7 +182,9 @@ impl Arbiter {
             })));
     }
 
-    /// Send a function to the arbiter's thread, exeute and return result.
+    /// Send a function to the Arbiter's thread. This function will be executed asynchronously.
+    /// A future is created, and when resolved will contain the result of the function sent
+    /// to the Arbiters thread.
     pub fn exec<F, R>(&self, f: F) -> impl Future<Item = R, Error = Canceled>
     where
         F: FnOnce() -> R + Send + 'static,
