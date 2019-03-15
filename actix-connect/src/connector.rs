@@ -140,7 +140,7 @@ impl<T: Address> Future for ConnectorResponse<T> {
                             self.req.as_ref().unwrap().host(),
                             self.port,
                         );
-                        if self.addrs.as_ref().unwrap().is_empty() {
+                        if self.addrs.is_none() || self.addrs.as_ref().unwrap().is_empty() {
                             return Err(err.into());
                         }
                     }

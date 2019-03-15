@@ -43,13 +43,22 @@ fn test_static_str() {
         ))
         .unwrap();
     let mut conn = srv
-        .block_on(lazy(|| Ok::<_, ()>(actix_connect::new_connector(resolver))))
+        .block_on(lazy(|| {
+            Ok::<_, ()>(actix_connect::new_connector(resolver.clone()))
+        }))
         .unwrap();
 
     let con = srv
         .block_on(conn.call(Connect::with("10", srv.addr())))
         .unwrap();
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
+
+    let connect = Connect::new(srv.host().to_owned());
+    let mut conn = srv
+        .block_on(lazy(|| Ok::<_, ()>(actix_connect::new_connector(resolver))))
+        .unwrap();
+    let con = srv.block_on(conn.call(connect));
+    assert!(con.is_err());
 }
 
 #[test]

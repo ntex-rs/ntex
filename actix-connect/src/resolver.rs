@@ -153,7 +153,9 @@ impl<T: Address> Future for ResolverFuture<T> {
                     req.host(),
                     addrs
                 );
-                if addrs.len() == 1 {
+                if addrs.is_empty() {
+                    Err(ConnectError::NoRecords)
+                } else if addrs.len() == 1 {
                     req.addr = Some(either::Either::Left(addrs.pop_front().unwrap()));
                     Ok(Async::Ready(req))
                 } else {
