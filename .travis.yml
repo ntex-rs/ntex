@@ -58,13 +58,13 @@ after_success:
     #cd actix-utils && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
     #cd router && cargo tarpaulin --out Xml && bash <(curl -s https://codecov.io/bash) && cd ..
 
-    cd actix-service && cargo tarpaulin --out Xml && cd ..
-    #cd actix-rt && cargo tarpaulin --out Xml && cd ..
-    cd actix-connect && cargo tarpaulin --out Xml && cd ..
-    #cd actix-codec && cargo tarpaulin --out Xml && cd ..
-    #cd actix-server && cargo tarpaulin --out Xml && cd ..
-    cd actix-utils && cargo tarpaulin --out Xml && cd ..
-    cd router && cargo tarpaulin --out Xml && cd ..
+    cd actix-service && taskset -c 0 cargo tarpaulin --out Xml && cd ..
+    cd actix-rt && cargo taskset -c 0 tarpaulin --out Xml && cd ..
+    cd actix-connect && taskset -c 0 cargo tarpaulin --out Xml && cd ..
+    cd actix-codec && taskset -c 0 cargo tarpaulin --out Xml && cd ..
+    cd actix-utils && taskset -c 0 cargo tarpaulin --out Xml && cd ..
+    cd actix-server && taskset -c 0 cargo tarpaulin --all-features --out Xml && cd ..
+    cd router && taskset -c 0 cargo tarpaulin --out Xml && cd ..
 
     # cargo tarpaulin --all --all-features --out Xml
     echo "Uploaded code coverage"
