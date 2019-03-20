@@ -1,5 +1,10 @@
 # Changes
 
+### Added
+
+* Allow to send messages to `FramedTransport` via mpsc channel.
+
+
 ## [0.3.4] - 2019-03-12
 
 ### Changed
