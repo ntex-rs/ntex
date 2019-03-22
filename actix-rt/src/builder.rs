@@ -86,8 +86,7 @@ impl Builder {
         let (stop_tx, stop) = channel();
         let (sys_sender, sys_receiver) = unbounded();
 
-        let arbiter = Arbiter::new_system();
-        let system = System::construct(sys_sender, arbiter.clone(), self.stop_on_panic);
+        let system = System::construct(sys_sender, Arbiter::new_system(), self.stop_on_panic);
 
         // system arbiter
         let arb = SystemArbiter::new(stop_tx, sys_receiver);
