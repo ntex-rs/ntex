@@ -167,6 +167,22 @@ impl<T, U> Framed<T, U> {
         }
     }
 
+    /// Consume the `Frame`, returning `Frame` with different io.
+    pub fn map_io<F, T2>(self, f: F) -> Framed<T2, U>
+    where
+        F: Fn(T) -> T2,
+    {
+        let (inner, read_buf) = self.inner.into_parts();
+        let (inner, write_buf, lw, hw) = inner.into_parts();
+
+        Framed {
+            inner: framed_read2_with_buffer(
+                framed_write2_with_buffer(Fuse(f(inner.0), inner.1), write_buf, lw, hw),
+                read_buf,
+            ),
+        }
+    }
+
     /// Consume the `Frame`, returning `Frame` with different codec.
     pub fn map_codec<F, U2>(self, f: F) -> Framed<T, U2>
     where
