@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use threadpool::ThreadPool;
 
 /// Env variable for default cpu pool size
-const ENV_CPU_POOL_VAR: &str = "ACTIX_CPU_POOL";
+const ENV_CPU_POOL_VAR: &str = "ACTIX_THREADPOOL";
 
 lazy_static::lazy_static! {
     pub(crate) static ref DEFAULT_POOL: Mutex<ThreadPool> = {
@@ -18,7 +18,7 @@ lazy_static::lazy_static! {
                 if let Ok(val) = val.parse() {
                     val
                 } else {
-                    log::error!("Can not parse ACTIX_CPU_POOL value");
+                    log::error!("Can not parse ACTIX_THREADPOOL value");
                     num_cpus::get() * 5
                 }
             }

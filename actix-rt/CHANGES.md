@@ -1,5 +1,11 @@
 # Changes
 
+## [0.2.2] - 2019-03-28
+
+### Changed
+
+* Moved `blocking` module to `actix-threadpool` crate
+
 ## [0.2.1] - 2019-03-11
 
 ### Added

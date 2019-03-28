@@ -1,7 +1,6 @@
 //! A runtime implementation that runs everything on the current thread.
 
 mod arbiter;
-pub mod blocking;
 mod builder;
 mod runtime;
 mod system;
@@ -10,6 +9,9 @@ pub use self::arbiter::Arbiter;
 pub use self::builder::{Builder, SystemRunner};
 pub use self::runtime::Runtime;
 pub use self::system::System;
+
+#[doc(hidden)]
+pub use actix_threadpool as blocking;
 
 /// Spawns a future on the current arbiter.
 ///
