@@ -18,7 +18,7 @@ name = "actix_rt"
 path = "src/lib.rs"
 
 [dependencies]
-actix-threadpool = { path="../actix-threadpool" }
+actix-threadpool = "0.1.0"
 futures = "0.1.25"
 tokio-current-thread = "0.1"
 tokio-executor = "0.1.5"
