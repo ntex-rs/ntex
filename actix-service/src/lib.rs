@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -388,6 +389,24 @@ where
 
     fn call(&mut self, request: Self::Request) -> S::Future {
         (**self).call(request)
+    }
+}
+
+impl<S> Service for Rc<RefCell<S>>
+where
+    S: Service,
+{
+    type Request = S::Request;
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self) -> Poll<(), S::Error> {
+        self.borrow_mut().poll_ready()
+    }
+
+    fn call(&mut self, request: Self::Request) -> S::Future {
+        self.borrow_mut().call(request)
     }
 }
 

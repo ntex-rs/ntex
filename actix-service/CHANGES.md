@@ -1,5 +1,12 @@
 # Changes
 
+## [0.3.5] - 2019-04-xx
+
+### Added
+
+* Add `impl<S: Service> Service for Rc<RefCell<S>>`
+
+
 ## [0.3.4] - 2019-03-12
 
 ### Added
