@@ -328,7 +328,7 @@ impl ServerBuilder {
                 self.accept.send(Command::Stop);
 
                 // stop workers
-                if !self.workers.is_empty() {
+                if !self.workers.is_empty() && graceful {
                     spawn(
                         futures_unordered(
                             self.workers

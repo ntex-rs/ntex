@@ -1,5 +1,12 @@
 # Changes
 
+## [0.4.2] - 2019-03-30
+
+### Fixed
+
+* Fix SIGINT force shutdown
+
+
 ## [0.4.1] - 2019-03-14
 
 ### Added
