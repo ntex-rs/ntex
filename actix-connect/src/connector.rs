@@ -12,54 +12,54 @@ use super::error::ConnectError;
 
 /// Tcp connector service factory
 #[derive(Debug)]
-pub struct ConnectorFactory<T>(PhantomData<T>);
+pub struct TcpConnectorFactory<T>(PhantomData<T>);
 
-impl<T> ConnectorFactory<T> {
+impl<T> TcpConnectorFactory<T> {
     pub fn new() -> Self {
-        ConnectorFactory(PhantomData)
+        TcpConnectorFactory(PhantomData)
     }
 }
 
-impl<T> Clone for ConnectorFactory<T> {
+impl<T> Clone for TcpConnectorFactory<T> {
     fn clone(&self) -> Self {
-        ConnectorFactory(PhantomData)
+        TcpConnectorFactory(PhantomData)
     }
 }
 
-impl<T: Address> NewService for ConnectorFactory<T> {
+impl<T: Address> NewService for TcpConnectorFactory<T> {
     type Request = Connect<T>;
     type Response = Connection<T, TcpStream>;
     type Error = ConnectError;
-    type Service = Connector<T>;
+    type Service = TcpConnector<T>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: &()) -> Self::Future {
-        ok(Connector(PhantomData))
+        ok(TcpConnector(PhantomData))
     }
 }
 
 /// Tcp connector service
 #[derive(Debug)]
-pub struct Connector<T>(PhantomData<T>);
+pub struct TcpConnector<T>(PhantomData<T>);
 
-impl<T> Connector<T> {
+impl<T> TcpConnector<T> {
     pub fn new() -> Self {
-        Connector(PhantomData)
+        TcpConnector(PhantomData)
     }
 }
 
-impl<T> Clone for Connector<T> {
+impl<T> Clone for TcpConnector<T> {
     fn clone(&self) -> Self {
-        Connector(PhantomData)
+        TcpConnector(PhantomData)
     }
 }
 
-impl<T: Address> Service for Connector<T> {
+impl<T: Address> Service for TcpConnector<T> {
     type Request = Connect<T>;
     type Response = Connection<T, TcpStream>;
     type Error = ConnectError;
-    type Future = Either<ConnectorResponse<T>, FutureResult<Self::Response, Self::Error>>;
+    type Future = Either<TcpConnectorResponse<T>, FutureResult<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
@@ -70,7 +70,7 @@ impl<T: Address> Service for Connector<T> {
         let Connect { req, addr, .. } = req;
 
         if let Some(addr) = addr {
-            Either::A(ConnectorResponse::new(req, port, addr))
+            Either::A(TcpConnectorResponse::new(req, port, addr))
         } else {
             error!("TCP connector: got unresolved address");
             Either::B(err(ConnectError::Unresolverd))
@@ -80,19 +80,19 @@ impl<T: Address> Service for Connector<T> {
 
 #[doc(hidden)]
 /// Tcp stream connector response future
-pub struct ConnectorResponse<T> {
+pub struct TcpConnectorResponse<T> {
     req: Option<T>,
     port: u16,
     addrs: Option<VecDeque<SocketAddr>>,
     stream: Option<ConnectFuture>,
 }
 
-impl<T: Address> ConnectorResponse<T> {
+impl<T: Address> TcpConnectorResponse<T> {
     pub fn new(
         req: T,
         port: u16,
         addr: either::Either<SocketAddr, VecDeque<SocketAddr>>,
-    ) -> ConnectorResponse<T> {
+    ) -> TcpConnectorResponse<T> {
         trace!(
             "TCP connector - connecting to {:?} port:{}",
             req.host(),
@@ -100,13 +100,13 @@ impl<T: Address> ConnectorResponse<T> {
         );
 
         match addr {
-            either::Either::Left(addr) => ConnectorResponse {
+            either::Either::Left(addr) => TcpConnectorResponse {
                 req: Some(req),
                 port,
                 addrs: None,
                 stream: Some(TcpStream::connect(&addr)),
             },
-            either::Either::Right(addrs) => ConnectorResponse {
+            either::Either::Right(addrs) => TcpConnectorResponse {
                 req: Some(req),
                 port,
                 addrs: Some(addrs),
@@ -116,7 +116,7 @@ impl<T: Address> ConnectorResponse<T> {
     }
 }
 
-impl<T: Address> Future for ConnectorResponse<T> {
+impl<T: Address> Future for TcpConnectorResponse<T> {
     type Item = Connection<T, TcpStream>;
     type Error = ConnectError;
 

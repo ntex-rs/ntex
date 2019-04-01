@@ -1,5 +1,12 @@
 # Changes
 
+## [0.1.2] - 2019-04-xx
+
+### Changed
+
+* Rename connect Connector to TcpConnector #10
+
+
 ## [0.1.1] - 2019-03-15
 
 ### Fixed
