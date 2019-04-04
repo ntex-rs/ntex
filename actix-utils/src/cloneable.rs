@@ -7,12 +7,12 @@ use futures::Poll;
 use super::cell::Cell;
 
 /// Service that allows to turn non-clone service to a service with `Clone` impl
-pub struct CloneableService<T: 'static> {
+pub struct CloneableService<T> {
     service: Cell<T>,
     _t: PhantomData<Rc<()>>,
 }
 
-impl<T: 'static> CloneableService<T> {
+impl<T> CloneableService<T> {
     pub fn new(service: T) -> Self
     where
         T: Service,
@@ -24,7 +24,7 @@ impl<T: 'static> CloneableService<T> {
     }
 }
 
-impl<T: 'static> Clone for CloneableService<T> {
+impl<T> Clone for CloneableService<T> {
     fn clone(&self) -> Self {
         Self {
             service: self.service.clone(),
@@ -35,7 +35,7 @@ impl<T: 'static> Clone for CloneableService<T> {
 
 impl<T> Service for CloneableService<T>
 where
-    T: Service + 'static,
+    T: Service,
 {
     type Request = T::Request;
     type Response = T::Response;

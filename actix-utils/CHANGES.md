@@ -1,8 +1,15 @@
 # Changes
 
+
+## [0.3.5] - 2019-04-04
+
 ### Added
 
 * Allow to send messages to `FramedTransport` via mpsc channel.
+
+### Changed
+
+* Remove 'static constraint from Clonable service
 
 
 ## [0.3.4] - 2019-03-12
