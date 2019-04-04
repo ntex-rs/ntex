@@ -40,9 +40,7 @@ pub trait Transform<S> {
     /// The future response value.
     type Future: Future<Item = Self::Transform, Error = Self::InitError>;
 
-    /// Creates and returns a new Service component, asynchronously.  `new_transform`
-    /// is called only once during the lifetime of a server -- as the server
-    /// initializes.
+    /// Creates and returns a new Service component, asynchronously
     fn new_transform(&self, service: S) -> Self::Future;
 
     /// Map this service's factory error to a different error,
