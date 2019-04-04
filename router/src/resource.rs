@@ -196,18 +196,17 @@ impl ResourceDef {
                     [PathItem::Static(""); MAX_DYNAMIC_SEGMENTS];
 
                 if let Some(captures) = re.captures(path.path()) {
-                    let mut passed = false;
-
-                    for capture in captures.iter() {
-                        if let Some(ref m) = capture {
-                            if !passed {
-                                passed = true;
-                                continue;
-                            }
-
-                            segments[idx] = PathItem::Segment(m.start() as u16, m.end() as u16);
+                    for (no, name) in names.iter().enumerate() {
+                        if let Some(m) = captures.name(&name) {
                             idx += 1;
                             pos = m.end();
+                            segments[no] = PathItem::Segment(m.start() as u16, m.end() as u16);
+                        } else {
+                            log::error!(
+                                "Dynamic path match but not all segments found: {}",
+                                name
+                            );
+                            false;
                         }
                     }
                 } else {
