@@ -1,6 +1,10 @@
 # Changes
 
-## [0.1.2] - 2019-04-xx
+## [0.1.2] - 2019-04-04
+
+### Added
+
+* Log error if dns system config could not be loaded.
 
 ### Changed
 

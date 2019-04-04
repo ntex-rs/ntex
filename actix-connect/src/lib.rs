@@ -47,10 +47,12 @@ pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver 
 }
 
 pub fn start_default_resolver() -> AsyncResolver {
-    let (cfg, opts) = if let Ok((cfg, opts)) = read_system_conf() {
-        (cfg, opts)
-    } else {
-        (ResolverConfig::default(), ResolverOpts::default())
+    let (cfg, opts) = match read_system_conf() {
+        Ok((cfg, opts)) => (cfg, opts),
+        Err(e) => {
+            log::error!("TRust-DNS can not load system config: {}", e);
+            (ResolverConfig::default(), ResolverOpts::default())
+        }
     };
 
     let (resolver, bg) = AsyncResolver::new(cfg, opts);
