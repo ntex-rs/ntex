@@ -6,9 +6,16 @@ use futures::{Async, Future, IntoFuture, Poll};
 use crate::transform_err::{TransformFromErr, TransformMapInitErr};
 use crate::{IntoNewService, NewService, Service};
 
-/// `Transform` service factory.
+/// The `Transform` trait defines the interface of a Service factory.  `Transform`
+/// is often implemented for middleware, defining how to manufacture a
+/// middleware Service.  A Service that is manufactured by the factory takes 
+/// the Service that follows it during execution as a parameter, assuming
+/// ownership of the next Service.  A Service can be a variety of types, such
+/// as (but not limited to) another middleware Service, an extractor Service,
+/// other helper Services, or the request handler endpoint Service.
 ///
-/// Transform factory creates service that wraps other services.
+/// A Service is created by the factory during server initialization.
+///
 /// `Config` is a service factory configuration type.
 pub trait Transform<S> {
     /// Requests handled by the service.
@@ -33,7 +40,9 @@ pub trait Transform<S> {
     /// The future response value.
     type Future: Future<Item = Self::Transform, Error = Self::InitError>;
 
-    /// Create and return a new service value asynchronously.
+    /// Creates and returns a new Service component, asynchronously.  `new_transform`
+    /// is called only once during the lifetime of a server -- as the server
+    /// initializes.
     fn new_transform(&self, service: S) -> Self::Future;
 
     /// Map this service's factory error to a different error,

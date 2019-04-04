@@ -53,6 +53,9 @@ pub use self::then::{Then, ThenNewService};
 pub use self::transform::{apply_transform, IntoTransform, Transform};
 
 /// An asynchronous function from `Request` to a `Response`.
+/// The entire request/response lifecycle can be represented as a pipeline of
+/// Services.  The linkage between Services is represented in terms of ownership,
+/// where the preceeding Service owns that which follows it.
 pub trait Service {
     /// Requests handled by the service.
     type Request;
