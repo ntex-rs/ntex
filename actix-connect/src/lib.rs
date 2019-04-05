@@ -17,6 +17,8 @@ pub mod ssl;
 #[cfg(feature = "uri")]
 mod uri;
 
+pub use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
+pub use trust_dns_resolver::system_conf::read_system_conf;
 pub use trust_dns_resolver::{error::ResolveError, AsyncResolver};
 
 pub use self::connect::{Address, Connect, Connection};
@@ -26,8 +28,6 @@ pub use self::resolver::{Resolver, ResolverFactory};
 
 use actix_service::{NewService, Service, ServiceExt};
 use tokio_tcp::TcpStream;
-use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
-use trust_dns_resolver::system_conf::read_system_conf;
 
 #[doc(hidden)]
 #[deprecated(since = "0.1.2", note = "please use `actix_connect::TcpConnector`")]

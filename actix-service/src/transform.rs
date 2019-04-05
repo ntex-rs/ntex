@@ -8,7 +8,7 @@ use crate::{IntoNewService, NewService, Service};
 
 /// The `Transform` trait defines the interface of a Service factory.  `Transform`
 /// is often implemented for middleware, defining how to manufacture a
-/// middleware Service.  A Service that is manufactured by the factory takes 
+/// middleware Service.  A Service that is manufactured by the factory takes
 /// the Service that follows it during execution as a parameter, assuming
 /// ownership of the next Service.  A Service can be a variety of types, such
 /// as (but not limited to) another middleware Service, an extractor Service,
