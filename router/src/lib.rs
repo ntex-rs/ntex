@@ -39,7 +39,7 @@ impl<T: AsRef<[u8]>> ResourcePath for string::String<T> {
 mod url;
 
 #[cfg(feature = "http")]
-pub use self::url::Url;
+pub use self::url::{Quoter, Url};
 
 #[cfg(feature = "http")]
 mod http_support {

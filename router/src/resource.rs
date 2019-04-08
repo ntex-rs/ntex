@@ -118,6 +118,7 @@ impl ResourceDef {
         &self.pattern
     }
 
+    #[inline]
     /// Check if path matchs this pattern?
     pub fn is_match(&self, path: &str) -> bool {
         match self.tp {

@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::ResourcePath;
 
 #[allow(dead_code)]
@@ -39,7 +37,7 @@ thread_local! {
 #[derive(Default, Clone, Debug)]
 pub struct Url {
     uri: http::Uri,
-    path: Option<Rc<String>>,
+    path: Option<String>,
 }
 
 impl Url {
@@ -47,6 +45,13 @@ impl Url {
         let path = DEFAULT_QUOTER.with(|q| q.requote(uri.path().as_bytes()));
 
         Url { uri, path }
+    }
+
+    pub fn with_quoter(uri: http::Uri, quoter: &Quoter) -> Url {
+        Url {
+            path: quoter.requote(uri.path().as_bytes()),
+            uri,
+        }
     }
 
     pub fn uri(&self) -> &http::Uri {
@@ -61,19 +66,27 @@ impl Url {
         }
     }
 
+    #[inline]
     pub fn update(&mut self, uri: &http::Uri) {
         self.uri = uri.clone();
         self.path = DEFAULT_QUOTER.with(|q| q.requote(uri.path().as_bytes()));
     }
+
+    #[inline]
+    pub fn update_with_quoter(&mut self, uri: &http::Uri, quoter: &Quoter) {
+        self.uri = uri.clone();
+        self.path = quoter.requote(uri.path().as_bytes());
+    }
 }
 
 impl ResourcePath for Url {
+    #[inline]
     fn path(&self) -> &str {
         self.path()
     }
 }
 
-pub(crate) struct Quoter {
+pub struct Quoter {
     safe_table: [u8; 16],
     protected_table: [u8; 16],
 }
@@ -108,7 +121,7 @@ impl Quoter {
         q
     }
 
-    pub fn requote(&self, val: &[u8]) -> Option<Rc<String>> {
+    pub fn requote(&self, val: &[u8]) -> Option<String> {
         let mut has_pct = 0;
         let mut pct = [b'%', 0, 0];
         let mut idx = 0;
@@ -160,7 +173,7 @@ impl Quoter {
         if let Some(data) = cloned {
             // Unsafe: we get data from http::Uri, which does utf-8 checks already
             // this code only decodes valid pct encoded values
-            Some(Rc::new(unsafe { String::from_utf8_unchecked(data) }))
+            Some(unsafe { String::from_utf8_unchecked(data) })
         } else {
             None
         }

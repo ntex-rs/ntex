@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.2] - 2019-04-07
+
+* Export `Quoter` type
+
+* Allow to reset `Path` instance
+
 ## [0.1.1] - 2019-04-03
 
 * Get dynamic segment by name instead of iterator.
