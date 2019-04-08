@@ -1,12 +1,14 @@
+use futures::future::{err, ok, Either, FutureResult};
+use futures::{Async, Future, IntoFuture, Poll};
+
 use crate::{NewService, Service};
-use futures::{Future, IntoFuture, Poll};
 
 pub type BoxedService<Req, Res, Err> = Box<
     Service<
         Request = Req,
         Response = Res,
         Error = Err,
-        Future = Box<Future<Item = Res, Error = Err>>,
+        Future = Either<FutureResult<Res, Err>, Box<Future<Item = Res, Error = Err>>>,
     >,
 >;
 
@@ -125,13 +127,21 @@ where
     type Request = Req;
     type Response = Res;
     type Error = Err;
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
+    type Future = Either<
+        FutureResult<Self::Response, Self::Error>,
+        Box<Future<Item = Self::Response, Error = Self::Error>>,
+    >;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         self.0.poll_ready()
     }
 
     fn call(&mut self, req: Self::Request) -> Self::Future {
-        Box::new(self.0.call(req))
+        let mut fut = self.0.call(req);
+        match fut.poll() {
+            Ok(Async::Ready(res)) => Either::A(ok(res)),
+            Err(e) => Either::A(err(e)),
+            Ok(Async::NotReady) => Either::B(Box::new(fut)),
+        }
     }
 }

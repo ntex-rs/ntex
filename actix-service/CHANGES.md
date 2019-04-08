@@ -1,5 +1,12 @@
 # Changes
 
+## [0.3.6] - 2019-04-07
+
+### Changed
+
+* Poll boxed service call result immediately
+
+
 ## [0.3.5] - 2019-03-29
 
 ### Added
