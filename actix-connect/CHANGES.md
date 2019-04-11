@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.3] - 2019-04-11
+
+### Changed
+
+* Start trust-dns default resolver on first use
+
 ## [0.1.2] - 2019-04-04
 
 ### Added

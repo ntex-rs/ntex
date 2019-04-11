@@ -10,10 +10,11 @@ use trust_dns_resolver::{AsyncResolver, Background};
 
 use crate::connect::{Address, Connect};
 use crate::error::ConnectError;
+use crate::get_default_resolver;
 
 /// DNS Resolver Service factory
 pub struct ResolverFactory<T> {
-    resolver: AsyncResolver,
+    resolver: Option<AsyncResolver>,
     _t: PhantomData<T>,
 }
 
@@ -21,13 +22,18 @@ impl<T> ResolverFactory<T> {
     /// Create new resolver instance with custom configuration and options.
     pub fn new(resolver: AsyncResolver) -> Self {
         ResolverFactory {
-            resolver,
+            resolver: Some(resolver),
             _t: PhantomData,
         }
     }
+}
 
-    pub fn resolver(&self) -> &AsyncResolver {
-        &self.resolver
+impl<T> Default for ResolverFactory<T> {
+    fn default() -> Self {
+        ResolverFactory {
+            resolver: None,
+            _t: PhantomData,
+        }
     }
 }
 
@@ -58,7 +64,7 @@ impl<T: Address> NewService for ResolverFactory<T> {
 
 /// DNS Resolver Service
 pub struct Resolver<T> {
-    resolver: AsyncResolver,
+    resolver: Option<AsyncResolver>,
     _t: PhantomData<T>,
 }
 
@@ -66,7 +72,16 @@ impl<T> Resolver<T> {
     /// Create new resolver instance with custom configuration and options.
     pub fn new(resolver: AsyncResolver) -> Self {
         Resolver {
-            resolver,
+            resolver: Some(resolver),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<T> Default for Resolver<T> {
+    fn default() -> Self {
+        Resolver {
+            resolver: None,
             _t: PhantomData,
         }
     }
@@ -100,7 +115,10 @@ impl<T: Address> Service for Resolver<T> {
                 Either::B(ok(req))
             } else {
                 trace!("DNS resolver: resolving host {:?}", req.host());
-                Either::A(ResolverFuture::new(req, &self.resolver))
+                if self.resolver.is_none() {
+                    self.resolver = Some(get_default_resolver());
+                }
+                Either::A(ResolverFuture::new(req, self.resolver.as_ref().unwrap()))
             }
         }
     }
