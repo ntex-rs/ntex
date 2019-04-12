@@ -48,8 +48,7 @@ tokio-openssl = { version="0.3", optional = true }
 
 [dev-dependencies]
 bytes = "0.4"
-#actix-test-server = { version="0.2.0", features=["ssl"] }
-actix-test-server = { path="../actix-test-server", features=["ssl"] }
+actix-test-server = { version="0.2.1", features=["ssl"] }
 actix-server-config = "0.1.0"
 actix-utils = "0.3.4"
 tokio-tcp = "0.1"
