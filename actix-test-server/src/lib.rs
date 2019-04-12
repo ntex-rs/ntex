@@ -6,7 +6,7 @@ use actix_rt::{Runtime, System};
 use actix_server::{Server, StreamServiceFactory};
 pub use actix_server_config::{Io, ServerConfig};
 
-use futures::Future;
+use futures::future::{lazy, Future, IntoFuture};
 use net2::TcpBuilder;
 use tokio_reactor::Handle;
 use tokio_tcp::TcpStream;
@@ -97,6 +97,15 @@ impl TestServerRuntime {
         F: Future<Item = I, Error = E>,
     {
         self.rt.block_on(fut)
+    }
+
+    /// Runs the provided function, with runtime enabled.
+    pub fn run_on<F, R>(&mut self, f: F) -> Result<R::Item, R::Error>
+    where
+        F: FnOnce() -> R,
+        R: IntoFuture,
+    {
+        self.rt.block_on(lazy(|| f().into_future()))
     }
 
     /// Spawn future to the current runtime
