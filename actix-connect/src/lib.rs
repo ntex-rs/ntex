@@ -102,7 +102,7 @@ pub fn new_connector_factory<T: Address>(
 pub fn default_connector<T: Address>(
 ) -> impl Service<Request = Connect<T>, Response = Connection<T, TcpStream>, Error = ConnectError>
          + Clone {
-    Resolver::new(start_default_resolver()).and_then(TcpConnector::new())
+    Resolver::default().and_then(TcpConnector::new())
 }
 
 /// Create connector service factory with default parameters
@@ -112,5 +112,5 @@ pub fn default_connector_factory<T: Address>() -> impl NewService<
     Error = ConnectError,
     InitError = (),
 > + Clone {
-    ResolverFactory::new(start_default_resolver()).and_then(TcpConnectorFactory::new())
+    ResolverFactory::default().and_then(TcpConnectorFactory::new())
 }

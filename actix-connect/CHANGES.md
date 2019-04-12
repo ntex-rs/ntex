@@ -1,5 +1,12 @@
 # Changes
 
+## [0.1.4] - 2019-04-12
+
+### Changed
+
+* Do not start default resolver immediately for default connector.
+
+
 ## [0.1.3] - 2019-04-11
 
 ### Changed

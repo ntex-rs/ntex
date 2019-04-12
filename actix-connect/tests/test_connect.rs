@@ -9,6 +9,7 @@ use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 
 use actix_connect::{default_connector, Connect};
 
+#[cfg(feature = "ssl")]
 #[test]
 fn test_string() {
     let mut srv = TestServer::with(|| {
@@ -19,11 +20,9 @@ fn test_string() {
         })
     });
 
-    let mut conn = srv
-        .block_on(lazy(|| Ok::<_, ()>(default_connector())))
-        .unwrap();
+    let mut conn = default_connector();
     let addr = format!("localhost:{}", srv.port());
-    let con = srv.block_on(conn.call(addr.into())).unwrap();
+    let con = srv.run_on(move || conn.call(addr.into())).unwrap();
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
 }
 
@@ -92,6 +91,7 @@ fn test_new_service() {
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
 }
 
+#[cfg(feature = "ssl")]
 #[test]
 fn test_uri() {
     let mut srv = TestServer::with(|| {
@@ -102,10 +102,8 @@ fn test_uri() {
         })
     });
 
-    let mut conn = srv
-        .block_on(lazy(|| Ok::<_, ()>(default_connector())))
-        .unwrap();
+    let mut conn = default_connector();
     let addr = Uri::try_from(format!("https://localhost:{}", srv.port())).unwrap();
-    let con = srv.block_on(conn.call(addr.into())).unwrap();
+    let con = srv.run_on(move || conn.call(addr.into())).unwrap();
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
 }
