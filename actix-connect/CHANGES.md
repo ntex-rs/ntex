@@ -1,5 +1,11 @@
 # Changes
 
+
+### Changed
+
+* Use trust-dns-resolver 0.11.0
+
+
 ## [0.1.4] - 2019-04-12
 
 ### Changed
