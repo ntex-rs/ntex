@@ -1,6 +1,6 @@
 [package]
 name = "actix-server-config"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix server config utils"
 homepage = "https://actix.rs"
@@ -13,5 +13,22 @@ workspace = ".."
 name = "actix_server_config"
 path = "src/lib.rs"
 
+[package.metadata.docs.rs]
+features = ["ssl", "rust-tls"]
+
+[features]
+default = []
+
+# openssl
+ssl = ["tokio-openssl"]
+
+# rustls
+rust-tls = ["rustls", "tokio-rustls"]
+
 [dependencies]
 futures = "0.1.25"
+tokio-io = "0.1.12"
+tokio-tcp = "0.1"
+tokio-openssl = { version="0.3.0", optional = true }
+rustls = { version = "0.15.2", optional = true }
+tokio-rustls = { version = "0.9.1", optional = true }

@@ -1,7 +1,10 @@
 use std::cell::Cell;
-use std::fmt;
 use std::net::SocketAddr;
 use std::rc::Rc;
+use std::{fmt, io, net, time};
+
+use tokio_io::{AsyncRead, AsyncWrite};
+use tokio_tcp::TcpStream;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -128,5 +131,88 @@ impl<T, P> std::ops::DerefMut for Io<T, P> {
 impl<T: fmt::Debug, P> fmt::Debug for Io<T, P> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Io {{{:?}}}", self.io)
+    }
+}
+
+/// Low-level io stream operations
+pub trait IoStream: AsyncRead + AsyncWrite {
+    /// Returns the socket address of the remote peer of this TCP connection.
+    fn peer_addr(&self) -> Option<SocketAddr> {
+        None
+    }
+
+    /// Sets the value of the TCP_NODELAY option on this socket.
+    fn set_nodelay(&mut self, nodelay: bool) -> io::Result<()>;
+
+    fn set_linger(&mut self, dur: Option<time::Duration>) -> io::Result<()>;
+
+    fn set_keepalive(&mut self, dur: Option<time::Duration>) -> io::Result<()>;
+}
+
+impl IoStream for TcpStream {
+    #[inline]
+    fn peer_addr(&self) -> Option<net::SocketAddr> {
+        TcpStream::peer_addr(self).ok()
+    }
+
+    #[inline]
+    fn set_nodelay(&mut self, nodelay: bool) -> io::Result<()> {
+        TcpStream::set_nodelay(self, nodelay)
+    }
+
+    #[inline]
+    fn set_linger(&mut self, dur: Option<time::Duration>) -> io::Result<()> {
+        TcpStream::set_linger(self, dur)
+    }
+
+    #[inline]
+    fn set_keepalive(&mut self, dur: Option<time::Duration>) -> io::Result<()> {
+        TcpStream::set_keepalive(self, dur)
+    }
+}
+
+#[cfg(any(feature = "ssl"))]
+impl<T: IoStream> IoStream for tokio_openssl::SslStream<T> {
+    #[inline]
+    fn peer_addr(&self) -> Option<net::SocketAddr> {
+        self.get_ref().get_ref().peer_addr()
+    }
+
+    #[inline]
+    fn set_nodelay(&mut self, nodelay: bool) -> io::Result<()> {
+        self.get_mut().get_mut().set_nodelay(nodelay)
+    }
+
+    #[inline]
+    fn set_linger(&mut self, dur: Option<time::Duration>) -> io::Result<()> {
+        self.get_mut().get_mut().set_linger(dur)
+    }
+
+    #[inline]
+    fn set_keepalive(&mut self, dur: Option<time::Duration>) -> io::Result<()> {
+        self.get_mut().get_mut().set_keepalive(dur)
+    }
+}
+
+#[cfg(any(feature = "rust-tls"))]
+impl<T: IoStream> IoStream for tokio_rustls::TlsStream<T, rustls::ServerSession> {
+    #[inline]
+    fn peer_addr(&self) -> Option<net::SocketAddr> {
+        self.get_ref().0.peer_addr()
+    }
+
+    #[inline]
+    fn set_nodelay(&mut self, nodelay: bool) -> io::Result<()> {
+        self.get_mut().0.set_nodelay(nodelay)
+    }
+
+    #[inline]
+    fn set_linger(&mut self, dur: Option<time::Duration>) -> io::Result<()> {
+        self.get_mut().0.set_linger(dur)
+    }
+
+    #[inline]
+    fn set_keepalive(&mut self, dur: Option<time::Duration>) -> io::Result<()> {
+        self.get_mut().0.set_keepalive(dur)
     }
 }

@@ -1,5 +1,16 @@
 # Changes
 
+## [0.4.3] - 2019-04-16
+
+### Added
+
+* Re-export `IoStream` trait
+
+### Changed
+
+* Deppend on `ssl` and `rust-tls` features from actix-server-config
+
+
 ## [0.4.2] - 2019-03-30
 
 ### Fixed
