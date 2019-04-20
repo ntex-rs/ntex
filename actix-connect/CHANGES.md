@@ -1,5 +1,10 @@
 # Changes
 
+## [0.1.5] - 2019-04-19
+
+### Added
+
+* `Connect::set_addr()`
 
 ### Changed
 

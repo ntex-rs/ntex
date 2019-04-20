@@ -8,9 +8,12 @@ pub type BoxedService<Req, Res, Err> = Box<
         Request = Req,
         Response = Res,
         Error = Err,
-        Future = Either<FutureResult<Res, Err>, Box<Future<Item = Res, Error = Err>>>,
+        Future = BoxedServiceResponse<Res, Err>,
     >,
 >;
+
+pub type BoxedServiceResponse<Res, Err> =
+    Either<FutureResult<Res, Err>, Box<Future<Item = Res, Error = Err>>>;
 
 /// Create boxed new service
 pub fn new_service<T, C>(

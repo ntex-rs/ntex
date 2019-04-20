@@ -69,6 +69,14 @@ impl<T: Address> Connect<T> {
         self
     }
 
+    /// Use address.
+    pub fn set_addr(mut self, addr: Option<SocketAddr>) -> Self {
+        if let Some(addr) = addr {
+            self.addr = Some(Either::Left(addr));
+        }
+        self
+    }
+
     /// Host name
     pub fn host(&self) -> &str {
         self.req.host()
