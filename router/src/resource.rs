@@ -267,8 +267,9 @@ impl ResourceDef {
         true
     }
 
-    fn parse_param(pattern: &str) -> (PatternElement, String, &str) {
+    fn parse_param(pattern: &str) -> (PatternElement, String, &str, bool) {
         const DEFAULT_PATTERN: &str = "[^/]+";
+        const DEFAULT_PATTERN_TAIL: &str = ".*";
         let mut params_nesting = 0usize;
         let close_idx = pattern
             .find(|c| match c {
@@ -283,34 +284,54 @@ impl ResourceDef {
                 _ => false,
             })
             .expect("malformed dynamic segment");
-        let (mut param, rem) = pattern.split_at(close_idx + 1);
+        let (mut param, mut rem) = pattern.split_at(close_idx + 1);
         param = &param[1..param.len() - 1]; // Remove outer brackets
+        let tail = rem == "*";
+
         let (name, pattern) = match param.find(':') {
             Some(idx) => {
+                if tail {
+                    panic!("Custom regex is not supported for remainder match");
+                }
                 let (name, pattern) = param.split_at(idx);
                 (name, &pattern[1..])
             }
-            None => (param, DEFAULT_PATTERN),
+            None => (
+                param,
+                if tail {
+                    rem = &rem[1..];
+                    DEFAULT_PATTERN_TAIL
+                } else {
+                    DEFAULT_PATTERN
+                },
+            ),
         };
         (
             PatternElement::Var(name.to_string()),
             format!(r"(?P<{}>{})", &name, &pattern),
             rem,
+            tail,
         )
     }
 
     fn parse(
         mut pattern: &str,
-        for_prefix: bool,
+        mut for_prefix: bool,
     ) -> (String, Vec<PatternElement>, bool, usize) {
         if pattern.find('{').is_none() {
-            return (
-                String::from(pattern),
-                vec![PatternElement::Str(String::from(pattern))],
-                false,
-                pattern.chars().count(),
-            );
-        };
+            return if pattern.ends_with('*') {
+                let path = &pattern[..pattern.len() - 1];
+                let re = String::from("^") + path + "(.*)";
+                (re, vec![PatternElement::Str(String::from(path))], true, 0)
+            } else {
+                (
+                    String::from(pattern),
+                    vec![PatternElement::Str(String::from(pattern))],
+                    false,
+                    pattern.chars().count(),
+                )
+            };
+        }
 
         let mut elems = Vec::new();
         let mut re = String::from("^");
@@ -320,7 +341,11 @@ impl ResourceDef {
             let (prefix, rem) = pattern.split_at(idx);
             elems.push(PatternElement::Str(String::from(prefix)));
             re.push_str(&escape(prefix));
-            let (param_pattern, re_part, rem) = Self::parse_param(rem);
+            let (param_pattern, re_part, rem, tail) = Self::parse_param(rem);
+            if tail {
+                for_prefix = true;
+            }
+
             elems.push(param_pattern);
             re.push_str(&re_part);
             pattern = rem;
@@ -340,7 +365,6 @@ impl ResourceDef {
         if !for_prefix {
             re.push_str("$");
         }
-
         (re, elems, true, pattern.chars().count())
     }
 }
@@ -446,6 +470,42 @@ mod tests {
         let mut path = Path::new("/012345");
         assert!(re.match_path(&mut path));
         assert_eq!(path.get("id").unwrap(), "012345");
+    }
+
+    #[test]
+    fn test_parse_tail() {
+        let re = ResourceDef::new("/user/-{id}*");
+
+        let mut path = Path::new("/user/-profile");
+        assert!(re.match_path(&mut path));
+        assert_eq!(path.get("id").unwrap(), "profile");
+
+        let mut path = Path::new("/user/-2345");
+        assert!(re.match_path(&mut path));
+        assert_eq!(path.get("id").unwrap(), "2345");
+
+        let mut path = Path::new("/user/-2345/");
+        assert!(re.match_path(&mut path));
+        assert_eq!(path.get("id").unwrap(), "2345/");
+
+        let mut path = Path::new("/user/-2345/sdg");
+        assert!(re.match_path(&mut path));
+        assert_eq!(path.get("id").unwrap(), "2345/sdg");
+    }
+
+    #[test]
+    fn test_static_tail() {
+        let re = ResourceDef::new("/user*");
+        assert!(re.is_match("/user/profile"));
+        assert!(re.is_match("/user/2345"));
+        assert!(re.is_match("/user/2345/"));
+        assert!(re.is_match("/user/2345/sdg"));
+
+        let re = ResourceDef::new("/user/*");
+        assert!(re.is_match("/user/profile"));
+        assert!(re.is_match("/user/2345"));
+        assert!(re.is_match("/user/2345/"));
+        assert!(re.is_match("/user/2345/sdg"));
     }
 
     #[test]
