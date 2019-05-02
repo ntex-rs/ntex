@@ -1,5 +1,11 @@
 # Changes
 
+## [0.4.4] - 2019-05-xx
+
+### Added
+
+* Derive debug for Server and ServerCommand
+
 ## [0.4.3] - 2019-04-16
 
 ### Added
