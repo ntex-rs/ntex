@@ -5,6 +5,7 @@ use futures::Future;
 use crate::builder::ServerBuilder;
 use crate::signals::Signal;
 
+#[derive(Debug)]
 pub(crate) enum ServerCommand {
     WorkerDied(usize),
     Pause(oneshot::Sender<()>),
@@ -17,7 +18,7 @@ pub(crate) enum ServerCommand {
     },
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Server(UnboundedSender<ServerCommand>);
 
 impl Server {
