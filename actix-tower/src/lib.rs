@@ -23,21 +23,28 @@ impl<S, R> ActixCompat<S, R> {
 
 /// Extension trait for wrapping a `tower_service::Service` instance for use as
 /// an `actix_service::Service`.
-pub trait TowerServiceExt {
+pub trait TowerServiceExt<R> : TowerService<R> + Sized {
     /// Wraps a `tower_service::Service` in a compatibility wrapper.
-    fn into_actix_service<R>(self) -> ActixCompat<Self, R>
-    where
-        Self: TowerService<R> + Sized;
-}
-
-impl<S> TowerServiceExt for S {
-    fn into_actix_service<R>(self) -> ActixCompat<Self, R>
-    where
-        Self: TowerService<R> + Sized
-    {
+    fn into_actix_service(self) -> ActixCompat<Self, R> {
         ActixCompat::new(self)
     }
+
+    /// Takes a function that, when provided with an `actix_service::Service` wraps it
+    /// and returns a new service. Useful for wrapping a `tower_service::Service` with
+    /// middleware built for `actix_service`.
+    fn wrap_with_actix_middleware<F, U>(self, f: F) -> TowerCompat<U>
+    where
+        F: FnOnce(ActixCompat<Self, R>) -> U,
+        U: ActixService<Request = R>
+    {
+        f(self.into_actix_service()).into_tower_service()
+    }
 }
+
+impl<S, R> TowerServiceExt<R> for S
+where
+    S: TowerService<R> + Sized
+{}
 
 impl<S, R> ActixService for ActixCompat<S, R>
 where
@@ -76,18 +83,26 @@ impl<S> TowerCompat<S> {
 /// a `tower_service::Service`.
 pub trait ActixServiceExt: ActixService + Sized {
     /// Wraps a `tower_service::Service` in a compatibility wrapper.
-    fn into_tower_service(self) -> TowerCompat<Self>;
+    fn into_tower_service(self) -> TowerCompat<Self> {
+        TowerCompat::new(self)
+    }
+
+    /// Takes a function that, when provided with a `tower_service::Service` wraps it
+    /// and returns a new service. Useful for wrapping an `actix_service::Service` with
+    /// middleware built for `tower_service`.
+    fn wrap_with_tower_middleware<F, U>(self, f: F) -> ActixCompat<U, Self::Request>
+    where
+        F: FnOnce(TowerCompat<Self>) -> U,
+        U: TowerService<Self::Request>
+    {
+        f(self.into_tower_service()).into_actix_service()
+    }
 }
 
 impl<S> ActixServiceExt for S
 where
     S: ActixService + Sized
-{
-    fn into_tower_service(self) -> TowerCompat<Self>
-    {
-        TowerCompat::new(self)
-    }
-}
+{}
 
 impl<S> TowerService<S::Request> for TowerCompat<S>
 where
@@ -131,6 +146,15 @@ mod tests {
             assert_eq!(Ok(Async::Ready(())), s.poll_ready());
 
             assert_eq!(Ok(Async::Ready(5)), s.call(()).poll());
+        }
+
+        #[test]
+        fn random_service_can_use_actix_middleware() {
+            let mut s = RandomService.wrap_with_actix_middleware(DoMathTransform);
+
+            assert_eq!(Ok(Async::Ready(())), s.poll_ready());
+
+            assert_eq!(Ok(Async::Ready(68)), s.call(()).poll());
         }
 
         #[test]
@@ -277,8 +301,8 @@ mod tests {
 
         #[test]
         fn random_service_and_add_service_and_ignoring_service_chained() {
-            let s1 = AddOneService::wrap(RandomService.into_tower_service()).into_actix_service();
-            let s2 = AddOneService::wrap(DoMathService.into_tower_service()).into_actix_service();
+            let s1 = RandomService.wrap_with_tower_middleware(AddOneService::wrap);
+            let s2 = DoMathService.wrap_with_tower_middleware(AddOneService::wrap);
 
             let mut s = s1.and_then(s2);
 
