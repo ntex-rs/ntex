@@ -1,4 +1,60 @@
-//! Utilities to ease interoperability with services based on the `tower-service` crate.
+//! Utilities to provide interoperability between services based on the
+//! `actix-service` and `tower-service` crates.
+//!
+//! ## Example
+//!
+//! In the following example, we take a `RandomService`—which will always
+//! return 4—and wraps it with a middleware that will always add 1 to the
+//! result. This pattern can be further used to wrap services from either
+//! `tower-service` or `actix-service` with middleware provided by the other.
+//!
+//! ```
+//! use actix_tower::ActixServiceExt;
+//! # use futures::{Async, Future};
+//! use actix_service::Service;
+//!
+//! struct RandomService;
+//! impl Service for RandomService {
+//!     // …
+//! #    type Request = ();
+//! #    type Response = u32;
+//! #    type Error = ();
+//! #    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+//! #
+//! #    fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> {
+//! #        Ok(Async::Ready(()))
+//! #    }
+//! #
+//! #    fn call(&mut self, _req: Self::Request) -> Self::Future {
+//! #        futures::finished(4)
+//! #     }
+//! }
+//!
+//! struct AddOneMiddleware<S>(S);
+//! impl<S, R> tower_service::Service<R> for AddOneMiddleware<S>
+//! where
+//!     S: tower_service::Service<R, Response = u32>,
+//!     S::Future: 'static,
+//! {
+//!     /// …
+//! #    type Response = u32;
+//! #    type Error = S::Error;
+//! #    type Future = Box<dyn Future<Item = Self::Response, Error = Self::Error>>;
+//! #
+//! #    fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> {
+//! #        self.0.poll_ready()
+//! #    }
+//! #
+//! #    fn call(&mut self, req: R) -> Self::Future {
+//! #        let fut = self.0.call(req).map(|x| x + 1);
+//! #        Box::new(fut)
+//! #    }
+//! }
+//!
+//! let mut s = RandomService.wrap_with_tower_middleware(AddOneMiddleware);
+//! assert_eq!(Ok(Async::Ready(())), s.poll_ready());
+//! assert_eq!(Ok(Async::Ready(5)), s.call(()).poll());
+//! ```
 
 use actix_service::Service as ActixService;
 use std::marker::PhantomData;
@@ -6,6 +62,8 @@ use tower_service::Service as TowerService;
 
 /// Compatibility wrapper associating a `tower_service::Service` with a particular
 /// `Request` type, so that it can be used as an `actix_service::Service`.
+///
+/// Generally created through convenience methods on the `TowerServiceExt<R>` trait.
 pub struct ActixCompat<S, R> {
     inner: S,
     _phantom: PhantomData<R>,
@@ -25,6 +83,32 @@ impl<S, R> ActixCompat<S, R> {
 /// an `actix_service::Service`.
 pub trait TowerServiceExt<R> : TowerService<R> + Sized {
     /// Wraps a `tower_service::Service` in a compatibility wrapper.
+    ///
+    /// ```
+    /// use actix_service::Service;
+    /// use actix_tower::TowerServiceExt;
+    /// # use futures::{Async, Future};
+    ///
+    /// struct RandomService;
+    /// impl<R> tower_service::Service<R> for RandomService {
+    ///     // …
+    /// #    type Response = u32;
+    /// #    type Error = ();
+    /// #    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+    /// #
+    /// #    fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> {
+    /// #        Ok(Async::Ready(()))
+    /// #    }
+    /// #
+    /// #    fn call(&mut self, _req: R) -> Self::Future {
+    /// #        futures::finished(4)
+    /// #     }
+    /// }
+    ///
+    /// let mut s = RandomService.into_actix_service();
+    /// assert_eq!(Ok(Async::Ready(())), s.poll_ready());
+    /// assert_eq!(Ok(Async::Ready(4)), s.call(()).poll());
+    /// ```
     fn into_actix_service(self) -> ActixCompat<Self, R> {
         ActixCompat::new(self)
     }
@@ -32,6 +116,54 @@ pub trait TowerServiceExt<R> : TowerService<R> + Sized {
     /// Takes a function that, when provided with an `actix_service::Service` wraps it
     /// and returns a new service. Useful for wrapping a `tower_service::Service` with
     /// middleware built for `actix_service`.
+    ///
+    /// ```
+    /// use actix_tower::TowerServiceExt;
+    /// # use futures::{Async, Future};
+    /// use tower_service::Service;
+    ///
+    /// struct RandomService;
+    /// impl<R> Service<R> for RandomService {
+    ///     // …
+    /// #    type Response = u32;
+    /// #    type Error = ();
+    /// #    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+    /// #
+    /// #    fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> {
+    /// #        Ok(Async::Ready(()))
+    /// #    }
+    /// #
+    /// #    fn call(&mut self, _req: R) -> Self::Future {
+    /// #        futures::finished(4)
+    /// #     }
+    /// }
+    ///
+    /// struct AddOneTransform<S>(S);
+    /// impl<S> actix_service::Service for AddOneTransform<S>
+    /// where
+    ///     S: actix_service::Service<Response = u32>,
+    ///     S::Future: 'static,
+    /// {
+    ///     /// …
+    /// #    type Request = S::Request;
+    /// #    type Response = u32;
+    /// #    type Error = S::Error;
+    /// #    type Future = Box<dyn Future<Item = Self::Response, Error = Self::Error>>;
+    /// #
+    /// #    fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> {
+    /// #        self.0.poll_ready()
+    /// #    }
+    /// #
+    /// #    fn call(&mut self, req: Self::Request) -> Self::Future {
+    /// #        let fut = self.0.call(req).map(|x| x + 1);
+    /// #        Box::new(fut)
+    /// #    }
+    /// }
+    ///
+    /// let mut s = RandomService.wrap_with_actix_middleware(AddOneTransform);
+    /// assert_eq!(Ok(Async::Ready(())), s.poll_ready());
+    /// assert_eq!(Ok(Async::Ready(5)), s.call(()).poll());
+    /// ```
     fn wrap_with_actix_middleware<F, U>(self, f: F) -> TowerCompat<U>
     where
         F: FnOnce(ActixCompat<Self, R>) -> U,
@@ -66,6 +198,8 @@ where
 
 /// Compatibility wrapper associating an `actix_service::Service` with a particular
 /// `Request` type, so that it can be used as a `tower_service::Service`.
+///
+/// Generally created through convenience methods on the `ActixServiceExt<R>` trait.
 pub struct TowerCompat<S> {
     inner: S,
 }
@@ -83,6 +217,33 @@ impl<S> TowerCompat<S> {
 /// a `tower_service::Service`.
 pub trait ActixServiceExt: ActixService + Sized {
     /// Wraps a `tower_service::Service` in a compatibility wrapper.
+    ///
+    /// ```
+    /// use actix_tower::ActixServiceExt;
+    /// # use futures::{Async, Future};
+    /// use tower_service::Service;
+    ///
+    /// struct RandomService;
+    /// impl actix_service::Service for RandomService {
+    ///     // …
+    /// #    type Request = ();
+    /// #    type Response = u32;
+    /// #    type Error = ();
+    /// #    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+    /// #
+    /// #    fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> {
+    /// #        Ok(Async::Ready(()))
+    /// #    }
+    /// #
+    /// #    fn call(&mut self, _req: Self::Request) -> Self::Future {
+    /// #        futures::finished(4)
+    /// #     }
+    /// }
+    ///
+    /// let mut s = RandomService.into_tower_service();
+    /// assert_eq!(Ok(Async::Ready(())), s.poll_ready());
+    /// assert_eq!(Ok(Async::Ready(4)), s.call(()).poll());
+    /// ```
     fn into_tower_service(self) -> TowerCompat<Self> {
         TowerCompat::new(self)
     }
@@ -90,6 +251,54 @@ pub trait ActixServiceExt: ActixService + Sized {
     /// Takes a function that, when provided with a `tower_service::Service` wraps it
     /// and returns a new service. Useful for wrapping an `actix_service::Service` with
     /// middleware built for `tower_service`.
+    ///
+    /// ```
+    /// use actix_tower::ActixServiceExt;
+    /// # use futures::{Async, Future};
+    /// use actix_service::Service;
+    ///
+    /// struct RandomService;
+    /// impl Service for RandomService {
+    ///     // …
+    /// #    type Request = ();
+    /// #    type Response = u32;
+    /// #    type Error = ();
+    /// #    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+    /// #
+    /// #    fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> {
+    /// #        Ok(Async::Ready(()))
+    /// #    }
+    /// #
+    /// #    fn call(&mut self, _req: Self::Request) -> Self::Future {
+    /// #        futures::finished(4)
+    /// #     }
+    /// }
+    ///
+    /// struct AddOneMiddleware<S>(S);
+    /// impl<S, R> tower_service::Service<R> for AddOneMiddleware<S>
+    /// where
+    ///     S: tower_service::Service<R, Response = u32>,
+    ///     S::Future: 'static,
+    /// {
+    ///     /// …
+    /// #    type Response = u32;
+    /// #    type Error = S::Error;
+    /// #    type Future = Box<dyn Future<Item = Self::Response, Error = Self::Error>>;
+    /// #
+    /// #    fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> {
+    /// #        self.0.poll_ready()
+    /// #    }
+    /// #
+    /// #    fn call(&mut self, req: R) -> Self::Future {
+    /// #        let fut = self.0.call(req).map(|x| x + 1);
+    /// #        Box::new(fut)
+    /// #    }
+    /// }
+    ///
+    /// let mut s = RandomService.wrap_with_tower_middleware(AddOneMiddleware);
+    /// assert_eq!(Ok(Async::Ready(())), s.poll_ready());
+    /// assert_eq!(Ok(Async::Ready(5)), s.call(()).poll());
+    /// ```
     fn wrap_with_tower_middleware<F, U>(self, f: F) -> ActixCompat<U, Self::Request>
     where
         F: FnOnce(TowerCompat<Self>) -> U,
