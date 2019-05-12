@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
+use std::convert::Infallible;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use actix_service::{IntoService, Service, Transform, Void};
+use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, FutureResult};
 use futures::task::AtomicTask;
 use futures::unsync::oneshot;
@@ -90,7 +91,7 @@ where
     type Request = S::Request;
     type Response = S::Response;
     type Error = InOrderError<S::Error>;
-    type InitError = Void;
+    type InitError = Infallible;
     type Transform = InOrderService<S>;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 

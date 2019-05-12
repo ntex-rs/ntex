@@ -1,170 +1,18 @@
 //! Framed dispatcher service and related utilities
 use std::collections::VecDeque;
-use std::marker::PhantomData;
-use std::mem;
+use std::{fmt, mem};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
-use actix_service::{IntoNewService, IntoService, NewService, Service};
-use futures::future::{ok, FutureResult};
+use actix_service::{IntoService, Service};
 use futures::task::AtomicTask;
 use futures::unsync::mpsc;
-use futures::{Async, Future, IntoFuture, Poll, Sink, Stream};
+use futures::{Async, Future, Poll, Sink, Stream};
 use log::debug;
 
 use crate::cell::Cell;
 
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;
-
-pub struct FramedNewService<S, T, U, C> {
-    factory: S,
-    _t: PhantomData<(T, U, C)>,
-}
-
-impl<S, T, U, C> FramedNewService<S, T, U, C>
-where
-    C: Clone,
-    S: NewService<C, Request = Request<U>, Response = Response<U>>,
-    S::Error: 'static,
-    <S::Service as Service>::Future: 'static,
-    T: AsyncRead + AsyncWrite,
-    U: Decoder + Encoder,
-    <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
-{
-    pub fn new<F1: IntoNewService<S, C>>(factory: F1) -> Self {
-        Self {
-            factory: factory.into_new_service(),
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<S, T, U, C> Clone for FramedNewService<S, T, U, C>
-where
-    S: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            factory: self.factory.clone(),
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<S, T, U, C> NewService<C> for FramedNewService<S, T, U, C>
-where
-    C: Clone,
-    S: NewService<C, Request = Request<U>, Response = Response<U>> + Clone,
-    S::Error: 'static,
-    <S::Service as Service>::Future: 'static,
-    T: AsyncRead + AsyncWrite,
-    U: Decoder + Encoder,
-    <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
-{
-    type Request = Framed<T, U>;
-    type Response = FramedTransport<S::Service, T, U>;
-    type Error = S::InitError;
-    type InitError = S::InitError;
-    type Service = FramedService<S, T, U, C>;
-    type Future = FutureResult<Self::Service, Self::InitError>;
-
-    fn new_service(&self, cfg: &C) -> Self::Future {
-        ok(FramedService {
-            factory: self.factory.clone(),
-            config: cfg.clone(),
-            _t: PhantomData,
-        })
-    }
-}
-
-pub struct FramedService<S, T, U, C> {
-    factory: S,
-    config: C,
-    _t: PhantomData<(T, U)>,
-}
-
-impl<S, T, U, C> Clone for FramedService<S, T, U, C>
-where
-    S: Clone,
-    C: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            factory: self.factory.clone(),
-            config: self.config.clone(),
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<S, T, U, C> Service for FramedService<S, T, U, C>
-where
-    S: NewService<C, Request = Request<U>, Response = Response<U>>,
-    S::Error: 'static,
-    <S::Service as Service>::Future: 'static,
-    T: AsyncRead + AsyncWrite,
-    U: Decoder + Encoder,
-    <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
-    C: Clone,
-{
-    type Request = Framed<T, U>;
-    type Response = FramedTransport<S::Service, T, U>;
-    type Error = S::InitError;
-    type Future = FramedServiceResponseFuture<S, T, U, C>;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        Ok(Async::Ready(()))
-    }
-
-    fn call(&mut self, req: Framed<T, U>) -> Self::Future {
-        FramedServiceResponseFuture {
-            fut: self.factory.new_service(&self.config),
-            framed: Some(req),
-        }
-    }
-}
-
-#[doc(hidden)]
-pub struct FramedServiceResponseFuture<S, T, U, C>
-where
-    S: NewService<C, Request = Request<U>, Response = Response<U>>,
-    S::Error: 'static,
-    <S::Service as Service>::Future: 'static,
-    T: AsyncRead + AsyncWrite,
-    U: Decoder + Encoder,
-    <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
-{
-    fut: <S::Future as IntoFuture>::Future,
-    framed: Option<Framed<T, U>>,
-}
-
-impl<S, T, U, C> Future for FramedServiceResponseFuture<S, T, U, C>
-where
-    S: NewService<C, Request = Request<U>, Response = Response<U>>,
-    S::Error: 'static,
-    <S::Service as Service>::Future: 'static,
-    T: AsyncRead + AsyncWrite,
-    U: Decoder + Encoder,
-    <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
-{
-    type Item = FramedTransport<S::Service, T, U>;
-    type Error = S::InitError;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.fut.poll()? {
-            Async::NotReady => Ok(Async::NotReady),
-            Async::Ready(service) => Ok(Async::Ready(FramedTransport::new(
-                self.framed.take().unwrap(),
-                service,
-            ))),
-        }
-    }
-}
 
 /// Framed transport errors
 pub enum FramedTransportError<E, U: Encoder + Decoder> {
@@ -176,6 +24,42 @@ pub enum FramedTransportError<E, U: Encoder + Decoder> {
 impl<E, U: Encoder + Decoder> From<E> for FramedTransportError<E, U> {
     fn from(err: E) -> Self {
         FramedTransportError::Service(err)
+    }
+}
+
+impl<E, U: Encoder + Decoder> fmt::Debug for FramedTransportError<E, U>
+where
+    E: fmt::Debug,
+    <U as Encoder>::Error: fmt::Debug,
+    <U as Decoder>::Error: fmt::Debug,
+{
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            FramedTransportError::Service(ref e) => {
+                write!(fmt, "FramedTransportError::Service({:?})", e)
+            }
+            FramedTransportError::Encoder(ref e) => {
+                write!(fmt, "FramedTransportError::Encoder({:?})", e)
+            }
+            FramedTransportError::Decoder(ref e) => {
+                write!(fmt, "FramedTransportError::Encoder({:?})", e)
+            }
+        }
+    }
+}
+
+impl<E, U: Encoder + Decoder> fmt::Display for FramedTransportError<E, U>
+where
+    E: fmt::Display,
+    <U as Encoder>::Error: fmt::Debug,
+    <U as Decoder>::Error: fmt::Debug,
+{
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            FramedTransportError::Service(ref e) => write!(fmt, "{}", e),
+            FramedTransportError::Encoder(ref e) => write!(fmt, "{:?}", e),
+            FramedTransportError::Decoder(ref e) => write!(fmt, "{:?}", e),
+        }
     }
 }
 
@@ -442,80 +326,5 @@ where
             TransportState::FramedError(err) => Err(err),
             TransportState::Stopping => Ok(Async::Ready(())),
         }
-    }
-}
-
-pub struct IntoFramed<T, U, F>
-where
-    T: AsyncRead + AsyncWrite,
-    F: Fn() -> U + Send + Clone + 'static,
-    U: Encoder + Decoder,
-{
-    factory: F,
-    _t: PhantomData<(T,)>,
-}
-
-impl<T, U, F> IntoFramed<T, U, F>
-where
-    T: AsyncRead + AsyncWrite,
-    F: Fn() -> U + Send + Clone + 'static,
-    U: Encoder + Decoder,
-{
-    pub fn new(factory: F) -> Self {
-        IntoFramed {
-            factory,
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<T, C, U, F> NewService<C> for IntoFramed<T, U, F>
-where
-    T: AsyncRead + AsyncWrite,
-    F: Fn() -> U + Send + Clone + 'static,
-    U: Encoder + Decoder,
-{
-    type Request = T;
-    type Response = Framed<T, U>;
-    type Error = ();
-    type InitError = ();
-    type Service = IntoFramedService<T, U, F>;
-    type Future = FutureResult<Self::Service, Self::InitError>;
-
-    fn new_service(&self, _: &C) -> Self::Future {
-        ok(IntoFramedService {
-            factory: self.factory.clone(),
-            _t: PhantomData,
-        })
-    }
-}
-
-pub struct IntoFramedService<T, U, F>
-where
-    T: AsyncRead + AsyncWrite,
-    F: Fn() -> U + Send + Clone + 'static,
-    U: Encoder + Decoder,
-{
-    factory: F,
-    _t: PhantomData<(T,)>,
-}
-
-impl<T, U, F> Service for IntoFramedService<T, U, F>
-where
-    T: AsyncRead + AsyncWrite,
-    F: Fn() -> U + Send + Clone + 'static,
-    U: Encoder + Decoder,
-{
-    type Request = T;
-    type Response = Framed<T, U>;
-    type Error = ();
-    type Future = FutureResult<Self::Response, Self::Error>;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        Ok(Async::Ready(()))
-    }
-
-    fn call(&mut self, req: T) -> Self::Future {
-        ok(Framed::new(req, (self.factory)()))
     }
 }

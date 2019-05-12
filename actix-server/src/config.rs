@@ -207,8 +207,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service<T, F>(&mut self, name: &str, service: F)
     where
-        F: IntoNewService<T, ServerConfig>,
-        T: NewService<ServerConfig, Request = Io<TcpStream>> + 'static,
+        F: IntoNewService<T>,
+        T: NewService<Config = ServerConfig, Request = Io<TcpStream>> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -237,11 +237,11 @@ impl ServiceRuntime {
 
 type BoxedNewService = Box<
     NewService<
-        ServerConfig,
         Request = (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
         InitError = (),
+        Config = ServerConfig,
         Service = BoxedServerService,
         Future = Box<Future<Item = BoxedServerService, Error = ()>>,
     >,
@@ -251,9 +251,9 @@ struct ServiceFactory<T> {
     inner: T,
 }
 
-impl<T> NewService<ServerConfig> for ServiceFactory<T>
+impl<T> NewService for ServiceFactory<T>
 where
-    T: NewService<ServerConfig, Request = Io<TcpStream>>,
+    T: NewService<Config = ServerConfig, Request = Io<TcpStream>>,
     T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,
@@ -263,6 +263,7 @@ where
     type Response = ();
     type Error = ();
     type InitError = ();
+    type Config = ServerConfig;
     type Service = BoxedServerService;
     type Future = Box<Future<Item = BoxedServerService, Error = ()>>;
 

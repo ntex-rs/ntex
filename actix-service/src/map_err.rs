@@ -98,19 +98,19 @@ where
 /// service's error.
 ///
 /// This is created by the `NewServiceExt::map_err` method.
-pub struct MapErrNewService<A, F, E, C>
+pub struct MapErrNewService<A, F, E>
 where
-    A: NewService<C>,
+    A: NewService,
     F: Fn(A::Error) -> E + Clone,
 {
     a: A,
     f: F,
-    e: PhantomData<(E, C)>,
+    e: PhantomData<E>,
 }
 
-impl<A, F, E, C> MapErrNewService<A, F, E, C>
+impl<A, F, E> MapErrNewService<A, F, E>
 where
-    A: NewService<C>,
+    A: NewService,
     F: Fn(A::Error) -> E + Clone,
 {
     /// Create new `MapErr` new service instance
@@ -123,9 +123,9 @@ where
     }
 }
 
-impl<A, F, E, C> Clone for MapErrNewService<A, F, E, C>
+impl<A, F, E> Clone for MapErrNewService<A, F, E>
 where
-    A: NewService<C> + Clone,
+    A: NewService + Clone,
     F: Fn(A::Error) -> E + Clone,
 {
     fn clone(&self) -> Self {
@@ -137,36 +137,37 @@ where
     }
 }
 
-impl<A, F, E, C> NewService<C> for MapErrNewService<A, F, E, C>
+impl<A, F, E> NewService for MapErrNewService<A, F, E>
 where
-    A: NewService<C>,
+    A: NewService,
     F: Fn(A::Error) -> E + Clone,
 {
     type Request = A::Request;
     type Response = A::Response;
     type Error = E;
+
+    type Config = A::Config;
     type Service = MapErr<A::Service, F, E>;
-
     type InitError = A::InitError;
-    type Future = MapErrNewServiceFuture<A, F, E, C>;
+    type Future = MapErrNewServiceFuture<A, F, E>;
 
-    fn new_service(&self, cfg: &C) -> Self::Future {
+    fn new_service(&self, cfg: &A::Config) -> Self::Future {
         MapErrNewServiceFuture::new(self.a.new_service(cfg), self.f.clone())
     }
 }
 
-pub struct MapErrNewServiceFuture<A, F, E, C>
+pub struct MapErrNewServiceFuture<A, F, E>
 where
-    A: NewService<C>,
+    A: NewService,
     F: Fn(A::Error) -> E,
 {
     fut: A::Future,
     f: F,
 }
 
-impl<A, F, E, C> MapErrNewServiceFuture<A, F, E, C>
+impl<A, F, E> MapErrNewServiceFuture<A, F, E>
 where
-    A: NewService<C>,
+    A: NewService,
     F: Fn(A::Error) -> E,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -174,9 +175,9 @@ where
     }
 }
 
-impl<A, F, E, C> Future for MapErrNewServiceFuture<A, F, E, C>
+impl<A, F, E> Future for MapErrNewServiceFuture<A, F, E>
 where
-    A: NewService<C>,
+    A: NewService,
     F: Fn(A::Error) -> E + Clone,
 {
     type Item = MapErr<A::Service, F, E>;

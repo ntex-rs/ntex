@@ -1,5 +1,16 @@
 # Changes
 
+## [0.5.0] - 2019-05-11
+
+### Added
+
+* Add `Debug` impl for `SslError`
+
+### Changed
+
+* Upgrade to actix-service 0.4
+
+
 ## [0.4.3] - 2019-04-16
 
 ### Added

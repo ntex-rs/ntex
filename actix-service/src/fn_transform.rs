@@ -3,10 +3,11 @@ use std::marker::PhantomData;
 use futures::future::{ok, FutureResult};
 use futures::IntoFuture;
 
-use crate::{Apply, IntoTransform, Service, Transform};
+use crate::apply::Apply;
+use crate::{IntoTransform, Service, Transform};
 
 /// Use function as transform service
-pub fn fn_transform<F, S, In, Out, Err>(
+pub fn transform_fn<F, S, In, Out, Err>(
     f: F,
 ) -> impl Transform<S, Request = In, Response = Out::Item, Error = Out::Error, InitError = Err>
 where

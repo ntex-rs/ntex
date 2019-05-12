@@ -50,6 +50,7 @@ impl<T: Address> NewService for ResolverFactory<T> {
     type Request = Connect<T>;
     type Response = Connect<T>;
     type Error = ConnectError;
+    type Config = ();
     type Service = Resolver<T>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;

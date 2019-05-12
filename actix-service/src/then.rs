@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use futures::{Async, Future, Poll};
 
 use super::{IntoNewService, NewService, Service};
@@ -115,38 +113,36 @@ where
 }
 
 /// `ThenNewService` new service combinator
-pub struct ThenNewService<A, B, C> {
+pub struct ThenNewService<A, B> {
     a: A,
     b: B,
-    _t: PhantomData<C>,
 }
 
-impl<A, B, C> ThenNewService<A, B, C> {
+impl<A, B> ThenNewService<A, B> {
     /// Create new `AndThen` combinator
     pub fn new<F>(a: A, f: F) -> Self
     where
-        A: NewService<C>,
+        A: NewService,
         B: NewService<
-            C,
+            Config = A::Config,
             Request = Result<A::Response, A::Error>,
             Error = A::Error,
             InitError = A::InitError,
         >,
-        F: IntoNewService<B, C>,
+        F: IntoNewService<B>,
     {
         Self {
             a,
             b: f.into_new_service(),
-            _t: PhantomData,
         }
     }
 }
 
-impl<A, B, C> NewService<C> for ThenNewService<A, B, C>
+impl<A, B> NewService for ThenNewService<A, B>
 where
-    A: NewService<C>,
+    A: NewService,
     B: NewService<
-        C,
+        Config = A::Config,
         Request = Result<A::Response, A::Error>,
         Error = A::Error,
         InitError = A::InitError,
@@ -155,17 +151,18 @@ where
     type Request = A::Request;
     type Response = B::Response;
     type Error = A::Error;
+
+    type Config = A::Config;
     type Service = Then<A::Service, B::Service>;
-
     type InitError = A::InitError;
-    type Future = ThenNewServiceFuture<A, B, C>;
+    type Future = ThenNewServiceFuture<A, B>;
 
-    fn new_service(&self, cfg: &C) -> Self::Future {
+    fn new_service(&self, cfg: &A::Config) -> Self::Future {
         ThenNewServiceFuture::new(self.a.new_service(cfg), self.b.new_service(cfg))
     }
 }
 
-impl<A, B, C> Clone for ThenNewService<A, B, C>
+impl<A, B> Clone for ThenNewService<A, B>
 where
     A: Clone,
     B: Clone,
@@ -174,16 +171,15 @@ where
         Self {
             a: self.a.clone(),
             b: self.b.clone(),
-            _t: PhantomData,
         }
     }
 }
 
-pub struct ThenNewServiceFuture<A, B, C>
+pub struct ThenNewServiceFuture<A, B>
 where
-    A: NewService<C>,
+    A: NewService,
     B: NewService<
-        C,
+        Config = A::Config,
         Request = Result<A::Response, A::Error>,
         Error = A::Error,
         InitError = A::InitError,
@@ -195,11 +191,11 @@ where
     b: Option<B::Service>,
 }
 
-impl<A, B, C> ThenNewServiceFuture<A, B, C>
+impl<A, B> ThenNewServiceFuture<A, B>
 where
-    A: NewService<C>,
+    A: NewService,
     B: NewService<
-        C,
+        Config = A::Config,
         Request = Result<A::Response, A::Error>,
         Error = A::Error,
         InitError = A::InitError,
@@ -215,11 +211,11 @@ where
     }
 }
 
-impl<A, B, C> Future for ThenNewServiceFuture<A, B, C>
+impl<A, B> Future for ThenNewServiceFuture<A, B>
 where
-    A: NewService<C>,
+    A: NewService,
     B: NewService<
-        C,
+        Config = A::Config,
         Request = Result<A::Response, A::Error>,
         Error = A::Error,
         InitError = A::InitError,

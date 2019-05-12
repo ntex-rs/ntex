@@ -97,17 +97,17 @@ where
 }
 
 /// `MapNewService` new service combinator
-pub struct MapNewService<A, F, Res, Cfg> {
+pub struct MapNewService<A, F, Res> {
     a: A,
     f: F,
-    r: PhantomData<(Res, Cfg)>,
+    r: PhantomData<Res>,
 }
 
-impl<A, F, Res, Cfg> MapNewService<A, F, Res, Cfg> {
+impl<A, F, Res> MapNewService<A, F, Res> {
     /// Create new `Map` new service instance
     pub fn new(a: A, f: F) -> Self
     where
-        A: NewService<Cfg>,
+        A: NewService,
         F: FnMut(A::Response) -> Res,
     {
         Self {
@@ -118,7 +118,7 @@ impl<A, F, Res, Cfg> MapNewService<A, F, Res, Cfg> {
     }
 }
 
-impl<A, F, Res, Cfg> Clone for MapNewService<A, F, Res, Cfg>
+impl<A, F, Res> Clone for MapNewService<A, F, Res>
 where
     A: Clone,
     F: Clone,
@@ -132,36 +132,37 @@ where
     }
 }
 
-impl<A, F, Res, Cfg> NewService<Cfg> for MapNewService<A, F, Res, Cfg>
+impl<A, F, Res> NewService for MapNewService<A, F, Res>
 where
-    A: NewService<Cfg>,
+    A: NewService,
     F: FnMut(A::Response) -> Res + Clone,
 {
     type Request = A::Request;
     type Response = Res;
     type Error = A::Error;
+
+    type Config = A::Config;
     type Service = Map<A::Service, F, Res>;
-
     type InitError = A::InitError;
-    type Future = MapNewServiceFuture<A, F, Res, Cfg>;
+    type Future = MapNewServiceFuture<A, F, Res>;
 
-    fn new_service(&self, cfg: &Cfg) -> Self::Future {
+    fn new_service(&self, cfg: &A::Config) -> Self::Future {
         MapNewServiceFuture::new(self.a.new_service(cfg), self.f.clone())
     }
 }
 
-pub struct MapNewServiceFuture<A, F, Res, Cfg>
+pub struct MapNewServiceFuture<A, F, Res>
 where
-    A: NewService<Cfg>,
+    A: NewService,
     F: FnMut(A::Response) -> Res,
 {
     fut: A::Future,
     f: Option<F>,
 }
 
-impl<A, F, Res, Cfg> MapNewServiceFuture<A, F, Res, Cfg>
+impl<A, F, Res> MapNewServiceFuture<A, F, Res>
 where
-    A: NewService<Cfg>,
+    A: NewService,
     F: FnMut(A::Response) -> Res,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -169,9 +170,9 @@ where
     }
 }
 
-impl<A, F, Res, Cfg> Future for MapNewServiceFuture<A, F, Res, Cfg>
+impl<A, F, Res> Future for MapNewServiceFuture<A, F, Res>
 where
-    A: NewService<Cfg>,
+    A: NewService,
     F: FnMut(A::Response) -> Res,
 {
     type Item = Map<A::Service, F, Res>;

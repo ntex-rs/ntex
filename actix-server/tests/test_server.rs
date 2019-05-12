@@ -4,7 +4,7 @@ use std::{net, thread, time};
 
 use actix_codec::{BytesCodec, Framed};
 use actix_server::{Io, Server, ServerConfig};
-use actix_service::{fn_cfg_factory, fn_service, IntoService};
+use actix_service::{new_service_cfg, service_fn, IntoService};
 use bytes::Bytes;
 use futures::{Future, Sink};
 use net2::TcpBuilder;
@@ -28,7 +28,7 @@ fn test_bind() {
         let sys = actix_rt::System::new("test");
         let srv = Server::build()
             .bind("test", addr, move || {
-                fn_cfg_factory(move |cfg: &ServerConfig| {
+                new_service_cfg(move |cfg: &ServerConfig| {
                     assert_eq!(cfg.local_addr(), addr);
                     Ok::<_, ()>((|_| Ok::<_, ()>(())).into_service())
                 })
@@ -54,7 +54,7 @@ fn test_bind_no_config() {
     let h = thread::spawn(move || {
         let sys = actix_rt::System::new("test");
         let srv = Server::build()
-            .bind("test", addr, move || fn_service(|_| Ok::<_, ()>(())))
+            .bind("test", addr, move || service_fn(|_| Ok::<_, ()>(())))
             .unwrap()
             .start();
         let _ = tx.send((srv, actix_rt::System::current()));
@@ -76,7 +76,7 @@ fn test_listen() {
         let lst = net::TcpListener::bind(addr).unwrap();
         let srv = Server::build()
             .listen("test", lst, move || {
-                fn_cfg_factory(move |cfg: &ServerConfig| {
+                new_service_cfg(move |cfg: &ServerConfig| {
                     assert_eq!(cfg.local_addr(), addr);
                     Ok::<_, ()>((|_| Ok::<_, ()>(())).into_service())
                 })
@@ -105,7 +105,7 @@ fn test_start() {
         let srv = Server::build()
             .backlog(100)
             .bind("test", addr, move || {
-                fn_cfg_factory(move |cfg: &ServerConfig| {
+                new_service_cfg(move |cfg: &ServerConfig| {
                     assert_eq!(cfg.local_addr(), addr);
                     Ok::<_, ()>(
                         (|io: Io<TcpStream>| {

@@ -1,4 +1,6 @@
-use actix_service::{IntoService, Service, Transform, Void};
+use std::convert::Infallible;
+
+use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 
@@ -28,7 +30,7 @@ impl<S: Service> Transform<S> for InFlight {
     type Request = S::Request;
     type Response = S::Response;
     type Error = S::Error;
-    type InitError = Void;
+    type InitError = Infallible;
     type Transform = InFlightService<S>;
     type Future = FutureResult<Self::Transform, Self::InitError>;
 

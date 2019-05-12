@@ -1,112 +1,104 @@
 use std::marker::PhantomData;
 
-use crate::{IntoNewService, NewService};
+use futures::future::Future;
+use futures::{try_ready, Async, IntoFuture, Poll};
 
-/// Create new ApplyConfig` service factory combinator
-pub fn apply_cfg<F, S, C1, C2, U>(f: F, service: U) -> ApplyConfig<F, S, C1, C2>
+use crate::cell::Cell;
+use crate::{IntoService, NewService, Service};
+
+/// Convert `Fn(&Config, &mut Service) -> Future<Service>` fn to a NewService
+pub fn apply_cfg<F, C, T, R, S>(srv: T, f: F) -> ApplyConfigService<F, C, T, R, S>
 where
-    S: NewService<C2>,
-    F: Fn(&C1) -> C2,
-    U: IntoNewService<S, C2>,
+    F: FnMut(&C, &mut T) -> R,
+    T: Service,
+    R: IntoFuture,
+    R::Item: IntoService<S>,
+    S: Service,
 {
-    ApplyConfig::new(service.into_new_service(), f)
-}
-
-/// `ApplyConfig` service factory combinator
-pub struct ApplyConfig<F, S, C1, C2> {
-    s: S,
-    f: F,
-    r: PhantomData<(C1, C2)>,
-}
-
-impl<F, S, C1, C2> ApplyConfig<F, S, C1, C2>
-where
-    S: NewService<C2>,
-    F: Fn(&C1) -> C2,
-{
-    /// Create new ApplyConfig` service factory combinator
-    pub fn new<U: IntoNewService<S, C2>>(a: U, f: F) -> Self {
-        Self {
-            f,
-            s: a.into_new_service(),
-            r: PhantomData,
-        }
+    ApplyConfigService {
+        f: Cell::new(f),
+        srv: Cell::new(srv.into_service()),
+        _t: PhantomData,
     }
 }
 
-impl<F, S, C1, C2> Clone for ApplyConfig<F, S, C1, C2>
+/// Convert `Fn(&Config) -> Future<Service>` fn to NewService
+pub struct ApplyConfigService<F, C, T, R, S>
 where
-    S: Clone,
-    F: Clone,
+    F: FnMut(&C, &mut T) -> R,
+    T: Service,
+    R: IntoFuture,
+    R::Item: IntoService<S>,
+    S: Service,
+{
+    f: Cell<F>,
+    srv: Cell<T>,
+    _t: PhantomData<(C, R, S)>,
+}
+
+impl<F, C, T, R, S> Clone for ApplyConfigService<F, C, T, R, S>
+where
+    F: FnMut(&C, &mut T) -> R,
+    T: Service,
+    R: IntoFuture,
+    R::Item: IntoService<S>,
+    S: Service,
 {
     fn clone(&self) -> Self {
-        Self {
-            s: self.s.clone(),
+        ApplyConfigService {
             f: self.f.clone(),
-            r: PhantomData,
+            srv: self.srv.clone(),
+            _t: PhantomData,
         }
     }
 }
 
-impl<F, S, C1, C2> NewService<C1> for ApplyConfig<F, S, C1, C2>
+impl<F, C, T, R, S> NewService for ApplyConfigService<F, C, T, R, S>
 where
-    S: NewService<C2>,
-    F: Fn(&C1) -> C2,
+    F: FnMut(&C, &mut T) -> R,
+    T: Service,
+    R: IntoFuture,
+    R::Item: IntoService<S>,
+    S: Service,
 {
+    type Config = C;
     type Request = S::Request;
     type Response = S::Response;
     type Error = S::Error;
-    type Service = S::Service;
+    type Service = S;
 
-    type InitError = S::InitError;
-    type Future = S::Future;
+    type InitError = R::Error;
+    type Future = FnNewServiceConfigFut<R, S>;
 
-    fn new_service(&self, cfg: &C1) -> Self::Future {
-        let cfg2 = (self.f)(cfg);
-
-        self.s.new_service(&cfg2)
+    fn new_service(&self, cfg: &C) -> Self::Future {
+        FnNewServiceConfigFut {
+            fut: unsafe { (self.f.get_mut_unsafe())(cfg, self.srv.get_mut_unsafe()) }
+                .into_future(),
+            _t: PhantomData,
+        }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use futures::future::{ok, FutureResult};
-    use futures::{Async, Future, Poll};
+pub struct FnNewServiceConfigFut<R, S>
+where
+    R: IntoFuture,
+    R::Item: IntoService<S>,
+    S: Service,
+{
+    fut: R::Future,
+    _t: PhantomData<(S,)>,
+}
 
-    use crate::{fn_cfg_factory, NewService, Service};
+impl<R, S> Future for FnNewServiceConfigFut<R, S>
+where
+    R: IntoFuture,
+    R::Item: IntoService<S>,
+    S: Service,
+{
+    type Item = S;
+    type Error = R::Error;
 
-    #[derive(Clone)]
-    struct Srv;
-    impl Service for Srv {
-        type Request = ();
-        type Response = ();
-        type Error = ();
-        type Future = FutureResult<(), ()>;
-
-        fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-            Ok(Async::Ready(()))
-        }
-
-        fn call(&mut self, _: ()) -> Self::Future {
-            ok(())
-        }
-    }
-
-    #[test]
-    fn test_new_service() {
-        let new_srv = fn_cfg_factory(|_: &usize| Ok::<_, ()>(Srv)).apply_cfg(
-            fn_cfg_factory(|s: &String| {
-                assert_eq!(s, "test");
-                Ok::<_, ()>(Srv)
-            }),
-            |cfg: &usize| {
-                assert_eq!(*cfg, 1);
-                "test".to_string()
-            },
-        );
-
-        if let Async::Ready(mut srv) = new_srv.new_service(&1).poll().unwrap() {
-            assert!(srv.poll_ready().is_ok());
-        }
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        Ok(Async::Ready(try_ready!(self.fut.poll()).into_service()))
     }
 }

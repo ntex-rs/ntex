@@ -15,13 +15,14 @@ pub type BoxedService<Req, Res, Err> = Box<
 pub type BoxedServiceResponse<Res, Err> =
     Either<FutureResult<Res, Err>, Box<Future<Item = Res, Error = Err>>>;
 
+pub struct BoxedNewService<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
+
 /// Create boxed new service
-pub fn new_service<T, C>(
+pub fn new_service<T>(
     service: T,
-) -> BoxedNewService<C, T::Request, T::Response, T::Error, T::InitError>
+) -> BoxedNewService<T::Config, T::Request, T::Response, T::Error, T::InitError>
 where
-    C: 'static,
-    T: NewService<C> + 'static,
+    T: NewService + 'static,
     T::Request: 'static,
     T::Response: 'static,
     T::Service: 'static,
@@ -46,7 +47,7 @@ where
 
 type Inner<C, Req, Res, Err, InitErr> = Box<
     NewService<
-        C,
+        Config = C,
         Request = Req,
         Response = Res,
         Error = Err,
@@ -56,9 +57,7 @@ type Inner<C, Req, Res, Err, InitErr> = Box<
     >,
 >;
 
-pub struct BoxedNewService<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
-
-impl<C, Req, Res, Err, InitErr> NewService<C> for BoxedNewService<C, Req, Res, Err, InitErr>
+impl<C, Req, Res, Err, InitErr> NewService for BoxedNewService<C, Req, Res, Err, InitErr>
 where
     Req: 'static,
     Res: 'static,
@@ -69,6 +68,7 @@ where
     type Response = Res;
     type Error = Err;
     type InitError = InitErr;
+    type Config = C;
     type Service = BoxedService<Req, Res, Err>;
     type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
 
@@ -77,18 +77,18 @@ where
     }
 }
 
-struct NewServiceWrapper<C, T: NewService<C>> {
+struct NewServiceWrapper<C, T: NewService> {
     service: T,
     _t: std::marker::PhantomData<C>,
 }
 
-impl<C, T, Req, Res, Err, InitErr> NewService<C> for NewServiceWrapper<C, T>
+impl<C, T, Req, Res, Err, InitErr> NewService for NewServiceWrapper<C, T>
 where
     Req: 'static,
     Res: 'static,
     Err: 'static,
     InitErr: 'static,
-    T: NewService<C, Request = Req, Response = Res, Error = Err, InitError = InitErr>,
+    T: NewService<Config = C, Request = Req, Response = Res, Error = Err, InitError = InitErr>,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
@@ -97,6 +97,7 @@ where
     type Response = Res;
     type Error = Err;
     type InitError = InitErr;
+    type Config = C;
     type Service = BoxedService<Req, Res, Err>;
     type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
 

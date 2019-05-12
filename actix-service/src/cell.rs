@@ -29,4 +29,8 @@ impl<T> Cell<T> {
     pub(crate) fn get_mut(&mut self) -> &mut T {
         unsafe { &mut *self.inner.as_ref().get() }
     }
+
+    pub(crate) unsafe fn get_mut_unsafe(&self) -> &mut T {
+        &mut *self.inner.as_ref().get()
+    }
 }

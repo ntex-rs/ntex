@@ -19,11 +19,11 @@ use tokio_tcp::TcpStream;
 /// # Examples
 ///
 /// ```rust
-/// use actix_service::{fn_service, IntoNewService};
+/// use actix_service::{service_fn, IntoNewService};
 /// use actix_test_server::TestServer;
 ///
 /// fn main() {
-///     let srv = TestServer::with(|| fn_service(
+///     let srv = TestServer::with(|| service_fn(
 ///         |sock| {
 ///             println!("New connection: {:?}", sock);
 ///             Ok::<_, ()>(())

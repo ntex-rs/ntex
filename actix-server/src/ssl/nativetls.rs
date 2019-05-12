@@ -37,10 +37,12 @@ impl<T: AsyncRead + AsyncWrite, P> Clone for NativeTlsAcceptor<T, P> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite, P> NewService<ServerConfig> for NativeTlsAcceptor<T, P> {
+impl<T: AsyncRead + AsyncWrite, P> NewService for NativeTlsAcceptor<T, P> {
     type Request = Io<T, P>;
     type Response = Io<TlsStream<T>, P>;
     type Error = Error;
+
+    type Config = ServerConfig;
     type Service = NativeTlsAcceptorService<T, P>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;

@@ -1,5 +1,18 @@
 # Changes
 
+## [0.4.0] - 2019-05-11
+
+### Changed
+
+* Change `Either` to handle two nexted services
+
+* Upgrade actix-service 0.4
+
+### Deleted
+
+* Framed related services
+
+* Stream related services
 
 ## [0.3.5] - 2019-04-04
 

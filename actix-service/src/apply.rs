@@ -16,17 +16,14 @@ where
     Apply::new(service.into_service(), f)
 }
 
-/// Create fractory for `apply_fn` service.
-pub fn apply_fn_factory<T, F, In, Out, Cfg, U>(
-    service: U,
-    f: F,
-) -> ApplyNewService<T, F, In, Out, Cfg>
+/// Create factory for `apply` service.
+pub fn new_apply_fn<T, F, In, Out, U>(service: U, f: F) -> ApplyNewService<T, F, In, Out>
 where
-    T: NewService<Cfg>,
+    T: NewService,
     F: FnMut(In, &mut T::Service) -> Out + Clone,
     Out: IntoFuture,
     Out::Error: From<T::Error>,
-    U: IntoNewService<T, Cfg>,
+    U: IntoNewService<T>,
 {
     ApplyNewService::new(service.into_new_service(), f)
 }
@@ -50,7 +47,7 @@ where
     Out::Error: From<T::Error>,
 {
     /// Create new `Apply` combinator
-    pub fn new<I: IntoService<T>>(service: I, f: F) -> Self {
+    pub(crate) fn new<I: IntoService<T>>(service: I, f: F) -> Self {
         Self {
             service: service.into_service(),
             f,
@@ -95,24 +92,24 @@ where
 }
 
 /// `ApplyNewService` new service combinator
-pub struct ApplyNewService<T, F, In, Out, Cfg>
+pub struct ApplyNewService<T, F, In, Out>
 where
-    T: NewService<Cfg>,
+    T: NewService,
 {
     service: T,
     f: F,
-    r: PhantomData<(In, Out, Cfg)>,
+    r: PhantomData<(In, Out)>,
 }
 
-impl<T, F, In, Out, Cfg> ApplyNewService<T, F, In, Out, Cfg>
+impl<T, F, In, Out> ApplyNewService<T, F, In, Out>
 where
-    T: NewService<Cfg>,
+    T: NewService,
     F: FnMut(In, &mut T::Service) -> Out + Clone,
     Out: IntoFuture,
     Out::Error: From<T::Error>,
 {
     /// Create new `ApplyNewService` new service instance
-    pub fn new<F1: IntoNewService<T, Cfg>>(service: F1, f: F) -> Self {
+    pub(crate) fn new<F1: IntoNewService<T>>(service: F1, f: F) -> Self {
         Self {
             f,
             service: service.into_new_service(),
@@ -121,9 +118,9 @@ where
     }
 }
 
-impl<T, F, In, Out, Cfg> Clone for ApplyNewService<T, F, In, Out, Cfg>
+impl<T, F, In, Out> Clone for ApplyNewService<T, F, In, Out>
 where
-    T: NewService<Cfg> + Clone,
+    T: NewService + Clone,
     F: FnMut(In, &mut T::Service) -> Out + Clone,
     Out: IntoFuture,
 {
@@ -136,9 +133,9 @@ where
     }
 }
 
-impl<T, F, In, Out, Cfg> NewService<Cfg> for ApplyNewService<T, F, In, Out, Cfg>
+impl<T, F, In, Out> NewService for ApplyNewService<T, F, In, Out>
 where
-    T: NewService<Cfg>,
+    T: NewService,
     F: FnMut(In, &mut T::Service) -> Out + Clone,
     Out: IntoFuture,
     Out::Error: From<T::Error>,
@@ -146,19 +143,20 @@ where
     type Request = In;
     type Response = Out::Item;
     type Error = Out::Error;
+
+    type Config = T::Config;
     type Service = Apply<T::Service, F, In, Out>;
-
     type InitError = T::InitError;
-    type Future = ApplyNewServiceFuture<T, F, In, Out, Cfg>;
+    type Future = ApplyNewServiceFuture<T, F, In, Out>;
 
-    fn new_service(&self, cfg: &Cfg) -> Self::Future {
+    fn new_service(&self, cfg: &T::Config) -> Self::Future {
         ApplyNewServiceFuture::new(self.service.new_service(cfg), self.f.clone())
     }
 }
 
-pub struct ApplyNewServiceFuture<T, F, In, Out, Cfg>
+pub struct ApplyNewServiceFuture<T, F, In, Out>
 where
-    T: NewService<Cfg>,
+    T: NewService,
     F: FnMut(In, &mut T::Service) -> Out + Clone,
     Out: IntoFuture,
 {
@@ -167,9 +165,9 @@ where
     r: PhantomData<(In, Out)>,
 }
 
-impl<T, F, In, Out, Cfg> ApplyNewServiceFuture<T, F, In, Out, Cfg>
+impl<T, F, In, Out> ApplyNewServiceFuture<T, F, In, Out>
 where
-    T: NewService<Cfg>,
+    T: NewService,
     F: FnMut(In, &mut T::Service) -> Out + Clone,
     Out: IntoFuture,
 {
@@ -182,9 +180,9 @@ where
     }
 }
 
-impl<T, F, In, Out, Cfg> Future for ApplyNewServiceFuture<T, F, In, Out, Cfg>
+impl<T, F, In, Out> Future for ApplyNewServiceFuture<T, F, In, Out>
 where
-    T: NewService<Cfg>,
+    T: NewService,
     F: FnMut(In, &mut T::Service) -> Out + Clone,
     Out: IntoFuture,
     Out::Error: From<T::Error>,

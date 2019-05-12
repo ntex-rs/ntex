@@ -24,7 +24,7 @@ pub(crate) enum ServerMessage {
 }
 
 pub trait ServiceFactory: Send + Clone + 'static {
-    type NewService: NewService<ServerConfig, Request = Io<TcpStream>>;
+    type NewService: NewService<Config = ServerConfig, Request = Io<TcpStream>>;
 
     fn create(&self) -> Self::NewService;
 }
@@ -169,7 +169,7 @@ impl InternalServiceFactory for Box<InternalServiceFactory> {
 impl<F, T> ServiceFactory for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: NewService<ServerConfig, Request = Io<TcpStream>>,
+    T: NewService<Config = ServerConfig, Request = Io<TcpStream>>,
 {
     type NewService = T;
 

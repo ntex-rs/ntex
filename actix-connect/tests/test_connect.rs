@@ -1,6 +1,6 @@
 use actix_codec::{BytesCodec, Framed};
 use actix_server_config::Io;
-use actix_service::{fn_service, NewService, Service};
+use actix_service::{service_fn, NewService, Service};
 use actix_test_server::TestServer;
 use bytes::Bytes;
 use futures::{future::lazy, Future, Sink};
@@ -13,7 +13,7 @@ use actix_connect::{default_connector, Connect};
 #[test]
 fn test_string() {
     let mut srv = TestServer::with(|| {
-        fn_service(|io: Io<tokio_tcp::TcpStream>| {
+        service_fn(|io: Io<tokio_tcp::TcpStream>| {
             Framed::new(io.into_parts().0, BytesCodec)
                 .send(Bytes::from_static(b"test"))
                 .then(|_| Ok::<_, ()>(()))
@@ -29,7 +29,7 @@ fn test_string() {
 #[test]
 fn test_static_str() {
     let mut srv = TestServer::with(|| {
-        fn_service(|io: Io<tokio_tcp::TcpStream>| {
+        service_fn(|io: Io<tokio_tcp::TcpStream>| {
             Framed::new(io.into_parts().0, BytesCodec)
                 .send(Bytes::from_static(b"test"))
                 .then(|_| Ok::<_, ()>(()))
@@ -63,7 +63,7 @@ fn test_static_str() {
 #[test]
 fn test_new_service() {
     let mut srv = TestServer::with(|| {
-        fn_service(|io: Io<tokio_tcp::TcpStream>| {
+        service_fn(|io: Io<tokio_tcp::TcpStream>| {
             Framed::new(io.into_parts().0, BytesCodec)
                 .send(Bytes::from_static(b"test"))
                 .then(|_| Ok::<_, ()>(()))
@@ -95,7 +95,7 @@ fn test_new_service() {
 #[test]
 fn test_uri() {
     let mut srv = TestServer::with(|| {
-        fn_service(|io: Io<tokio_tcp::TcpStream>| {
+        service_fn(|io: Io<tokio_tcp::TcpStream>| {
             Framed::new(io.into_parts().0, BytesCodec)
                 .send(Bytes::from_static(b"test"))
                 .then(|_| Ok::<_, ()>(()))

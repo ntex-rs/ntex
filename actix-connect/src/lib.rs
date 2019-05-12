@@ -31,17 +31,6 @@ pub use self::resolver::{Resolver, ResolverFactory};
 use actix_service::{NewService, Service, ServiceExt};
 use tokio_tcp::TcpStream;
 
-#[doc(hidden)]
-#[deprecated(since = "0.1.2", note = "please use `actix_connect::TcpConnector`")]
-pub type Connector<T> = TcpConnector<T>;
-
-#[doc(hidden)]
-#[deprecated(
-    since = "0.1.2",
-    note = "please use `actix_connect::TcpConnectorFactory`"
-)]
-pub type ConnectorFactory<T> = TcpConnectorFactory<T>;
-
 pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver {
     let (resolver, bg) = AsyncResolver::new(cfg, opts);
     tokio_current_thread::spawn(bg);
@@ -90,6 +79,7 @@ pub fn new_connector<T: Address>(
 pub fn new_connector_factory<T: Address>(
     resolver: AsyncResolver,
 ) -> impl NewService<
+    Config = (),
     Request = Connect<T>,
     Response = Connection<T, TcpStream>,
     Error = ConnectError,
@@ -107,6 +97,7 @@ pub fn default_connector<T: Address>(
 
 /// Create connector service factory with default parameters
 pub fn default_connector_factory<T: Address>() -> impl NewService<
+    Config = (),
     Request = Connect<T>,
     Response = Connection<T, TcpStream>,
     Error = ConnectError,

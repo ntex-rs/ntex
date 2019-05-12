@@ -35,6 +35,7 @@ thread_local! {
 }
 
 /// Ssl error combinded with service error.
+#[derive(Debug)]
 pub enum SslError<E1, E2> {
     Ssl(E1),
     Service(E2),

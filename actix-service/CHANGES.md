@@ -1,5 +1,20 @@
 # Changes
 
+## [0.4.0] - 2019-05-11
+
+### Changed
+
+* Use associated type for `NewService` config
+
+* Change `apply_cfg` function
+
+* Renamed helper functions
+
+### Added
+
+* Add `NewService::map_config` and `NewService::unit_config` combinators
+
+
 ## [0.3.6] - 2019-04-07
 
 ### Changed

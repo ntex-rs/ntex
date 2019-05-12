@@ -10,7 +10,7 @@ use std::{env, fmt, io};
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_rt::System;
 use actix_server::{Io, Server};
-use actix_service::{fn_service, NewService};
+use actix_service::{service_fn, NewService};
 use futures::{future, Future};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use tokio_openssl::SslAcceptorExt;
@@ -54,14 +54,14 @@ fn main() -> io::Result<()> {
                 let acceptor = acceptor.clone();
 
                 // service for converting incoming TcpStream to a SslStream<TcpStream>
-                fn_service(move |stream: Io<tokio_tcp::TcpStream>| {
+                service_fn(move |stream: Io<tokio_tcp::TcpStream>| {
                     SslAcceptorExt::accept_async(&acceptor, stream.into_parts().0)
                         .map_err(|e| println!("Openssl error: {}", e))
                 })
                 // .and_then() combinator uses other service to convert incoming `Request` to a
                 // `Response` and then uses that response as an input for next
                 // service. in this case, on success we use `logger` service
-                .and_then(fn_service(logger))
+                .and_then(logger)
                 // Next service counts number of connections
                 .and_then(move |_| {
                     let num = num.fetch_add(1, Ordering::Relaxed);

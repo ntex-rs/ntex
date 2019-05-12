@@ -39,10 +39,12 @@ impl<T, P> Clone for RustlsAcceptor<T, P> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite, P> NewService<SrvConfig> for RustlsAcceptor<T, P> {
+impl<T: AsyncRead + AsyncWrite, P> NewService for RustlsAcceptor<T, P> {
     type Request = Io<T, P>;
     type Response = Io<TlsStream<T, ServerSession>, P>;
     type Error = io::Error;
+
+    type Config = SrvConfig;
     type Service = RustlsAcceptorService<T, P>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;

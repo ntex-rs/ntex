@@ -52,13 +52,14 @@ impl<T, U> Clone for OpensslConnector<T, U> {
     }
 }
 
-impl<T: Address, U> NewService<()> for OpensslConnector<T, U>
+impl<T: Address, U> NewService for OpensslConnector<T, U>
 where
     U: AsyncRead + AsyncWrite + fmt::Debug,
 {
     type Request = Connection<T, U>;
     type Response = Connection<T, SslStream<U>>;
     type Error = HandshakeError<U>;
+    type Config = ();
     type Service = OpensslConnectorService<T, U>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;

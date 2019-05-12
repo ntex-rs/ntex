@@ -1,10 +1,9 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use actix_service::{IntoNewService, IntoService, NewService, Service};
-use futures::future::{ok, Future, FutureResult};
+use actix_service::{IntoService, NewService, Service};
 use futures::unsync::mpsc;
-use futures::{Async, Poll, Stream};
+use futures::{Async, Future, Poll, Stream};
 
 type Request<T> = Result<<T as IntoStream>::Item, <T as IntoStream>::Error>;
 
@@ -29,76 +28,19 @@ where
     }
 }
 
-pub struct StreamNewService<S, T, E, C> {
+pub struct StreamService<S, T: NewService, E> {
     factory: Rc<T>,
-    _t: PhantomData<(S, E, C)>,
-}
-
-impl<S, T, E, C> StreamNewService<S, T, E, C>
-where
-    C: Clone,
-    S: IntoStream,
-    T: NewService<C, Request = Request<S>, Response = (), Error = E, InitError = E>,
-    T::Future: 'static,
-    T::Service: 'static,
-    <T::Service as Service>::Future: 'static,
-{
-    pub fn new<F: IntoNewService<T, C>>(factory: F) -> Self {
-        Self {
-            factory: Rc::new(factory.into_new_service()),
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<S, T, E, C> Clone for StreamNewService<S, T, E, C> {
-    fn clone(&self) -> Self {
-        Self {
-            factory: self.factory.clone(),
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<S, T, E, C> NewService<C> for StreamNewService<S, T, E, C>
-where
-    C: Clone,
-    S: IntoStream + 'static,
-    T: NewService<C, Request = Request<S>, Response = (), Error = E, InitError = E>,
-    T::Future: 'static,
-    T::Service: 'static,
-    <T::Service as Service>::Future: 'static,
-{
-    type Request = S;
-    type Response = ();
-    type Error = E;
-    type InitError = E;
-    type Service = StreamService<S, T, E, C>;
-    type Future = FutureResult<Self::Service, E>;
-
-    fn new_service(&self, cfg: &C) -> Self::Future {
-        ok(StreamService {
-            factory: self.factory.clone(),
-            config: cfg.clone(),
-            _t: PhantomData,
-        })
-    }
-}
-
-pub struct StreamService<S, T, E, C = ()> {
-    factory: Rc<T>,
-    config: C,
+    config: T::Config,
     _t: PhantomData<(S, E)>,
 }
 
-impl<S, T, E, C> Service for StreamService<S, T, E, C>
+impl<S, T, E> Service for StreamService<S, T, E>
 where
     S: IntoStream + 'static,
-    T: NewService<C, Request = Request<S>, Response = (), Error = E, InitError = E>,
+    T: NewService<Request = Request<S>, Response = (), Error = E, InitError = E>,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
-    C: Clone,
 {
     type Request = S;
     type Response = ();
@@ -204,86 +146,6 @@ impl<F: Future> Future for StreamDispatcherService<F> {
                 let _ = self.stop.unbounded_send(e);
                 Ok(Async::Ready(()))
             }
-        }
-    }
-}
-
-/// `NewService` that implements, read one item from the stream.
-pub struct TakeItem<T> {
-    _t: PhantomData<T>,
-}
-
-impl<T> TakeItem<T> {
-    /// Create new `TakeRequest` instance.
-    pub fn new() -> Self {
-        TakeItem { _t: PhantomData }
-    }
-}
-
-impl<T> Default for TakeItem<T> {
-    fn default() -> Self {
-        TakeItem { _t: PhantomData }
-    }
-}
-
-impl<T> Clone for TakeItem<T> {
-    fn clone(&self) -> TakeItem<T> {
-        TakeItem { _t: PhantomData }
-    }
-}
-
-impl<T: Stream, C> NewService<C> for TakeItem<T> {
-    type Request = T;
-    type Response = (Option<T::Item>, T);
-    type Error = T::Error;
-    type InitError = ();
-    type Service = TakeItemService<T>;
-    type Future = FutureResult<Self::Service, Self::InitError>;
-
-    fn new_service(&self, _: &C) -> Self::Future {
-        ok(TakeItemService { _t: PhantomData })
-    }
-}
-
-/// `NewService` that implements, read one request from framed object feature.
-pub struct TakeItemService<T> {
-    _t: PhantomData<T>,
-}
-
-impl<T> Clone for TakeItemService<T> {
-    fn clone(&self) -> TakeItemService<T> {
-        TakeItemService { _t: PhantomData }
-    }
-}
-
-impl<T: Stream> Service for TakeItemService<T> {
-    type Request = T;
-    type Response = (Option<T::Item>, T);
-    type Error = T::Error;
-    type Future = TakeItemServiceResponse<T>;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        Ok(Async::Ready(()))
-    }
-
-    fn call(&mut self, req: T) -> Self::Future {
-        TakeItemServiceResponse { stream: Some(req) }
-    }
-}
-
-#[doc(hidden)]
-pub struct TakeItemServiceResponse<T: Stream> {
-    stream: Option<T>,
-}
-
-impl<T: Stream> Future for TakeItemServiceResponse<T> {
-    type Item = (Option<T::Item>, T);
-    type Error = T::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.stream.as_mut().expect("Use after finish").poll()? {
-            Async::Ready(item) => Ok(Async::Ready((item, self.stream.take().unwrap()))),
-            Async::NotReady => Ok(Async::NotReady),
         }
     }
 }

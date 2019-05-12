@@ -37,10 +37,11 @@ impl<T: AsyncRead + AsyncWrite, P> Clone for OpensslAcceptor<T, P> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite, P> NewService<ServerConfig> for OpensslAcceptor<T, P> {
+impl<T: AsyncRead + AsyncWrite, P> NewService for OpensslAcceptor<T, P> {
     type Request = Io<T, P>;
     type Response = Io<SslStream<T>, P>;
     type Error = HandshakeError<T>;
+    type Config = ServerConfig;
     type Service = OpensslAcceptorService<T, P>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;

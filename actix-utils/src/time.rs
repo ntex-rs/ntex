@@ -1,6 +1,7 @@
+use std::convert::Infallible;
 use std::time::{self, Duration, Instant};
 
-use actix_service::{NewService, Service, Void};
+use actix_service::{NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 use tokio_timer::sleep;
@@ -41,11 +42,12 @@ impl Default for LowResTime {
     }
 }
 
-impl NewService<()> for LowResTime {
+impl NewService for LowResTime {
     type Request = ();
     type Response = Instant;
-    type Error = Void;
-    type InitError = Void;
+    type Error = Infallible;
+    type InitError = Infallible;
+    type Config = ();
     type Service = LowResTimeService;
     type Future = FutureResult<Self::Service, Self::InitError>;
 
@@ -91,7 +93,7 @@ impl LowResTimeService {
 impl Service for LowResTimeService {
     type Request = ();
     type Response = Instant;
-    type Error = Void;
+    type Error = Infallible;
     type Future = FutureResult<Self::Response, Self::Error>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {

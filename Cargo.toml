@@ -37,3 +37,9 @@ futures = "0.1.25"
 openssl = "0.10"
 tokio-tcp = "0.1"
 tokio-openssl = "0.3"
+
+[patch.crates-io]
+actix-service = { path = "actix-service" }
+actix-utils = { path = "actix-utils" }
+actix-server = { path = "actix-server" }
+actix-connect = { path = "actix-connect" }

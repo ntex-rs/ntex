@@ -1,5 +1,12 @@
 # Changes
 
+## [0.2.0] - 2019-05-11
+
+### Changed
+
+* Upgrade to actix-service 0.4
+
+
 ## [0.1.5] - 2019-04-19
 
 ### Added

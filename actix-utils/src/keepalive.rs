@@ -1,7 +1,8 @@
+use std::convert::Infallible;
 use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
-use actix_service::{NewService, Service, Void};
+use actix_service::{NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 use tokio_timer::Delay;
@@ -43,14 +44,15 @@ where
     }
 }
 
-impl<R, E, F> NewService<()> for KeepAlive<R, E, F>
+impl<R, E, F> NewService for KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
     type Request = R;
     type Response = R;
     type Error = E;
-    type InitError = Void;
+    type InitError = Infallible;
+    type Config = ();
     type Service = KeepAliveService<R, E, F>;
     type Future = FutureResult<Self::Service, Self::InitError>;
 

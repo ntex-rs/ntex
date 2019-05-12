@@ -1,5 +1,5 @@
 //! Contains `Either` service and related types and functions.
-use actix_service::{NewService, Service};
+use actix_service::{IntoNewService, NewService, Service};
 use futures::{future, try_ready, Async, Future, IntoFuture, Poll};
 
 /// Combine two different service types into a single type.
@@ -7,16 +7,16 @@ use futures::{future, try_ready, Async, Future, IntoFuture, Poll};
 /// Both services must be of the same request, response, and error types.
 /// `EitherService` is useful for handling conditional branching in service
 /// middleware to different inner service types.
-pub enum EitherService<A, B> {
-    A(A),
-    B(B),
+pub struct EitherService<A, B> {
+    left: A,
+    right: B,
 }
 
 impl<A: Clone, B: Clone> Clone for EitherService<A, B> {
     fn clone(&self) -> Self {
-        match self {
-            EitherService::A(srv) => EitherService::A(srv.clone()),
-            EitherService::B(srv) => EitherService::B(srv.clone()),
+        EitherService {
+            left: self.left.clone(),
+            right: self.right.clone(),
         }
     }
 }
@@ -24,129 +24,130 @@ impl<A: Clone, B: Clone> Clone for EitherService<A, B> {
 impl<A, B> Service for EitherService<A, B>
 where
     A: Service,
-    B: Service<Request = A::Request, Response = A::Response, Error = A::Error>,
+    B: Service<Response = A::Response, Error = A::Error>,
 {
-    type Request = A::Request;
+    type Request = either::Either<A::Request, B::Request>;
     type Response = A::Response;
     type Error = A::Error;
     type Future = future::Either<A::Future, B::Future>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        match self {
-            EitherService::A(ref mut inner) => inner.poll_ready(),
-            EitherService::B(ref mut inner) => inner.poll_ready(),
+        let left = self.left.poll_ready()?;
+        let right = self.right.poll_ready()?;
+
+        if left.is_ready() && right.is_ready() {
+            Ok(Async::Ready(()))
+        } else {
+            Ok(Async::NotReady)
         }
     }
 
-    fn call(&mut self, req: A::Request) -> Self::Future {
-        match self {
-            EitherService::A(ref mut inner) => future::Either::A(inner.call(req)),
-            EitherService::B(ref mut inner) => future::Either::B(inner.call(req)),
+    fn call(&mut self, req: either::Either<A::Request, B::Request>) -> Self::Future {
+        match req {
+            either::Either::Left(req) => future::Either::A(self.left.call(req)),
+            either::Either::Right(req) => future::Either::B(self.right.call(req)),
         }
     }
 }
 
-/// Combine two different new service types into a single type.
-pub enum Either<A, B> {
-    A(A),
-    B(B),
+/// Combine two different new service types into a single service.
+pub struct Either<A, B> {
+    left: A,
+    right: B,
 }
 
 impl<A, B> Either<A, B> {
-    pub fn new_a<C>(srv: A) -> Self
+    pub fn new_a<F>(srv: F) -> Either<A, ()>
     where
-        A: NewService<C>,
-        B: NewService<
-            C,
-            Request = A::Request,
-            Response = A::Response,
-            Error = A::Error,
-            InitError = A::InitError,
-        >,
+        A: NewService,
+        F: IntoNewService<A>,
     {
-        Either::A(srv)
+        Either {
+            left: srv.into_new_service(),
+            right: (),
+        }
     }
 
-    pub fn new_b<C>(srv: B) -> Self
+    pub fn new_b<F>(srv: F) -> Either<(), B>
     where
-        A: NewService<C>,
-        B: NewService<
-            C,
-            Request = A::Request,
-            Response = A::Response,
-            Error = A::Error,
-            InitError = A::InitError,
-        >,
+        B: NewService,
+        F: IntoNewService<B>,
     {
-        Either::B(srv)
+        Either {
+            left: (),
+            right: srv.into_new_service(),
+        }
     }
 }
 
-impl<A, B, C> NewService<C> for Either<A, B>
+impl<A, B> NewService for Either<A, B>
 where
-    A: NewService<C>,
+    A: NewService,
     B: NewService<
-        C,
-        Request = A::Request,
+        Config = A::Config,
         Response = A::Response,
         Error = A::Error,
         InitError = A::InitError,
     >,
 {
-    type Request = A::Request;
+    type Request = either::Either<A::Request, B::Request>;
     type Response = A::Response;
     type Error = A::Error;
     type InitError = A::InitError;
+    type Config = A::Config;
     type Service = EitherService<A::Service, B::Service>;
-    type Future = EitherNewService<A, B, C>;
+    type Future = EitherNewService<A, B>;
 
-    fn new_service(&self, cfg: &C) -> Self::Future {
-        match self {
-            Either::A(ref inner) => EitherNewService::A(inner.new_service(cfg)),
-            Either::B(ref inner) => EitherNewService::B(inner.new_service(cfg)),
+    fn new_service(&self, cfg: &A::Config) -> Self::Future {
+        EitherNewService {
+            left: None,
+            right: None,
+            left_fut: self.left.new_service(cfg),
+            right_fut: self.right.new_service(cfg),
         }
     }
 }
 
 impl<A: Clone, B: Clone> Clone for Either<A, B> {
     fn clone(&self) -> Self {
-        match self {
-            Either::A(srv) => Either::A(srv.clone()),
-            Either::B(srv) => Either::B(srv.clone()),
+        Self {
+            left: self.left.clone(),
+            right: self.right.clone(),
         }
     }
 }
 
 #[doc(hidden)]
-pub enum EitherNewService<A: NewService<C>, B: NewService<C>, C> {
-    A(<A::Future as IntoFuture>::Future),
-    B(<B::Future as IntoFuture>::Future),
+pub struct EitherNewService<A: NewService, B: NewService> {
+    left: Option<A::Service>,
+    right: Option<B::Service>,
+    left_fut: <A::Future as IntoFuture>::Future,
+    right_fut: <B::Future as IntoFuture>::Future,
 }
 
-impl<A, B, C> Future for EitherNewService<A, B, C>
+impl<A, B> Future for EitherNewService<A, B>
 where
-    A: NewService<C>,
-    B: NewService<
-        C,
-        Request = A::Request,
-        Response = A::Response,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
+    A: NewService,
+    B: NewService<Response = A::Response, Error = A::Error, InitError = A::InitError>,
 {
     type Item = EitherService<A::Service, B::Service>;
     type Error = A::InitError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self {
-            EitherNewService::A(ref mut fut) => {
-                let service = try_ready!(fut.poll());
-                Ok(Async::Ready(EitherService::A(service)))
-            }
-            EitherNewService::B(ref mut fut) => {
-                let service = try_ready!(fut.poll());
-                Ok(Async::Ready(EitherService::B(service)))
-            }
+        if self.left.is_none() {
+            self.left = Some(try_ready!(self.left_fut.poll()));
+        }
+        if self.right.is_none() {
+            self.right = Some(try_ready!(self.right_fut.poll()));
+        }
+
+        if self.left.is_some() && self.right.is_some() {
+            Ok(Async::Ready(EitherService {
+                left: self.left.take().unwrap(),
+                right: self.right.take().unwrap(),
+            }))
+        } else {
+            Ok(Async::NotReady)
         }
     }
 }

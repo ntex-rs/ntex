@@ -30,6 +30,7 @@ impl<T: Address> NewService for TcpConnectorFactory<T> {
     type Request = Connect<T>;
     type Response = Connection<T, TcpStream>;
     type Error = ConnectError;
+    type Config = ();
     type Service = TcpConnector<T>;
     type InitError = ();
     type Future = FutureResult<Self::Service, Self::InitError>;
