@@ -1,6 +1,6 @@
 [package]
 name = "actix-test-server"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix test server"
 keywords = ["network", "framework", "async", "futures"]
@@ -11,7 +11,7 @@ categories = ["network-programming", "asynchronous"]
 license = "MIT/Apache-2.0"
 exclude = [".gitignore", ".travis.yml", ".cargo/config", "appveyor.yml"]
 edition = "2018"
-workspace = "../"
+workspace = ".."
 
 [package.metadata.docs.rs]
 features = ["ssl", "tls", "rust-tls"]
@@ -34,7 +34,7 @@ rust-tls = ["rustls", "tokio-rustls", "webpki", "webpki-roots"]
 
 [dependencies]
 actix-rt = "0.2.1"
-actix-server = "0.4.0"
+actix-server = "0.5.0"
 actix-server-config = "0.1.0"
 
 log = "0.4"
@@ -56,4 +56,4 @@ webpki = { version = "0.19", optional = true }
 webpki-roots = { version = "0.16", optional = true }
 
 [dev-dependencies]
-actix-service = "0.3.4"
+actix-service = "0.4.0"
