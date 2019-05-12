@@ -5,6 +5,8 @@
 //! * `ssl` - enables ssl support via `openssl` crate
 //! * `rust-tls` - enables ssl support via `rustls` crate
 
+#![recursion_limit = "128"]
+
 #[macro_use]
 extern crate log;
 

@@ -23,6 +23,7 @@ members = [
   "actix-server-config",
   "actix-test-server",
   "actix-threadpool",
+  "actix-tower",
   "actix-utils",
   "router",
 ]
