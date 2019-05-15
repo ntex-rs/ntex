@@ -5,7 +5,7 @@ use std::rc::Rc;
 use regex::{escape, Regex};
 
 use crate::path::{Path, PathItem};
-use crate::ResourcePath;
+use crate::{Resource, ResourcePath};
 
 const MAX_DYNAMIC_SEGMENTS: usize = 16;
 
@@ -235,6 +235,90 @@ impl ResourceDef {
                     return false;
                 };
                 path.skip(min(rpath.len(), len) as u16);
+                true
+            }
+        }
+    }
+
+    /// Is the given path and parameters a match against this pattern?
+    pub fn match_path_checked<R, T, F, U>(
+        &self,
+        res: &mut R,
+        check: &F,
+        user_data: &Option<U>,
+    ) -> bool
+    where
+        T: ResourcePath,
+        R: Resource<T>,
+        F: Fn(&R, &Option<U>) -> bool,
+    {
+        match self.tp {
+            PatternType::Static(ref s) => {
+                if s == res.resource_path().path() && check(res, user_data) {
+                    let path = res.resource_path();
+                    path.skip(path.len() as u16);
+                    true
+                } else {
+                    false
+                }
+            }
+            PatternType::Dynamic(ref re, ref names, len) => {
+                let mut idx = 0;
+                let mut pos = 0;
+                let mut segments: [PathItem; MAX_DYNAMIC_SEGMENTS] =
+                    [PathItem::Static(""); MAX_DYNAMIC_SEGMENTS];
+
+                if let Some(captures) = re.captures(res.resource_path().path()) {
+                    for (no, name) in names.iter().enumerate() {
+                        if let Some(m) = captures.name(&name) {
+                            idx += 1;
+                            pos = m.end();
+                            segments[no] = PathItem::Segment(m.start() as u16, m.end() as u16);
+                        } else {
+                            log::error!(
+                                "Dynamic path match but not all segments found: {}",
+                                name
+                            );
+                            false;
+                        }
+                    }
+                } else {
+                    return false;
+                }
+
+                if !check(res, user_data) {
+                    return false;
+                }
+
+                let path = res.resource_path();
+                for idx in 0..idx {
+                    path.add(names[idx].clone(), segments[idx]);
+                }
+                path.skip((pos + len) as u16);
+                true
+            }
+            PatternType::Prefix(ref s) => {
+                let len = {
+                    let rpath = res.resource_path().path();
+                    if s == rpath {
+                        s.len()
+                    } else if rpath.starts_with(s)
+                        && (s.ends_with('/') || rpath.split_at(s.len()).1.starts_with('/'))
+                    {
+                        if s.ends_with('/') {
+                            s.len() - 1
+                        } else {
+                            s.len()
+                        }
+                    } else {
+                        return false;
+                    }
+                };
+                if !check(res, user_data) {
+                    return false;
+                }
+                let path = res.resource_path();
+                path.skip(min(path.path().len(), len) as u16);
                 true
             }
         }

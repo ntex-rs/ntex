@@ -1,8 +1,8 @@
 [package]
 name = "actix-router"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
-description = "Path table router"
+description = "Path router"
 keywords = ["actix"]
 homepage = "https://actix.rs"
 repository = "https://github.com/actix/actix-net.git"
