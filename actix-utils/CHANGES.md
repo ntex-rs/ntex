@@ -1,5 +1,12 @@
 # Changes
 
+##[0.4.1] - 2019-05-xx
+
+### Changed
+
+* Change `Either` constructor
+
+
 ## [0.4.0] - 2019-05-11
 
 ### Changed

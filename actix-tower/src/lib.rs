@@ -33,7 +33,7 @@ pub trait TowerServiceExt {
 impl<S> TowerServiceExt for S {
     fn compat<R>(self) -> TowerCompat<Self, R>
     where
-        Self: TowerService<R> + Sized
+        Self: TowerService<R> + Sized,
     {
         TowerCompat::new(self)
     }
@@ -61,7 +61,7 @@ where
 mod tests {
     use super::TowerServiceExt;
     use actix_service::{Service as ActixService, ServiceExt, Transform};
-    use futures::{future::FutureResult, Async, Poll, Future};
+    use futures::{future::FutureResult, Async, Future, Poll};
     use tower_service::Service as TowerService;
 
     struct RandomService;
@@ -182,7 +182,10 @@ mod tests {
     fn tower_service_as_actix_service_can_be_transformed() {
         let transform = DoMath;
 
-        let mut s = transform.new_transform(RandomService.compat()).wait().unwrap();
+        let mut s = transform
+            .new_transform(RandomService.compat())
+            .wait()
+            .unwrap();
 
         assert_eq!(Ok(Async::Ready(())), s.poll_ready());
 

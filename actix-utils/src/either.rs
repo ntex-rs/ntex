@@ -57,25 +57,21 @@ pub struct Either<A, B> {
 }
 
 impl<A, B> Either<A, B> {
-    pub fn new_a<F>(srv: F) -> Either<A, ()>
+    pub fn new<F1, F2>(srv_a: F1, srv_b: F2) -> Either<A, B>
     where
         A: NewService,
-        F: IntoNewService<A>,
+        B: NewService<
+            Config = A::Config,
+            Response = A::Response,
+            Error = A::Error,
+            InitError = A::InitError,
+        >,
+        F1: IntoNewService<A>,
+        F2: IntoNewService<B>,
     {
         Either {
-            left: srv.into_new_service(),
-            right: (),
-        }
-    }
-
-    pub fn new_b<F>(srv: F) -> Either<(), B>
-    where
-        B: NewService,
-        F: IntoNewService<B>,
-    {
-        Either {
-            left: (),
-            right: srv.into_new_service(),
+            left: srv_a.into_new_service(),
+            right: srv_b.into_new_service(),
         }
     }
 }
