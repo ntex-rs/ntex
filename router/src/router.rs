@@ -19,26 +19,26 @@ impl<T, U> Router<T, U> {
         }
     }
 
-    pub fn recognize<R, P>(&self, reosurce: &mut R) -> Option<(&T, ResourceId)>
+    pub fn recognize<R, P>(&self, resource: &mut R) -> Option<(&T, ResourceId)>
     where
         R: Resource<P>,
         P: ResourcePath,
     {
         for item in self.0.iter() {
-            if item.0.match_path(reosurce.resource_path()) {
+            if item.0.match_path(resource.resource_path()) {
                 return Some((&item.1, ResourceId(item.0.id())));
             }
         }
         None
     }
 
-    pub fn recognize_mut<R, P>(&mut self, reosurce: &mut R) -> Option<(&mut T, ResourceId)>
+    pub fn recognize_mut<R, P>(&mut self, resource: &mut R) -> Option<(&mut T, ResourceId)>
     where
         R: Resource<P>,
         P: ResourcePath,
     {
         for item in self.0.iter_mut() {
-            if item.0.match_path(reosurce.resource_path()) {
+            if item.0.match_path(resource.resource_path()) {
                 return Some((&mut item.1, ResourceId(item.0.id())));
             }
         }
