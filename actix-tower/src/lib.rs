@@ -166,12 +166,8 @@ pub trait TowerServiceExt<R> : TowerService<R> + Sized {
     /// ```
     fn wrap_with_actix_middleware<F, U>(self, f: F) -> TowerCompat<U>
     where
-<<<<<<< HEAD
-        Self: TowerService<R> + Sized,
-=======
         F: FnOnce(ActixCompat<Self, R>) -> U,
         U: ActixService<Request = R>
->>>>>>> 14e3933d8b4c68859fb0bea9d99d712280e0cce4
     {
         f(self.into_actix_service()).into_tower_service()
     }
@@ -336,12 +332,6 @@ where
 
 #[cfg(test)]
 mod tests {
-<<<<<<< HEAD
-    use super::TowerServiceExt;
-    use actix_service::{Service as ActixService, ServiceExt, Transform};
-    use futures::{future::FutureResult, Async, Future, Poll};
-    use tower_service::Service as TowerService;
-=======
     mod tower_service_into_actix_service {
         use crate::TowerServiceExt;
         use actix_service::{Service as ActixService, ServiceExt, Transform};
@@ -354,7 +344,6 @@ mod tests {
             let mut s = RandomService.into_actix_service();
 
             assert_eq!(Ok(Async::Ready(())), s.poll_ready());
->>>>>>> 14e3933d8b4c68859fb0bea9d99d712280e0cce4
 
             assert_eq!(Ok(Async::Ready(4)), s.call(()).poll());
         }
@@ -524,22 +513,10 @@ mod tests {
             let s1 = RandomService.wrap_with_tower_middleware(AddOneService::wrap);
             let s2 = DoMathService.wrap_with_tower_middleware(AddOneService::wrap);
 
-<<<<<<< HEAD
-        let mut s = transform
-            .new_transform(RandomService.compat())
-            .wait()
-            .unwrap();
-=======
             let mut s = s1.and_then(s2);
->>>>>>> 14e3933d8b4c68859fb0bea9d99d712280e0cce4
 
             assert_eq!(Ok(Async::Ready(())), s.poll_ready());
 
-<<<<<<< HEAD
-        assert_eq!(Ok(Async::Ready(68)), s.call(()).poll());
-    }
-}
-=======
             assert_eq!(Ok(Async::Ready(86)), s.call(()).poll());
         }
 
@@ -608,4 +585,3 @@ mod tests {
             }
         }}
 }
->>>>>>> 14e3933d8b4c68859fb0bea9d99d712280e0cce4
