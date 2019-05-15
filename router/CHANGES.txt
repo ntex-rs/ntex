@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.5] - 2019-05-15
+
+* Remove debug prints
+
 ## [0.1.4] - 2019-05-15
 
 * Fix checked resource match

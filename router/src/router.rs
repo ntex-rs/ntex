@@ -55,11 +55,8 @@ impl<T, U> Router<T, U> {
         R: Resource<P>,
         P: ResourcePath,
     {
-        println!("router ==== {:?}", self.0.len());
         for item in self.0.iter_mut() {
-            println!("1");
             if item.0.match_path_checked(resource, &check, &item.2) {
-                println!("lll");
                 return Some((&mut item.1, ResourceId(item.0.id())));
             }
         }
