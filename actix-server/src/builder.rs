@@ -128,8 +128,8 @@ impl ServerBuilder {
     /// dropped.
     ///
     /// By default shutdown timeout sets to 30 seconds.
-    pub fn shutdown_timeout(mut self, sec: u16) -> Self {
-        self.shutdown_timeout = Duration::from_secs(u64::from(sec));
+    pub fn shutdown_timeout(mut self, sec: u64) -> Self {
+        self.shutdown_timeout = Duration::from_secs(sec);
         self
     }
 

@@ -1,5 +1,12 @@
 # Changes
 
+## [0.5.1] - 2019-05-18
+
+### Changed
+
+* ServerBuilder::shutdown_timeout() accepts u64
+
+
 ## [0.5.0] - 2019-05-12
 
 ### Added
