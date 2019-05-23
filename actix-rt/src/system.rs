@@ -2,10 +2,11 @@ use std::cell::RefCell;
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use tokio_current_thread::Handle;
 use futures::sync::mpsc::UnboundedSender;
 
 use crate::arbiter::{Arbiter, SystemCommand};
-use crate::builder::{Builder, SystemRunner};
+use crate::builder::{Builder, SystemRunner, AsyncSystemRunner};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -53,6 +54,14 @@ impl System {
     /// This method panics if it can not create tokio runtime
     pub fn new<T: Into<String>>(name: T) -> SystemRunner {
         Self::builder().name(name).build()
+    }
+
+    #[allow(clippy::new_ret_no_self)]
+    /// Create new system.
+    ///
+    /// This method panics if it can not create tokio runtime
+    pub fn new_async<T: Into<String>>(name: T, executor: Handle) -> AsyncSystemRunner {
+        Self::builder().name(name).build_async(executor)
     }
 
     /// Get current running system.
