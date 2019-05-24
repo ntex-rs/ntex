@@ -57,9 +57,9 @@ impl System {
     }
 
     #[allow(clippy::new_ret_no_self)]
-    /// Create new system.
+    /// Create new system using provided CurrentThread Handle.
     ///
-    /// This method panics if it can not create tokio runtime
+    /// This method panics if it can not spawn system arbiter
     pub fn new_async<T: Into<String>>(name: T, executor: Handle) -> AsyncSystemRunner {
         Self::builder().name(name).build_async(executor)
     }
