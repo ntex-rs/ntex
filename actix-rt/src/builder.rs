@@ -73,7 +73,7 @@ impl Builder {
     /// Create new System that can run asynchronously.
     ///
     /// This method panics if it cannot start the system arbiter
-    pub fn build_async(self, executor: Handle) -> AsyncSystemRunner {
+    pub(crate) fn build_async(self, executor: Handle) -> AsyncSystemRunner {
         self.create_async_runtime(executor)
     }
 
@@ -87,8 +87,7 @@ impl Builder {
         self.create_runtime(f).run()
     }
 
-    fn create_async_runtime(self, executor: Handle) -> AsyncSystemRunner
-    {
+    fn create_async_runtime(self, executor: Handle) -> AsyncSystemRunner {
         let (stop_tx, stop) = channel();
         let (sys_sender, sys_receiver) = unbounded();
 
@@ -152,7 +151,7 @@ impl Builder {
 }
 
 #[derive(Debug)]
-pub struct AsyncSystemRunner {
+pub(crate) struct AsyncSystemRunner {
     stop: Receiver<i32>,
     system: System,
 }
@@ -160,36 +159,30 @@ pub struct AsyncSystemRunner {
 impl AsyncSystemRunner {
     /// This function will start event loop and returns a future that
     /// resolves once the `System::stop()` function is called.
-    pub fn run_nonblocking(self) -> Box<Future<Item = (), Error = io::Error> + Send + 'static> {
+    pub(crate) fn run_nonblocking(self) -> Box<Future<Item = (), Error = io::Error> + Send + 'static> {
         let AsyncSystemRunner { stop, .. } = self;
 
         // run loop
-        Box::new(future::ok(())
-            .and_then(|_| {
-                Arbiter::run_system();
-                future::ok(())
-            }).
-            and_then(|_| {
-                stop.then(|res| {
-                    match res {
-                        Ok(code) => {
-                            if code != 0 {
-                                Err(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    format!("Non-zero exit code: {}", code),
-                                ))
-                            } else {
-                                Ok(())
-                            }
-                        }
-                        Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+        Box::new(future::lazy(|| {
+            Arbiter::run_system();
+            stop.then(|res| match res {
+                Ok(code) => {
+                    if code != 0 {
+                        Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("Non-zero exit code: {}", code),
+                        ))
+                    } else {
+                        Ok(())
                     }
-                })
-            }).then(|result| {
+                }
+                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            })
+            .then(|result| {
                 Arbiter::stop_system();
                 result
             })
-        )
+        }))
     }
 }
 
