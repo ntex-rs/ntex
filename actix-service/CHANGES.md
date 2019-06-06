@@ -1,5 +1,11 @@
 # Changes
 
+## [0.4.1] - 2019-06-06
+
+### Added
+
+* Add `new_apply_cfg` function
+
 ## [0.4.0] - 2019-05-12
 
 ### Changed

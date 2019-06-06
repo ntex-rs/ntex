@@ -25,7 +25,7 @@ mod transform_err;
 
 pub use self::and_then::{AndThen, AndThenNewService};
 pub use self::apply::{apply_fn, new_apply_fn, Apply, ApplyNewService};
-pub use self::apply_cfg::apply_cfg;
+pub use self::apply_cfg::{apply_cfg, new_apply_cfg};
 pub use self::fn_service::{new_service_cfg, new_service_fn, service_fn, ServiceFn};
 pub use self::fn_transform::transform_fn;
 pub use self::from_err::{FromErr, FromErrNewService};
