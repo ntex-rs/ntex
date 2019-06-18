@@ -1,5 +1,9 @@
 # Changes
 
+### Changed
+
+* Update `derive_more` to 0.15
+
 ## [0.2.0] - 2019-05-12
 
 ### Changed

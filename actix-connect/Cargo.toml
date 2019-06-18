@@ -33,7 +33,7 @@ uri = ["http"]
 actix-service = "0.4.0"
 actix-codec = "0.1.2"
 actix-utils = "0.4.0"
-derive_more = "0.14.0"
+derive_more = "0.15"
 either = "1.5.2"
 futures = "0.1.25"
 http = { version = "0.1.17", optional = true }

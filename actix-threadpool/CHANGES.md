@@ -1,5 +1,9 @@
 # Changes
 
+### Changed
+
+* Update `derive_more` to 0.15
+
 ## [0.1.1] - 2019-06-05
 
 * Update parking_lot
