@@ -18,7 +18,7 @@ name = "actix_threadpool"
 path = "src/lib.rs"
 
 [dependencies]
-derive_more = "0.14"
+derive_more = "0.15"
 futures = "0.1.25"
 parking_lot = "0.8"
 lazy_static = "1.2"
