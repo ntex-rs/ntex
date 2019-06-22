@@ -7,7 +7,7 @@ use futures::Future;
 use tokio_current_thread::Handle;
 
 use crate::arbiter::{Arbiter, SystemCommand};
-use crate::builder::{AsyncSystemRunner, Builder, SystemRunner};
+use crate::builder::{Builder, SystemRunner};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -64,7 +64,7 @@ impl System {
     pub fn run_in_executor<T: Into<String>>(
         name: T,
         executor: Handle,
-    ) -> Box<Future<Item = (), Error = io::Error> + Send + 'static> {
+    ) -> impl Future<Item = (), Error = io::Error> + Send {
         Self::builder()
             .name(name)
             .build_async(executor)

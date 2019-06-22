@@ -159,11 +159,11 @@ pub(crate) struct AsyncSystemRunner {
 impl AsyncSystemRunner {
     /// This function will start event loop and returns a future that
     /// resolves once the `System::stop()` function is called.
-    pub(crate) fn run_nonblocking(self) -> Box<Future<Item = (), Error = io::Error> + Send + 'static> {
+    pub(crate) fn run_nonblocking(self) -> impl Future<Item = (), Error = io::Error> + Send {
         let AsyncSystemRunner { stop, .. } = self;
 
         // run loop
-        Box::new(future::lazy(|| {
+        future::lazy(|| {
             Arbiter::run_system();
             stop.then(|res| match res {
                 Ok(code) => {
@@ -182,7 +182,7 @@ impl AsyncSystemRunner {
                 Arbiter::stop_system();
                 result
             })
-        }))
+        })
     }
 }
 

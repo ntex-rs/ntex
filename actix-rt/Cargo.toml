@@ -1,6 +1,6 @@
 [package]
 name = "actix-rt"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -18,7 +18,7 @@ name = "actix_rt"
 path = "src/lib.rs"
 
 [dependencies]
-actix-threadpool = "0.1.0"
+actix-threadpool = "0.1.1"
 futures = "0.1.25"
 tokio-current-thread = "0.1"
 tokio-executor = "0.1.5"
