@@ -3,9 +3,11 @@ use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::sync::mpsc::UnboundedSender;
+use futures::Future;
+use tokio_current_thread::Handle;
 
 use crate::arbiter::{Arbiter, SystemCommand};
-use crate::builder::{Builder, SystemRunner};
+use crate::builder::{AsyncSystemRunner, Builder, SystemRunner};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -53,6 +55,20 @@ impl System {
     /// This method panics if it can not create tokio runtime
     pub fn new<T: Into<String>>(name: T) -> SystemRunner {
         Self::builder().name(name).build()
+    }
+
+    #[allow(clippy::new_ret_no_self)]
+    /// Create new system using provided CurrentThread Handle.
+    ///
+    /// This method panics if it can not spawn system arbiter
+    pub fn run_in_executor<T: Into<String>>(
+        name: T,
+        executor: Handle,
+    ) -> Box<Future<Item = (), Error = io::Error> + Send + 'static> {
+        Self::builder()
+            .name(name)
+            .build_async(executor)
+            .run_nonblocking()
     }
 
     /// Get current running system.

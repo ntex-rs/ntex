@@ -1,11 +1,12 @@
 use std::borrow::Cow;
 use std::io;
 
+use futures::future;
 use futures::future::{lazy, Future};
 use futures::sync::mpsc::unbounded;
 use futures::sync::oneshot::{channel, Receiver};
 
-use tokio_current_thread::CurrentThread;
+use tokio_current_thread::{CurrentThread, Handle};
 use tokio_reactor::Reactor;
 use tokio_timer::clock::Clock;
 use tokio_timer::timer::Timer;
@@ -69,6 +70,13 @@ impl Builder {
         self.create_runtime(|| {})
     }
 
+    /// Create new System that can run asynchronously.
+    ///
+    /// This method panics if it cannot start the system arbiter
+    pub(crate) fn build_async(self, executor: Handle) -> AsyncSystemRunner {
+        self.create_async_runtime(executor)
+    }
+
     /// This function will start tokio runtime and will finish once the
     /// `System::stop()` message get called.
     /// Function `f` get called within tokio runtime context.
@@ -77,6 +85,21 @@ impl Builder {
         F: FnOnce() + 'static,
     {
         self.create_runtime(f).run()
+    }
+
+    fn create_async_runtime(self, executor: Handle) -> AsyncSystemRunner {
+        let (stop_tx, stop) = channel();
+        let (sys_sender, sys_receiver) = unbounded();
+
+        let system = System::construct(sys_sender, Arbiter::new_system(), self.stop_on_panic);
+
+        // system arbiter
+        let arb = SystemArbiter::new(stop_tx, sys_receiver);
+
+        // start the system arbiter
+        executor.spawn(arb).expect("could not start system arbiter");
+
+        AsyncSystemRunner { stop, system }
     }
 
     fn create_runtime<F>(self, f: F) -> SystemRunner
@@ -124,6 +147,42 @@ impl Builder {
             self.clock.clone(),
             executor,
         ))
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct AsyncSystemRunner {
+    stop: Receiver<i32>,
+    system: System,
+}
+
+impl AsyncSystemRunner {
+    /// This function will start event loop and returns a future that
+    /// resolves once the `System::stop()` function is called.
+    pub(crate) fn run_nonblocking(self) -> Box<Future<Item = (), Error = io::Error> + Send + 'static> {
+        let AsyncSystemRunner { stop, .. } = self;
+
+        // run loop
+        Box::new(future::lazy(|| {
+            Arbiter::run_system();
+            stop.then(|res| match res {
+                Ok(code) => {
+                    if code != 0 {
+                        Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("Non-zero exit code: {}", code),
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                }
+                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            })
+            .then(|result| {
+                Arbiter::stop_system();
+                result
+            })
+        }))
     }
 }
 
