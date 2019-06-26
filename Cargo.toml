@@ -24,6 +24,7 @@ members = [
   "actix-test-server",
   "actix-threadpool",
   "actix-tower",
+  "actix-ioframe",
   "actix-utils",
   "router",
 ]
