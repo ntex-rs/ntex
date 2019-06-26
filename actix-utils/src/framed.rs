@@ -187,10 +187,12 @@ where
                             return true;
                         }
                         Ok(Async::Ready(None)) => {
+                            rx_done = true;
                             let _ = self.rx.take();
                         }
                         Ok(Async::NotReady) => rx_done = true,
                         Err(_e) => {
+                            rx_done = true;
                             let _ = self.rx.take();
                         }
                     }

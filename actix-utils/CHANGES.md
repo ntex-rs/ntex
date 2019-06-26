@@ -1,6 +1,13 @@
 # Changes
 
-##[0.4.1] - 2019-05-15
+## [0.4.2] - 2019-06-26
+
+### Fixed
+
+* Do not block on sink drop for FramedTransport
+
+
+## [0.4.1] - 2019-05-15
 
 ### Changed
 

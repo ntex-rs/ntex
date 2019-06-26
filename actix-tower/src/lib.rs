@@ -81,7 +81,7 @@ impl<S, R> ActixCompat<S, R> {
 
 /// Extension trait for wrapping a `tower_service::Service` instance for use as
 /// an `actix_service::Service`.
-pub trait TowerServiceExt<R> : TowerService<R> + Sized {
+pub trait TowerServiceExt<R>: TowerService<R> + Sized {
     /// Wraps a `tower_service::Service` in a compatibility wrapper.
     ///
     /// ```
@@ -167,16 +167,13 @@ pub trait TowerServiceExt<R> : TowerService<R> + Sized {
     fn wrap_with_actix_middleware<F, U>(self, f: F) -> TowerCompat<U>
     where
         F: FnOnce(ActixCompat<Self, R>) -> U,
-        U: ActixService<Request = R>
+        U: ActixService<Request = R>,
     {
         f(self.into_actix_service()).into_tower_service()
     }
 }
 
-impl<S, R> TowerServiceExt<R> for S
-where
-    S: TowerService<R> + Sized
-{}
+impl<S, R> TowerServiceExt<R> for S where S: TowerService<R> + Sized {}
 
 impl<S, R> ActixService for ActixCompat<S, R>
 where
@@ -207,9 +204,7 @@ pub struct TowerCompat<S> {
 impl<S> TowerCompat<S> {
     /// Wraps an `actix_service::Service` in a compatibility wrapper.
     pub fn new(inner: S) -> Self {
-        TowerCompat {
-            inner,
-        }
+        TowerCompat { inner }
     }
 }
 
@@ -302,16 +297,13 @@ pub trait ActixServiceExt: ActixService + Sized {
     fn wrap_with_tower_middleware<F, U>(self, f: F) -> ActixCompat<U, Self::Request>
     where
         F: FnOnce(TowerCompat<Self>) -> U,
-        U: TowerService<Self::Request>
+        U: TowerService<Self::Request>,
     {
         f(self.into_tower_service()).into_actix_service()
     }
 }
 
-impl<S> ActixServiceExt for S
-where
-    S: ActixService + Sized
-{}
+impl<S> ActixServiceExt for S where S: ActixService + Sized {}
 
 impl<S> TowerService<S::Request> for TowerCompat<S>
 where
@@ -335,9 +327,8 @@ mod tests {
     mod tower_service_into_actix_service {
         use crate::TowerServiceExt;
         use actix_service::{Service as ActixService, ServiceExt, Transform};
-        use futures::{future::FutureResult, Async, Poll, Future};
+        use futures::{future::FutureResult, Async, Future, Poll};
         use tower_service::Service as TowerService;
-
 
         #[test]
         fn random_service_returns_4() {
@@ -397,7 +388,10 @@ mod tests {
         fn random_service_can_be_transformed_to_do_math() {
             let transform = DoMath;
 
-            let mut s = transform.new_transform(RandomService.into_actix_service()).wait().unwrap();
+            let mut s = transform
+                .new_transform(RandomService.into_actix_service())
+                .wait()
+                .unwrap();
 
             assert_eq!(Ok(Async::Ready(())), s.poll_ready());
 
@@ -477,9 +471,8 @@ mod tests {
     mod actix_service_into_tower_service {
         use crate::{ActixServiceExt, TowerServiceExt};
         use actix_service::{Service as ActixService, ServiceExt};
-        use futures::{future::FutureResult, Async, Poll, Future};
+        use futures::{future::FutureResult, Async, Future, Poll};
         use tower_service::Service as TowerService;
-
 
         #[test]
         fn random_service_returns_4() {
@@ -492,7 +485,8 @@ mod tests {
 
         #[test]
         fn random_service_can_use_tower_middleware() {
-            let mut s = AddOneService::wrap(RandomService.into_tower_service()).into_actix_service();
+            let mut s =
+                AddOneService::wrap(RandomService.into_tower_service()).into_actix_service();
 
             assert_eq!(Ok(Async::Ready(())), s.poll_ready());
 
@@ -501,7 +495,8 @@ mod tests {
 
         #[test]
         fn do_math_service_can_use_tower_middleware() {
-            let mut s = AddOneService::wrap(DoMathService.into_tower_service()).into_actix_service();
+            let mut s =
+                AddOneService::wrap(DoMathService.into_tower_service()).into_actix_service();
 
             assert_eq!(Ok(Async::Ready(())), s.poll_ready());
 
@@ -537,14 +532,12 @@ mod tests {
         }
 
         struct AddOneService<S> {
-            inner: S
+            inner: S,
         }
 
         impl<S> AddOneService<S> {
             fn wrap(inner: S) -> Self {
-                AddOneService {
-                    inner,
-                }
+                AddOneService { inner }
             }
         }
 
@@ -562,8 +555,7 @@ mod tests {
             }
 
             fn call(&mut self, req: R) -> Self::Future {
-                let fut = self.inner.call(req)
-                    .map(|x| x + 1);
+                let fut = self.inner.call(req).map(|x| x + 1);
 
                 Box::new(fut)
             }
@@ -583,5 +575,6 @@ mod tests {
             fn call(&mut self, req: Self::Request) -> Self::Future {
                 futures::finished(req * 17)
             }
-        }}
+        }
+    }
 }
