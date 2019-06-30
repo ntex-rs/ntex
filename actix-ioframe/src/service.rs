@@ -193,7 +193,6 @@ pub struct FramedServiceImpl<St, C, T, Io, Codec> {
 
 impl<St, C, T, Io, Codec> Service for FramedServiceImpl<St, C, T, Io, Codec>
 where
-    // St: 'static,
     Io: AsyncRead + AsyncWrite,
     C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
     C::Error: 'static,
