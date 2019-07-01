@@ -52,6 +52,16 @@ impl<Io, St, Codec: Encoder + Decoder> ConnectResult<Io, St, Codec> {
     }
 
     #[inline]
+    pub fn get_ref(&self) -> &Io {
+        self.framed.get_ref()
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self) -> &mut Io {
+        self.framed.get_mut()
+    }
+
+    #[inline]
     pub fn state<S>(self, state: S) -> ConnectResult<Io, S, Codec> {
         ConnectResult {
             state,
