@@ -1,13 +1,14 @@
+use std::cell::{Ref, RefMut};
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
 use actix_codec::{Decoder, Encoder};
 
-use crate::cell::Cell;
 use crate::sink::Sink;
+use crate::state::State;
 
-pub struct Item<S, Codec: Encoder + Decoder> {
-    state: Cell<S>,
+pub struct Item<St, Codec: Encoder + Decoder> {
+    state: State<St>,
     sink: Sink<<Codec as Encoder>::Item>,
     item: <Codec as Decoder>::Item,
 }
@@ -17,7 +18,7 @@ where
     Codec: Encoder + Decoder,
 {
     pub(crate) fn new(
-        state: Cell<St>,
+        state: State<St>,
         sink: Sink<<Codec as Encoder>::Item>,
         item: <Codec as Decoder>::Item,
     ) -> Self {
@@ -25,12 +26,12 @@ where
     }
 
     #[inline]
-    pub fn state(&self) -> &St {
+    pub fn state(&self) -> Ref<St> {
         self.state.get_ref()
     }
 
     #[inline]
-    pub fn state_mut(&mut self) -> &mut St {
+    pub fn state_mut(&mut self) -> RefMut<St> {
         self.state.get_mut()
     }
 
@@ -42,6 +43,17 @@ where
     #[inline]
     pub fn into_inner(self) -> <Codec as Decoder>::Item {
         self.item
+    }
+
+    #[inline]
+    pub fn into_parts(
+        self,
+    ) -> (
+        State<St>,
+        Sink<<Codec as Encoder>::Item>,
+        <Codec as Decoder>::Item,
+    ) {
+        (self.state, self.sink, self.item)
     }
 }
 

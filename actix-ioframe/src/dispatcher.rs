@@ -13,6 +13,7 @@ use crate::cell::Cell;
 use crate::error::ServiceError;
 use crate::item::Item;
 use crate::sink::Sink;
+use crate::state::State;
 
 type Request<S, U> = Item<S, U>;
 type Response<U> = <U as Encoder>::Item;
@@ -37,8 +38,8 @@ where
 {
     service: S,
     sink: Sink<<U as Encoder>::Item>,
-    state: Cell<St>,
-    dispatch_state: State<S, U>,
+    state: State<St>,
+    dispatch_state: FramedState<S, U>,
     framed: Framed<T, U>,
     rx: Option<mpsc::UnboundedReceiver<FramedMessage<<U as Encoder>::Item>>>,
     inner: Cell<FramedDispatcherInner<<U as Encoder>::Item, S::Error>>,
@@ -56,7 +57,7 @@ where
 {
     pub(crate) fn new<F: IntoService<S>>(
         framed: Framed<T, U>,
-        state: Cell<St>,
+        state: State<St>,
         service: F,
         rx: mpsc::UnboundedReceiver<FramedMessage<<U as Encoder>::Item>>,
         sink: Sink<<U as Encoder>::Item>,
@@ -67,7 +68,7 @@ where
             sink,
             rx: Some(rx),
             service: service.into_service(),
-            dispatch_state: State::Processing,
+            dispatch_state: FramedState::Processing,
             inner: Cell::new(FramedDispatcherInner {
                 buf: VecDeque::new(),
                 task: AtomicTask::new(),
@@ -76,7 +77,7 @@ where
     }
 }
 
-enum State<S: Service, U: Encoder + Decoder> {
+enum FramedState<S: Service, U: Encoder + Decoder> {
     Processing,
     Error(ServiceError<S::Error, U>),
     FramedError(ServiceError<S::Error, U>),
@@ -84,22 +85,22 @@ enum State<S: Service, U: Encoder + Decoder> {
     Stopping,
 }
 
-impl<S: Service, U: Encoder + Decoder> State<S, U> {
+impl<S: Service, U: Encoder + Decoder> FramedState<S, U> {
     fn stop(&mut self, tx: Option<oneshot::Sender<()>>) {
         match self {
-            State::FlushAndStop(ref mut vec) => {
+            FramedState::FlushAndStop(ref mut vec) => {
                 if let Some(tx) = tx {
                     vec.push(tx)
                 }
             }
-            State::Processing => {
-                *self = State::FlushAndStop(if let Some(tx) = tx {
+            FramedState::Processing => {
+                *self = FramedState::FlushAndStop(if let Some(tx) = tx {
                     vec![tx]
                 } else {
                     Vec::new()
                 })
             }
-            State::Error(_) | State::FramedError(_) | State::Stopping => {
+            FramedState::Error(_) | FramedState::FramedError(_) | FramedState::Stopping => {
                 if let Some(tx) = tx {
                     let _ = tx.send(());
                 }
@@ -131,12 +132,12 @@ where
                         Ok(Async::Ready(Some(el))) => el,
                         Err(err) => {
                             self.dispatch_state =
-                                State::FramedError(ServiceError::Decoder(err));
+                                FramedState::FramedError(ServiceError::Decoder(err));
                             return true;
                         }
                         Ok(Async::NotReady) => return false,
                         Ok(Async::Ready(None)) => {
-                            self.dispatch_state = State::Stopping;
+                            self.dispatch_state = FramedState::Stopping;
                             return true;
                         }
                     };
@@ -161,7 +162,7 @@ where
                 }
                 Ok(Async::NotReady) => return false,
                 Err(err) => {
-                    self.dispatch_state = State::Error(ServiceError::Service(err));
+                    self.dispatch_state = FramedState::Error(ServiceError::Service(err));
                     return true;
                 }
             }
@@ -180,13 +181,14 @@ where
                         Ok(msg) => {
                             if let Err(err) = self.framed.force_send(msg) {
                                 self.dispatch_state =
-                                    State::FramedError(ServiceError::Encoder(err));
+                                    FramedState::FramedError(ServiceError::Encoder(err));
                                 return true;
                             }
                             buf_empty = inner.buf.is_empty();
                         }
                         Err(err) => {
-                            self.dispatch_state = State::Error(ServiceError::Service(err));
+                            self.dispatch_state =
+                                FramedState::Error(ServiceError::Service(err));
                             return true;
                         }
                     }
@@ -197,7 +199,7 @@ where
                         Ok(Async::Ready(Some(FramedMessage::Message(msg)))) => {
                             if let Err(err) = self.framed.force_send(msg) {
                                 self.dispatch_state =
-                                    State::FramedError(ServiceError::Encoder(err));
+                                    FramedState::FramedError(ServiceError::Encoder(err));
                                 return true;
                             }
                         }
@@ -231,7 +233,8 @@ where
                     Ok(Async::NotReady) => break,
                     Err(err) => {
                         debug!("Error sending data: {:?}", err);
-                        self.dispatch_state = State::FramedError(ServiceError::Encoder(err));
+                        self.dispatch_state =
+                            FramedState::FramedError(ServiceError::Encoder(err));
                         return true;
                     }
                     Ok(Async::Ready(_)) => (),
@@ -259,32 +262,32 @@ where
     type Error = ServiceError<S::Error, U>;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match mem::replace(&mut self.dispatch_state, State::Processing) {
-            State::Processing => {
+        match mem::replace(&mut self.dispatch_state, FramedState::Processing) {
+            FramedState::Processing => {
                 if self.poll_read() || self.poll_write() {
                     self.poll()
                 } else {
                     Ok(Async::NotReady)
                 }
             }
-            State::Error(err) => {
+            FramedState::Error(err) => {
                 if self.framed.is_write_buf_empty()
                     || (self.poll_write() || self.framed.is_write_buf_empty())
                 {
                     Err(err)
                 } else {
-                    self.dispatch_state = State::Error(err);
+                    self.dispatch_state = FramedState::Error(err);
                     Ok(Async::NotReady)
                 }
             }
-            State::FlushAndStop(mut vec) => {
+            FramedState::FlushAndStop(mut vec) => {
                 if !self.framed.is_write_buf_empty() {
                     match self.framed.poll_complete() {
                         Err(err) => {
                             debug!("Error sending data: {:?}", err);
                         }
                         Ok(Async::NotReady) => {
-                            self.dispatch_state = State::FlushAndStop(vec);
+                            self.dispatch_state = FramedState::FlushAndStop(vec);
                             return Ok(Async::NotReady);
                         }
                         Ok(Async::Ready(_)) => (),
@@ -295,8 +298,8 @@ where
                 }
                 Ok(Async::Ready(()))
             }
-            State::FramedError(err) => Err(err),
-            State::Stopping => Ok(Async::Ready(())),
+            FramedState::FramedError(err) => Err(err),
+            FramedState::Stopping => Ok(Async::Ready(())),
         }
     }
 }

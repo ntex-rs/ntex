@@ -9,6 +9,7 @@ use crate::connect::{Connect, ConnectResult};
 use crate::dispatcher::FramedDispatcher;
 use crate::error::ServiceError;
 use crate::item::Item;
+use crate::state::State;
 
 type RequestItem<S, U> = Item<S, U>;
 type ResponseItem<U> = Option<<U as Encoder>::Item>;
@@ -295,7 +296,7 @@ where
                 match fut.poll()? {
                     Async::Ready(res) => {
                         self.inner = FramedServiceImplResponseInner::Handler(
-                            handler.new_service(res.state.get_ref()),
+                            handler.new_service(&res.state),
                             Some(res),
                         );
                         self.poll()
@@ -309,7 +310,11 @@ where
                         let res = res.take().unwrap();
                         self.inner =
                             FramedServiceImplResponseInner::Dispatcher(FramedDispatcher::new(
-                                res.framed, res.state, handler, res.rx, res.sink,
+                                res.framed,
+                                State::new(res.state),
+                                handler,
+                                res.rx,
+                                res.sink,
                             ));
                         self.poll()
                     }
