@@ -81,14 +81,9 @@ where
     /// Second parameter indicates error occured during disconnect.
     pub fn disconnect<F, Out>(mut self, disconnect: F) -> Self
     where
-        F: Fn(&mut St, bool) -> Out + 'static,
-        Out: IntoFuture,
-        Out::Future: 'static,
+        F: Fn(&mut St, bool) + 'static,
     {
-        self.disconnect = Some(Rc::new(move |st, error| {
-            let fut = disconnect(st, error).into_future();
-            tokio_current_thread::spawn(fut.map_err(|_| ()).map(|_| ()));
-        }));
+        self.disconnect = Some(Rc::new(disconnect));
         self
     }
 
@@ -136,16 +131,11 @@ where
     /// Callback to execute on disconnect
     ///
     /// Second parameter indicates error occured during disconnect.
-    pub fn disconnect<F, Out>(mut self, disconnect: F) -> Self
+    pub fn disconnect<F>(mut self, disconnect: F) -> Self
     where
-        F: Fn(&mut St, bool) -> Out + 'static,
-        Out: IntoFuture,
-        Out::Future: 'static,
+        F: Fn(&mut St, bool) + 'static,
     {
-        self.disconnect = Some(Rc::new(move |st, error| {
-            let fut = disconnect(st, error).into_future();
-            tokio_current_thread::spawn(fut.map_err(|_| ()).map(|_| ()));
-        }));
+        self.disconnect = Some(Rc::new(disconnect));
         self
     }
 
