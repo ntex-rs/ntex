@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use actix_service::{IntoNewService, IntoService, NewService, Service};
-use futures::{Async, Future, Poll};
+use futures::{Async, Future, IntoFuture, Poll};
 
 use crate::connect::{Connect, ConnectResult};
 use crate::dispatcher::FramedDispatcher;
@@ -33,6 +33,7 @@ impl<St, Codec> Builder<St, Codec> {
     {
         ServiceBuilder {
             connect: connect.into_service(),
+            disconnect: None,
             _t: PhantomData,
         }
     }
@@ -53,6 +54,7 @@ impl<St, Codec> Builder<St, Codec> {
     {
         NewServiceBuilder {
             connect: connect.into_new_service(),
+            disconnect: None,
             _t: PhantomData,
         }
     }
@@ -60,6 +62,7 @@ impl<St, Codec> Builder<St, Codec> {
 
 pub struct ServiceBuilder<St, C, Io, Codec> {
     connect: C,
+    disconnect: Option<Rc<Fn(&mut St, bool)>>,
     _t: PhantomData<(St, Io, Codec)>,
 }
 
@@ -73,6 +76,23 @@ where
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,
 {
+    /// Callback to execute on disconnect
+    ///
+    /// Second parameter indicates error occured during disconnect.
+    pub fn disconnect<F, Out>(mut self, disconnect: F) -> Self
+    where
+        F: Fn(&mut St, bool) -> Out + 'static,
+        Out: IntoFuture,
+        Out::Future: 'static,
+    {
+        self.disconnect = Some(Rc::new(move |st, error| {
+            let fut = disconnect(st, error).into_future();
+            tokio_current_thread::spawn(fut.map_err(|_| ()).map(|_| ()));
+        }));
+        self
+    }
+
+    /// Provide stream items handler service and construct service factory.
     pub fn finish<F, T>(
         self,
         service: F,
@@ -90,6 +110,7 @@ where
         FramedServiceImpl {
             connect: self.connect,
             handler: Rc::new(service.into_new_service()),
+            disconnect: self.disconnect.clone(),
             _t: PhantomData,
         }
     }
@@ -97,6 +118,7 @@ where
 
 pub struct NewServiceBuilder<St, C, Io, Codec> {
     connect: C,
+    disconnect: Option<Rc<Fn(&mut St, bool)>>,
     _t: PhantomData<(St, Io, Codec)>,
 }
 
@@ -111,6 +133,22 @@ where
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,
 {
+    /// Callback to execute on disconnect
+    ///
+    /// Second parameter indicates error occured during disconnect.
+    pub fn disconnect<F, Out>(mut self, disconnect: F) -> Self
+    where
+        F: Fn(&mut St, bool) -> Out + 'static,
+        Out: IntoFuture,
+        Out::Future: 'static,
+    {
+        self.disconnect = Some(Rc::new(move |st, error| {
+            let fut = disconnect(st, error).into_future();
+            tokio_current_thread::spawn(fut.map_err(|_| ()).map(|_| ()));
+        }));
+        self
+    }
+
     pub fn finish<F, T>(
         self,
         service: F,
@@ -133,6 +171,7 @@ where
         FramedService {
             connect: self.connect,
             handler: Rc::new(service.into_new_service()),
+            disconnect: self.disconnect,
             _t: PhantomData,
         }
     }
@@ -141,6 +180,7 @@ where
 pub(crate) struct FramedService<St, C, T, Io, Codec> {
     connect: C,
     handler: Rc<T>,
+    disconnect: Option<Rc<Fn(&mut St, bool)>>,
     _t: PhantomData<(St, Io, Codec)>,
 }
 
@@ -172,6 +212,7 @@ where
 
     fn new_service(&self, _: &()) -> Self::Future {
         let handler = self.handler.clone();
+        let disconnect = self.disconnect.clone();
 
         // create connect service and then create service impl
         Box::new(
@@ -180,6 +221,7 @@ where
                 .map(move |connect| FramedServiceImpl {
                     connect,
                     handler,
+                    disconnect,
                     _t: PhantomData,
                 }),
         )
@@ -189,6 +231,7 @@ where
 pub struct FramedServiceImpl<St, C, T, Io, Codec> {
     connect: C,
     handler: Rc<T>,
+    disconnect: Option<Rc<Fn(&mut St, bool)>>,
     _t: PhantomData<(St, Io, Codec)>,
 }
 
@@ -224,6 +267,7 @@ where
                 self.connect.call(Connect::new(req)),
                 self.handler.clone(),
             ),
+            disconnect: self.disconnect.clone(),
         }
     }
 }
@@ -246,6 +290,7 @@ where
     <Codec as Encoder>::Error: std::fmt::Debug,
 {
     inner: FramedServiceImplResponseInner<St, Io, Codec, C, T>,
+    disconnect: Option<Rc<Fn(&mut St, bool)>>,
 }
 
 enum FramedServiceImplResponseInner<St, Io, Codec, C, T>
@@ -315,6 +360,7 @@ where
                                 handler,
                                 res.rx,
                                 res.sink,
+                                self.disconnect.clone(),
                             ));
                         self.poll()
                     }

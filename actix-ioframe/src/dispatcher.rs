@@ -1,6 +1,7 @@
 //! Framed dispatcher service and related utilities
 use std::collections::VecDeque;
 use std::mem;
+use std::rc::Rc;
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use actix_service::{IntoService, Service};
@@ -43,6 +44,7 @@ where
     framed: Framed<T, U>,
     rx: Option<mpsc::UnboundedReceiver<FramedMessage<<U as Encoder>::Item>>>,
     inner: Cell<FramedDispatcherInner<<U as Encoder>::Item, S::Error>>,
+    disconnect: Option<Rc<Fn(&mut St, bool)>>,
 }
 
 impl<St, S, T, U> FramedDispatcher<St, S, T, U>
@@ -61,11 +63,13 @@ where
         service: F,
         rx: mpsc::UnboundedReceiver<FramedMessage<<U as Encoder>::Item>>,
         sink: Sink<<U as Encoder>::Item>,
+        disconnect: Option<Rc<Fn(&mut St, bool)>>,
     ) -> Self {
         FramedDispatcher {
             framed,
             state,
             sink,
+            disconnect,
             rx: Some(rx),
             service: service.into_service(),
             dispatch_state: FramedState::Processing,
@@ -124,6 +128,12 @@ where
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
+    fn disconnect(&mut self, error: bool) {
+        if let Some(ref disconnect) = self.disconnect {
+            (&*disconnect)(&mut *self.state.get_mut(), error);
+        }
+    }
+
     fn poll_read(&mut self) -> bool {
         loop {
             match self.service.poll_ready() {
@@ -274,6 +284,7 @@ where
                 if self.framed.is_write_buf_empty()
                     || (self.poll_write() || self.framed.is_write_buf_empty())
                 {
+                    self.disconnect(true);
                     Err(err)
                 } else {
                     self.dispatch_state = FramedState::Error(err);
@@ -296,9 +307,13 @@ where
                 for tx in vec.drain(..) {
                     let _ = tx.send(());
                 }
+                self.disconnect(false);
                 Ok(Async::Ready(()))
             }
-            FramedState::FramedError(err) => Err(err),
+            FramedState::FramedError(err) => {
+                self.disconnect(true);
+                Err(err)
+            }
             FramedState::Stopping => Ok(Async::Ready(())),
         }
     }
