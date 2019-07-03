@@ -314,7 +314,10 @@ where
                 self.disconnect(true);
                 Err(err)
             }
-            FramedState::Stopping => Ok(Async::Ready(())),
+            FramedState::Stopping => {
+                self.disconnect(false);
+                Ok(Async::Ready(()))
+            }
         }
     }
 }

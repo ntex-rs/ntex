@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use actix_service::{IntoNewService, IntoService, NewService, Service};
-use futures::{Async, Future, IntoFuture, Poll};
+use futures::{Async, Future, Poll};
 
 use crate::connect::{Connect, ConnectResult};
 use crate::dispatcher::FramedDispatcher;
@@ -139,11 +139,11 @@ where
         self
     }
 
-    pub fn finish<F, T>(
+    pub fn finish<F, T, Cfg>(
         self,
         service: F,
     ) -> impl NewService<
-        Config = (),
+        Config = Cfg,
         Request = Io,
         Response = (),
         Error = ServiceError<C::Error, Codec>,
@@ -167,14 +167,14 @@ where
     }
 }
 
-pub(crate) struct FramedService<St, C, T, Io, Codec> {
+pub(crate) struct FramedService<St, C, T, Io, Codec, Cfg> {
     connect: C,
     handler: Rc<T>,
     disconnect: Option<Rc<Fn(&mut St, bool)>>,
-    _t: PhantomData<(St, Io, Codec)>,
+    _t: PhantomData<(St, Io, Codec, Cfg)>,
 }
 
-impl<St, C, T, Io, Codec> NewService for FramedService<St, C, T, Io, Codec>
+impl<St, C, T, Io, Codec, Cfg> NewService for FramedService<St, C, T, Io, Codec, Cfg>
 where
     St: 'static,
     Io: AsyncRead + AsyncWrite,
@@ -192,7 +192,7 @@ where
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,
 {
-    type Config = ();
+    type Config = Cfg;
     type Request = Io;
     type Response = ();
     type Error = ServiceError<C::Error, Codec>;
@@ -200,7 +200,7 @@ where
     type Service = FramedServiceImpl<St, C::Service, T, Io, Codec>;
     type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
 
-    fn new_service(&self, _: &()) -> Self::Future {
+    fn new_service(&self, _: &Cfg) -> Self::Future {
         let handler = self.handler.clone();
         let disconnect = self.disconnect.clone();
 

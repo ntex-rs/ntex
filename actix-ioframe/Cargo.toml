@@ -18,8 +18,8 @@ name = "actix_ioframe"
 path = "src/lib.rs"
 
 [dependencies]
-actix-service = "0.4.0"
-actix-codec = "0.1.1"
+actix-service = "0.4.1"
+actix-codec = "0.1.2"
 bytes = "0.4"
 either = "1.5.2"
 futures = "0.1.25"
@@ -28,3 +28,8 @@ log = "0.4"
 
 [dev-dependencies]
 actix-rt = "0.2.2"
+actix-connect = "0.2.0"
+actix-test-server = "0.2.2"
+actix-server-config = "0.1.1"
+tokio-tcp = "0.1"
+tokio-timer = "0.2"
