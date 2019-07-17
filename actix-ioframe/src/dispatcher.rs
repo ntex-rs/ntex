@@ -153,7 +153,7 @@ where
                     };
 
                     let mut cell = self.inner.clone();
-                    cell.get_mut().task.register();
+                    unsafe { cell.get_mut().task.register() };
                     tokio_current_thread::spawn(
                         self.service
                             .call(Item::new(self.state.clone(), self.sink.clone(), item))
@@ -163,9 +163,11 @@ where
                                     Ok(None) => return Ok(()),
                                     Err(err) => Err(err),
                                 };
-                                let inner = cell.get_mut();
-                                inner.buf.push_back(item);
-                                inner.task.notify();
+                                unsafe {
+                                    let inner = cell.get_mut();
+                                    inner.buf.push_back(item);
+                                    inner.task.notify();
+                                }
                                 Ok(())
                             }),
                     );
@@ -181,7 +183,7 @@ where
 
     /// write to framed object
     fn poll_write(&mut self) -> bool {
-        let inner = self.inner.get_mut();
+        let inner = unsafe { self.inner.get_mut() };
         let mut rx_done = self.rx.is_none();
         let mut buf_empty = inner.buf.is_empty();
         loop {
