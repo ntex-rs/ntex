@@ -1,5 +1,12 @@
 # Changes
 
+## [0.4.4] - 2019-07-17
+
+### Changed
+
+* Undeprecate `FramedTransport` as it is actually useful
+
+
 ## [0.4.3] - 2019-07-17
 
 ### Deprecated
