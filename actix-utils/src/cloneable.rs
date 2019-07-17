@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -6,6 +7,8 @@ use futures::Poll;
 
 use super::cell::Cell;
 
+#[doc(hidden)]
+#[deprecated(since = "0.4.3", note = "support will be removed in actix-utils 0.4.5")]
 /// Service that allows to turn non-clone service to a service with `Clone` impl
 pub struct CloneableService<T> {
     service: Cell<T>,

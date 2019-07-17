@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Framed dispatcher service and related utilities
 use std::collections::VecDeque;
 use std::{fmt, mem};
@@ -14,6 +15,8 @@ use crate::cell::Cell;
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;
 
+#[doc(hidden)]
+#[deprecated(since = "0.4.3", note = "support will be removed in actix-utils 0.4.5")]
 /// Framed transport errors
 pub enum FramedTransportError<E, U: Encoder + Decoder> {
     Service(E),
@@ -63,11 +66,18 @@ where
     }
 }
 
+#[doc(hidden)]
+#[deprecated(since = "0.4.3", note = "support will be removed in actix-utils 0.4.5")]
 pub enum FramedMessage<T> {
     Message(T),
     Close,
 }
 
+#[doc(hidden)]
+#[deprecated(
+    since = "0.4.3",
+    note = "please use `actix_ioframe` instead. support will be removed in actix-utils 0.4.5"
+)]
 /// FramedTransport - is a future that reads frames from Framed object
 /// and pass then to the service.
 pub struct FramedTransport<S, T, U>

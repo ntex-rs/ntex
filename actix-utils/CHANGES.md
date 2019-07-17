@@ -1,5 +1,14 @@
 # Changes
 
+## [0.4.3] - 2019-07-17
+
+### Deprecated
+
+* Deprecate `CloneableService` as it is not safe and in general not very useful
+
+* Deprecate `FramedTransport` in favor of `actix-ioframe`
+
+
 ## [0.4.2] - 2019-06-26
 
 ### Fixed
