@@ -1,5 +1,12 @@
 # Changes
 
+## [0.2.4] - 2019-07-17
+
+### Changed
+
+* Avoid a copy of the Future when initializing the Box. #29
+
+
 ## [0.2.3] - 2019-06-22
 
 ### Added

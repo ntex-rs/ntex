@@ -6,17 +6,11 @@ use futures::{Async, Future, IntoFuture, Poll};
 use crate::transform_err::{TransformFromErr, TransformMapInitErr};
 use crate::{IntoNewService, NewService, Service};
 
-/// The `Transform` trait defines the interface of a Service factory.  `Transform`
-/// is often implemented for middleware, defining how to manufacture a
-/// middleware Service.  A Service that is manufactured by the factory takes
+/// The `Transform` trait defines the interface of a Service factory. `Transform`
+/// is often implemented for middleware, defining how to construct a
+/// middleware Service. A Service that is constructed by the factory takes
 /// the Service that follows it during execution as a parameter, assuming
-/// ownership of the next Service.  A Service can be a variety of types, such
-/// as (but not limited to) another middleware Service, an extractor Service,
-/// other helper Services, or the request handler endpoint Service.
-///
-/// A Service is created by the factory during server initialization.
-///
-/// `Config` is a service factory configuration type.
+/// ownership of the next Service.
 pub trait Transform<S> {
     /// Requests handled by the service.
     type Request;
