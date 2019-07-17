@@ -11,6 +11,8 @@ use tokio_current_thread::spawn;
 use crate::builder::Builder;
 use crate::system::System;
 
+use copyless::BoxHelper;
+
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = RefCell::new(None);
     static RUNNING: Cell<bool> = Cell::new(false);
@@ -141,9 +143,9 @@ impl Arbiter {
     {
         RUNNING.with(move |cell| {
             if cell.get() {
-                spawn(Box::new(future));
+                spawn(Box::alloc().init(future));
             } else {
-                Q.with(move |cell| cell.borrow_mut().push(Box::new(future)));
+                Q.with(move |cell| cell.borrow_mut().push(Box::alloc().init(future)));
             }
         });
     }
