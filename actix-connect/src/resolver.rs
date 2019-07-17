@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 
@@ -162,23 +161,20 @@ impl<T: Address> Future for ResolverFuture<T> {
         })? {
             Async::NotReady => Ok(Async::NotReady),
             Async::Ready(ips) => {
-                let mut req = self.req.take().unwrap();
-                let mut addrs: VecDeque<_> = ips
-                    .iter()
-                    .map(|ip| SocketAddr::new(ip, req.port()))
-                    .collect();
+                let req = self.req.take().unwrap();
+
+                let port = req.port();
+                let req = req.set_addrs(ips.iter().map(|ip| SocketAddr::new(ip, port)));
+
                 trace!(
                     "DNS resolver: host {:?} resolved to {:?}",
                     req.host(),
-                    addrs
+                    req.addrs()
                 );
-                if addrs.is_empty() {
+
+                if req.addr.is_none() {
                     Err(ConnectError::NoRecords)
-                } else if addrs.len() == 1 {
-                    req.addr = Some(either::Either::Left(addrs.pop_front().unwrap()));
-                    Ok(Async::Ready(req))
                 } else {
-                    req.addr = Some(either::Either::Right(addrs));
                     Ok(Async::Ready(req))
                 }
             }
