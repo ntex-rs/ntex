@@ -1,8 +1,15 @@
 # Changes
 
+## [0.2.1] - 2019-07-17
+
+### Added
+
+* Expose Connect addrs #30
+
 ### Changed
 
 * Update `derive_more` to 0.15
+
 
 ## [0.2.0] - 2019-05-12
 
