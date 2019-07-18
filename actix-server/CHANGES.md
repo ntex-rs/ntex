@@ -1,5 +1,12 @@
 # Changes
 
+## [0.6.0] - 2019-07-18
+
+### Added
+
+* Support Unix domain sockets #3
+
+
 ## [0.5.1] - 2019-05-18
 
 ### Changed

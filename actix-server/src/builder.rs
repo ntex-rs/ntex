@@ -9,6 +9,7 @@ use futures::{Async, Future, Poll, Stream};
 use log::{error, info};
 use net2::TcpBuilder;
 use num_cpus;
+use tokio_tcp::TcpStream;
 use tokio_timer::sleep;
 
 use crate::accept::{AcceptLoop, AcceptNotify, Command};
@@ -16,6 +17,7 @@ use crate::config::{ConfiguredService, ServiceConfig};
 use crate::server::{Server, ServerCommand};
 use crate::services::{InternalServiceFactory, ServiceFactory, StreamNewService};
 use crate::signals::{Signal, Signals};
+use crate::socket::StdListener;
 use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use crate::{ssl, Token};
 
@@ -25,8 +27,8 @@ pub struct ServerBuilder {
     token: Token,
     backlog: i32,
     workers: Vec<(usize, WorkerClient)>,
-    services: Vec<Box<InternalServiceFactory>>,
-    sockets: Vec<(Token, net::TcpListener)>,
+    services: Vec<Box<dyn InternalServiceFactory>>,
+    sockets: Vec<(Token, StdListener)>,
     accept: AcceptLoop,
     exit: bool,
     shutdown_timeout: Duration,
@@ -151,7 +153,7 @@ impl ServerBuilder {
             for (name, lst) in cfg.services {
                 let token = self.token.next();
                 srv.stream(token, name, lst.local_addr()?);
-                self.sockets.push((token, lst));
+                self.sockets.push((token, StdListener::Tcp(lst)));
             }
             self.services.push(Box::new(srv));
         }
@@ -163,7 +165,7 @@ impl ServerBuilder {
     /// Add new service to the server.
     pub fn bind<F, U, N: AsRef<str>>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
-        F: ServiceFactory,
+        F: ServiceFactory<TcpStream>,
         U: net::ToSocketAddrs,
     {
         let sockets = bind_addr(addr, self.backlog)?;
@@ -176,8 +178,36 @@ impl ServerBuilder {
                 factory.clone(),
                 lst.local_addr()?,
             ));
-            self.sockets.push((token, lst));
+            self.sockets.push((token, StdListener::Tcp(lst)));
         }
+        Ok(self)
+    }
+
+    #[cfg(all(unix, feature = "uds"))]
+    /// Add new unix domain service to the server.
+    pub fn bind_uds<F, U, N>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
+    where
+        F: ServiceFactory<tokio_uds::UnixStream>,
+        N: AsRef<str>,
+        U: AsRef<std::path::Path>,
+    {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        use std::os::unix::net::UnixListener;
+
+        // TODO: need to do something with existing paths
+        let _ = std::fs::remove_file(addr.as_ref());
+
+        let lst = UnixListener::bind(addr)?;
+
+        let token = self.token.next();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        self.services.push(StreamNewService::create(
+            name.as_ref().to_string(),
+            token,
+            factory.clone(),
+            addr,
+        ));
+        self.sockets.push((token, StdListener::Uds(lst)));
         Ok(self)
     }
 
@@ -189,7 +219,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: ServiceFactory,
+        F: ServiceFactory<TcpStream>,
     {
         let token = self.token.next();
         self.services.push(StreamNewService::create(
@@ -198,7 +228,7 @@ impl ServerBuilder {
             factory,
             lst.local_addr()?,
         ));
-        self.sockets.push((token, lst));
+        self.sockets.push((token, StdListener::Tcp(lst)));
         Ok(self)
     }
 
@@ -243,7 +273,7 @@ impl ServerBuilder {
 
             // start accept thread
             for sock in &self.sockets {
-                info!("Starting server on {}", sock.1.local_addr().ok().unwrap());
+                info!("Starting server on {}", sock.1);
             }
             self.accept
                 .start(mem::replace(&mut self.sockets, Vec::new()), workers);
@@ -266,7 +296,7 @@ impl ServerBuilder {
         let timeout = self.shutdown_timeout;
         let avail = WorkerAvailability::new(notify);
         let worker = WorkerClient::new(idx, tx1, tx2, avail.clone());
-        let services: Vec<Box<InternalServiceFactory>> =
+        let services: Vec<Box<dyn InternalServiceFactory>> =
             self.services.iter().map(|v| v.clone_factory()).collect();
 
         Arbiter::new().send(lazy(move || {

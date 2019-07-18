@@ -1,17 +1,17 @@
 use std::sync::mpsc as sync_mpsc;
 use std::time::{Duration, Instant};
-use std::{io, net, thread};
+use std::{io, thread};
 
 use actix_rt::System;
 use futures::future::{lazy, Future};
 use log::{error, info};
-use mio;
 use slab::Slab;
 use tokio_timer::Delay;
 
-use super::server::Server;
-use super::worker::{Conn, WorkerClient};
-use super::Token;
+use crate::server::Server;
+use crate::socket::{SocketAddr, SocketListener, StdListener};
+use crate::worker::{Conn, WorkerClient};
+use crate::Token;
 
 pub(crate) enum Command {
     Pause,
@@ -21,9 +21,9 @@ pub(crate) enum Command {
 }
 
 struct ServerSocketInfo {
-    addr: net::SocketAddr,
+    addr: SocketAddr,
     token: Token,
-    sock: mio::net::TcpListener,
+    sock: SocketListener,
     timeout: Option<Instant>,
 }
 
@@ -84,7 +84,7 @@ impl AcceptLoop {
 
     pub(crate) fn start(
         &mut self,
-        socks: Vec<(Token, net::TcpListener)>,
+        socks: Vec<(Token, StdListener)>,
         workers: Vec<WorkerClient>,
     ) {
         let srv = self.srv.take().expect("Can not re-use AcceptInfo");
@@ -135,7 +135,7 @@ impl Accept {
         rx: sync_mpsc::Receiver<Command>,
         cmd_reg: mio::Registration,
         notify_reg: mio::Registration,
-        socks: Vec<(Token, net::TcpListener)>,
+        socks: Vec<(Token, StdListener)>,
         srv: Server,
         workers: Vec<WorkerClient>,
     ) {
@@ -174,7 +174,7 @@ impl Accept {
 
     fn new(
         rx: sync_mpsc::Receiver<Command>,
-        socks: Vec<(Token, net::TcpListener)>,
+        socks: Vec<(Token, StdListener)>,
         workers: Vec<WorkerClient>,
         srv: Server,
     ) -> Accept {
@@ -187,10 +187,9 @@ impl Accept {
         // Start accept
         let mut sockets = Slab::new();
         for (hnd_token, lst) in socks.into_iter() {
-            let addr = lst.local_addr().unwrap();
-            let server = mio::net::TcpListener::from_std(lst)
-                .expect("Can not create mio::net::TcpListener");
+            let addr = lst.local_addr();
 
+            let server = lst.into_listener();
             let entry = sockets.vacant_entry();
             let token = entry.key();
 
@@ -422,12 +421,13 @@ impl Accept {
     fn accept(&mut self, token: usize) {
         loop {
             let msg = if let Some(info) = self.sockets.get_mut(token) {
-                match info.sock.accept_std() {
-                    Ok((io, addr)) => Conn {
+                match info.sock.accept() {
+                    Ok(Some((io, addr))) => Conn {
                         io,
                         token: info.token,
                         peer: Some(addr),
                     },
+                    Ok(None) => return,
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return,
                     Err(ref e) if connection_error(e) => continue,
                     Err(e) => {

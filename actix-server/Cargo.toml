@@ -1,6 +1,6 @@
 [package]
 name = "actix-server"
-version = "0.5.1"
+version = "0.6.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix server - General purpose tcp server"
 keywords = ["network", "framework", "async", "futures"]
@@ -14,7 +14,7 @@ edition = "2018"
 workspace = ".."
 
 [package.metadata.docs.rs]
-features = ["ssl", "tls", "rust-tls"]
+features = ["ssl", "tls", "rust-tls", "uds"]
 
 [lib]
 name = "actix_server"
@@ -32,15 +32,18 @@ ssl = ["openssl", "tokio-openssl", "actix-server-config/ssl"]
 # rustls
 rust-tls = ["rustls", "tokio-rustls", "webpki", "webpki-roots", "actix-server-config/rust-tls"]
 
+# uds
+uds = ["mio-uds", "tokio-uds", "actix-server-config/uds"]
+
 [dependencies]
-actix-rt = "0.2.1"
-actix-service = "0.4.0"
-actix-server-config = "0.1.1"
+actix-rt = "0.2.2"
+actix-service = "0.4.1"
+actix-server-config = "0.1.2"
 
 log = "0.4"
 num_cpus = "1.0"
 
-mio = "0.6.13"
+mio = "0.6.19"
 net2 = "0.2"
 futures = "0.1"
 slab = "0.4"
@@ -50,6 +53,10 @@ tokio-timer = "0.2.8"
 tokio-reactor = "0.1"
 tokio-signal = "0.2"
 
+# unix domain sockets
+mio-uds = { version="0.6.7", optional = true }
+tokio-uds = { version="0.2.5", optional = true }
+
 # native-tls
 native-tls = { version="0.2", optional = true }
 
@@ -57,7 +64,7 @@ native-tls = { version="0.2", optional = true }
 openssl = { version="0.10", optional = true }
 tokio-openssl = { version="0.3", optional = true }
 
-#rustls
+# rustls
 rustls = { version = "0.15.2", optional = true }
 tokio-rustls = { version = "0.9.1", optional = true }
 webpki = { version = "0.19", optional = true }

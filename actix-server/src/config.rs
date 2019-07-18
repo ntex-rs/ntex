@@ -17,7 +17,7 @@ use super::Token;
 
 pub struct ServiceConfig {
     pub(crate) services: Vec<(String, net::TcpListener)>,
-    pub(crate) apply: Option<Box<ServiceRuntimeConfiguration>>,
+    pub(crate) apply: Option<Box<dyn ServiceRuntimeConfiguration>>,
     pub(crate) threads: usize,
     pub(crate) backlog: i32,
 }
@@ -75,13 +75,13 @@ impl ServiceConfig {
 }
 
 pub(super) struct ConfiguredService {
-    rt: Box<ServiceRuntimeConfiguration>,
+    rt: Box<dyn ServiceRuntimeConfiguration>,
     names: HashMap<Token, (String, net::SocketAddr)>,
     services: HashMap<String, Token>,
 }
 
 impl ConfiguredService {
-    pub(super) fn new(rt: Box<ServiceRuntimeConfiguration>) -> Self {
+    pub(super) fn new(rt: Box<dyn ServiceRuntimeConfiguration>) -> Self {
         ConfiguredService {
             rt,
             names: HashMap::new(),
@@ -100,7 +100,7 @@ impl InternalServiceFactory for ConfiguredService {
         &self.names[&token].0
     }
 
-    fn clone_factory(&self) -> Box<InternalServiceFactory> {
+    fn clone_factory(&self) -> Box<dyn InternalServiceFactory> {
         Box::new(Self {
             rt: self.rt.clone(),
             names: self.names.clone(),
@@ -108,7 +108,7 @@ impl InternalServiceFactory for ConfiguredService {
         })
     }
 
-    fn create(&self) -> Box<Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>> {
+    fn create(&self) -> Box<dyn Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>> {
         // configure services
         let mut rt = ServiceRuntime::new(self.services.clone());
         self.rt.configure(&mut rt);
@@ -156,7 +156,7 @@ impl InternalServiceFactory for ConfiguredService {
 }
 
 pub(super) trait ServiceRuntimeConfiguration: Send {
-    fn clone(&self) -> Box<ServiceRuntimeConfiguration>;
+    fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration>;
 
     fn configure(&self, rt: &mut ServiceRuntime);
 }
@@ -165,7 +165,7 @@ impl<F> ServiceRuntimeConfiguration for F
 where
     F: Fn(&mut ServiceRuntime) + Send + Clone + 'static,
 {
-    fn clone(&self) -> Box<ServiceRuntimeConfiguration> {
+    fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration> {
         Box::new(self.clone())
     }
 
@@ -181,7 +181,7 @@ fn not_configured(_: &mut ServiceRuntime) {
 pub struct ServiceRuntime {
     names: HashMap<String, Token>,
     services: HashMap<Token, BoxedNewService>,
-    onstart: Vec<Box<Future<Item = (), Error = ()>>>,
+    onstart: Vec<Box<dyn Future<Item = (), Error = ()>>>,
 }
 
 impl ServiceRuntime {
@@ -236,14 +236,14 @@ impl ServiceRuntime {
 }
 
 type BoxedNewService = Box<
-    NewService<
+    dyn NewService<
         Request = (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
         InitError = (),
         Config = ServerConfig,
         Service = BoxedServerService,
-        Future = Box<Future<Item = BoxedServerService, Error = ()>>,
+        Future = Box<dyn Future<Item = BoxedServerService, Error = ()>>,
     >,
 >;
 
@@ -265,7 +265,7 @@ where
     type InitError = ();
     type Config = ServerConfig;
     type Service = BoxedServerService;
-    type Future = Box<Future<Item = BoxedServerService, Error = ()>>;
+    type Future = Box<dyn Future<Item = BoxedServerService, Error = ()>>;
 
     fn new_service(&self, cfg: &ServerConfig) -> Self::Future {
         Box::new(self.inner.new_service(cfg).map_err(|_| ()).map(|s| {

@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::{mem, net, time};
+use std::{mem, time};
 
 use actix_rt::{spawn, Arbiter};
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -12,6 +12,7 @@ use tokio_timer::{sleep, Delay};
 use crate::accept::AcceptNotify;
 use crate::counter::Counter;
 use crate::services::{BoxedServerService, InternalServiceFactory, ServerMessage};
+use crate::socket::{SocketAddr, StdStream};
 use crate::Token;
 
 pub(crate) struct WorkerCommand(Conn);
@@ -25,9 +26,9 @@ pub(crate) struct StopCommand {
 
 #[derive(Debug)]
 pub(crate) struct Conn {
-    pub io: net::TcpStream,
+    pub io: StdStream,
     pub token: Token,
-    pub peer: Option<net::SocketAddr>,
+    pub peer: Option<SocketAddr>,
 }
 
 static MAX_CONNS: AtomicUsize = AtomicUsize::new(25600);
@@ -127,7 +128,7 @@ pub(crate) struct Worker {
     services: Vec<Option<(usize, BoxedServerService)>>,
     availability: WorkerAvailability,
     conns: Counter,
-    factories: Vec<Box<InternalServiceFactory>>,
+    factories: Vec<Box<dyn InternalServiceFactory>>,
     state: WorkerState,
     shutdown_timeout: time::Duration,
 }
@@ -136,7 +137,7 @@ impl Worker {
     pub(crate) fn start(
         rx: UnboundedReceiver<WorkerCommand>,
         rx2: UnboundedReceiver<StopCommand>,
-        factories: Vec<Box<InternalServiceFactory>>,
+        factories: Vec<Box<dyn InternalServiceFactory>>,
         availability: WorkerAvailability,
         shutdown_timeout: time::Duration,
     ) {
@@ -237,7 +238,7 @@ enum WorkerState {
     Restarting(
         usize,
         Token,
-        Box<Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>>,
+        Box<dyn Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>>,
     ),
     Shutdown(Delay, Delay, oneshot::Sender<bool>),
 }

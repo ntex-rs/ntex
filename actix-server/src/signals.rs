@@ -27,7 +27,7 @@ pub(crate) struct Signals {
     streams: Vec<SigStream>,
 }
 
-type SigStream = Box<Stream<Item = Signal, Error = io::Error>>;
+type SigStream = Box<dyn Stream<Item = Signal, Error = io::Error>>;
 
 impl Signals {
     pub(crate) fn start(srv: Server) {
@@ -46,7 +46,7 @@ impl Signals {
             {
                 use tokio_signal::unix;
 
-                let mut sigs: Vec<Box<Future<Item = SigStream, Error = io::Error>>> =
+                let mut sigs: Vec<Box<dyn Future<Item = SigStream, Error = io::Error>>> =
                     Vec::new();
                 sigs.push(Box::new(
                     tokio_signal::unix::Signal::new(tokio_signal::unix::SIGINT).map(|stream| {

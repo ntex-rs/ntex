@@ -7,6 +7,7 @@ mod counter;
 mod server;
 mod services;
 mod signals;
+mod socket;
 pub mod ssl;
 mod worker;
 
@@ -16,6 +17,9 @@ pub use self::builder::ServerBuilder;
 pub use self::config::{ServiceConfig, ServiceRuntime};
 pub use self::server::Server;
 pub use self::services::ServiceFactory;
+
+#[doc(hidden)]
+pub use self::socket::FromStream;
 
 #[doc(hidden)]
 pub use self::services::ServiceFactory as StreamServiceFactory;
