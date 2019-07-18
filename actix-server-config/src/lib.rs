@@ -95,9 +95,9 @@ impl<T, P> Io<T, P> {
     /// Return new Io object with new parameter.
     pub fn set<U>(self, params: U) -> Io<T, U> {
         Io {
+            params,
             io: self.io,
             proto: self.proto,
-            params: params,
         }
     }
 
@@ -214,5 +214,28 @@ impl<T: IoStream> IoStream for tokio_rustls::TlsStream<T, rustls::ServerSession>
     #[inline]
     fn set_keepalive(&mut self, dur: Option<time::Duration>) -> io::Result<()> {
         self.get_mut().0.set_keepalive(dur)
+    }
+}
+
+#[cfg(all(unix, feature = "uds"))]
+impl IoStream for tokio_uds::UnixStream {
+    #[inline]
+    fn peer_addr(&self) -> Option<net::SocketAddr> {
+        None
+    }
+
+    #[inline]
+    fn set_nodelay(&mut self, _: bool) -> io::Result<()> {
+        Ok(())
+    }
+
+    #[inline]
+    fn set_linger(&mut self, _: Option<time::Duration>) -> io::Result<()> {
+        Ok(())
+    }
+
+    #[inline]
+    fn set_keepalive(&mut self, _: Option<time::Duration>) -> io::Result<()> {
+        Ok(())
     }
 }

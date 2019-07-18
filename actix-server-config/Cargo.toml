@@ -1,6 +1,6 @@
 [package]
 name = "actix-server-config"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix server config utils"
 homepage = "https://actix.rs"
@@ -14,7 +14,7 @@ name = "actix_server_config"
 path = "src/lib.rs"
 
 [package.metadata.docs.rs]
-features = ["ssl", "rust-tls"]
+features = ["ssl", "rust-tls", "uds"]
 
 [features]
 default = []
@@ -25,6 +25,9 @@ ssl = ["tokio-openssl"]
 # rustls
 rust-tls = ["rustls", "tokio-rustls"]
 
+# unix domain sockets
+uds = ["tokio-uds"]
+
 [dependencies]
 futures = "0.1.25"
 tokio-io = "0.1.12"
@@ -32,3 +35,4 @@ tokio-tcp = "0.1"
 tokio-openssl = { version="0.3.0", optional = true }
 rustls = { version = "0.15.2", optional = true }
 tokio-rustls = { version = "0.9.1", optional = true }
+tokio-uds = { version="0.2.5", optional = true }
