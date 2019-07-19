@@ -1,5 +1,12 @@
 # Changes
 
+## [0.4.5] - 2019-07-19
+
+### Removed
+
+* Deprecated `CloneableService` as it is not safe
+
+
 ## [0.4.4] - 2019-07-17
 
 ### Changed
