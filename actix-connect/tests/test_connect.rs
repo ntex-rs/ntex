@@ -26,6 +26,22 @@ fn test_string() {
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
 }
 
+#[cfg(feature = "rust-tls")]
+#[test]
+fn test_rustls_string() {
+    let mut srv = TestServer::with(|| {
+        service_fn(|io: Io<tokio_tcp::TcpStream>| {
+            Framed::new(io.into_parts().0, BytesCodec)
+                .send(Bytes::from_static(b"test"))
+                .then(|_| Ok::<_, ()>(()))
+        })
+    });
+
+    let mut conn = default_connector();
+    let addr = format!("localhost:{}", srv.port());
+    let con = srv.run_on(move || conn.call(addr.into())).unwrap();
+    assert_eq!(con.peer_addr().unwrap(), srv.addr());
+}
 #[test]
 fn test_static_str() {
     let mut srv = TestServer::with(|| {
@@ -94,6 +110,23 @@ fn test_new_service() {
 #[cfg(feature = "ssl")]
 #[test]
 fn test_uri() {
+    let mut srv = TestServer::with(|| {
+        service_fn(|io: Io<tokio_tcp::TcpStream>| {
+            Framed::new(io.into_parts().0, BytesCodec)
+                .send(Bytes::from_static(b"test"))
+                .then(|_| Ok::<_, ()>(()))
+        })
+    });
+
+    let mut conn = default_connector();
+    let addr = Uri::try_from(format!("https://localhost:{}", srv.port())).unwrap();
+    let con = srv.run_on(move || conn.call(addr.into())).unwrap();
+    assert_eq!(con.peer_addr().unwrap(), srv.addr());
+}
+
+#[cfg(feature = "rust-tls")]
+#[test]
+fn test_rustls_uri() {
     let mut srv = TestServer::with(|| {
         service_fn(|io: Io<tokio_tcp::TcpStream>| {
             Framed::new(io.into_parts().0, BytesCodec)

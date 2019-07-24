@@ -26,6 +26,9 @@ default = ["uri"]
 # openssl
 ssl = ["openssl", "tokio-openssl"]
 
+#rustls
+rust-tls = ["rustls", "tokio-rustls", "webpki"]
+
 # support http::Uri as connect address
 uri = ["http"]
 
@@ -45,6 +48,11 @@ trust-dns-resolver = { version="0.11.0", default-features = false }
 # openssl
 openssl = { version="0.10", optional = true }
 tokio-openssl = { version="0.3", optional = true }
+
+#rustls
+rustls = { version = "0.15.2", optional = true }
+tokio-rustls = { version = "0.9.1", optional = true }
+webpki = { version = "0.19", optional = true }
 
 [dev-dependencies]
 bytes = "0.4"

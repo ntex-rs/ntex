@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.2] - 2019-07-24
+
+* Add `rustls` support
+
 ## [0.2.1] - 2019-07-17
 
 ### Added
