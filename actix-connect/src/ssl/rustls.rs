@@ -4,9 +4,12 @@ use std::marker::PhantomData;
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_service::{NewService, Service};
 use futures::{future::ok, future::FutureResult, Async, Future, Poll};
-use webpki::DNSNameRef;
-use tokio_rustls::{TlsConnector, TlsStream, Connect, rustls::{ClientConfig, ClientSession}};
 use std::sync::Arc;
+use tokio_rustls::{
+    rustls::{ClientConfig, ClientSession},
+    Connect, TlsConnector, TlsStream,
+};
+use webpki::DNSNameRef;
 
 use crate::{Address, Connection};
 
