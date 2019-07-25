@@ -176,7 +176,7 @@ impl<T: ?Sized> ServiceExt for T where T: Service {}
 /// Creates new `Service` values.
 ///
 /// Acts as a service factory. This is useful for cases where new `Service`
-/// values must be produced. One case is a TCP servier listener. The listner
+/// values must be produced. One case is a TCP server listener. The listener
 /// accepts new TCP streams, obtains a new `Service` value using the
 /// `NewService` trait, and uses that new `Service` value to process inbound
 /// requests on that new TCP stream.
