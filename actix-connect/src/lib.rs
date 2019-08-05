@@ -16,6 +16,7 @@ mod connect;
 mod connector;
 mod error;
 mod resolver;
+mod service;
 pub mod ssl;
 
 #[cfg(feature = "uri")]
@@ -29,6 +30,7 @@ pub use self::connect::{Address, Connect, Connection};
 pub use self::connector::{TcpConnector, TcpConnectorFactory};
 pub use self::error::ConnectError;
 pub use self::resolver::{Resolver, ResolverFactory};
+pub use self::service::{ConnectService, ConnectServiceFactory};
 
 use actix_service::{NewService, Service, ServiceExt};
 use tokio_tcp::TcpStream;

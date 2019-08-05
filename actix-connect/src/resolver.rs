@@ -25,6 +25,13 @@ impl<T> ResolverFactory<T> {
             _t: PhantomData,
         }
     }
+
+    pub fn service(&self) -> Resolver<T> {
+        Resolver {
+            resolver: self.resolver.clone(),
+            _t: PhantomData,
+        }
+    }
 }
 
 impl<T> Default for ResolverFactory<T> {
@@ -55,10 +62,7 @@ impl<T: Address> NewService for ResolverFactory<T> {
     type Future = FutureResult<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: &()) -> Self::Future {
-        ok(Resolver {
-            resolver: self.resolver.clone(),
-            _t: PhantomData,
-        })
+        ok(self.service())
     }
 }
 

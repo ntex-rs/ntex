@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.3] - 2019-08-05
+
+* Add `ConnectService` and `OpensslConnectService`
+
 ## [0.2.2] - 2019-07-24
 
 * Add `rustls` support

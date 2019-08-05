@@ -18,6 +18,17 @@ impl<T> TcpConnectorFactory<T> {
     pub fn new() -> Self {
         TcpConnectorFactory(PhantomData)
     }
+
+    /// Create tcp connector service
+    pub fn service(&self) -> TcpConnector<T> {
+        TcpConnector(PhantomData)
+    }
+}
+
+impl<T> Default for TcpConnectorFactory<T> {
+    fn default() -> Self {
+        TcpConnectorFactory(PhantomData)
+    }
 }
 
 impl<T> Clone for TcpConnectorFactory<T> {
@@ -36,7 +47,7 @@ impl<T: Address> NewService for TcpConnectorFactory<T> {
     type Future = FutureResult<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: &()) -> Self::Future {
-        ok(TcpConnector(PhantomData))
+        ok(self.service())
     }
 }
 
