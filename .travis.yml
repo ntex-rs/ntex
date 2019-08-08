@@ -10,6 +10,7 @@ matrix:
   include:
     - rust: stable
     - rust: beta
+    - rust: 1.36.0
     - rust: nightly-2019-06-15
   allow_failures:
     - rust: nightly-2019-06-15
