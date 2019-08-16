@@ -190,7 +190,7 @@ mod tests {
         type Request = ();
         type Response = ();
         type Error = ();
-        type Future = Box<Future<Item = (), Error = ()>>;
+        type Future = Box<dyn Future<Item = (), Error = ()>>;
 
         fn poll_ready(&mut self) -> Poll<(), Self::Error> {
             Ok(Async::Ready(()))

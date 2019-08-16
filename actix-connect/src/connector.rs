@@ -52,7 +52,7 @@ impl<T: Address> NewService for TcpConnectorFactory<T> {
 }
 
 /// Tcp connector service
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct TcpConnector<T>(PhantomData<T>);
 
 impl<T> TcpConnector<T> {

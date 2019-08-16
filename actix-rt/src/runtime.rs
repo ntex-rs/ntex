@@ -40,7 +40,7 @@ impl Error for RunError {
     fn description(&self) -> &str {
         self.inner.description()
     }
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         self.inner.source()
     }
 }

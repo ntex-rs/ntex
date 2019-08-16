@@ -214,7 +214,7 @@ mod tests {
         type Request = oneshot::Receiver<usize>;
         type Response = usize;
         type Error = ();
-        type Future = Box<Future<Item = usize, Error = ()>>;
+        type Future = Box<dyn Future<Item = usize, Error = ()>>;
 
         fn poll_ready(&mut self) -> Poll<(), Self::Error> {
             Ok(Async::Ready(()))

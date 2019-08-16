@@ -44,7 +44,7 @@ where
     framed: Framed<T, U>,
     rx: Option<mpsc::UnboundedReceiver<FramedMessage<<U as Encoder>::Item>>>,
     inner: Cell<FramedDispatcherInner<<U as Encoder>::Item, S::Error>>,
-    disconnect: Option<Rc<Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
 }
 
 impl<St, S, T, U> FramedDispatcher<St, S, T, U>
@@ -63,7 +63,7 @@ where
         service: F,
         rx: mpsc::UnboundedReceiver<FramedMessage<<U as Encoder>::Item>>,
         sink: Sink<<U as Encoder>::Item>,
-        disconnect: Option<Rc<Fn(&mut St, bool)>>,
+        disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
     ) -> Self {
         FramedDispatcher {
             framed,

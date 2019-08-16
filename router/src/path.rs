@@ -93,7 +93,7 @@ impl<T: ResourcePath> Path<T> {
     #[inline]
     /// Skip first `n` chars in path
     pub fn skip(&mut self, n: u16) {
-        self.skip = self.skip + n;
+        self.skip += n;
     }
 
     pub(crate) fn add(&mut self, name: Rc<String>, value: PathItem) {

@@ -45,7 +45,7 @@ where
     type Request = S;
     type Response = ();
     type Error = E;
-    type Future = Box<Future<Item = (), Error = E>>;
+    type Future = Box<dyn Future<Item = (), Error = E>>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))

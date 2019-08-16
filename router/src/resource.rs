@@ -207,7 +207,7 @@ impl ResourceDef {
                                 "Dynamic path match but not all segments found: {}",
                                 name
                             );
-                            false;
+                            return false;
                         }
                     }
                 } else {
@@ -279,7 +279,7 @@ impl ResourceDef {
                                 "Dynamic path match but not all segments found: {}",
                                 name
                             );
-                            false;
+                            return false;
                         }
                     }
                 } else {

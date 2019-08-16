@@ -4,7 +4,7 @@ use futures::{Async, Future, IntoFuture, Poll};
 use crate::{NewService, Service};
 
 pub type BoxedService<Req, Res, Err> = Box<
-    Service<
+    dyn Service<
         Request = Req,
         Response = Res,
         Error = Err,
@@ -13,7 +13,7 @@ pub type BoxedService<Req, Res, Err> = Box<
 >;
 
 pub type BoxedServiceResponse<Res, Err> =
-    Either<FutureResult<Res, Err>, Box<Future<Item = Res, Error = Err>>>;
+    Either<FutureResult<Res, Err>, Box<dyn Future<Item = Res, Error = Err>>>;
 
 pub struct BoxedNewService<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
 
@@ -46,14 +46,14 @@ where
 }
 
 type Inner<C, Req, Res, Err, InitErr> = Box<
-    NewService<
+    dyn NewService<
         Config = C,
         Request = Req,
         Response = Res,
         Error = Err,
         InitError = InitErr,
         Service = BoxedService<Req, Res, Err>,
-        Future = Box<Future<Item = BoxedService<Req, Res, Err>, Error = InitErr>>,
+        Future = Box<dyn Future<Item = BoxedService<Req, Res, Err>, Error = InitErr>>,
     >,
 >;
 
@@ -70,7 +70,7 @@ where
     type InitError = InitErr;
     type Config = C;
     type Service = BoxedService<Req, Res, Err>;
-    type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
+    type Future = Box<dyn Future<Item = Self::Service, Error = Self::InitError>>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         self.0.new_service(cfg)
@@ -99,7 +99,7 @@ where
     type InitError = InitErr;
     type Config = C;
     type Service = BoxedService<Req, Res, Err>;
-    type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
+    type Future = Box<dyn Future<Item = Self::Service, Error = Self::InitError>>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         Box::new(
@@ -133,7 +133,7 @@ where
     type Error = Err;
     type Future = Either<
         FutureResult<Self::Response, Self::Error>,
-        Box<Future<Item = Self::Response, Error = Self::Error>>,
+        Box<dyn Future<Item = Self::Response, Error = Self::Error>>,
     >;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {

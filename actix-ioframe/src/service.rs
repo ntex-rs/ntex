@@ -62,7 +62,7 @@ impl<St, Codec> Builder<St, Codec> {
 
 pub struct ServiceBuilder<St, C, Io, Codec> {
     connect: C,
-    disconnect: Option<Rc<Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
     _t: PhantomData<(St, Io, Codec)>,
 }
 
@@ -113,7 +113,7 @@ where
 
 pub struct NewServiceBuilder<St, C, Io, Codec> {
     connect: C,
-    disconnect: Option<Rc<Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
     _t: PhantomData<(St, Io, Codec)>,
 }
 
@@ -170,7 +170,7 @@ where
 pub(crate) struct FramedService<St, C, T, Io, Codec, Cfg> {
     connect: C,
     handler: Rc<T>,
-    disconnect: Option<Rc<Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
     _t: PhantomData<(St, Io, Codec, Cfg)>,
 }
 
@@ -198,7 +198,7 @@ where
     type Error = ServiceError<C::Error, Codec>;
     type InitError = C::InitError;
     type Service = FramedServiceImpl<St, C::Service, T, Io, Codec>;
-    type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
+    type Future = Box<dyn Future<Item = Self::Service, Error = Self::InitError>>;
 
     fn new_service(&self, _: &Cfg) -> Self::Future {
         let handler = self.handler.clone();
@@ -221,7 +221,7 @@ where
 pub struct FramedServiceImpl<St, C, T, Io, Codec> {
     connect: C,
     handler: Rc<T>,
-    disconnect: Option<Rc<Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
     _t: PhantomData<(St, Io, Codec)>,
 }
 
@@ -280,7 +280,7 @@ where
     <Codec as Encoder>::Error: std::fmt::Debug,
 {
     inner: FramedServiceImplResponseInner<St, Io, Codec, C, T>,
-    disconnect: Option<Rc<Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
 }
 
 enum FramedServiceImplResponseInner<St, Io, Codec, C, T>

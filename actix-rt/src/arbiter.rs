@@ -16,15 +16,15 @@ use copyless::BoxHelper;
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = RefCell::new(None);
     static RUNNING: Cell<bool> = Cell::new(false);
-    static Q: RefCell<Vec<Box<Future<Item = (), Error = ()>>>> = RefCell::new(Vec::new());
+    static Q: RefCell<Vec<Box<dyn Future<Item = (), Error = ()>>>> = RefCell::new(Vec::new());
 );
 
 pub(crate) static COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) enum ArbiterCommand {
     Stop,
-    Execute(Box<Future<Item = (), Error = ()> + Send>),
-    ExecuteFn(Box<FnExec>),
+    Execute(Box<dyn Future<Item = (), Error = ()> + Send>),
+    ExecuteFn(Box<dyn FnExec>),
 }
 
 impl fmt::Debug for ArbiterCommand {
@@ -180,7 +180,7 @@ impl Arbiter {
         let _ = self
             .0
             .unbounded_send(ArbiterCommand::ExecuteFn(Box::new(move || {
-                let _ = f();
+                f();
             })));
     }
 
@@ -312,7 +312,7 @@ impl<F> FnExec for F
 where
     F: FnOnce() + Send + 'static,
 {
-    #[cfg_attr(feature = "cargo-clippy", allow(boxed_local))]
+    #[allow(clippy::boxed_local)]
     fn call_box(self: Box<Self>) {
         (*self)()
     }

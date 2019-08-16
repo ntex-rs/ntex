@@ -113,17 +113,15 @@ impl<T: Address> Service for Resolver<T> {
     fn call(&mut self, mut req: Connect<T>) -> Self::Future {
         if req.addr.is_some() {
             Either::B(ok(req))
+        } else if let Ok(ip) = req.host().parse() {
+            req.addr = Some(either::Either::Left(SocketAddr::new(ip, req.port())));
+            Either::B(ok(req))
         } else {
-            if let Ok(ip) = req.host().parse() {
-                req.addr = Some(either::Either::Left(SocketAddr::new(ip, req.port())));
-                Either::B(ok(req))
-            } else {
-                trace!("DNS resolver: resolving host {:?}", req.host());
-                if self.resolver.is_none() {
-                    self.resolver = Some(get_default_resolver());
-                }
-                Either::A(ResolverFuture::new(req, self.resolver.as_ref().unwrap()))
+            trace!("DNS resolver: resolving host {:?}", req.host());
+            if self.resolver.is_none() {
+                self.resolver = Some(get_default_resolver());
             }
+            Either::A(ResolverFuture::new(req, self.resolver.as_ref().unwrap()))
         }
     }
 }
