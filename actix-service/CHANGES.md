@@ -1,5 +1,12 @@
 # Changes
 
+## [0.4.2] - 2019-08-27
+
+### Fixed
+
+* Check service readiness for `new_apply_cfg` combinator
+
+
 ## [0.4.1] - 2019-06-06
 
 ### Added

@@ -49,6 +49,7 @@ where
     C: Clone,
     F: FnMut(&C, &mut T::Service) -> R,
     T: NewService<Config = ()>,
+    T::InitError: From<T::Error>,
     R: IntoFuture<Error = T::InitError>,
     R::Item: IntoService<S>,
     S: Service,
@@ -179,6 +180,7 @@ where
     C: Clone,
     F: FnMut(&C, &mut T::Service) -> R,
     T: NewService<Config = ()>,
+    T::InitError: From<T::Error>,
     R: IntoFuture<Error = T::InitError>,
     R::Item: IntoService<S>,
     S: Service,
@@ -196,8 +198,9 @@ where
         ApplyConfigNewServiceFut {
             f: self.f.clone(),
             cfg: cfg.clone(),
-            srv: Some(self.srv.get_ref().new_service(&())),
             fut: None,
+            srv: None,
+            srv_fut: Some(self.srv.get_ref().new_service(&())),
             _t: PhantomData,
         }
     }
@@ -208,13 +211,15 @@ where
     C: Clone,
     F: FnMut(&C, &mut T::Service) -> R,
     T: NewService<Config = ()>,
+    T::InitError: From<T::Error>,
     R: IntoFuture<Error = T::InitError>,
     R::Item: IntoService<S>,
     S: Service,
 {
     cfg: C,
     f: Cell<F>,
-    srv: Option<T::Future>,
+    srv: Option<T::Service>,
+    srv_fut: Option<T::Future>,
     fut: Option<R::Future>,
     _t: PhantomData<(S,)>,
 }
@@ -224,6 +229,7 @@ where
     C: Clone,
     F: FnMut(&C, &mut T::Service) -> R,
     T: NewService<Config = ()>,
+    T::InitError: From<T::Error>,
     R: IntoFuture<Error = T::InitError>,
     R::Item: IntoService<S>,
     S: Service,
@@ -232,12 +238,12 @@ where
     type Error = R::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Some(ref mut fut) = self.srv {
+        if let Some(ref mut fut) = self.srv_fut {
             match fut.poll()? {
                 Async::NotReady => return Ok(Async::NotReady),
-                Async::Ready(mut srv) => {
-                    let _ = self.srv.take();
-                    self.fut = Some(self.f.get_mut()(&self.cfg, &mut srv).into_future());
+                Async::Ready(srv) => {
+                    let _ = self.srv_fut.take();
+                    self.srv = Some(srv);
                     return self.poll();
                 }
             }
@@ -245,6 +251,14 @@ where
 
         if let Some(ref mut fut) = self.fut {
             Ok(Async::Ready(try_ready!(fut.poll()).into_service()))
+        } else if let Some(ref mut srv) = self.srv {
+            match srv.poll_ready()? {
+                Async::NotReady => Ok(Async::NotReady),
+                Async::Ready(_) => {
+                    self.fut = Some(self.f.get_mut()(&self.cfg, srv).into_future());
+                    return self.poll();
+                }
+            }
         } else {
             Ok(Async::NotReady)
         }
