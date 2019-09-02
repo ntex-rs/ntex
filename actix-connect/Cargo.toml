@@ -1,6 +1,6 @@
 [package]
 name = "actix-connect"
-version = "0.2.3"
+version = "0.2.4"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix Connector - tcp connector service"
 keywords = ["network", "framework", "async", "futures"]
@@ -36,6 +36,7 @@ uri = ["http"]
 actix-service = "0.4.0"
 actix-codec = "0.1.2"
 actix-utils = "0.4.0"
+actix-rt = "0.2.5"
 derive_more = "0.15"
 either = "1.5.2"
 futures = "0.1.25"

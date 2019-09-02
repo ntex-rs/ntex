@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.4] - 2019-09-02
+
+* Use arbiter's storage for default async resolver
+
 ## [0.2.3] - 2019-08-05
 
 * Add `ConnectService` and `OpensslConnectService`

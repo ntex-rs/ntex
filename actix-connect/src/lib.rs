@@ -10,8 +10,6 @@
 #[macro_use]
 extern crate log;
 
-use std::cell::RefCell;
-
 mod connect;
 mod connector;
 mod error;
@@ -32,6 +30,7 @@ pub use self::error::ConnectError;
 pub use self::resolver::{Resolver, ResolverFactory};
 pub use self::service::{ConnectService, ConnectServiceFactory};
 
+use actix_rt::Arbiter;
 use actix_service::{NewService, Service, ServiceExt};
 use tokio_tcp::TcpStream;
 
@@ -41,16 +40,12 @@ pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver 
     resolver
 }
 
-thread_local! {
-    static DEFAULT_RESOLVER: RefCell<Option<AsyncResolver>> = RefCell::new(None);
-}
+struct DefaultResolver(AsyncResolver);
 
 pub(crate) fn get_default_resolver() -> AsyncResolver {
-    DEFAULT_RESOLVER.with(|cell| {
-        if let Some(ref resolver) = *cell.borrow() {
-            return resolver.clone();
-        }
-
+    if Arbiter::contains_item::<DefaultResolver>() {
+        return Arbiter::get_item(|item: &DefaultResolver| item.0.clone());
+    } else {
         let (cfg, opts) = match read_system_conf() {
             Ok((cfg, opts)) => (cfg, opts),
             Err(e) => {
@@ -62,9 +57,9 @@ pub(crate) fn get_default_resolver() -> AsyncResolver {
         let (resolver, bg) = AsyncResolver::new(cfg, opts);
         tokio_current_thread::spawn(bg);
 
-        *cell.borrow_mut() = Some(resolver.clone());
+        Arbiter::set_item(DefaultResolver(resolver.clone()));
         resolver
-    })
+    }
 }
 
 pub fn start_default_resolver() -> AsyncResolver {
