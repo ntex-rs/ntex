@@ -1,3 +1,4 @@
+use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,6 +18,7 @@ thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = RefCell::new(None);
     static RUNNING: Cell<bool> = Cell::new(false);
     static Q: RefCell<Vec<Box<dyn Future<Item = (), Error = ()>>>> = RefCell::new(Vec::new());
+    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::new());
 );
 
 pub(crate) static COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -56,6 +58,7 @@ impl Arbiter {
         let arb = Arbiter(tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         RUNNING.with(|cell| cell.set(false));
+        STORAGE.with(|cell| cell.borrow_mut().clear());
         Arbiter::spawn(ArbiterController { stop: None, rx });
 
         arb
@@ -90,6 +93,7 @@ impl Arbiter {
 
             let (stop, stop_rx) = channel();
             RUNNING.with(|cell| cell.set(true));
+            STORAGE.with(|cell| cell.borrow_mut().clear());
 
             System::set_current(sys);
 
@@ -201,6 +205,50 @@ impl Arbiter {
                 }
             })));
         rx
+    }
+
+    /// Set item to arbiter storage
+    pub fn set_item<T: 'static>(item: T) {
+        STORAGE.with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), Box::new(item)));
+    }
+
+    /// Check if arbiter storage contains item
+    pub fn contains_item<T: 'static>() -> bool {
+        STORAGE.with(move |cell| cell.borrow().get(&TypeId::of::<T>()).is_some())
+    }
+
+    /// Get a reference to a type previously inserted on this arbiter's storage.
+    ///
+    /// Panics is item is not inserted
+    pub fn get_item<T: 'static, F, R>(mut f: F) -> R
+    where
+        F: FnMut(&T) -> R,
+    {
+        STORAGE.with(move |cell| {
+            let st = cell.borrow();
+            let item = st
+                .get(&TypeId::of::<T>())
+                .and_then(|boxed| (&**boxed as &(dyn Any + 'static)).downcast_ref())
+                .unwrap();
+            f(item)
+        })
+    }
+
+    /// Get a mutable reference to a type previously inserted on this arbiter's storage.
+    ///
+    /// Panics is item is not inserted
+    pub fn get_mut_item<T: 'static, F, R>(mut f: F) -> R
+    where
+        F: FnMut(&mut T) -> R,
+    {
+        STORAGE.with(move |cell| {
+            let mut st = cell.borrow_mut();
+            let item = st
+                .get_mut(&TypeId::of::<T>())
+                .and_then(|boxed| (&mut **boxed as &mut (dyn Any + 'static)).downcast_mut())
+                .unwrap();
+            f(item)
+        })
     }
 }
 

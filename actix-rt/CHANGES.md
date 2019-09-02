@@ -1,5 +1,12 @@
 # Changes
 
+## [0.2.5] - 2019-09-02
+
+### Added
+
+* Add arbiter specific storage
+
+
 ## [0.2.4] - 2019-07-17
 
 ### Changed
