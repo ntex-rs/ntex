@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.5] - 2019-09-05
+
+* Add `TcpConnectService`
+
 ## [0.2.4] - 2019-09-02
 
 * Use arbiter's storage for default async resolver

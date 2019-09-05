@@ -28,7 +28,7 @@ pub use self::connect::{Address, Connect, Connection};
 pub use self::connector::{TcpConnector, TcpConnectorFactory};
 pub use self::error::ConnectError;
 pub use self::resolver::{Resolver, ResolverFactory};
-pub use self::service::{ConnectService, ConnectServiceFactory};
+pub use self::service::{ConnectService, ConnectServiceFactory, TcpConnectService};
 
 use actix_rt::Arbiter;
 use actix_service::{NewService, Service, ServiceExt};

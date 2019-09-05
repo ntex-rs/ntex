@@ -38,6 +38,14 @@ impl<T> ConnectServiceFactory<T> {
             resolver: self.resolver.service(),
         }
     }
+
+    /// Construct new tcp stream service
+    pub fn tcp_service(&self) -> TcpConnectService<T> {
+        TcpConnectService {
+            tcp: self.tcp.service(),
+            resolver: self.resolver.service(),
+        }
+    }
 }
 
 impl<T> Default for ConnectServiceFactory<T> {
@@ -116,6 +124,58 @@ impl<T: Address> Future for ConnectServiceResponse<T> {
 
         if let Some(ref mut fut) = self.fut2 {
             return fut.poll();
+        }
+
+        Ok(Async::NotReady)
+    }
+}
+
+#[derive(Clone)]
+pub struct TcpConnectService<T> {
+    tcp: TcpConnector<T>,
+    resolver: Resolver<T>,
+}
+
+impl<T: Address> Service for TcpConnectService<T> {
+    type Request = Connect<T>;
+    type Response = TcpStream;
+    type Error = ConnectError;
+    type Future = TcpConnectServiceResponse<T>;
+
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(Async::Ready(()))
+    }
+
+    fn call(&mut self, req: Connect<T>) -> Self::Future {
+        TcpConnectServiceResponse {
+            fut1: Some(self.resolver.call(req)),
+            fut2: None,
+            tcp: self.tcp.clone(),
+        }
+    }
+}
+
+pub struct TcpConnectServiceResponse<T: Address> {
+    fut1: Option<<Resolver<T> as Service>::Future>,
+    fut2: Option<<TcpConnector<T> as Service>::Future>,
+    tcp: TcpConnector<T>,
+}
+
+impl<T: Address> Future for TcpConnectServiceResponse<T> {
+    type Item = TcpStream;
+    type Error = ConnectError;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if let Some(ref mut fut) = self.fut1 {
+            let res = try_ready!(fut.poll());
+            let _ = self.fut1.take();
+            self.fut2 = Some(self.tcp.call(res));
+        }
+
+        if let Some(ref mut fut) = self.fut2 {
+            if let Async::Ready(conn) = fut.poll()? {
+                return Ok(Async::Ready(conn.into_parts().0));
+            }
         }
 
         Ok(Async::NotReady)
