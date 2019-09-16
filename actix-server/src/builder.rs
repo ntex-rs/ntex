@@ -185,20 +185,41 @@ impl ServerBuilder {
 
     #[cfg(all(unix, feature = "uds"))]
     /// Add new unix domain service to the server.
-    pub fn bind_uds<F, U, N>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
+    pub fn bind_uds<F, U, N>(self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
         F: ServiceFactory<tokio_uds::UnixStream>,
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
     {
-        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         use std::os::unix::net::UnixListener;
 
-        // TODO: need to do something with existing paths
-        let _ = std::fs::remove_file(addr.as_ref());
+        // The path must not exist when we try to bind.
+        // Try to remove it to avoid bind error.
+        if let Err(e) = std::fs::remove_file(addr.as_ref()) {
+            // NotFound is expected and not an issue. Anything else is.
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(e);
+            }
+        }
 
         let lst = UnixListener::bind(addr)?;
+        self.listen_uds(name, lst, factory)
+    }
 
+    #[cfg(all(unix, feature = "uds"))]
+    /// Add new unix domain service to the server.
+    /// Useful when running as a systemd service and
+    /// a socket FD can be acquired using the systemd crate.
+    pub fn listen_uds<F, N: AsRef<str>>(
+        mut self,
+        name: N,
+        lst: std::os::unix::net::UnixListener,
+        factory: F,
+    ) -> io::Result<Self>
+    where
+        F: ServiceFactory<tokio_uds::UnixStream>,
+    {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         self.services.push(StreamNewService::create(
