@@ -17,14 +17,15 @@ edition = "2018"
 members = [
   "actix-codec",
   "actix-connect",
+  "actix-ioframe",
   "actix-rt",
   "actix-service",
   "actix-server",
   "actix-server-config",
+  "actix-testing",
   "actix-test-server",
   "actix-threadpool",
   "actix-tower",
-  "actix-ioframe",
   "actix-utils",
   "router",
 ]
