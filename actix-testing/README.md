@@ -1,4 +1,4 @@
-# Actix test utilities [[![crates.io](https://meritbadge.herokuapp.com/actix-testing)](https://crates.io/crates/actix-testint) [![Join the chat at https://gitter.im/actix/actix](https://badges.gitter.im/actix/actix.svg)](https://gitter.im/actix/actix?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+# Actix test utilities [![crates.io](https://meritbadge.herokuapp.com/actix-testing)](https://crates.io/crates/actix-testint) [![Join the chat at https://gitter.im/actix/actix](https://badges.gitter.im/actix/actix.svg)](https://gitter.im/actix/actix?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 ## Documentation & community resources
 
