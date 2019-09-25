@@ -1,5 +1,12 @@
 # Changes
 
+## [0.6.1] - 2019-09-25
+
+### Added
+
+* Add UDS listening support to `ServerBuilder`
+
+
 ## [0.6.0] - 2019-07-18
 
 ### Added
