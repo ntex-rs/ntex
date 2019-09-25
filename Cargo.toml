@@ -23,7 +23,6 @@ members = [
   "actix-server",
   "actix-server-config",
   "actix-testing",
-  "actix-test-server",
   "actix-threadpool",
   "actix-tower",
   "actix-utils",
