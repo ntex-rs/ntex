@@ -39,3 +39,16 @@ futures = "0.1.25"
 openssl = "0.10"
 tokio-tcp = "0.1"
 tokio-openssl = "0.3"
+
+[patch.crates-io]
+actix-codec = { path = "actix-codec" }
+actix-connect = { path = "actix-connect" }
+actix-ioframe = { path = "actix-ioframe" }
+actix-rt = { path = "actix-rt" }
+actix-server = { path = "actix-server" }
+actix-server-config = { path = "actix-server-config" }
+actix-service = { path = "actix-service" }
+actix-testing = { path = "actix-testing" }
+actix-threadpool = { path = "actix-threadpool" }
+actix-utils = { path = "actix-utils" }
+actix-router = { path = "router" }
