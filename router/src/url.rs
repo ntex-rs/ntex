@@ -195,7 +195,7 @@ fn from_hex(v: u8) -> Option<u8> {
 
 #[inline]
 fn restore_ch(d1: u8, d2: u8) -> Option<u8> {
-    from_hex(d1).and_then(|d1| from_hex(d2).and_then(move |d2| Some(d1 << 4 | d2)))
+    from_hex(d1).and_then(|d1| from_hex(d2).map(move |d2| d1 << 4 | d2))
 }
 
 #[cfg(test)]
