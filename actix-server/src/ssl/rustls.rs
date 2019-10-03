@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use actix_service::{NewService, Service};
 use futures::{future::ok, future::FutureResult, Async, Future, Poll};
-use rustls::{ServerConfig, ServerSession};
+use rustls::ServerConfig;
 use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_rustls::{Accept, TlsAcceptor, TlsStream};
+use tokio_rustls::{server::TlsStream, Accept, TlsAcceptor};
 
 use crate::counter::{Counter, CounterGuard};
 use crate::ssl::MAX_CONN_COUNTER;
@@ -41,7 +41,7 @@ impl<T, P> Clone for RustlsAcceptor<T, P> {
 
 impl<T: AsyncRead + AsyncWrite, P> NewService for RustlsAcceptor<T, P> {
     type Request = Io<T, P>;
-    type Response = Io<TlsStream<T, ServerSession>, P>;
+    type Response = Io<TlsStream<T>, P>;
     type Error = io::Error;
 
     type Config = SrvConfig;
@@ -70,7 +70,7 @@ pub struct RustlsAcceptorService<T, P> {
 
 impl<T: AsyncRead + AsyncWrite, P> Service for RustlsAcceptorService<T, P> {
     type Request = Io<T, P>;
-    type Response = Io<TlsStream<T, ServerSession>, P>;
+    type Response = Io<TlsStream<T>, P>;
     type Error = io::Error;
     type Future = RustlsAcceptorServiceFut<T, P>;
 
@@ -102,7 +102,7 @@ where
 }
 
 impl<T: AsyncRead + AsyncWrite, P> Future for RustlsAcceptorServiceFut<T, P> {
-    type Item = Io<TlsStream<T, ServerSession>, P>;
+    type Item = Io<TlsStream<T>, P>;
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {

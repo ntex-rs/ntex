@@ -1,5 +1,12 @@
 # Changes
 
+## Next
+
+### Changed
+
+* Update `rustls` to 0.16
+* Minimum required Rust version upped to 1.37.0
+
 ## [0.2.5] - 2019-09-05
 
 * Add `TcpConnectService`

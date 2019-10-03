@@ -195,7 +195,7 @@ impl<T: IoStream> IoStream for tokio_openssl::SslStream<T> {
 }
 
 #[cfg(any(feature = "rust-tls"))]
-impl<T: IoStream> IoStream for tokio_rustls::TlsStream<T, rustls::ServerSession> {
+impl<T: IoStream> IoStream for tokio_rustls::server::TlsStream<T> {
     #[inline]
     fn peer_addr(&self) -> Option<net::SocketAddr> {
         self.get_ref().0.peer_addr()
