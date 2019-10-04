@@ -42,6 +42,7 @@ fn test_rustls_string() {
     let con = test::call_service(&mut conn, addr.into());
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
 }
+
 #[test]
 fn test_static_str() {
     let srv = TestServer::with(|| {
