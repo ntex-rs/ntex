@@ -94,7 +94,8 @@ where
     fn call(&mut self, stream: Connection<T, U>) -> Self::Future {
         trace!("SSL Handshake start for: {:?}", stream.host());
         let (io, stream) = stream.replace(());
-        let host = DNSNameRef::try_from_ascii_str(stream.host()).unwrap();
+        let host = DNSNameRef::try_from_ascii_str(stream.host())
+            .expect("rustls currently only handles hostname-based connections. See https://github.com/briansmith/webpki/issues/54");
         ConnectAsyncExt {
             fut: TlsConnector::from(self.connector.clone()).connect(host, io),
             stream: Some(stream),
