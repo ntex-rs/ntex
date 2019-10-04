@@ -58,4 +58,4 @@ webpki = { version = "0.21", optional = true }
 [dev-dependencies]
 bytes = "0.4"
 actix-testing = { version="0.1.0" }
-actix-server-config = "0.1.0"
+actix-server-config = "0.2.0"

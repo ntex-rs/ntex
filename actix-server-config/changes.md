@@ -1,6 +1,6 @@
 # Changes
 
-## Next
+## [0.2.0] - 2019-10-03
 
 ### Changed
 

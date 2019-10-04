@@ -38,7 +38,7 @@ uds = ["mio-uds", "tokio-uds", "actix-server-config/uds"]
 [dependencies]
 actix-rt = "0.2.2"
 actix-service = "0.4.1"
-actix-server-config = "0.1.2"
+actix-server-config = "0.2.0"
 
 log = "0.4"
 num_cpus = "1.0"
