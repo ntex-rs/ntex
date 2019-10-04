@@ -1,6 +1,6 @@
 [package]
 name = "actix-server"
-version = "0.6.1"
+version = "0.7.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix server - General purpose tcp server"
 keywords = ["network", "framework", "async", "futures"]
