@@ -147,6 +147,7 @@ where
                         }
                         Ok(Async::NotReady) => return false,
                         Ok(Async::Ready(None)) => {
+                            log::trace!("Client disconnected");
                             self.dispatch_state = FramedState::Stopping;
                             return true;
                         }

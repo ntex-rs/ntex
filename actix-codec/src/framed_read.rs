@@ -209,6 +209,7 @@ where
             // get a spurious 0 that looks like EOF
             self.buffer.reserve(1);
             if 0 == try_ready!(self.inner.read_buf(&mut self.buffer)) {
+                trace!("read 0 bytes, mark stream as eof");
                 self.eof = true;
             }
 
