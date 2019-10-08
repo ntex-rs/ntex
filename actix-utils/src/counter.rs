@@ -25,11 +25,13 @@ impl Counter {
         }))
     }
 
+    /// Get counter guard.
     pub fn get(&self) -> CounterGuard {
         CounterGuard::new(self.0.clone())
     }
 
-    /// Check if counter is not at capacity
+    /// Check if counter is not at capacity. If counter at capacity
+    /// it registers notification for current task.
     pub fn available(&self) -> bool {
         self.0.available()
     }
@@ -57,11 +59,7 @@ impl Drop for CounterGuard {
 
 impl CounterInner {
     fn inc(&self) {
-        let num = self.count.get() + 1;
-        self.count.set(num);
-        if num == self.capacity {
-            self.task.register();
-        }
+        self.count.set(self.count.get() + 1);
     }
 
     fn dec(&self) {
@@ -73,6 +71,11 @@ impl CounterInner {
     }
 
     fn available(&self) -> bool {
-        self.count.get() < self.capacity
+        if self.count.get() < self.capacity {
+            true
+        } else {
+            self.task.register();
+            false
+        }
     }
 }
