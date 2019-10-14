@@ -1,5 +1,12 @@
 # Changes
 
+## [0.2.6] - Unreleased
+
+### Fixed
+
+* Fix arbiter's thread panic message.
+
+
 ## [0.2.5] - 2019-09-02
 
 ### Added

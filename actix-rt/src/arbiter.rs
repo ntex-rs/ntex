@@ -260,9 +260,11 @@ struct ArbiterController {
 impl Drop for ArbiterController {
     fn drop(&mut self) {
         if thread::panicking() {
-            eprintln!("Panic in Arbiter thread, shutting down system.");
             if System::current().stop_on_panic() {
+                eprintln!("Panic in Arbiter thread, shutting down system.");
                 System::current().stop_with_code(1)
+            } else {
+                eprintln!("Panic in Arbiter thread.");
             }
         }
     }
