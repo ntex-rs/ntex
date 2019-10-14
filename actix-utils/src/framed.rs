@@ -129,7 +129,6 @@ where
                     };
 
                     let mut cell = self.inner.clone();
-                    cell.get_mut().task.register();
                     tokio_current_thread::spawn(self.service.call(item).then(move |item| {
                         let inner = cell.get_mut();
                         inner.buf.push_back(item);
@@ -293,6 +292,8 @@ where
     type Error = FramedTransportError<S::Error, U>;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.inner.get_ref().task.register();
+
         match mem::replace(&mut self.state, TransportState::Processing) {
             TransportState::Processing => {
                 if self.poll_read() || self.poll_write() {
