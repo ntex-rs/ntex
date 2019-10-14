@@ -1,18 +1,3 @@
-[package]
-name = "actix-net"
-version = "0.3.0"
-authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
-description = "Actix net - framework for the composable network services for Rust"
-readme = "README.md"
-keywords = ["network", "framework", "async", "futures"]
-homepage = "https://actix.rs"
-repository = "https://github.com/actix/actix-net.git"
-documentation = "https://docs.rs/actix-net/"
-categories = ["network-programming", "asynchronous"]
-license = "MIT/Apache-2.0"
-exclude = [".gitignore", ".travis.yml", ".cargo/config", "appveyor.yml"]
-edition = "2018"
-
 [workspace]
 members = [
   "actix-codec",
@@ -27,17 +12,6 @@ members = [
   "actix-utils",
   "router",
 ]
-
-[dev-dependencies]
-actix-service = "0.4.0"
-actix-codec = "0.1.1"
-actix-rt = "0.2.0"
-actix-server = { version="0.5.0", features=["ssl"] }
-env_logger = "0.6"
-futures = "0.1.25"
-openssl = "0.10"
-tokio-tcp = "0.1"
-tokio-openssl = "0.3"
 
 [patch.crates-io]
 actix-codec = { path = "actix-codec" }
