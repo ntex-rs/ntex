@@ -1,8 +1,8 @@
 use std::{fmt, io, net};
 
 use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_reactor::Handle;
-use tokio_tcp::TcpStream;
+use tokio_net::driver::Handle;
+use tokio_net::tcp::TcpStream;
 
 pub(crate) enum StdListener {
     Tcp(net::TcpListener),

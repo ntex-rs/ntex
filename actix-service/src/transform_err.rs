@@ -1,6 +1,9 @@
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use futures::{Future, Poll};
+use pin_project::pin_project;
 
 use super::Transform;
 
@@ -63,12 +66,13 @@ where
         }
     }
 }
-
+#[pin_project]
 pub struct TransformMapInitErrFuture<T, S, F, E>
 where
     T: Transform<S>,
     F: Fn(T::InitError) -> E,
 {
+    #[pin]
     fut: T::Future,
     f: F,
 }
@@ -78,85 +82,10 @@ where
     T: Transform<S>,
     F: Fn(T::InitError) -> E + Clone,
 {
-    type Item = T::Transform;
-    type Error = E;
+    type Output = Result<T::Transform, E>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.fut.poll().map_err(&self.f)
-    }
-}
-
-/// Transform for the `from_err` combinator, changing the type of a new
-/// transform's init error.
-///
-/// This is created by the `Transform::from_err` method.
-pub struct TransformFromErr<T, S, E> {
-    t: T,
-    e: PhantomData<(S, E)>,
-}
-
-impl<T, S, E> TransformFromErr<T, S, E>
-where
-    T: Transform<S>,
-    E: From<T::InitError>,
-{
-    /// Create new `TransformFromErr` new transform instance
-    pub fn new(t: T) -> Self {
-        Self { t, e: PhantomData }
-    }
-}
-
-impl<T, S, E> Clone for TransformFromErr<T, S, E>
-where
-    T: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            t: self.t.clone(),
-            e: PhantomData,
-        }
-    }
-}
-
-impl<T, S, E> Transform<S> for TransformFromErr<T, S, E>
-where
-    T: Transform<S>,
-    E: From<T::InitError>,
-{
-    type Request = T::Request;
-    type Response = T::Response;
-    type Error = T::Error;
-    type Transform = T::Transform;
-
-    type InitError = E;
-    type Future = TransformFromErrFuture<T, S, E>;
-
-    fn new_transform(&self, service: S) -> Self::Future {
-        TransformFromErrFuture {
-            fut: self.t.new_transform(service),
-            _t: PhantomData,
-        }
-    }
-}
-
-pub struct TransformFromErrFuture<T, S, E>
-where
-    T: Transform<S>,
-    E: From<T::InitError>,
-{
-    fut: T::Future,
-    _t: PhantomData<E>,
-}
-
-impl<T, S, E> Future for TransformFromErrFuture<T, S, E>
-where
-    T: Transform<S>,
-    E: From<T::InitError>,
-{
-    type Item = T::Transform;
-    type Error = E;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.fut.poll().map_err(E::from)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        this.fut.poll(cx).map_err(this.f)
     }
 }

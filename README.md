@@ -4,10 +4,8 @@ Actix net - framework for composable network services
 
 ## Documentation & community resources
 
-* [API Documentation (Development)](https://actix.rs/actix-net/actix_net/)
 * [Chat on gitter](https://gitter.im/actix/actix)
-* Cargo package: [actix-net](https://crates.io/crates/actix-net)
-* Minimum supported Rust version: 1.37 or later
+* Minimum supported Rust version: 1.39 or later
 
 ## Example
 

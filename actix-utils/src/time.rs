@@ -1,10 +1,10 @@
 use std::convert::Infallible;
+use std::task::{Context, Poll};
 use std::time::{self, Duration, Instant};
 
-use actix_service::{NewService, Service};
-use futures::future::{ok, FutureResult};
-use futures::{Async, Future, Poll};
-use tokio_timer::sleep;
+use actix_service::{Service, ServiceFactory};
+use futures::future::{ok, ready, FutureExt, Ready};
+use tokio_timer::delay_for;
 
 use super::cell::Cell;
 
@@ -42,14 +42,14 @@ impl Default for LowResTime {
     }
 }
 
-impl NewService for LowResTime {
+impl ServiceFactory for LowResTime {
     type Request = ();
     type Response = Instant;
     type Error = Infallible;
     type InitError = Infallible;
     type Config = ();
     type Service = LowResTimeService;
-    type Future = FutureResult<Self::Service, Self::InitError>;
+    type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: &()) -> Self::Future {
         ok(self.timer())
@@ -79,12 +79,10 @@ impl LowResTimeService {
                 b.resolution
             };
 
-            tokio_current_thread::spawn(sleep(interval).map_err(|_| panic!()).and_then(
-                move |_| {
-                    inner.get_mut().current.take();
-                    Ok(())
-                },
-            ));
+            tokio_executor::current_thread::spawn(delay_for(interval).then(move |_| {
+                inner.get_mut().current.take();
+                ready(())
+            }));
             now
         }
     }
@@ -94,10 +92,10 @@ impl Service for LowResTimeService {
     type Request = ();
     type Response = Instant;
     type Error = Infallible;
-    type Future = FutureResult<Self::Response, Self::Error>;
+    type Future = Ready<Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        Ok(Async::Ready(()))
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, _: ()) -> Self::Future {
@@ -146,12 +144,10 @@ impl SystemTimeService {
                 b.resolution
             };
 
-            tokio_current_thread::spawn(sleep(interval).map_err(|_| panic!()).and_then(
-                move |_| {
-                    inner.get_mut().current.take();
-                    Ok(())
-                },
-            ));
+            tokio_executor::current_thread::spawn(delay_for(interval).then(move |_| {
+                inner.get_mut().current.take();
+                ready(())
+            }));
             now
         }
     }
@@ -160,7 +156,6 @@ impl SystemTimeService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::future;
     use std::time::{Duration, SystemTime};
 
     /// State Under Test: Two calls of `SystemTimeService::now()` return the same value if they are done within resolution interval of `SystemTimeService`.
@@ -170,13 +165,11 @@ mod tests {
     fn system_time_service_time_does_not_immediately_change() {
         let resolution = Duration::from_millis(50);
 
-        let _ = actix_rt::System::new("test").block_on(future::lazy(|| {
+        let _ = actix_rt::System::new("test").block_on(async {
             let time_service = SystemTimeService::with(resolution);
 
             assert_eq!(time_service.now(), time_service.now());
-
-            Ok::<(), ()>(())
-        }));
+        });
     }
 
     /// State Under Test: Two calls of `LowResTimeService::now()` return the same value if they are done within resolution interval of `SystemTimeService`.
@@ -186,13 +179,11 @@ mod tests {
     fn lowres_time_service_time_does_not_immediately_change() {
         let resolution = Duration::from_millis(50);
 
-        let _ = actix_rt::System::new("test").block_on(future::lazy(|| {
+        let _ = actix_rt::System::new("test").block_on(async {
             let time_service = LowResTimeService::with(resolution);
 
             assert_eq!(time_service.now(), time_service.now());
-
-            Ok::<(), ()>(())
-        }));
+        });
     }
 
     /// State Under Test: `SystemTimeService::now()` updates returned value every resolution period.
@@ -204,7 +195,7 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(150);
 
-        let _ = actix_rt::System::new("test").block_on(future::lazy(|| {
+        actix_rt::System::new("test").block_on(async {
             let time_service = SystemTimeService::with(resolution);
 
             let first_time = time_service
@@ -212,17 +203,15 @@ mod tests {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap();
 
-            sleep(wait_time).then(move |_| {
-                let second_time = time_service
-                    .now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap();
+            delay_for(wait_time).await;
 
-                assert!(second_time - first_time >= wait_time);
+            let second_time = time_service
+                .now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap();
 
-                Ok::<(), ()>(())
-            })
-        }));
+            assert!(second_time - first_time >= wait_time);
+        });
     }
 
     /// State Under Test: `LowResTimeService::now()` updates returned value every resolution period.
@@ -234,18 +223,15 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(150);
 
-        let _ = actix_rt::System::new("test").block_on(future::lazy(|| {
+        let _ = actix_rt::System::new("test").block_on(async {
             let time_service = LowResTimeService::with(resolution);
 
             let first_time = time_service.now();
 
-            sleep(wait_time).then(move |_| {
-                let second_time = time_service.now();
+            delay_for(wait_time).await;
 
-                assert!(second_time - first_time >= wait_time);
-
-                Ok::<(), ()>(())
-            })
-        }));
+            let second_time = time_service.now();
+            assert!(second_time - first_time >= wait_time);
+        });
     }
 }

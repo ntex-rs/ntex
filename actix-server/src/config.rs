@@ -2,18 +2,17 @@ use std::collections::HashMap;
 use std::{fmt, io, net};
 
 use actix_server_config::{Io, ServerConfig};
-use actix_service::{IntoNewService, NewService};
-use futures::future::{join_all, Future};
+use actix_service as actix;
+use futures::future::{Future, FutureExt, LocalBoxFuture};
 use log::error;
-use tokio_tcp::TcpStream;
-
-use crate::counter::CounterGuard;
+use tokio_net::tcp::TcpStream;
 
 use super::builder::bind_addr;
-use super::services::{
+use super::service::{
     BoxedServerService, InternalServiceFactory, ServerMessage, StreamService,
 };
 use super::Token;
+use crate::counter::CounterGuard;
 
 pub struct ServiceConfig {
     pub(crate) services: Vec<(String, net::TcpListener)>,
@@ -108,50 +107,39 @@ impl InternalServiceFactory for ConfiguredService {
         })
     }
 
-    fn create(&self) -> Box<dyn Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>> {
+    fn create(&self) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         // configure services
         let mut rt = ServiceRuntime::new(self.services.clone());
         self.rt.configure(&mut rt);
         rt.validate();
 
-        let services = rt.services;
+        let names = self.names.clone();
 
-        // on start futures
-        if rt.onstart.is_empty() {
-            // construct services
-            let mut fut = Vec::new();
-            for (token, ns) in services {
-                let config = ServerConfig::new(self.names[&token].1);
-                fut.push(ns.new_service(&config).map(move |service| (token, service)));
+        // construct services
+        async move {
+            let services = rt.services;
+            // TODO: Proper error handling here
+            for f in rt.onstart.into_iter() {
+                f.await;
             }
+            let mut res = vec![];
+            for (token, ns) in services.into_iter() {
+                let config = ServerConfig::new(names[&token].1);
 
-            Box::new(join_all(fut).map_err(|e| {
-                error!("Can not construct service: {:?}", e);
-            }))
-        } else {
-            let names = self.names.clone();
-
-            // run onstart future and then construct services
-            Box::new(
-                join_all(rt.onstart)
-                    .map_err(|e| {
-                        error!("Can not construct service: {:?}", e);
-                    })
-                    .and_then(move |_| {
-                        // construct services
-                        let mut fut = Vec::new();
-                        for (token, ns) in services {
-                            let config = ServerConfig::new(names[&token].1);
-                            fut.push(
-                                ns.new_service(&config).map(move |service| (token, service)),
-                            );
-                        }
-                        join_all(fut).map_err(|e| {
-                            error!("Can not construct service: {:?}", e);
-                        })
-                    }),
-            )
+                let newserv = ns.new_service(&config);
+                match newserv.await {
+                    Ok(serv) => {
+                        res.push((token, serv));
+                    }
+                    Err(e) => {
+                        error!("Can not construct service {:?}", e);
+                        return Err(e);
+                    }
+                };
+            }
+            return Ok(res);
         }
+            .boxed_local()
     }
 }
 
@@ -181,7 +169,7 @@ fn not_configured(_: &mut ServiceRuntime) {
 pub struct ServiceRuntime {
     names: HashMap<String, Token>,
     services: HashMap<Token, BoxedNewService>,
-    onstart: Vec<Box<dyn Future<Item = (), Error = ()>>>,
+    onstart: Vec<LocalBoxFuture<'static, ()>>,
 }
 
 impl ServiceRuntime {
@@ -207,8 +195,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service<T, F>(&mut self, name: &str, service: F)
     where
-        F: IntoNewService<T>,
-        T: NewService<Config = ServerConfig, Request = Io<TcpStream>> + 'static,
+        F: actix::IntoServiceFactory<T>,
+        T: actix::ServiceFactory<Config = ServerConfig, Request = Io<TcpStream>> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -218,7 +206,7 @@ impl ServiceRuntime {
             self.services.insert(
                 token.clone(),
                 Box::new(ServiceFactory {
-                    inner: service.into_new_service(),
+                    inner: service.into_factory(),
                 }),
             );
         } else {
@@ -229,21 +217,21 @@ impl ServiceRuntime {
     /// Execute future before services initialization.
     pub fn on_start<F>(&mut self, fut: F)
     where
-        F: Future<Item = (), Error = ()> + 'static,
+        F: Future<Output = ()> + 'static,
     {
-        self.onstart.push(Box::new(fut))
+        self.onstart.push(fut.boxed_local())
     }
 }
 
 type BoxedNewService = Box<
-    dyn NewService<
+    dyn actix::ServiceFactory<
         Request = (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
         InitError = (),
         Config = ServerConfig,
         Service = BoxedServerService,
-        Future = Box<dyn Future<Item = BoxedServerService, Error = ()>>,
+        Future = LocalBoxFuture<'static, Result<BoxedServerService, ()>>,
     >,
 >;
 
@@ -251,9 +239,9 @@ struct ServiceFactory<T> {
     inner: T,
 }
 
-impl<T> NewService for ServiceFactory<T>
+impl<T> actix::ServiceFactory for ServiceFactory<T>
 where
-    T: NewService<Config = ServerConfig, Request = Io<TcpStream>>,
+    T: actix::ServiceFactory<Config = ServerConfig, Request = Io<TcpStream>>,
     T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,
@@ -265,12 +253,19 @@ where
     type InitError = ();
     type Config = ServerConfig;
     type Service = BoxedServerService;
-    type Future = Box<dyn Future<Item = BoxedServerService, Error = ()>>;
+    type Future = LocalBoxFuture<'static, Result<BoxedServerService, ()>>;
 
     fn new_service(&self, cfg: &ServerConfig) -> Self::Future {
-        Box::new(self.inner.new_service(cfg).map_err(|_| ()).map(|s| {
-            let service: BoxedServerService = Box::new(StreamService::new(s));
-            service
-        }))
+        let fut = self.inner.new_service(cfg);
+        async move {
+            return match fut.await {
+                Ok(s) => Ok(Box::new(StreamService::new(s)) as BoxedServerService),
+                Err(e) => {
+                    error!("Can not construct service: {:?}", e);
+                    Err(())
+                }
+            };
+        }
+            .boxed_local()
     }
 }

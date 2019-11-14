@@ -1,6 +1,6 @@
 [package]
 name = "actix-ioframe"
-version = "0.1.1"
+version = "0.3.0-alpha.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix framed service"
 keywords = ["network", "framework", "async", "futures"]
@@ -18,18 +18,20 @@ name = "actix_ioframe"
 path = "src/lib.rs"
 
 [dependencies]
-actix-service = "0.4.1"
-actix-codec = "0.1.2"
+actix-service = "1.0.0-alpha.1"
+actix-codec = "0.2.0-alpha.1"
+actix-utils = "0.5.0-alpha.1"
 bytes = "0.4"
 either = "1.5.2"
-futures = "0.1.25"
-tokio-current-thread = "0.1.4"
+futures = "0.3.1"
+pin-project = "0.4.5"
+tokio-executor = "=0.2.0-alpha.6"
 log = "0.4"
 
 [dev-dependencies]
-actix-rt = "0.2.2"
-actix-connect = "0.3.0"
-actix-testing = "0.2.0"
-actix-server-config = "0.2.0"
-tokio-tcp = "0.1"
-tokio-timer = "0.2"
+actix-rt = "1.0.0-alpha.1"
+actix-connect = "1.0.0-alpha.1"
+actix-testing = "0.3.0-alpha.1"
+actix-server-config = "0.3.0-alpha.1"
+tokio-net = "=0.2.0-alpha.6"
+tokio-timer = "=0.3.0-alpha.6"

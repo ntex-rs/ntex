@@ -1,23 +1,26 @@
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use futures::{Future, Poll};
+use pin_project::pin_project;
 
-use super::NewService;
+use super::ServiceFactory;
 
 /// `MapInitErr` service combinator
-pub struct MapInitErr<A, F, E> {
+pub(crate) struct MapInitErr<A, F, E> {
     a: A,
     f: F,
     e: PhantomData<E>,
 }
 
-impl<A, F, E> MapInitErr<A, F, E> {
+impl<A, F, E> MapInitErr<A, F, E>
+where
+    A: ServiceFactory,
+    F: Fn(A::InitError) -> E,
+{
     /// Create new `MapInitErr` combinator
-    pub fn new(a: A, f: F) -> Self
-    where
-        A: NewService,
-        F: Fn(A::InitError) -> E,
-    {
+    pub(crate) fn new(a: A, f: F) -> Self {
         Self {
             a,
             f,
@@ -40,9 +43,9 @@ where
     }
 }
 
-impl<A, F, E> NewService for MapInitErr<A, F, E>
+impl<A, F, E> ServiceFactory for MapInitErr<A, F, E>
 where
-    A: NewService,
+    A: ServiceFactory,
     F: Fn(A::InitError) -> E + Clone,
 {
     type Request = A::Request;
@@ -58,19 +61,20 @@ where
         MapInitErrFuture::new(self.a.new_service(cfg), self.f.clone())
     }
 }
-
-pub struct MapInitErrFuture<A, F, E>
+#[pin_project]
+pub(crate) struct MapInitErrFuture<A, F, E>
 where
-    A: NewService,
+    A: ServiceFactory,
     F: Fn(A::InitError) -> E,
 {
     f: F,
+    #[pin]
     fut: A::Future,
 }
 
 impl<A, F, E> MapInitErrFuture<A, F, E>
 where
-    A: NewService,
+    A: ServiceFactory,
     F: Fn(A::InitError) -> E,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -80,13 +84,13 @@ where
 
 impl<A, F, E> Future for MapInitErrFuture<A, F, E>
 where
-    A: NewService,
+    A: ServiceFactory,
     F: Fn(A::InitError) -> E,
 {
-    type Item = A::Service;
-    type Error = E;
+    type Output = Result<A::Service, E>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.fut.poll().map_err(&self.f)
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        this.fut.poll(cx).map_err(this.f)
     }
 }

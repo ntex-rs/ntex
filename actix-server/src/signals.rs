@@ -1,8 +1,13 @@
+use std::future::Future;
 use std::io;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use actix_rt::spawn;
-use futures::stream::futures_unordered;
-use futures::{Async, Future, Poll, Stream};
+use futures::future::LocalBoxFuture;
+use futures::stream::{futures_unordered, FuturesUnordered, LocalBoxStream};
+use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStream, TryStreamExt};
+use tokio_net::signal::unix::signal;
 
 use crate::server::Server;
 
@@ -27,14 +32,14 @@ pub(crate) struct Signals {
     streams: Vec<SigStream>,
 }
 
-type SigStream = Box<dyn Stream<Item = Signal, Error = io::Error>>;
+type SigStream = LocalBoxStream<'static, Result<Signal, io::Error>>;
 
 impl Signals {
     pub(crate) fn start(srv: Server) {
         let fut = {
             #[cfg(not(unix))]
             {
-                tokio_signal::ctrl_c()
+                tokio_net::signal::ctrl_c()
                     .map_err(|_| ())
                     .and_then(move |stream| Signals {
                         srv,
@@ -44,51 +49,79 @@ impl Signals {
 
             #[cfg(unix)]
             {
-                use tokio_signal::unix;
+                use tokio_net::signal::unix;
 
-                let mut sigs: Vec<Box<dyn Future<Item = SigStream, Error = io::Error>>> =
-                    Vec::new();
-                sigs.push(Box::new(
-                    tokio_signal::unix::Signal::new(tokio_signal::unix::SIGINT).map(|stream| {
-                        let s: SigStream = Box::new(stream.map(|_| Signal::Int));
-                        s
-                    }),
-                ));
-                sigs.push(Box::new(
-                    tokio_signal::unix::Signal::new(tokio_signal::unix::SIGHUP).map(
-                        |stream: unix::Signal| {
+                let mut sigs: Vec<_> = Vec::new();
+
+                let mut SIG_MAP = [
+                    (
+                        tokio_net::signal::unix::SignalKind::interrupt(),
+                        Signal::Int,
+                    ),
+                    (tokio_net::signal::unix::SignalKind::hangup(), Signal::Hup),
+                    (
+                        tokio_net::signal::unix::SignalKind::terminate(),
+                        Signal::Term,
+                    ),
+                    (tokio_net::signal::unix::SignalKind::quit(), Signal::Quit),
+                ];
+
+                for (kind, sig) in SIG_MAP.into_iter() {
+                    let sig = sig.clone();
+                    let fut = signal(*kind).unwrap();
+                    sigs.push(fut.map(move |_| Ok(sig)).boxed_local());
+                }
+                /* TODO: Finish rewriting this
+                sigs.push(
+                    tokio_net::signal::unix::signal(tokio_net::signal::si).unwrap()
+                        .map(|stream| {
+                            let s: SigStream = Box::new(stream.map(|_| Signal::Int));
+                            s
+                        }).boxed()
+                );
+                sigs.push(
+
+                    tokio_net::signal::unix::signal(tokio_net::signal::unix::SignalKind::hangup()).unwrap()
+                        .map(|stream: unix::Signal| {
                             let s: SigStream = Box::new(stream.map(|_| Signal::Hup));
                             s
-                        },
-                    ),
-                ));
-                sigs.push(Box::new(
-                    tokio_signal::unix::Signal::new(tokio_signal::unix::SIGTERM).map(
-                        |stream| {
+                        }).boxed()
+                );
+                sigs.push(
+                    tokio_net::signal::unix::signal(
+                        tokio_net::signal::unix::SignalKind::terminate()
+                    ).unwrap()
+                        .map(|stream| {
                             let s: SigStream = Box::new(stream.map(|_| Signal::Term));
                             s
-                        },
-                    ),
-                ));
-                sigs.push(Box::new(
-                    tokio_signal::unix::Signal::new(tokio_signal::unix::SIGQUIT).map(
-                        |stream| {
+                        }).boxed(),
+                );
+                sigs.push(
+                    tokio_net::signal::unix::signal(
+                        tokio_net::signal::unix::SignalKind::quit()
+                    ).unwrap()
+                        .map(|stream| {
                             let s: SigStream = Box::new(stream.map(|_| Signal::Quit));
                             s
-                        },
-                    ),
-                ));
-                futures_unordered(sigs)
-                    .collect()
-                    .map_err(|_| ())
-                    .and_then(move |streams| Signals { srv, streams })
+                        }).boxed()
+                );
+                */
+
+                Signals { srv, streams: sigs }
             }
         };
-        spawn(fut);
+        spawn(async {});
     }
 }
 
 impl Future for Signals {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        unimplemented!()
+    }
+
+    /*
     type Item = ();
     type Error = ();
 
@@ -115,4 +148,5 @@ impl Future for Signals {
             Ok(Async::NotReady)
         }
     }
+    */
 }

@@ -1,8 +1,11 @@
 use std::convert::Infallible;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use actix_service::{IntoService, Service, Transform};
-use futures::future::{ok, FutureResult};
-use futures::{Async, Future, Poll};
+use futures::future::{ok, Ready};
+use pin_project::pin_project;
 
 use super::counter::{Counter, CounterGuard};
 
@@ -32,7 +35,7 @@ impl<S: Service> Transform<S> for InFlight {
     type Error = S::Error;
     type InitError = Infallible;
     type Transform = InFlightService<S>;
-    type Future = FutureResult<Self::Transform, Self::InitError>;
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
         ok(InFlightService::new(self.max_inflight, service))
@@ -68,14 +71,14 @@ where
     type Error = T::Error;
     type Future = InFlightServiceResponse<T>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        if let Async::NotReady = self.service.poll_ready()? {
-            Ok(Async::NotReady)
-        } else if !self.count.available() {
+    fn poll_ready(&mut self, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        if let Poll::Pending = self.service.poll_ready(cx)? {
+            Poll::Pending
+        } else if !self.count.available(cx) {
             log::trace!("InFlight limit exceeded");
-            Ok(Async::NotReady)
+            Poll::Pending
         } else {
-            Ok(Async::Ready(()))
+            Poll::Ready(Ok(()))
         }
     }
 
@@ -87,31 +90,31 @@ where
     }
 }
 
+#[pin_project]
 #[doc(hidden)]
 pub struct InFlightServiceResponse<T: Service> {
+    #[pin]
     fut: T::Future,
     _guard: CounterGuard,
 }
 
 impl<T: Service> Future for InFlightServiceResponse<T> {
-    type Item = T::Response;
-    type Error = T::Error;
+    type Output = Result<T::Response, T::Error>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.fut.poll()
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        self.project().fut.poll(cx)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use futures::future::lazy;
-    use futures::{Async, Poll};
 
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use super::*;
-    use actix_service::blank::{Blank, BlankNewService};
-    use actix_service::{NewService, Service, ServiceExt};
+    use actix_service::{apply, factory_fn, Service, ServiceFactory};
+    use futures::future::{lazy, ok, FutureExt, LocalBoxFuture};
 
     struct SleepService(Duration);
 
@@ -119,57 +122,49 @@ mod tests {
         type Request = ();
         type Response = ();
         type Error = ();
-        type Future = Box<dyn Future<Item = (), Error = ()>>;
+        type Future = LocalBoxFuture<'static, Result<(), ()>>;
 
-        fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-            Ok(Async::Ready(()))
+        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
         }
 
         fn call(&mut self, _: ()) -> Self::Future {
-            Box::new(tokio_timer::sleep(self.0).map_err(|_| ()))
+            tokio_timer::delay_for(self.0)
+                .then(|_| ok::<_, ()>(()))
+                .boxed_local()
         }
     }
 
     #[test]
     fn test_transform() {
         let wait_time = Duration::from_millis(50);
-        let _ = actix_rt::System::new("test").block_on(lazy(|| {
-            let mut srv =
-                Blank::new().and_then(InFlightService::new(1, SleepService(wait_time)));
-            assert_eq!(srv.poll_ready(), Ok(Async::Ready(())));
+        let _ = actix_rt::System::new("test").block_on(async {
+            let mut srv = InFlightService::new(1, SleepService(wait_time));
+            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-            let mut res = srv.call(());
-            let _ = res.poll();
-            assert_eq!(srv.poll_ready(), Ok(Async::NotReady));
+            let res = srv.call(());
+            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
-            drop(res);
-            assert_eq!(srv.poll_ready(), Ok(Async::Ready(())));
-
-            Ok::<_, ()>(())
-        }));
+            let _ = res.await;
+            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        });
     }
 
     #[test]
     fn test_newtransform() {
         let wait_time = Duration::from_millis(50);
-        let _ = actix_rt::System::new("test").block_on(lazy(|| {
-            let srv =
-                BlankNewService::new().apply(InFlight::new(1), || Ok(SleepService(wait_time)));
 
-            if let Async::Ready(mut srv) = srv.new_service(&()).poll().unwrap() {
-                assert_eq!(srv.poll_ready(), Ok(Async::Ready(())));
+        actix_rt::System::new("test").block_on(async {
+            let srv = apply(InFlight::new(1), factory_fn(|| ok(SleepService(wait_time))));
 
-                let mut res = srv.call(());
-                let _ = res.poll();
-                assert_eq!(srv.poll_ready(), Ok(Async::NotReady));
+            let mut srv = srv.new_service(&()).await.unwrap();
+            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-                drop(res);
-                assert_eq!(srv.poll_ready(), Ok(Async::Ready(())));
-            } else {
-                panic!()
-            }
+            let res = srv.call(());
+            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
-            Ok::<_, ()>(())
-        }));
+            let _ = res.await;
+            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        });
     }
 }

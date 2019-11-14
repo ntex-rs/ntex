@@ -1,16 +1,16 @@
-use futures::sync::mpsc::UnboundedSender;
-use futures::sync::oneshot;
-use futures::Future;
+use futures::channel::mpsc::UnboundedSender;
+use futures::channel::oneshot;
+use futures::{Future, TryFutureExt};
 
 use crate::builder::ServerBuilder;
-use crate::signals::Signal;
+// use crate::signals::Signal;
 
 #[derive(Debug)]
 pub(crate) enum ServerCommand {
-    WorkerDied(usize),
+    WorkerFaulted(usize),
     Pause(oneshot::Sender<()>),
     Resume(oneshot::Sender<()>),
-    Signal(Signal),
+    // Signal(Signal),
     /// Whether to try and shut down gracefully
     Stop {
         graceful: bool,
@@ -31,26 +31,26 @@ impl Server {
         ServerBuilder::default()
     }
 
-    pub(crate) fn signal(&self, sig: Signal) {
-        let _ = self.0.unbounded_send(ServerCommand::Signal(sig));
-    }
+    // pub(crate) fn signal(&self, sig: Signal) {
+    //     let _ = self.0.unbounded_send(ServerCommand::Signal(sig));
+    // }
 
-    pub(crate) fn worker_died(&self, idx: usize) {
-        let _ = self.0.unbounded_send(ServerCommand::WorkerDied(idx));
+    pub(crate) fn worker_faulted(&self, idx: usize) {
+        let _ = self.0.unbounded_send(ServerCommand::WorkerFaulted(idx));
     }
 
     /// Pause accepting incoming connections
     ///
     /// If socket contains some pending connection, they might be dropped.
     /// All opened connection remains active.
-    pub fn pause(&self) -> impl Future<Item = (), Error = ()> {
+    pub fn pause(&self) -> impl Future<Output = Result<(), ()>> {
         let (tx, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(ServerCommand::Pause(tx));
         rx.map_err(|_| ())
     }
 
     /// Resume accepting incoming connections
-    pub fn resume(&self) -> impl Future<Item = (), Error = ()> {
+    pub fn resume(&self) -> impl Future<Output = Result<(), ()>> {
         let (tx, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(ServerCommand::Resume(tx));
         rx.map_err(|_| ())
@@ -59,7 +59,7 @@ impl Server {
     /// Stop incoming connection processing, stop all workers and exit.
     ///
     /// If server starts with `spawn()` method, then spawned thread get terminated.
-    pub fn stop(&self, graceful: bool) -> impl Future<Item = (), Error = ()> {
+    pub fn stop(&self, graceful: bool) -> impl Future<Output = Result<(), ()>> {
         let (tx, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(ServerCommand::Stop {
             graceful,

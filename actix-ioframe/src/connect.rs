@@ -1,7 +1,11 @@
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
-use futures::unsync::mpsc;
+use actix_utils::mpsc;
+use futures::Stream;
+use pin_project::pin_project;
 
 use crate::dispatcher::FramedMessage;
 use crate::sink::Sink;
@@ -13,7 +17,7 @@ pub struct Connect<Io, St = (), Codec = ()> {
 
 impl<Io> Connect<Io>
 where
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
 {
     pub(crate) fn new(io: Io) -> Self {
         Self {
@@ -24,9 +28,9 @@ where
 
     pub fn codec<Codec>(self, codec: Codec) -> ConnectResult<Io, (), Codec>
     where
-        Codec: Encoder + Decoder,
+        Codec: Encoder + Decoder + Unpin,
     {
-        let (tx, rx) = mpsc::unbounded();
+        let (tx, rx) = mpsc::channel();
         let sink = Sink::new(tx);
 
         ConnectResult {
@@ -38,10 +42,12 @@ where
     }
 }
 
+#[pin_project]
 pub struct ConnectResult<Io, St, Codec: Encoder + Decoder> {
     pub(crate) state: St,
+    #[pin]
     pub(crate) framed: Framed<Io, Codec>,
-    pub(crate) rx: mpsc::UnboundedReceiver<FramedMessage<<Codec as Encoder>::Item>>,
+    pub(crate) rx: mpsc::Receiver<FramedMessage<<Codec as Encoder>::Item>>,
     pub(crate) sink: Sink<<Codec as Encoder>::Item>,
 }
 
@@ -72,39 +78,41 @@ impl<Io, St, Codec: Encoder + Decoder> ConnectResult<Io, St, Codec> {
     }
 }
 
-impl<Io, St, Codec> futures::Stream for ConnectResult<Io, St, Codec>
+impl<Io, St, Codec> Stream for ConnectResult<Io, St, Codec>
 where
-    Io: AsyncRead + AsyncWrite,
-    Codec: Encoder + Decoder,
+    Io: AsyncRead + AsyncWrite + Unpin,
+    Codec: Encoder + Decoder + Unpin,
 {
-    type Item = <Codec as Decoder>::Item;
-    type Error = <Codec as Decoder>::Error;
+    type Item = Result<<Codec as Decoder>::Item, <Codec as Decoder>::Error>;
 
-    fn poll(&mut self) -> futures::Poll<Option<Self::Item>, Self::Error> {
-        self.framed.poll()
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        self.project().framed.poll_next(cx)
     }
 }
 
-impl<Io, St, Codec> futures::Sink for ConnectResult<Io, St, Codec>
+impl<Io, St, Codec> futures::Sink<<Codec as Encoder>::Item> for ConnectResult<Io, St, Codec>
 where
-    Io: AsyncRead + AsyncWrite,
-    Codec: Encoder + Decoder,
+    Io: AsyncRead + AsyncWrite + Unpin,
+    Codec: Encoder + Decoder + Unpin,
 {
-    type SinkItem = <Codec as Encoder>::Item;
-    type SinkError = <Codec as Encoder>::Error;
+    type Error = <Codec as Encoder>::Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.project().framed.poll_ready(cx)
+    }
 
     fn start_send(
-        &mut self,
-        item: Self::SinkItem,
-    ) -> futures::StartSend<Self::SinkItem, Self::SinkError> {
-        self.framed.start_send(item)
+        self: Pin<&mut Self>,
+        item: <Codec as Encoder>::Item,
+    ) -> Result<(), Self::Error> {
+        self.project().framed.start_send(item)
     }
 
-    fn poll_complete(&mut self) -> futures::Poll<(), Self::SinkError> {
-        self.framed.poll_complete()
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.project().framed.poll_flush(cx)
     }
 
-    fn close(&mut self) -> futures::Poll<(), Self::SinkError> {
-        self.framed.close()
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.project().framed.poll_close(cx)
     }
 }

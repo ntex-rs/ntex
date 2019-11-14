@@ -2,19 +2,21 @@
 //!
 //! If the response does not complete within the specified timeout, the response
 //! will be aborted.
-use std::fmt;
+use std::future::Future;
 use std::marker::PhantomData;
-use std::time::Duration;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::{fmt, time};
 
 use actix_service::{IntoService, Service, Transform};
-use futures::future::{ok, FutureResult};
-use futures::{Async, Future, Poll};
-use tokio_timer::{clock, Delay};
+use futures::future::{ok, Ready};
+use pin_project::pin_project;
+use tokio_timer::{clock, delay, Delay};
 
 /// Applies a timeout to requests.
 #[derive(Debug)]
 pub struct Timeout<E = ()> {
-    timeout: Duration,
+    timeout: time::Duration,
     _t: PhantomData<E>,
 }
 
@@ -66,7 +68,7 @@ impl<E: PartialEq> PartialEq for TimeoutError<E> {
 }
 
 impl<E> Timeout<E> {
-    pub fn new(timeout: Duration) -> Self {
+    pub fn new(timeout: time::Duration) -> Self {
         Timeout {
             timeout,
             _t: PhantomData,
@@ -89,7 +91,7 @@ where
     type Error = TimeoutError<S::Error>;
     type InitError = E;
     type Transform = TimeoutService<S>;
-    type Future = FutureResult<Self::Transform, Self::InitError>;
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
         ok(TimeoutService {
@@ -103,14 +105,14 @@ where
 #[derive(Debug, Clone)]
 pub struct TimeoutService<S> {
     service: S,
-    timeout: Duration,
+    timeout: time::Duration,
 }
 
 impl<S> TimeoutService<S>
 where
     S: Service,
 {
-    pub fn new<U>(timeout: Duration, service: U) -> Self
+    pub fn new<U>(timeout: time::Duration, service: U) -> Self
     where
         U: IntoService<S>,
     {
@@ -130,21 +132,23 @@ where
     type Error = TimeoutError<S::Error>;
     type Future = TimeoutServiceResponse<S>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.service.poll_ready().map_err(TimeoutError::Service)
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.service.poll_ready(cx).map_err(TimeoutError::Service)
     }
 
     fn call(&mut self, request: S::Request) -> Self::Future {
         TimeoutServiceResponse {
             fut: self.service.call(request),
-            sleep: Delay::new(clock::now() + self.timeout),
+            sleep: delay(clock::now() + self.timeout),
         }
     }
 }
 
 /// `TimeoutService` response future
+#[pin_project]
 #[derive(Debug)]
 pub struct TimeoutServiceResponse<T: Service> {
+    #[pin]
     fut: T::Future,
     sleep: Delay,
 }
@@ -153,36 +157,34 @@ impl<T> Future for TimeoutServiceResponse<T>
 where
     T: Service,
 {
-    type Item = T::Response;
-    type Error = TimeoutError<T::Error>;
+    type Output = Result<T::Response, TimeoutError<T::Error>>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
+
         // First, try polling the future
-        match self.fut.poll() {
-            Ok(Async::Ready(v)) => return Ok(Async::Ready(v)),
-            Ok(Async::NotReady) => {}
-            Err(e) => return Err(TimeoutError::Service(e)),
+        match this.fut.poll(cx) {
+            Poll::Ready(Ok(v)) => return Poll::Ready(Ok(v)),
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(TimeoutError::Service(e))),
+            Poll::Pending => {}
         }
 
         // Now check the sleep
-        match self.sleep.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(_)) => Err(TimeoutError::Timeout),
-            Err(_) => Err(TimeoutError::Timeout),
+        match Pin::new(&mut this.sleep).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(_) => Poll::Ready(Err(TimeoutError::Timeout)),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use futures::future::lazy;
-    use futures::{Async, Poll};
-
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use super::*;
-    use actix_service::blank::{Blank, BlankNewService};
-    use actix_service::{NewService, Service, ServiceExt};
+    use actix_service::{apply, factory_fn, Service, ServiceFactory};
+    use futures::future::{ok, FutureExt, LocalBoxFuture};
 
     struct SleepService(Duration);
 
@@ -190,14 +192,16 @@ mod tests {
         type Request = ();
         type Response = ();
         type Error = ();
-        type Future = Box<dyn Future<Item = (), Error = ()>>;
+        type Future = LocalBoxFuture<'static, Result<(), ()>>;
 
-        fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-            Ok(Async::Ready(()))
+        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
         }
 
         fn call(&mut self, _: ()) -> Self::Future {
-            Box::new(tokio_timer::sleep(self.0).map_err(|_| ()))
+            tokio_timer::delay_for(self.0)
+                .then(|_| ok::<_, ()>(()))
+                .boxed_local()
         }
     }
 
@@ -206,11 +210,10 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
 
-        let res = actix_rt::System::new("test").block_on(lazy(|| {
-            let mut timeout = Blank::default()
-                .and_then(TimeoutService::new(resolution, SleepService(wait_time)));
-            timeout.call(())
-        }));
+        let res = actix_rt::System::new("test").block_on(async {
+            let mut timeout = TimeoutService::new(resolution, SleepService(wait_time));
+            timeout.call(()).await
+        });
         assert_eq!(res, Ok(()));
     }
 
@@ -219,11 +222,10 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(150);
 
-        let res = actix_rt::System::new("test").block_on(lazy(|| {
-            let mut timeout = Blank::default()
-                .and_then(TimeoutService::new(resolution, SleepService(wait_time)));
-            timeout.call(())
-        }));
+        let res = actix_rt::System::new("test").block_on(async {
+            let mut timeout = TimeoutService::new(resolution, SleepService(wait_time));
+            timeout.call(()).await
+        });
         assert_eq!(res, Err(TimeoutError::Timeout));
     }
 
@@ -232,15 +234,15 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(150);
 
-        let res = actix_rt::System::new("test").block_on(lazy(|| {
-            let timeout = BlankNewService::<(), (), ()>::default()
-                .apply(Timeout::new(resolution), || Ok(SleepService(wait_time)));
-            if let Async::Ready(mut to) = timeout.new_service(&()).poll().unwrap() {
-                to.call(())
-            } else {
-                panic!()
-            }
-        }));
+        let res = actix_rt::System::new("test").block_on(async {
+            let timeout = apply(
+                Timeout::new(resolution),
+                factory_fn(|| ok::<_, ()>(SleepService(wait_time))),
+            );
+            let mut srv = timeout.new_service(&()).await.unwrap();
+
+            srv.call(()).await
+        });
         assert_eq!(res, Err(TimeoutError::Timeout));
     }
 }

@@ -1,10 +1,13 @@
 use std::fmt;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite};
-use actix_service::{NewService, Service};
-use futures::{future::ok, future::FutureResult, Async, Future, Poll};
-use std::sync::Arc;
+use actix_service::{Service, ServiceFactory};
+use futures::future::{ok, Ready};
 use tokio_rustls::{client::TlsStream, rustls::ClientConfig, Connect, TlsConnector};
 use webpki::DNSNameRef;
 
@@ -27,8 +30,8 @@ impl<T, U> RustlsConnector<T, U> {
 
 impl<T, U> RustlsConnector<T, U>
 where
-    T: Address,
-    U: AsyncRead + AsyncWrite + fmt::Debug,
+    T: Address + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
 {
     pub fn service(
         connector: Arc<ClientConfig>,
@@ -53,9 +56,9 @@ impl<T, U> Clone for RustlsConnector<T, U> {
     }
 }
 
-impl<T: Address, U> NewService for RustlsConnector<T, U>
+impl<T: Address + Unpin, U> ServiceFactory for RustlsConnector<T, U>
 where
-    U: AsyncRead + AsyncWrite + fmt::Debug,
+    U: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
 {
     type Request = Connection<T, U>;
     type Response = Connection<T, TlsStream<U>>;
@@ -63,7 +66,7 @@ where
     type Config = ();
     type Service = RustlsConnectorService<T, U>;
     type InitError = ();
-    type Future = FutureResult<Self::Service, Self::InitError>;
+    type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: &()) -> Self::Future {
         ok(RustlsConnectorService {
@@ -78,17 +81,17 @@ pub struct RustlsConnectorService<T, U> {
     _t: PhantomData<(T, U)>,
 }
 
-impl<T: Address, U> Service for RustlsConnectorService<T, U>
+impl<T: Address + Unpin, U> Service for RustlsConnectorService<T, U>
 where
-    U: AsyncRead + AsyncWrite + fmt::Debug,
+    U: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
 {
     type Request = Connection<T, U>;
     type Response = Connection<T, TlsStream<U>>;
     type Error = std::io::Error;
     type Future = ConnectAsyncExt<T, U>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        Ok(Async::Ready(()))
+    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, stream: Connection<T, U>) -> Self::Future {
@@ -108,24 +111,20 @@ pub struct ConnectAsyncExt<T, U> {
     stream: Option<Connection<T, ()>>,
 }
 
-impl<T: Address, U> Future for ConnectAsyncExt<T, U>
+impl<T: Address + Unpin, U> Future for ConnectAsyncExt<T, U>
 where
-    U: AsyncRead + AsyncWrite + fmt::Debug,
+    U: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
 {
-    type Item = Connection<T, TlsStream<U>>;
-    type Error = std::io::Error;
+    type Output = Result<Connection<T, TlsStream<U>>, std::io::Error>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.fut.poll().map_err(|e| {
-            trace!("SSL Handshake error: {:?}", e);
-            e
-        })? {
-            Async::Ready(stream) => {
-                let s = self.stream.take().unwrap();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        Poll::Ready(
+            futures::ready!(Pin::new(&mut this.fut).poll(cx)).map(|stream| {
+                let s = this.stream.take().unwrap();
                 trace!("SSL Handshake success: {:?}", s.host());
-                Ok(Async::Ready(s.replace(stream).1))
-            }
-            Async::NotReady => Ok(Async::NotReady),
-        }
+                s.replace(stream).1
+            }),
+        )
     }
 }

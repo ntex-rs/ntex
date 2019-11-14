@@ -1,22 +1,24 @@
-use std::time::Duration;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 use std::{io, mem, net};
 
 use actix_rt::{spawn, Arbiter, System};
-use futures::future::{lazy, ok};
-use futures::stream::futures_unordered;
-use futures::sync::mpsc::{unbounded, UnboundedReceiver};
-use futures::{Async, Future, Poll, Stream};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver};
+use futures::future::ready;
+use futures::stream::FuturesUnordered;
+use futures::{ready, Future, FutureExt, Stream, StreamExt};
 use log::{error, info};
 use net2::TcpBuilder;
 use num_cpus;
-use tokio_tcp::TcpStream;
-use tokio_timer::sleep;
+use tokio_net::tcp::TcpStream;
+use tokio_timer::delay;
 
 use crate::accept::{AcceptLoop, AcceptNotify, Command};
 use crate::config::{ConfiguredService, ServiceConfig};
 use crate::server::{Server, ServerCommand};
-use crate::services::{InternalServiceFactory, ServiceFactory, StreamNewService};
-use crate::signals::{Signal, Signals};
+use crate::service::{InternalServiceFactory, ServiceFactory, StreamNewService};
+// use crate::signals::{Signal, Signals};
 use crate::socket::StdListener;
 use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use crate::{ssl, Token};
@@ -301,7 +303,7 @@ impl ServerBuilder {
 
             // handle signals
             if !self.no_signals {
-                Signals::start(self.server.clone());
+                // Signals::start(self.server.clone());
             }
 
             // start http server actor
@@ -320,10 +322,12 @@ impl ServerBuilder {
         let services: Vec<Box<dyn InternalServiceFactory>> =
             self.services.iter().map(|v| v.clone_factory()).collect();
 
-        Arbiter::new().send(lazy(move || {
-            Worker::start(rx1, rx2, services, avail, timeout);
-            Ok::<_, ()>(())
-        }));
+        Arbiter::new().send(
+            async move {
+                Worker::start(rx1, rx2, services, avail, timeout);
+            }
+                .boxed(),
+        );
 
         worker
     }
@@ -338,37 +342,37 @@ impl ServerBuilder {
                 self.accept.send(Command::Resume);
                 let _ = tx.send(());
             }
-            ServerCommand::Signal(sig) => {
-                // Signals support
-                // Handle `SIGINT`, `SIGTERM`, `SIGQUIT` signals and stop actix system
-                match sig {
-                    Signal::Int => {
-                        info!("SIGINT received, exiting");
-                        self.exit = true;
-                        self.handle_cmd(ServerCommand::Stop {
-                            graceful: false,
-                            completion: None,
-                        })
-                    }
-                    Signal::Term => {
-                        info!("SIGTERM received, stopping");
-                        self.exit = true;
-                        self.handle_cmd(ServerCommand::Stop {
-                            graceful: true,
-                            completion: None,
-                        })
-                    }
-                    Signal::Quit => {
-                        info!("SIGQUIT received, exiting");
-                        self.exit = true;
-                        self.handle_cmd(ServerCommand::Stop {
-                            graceful: false,
-                            completion: None,
-                        })
-                    }
-                    _ => (),
-                }
-            }
+            // ServerCommand::Signal(sig) => {
+            // Signals support
+            // Handle `SIGINT`, `SIGTERM`, `SIGQUIT` signals and stop actix system
+            // match sig {
+            //     Signal::Int => {
+            //         info!("SIGINT received, exiting");
+            //         self.exit = true;
+            //         self.handle_cmd(ServerCommand::Stop {
+            //             graceful: false,
+            //             completion: None,
+            //         })
+            //     }
+            //     Signal::Term => {
+            //         info!("SIGTERM received, stopping");
+            //         self.exit = true;
+            //         self.handle_cmd(ServerCommand::Stop {
+            //             graceful: true,
+            //             completion: None,
+            //         })
+            //     }
+            //     Signal::Quit => {
+            //         info!("SIGQUIT received, exiting");
+            //         self.exit = true;
+            //         self.handle_cmd(ServerCommand::Stop {
+            //             graceful: false,
+            //             completion: None,
+            //         })
+            //     }
+            //     _ => (),
+            // }
+            // }
             ServerCommand::Stop {
                 graceful,
                 completion,
@@ -381,39 +385,44 @@ impl ServerBuilder {
                 // stop workers
                 if !self.workers.is_empty() && graceful {
                     spawn(
-                        futures_unordered(
-                            self.workers
-                                .iter()
-                                .map(move |worker| worker.1.stop(graceful)),
-                        )
-                        .collect()
-                        .then(move |_| {
-                            if let Some(tx) = completion {
-                                let _ = tx.send(());
-                            }
-                            if exit {
-                                spawn(sleep(Duration::from_millis(300)).then(|_| {
-                                    System::current().stop();
-                                    ok(())
-                                }));
-                            }
-                            ok(())
-                        }),
+                        self.workers
+                            .iter()
+                            .map(move |worker| worker.1.stop(graceful))
+                            .collect::<FuturesUnordered<_>>()
+                            .collect::<Vec<_>>()
+                            .then(move |_| {
+                                if let Some(tx) = completion {
+                                    let _ = tx.send(());
+                                }
+                                if exit {
+                                    spawn(
+                                        async {
+                                            delay(Instant::now() + Duration::from_millis(300))
+                                                .await;
+                                            System::current().stop();
+                                        }
+                                            .boxed(),
+                                    );
+                                }
+                                ready(())
+                            }),
                     )
                 } else {
                     // we need to stop system if server was spawned
                     if self.exit {
-                        spawn(sleep(Duration::from_millis(300)).then(|_| {
-                            System::current().stop();
-                            ok(())
-                        }));
+                        spawn(
+                            delay(Instant::now() + Duration::from_millis(300)).then(|_| {
+                                System::current().stop();
+                                ready(())
+                            }),
+                        );
                     }
                     if let Some(tx) = completion {
                         let _ = tx.send(());
                     }
                 }
             }
-            ServerCommand::WorkerDied(idx) => {
+            ServerCommand::WorkerFaulted(idx) => {
                 let mut found = false;
                 for i in 0..self.workers.len() {
                     if self.workers[i].0 == idx {
@@ -447,15 +456,15 @@ impl ServerBuilder {
 }
 
 impl Future for ServerBuilder {
-    type Item = ();
-    type Error = ();
+    type Output = ();
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            match self.cmd.poll() {
-                Ok(Async::Ready(None)) | Err(_) => return Ok(Async::Ready(())),
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Ok(Async::Ready(Some(item))) => self.handle_cmd(item),
+            match ready!(Pin::new(&mut self.cmd).poll_next(cx)) {
+                Some(it) => self.as_mut().get_mut().handle_cmd(it),
+                None => {
+                    return Poll::Pending;
+                }
             }
         }
     }

@@ -1,7 +1,8 @@
-use futures::future::{err, ok, Either, FutureResult};
-use futures::{Async, Future, IntoFuture, Poll};
+use std::task::{Context, Poll};
 
-use crate::{NewService, Service};
+use futures::future::{FutureExt, LocalBoxFuture};
+
+use crate::{Service, ServiceFactory};
 
 pub type BoxedService<Req, Res, Err> = Box<
     dyn Service<
@@ -12,17 +13,16 @@ pub type BoxedService<Req, Res, Err> = Box<
     >,
 >;
 
-pub type BoxedServiceResponse<Res, Err> =
-    Either<FutureResult<Res, Err>, Box<dyn Future<Item = Res, Error = Err>>>;
+pub type BoxedServiceResponse<Res, Err> = LocalBoxFuture<'static, Result<Res, Err>>;
 
 pub struct BoxedNewService<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
 
 /// Create boxed new service
-pub fn new_service<T>(
-    service: T,
+pub fn factory<T>(
+    factory: T,
 ) -> BoxedNewService<T::Config, T::Request, T::Response, T::Error, T::InitError>
 where
-    T: NewService + 'static,
+    T: ServiceFactory + 'static,
     T::Request: 'static,
     T::Response: 'static,
     T::Service: 'static,
@@ -30,8 +30,8 @@ where
     T::Error: 'static,
     T::InitError: 'static,
 {
-    BoxedNewService(Box::new(NewServiceWrapper {
-        service,
+    BoxedNewService(Box::new(FactoryWrapper {
+        factory,
         _t: std::marker::PhantomData,
     }))
 }
@@ -46,18 +46,18 @@ where
 }
 
 type Inner<C, Req, Res, Err, InitErr> = Box<
-    dyn NewService<
+    dyn ServiceFactory<
         Config = C,
         Request = Req,
         Response = Res,
         Error = Err,
         InitError = InitErr,
         Service = BoxedService<Req, Res, Err>,
-        Future = Box<dyn Future<Item = BoxedService<Req, Res, Err>, Error = InitErr>>,
+        Future = LocalBoxFuture<'static, Result<BoxedService<Req, Res, Err>, InitErr>>,
     >,
 >;
 
-impl<C, Req, Res, Err, InitErr> NewService for BoxedNewService<C, Req, Res, Err, InitErr>
+impl<C, Req, Res, Err, InitErr> ServiceFactory for BoxedNewService<C, Req, Res, Err, InitErr>
 where
     Req: 'static,
     Res: 'static,
@@ -70,25 +70,32 @@ where
     type InitError = InitErr;
     type Config = C;
     type Service = BoxedService<Req, Res, Err>;
-    type Future = Box<dyn Future<Item = Self::Service, Error = Self::InitError>>;
+
+    type Future = LocalBoxFuture<'static, Result<Self::Service, InitErr>>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         self.0.new_service(cfg)
     }
 }
 
-struct NewServiceWrapper<C, T: NewService> {
-    service: T,
+struct FactoryWrapper<C, T: ServiceFactory> {
+    factory: T,
     _t: std::marker::PhantomData<C>,
 }
 
-impl<C, T, Req, Res, Err, InitErr> NewService for NewServiceWrapper<C, T>
+impl<C, T, Req, Res, Err, InitErr> ServiceFactory for FactoryWrapper<C, T>
 where
     Req: 'static,
     Res: 'static,
     Err: 'static,
     InitErr: 'static,
-    T: NewService<Config = C, Request = Req, Response = Res, Error = Err, InitError = InitErr>,
+    T: ServiceFactory<
+        Config = C,
+        Request = Req,
+        Response = Res,
+        Error = Err,
+        InitError = InitErr,
+    >,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
@@ -99,15 +106,13 @@ where
     type InitError = InitErr;
     type Config = C;
     type Service = BoxedService<Req, Res, Err>;
-    type Future = Box<dyn Future<Item = Self::Service, Error = Self::InitError>>;
+    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
-        Box::new(
-            self.service
-                .new_service(cfg)
-                .into_future()
-                .map(ServiceWrapper::boxed),
-        )
+        self.factory
+            .new_service(cfg)
+            .map(|res| res.map(ServiceWrapper::boxed))
+            .boxed_local()
     }
 }
 
@@ -131,21 +136,13 @@ where
     type Request = Req;
     type Response = Res;
     type Error = Err;
-    type Future = Either<
-        FutureResult<Self::Response, Self::Error>,
-        Box<dyn Future<Item = Self::Response, Error = Self::Error>>,
-    >;
+    type Future = LocalBoxFuture<'static, Result<Res, Err>>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.0.poll_ready()
+    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.0.poll_ready(ctx)
     }
 
     fn call(&mut self, req: Self::Request) -> Self::Future {
-        let mut fut = self.0.call(req);
-        match fut.poll() {
-            Ok(Async::Ready(res)) => Either::A(ok(res)),
-            Err(e) => Either::A(err(e)),
-            Ok(Async::NotReady) => Either::B(Box::new(fut)),
-        }
+        self.0.call(req).boxed_local()
     }
 }

@@ -1,4 +1,4 @@
-//! Custom cell impl
+//! Custom cell impl, internal use only
 use std::{cell::UnsafeCell, fmt, rc::Rc};
 
 pub(crate) struct Cell<T> {

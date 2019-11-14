@@ -1,11 +1,13 @@
 use std::convert::Infallible;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use actix_service::{NewService, Service};
-use futures::future::{ok, FutureResult};
-use futures::{Async, Future, Poll};
-use tokio_timer::Delay;
+use actix_service::{Service, ServiceFactory};
+use futures::future::{ok, Ready};
+use tokio_timer::{delay, Delay};
 
 use super::time::{LowResTime, LowResTimeService};
 
@@ -44,7 +46,7 @@ where
     }
 }
 
-impl<R, E, F> NewService for KeepAlive<R, E, F>
+impl<R, E, F> ServiceFactory for KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
@@ -54,7 +56,7 @@ where
     type InitError = Infallible;
     type Config = ();
     type Service = KeepAliveService<R, E, F>;
-    type Future = FutureResult<Self::Service, Self::InitError>;
+    type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: &()) -> Self::Future {
         ok(KeepAliveService::new(
@@ -85,7 +87,7 @@ where
             ka,
             time,
             expire,
-            delay: Delay::new(expire),
+            delay: delay(expire),
             _t: PhantomData,
         }
     }
@@ -98,22 +100,21 @@ where
     type Request = R;
     type Response = R;
     type Error = E;
-    type Future = FutureResult<R, E>;
+    type Future = Ready<Result<R, E>>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        match self.delay.poll() {
-            Ok(Async::Ready(_)) => {
+    fn poll_ready(&mut self, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        match Pin::new(&mut self.delay).poll(cx) {
+            Poll::Ready(_) => {
                 let now = self.time.now();
                 if self.expire <= now {
-                    Err((self.f)())
+                    Poll::Ready(Err((self.f)()))
                 } else {
                     self.delay.reset(self.expire);
-                    let _ = self.delay.poll();
-                    Ok(Async::Ready(()))
+                    let _ = Pin::new(&mut self.delay).poll(cx);
+                    Poll::Ready(Ok(()))
                 }
             }
-            Ok(Async::NotReady) => Ok(Async::Ready(())),
-            Err(_e) => panic!(),
+            Poll::Pending => Poll::Ready(Ok(())),
         }
     }
 

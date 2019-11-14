@@ -1,10 +1,12 @@
+//! Actix server config utils.
+
 use std::cell::Cell;
 use std::net::SocketAddr;
 use std::rc::Rc;
-use std::{fmt, io, net, time};
+use std::{fmt, io, net, ops, time};
 
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_tcp::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -13,6 +15,7 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
+    #[inline]
     pub fn new(addr: SocketAddr) -> Self {
         ServerConfig {
             addr,
@@ -21,16 +24,19 @@ impl ServerConfig {
     }
 
     /// Returns the address of the local half of this TCP server socket
+    #[inline]
     pub fn local_addr(&self) -> SocketAddr {
         self.addr
     }
 
     /// Returns true if connection is secure (tls enabled)
+    #[inline]
     pub fn secure(&self) -> bool {
         self.secure.as_ref().get()
     }
 
     /// Set secure flag
+    #[inline]
     pub fn set_secure(&self) {
         self.secure.as_ref().set(true)
     }
@@ -114,7 +120,7 @@ impl<T, P> Io<T, P> {
     }
 }
 
-impl<T, P> std::ops::Deref for Io<T, P> {
+impl<T, P> ops::Deref for Io<T, P> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -122,14 +128,14 @@ impl<T, P> std::ops::Deref for Io<T, P> {
     }
 }
 
-impl<T, P> std::ops::DerefMut for Io<T, P> {
+impl<T, P> ops::DerefMut for Io<T, P> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.io
     }
 }
 
 impl<T: fmt::Debug, P> fmt::Debug for Io<T, P> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Io {{{:?}}}", self.io)
     }
 }
@@ -171,31 +177,31 @@ impl IoStream for TcpStream {
     }
 }
 
-#[cfg(any(feature = "ssl"))]
-impl<T: IoStream> IoStream for tokio_openssl::SslStream<T> {
+#[cfg(feature = "openssl")]
+impl<T: IoStream + Unpin> IoStream for tokio_openssl::SslStream<T> {
     #[inline]
     fn peer_addr(&self) -> Option<net::SocketAddr> {
-        self.get_ref().get_ref().peer_addr()
+        self.get_ref().peer_addr()
     }
 
     #[inline]
     fn set_nodelay(&mut self, nodelay: bool) -> io::Result<()> {
-        self.get_mut().get_mut().set_nodelay(nodelay)
+        self.get_mut().set_nodelay(nodelay)
     }
 
     #[inline]
     fn set_linger(&mut self, dur: Option<time::Duration>) -> io::Result<()> {
-        self.get_mut().get_mut().set_linger(dur)
+        self.get_mut().set_linger(dur)
     }
 
     #[inline]
     fn set_keepalive(&mut self, dur: Option<time::Duration>) -> io::Result<()> {
-        self.get_mut().get_mut().set_keepalive(dur)
+        self.get_mut().set_keepalive(dur)
     }
 }
 
-#[cfg(any(feature = "rust-tls"))]
-impl<T: IoStream> IoStream for tokio_rustls::server::TlsStream<T> {
+#[cfg(feature = "rustls")]
+impl<T: IoStream + Unpin> IoStream for tokio_rustls::server::TlsStream<T> {
     #[inline]
     fn peer_addr(&self) -> Option<net::SocketAddr> {
         self.get_ref().0.peer_addr()
@@ -217,8 +223,8 @@ impl<T: IoStream> IoStream for tokio_rustls::server::TlsStream<T> {
     }
 }
 
-#[cfg(all(unix, feature = "uds"))]
-impl IoStream for tokio_uds::UnixStream {
+#[cfg(unix)]
+impl IoStream for tokio::net::UnixStream {
     #[inline]
     fn peer_addr(&self) -> Option<net::SocketAddr> {
         None

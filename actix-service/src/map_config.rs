@@ -1,14 +1,48 @@
 use std::marker::PhantomData;
 
-use super::NewService;
+use super::ServiceFactory;
 
 pub enum MappedConfig<'a, T> {
     Ref(&'a T),
     Owned(T),
 }
 
+/// Adapt external config to a config for provided new service
+pub fn map_config<T, F, C>(
+    factory: T,
+    f: F,
+) -> impl ServiceFactory<
+    Config = C,
+    Request = T::Request,
+    Response = T::Response,
+    Error = T::Error,
+    InitError = T::InitError,
+>
+where
+    T: ServiceFactory,
+    F: Fn(&C) -> MappedConfig<T::Config>,
+{
+    MapConfig::new(factory, f)
+}
+
+/// Replace config with unit
+pub fn unit_config<T, C>(
+    new_service: T,
+) -> impl ServiceFactory<
+    Config = C,
+    Request = T::Request,
+    Response = T::Response,
+    Error = T::Error,
+    InitError = T::InitError,
+>
+where
+    T: ServiceFactory<Config = ()>,
+{
+    UnitConfig::new(new_service)
+}
+
 /// `MapInitErr` service combinator
-pub struct MapConfig<A, F, C> {
+pub(crate) struct MapConfig<A, F, C> {
     a: A,
     f: F,
     e: PhantomData<C>,
@@ -18,7 +52,7 @@ impl<A, F, C> MapConfig<A, F, C> {
     /// Create new `MapConfig` combinator
     pub fn new(a: A, f: F) -> Self
     where
-        A: NewService,
+        A: ServiceFactory,
         F: Fn(&C) -> MappedConfig<A::Config>,
     {
         Self {
@@ -43,9 +77,9 @@ where
     }
 }
 
-impl<A, F, C> NewService for MapConfig<A, F, C>
+impl<A, F, C> ServiceFactory for MapConfig<A, F, C>
 where
-    A: NewService,
+    A: ServiceFactory,
     F: Fn(&C) -> MappedConfig<A::Config>,
 {
     type Request = A::Request;
@@ -66,17 +100,17 @@ where
 }
 
 /// `MapInitErr` service combinator
-pub struct UnitConfig<A, C> {
+pub(crate) struct UnitConfig<A, C> {
     a: A,
     e: PhantomData<C>,
 }
 
-impl<A, C> UnitConfig<A, C> {
+impl<A, C> UnitConfig<A, C>
+where
+    A: ServiceFactory<Config = ()>,
+{
     /// Create new `UnitConfig` combinator
-    pub fn new(a: A) -> Self
-    where
-        A: NewService<Config = ()>,
-    {
+    pub(crate) fn new(a: A) -> Self {
         Self { a, e: PhantomData }
     }
 }
@@ -93,9 +127,9 @@ where
     }
 }
 
-impl<A, C> NewService for UnitConfig<A, C>
+impl<A, C> ServiceFactory for UnitConfig<A, C>
 where
-    A: NewService<Config = ()>,
+    A: ServiceFactory<Config = ()>,
 {
     type Request = A::Request;
     type Response = A::Response;

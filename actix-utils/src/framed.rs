@@ -1,15 +1,20 @@
 //! Framed dispatcher service and related utilities
+#![allow(type_alias_bounds)]
 use std::collections::VecDeque;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::{fmt, mem};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use actix_service::{IntoService, Service};
-use futures::task::AtomicTask;
-use futures::unsync::mpsc;
-use futures::{Async, Future, Poll, Sink, Stream};
+use futures::future::{ready, FutureExt};
+use futures::{Future, Sink, Stream};
 use log::debug;
+use pin_project::pin_project;
 
 use crate::cell::Cell;
+use crate::mpsc;
+use crate::task::LocalWaker;
 
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;
@@ -68,22 +73,26 @@ pub enum FramedMessage<T> {
     Close,
 }
 
+type Rx<U> = Option<mpsc::Receiver<FramedMessage<<U as Encoder>::Item>>>;
+type Inner<S: Service, U> = Cell<FramedTransportInner<<U as Encoder>::Item, S::Error>>;
+
 /// FramedTransport - is a future that reads frames from Framed object
 /// and pass then to the service.
+#[pin_project]
 pub struct FramedTransport<S, T, U>
 where
     S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite,
-    U: Encoder + Decoder,
+    T: AsyncRead + AsyncWrite + Unpin,
+    U: Encoder + Decoder + Unpin,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
     service: S,
     state: TransportState<S, U>,
     framed: Framed<T, U>,
-    rx: Option<mpsc::UnboundedReceiver<FramedMessage<<U as Encoder>::Item>>>,
+    rx: Option<mpsc::Receiver<FramedMessage<<U as Encoder>::Item>>>,
     inner: Cell<FramedTransportInner<<U as Encoder>::Item, S::Error>>,
 }
 
@@ -97,7 +106,7 @@ enum TransportState<S: Service, U: Encoder + Decoder> {
 
 struct FramedTransportInner<I, E> {
     buf: VecDeque<Result<I, E>>,
-    task: AtomicTask,
+    task: LocalWaker,
 }
 
 impl<S, T, U> FramedTransport<S, T, U>
@@ -105,130 +114,8 @@ where
     S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite,
-    U: Decoder + Encoder,
-    <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
-{
-    fn poll_read(&mut self) -> bool {
-        loop {
-            match self.service.poll_ready() {
-                Ok(Async::Ready(_)) => {
-                    let item = match self.framed.poll() {
-                        Ok(Async::Ready(Some(el))) => el,
-                        Err(err) => {
-                            self.state =
-                                TransportState::FramedError(FramedTransportError::Decoder(err));
-                            return true;
-                        }
-                        Ok(Async::NotReady) => return false,
-                        Ok(Async::Ready(None)) => {
-                            self.state = TransportState::Stopping;
-                            return true;
-                        }
-                    };
-
-                    let mut cell = self.inner.clone();
-                    tokio_current_thread::spawn(self.service.call(item).then(move |item| {
-                        let inner = cell.get_mut();
-                        inner.buf.push_back(item);
-                        inner.task.notify();
-                        Ok(())
-                    }));
-                }
-                Ok(Async::NotReady) => return false,
-                Err(err) => {
-                    self.state = TransportState::Error(FramedTransportError::Service(err));
-                    return true;
-                }
-            }
-        }
-    }
-
-    /// write to framed object
-    fn poll_write(&mut self) -> bool {
-        let inner = self.inner.get_mut();
-        let mut rx_done = self.rx.is_none();
-        let mut buf_empty = inner.buf.is_empty();
-        loop {
-            while !self.framed.is_write_buf_full() {
-                if !buf_empty {
-                    match inner.buf.pop_front().unwrap() {
-                        Ok(msg) => {
-                            if let Err(err) = self.framed.force_send(msg) {
-                                self.state = TransportState::FramedError(
-                                    FramedTransportError::Encoder(err),
-                                );
-                                return true;
-                            }
-                            buf_empty = inner.buf.is_empty();
-                        }
-                        Err(err) => {
-                            self.state =
-                                TransportState::Error(FramedTransportError::Service(err));
-                            return true;
-                        }
-                    }
-                }
-
-                if !rx_done && self.rx.is_some() {
-                    match self.rx.as_mut().unwrap().poll() {
-                        Ok(Async::Ready(Some(FramedMessage::Message(msg)))) => {
-                            if let Err(err) = self.framed.force_send(msg) {
-                                self.state = TransportState::FramedError(
-                                    FramedTransportError::Encoder(err),
-                                );
-                                return true;
-                            }
-                        }
-                        Ok(Async::Ready(Some(FramedMessage::Close))) => {
-                            self.state = TransportState::FlushAndStop;
-                            return true;
-                        }
-                        Ok(Async::Ready(None)) => {
-                            rx_done = true;
-                            let _ = self.rx.take();
-                        }
-                        Ok(Async::NotReady) => rx_done = true,
-                        Err(_e) => {
-                            rx_done = true;
-                            let _ = self.rx.take();
-                        }
-                    }
-                }
-
-                if rx_done && buf_empty {
-                    break;
-                }
-            }
-
-            if !self.framed.is_write_buf_empty() {
-                match self.framed.poll_complete() {
-                    Ok(Async::NotReady) => break,
-                    Err(err) => {
-                        debug!("Error sending data: {:?}", err);
-                        self.state =
-                            TransportState::FramedError(FramedTransportError::Encoder(err));
-                        return true;
-                    }
-                    Ok(Async::Ready(_)) => (),
-                }
-            } else {
-                break;
-            }
-        }
-
-        false
-    }
-}
-
-impl<S, T, U> FramedTransport<S, T, U>
-where
-    S: Service<Request = Request<U>, Response = Response<U>>,
-    S::Error: 'static,
-    S::Future: 'static,
-    T: AsyncRead + AsyncWrite,
-    U: Decoder + Encoder,
+    T: AsyncRead + AsyncWrite + Unpin,
+    U: Decoder + Encoder + Unpin,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
@@ -240,7 +127,7 @@ where
             state: TransportState::Processing,
             inner: Cell::new(FramedTransportInner {
                 buf: VecDeque::new(),
-                task: AtomicTask::new(),
+                task: LocalWaker::new(),
             }),
         }
     }
@@ -248,7 +135,7 @@ where
     /// Get Sender
     pub fn set_receiver(
         mut self,
-        rx: mpsc::UnboundedReceiver<FramedMessage<<U as Encoder>::Item>>,
+        rx: mpsc::Receiver<FramedMessage<<U as Encoder>::Item>>,
     ) -> Self {
         self.rx = Some(rx);
         self
@@ -283,51 +170,215 @@ where
     S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite,
-    U: Decoder + Encoder,
+    T: AsyncRead + AsyncWrite + Unpin,
+    U: Decoder + Encoder + Unpin,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
-    type Item = ();
-    type Error = FramedTransportError<S::Error, U>;
+    type Output = Result<(), FramedTransportError<S::Error, U>>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.inner.get_ref().task.register();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        self.inner.get_ref().task.register(cx.waker());
 
-        match mem::replace(&mut self.state, TransportState::Processing) {
-            TransportState::Processing => {
-                if self.poll_read() || self.poll_write() {
-                    self.poll()
-                } else {
-                    Ok(Async::NotReady)
-                }
+        let this = self.project();
+        poll(
+            cx,
+            this.service,
+            this.state,
+            this.framed,
+            this.rx,
+            this.inner,
+        )
+    }
+}
+
+fn poll<S, T, U>(
+    cx: &mut Context,
+    srv: &mut S,
+    state: &mut TransportState<S, U>,
+    framed: &mut Framed<T, U>,
+    rx: &mut Rx<U>,
+    inner: &mut Inner<S, U>,
+) -> Poll<Result<(), FramedTransportError<S::Error, U>>>
+where
+    S: Service<Request = Request<U>, Response = Response<U>>,
+    S::Error: 'static,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite + Unpin,
+    U: Decoder + Encoder + Unpin,
+    <U as Encoder>::Item: 'static,
+    <U as Encoder>::Error: std::fmt::Debug,
+{
+    match mem::replace(state, TransportState::Processing) {
+        TransportState::Processing => {
+            if poll_read(cx, srv, state, framed, inner)
+                || poll_write(cx, state, framed, rx, inner)
+            {
+                poll(cx, srv, state, framed, rx, inner)
+            } else {
+                Poll::Pending
             }
-            TransportState::Error(err) => {
-                if self.framed.is_write_buf_empty()
-                    || (self.poll_write() || self.framed.is_write_buf_empty())
-                {
-                    Err(err)
-                } else {
-                    self.state = TransportState::Error(err);
-                    Ok(Async::NotReady)
-                }
+        }
+        TransportState::Error(err) => {
+            let is_empty = framed.is_write_buf_empty();
+            if is_empty || (poll_write(cx, state, framed, rx, inner) || is_empty) {
+                Poll::Ready(Err(err))
+            } else {
+                *state = TransportState::Error(err);
+                Poll::Pending
             }
-            TransportState::FlushAndStop => {
-                if !self.framed.is_write_buf_empty() {
-                    match self.framed.poll_complete() {
-                        Err(err) => {
-                            debug!("Error sending data: {:?}", err);
-                            Ok(Async::Ready(()))
-                        }
-                        Ok(Async::NotReady) => Ok(Async::NotReady),
-                        Ok(Async::Ready(_)) => Ok(Async::Ready(())),
+        }
+        TransportState::FlushAndStop => {
+            if !framed.is_write_buf_empty() {
+                match Pin::new(framed).poll_flush(cx) {
+                    Poll::Ready(Err(err)) => {
+                        debug!("Error sending data: {:?}", err);
+                        Poll::Ready(Ok(()))
                     }
-                } else {
-                    Ok(Async::Ready(()))
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
                 }
+            } else {
+                Poll::Ready(Ok(()))
             }
-            TransportState::FramedError(err) => Err(err),
-            TransportState::Stopping => Ok(Async::Ready(())),
+        }
+        TransportState::FramedError(err) => Poll::Ready(Err(err)),
+        TransportState::Stopping => Poll::Ready(Ok(())),
+    }
+}
+
+fn poll_read<S, T, U>(
+    cx: &mut Context,
+    srv: &mut S,
+    state: &mut TransportState<S, U>,
+    framed: &mut Framed<T, U>,
+    inner: &mut Inner<S, U>,
+) -> bool
+where
+    S: Service<Request = Request<U>, Response = Response<U>>,
+    S::Error: 'static,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite + Unpin,
+    U: Decoder + Encoder + Unpin,
+    <U as Encoder>::Item: 'static,
+    <U as Encoder>::Error: std::fmt::Debug,
+{
+    loop {
+        match srv.poll_ready(cx) {
+            Poll::Ready(Ok(_)) => {
+                let item = match framed.next_item(cx) {
+                    Poll::Ready(Some(Ok(el))) => el,
+                    Poll::Ready(Some(Err(err))) => {
+                        *state =
+                            TransportState::FramedError(FramedTransportError::Decoder(err));
+                        return true;
+                    }
+                    Poll::Pending => return false,
+                    Poll::Ready(None) => {
+                        *state = TransportState::Stopping;
+                        return true;
+                    }
+                };
+
+                let mut cell = inner.clone();
+                let fut = srv.call(item).then(move |item| {
+                    let inner = cell.get_mut();
+                    inner.buf.push_back(item);
+                    inner.task.wake();
+                    ready(())
+                });
+                tokio_executor::current_thread::spawn(fut);
+            }
+            Poll::Pending => return false,
+            Poll::Ready(Err(err)) => {
+                *state = TransportState::Error(FramedTransportError::Service(err));
+                return true;
+            }
         }
     }
+}
+
+/// write to framed object
+fn poll_write<S, T, U>(
+    cx: &mut Context,
+    state: &mut TransportState<S, U>,
+    framed: &mut Framed<T, U>,
+    rx: &mut Rx<U>,
+    inner: &mut Inner<S, U>,
+) -> bool
+where
+    S: Service<Request = Request<U>, Response = Response<U>>,
+    S::Error: 'static,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite + Unpin,
+    U: Decoder + Encoder + Unpin,
+    <U as Encoder>::Item: 'static,
+    <U as Encoder>::Error: std::fmt::Debug,
+{
+    // let this = self.project();
+
+    let inner = inner.get_mut();
+    let mut rx_done = rx.is_none();
+    let mut buf_empty = inner.buf.is_empty();
+    loop {
+        while !framed.is_write_buf_full() {
+            if !buf_empty {
+                match inner.buf.pop_front().unwrap() {
+                    Ok(msg) => {
+                        if let Err(err) = framed.force_send(msg) {
+                            *state =
+                                TransportState::FramedError(FramedTransportError::Encoder(err));
+                            return true;
+                        }
+                        buf_empty = inner.buf.is_empty();
+                    }
+                    Err(err) => {
+                        *state = TransportState::Error(FramedTransportError::Service(err));
+                        return true;
+                    }
+                }
+            }
+
+            if !rx_done && rx.is_some() {
+                match Pin::new(rx.as_mut().unwrap()).poll_next(cx) {
+                    Poll::Ready(Some(FramedMessage::Message(msg))) => {
+                        if let Err(err) = framed.force_send(msg) {
+                            *state =
+                                TransportState::FramedError(FramedTransportError::Encoder(err));
+                            return true;
+                        }
+                    }
+                    Poll::Ready(Some(FramedMessage::Close)) => {
+                        *state = TransportState::FlushAndStop;
+                        return true;
+                    }
+                    Poll::Ready(None) => {
+                        rx_done = true;
+                        let _ = rx.take();
+                    }
+                    Poll::Pending => rx_done = true,
+                }
+            }
+
+            if rx_done && buf_empty {
+                break;
+            }
+        }
+
+        if !framed.is_write_buf_empty() {
+            match framed.flush(cx) {
+                Poll::Pending => break,
+                Poll::Ready(Err(err)) => {
+                    debug!("Error sending data: {:?}", err);
+                    *state = TransportState::FramedError(FramedTransportError::Encoder(err));
+                    return true;
+                }
+                Poll::Ready(Ok(_)) => (),
+            }
+        } else {
+            break;
+        }
+    }
+
+    false
 }

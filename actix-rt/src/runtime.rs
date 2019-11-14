@@ -2,11 +2,12 @@ use std::error::Error;
 use std::{fmt, io};
 
 use futures::Future;
-use tokio_current_thread::{self as current_thread, CurrentThread};
-use tokio_executor;
-use tokio_reactor::{self, Reactor};
-use tokio_timer::clock::{self, Clock};
-use tokio_timer::timer::{self, Timer};
+use tokio_executor::current_thread::{self, CurrentThread};
+use tokio_net::driver::{Handle as ReactorHandle, Reactor};
+use tokio_timer::{
+    clock::Clock,
+    timer::{self, Timer},
+};
 
 use crate::builder::Builder;
 
@@ -18,7 +19,7 @@ use crate::builder::Builder;
 /// [mod]: index.html
 #[derive(Debug)]
 pub struct Runtime {
-    reactor_handle: tokio_reactor::Handle,
+    reactor_handle: ReactorHandle,
     timer_handle: timer::Handle,
     clock: Clock,
     executor: CurrentThread<Timer<Reactor>>,
@@ -53,7 +54,7 @@ impl Runtime {
     }
 
     pub(super) fn new2(
-        reactor_handle: tokio_reactor::Handle,
+        reactor_handle: ReactorHandle,
         timer_handle: timer::Handle,
         clock: Clock,
         executor: CurrentThread<Timer<Reactor>>,
@@ -83,9 +84,8 @@ impl Runtime {
     /// let mut rt = Runtime::new().unwrap();
     ///
     /// // Spawn a future onto the runtime
-    /// rt.spawn(future::lazy(|| {
+    /// rt.spawn(future::lazy(|_| {
     ///     println!("running on the runtime");
-    ///     Ok(())
     /// }));
     /// # }
     /// # pub fn main() {}
@@ -97,7 +97,7 @@ impl Runtime {
     /// is currently at capacity and is unable to spawn a new future.
     pub fn spawn<F>(&mut self, future: F) -> &mut Self
     where
-        F: Future<Item = (), Error = ()> + 'static,
+        F: Future<Output = ()> + 'static,
     {
         self.executor.spawn(future);
         self
@@ -119,14 +119,14 @@ impl Runtime {
     ///
     /// The caller is responsible for ensuring that other spawned futures
     /// complete execution by calling `block_on` or `run`.
-    pub fn block_on<F>(&mut self, f: F) -> Result<F::Item, F::Error>
+    pub fn block_on<F>(&mut self, f: F) -> F::Output
     where
         F: Future,
     {
         self.enter(|executor| {
             // Run the provided future
             let ret = executor.block_on(f);
-            ret.map_err(|e| e.into_inner().expect("unexpected execution error"))
+            ret
         })
     }
 
@@ -139,7 +139,7 @@ impl Runtime {
 
     fn enter<F, R>(&mut self, f: F) -> R
     where
-        F: FnOnce(&mut current_thread::Entered<Timer<Reactor>>) -> R,
+        F: FnOnce(&mut CurrentThread<Timer<Reactor>>) -> R,
     {
         let Runtime {
             ref reactor_handle,
@@ -149,25 +149,13 @@ impl Runtime {
             ..
         } = *self;
 
-        // Binds an executor to this thread
-        let mut enter = tokio_executor::enter().expect("Multiple executors at once");
-
-        // This will set the default handle and timer to use inside the closure
-        // and run the future.
-        tokio_reactor::with_default(&reactor_handle, &mut enter, |enter| {
-            clock::with_default(clock, enter, |enter| {
-                timer::with_default(&timer_handle, enter, |enter| {
-                    // The TaskExecutor is a fake executor that looks into the
-                    // current single-threaded executor when used. This is a trick,
-                    // because we need two mutable references to the executor (one
-                    // to run the provided future, another to install as the default
-                    // one). We use the fake one here as the default one.
-                    let mut default_executor = current_thread::TaskExecutor::current();
-                    tokio_executor::with_default(&mut default_executor, enter, |enter| {
-                        let mut executor = executor.enter(enter);
-                        f(&mut executor)
-                    })
-                })
+        // WARN: We do not enter the executor here, since in tokio 0.2 the executor is entered
+        // automatically inside its `block_on` and `run` methods
+        tokio_executor::with_default(&mut current_thread::TaskExecutor::current(), || {
+            tokio_timer::clock::with_default(clock, || {
+                let _reactor_guard = tokio_net::driver::set_default(reactor_handle);
+                let _timer_guard = tokio_timer::set_default(timer_handle);
+                f(executor)
             })
         })
     }

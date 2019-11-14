@@ -3,19 +3,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::counter::Counter;
 
-#[cfg(feature = "ssl")]
+#[cfg(feature = "openssl")]
 mod openssl;
-#[cfg(feature = "ssl")]
+#[cfg(feature = "openssl")]
 pub use self::openssl::OpensslAcceptor;
 
-#[cfg(feature = "tls")]
+#[cfg(feature = "nativetls")]
 mod nativetls;
-#[cfg(feature = "tls")]
-pub use self::nativetls::{NativeTlsAcceptor, TlsStream};
+#[cfg(feature = "nativetls")]
+pub use self::nativetls::NativeTlsAcceptor;
 
-#[cfg(feature = "rust-tls")]
+#[cfg(feature = "rustls")]
 mod rustls;
-#[cfg(feature = "rust-tls")]
+#[cfg(feature = "rustls")]
 pub use self::rustls::RustlsAcceptor;
 
 /// Sets the maximum per-worker concurrent ssl connection establish process.

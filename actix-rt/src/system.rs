@@ -2,9 +2,9 @@ use std::cell::RefCell;
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::sync::mpsc::UnboundedSender;
+use futures::channel::mpsc::UnboundedSender;
 use futures::Future;
-use tokio_current_thread::Handle;
+use tokio::runtime::current_thread::Handle;
 
 use crate::arbiter::{Arbiter, SystemCommand};
 use crate::builder::{Builder, SystemRunner};
@@ -64,7 +64,7 @@ impl System {
     pub fn run_in_executor<T: Into<String>>(
         name: T,
         executor: Handle,
-    ) -> impl Future<Item = (), Error = io::Error> + Send {
+    ) -> impl Future<Output = Result<(), io::Error>> + Send {
         Self::builder()
             .name(name)
             .build_async(executor)

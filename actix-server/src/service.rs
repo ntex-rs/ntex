@@ -1,12 +1,13 @@
 use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use actix_rt::spawn;
 use actix_server_config::{Io, ServerConfig};
-use actix_service::{NewService, Service};
-use futures::future::{err, ok, FutureResult};
-use futures::{Future, Poll};
+use actix_service::{self as actix, Service, ServiceFactory as ActixServiceFactory};
+use futures::future::{err, ok, LocalBoxFuture, Ready};
+use futures::{FutureExt, TryFutureExt};
 use log::error;
 
 use super::Token;
@@ -24,7 +25,7 @@ pub(crate) enum ServerMessage {
 }
 
 pub trait ServiceFactory<Stream: FromStream>: Send + Clone + 'static {
-    type NewService: NewService<Config = ServerConfig, Request = Io<Stream>>;
+    type NewService: actix::ServiceFactory<Config = ServerConfig, Request = Io<Stream>>;
 
     fn create(&self) -> Self::NewService;
 }
@@ -34,7 +35,7 @@ pub(crate) trait InternalServiceFactory: Send {
 
     fn clone_factory(&self) -> Box<dyn InternalServiceFactory>;
 
-    fn create(&self) -> Box<dyn Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>>;
+    fn create(&self) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>;
 }
 
 pub(crate) type BoxedServerService = Box<
@@ -42,7 +43,7 @@ pub(crate) type BoxedServerService = Box<
         Request = (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
-        Future = FutureResult<(), ()>,
+        Future = Ready<Result<(), ()>>,
     >,
 >;
 
@@ -66,10 +67,10 @@ where
     type Request = (Option<CounterGuard>, ServerMessage);
     type Response = ();
     type Error = ();
-    type Future = FutureResult<(), ()>;
+    type Future = Ready<Result<(), ()>>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.service.poll_ready().map_err(|_| ())
+    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.service.poll_ready(ctx).map_err(|_| ())
     }
 
     fn call(&mut self, (guard, req): (Option<CounterGuard>, ServerMessage)) -> Self::Future {
@@ -80,10 +81,14 @@ where
                 });
 
                 if let Ok(stream) = stream {
-                    spawn(self.service.call(Io::new(stream)).then(move |res| {
-                        drop(guard);
-                        res.map_err(|_| ()).map(|_| ())
-                    }));
+                    let f = self.service.call(Io::new(stream));
+                    spawn(
+                        async move {
+                            let _ = f.await;
+                            drop(guard);
+                        }
+                            .boxed_local(),
+                    );
                     ok(())
                 } else {
                     err(())
@@ -142,19 +147,19 @@ where
         })
     }
 
-    fn create(&self) -> Box<dyn Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>> {
+    fn create(&self) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         let token = self.token;
         let config = ServerConfig::new(self.addr);
-        Box::new(
-            self.inner
-                .create()
-                .new_service(&config)
-                .map_err(|_| ())
-                .map(move |inner| {
-                    let service: BoxedServerService = Box::new(StreamService::new(inner));
-                    vec![(token, service)]
-                }),
-        )
+
+        self.inner
+            .create()
+            .new_service(&config)
+            .map_err(|_| ())
+            .map_ok(move |inner| {
+                let service: BoxedServerService = Box::new(StreamService::new(inner));
+                vec![(token, service)]
+            })
+            .boxed_local()
     }
 }
 
@@ -167,7 +172,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
         self.as_ref().clone_factory()
     }
 
-    fn create(&self) -> Box<dyn Future<Item = Vec<(Token, BoxedServerService)>, Error = ()>> {
+    fn create(&self) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         self.as_ref().create()
     }
 }
@@ -175,7 +180,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 impl<F, T, I> ServiceFactory<I> for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: NewService<Config = ServerConfig, Request = Io<I>>,
+    T: actix::ServiceFactory<Config = ServerConfig, Request = Io<I>>,
     I: FromStream,
 {
     type NewService = T;

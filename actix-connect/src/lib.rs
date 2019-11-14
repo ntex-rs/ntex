@@ -31,12 +31,12 @@ pub use self::resolver::{Resolver, ResolverFactory};
 pub use self::service::{ConnectService, ConnectServiceFactory, TcpConnectService};
 
 use actix_rt::Arbiter;
-use actix_service::{NewService, Service, ServiceExt};
-use tokio_tcp::TcpStream;
+use actix_service::{pipeline, pipeline_factory, Service, ServiceFactory};
+use tokio_net::tcp::TcpStream;
 
 pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver {
     let (resolver, bg) = AsyncResolver::new(cfg, opts);
-    tokio_current_thread::spawn(bg);
+    tokio_executor::current_thread::spawn(bg);
     resolver
 }
 
@@ -55,7 +55,7 @@ pub(crate) fn get_default_resolver() -> AsyncResolver {
         };
 
         let (resolver, bg) = AsyncResolver::new(cfg, opts);
-        tokio_current_thread::spawn(bg);
+        tokio_executor::current_thread::spawn(bg);
 
         Arbiter::set_item(DefaultResolver(resolver.clone()));
         resolver
@@ -70,37 +70,37 @@ pub fn start_default_resolver() -> AsyncResolver {
 pub fn new_connector<T: Address>(
     resolver: AsyncResolver,
 ) -> impl Service<Request = Connect<T>, Response = Connection<T, TcpStream>, Error = ConnectError>
-         + Clone {
-    Resolver::new(resolver).and_then(TcpConnector::new())
+{
+    pipeline(Resolver::new(resolver)).and_then(TcpConnector::new())
 }
 
 /// Create tcp connector service
 pub fn new_connector_factory<T: Address>(
     resolver: AsyncResolver,
-) -> impl NewService<
+) -> impl ServiceFactory<
     Config = (),
     Request = Connect<T>,
     Response = Connection<T, TcpStream>,
     Error = ConnectError,
     InitError = (),
-> + Clone {
-    ResolverFactory::new(resolver).and_then(TcpConnectorFactory::new())
+> {
+    pipeline_factory(ResolverFactory::new(resolver)).and_then(TcpConnectorFactory::new())
 }
 
 /// Create connector service with default parameters
 pub fn default_connector<T: Address>(
 ) -> impl Service<Request = Connect<T>, Response = Connection<T, TcpStream>, Error = ConnectError>
-         + Clone {
-    Resolver::default().and_then(TcpConnector::new())
+{
+    pipeline(Resolver::default()).and_then(TcpConnector::new())
 }
 
 /// Create connector service factory with default parameters
-pub fn default_connector_factory<T: Address>() -> impl NewService<
+pub fn default_connector_factory<T: Address>() -> impl ServiceFactory<
     Config = (),
     Request = Connect<T>,
     Response = Connection<T, TcpStream>,
     Error = ConnectError,
     InitError = (),
-> + Clone {
-    ResolverFactory::default().and_then(TcpConnectorFactory::new())
+> {
+    pipeline_factory(ResolverFactory::default()).and_then(TcpConnectorFactory::new())
 }

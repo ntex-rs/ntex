@@ -1,5 +1,11 @@
 # Changes
 
+## [0.2.0] - 2019-??-??
+
+### Changed
+
+* Migrate to `std::future`
+
 ## [0.1.2] - 2019-08-05
 
 ### Changed

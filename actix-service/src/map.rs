@@ -1,13 +1,16 @@
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use futures::{Async, Future, Poll};
+use pin_project::pin_project;
 
-use super::{NewService, Service};
+use super::{Service, ServiceFactory};
 
 /// Service for the `map` combinator, changing the type of a service's response.
 ///
 /// This is created by the `ServiceExt::map` method.
-pub struct Map<A, F, Response> {
+pub(crate) struct Map<A, F, Response> {
     service: A,
     f: F,
     _t: PhantomData<Response>,
@@ -52,8 +55,8 @@ where
     type Error = A::Error;
     type Future = MapFuture<A, F, Response>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.service.poll_ready()
+    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.service.poll_ready(ctx)
     }
 
     fn call(&mut self, req: A::Request) -> Self::Future {
@@ -61,12 +64,14 @@ where
     }
 }
 
-pub struct MapFuture<A, F, Response>
+#[pin_project]
+pub(crate) struct MapFuture<A, F, Response>
 where
     A: Service,
     F: FnMut(A::Response) -> Response,
 {
     f: F,
+    #[pin]
     fut: A::Future,
 }
 
@@ -85,19 +90,20 @@ where
     A: Service,
     F: FnMut(A::Response) -> Response,
 {
-    type Item = Response;
-    type Error = A::Error;
+    type Output = Result<Response, A::Error>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.fut.poll()? {
-            Async::Ready(resp) => Ok(Async::Ready((self.f)(resp))),
-            Async::NotReady => Ok(Async::NotReady),
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        match this.fut.poll(cx) {
+            Poll::Ready(Ok(resp)) => Poll::Ready(Ok((this.f)(resp))),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            Poll::Pending => Poll::Pending,
         }
     }
 }
 
 /// `MapNewService` new service combinator
-pub struct MapNewService<A, F, Res> {
+pub(crate) struct MapNewService<A, F, Res> {
     a: A,
     f: F,
     r: PhantomData<Res>,
@@ -107,7 +113,7 @@ impl<A, F, Res> MapNewService<A, F, Res> {
     /// Create new `Map` new service instance
     pub fn new(a: A, f: F) -> Self
     where
-        A: NewService,
+        A: ServiceFactory,
         F: FnMut(A::Response) -> Res,
     {
         Self {
@@ -132,9 +138,9 @@ where
     }
 }
 
-impl<A, F, Res> NewService for MapNewService<A, F, Res>
+impl<A, F, Res> ServiceFactory for MapNewService<A, F, Res>
 where
-    A: NewService,
+    A: ServiceFactory,
     F: FnMut(A::Response) -> Res + Clone,
 {
     type Request = A::Request;
@@ -151,18 +157,20 @@ where
     }
 }
 
-pub struct MapNewServiceFuture<A, F, Res>
+#[pin_project]
+pub(crate) struct MapNewServiceFuture<A, F, Res>
 where
-    A: NewService,
+    A: ServiceFactory,
     F: FnMut(A::Response) -> Res,
 {
+    #[pin]
     fut: A::Future,
     f: Option<F>,
 }
 
 impl<A, F, Res> MapNewServiceFuture<A, F, Res>
 where
-    A: NewService,
+    A: ServiceFactory,
     F: FnMut(A::Response) -> Res,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -172,37 +180,38 @@ where
 
 impl<A, F, Res> Future for MapNewServiceFuture<A, F, Res>
 where
-    A: NewService,
+    A: ServiceFactory,
     F: FnMut(A::Response) -> Res,
 {
-    type Item = Map<A::Service, F, Res>;
-    type Error = A::InitError;
+    type Output = Result<Map<A::Service, F, Res>, A::InitError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Async::Ready(service) = self.fut.poll()? {
-            Ok(Async::Ready(Map::new(service, self.f.take().unwrap())))
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        if let Poll::Ready(svc) = this.fut.poll(cx)? {
+            Poll::Ready(Ok(Map::new(svc, this.f.take().unwrap())))
         } else {
-            Ok(Async::NotReady)
+            Poll::Pending
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use futures::future::{ok, FutureResult};
+    use futures::future::{lazy, ok, Ready};
 
     use super::*;
-    use crate::{IntoNewService, Service, ServiceExt};
+    use crate::{into_factory, into_service, Service};
 
     struct Srv;
+
     impl Service for Srv {
         type Request = ();
         type Response = ();
         type Error = ();
-        type Future = FutureResult<(), ()>;
+        type Future = Ready<Result<(), ()>>;
 
-        fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-            Ok(Async::Ready(()))
+        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
         }
 
         fn call(&mut self, _: ()) -> Self::Future {
@@ -210,32 +219,27 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_poll_ready() {
-        let mut srv = Srv.map(|_| "ok");
-        let res = srv.poll_ready();
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), Async::Ready(()));
+    #[tokio::test]
+    async fn test_poll_ready() {
+        let mut srv = into_service(Srv).map(|_| "ok");
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
     }
 
-    #[test]
-    fn test_call() {
-        let mut srv = Srv.map(|_| "ok");
-        let res = srv.call(()).poll();
+    #[tokio::test]
+    async fn test_call() {
+        let mut srv = into_service(Srv).map(|_| "ok");
+        let res = srv.call(()).await;
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), Async::Ready("ok"));
+        assert_eq!(res.unwrap(), "ok");
     }
 
-    #[test]
-    fn test_new_service() {
-        let blank = || Ok::<_, ()>(Srv);
-        let new_srv = blank.into_new_service().map(|_| "ok");
-        if let Async::Ready(mut srv) = new_srv.new_service(&()).poll().unwrap() {
-            let res = srv.call(()).poll();
-            assert!(res.is_ok());
-            assert_eq!(res.unwrap(), Async::Ready("ok"));
-        } else {
-            panic!()
-        }
+    #[tokio::test]
+    async fn test_new_service() {
+        let new_srv = into_factory(|| ok::<_, ()>(Srv)).map(|_| "ok");
+        let mut srv = new_srv.new_service(&()).await.unwrap();
+        let res = srv.call(()).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), ("ok"));
     }
 }

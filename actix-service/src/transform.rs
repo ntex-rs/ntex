@@ -1,10 +1,13 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
-use futures::{Async, Future, IntoFuture, Poll};
+use crate::transform_err::TransformMapInitErr;
+use crate::{IntoServiceFactory, Service, ServiceFactory};
 
-use crate::transform_err::{TransformFromErr, TransformMapInitErr};
-use crate::{IntoNewService, NewService, Service};
+use pin_project::pin_project;
 
 /// The `Transform` trait defines the interface of a Service factory. `Transform`
 /// is often implemented for middleware, defining how to construct a
@@ -32,7 +35,7 @@ pub trait Transform<S> {
     type InitError;
 
     /// The future response value.
-    type Future: Future<Item = Self::Transform, Error = Self::InitError>;
+    type Future: Future<Output = Result<Self::Transform, Self::InitError>>;
 
     /// Creates and returns a new Service component, asynchronously
     fn new_transform(&self, service: S) -> Self::Future;
@@ -46,32 +49,6 @@ pub trait Transform<S> {
     {
         TransformMapInitErr::new(self, f)
     }
-
-    /// Map this service's init error to any error implementing `From` for
-    /// this service`s `Error`.
-    ///
-    /// Note that this function consumes the receiving transform and returns a
-    /// wrapped version of it.
-    fn from_err<E>(self) -> TransformFromErr<Self, S, E>
-    where
-        Self: Sized,
-        E: From<Self::InitError>,
-    {
-        TransformFromErr::new(self)
-    }
-
-    // /// Map this service's init error to service's init error
-    // /// if it is implementing `Into` to this service`s `InitError`.
-    // ///
-    // /// Note that this function consumes the receiving transform and returns a
-    // /// wrapped version of it.
-    // fn into_err<E>(self) -> TransformIntoErr<Self, S>
-    // where
-    //     Self: Sized,
-    //     Self::InitError: From<Self::InitError>,
-    // {
-    //     TransformFromErr::new(self)
-    // }
 }
 
 impl<T, S> Transform<S> for Rc<T>
@@ -106,31 +83,13 @@ where
     }
 }
 
-/// Trait for types that can be converted to a *transform service*
-pub trait IntoTransform<T, S>
-where
-    T: Transform<S>,
-{
-    /// Convert to a `TransformService`
-    fn into_transform(self) -> T;
-}
-
-impl<T, S> IntoTransform<T, S> for T
-where
-    T: Transform<S>,
-{
-    fn into_transform(self) -> T {
-        self
-    }
-}
-
-/// Apply transform to service factory. Function returns
+/// Apply transform to a service. Function returns
 /// services factory that in initialization creates
 /// service and applies transform to this service.
-pub fn apply_transform<T, S, F, U>(
-    t: F,
+pub fn apply<T, S, U>(
+    t: T,
     service: U,
-) -> impl NewService<
+) -> impl ServiceFactory<
     Config = S::Config,
     Request = T::Request,
     Response = T::Response,
@@ -139,30 +98,29 @@ pub fn apply_transform<T, S, F, U>(
     InitError = S::InitError,
 > + Clone
 where
-    S: NewService,
+    S: ServiceFactory,
     T: Transform<S::Service, InitError = S::InitError>,
-    F: IntoTransform<T, S::Service>,
-    U: IntoNewService<S>,
+    U: IntoServiceFactory<S>,
 {
-    ApplyTransform::new(t.into_transform(), service.into_new_service())
+    ApplyTransform::new(t, service.into_factory())
 }
 
 /// `Apply` transform to new service
-pub struct ApplyTransform<T, S> {
+struct ApplyTransform<T, S> {
     s: Rc<S>,
     t: Rc<T>,
 }
 
 impl<T, S> ApplyTransform<T, S>
 where
-    S: NewService,
+    S: ServiceFactory,
     T: Transform<S::Service, InitError = S::InitError>,
 {
     /// Create new `ApplyTransform` new service instance
-    pub fn new<F: IntoTransform<T, S::Service>>(t: F, service: S) -> Self {
+    fn new(t: T, service: S) -> Self {
         Self {
             s: Rc::new(service),
-            t: Rc::new(t.into_transform()),
+            t: Rc::new(t),
         }
     }
 }
@@ -176,9 +134,9 @@ impl<T, S> Clone for ApplyTransform<T, S> {
     }
 }
 
-impl<T, S> NewService for ApplyTransform<T, S>
+impl<T, S> ServiceFactory for ApplyTransform<T, S>
 where
-    S: NewService,
+    S: ServiceFactory,
     T: Transform<S::Service, InitError = S::InitError>,
 {
     type Request = T::Request;
@@ -193,40 +151,45 @@ where
     fn new_service(&self, cfg: &S::Config) -> Self::Future {
         ApplyTransformFuture {
             t_cell: self.t.clone(),
-            fut_a: self.s.new_service(cfg).into_future(),
+            fut_a: self.s.new_service(cfg),
             fut_t: None,
         }
     }
 }
 
-pub struct ApplyTransformFuture<T, S>
+#[pin_project]
+struct ApplyTransformFuture<T, S>
 where
-    S: NewService,
+    S: ServiceFactory,
     T: Transform<S::Service, InitError = S::InitError>,
 {
+    #[pin]
     fut_a: S::Future,
-    fut_t: Option<<T::Future as IntoFuture>::Future>,
+    #[pin]
+    fut_t: Option<T::Future>,
     t_cell: Rc<T>,
 }
 
 impl<T, S> Future for ApplyTransformFuture<T, S>
 where
-    S: NewService,
+    S: ServiceFactory,
     T: Transform<S::Service, InitError = S::InitError>,
 {
-    type Item = T::Transform;
-    type Error = T::InitError;
+    type Output = Result<T::Transform, T::InitError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if self.fut_t.is_none() {
-            if let Async::Ready(service) = self.fut_a.poll()? {
-                self.fut_t = Some(self.t_cell.new_transform(service).into_future());
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
+
+        if this.fut_t.as_mut().as_pin_mut().is_none() {
+            if let Poll::Ready(service) = this.fut_a.poll(cx)? {
+                this.fut_t.set(Some(this.t_cell.new_transform(service)));
             }
         }
-        if let Some(ref mut fut) = self.fut_t {
-            fut.poll()
+
+        if let Some(fut) = this.fut_t.as_mut().as_pin_mut() {
+            fut.poll(cx)
         } else {
-            Ok(Async::NotReady)
+            Poll::Pending
         }
     }
 }

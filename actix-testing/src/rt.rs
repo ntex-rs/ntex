@@ -1,9 +1,11 @@
 //! Various helpers for Actix applications to use during testing.
 use std::cell::RefCell;
+use std::future::Future;
 
 use actix_rt::{System, SystemRunner};
 use actix_service::Service;
-use futures::future::{lazy, Future, IntoFuture};
+use futures::future::{lazy, FutureExt};
+// use futures_util::future::FutureExt;
 
 thread_local! {
     static RT: RefCell<Inner> = {
@@ -35,11 +37,11 @@ impl Drop for Inner {
 ///
 /// Note that this function is intended to be used only for testing purpose.
 /// This function panics on nested call.
-pub fn block_on<F>(f: F) -> Result<F::Item, F::Error>
+pub fn block_on<F>(f: F) -> F::Output
 where
-    F: IntoFuture,
+    F: Future,
 {
-    RT.with(move |rt| rt.borrow_mut().get_mut().block_on(f.into_future()))
+    RT.with(move |rt| rt.borrow_mut().get_mut().block_on(f))
 }
 
 /// Runs the provided function, blocking the current thread until the result
@@ -52,21 +54,21 @@ where
 ///
 /// Note that this function is intended to be used only for testing purpose.
 /// This function panics on nested call.
-pub fn block_fn<F, R>(f: F) -> Result<R::Item, R::Error>
+pub fn block_fn<F, R>(f: F) -> F::Output
 where
     F: FnOnce() -> R,
-    R: IntoFuture,
+    R: Future,
 {
-    RT.with(move |rt| rt.borrow_mut().get_mut().block_on(lazy(f)))
+    RT.with(move |rt| rt.borrow_mut().get_mut().block_on(lazy(|_| f())))
 }
 
 /// Spawn future to the current test runtime.
 pub fn spawn<F>(fut: F)
 where
-    F: Future<Item = (), Error = ()> + 'static,
+    F: Future + 'static,
 {
     run_on(move || {
-        actix_rt::spawn(fut);
+        actix_rt::spawn(fut.map(|_| ()));
     });
 }
 
@@ -78,12 +80,7 @@ pub fn run_on<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    RT.with(move |rt| {
-        rt.borrow_mut()
-            .get_mut()
-            .block_on(lazy(|| Ok::<_, ()>(f())))
-    })
-    .unwrap()
+    RT.with(move |rt| rt.borrow_mut().get_mut().block_on(lazy(|_| f())))
 }
 
 /// Calls service and waits for response future completion.

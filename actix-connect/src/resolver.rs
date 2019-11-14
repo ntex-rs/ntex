@@ -1,9 +1,12 @@
+use std::future::Future;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use actix_service::{NewService, Service};
-use futures::future::{ok, Either, FutureResult};
-use futures::{Async, Future, Poll};
+use actix_service::{Service, ServiceFactory};
+use futures::future::{ok, Either, Ready};
+use pin_project::pin_project;
 use trust_dns_resolver::lookup_ip::LookupIpFuture;
 use trust_dns_resolver::{AsyncResolver, Background};
 
@@ -52,14 +55,14 @@ impl<T> Clone for ResolverFactory<T> {
     }
 }
 
-impl<T: Address> NewService for ResolverFactory<T> {
+impl<T: Address> ServiceFactory for ResolverFactory<T> {
     type Request = Connect<T>;
     type Response = Connect<T>;
     type Error = ConnectError;
     type Config = ();
     type Service = Resolver<T>;
     type InitError = ();
-    type Future = FutureResult<Self::Service, Self::InitError>;
+    type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: &()) -> Self::Future {
         ok(self.service())
@@ -104,32 +107,34 @@ impl<T: Address> Service for Resolver<T> {
     type Request = Connect<T>;
     type Response = Connect<T>;
     type Error = ConnectError;
-    type Future = Either<ResolverFuture<T>, FutureResult<Connect<T>, Self::Error>>;
+    type Future = Either<ResolverFuture<T>, Ready<Result<Connect<T>, Self::Error>>>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        Ok(Async::Ready(()))
+    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, mut req: Connect<T>) -> Self::Future {
         if req.addr.is_some() {
-            Either::B(ok(req))
+            Either::Right(ok(req))
         } else if let Ok(ip) = req.host().parse() {
             req.addr = Some(either::Either::Left(SocketAddr::new(ip, req.port())));
-            Either::B(ok(req))
+            Either::Right(ok(req))
         } else {
             trace!("DNS resolver: resolving host {:?}", req.host());
             if self.resolver.is_none() {
                 self.resolver = Some(get_default_resolver());
             }
-            Either::A(ResolverFuture::new(req, self.resolver.as_ref().unwrap()))
+            Either::Left(ResolverFuture::new(req, self.resolver.as_ref().unwrap()))
         }
     }
 }
 
+#[pin_project]
 #[doc(hidden)]
 /// Resolver future
 pub struct ResolverFuture<T: Address> {
     req: Option<Connect<T>>,
+    #[pin]
     lookup: Background<LookupIpFuture>,
 }
 
@@ -149,22 +154,15 @@ impl<T: Address> ResolverFuture<T> {
 }
 
 impl<T: Address> Future for ResolverFuture<T> {
-    type Item = Connect<T>;
-    type Error = ConnectError;
+    type Output = Result<Connect<T>, ConnectError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.lookup.poll().map_err(|e| {
-            trace!(
-                "DNS resolver: failed to resolve host {:?} err: {}",
-                self.req.as_ref().unwrap().host(),
-                e
-            );
-            e
-        })? {
-            Async::NotReady => Ok(Async::NotReady),
-            Async::Ready(ips) => {
-                let req = self.req.take().unwrap();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = self.project();
 
+        match this.lookup.poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(ips)) => {
+                let req = this.req.take().unwrap();
                 let port = req.port();
                 let req = req.set_addrs(ips.iter().map(|ip| SocketAddr::new(ip, port)));
 
@@ -175,10 +173,18 @@ impl<T: Address> Future for ResolverFuture<T> {
                 );
 
                 if req.addr.is_none() {
-                    Err(ConnectError::NoRecords)
+                    Poll::Ready(Err(ConnectError::NoRecords))
                 } else {
-                    Ok(Async::Ready(req))
+                    Poll::Ready(Ok(req))
                 }
+            }
+            Poll::Ready(Err(e)) => {
+                trace!(
+                    "DNS resolver: failed to resolve host {:?} err: {}",
+                    this.req.as_ref().unwrap().host(),
+                    e
+                );
+                Poll::Ready(Err(e.into()))
             }
         }
     }

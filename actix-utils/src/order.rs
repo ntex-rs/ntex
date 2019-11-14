@@ -1,14 +1,17 @@
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::fmt;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll};
 
 use actix_service::{IntoService, Service, Transform};
-use futures::future::{ok, FutureResult};
-use futures::task::AtomicTask;
-use futures::unsync::oneshot;
-use futures::{Async, Future, Poll};
+use futures::future::{ok, ready, FutureExt, Ready};
+
+use crate::oneshot;
+use crate::task::LocalWaker;
 
 struct Record<I, E> {
     rx: oneshot::Receiver<Result<I, E>>,
@@ -93,7 +96,7 @@ where
     type Error = InOrderError<S::Error>;
     type InitError = Infallible;
     type Transform = InOrderService<S>;
-    type Future = FutureResult<Self::Transform, Self::InitError>;
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
         ok(InOrderService::new(service))
@@ -102,7 +105,7 @@ where
 
 pub struct InOrderService<S: Service> {
     service: S,
-    task: Rc<AtomicTask>,
+    task: Rc<LocalWaker>,
     acks: VecDeque<Record<S::Response, S::Error>>,
 }
 
@@ -120,7 +123,7 @@ where
         Self {
             service: service.into_service(),
             acks: VecDeque::new(),
-            task: Rc::new(AtomicTask::new()),
+            task: Rc::new(LocalWaker::new()),
         }
     }
 }
@@ -137,28 +140,30 @@ where
     type Error = InOrderError<S::Error>;
     type Future = InOrderServiceResponse<S>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+    fn poll_ready(&mut self, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
         // poll_ready could be called from different task
-        self.task.register();
+        self.task.register(cx.waker());
 
         // check acks
         while !self.acks.is_empty() {
             let rec = self.acks.front_mut().unwrap();
-            match rec.rx.poll() {
-                Ok(Async::Ready(res)) => {
+            match Pin::new(&mut rec.rx).poll(cx) {
+                Poll::Ready(Ok(res)) => {
                     let rec = self.acks.pop_front().unwrap();
                     let _ = rec.tx.send(res);
                 }
-                Ok(Async::NotReady) => break,
-                Err(oneshot::Canceled) => return Err(InOrderError::Disconnected),
+                Poll::Pending => break,
+                Poll::Ready(Err(oneshot::Canceled)) => {
+                    return Poll::Ready(Err(InOrderError::Disconnected))
+                }
             }
         }
 
         // check nested service
-        if let Async::NotReady = self.service.poll_ready().map_err(InOrderError::Service)? {
-            Ok(Async::NotReady)
+        if let Poll::Pending = self.service.poll_ready(cx).map_err(InOrderError::Service)? {
+            Poll::Pending
         } else {
-            Ok(Async::Ready(()))
+            Poll::Ready(Ok(()))
         }
     }
 
@@ -168,10 +173,10 @@ where
         self.acks.push_back(Record { rx: rx1, tx: tx2 });
 
         let task = self.task.clone();
-        tokio_current_thread::spawn(self.service.call(request).then(move |res| {
-            task.notify();
+        tokio_executor::current_thread::spawn(self.service.call(request).then(move |res| {
+            task.wake();
             let _ = tx1.send(res);
-            Ok(())
+            ready(())
         }));
 
         InOrderServiceResponse { rx: rx2 }
@@ -184,29 +189,28 @@ pub struct InOrderServiceResponse<S: Service> {
 }
 
 impl<S: Service> Future for InOrderServiceResponse<S> {
-    type Item = S::Response;
-    type Error = InOrderError<S::Error>;
+    type Output = Result<S::Response, InOrderError<S::Error>>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.rx.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(Ok(res))) => Ok(Async::Ready(res)),
-            Ok(Async::Ready(Err(e))) => Err(e.into()),
-            Err(oneshot::Canceled) => Err(InOrderError::Disconnected),
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        match Pin::new(&mut self.rx).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(Ok(res))) => Poll::Ready(Ok(res)),
+            Poll::Ready(Ok(Err(e))) => Poll::Ready(Err(e.into())),
+            Poll::Ready(Err(_)) => Poll::Ready(Err(InOrderError::Disconnected)),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use futures::future::{lazy, Future};
-    use futures::{stream::futures_unordered, sync::oneshot, Async, Poll, Stream};
 
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use super::*;
-    use actix_service::blank::Blank;
-    use actix_service::{Service, ServiceExt};
+    use actix_service::Service;
+    use futures::channel::oneshot;
+    use futures::future::{lazy, LocalBoxFuture};
 
     struct Srv;
 
@@ -214,28 +218,14 @@ mod tests {
         type Request = oneshot::Receiver<usize>;
         type Response = usize;
         type Error = ();
-        type Future = Box<dyn Future<Item = usize, Error = ()>>;
+        type Future = LocalBoxFuture<'static, Result<usize, ()>>;
 
-        fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-            Ok(Async::Ready(()))
+        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
         }
 
         fn call(&mut self, req: oneshot::Receiver<usize>) -> Self::Future {
-            Box::new(req.map_err(|_| ()))
-        }
-    }
-
-    struct SrvPoll<S: Service> {
-        s: S,
-    }
-
-    impl<S: Service> Future for SrvPoll<S> {
-        type Item = ();
-        type Error = ();
-
-        fn poll(&mut self) -> Poll<(), ()> {
-            let _ = self.s.poll_ready();
-            Ok(Async::NotReady)
+            req.map(|res| res.map_err(|_| ())).boxed_local()
         }
     }
 
@@ -251,23 +241,26 @@ mod tests {
             let rx2 = rx2;
             let rx3 = rx3;
             let tx_stop = tx_stop;
-            let _ = actix_rt::System::new("test").block_on(lazy(move || {
-                let mut srv = Blank::new().and_then(InOrderService::new(Srv));
+            let _ = actix_rt::System::new("test").block_on(async {
+                let mut srv = InOrderService::new(Srv);
 
                 let res1 = srv.call(rx1);
                 let res2 = srv.call(rx2);
                 let res3 = srv.call(rx3);
-                tokio_current_thread::spawn(SrvPoll { s: srv });
 
-                futures_unordered(vec![res1, res2, res3])
-                    .collect()
-                    .and_then(move |res: Vec<_>| {
-                        assert_eq!(res, vec![1, 2, 3]);
-                        let _ = tx_stop.send(());
-                        actix_rt::System::current().stop();
-                        Ok(())
-                    })
-            }));
+                let _ = lazy(|cx| srv.poll_ready(cx)).await;
+
+                // dispatcher do this
+                tokio_timer::delay_for(Duration::from_millis(100)).await;
+                let _ = lazy(|cx| srv.poll_ready(cx)).await;
+
+                assert_eq!(res1.await.unwrap(), 1);
+                assert_eq!(res2.await.unwrap(), 2);
+                assert_eq!(res3.await.unwrap(), 3);
+
+                let _ = tx_stop.send(());
+                actix_rt::System::current().stop();
+            });
         });
 
         let _ = tx3.send(3);
@@ -275,7 +268,7 @@ mod tests {
         let _ = tx2.send(2);
         let _ = tx1.send(1);
 
-        let _ = rx_stop.wait();
+        let _ = actix_rt::System::new("test").block_on(rx_stop);
         let _ = h.join();
     }
 }

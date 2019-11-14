@@ -1,7 +1,11 @@
-use actix_service::{NewService, Service};
-use futures::future::{ok, FutureResult};
-use futures::{try_ready, Async, Future, Poll};
-use tokio_tcp::TcpStream;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use actix_service::{Service, ServiceFactory};
+use either::Either;
+use futures::future::{ok, Ready};
+use tokio_net::tcp::TcpStream;
 use trust_dns_resolver::AsyncResolver;
 
 use crate::connect::{Address, Connect, Connection};
@@ -14,7 +18,7 @@ pub struct ConnectServiceFactory<T> {
     resolver: ResolverFactory<T>,
 }
 
-impl<T> ConnectServiceFactory<T> {
+impl<T: Unpin> ConnectServiceFactory<T> {
     /// Construct new ConnectService factory
     pub fn new() -> Self {
         ConnectServiceFactory {
@@ -66,14 +70,14 @@ impl<T> Clone for ConnectServiceFactory<T> {
     }
 }
 
-impl<T: Address> NewService for ConnectServiceFactory<T> {
+impl<T: Address + Unpin> ServiceFactory for ConnectServiceFactory<T> {
     type Request = Connect<T>;
     type Response = Connection<T, TcpStream>;
     type Error = ConnectError;
     type Config = ();
     type Service = ConnectService<T>;
     type InitError = ();
-    type Future = FutureResult<Self::Service, Self::InitError>;
+    type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: &()) -> Self::Future {
         ok(self.service())
@@ -86,47 +90,66 @@ pub struct ConnectService<T> {
     resolver: Resolver<T>,
 }
 
-impl<T: Address> Service for ConnectService<T> {
+impl<T: Address + Unpin> Service for ConnectService<T> {
     type Request = Connect<T>;
     type Response = Connection<T, TcpStream>;
     type Error = ConnectError;
     type Future = ConnectServiceResponse<T>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        Ok(Async::Ready(()))
+    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, req: Connect<T>) -> Self::Future {
         ConnectServiceResponse {
-            fut1: Some(self.resolver.call(req)),
-            fut2: None,
+            state: ConnectState::Resolve(self.resolver.call(req)),
             tcp: self.tcp.clone(),
         }
     }
 }
 
-pub struct ConnectServiceResponse<T: Address> {
-    fut1: Option<<Resolver<T> as Service>::Future>,
-    fut2: Option<<TcpConnector<T> as Service>::Future>,
+enum ConnectState<T: Address + Unpin> {
+    Resolve(<Resolver<T> as Service>::Future),
+    Connect(<TcpConnector<T> as Service>::Future),
+}
+
+impl<T: Address + Unpin> ConnectState<T> {
+    fn poll(
+        &mut self,
+        cx: &mut Context,
+    ) -> Either<Poll<Result<Connection<T, TcpStream>, ConnectError>>, Connect<T>> {
+        match self {
+            ConnectState::Resolve(ref mut fut) => match Pin::new(fut).poll(cx) {
+                Poll::Pending => Either::Left(Poll::Pending),
+                Poll::Ready(Ok(res)) => Either::Right(res),
+                Poll::Ready(Err(err)) => Either::Left(Poll::Ready(Err(err))),
+            },
+            ConnectState::Connect(ref mut fut) => Either::Left(Pin::new(fut).poll(cx)),
+        }
+    }
+}
+
+pub struct ConnectServiceResponse<T: Address + Unpin> {
+    state: ConnectState<T>,
     tcp: TcpConnector<T>,
 }
 
-impl<T: Address> Future for ConnectServiceResponse<T> {
-    type Item = Connection<T, TcpStream>;
-    type Error = ConnectError;
+impl<T: Address + Unpin> Future for ConnectServiceResponse<T> {
+    type Output = Result<Connection<T, TcpStream>, ConnectError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Some(ref mut fut) = self.fut1 {
-            let res = try_ready!(fut.poll());
-            let _ = self.fut1.take();
-            self.fut2 = Some(self.tcp.call(res));
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let res = match self.state.poll(cx) {
+            Either::Right(res) => {
+                self.state = ConnectState::Connect(self.tcp.call(res));
+                self.state.poll(cx)
+            }
+            Either::Left(res) => return res,
+        };
+
+        match res {
+            Either::Left(res) => res,
+            Either::Right(_) => panic!(),
         }
-
-        if let Some(ref mut fut) = self.fut2 {
-            return fut.poll();
-        }
-
-        Ok(Async::NotReady)
     }
 }
 
@@ -136,48 +159,73 @@ pub struct TcpConnectService<T> {
     resolver: Resolver<T>,
 }
 
-impl<T: Address> Service for TcpConnectService<T> {
+impl<T: Address + Unpin + 'static> Service for TcpConnectService<T> {
     type Request = Connect<T>;
     type Response = TcpStream;
     type Error = ConnectError;
     type Future = TcpConnectServiceResponse<T>;
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        Ok(Async::Ready(()))
+    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, req: Connect<T>) -> Self::Future {
         TcpConnectServiceResponse {
-            fut1: Some(self.resolver.call(req)),
-            fut2: None,
+            state: TcpConnectState::Resolve(self.resolver.call(req)),
             tcp: self.tcp.clone(),
         }
     }
 }
 
-pub struct TcpConnectServiceResponse<T: Address> {
-    fut1: Option<<Resolver<T> as Service>::Future>,
-    fut2: Option<<TcpConnector<T> as Service>::Future>,
+enum TcpConnectState<T: Address + Unpin> {
+    Resolve(<Resolver<T> as Service>::Future),
+    Connect(<TcpConnector<T> as Service>::Future),
+}
+
+impl<T: Address + Unpin> TcpConnectState<T> {
+    fn poll(
+        &mut self,
+        cx: &mut Context,
+    ) -> Either<Poll<Result<TcpStream, ConnectError>>, Connect<T>> {
+        match self {
+            TcpConnectState::Resolve(ref mut fut) => match Pin::new(fut).poll(cx) {
+                Poll::Pending => (),
+                Poll::Ready(Ok(res)) => return Either::Right(res),
+                Poll::Ready(Err(err)) => return Either::Left(Poll::Ready(Err(err))),
+            },
+            TcpConnectState::Connect(ref mut fut) => {
+                if let Poll::Ready(res) = Pin::new(fut).poll(cx) {
+                    return match res {
+                        Ok(conn) => Either::Left(Poll::Ready(Ok(conn.into_parts().0))),
+                        Err(err) => Either::Left(Poll::Ready(Err(err))),
+                    };
+                }
+            }
+        }
+        Either::Left(Poll::Pending)
+    }
+}
+
+pub struct TcpConnectServiceResponse<T: Address + Unpin> {
+    state: TcpConnectState<T>,
     tcp: TcpConnector<T>,
 }
 
-impl<T: Address> Future for TcpConnectServiceResponse<T> {
-    type Item = TcpStream;
-    type Error = ConnectError;
+impl<T: Address + Unpin> Future for TcpConnectServiceResponse<T> {
+    type Output = Result<TcpStream, ConnectError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Some(ref mut fut) = self.fut1 {
-            let res = try_ready!(fut.poll());
-            let _ = self.fut1.take();
-            self.fut2 = Some(self.tcp.call(res));
-        }
-
-        if let Some(ref mut fut) = self.fut2 {
-            if let Async::Ready(conn) = fut.poll()? {
-                return Ok(Async::Ready(conn.into_parts().0));
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let res = match self.state.poll(cx) {
+            Either::Right(res) => {
+                self.state = TcpConnectState::Connect(self.tcp.call(res));
+                self.state.poll(cx)
             }
-        }
+            Either::Left(res) => return res,
+        };
 
-        Ok(Async::NotReady)
+        match res {
+            Either::Left(res) => res,
+            Either::Right(_) => panic!(),
+        }
     }
 }

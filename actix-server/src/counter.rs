@@ -1,7 +1,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use futures::task::AtomicTask;
+use futures::task::AtomicWaker;
+use std::task;
 
 #[derive(Clone)]
 /// Simple counter with ability to notify task on reaching specific number
@@ -13,7 +14,7 @@ pub struct Counter(Rc<CounterInner>);
 struct CounterInner {
     count: Cell<usize>,
     capacity: usize,
-    task: AtomicTask,
+    task: AtomicWaker,
 }
 
 impl Counter {
@@ -22,7 +23,7 @@ impl Counter {
         Counter(Rc::new(CounterInner {
             capacity,
             count: Cell::new(0),
-            task: AtomicTask::new(),
+            task: AtomicWaker::new(),
         }))
     }
 
@@ -31,8 +32,8 @@ impl Counter {
     }
 
     /// Check if counter is not at capacity
-    pub fn available(&self) -> bool {
-        self.0.available()
+    pub fn available(&self, cx: &mut task::Context) -> bool {
+        self.0.available(cx)
     }
 
     /// Get total number of acquired counts
@@ -66,14 +67,14 @@ impl CounterInner {
         let num = self.count.get();
         self.count.set(num - 1);
         if num == self.capacity {
-            self.task.notify();
+            self.task.wake();
         }
     }
 
-    fn available(&self) -> bool {
+    fn available(&self, cx: &mut task::Context) -> bool {
         let avail = self.count.get() < self.capacity;
         if !avail {
-            self.task.register();
+            self.task.register(cx.waker());
         }
         avail
     }

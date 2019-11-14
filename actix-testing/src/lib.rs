@@ -3,12 +3,12 @@ use std::sync::mpsc;
 use std::{net, thread};
 
 use actix_rt::System;
-use actix_server::{Server, ServerBuilder, StreamServiceFactory};
+use actix_server::{Server, ServerBuilder, ServiceFactory};
 pub use actix_server_config::{Io, ServerConfig};
 
 use net2::TcpBuilder;
-use tokio_reactor::Handle;
-use tokio_tcp::TcpStream;
+use tokio_net::driver::Handle;
+use tokio_net::tcp::TcpStream;
 
 mod rt;
 pub use self::rt::*;
@@ -21,12 +21,12 @@ pub use self::rt::*;
 /// # Examples
 ///
 /// ```rust
-/// use actix_service::{service_fn, IntoNewService};
+/// use actix_service::{service_fn};
 /// use actix_testing::TestServer;
 ///
 /// fn main() {
 ///     let srv = TestServer::with(|| service_fn(
-///         |sock| {
+///         |sock| async move {
 ///             println!("New connection: {:?}", sock);
 ///             Ok::<_, ()>(())
 ///         }
@@ -75,7 +75,7 @@ impl TestServer {
     }
 
     /// Start new test server with application factory
-    pub fn with<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServerRuntime {
+    pub fn with<F: ServiceFactory<TcpStream>>(factory: F) -> TestServerRuntime {
         let (tx, rx) = mpsc::channel();
 
         // run server in separate thread

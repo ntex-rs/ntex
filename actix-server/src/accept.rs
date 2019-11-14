@@ -3,10 +3,10 @@ use std::time::{Duration, Instant};
 use std::{io, thread};
 
 use actix_rt::System;
-use futures::future::{lazy, Future};
+use futures::FutureExt;
 use log::{error, info};
 use slab::Slab;
-use tokio_timer::Delay;
+use tokio_timer::delay;
 
 use crate::server::Server;
 use crate::socket::{SocketAddr, SocketListener, StdListener};
@@ -370,7 +370,7 @@ impl Accept {
                 match self.workers[self.next].send(msg) {
                     Ok(_) => (),
                     Err(tmp) => {
-                        self.srv.worker_died(self.workers[self.next].idx);
+                        self.srv.worker_faulted(self.workers[self.next].idx);
                         msg = tmp;
                         self.workers.swap_remove(self.next);
                         if self.workers.is_empty() {
@@ -396,7 +396,7 @@ impl Accept {
                             return;
                         }
                         Err(tmp) => {
-                            self.srv.worker_died(self.workers[self.next].idx);
+                            self.srv.worker_faulted(self.workers[self.next].idx);
                             msg = tmp;
                             self.workers.swap_remove(self.next);
                             if self.workers.is_empty() {
@@ -440,14 +440,13 @@ impl Accept {
                         info.timeout = Some(Instant::now() + Duration::from_millis(500));
 
                         let r = self.timer.1.clone();
-                        System::current().arbiter().send(lazy(move || {
-                            Delay::new(Instant::now() + Duration::from_millis(510))
-                                .map_err(|_| ())
-                                .and_then(move |_| {
-                                    let _ = r.set_readiness(mio::Ready::readable());
-                                    Ok(())
-                                })
-                        }));
+                        System::current().arbiter().send(
+                            async move {
+                                delay(Instant::now() + Duration::from_millis(510)).await;
+                                let _ = r.set_readiness(mio::Ready::readable());
+                            }
+                                .boxed(),
+                        );
                         return;
                     }
                 }

@@ -1,13 +1,15 @@
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use std::{fmt, thread};
 
-use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::sync::oneshot::{channel, Canceled, Sender};
-use futures::{future, Async, Future, IntoFuture, Poll, Stream};
-use tokio_current_thread::spawn;
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::channel::oneshot::{channel, Canceled, Sender};
+use futures::{future, Future, FutureExt, Stream};
+use tokio::runtime::current_thread::spawn;
 
 use crate::builder::Builder;
 use crate::system::System;
@@ -17,7 +19,7 @@ use copyless::BoxHelper;
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = RefCell::new(None);
     static RUNNING: Cell<bool> = Cell::new(false);
-    static Q: RefCell<Vec<Box<dyn Future<Item = (), Error = ()>>>> = RefCell::new(Vec::new());
+    static Q: RefCell<Vec<Box<dyn Future<Output = ()>>>> = RefCell::new(Vec::new());
     static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::new());
 );
 
@@ -25,7 +27,7 @@ pub(crate) static COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) enum ArbiterCommand {
     Stop,
-    Execute(Box<dyn Future<Item = (), Error = ()> + Send>),
+    Execute(Box<dyn Future<Output = ()> + Unpin + Send>),
     ExecuteFn(Box<dyn FnExec>),
 }
 
@@ -96,41 +98,49 @@ impl Arbiter {
         let (arb_tx, arb_rx) = unbounded();
         let arb_tx2 = arb_tx.clone();
 
-        let handle = thread::Builder::new().name(name.clone()).spawn(move || {
-            let mut rt = Builder::new().build_rt().expect("Can not create Runtime");
-            let arb = Arbiter::with_sender(arb_tx);
+        let handle = thread::Builder::new()
+            .name(name.clone())
+            .spawn(move || {
+                let mut rt = Builder::new().build_rt().expect("Can not create Runtime");
+                let arb = Arbiter::with_sender(arb_tx);
 
-            let (stop, stop_rx) = channel();
-            RUNNING.with(|cell| cell.set(true));
-            STORAGE.with(|cell| cell.borrow_mut().clear());
+                let (stop, stop_rx) = channel();
+                RUNNING.with(|cell| cell.set(true));
+                STORAGE.with(|cell| cell.borrow_mut().clear());
 
-            System::set_current(sys);
+                System::set_current(sys);
 
-            // start arbiter controller
-            rt.spawn(ArbiterController {
-                stop: Some(stop),
-                rx: arb_rx,
+                // start arbiter controller
+                rt.spawn(ArbiterController {
+                    stop: Some(stop),
+                    rx: arb_rx,
+                });
+                ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
+
+                // register arbiter
+                let _ = System::current()
+                    .sys()
+                    .unbounded_send(SystemCommand::RegisterArbiter(id, arb.clone()));
+
+                // run loop
+                let _ = match rt.block_on(stop_rx) {
+                    Ok(code) => code,
+                    Err(_) => 1,
+                };
+
+                // unregister arbiter
+                let _ = System::current()
+                    .sys()
+                    .unbounded_send(SystemCommand::UnregisterArbiter(id));
+            })
+            .unwrap_or_else(|err| {
+                panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err)
             });
-            ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
 
-            // register arbiter
-            let _ = System::current()
-                .sys()
-                .unbounded_send(SystemCommand::RegisterArbiter(id, arb.clone()));
-
-            // run loop
-            let _ = match rt.block_on(stop_rx) {
-                Ok(code) => code,
-                Err(_) => 1,
-            };
-
-            // unregister arbiter
-            let _ = System::current()
-                .sys()
-                .unbounded_send(SystemCommand::UnregisterArbiter(id));
-        }).unwrap_or_else(|err| panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err));
-
-        Arbiter{sender: arb_tx2, thread_handle: Some(handle)}
+        Arbiter {
+            sender: arb_tx2,
+            thread_handle: Some(handle),
+        }
     }
 
     pub(crate) fn run_system() {
@@ -138,7 +148,9 @@ impl Arbiter {
         Q.with(|cell| {
             let mut v = cell.borrow_mut();
             for fut in v.drain(..) {
-                spawn(fut);
+                // We pin the boxed future, so it can never again be moved.
+                let fut = unsafe { Pin::new_unchecked(fut) };
+                tokio_executor::current_thread::spawn(fut);
             }
         });
     }
@@ -152,12 +164,15 @@ impl Arbiter {
     /// thread.
     pub fn spawn<F>(future: F)
     where
-        F: Future<Item = (), Error = ()> + 'static,
+        F: Future<Output = ()> + 'static,
     {
         RUNNING.with(move |cell| {
             if cell.get() {
-                spawn(Box::alloc().init(future));
+                // Spawn the future on running executor
+                spawn(future);
             } else {
+                // Box the future and push it to the queue, this results in double boxing
+                // because the executor boxes the future again, but works for now
                 Q.with(move |cell| cell.borrow_mut().push(Box::alloc().init(future)));
             }
         });
@@ -169,15 +184,15 @@ impl Arbiter {
     pub fn spawn_fn<F, R>(f: F)
     where
         F: FnOnce() -> R + 'static,
-        R: IntoFuture<Item = (), Error = ()> + 'static,
+        R: Future<Output = ()> + 'static,
     {
-        Arbiter::spawn(future::lazy(f))
+        Arbiter::spawn(future::lazy(|_| f()).flatten())
     }
 
     /// Send a future to the Arbiter's thread, and spawn it.
     pub fn send<F>(&self, future: F)
     where
-        F: Future<Item = (), Error = ()> + Send + 'static,
+        F: Future<Output = ()> + Send + Unpin + 'static,
     {
         let _ = self
             .sender
@@ -200,7 +215,7 @@ impl Arbiter {
     /// Send a function to the Arbiter's thread. This function will be executed asynchronously.
     /// A future is created, and when resolved will contain the result of the function sent
     /// to the Arbiters thread.
-    pub fn exec<F, R>(&self, f: F) -> impl Future<Item = R, Error = Canceled>
+    pub fn exec<F, R>(&self, f: F) -> impl Future<Output = Result<R, Canceled>>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -261,15 +276,17 @@ impl Arbiter {
     }
 
     fn with_sender(sender: UnboundedSender<ArbiterCommand>) -> Self {
-        Self{sender, thread_handle: None}
+        Self {
+            sender,
+            thread_handle: None,
+        }
     }
 
     /// Wait for the event loop to stop by joining the underlying thread (if have Some).
-    pub fn join(&mut self) -> thread::Result<()>{
+    pub fn join(&mut self) -> thread::Result<()> {
         if let Some(thread_handle) = self.thread_handle.take() {
             thread_handle.join()
-        }
-        else {
+        } else {
             Ok(())
         }
     }
@@ -294,19 +311,18 @@ impl Drop for ArbiterController {
 }
 
 impl Future for ArbiterController {
-    type Item = ();
-    type Error = ();
+    type Output = ();
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            match self.rx.poll() {
-                Ok(Async::Ready(None)) | Err(_) => return Ok(Async::Ready(())),
-                Ok(Async::Ready(Some(item))) => match item {
+            match Pin::new(&mut self.rx).poll_next(cx) {
+                Poll::Ready(None) => return Poll::Ready(()),
+                Poll::Ready(Some(item)) => match item {
                     ArbiterCommand::Stop => {
                         if let Some(stop) = self.stop.take() {
                             let _ = stop.send(0);
                         };
-                        return Ok(Async::Ready(()));
+                        return Poll::Ready(());
                     }
                     ArbiterCommand::Execute(fut) => {
                         spawn(fut);
@@ -315,7 +331,7 @@ impl Future for ArbiterController {
                         f.call_box();
                     }
                 },
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
@@ -346,14 +362,13 @@ impl SystemArbiter {
 }
 
 impl Future for SystemArbiter {
-    type Item = ();
-    type Error = ();
+    type Output = ();
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            match self.commands.poll() {
-                Ok(Async::Ready(None)) | Err(_) => return Ok(Async::Ready(())),
-                Ok(Async::Ready(Some(cmd))) => match cmd {
+            match Pin::new(&mut self.commands).poll_next(cx) {
+                Poll::Ready(None) => return Poll::Ready(()),
+                Poll::Ready(Some(cmd)) => match cmd {
                     SystemCommand::Exit(code) => {
                         // stop arbiters
                         for arb in self.arbiters.values() {
@@ -371,7 +386,7 @@ impl Future for SystemArbiter {
                         self.arbiters.remove(&name);
                     }
                 },
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
