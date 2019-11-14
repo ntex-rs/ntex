@@ -6,6 +6,10 @@
 
 * Fix arbiter's thread panic message.
 
+### Added
+
+* Allow to join arbiter's thread. #60
+
 
 ## [0.2.5] - 2019-09-02
 
