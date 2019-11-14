@@ -1,6 +1,6 @@
 # Changes
 
-## [0.2.6] - Unreleased
+## [0.2.6] - 2019-11-14
 
 ### Fixed
 
