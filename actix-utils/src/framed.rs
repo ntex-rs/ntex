@@ -221,7 +221,7 @@ where
         }
         TransportState::Error(err) => {
             let is_empty = framed.is_write_buf_empty();
-            if is_empty || (poll_write(cx, state, framed, rx, inner) || is_empty) {
+            if is_empty || poll_write(cx, state, framed, rx, inner) {
                 Poll::Ready(Err(err))
             } else {
                 *state = TransportState::Error(err);

@@ -135,7 +135,7 @@ impl<T> Sender<T> {
     /// non-futures related thread, though, which would otherwise panic if
     /// `poll_cancel` were called.
     pub fn is_canceled(&self) -> bool {
-        !self.inner.upgrade().is_some()
+        self.inner.upgrade().is_none()
     }
 }
 
@@ -166,7 +166,7 @@ impl<T> Receiver<T> {
 
                 self.state = State::Closed(value);
             }
-            State::Closed(_) => return,
+            State::Closed(_) => {}
         };
     }
 }
@@ -180,7 +180,7 @@ impl<T> Future for Receiver<T> {
         let inner = match this.state {
             State::Open(ref mut inner) => inner,
             State::Closed(ref mut item) => match item.take() {
-                Some(item) => return Poll::Ready(Ok(item.into())),
+                Some(item) => return Poll::Ready(Ok(item)),
                 None => return Poll::Ready(Err(Canceled)),
             },
         };

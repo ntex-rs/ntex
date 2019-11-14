@@ -87,7 +87,7 @@ where
                             let _ = f.await;
                             drop(guard);
                         }
-                            .boxed_local(),
+                        .boxed_local(),
                     );
                     ok(())
                 } else {

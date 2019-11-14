@@ -125,8 +125,7 @@ impl Runtime {
     {
         self.enter(|executor| {
             // Run the provided future
-            let ret = executor.block_on(f);
-            ret
+            executor.block_on(f)
         })
     }
 

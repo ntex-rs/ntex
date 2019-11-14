@@ -229,12 +229,12 @@ impl SystemRunner {
     where
         F: Future<Output = O>,
     {
-        let _ = self.rt.block_on(async {
+        self.rt.block_on(async {
             Arbiter::run_system();
         });
 
         let res = self.rt.block_on(fut);
-        let _ = self.rt.block_on(async {
+        self.rt.block_on(async {
             Arbiter::stop_system();
         });
 

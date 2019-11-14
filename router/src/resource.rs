@@ -89,9 +89,9 @@ impl ResourceDef {
                 .collect();
             PatternType::Dynamic(re, names, len)
         } else if for_prefix {
-            PatternType::Prefix(pattern.clone())
+            PatternType::Prefix(pattern)
         } else {
-            PatternType::Static(pattern.clone())
+            PatternType::Static(pattern)
         };
 
         ResourceDef {
@@ -99,7 +99,7 @@ impl ResourceDef {
             elements,
             id: 0,
             name: String::new(),
-            pattern: path.to_owned(),
+            pattern: path,
         }
     }
 
@@ -234,7 +234,8 @@ impl ResourceDef {
                 } else {
                     return false;
                 };
-                path.skip(min(rpath.len(), len) as u16);
+                let rpath_len = rpath.len();
+                path.skip(min(rpath_len, len) as u16);
                 true
             }
         }

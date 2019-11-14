@@ -133,8 +133,7 @@ impl<T> Receiver<T> {
         let items = match self.state {
             State::Open(ref state) => {
                 let mut state = state.borrow_mut();
-                let items = mem::replace(&mut state.buffer, VecDeque::new());
-                items
+                mem::replace(&mut state.buffer, VecDeque::new())
             }
             State::Closed(_) => return,
         };

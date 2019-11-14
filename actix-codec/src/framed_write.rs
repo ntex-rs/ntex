@@ -236,9 +236,9 @@ where
     fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let len = self.buffer.len();
         if len >= self.high_watermark {
-            return Poll::Pending;
+            Poll::Pending
         } else {
-            return Poll::Ready(Ok(()));
+            Poll::Ready(Ok(()))
         }
     }
 

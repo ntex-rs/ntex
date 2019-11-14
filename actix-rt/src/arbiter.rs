@@ -120,7 +120,7 @@ impl Arbiter {
                 // register arbiter
                 let _ = System::current()
                     .sys()
-                    .unbounded_send(SystemCommand::RegisterArbiter(id, arb.clone()));
+                    .unbounded_send(SystemCommand::RegisterArbiter(id, arb));
 
                 // run loop
                 let _ = match rt.block_on(stop_rx) {
