@@ -1,15 +1,14 @@
 //! Thread pool for blocking operations
 
-use std::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use derive_more::Display;
 use futures::channel::oneshot;
 use parking_lot::Mutex;
 use threadpool::ThreadPool;
+
+pub use futures::channel::oneshot::Canceled;
 
 /// Env variable for default cpu pool size.
 const ENV_CPU_POOL_VAR: &str = "ACTIX_THREADPOOL";
@@ -40,11 +39,6 @@ thread_local! {
     };
 }
 
-/// Error of blocking operation execution being cancelled.
-#[derive(Clone, Copy, Debug, Display)]
-#[display(fmt = "Thread pool is gone")]
-pub struct Cancelled;
-
 /// Execute blocking function on a thread pool, returns future that resolves
 /// to result of the function execution.
 pub fn run<F, I>(f: F) -> CpuFuture<I>
@@ -71,11 +65,11 @@ pub struct CpuFuture<I> {
 }
 
 impl<I> Future for CpuFuture<I> {
-    type Output = Result<I, Cancelled>;
+    type Output = Result<I, Canceled>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let rx = Pin::new(&mut Pin::get_mut(self).rx);
         let res = futures::ready!(rx.poll(cx));
-        Poll::Ready(res.map_err(|_| Cancelled))
+        Poll::Ready(res.map_err(|_| Canceled))
     }
 }

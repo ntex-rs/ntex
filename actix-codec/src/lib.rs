@@ -21,5 +21,4 @@ pub use self::framed_read::FramedRead;
 pub use self::framed_write::FramedWrite;
 
 pub use tokio_codec::{Decoder, Encoder};
-// TODO: Migrate to futures asyncRead
 pub use tokio_io::{AsyncRead, AsyncWrite};

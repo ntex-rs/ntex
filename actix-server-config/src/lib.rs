@@ -5,8 +5,8 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::{fmt, io, net, ops, time};
 
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpStream;
+use tokio_io::{AsyncRead, AsyncWrite};
+use tokio_net::tcp::TcpStream;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -61,6 +61,8 @@ pub struct Io<T, P = ()> {
     proto: Protocol,
     params: P,
 }
+
+impl<T: Unpin> Unpin for Io<T> {}
 
 impl<T> Io<T, ()> {
     pub fn new(io: T) -> Self {
@@ -141,7 +143,7 @@ impl<T: fmt::Debug, P> fmt::Debug for Io<T, P> {
 }
 
 /// Low-level io stream operations
-pub trait IoStream: AsyncRead + AsyncWrite {
+pub trait IoStream: AsyncRead + AsyncWrite + Unpin {
     /// Returns the socket address of the remote peer of this TCP connection.
     fn peer_addr(&self) -> Option<SocketAddr> {
         None
@@ -224,7 +226,7 @@ impl<T: IoStream + Unpin> IoStream for tokio_rustls::server::TlsStream<T> {
 }
 
 #[cfg(unix)]
-impl IoStream for tokio::net::UnixStream {
+impl IoStream for tokio_net::uds::UnixStream {
     #[inline]
     fn peer_addr(&self) -> Option<net::SocketAddr> {
         None

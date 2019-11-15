@@ -61,14 +61,6 @@ where
             inner: framed_read2(framed_write2(Fuse(inner, codec), lw, hw)),
         }
     }
-
-    /// Force send item
-    pub fn force_send(
-        &mut self,
-        item: <U as Encoder>::Item,
-    ) -> Result<(), <U as Encoder>::Error> {
-        self.inner.get_mut().force_send(item)
-    }
 }
 
 impl<T, U> Framed<T, U> {
@@ -224,6 +216,18 @@ impl<T, U> Framed<T, U> {
 }
 
 impl<T, U> Framed<T, U> {
+    /// Force send item
+    pub fn force_send(
+        &mut self,
+        item: <U as Encoder>::Item,
+    ) -> Result<(), <U as Encoder>::Error>
+    where
+        T: AsyncWrite + Unpin,
+        U: Encoder + Unpin,
+    {
+        self.inner.get_mut().force_send(item)
+    }
+
     pub fn next_item(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<U::Item, U::Error>>>
     where
         T: AsyncRead + Unpin,
