@@ -36,13 +36,7 @@ where
     T: Address + Unpin + 'static,
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug + 'static,
 {
-    pub fn service(
-        connector: SslConnector,
-    ) -> impl Service<
-        Request = Connection<T, U>,
-        Response = Connection<T, SslStream<U>>,
-        Error = io::Error,
-    > {
+    pub fn service(connector: SslConnector) -> OpensslConnectorService<T, U> {
         OpensslConnectorService {
             connector: connector,
             _t: PhantomData,
@@ -59,8 +53,9 @@ impl<T, U> Clone for OpensslConnector<T, U> {
     }
 }
 
-impl<T: Address + Unpin + 'static, U> ServiceFactory for OpensslConnector<T, U>
+impl<T, U> ServiceFactory for OpensslConnector<T, U>
 where
+    T: Address + 'static,
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug + 'static,
 {
     type Request = Connection<T, U>;
@@ -93,8 +88,9 @@ impl<T, U> Clone for OpensslConnectorService<T, U> {
     }
 }
 
-impl<T: Address + Unpin + 'static, U> Service for OpensslConnectorService<T, U>
+impl<T, U> Service for OpensslConnectorService<T, U>
 where
+    T: Address + 'static,
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug + 'static,
 {
     type Request = Connection<T, U>;
@@ -129,7 +125,7 @@ pub struct ConnectAsyncExt<T, U> {
     _t: PhantomData<U>,
 }
 
-impl<T: Address + Unpin, U> Future for ConnectAsyncExt<T, U>
+impl<T: Address, U> Future for ConnectAsyncExt<T, U>
 where
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug + 'static,
 {
@@ -196,7 +192,7 @@ impl<T> Clone for OpensslConnectServiceFactory<T> {
     }
 }
 
-impl<T: Address + Unpin + 'static> ServiceFactory for OpensslConnectServiceFactory<T> {
+impl<T: Address + 'static> ServiceFactory for OpensslConnectServiceFactory<T> {
     type Request = Connect<T>;
     type Response = SslStream<TcpStream>;
     type Error = ConnectError;
@@ -216,7 +212,7 @@ pub struct OpensslConnectService<T> {
     openssl: OpensslConnectorService<T, TcpStream>,
 }
 
-impl<T: Address + Unpin + 'static> Service for OpensslConnectService<T> {
+impl<T: Address + 'static> Service for OpensslConnectService<T> {
     type Request = Connect<T>;
     type Response = SslStream<TcpStream>;
     type Error = ConnectError;
@@ -235,13 +231,13 @@ impl<T: Address + Unpin + 'static> Service for OpensslConnectService<T> {
     }
 }
 
-pub struct OpensslConnectServiceResponse<T: Address + Unpin + 'static> {
+pub struct OpensslConnectServiceResponse<T: Address + 'static> {
     fut1: Option<<ConnectService<T> as Service>::Future>,
     fut2: Option<<OpensslConnectorService<T, TcpStream> as Service>::Future>,
     openssl: OpensslConnectorService<T, TcpStream>,
 }
 
-impl<T: Address + Unpin> Future for OpensslConnectServiceResponse<T> {
+impl<T: Address> Future for OpensslConnectServiceResponse<T> {
     type Output = Result<SslStream<TcpStream>, ConnectError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {

@@ -33,13 +33,7 @@ where
     T: Address + Unpin,
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
 {
-    pub fn service(
-        connector: Arc<ClientConfig>,
-    ) -> impl Service<
-        Request = Connection<T, U>,
-        Response = Connection<T, TlsStream<U>>,
-        Error = std::io::Error,
-    > {
+    pub fn service(connector: Arc<ClientConfig>) -> RustlsConnectorService<T, U> {
         RustlsConnectorService {
             connector: connector,
             _t: PhantomData,
@@ -79,6 +73,15 @@ where
 pub struct RustlsConnectorService<T, U> {
     connector: Arc<ClientConfig>,
     _t: PhantomData<(T, U)>,
+}
+
+impl<T, U> Clone for RustlsConnectorService<T, U> {
+    fn clone(&self) -> Self {
+        Self {
+            connector: self.connector.clone(),
+            _t: PhantomData,
+        }
+    }
 }
 
 impl<T: Address + Unpin, U> Service for RustlsConnectorService<T, U>
