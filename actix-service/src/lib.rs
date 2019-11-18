@@ -73,7 +73,6 @@ pub trait Service {
     fn map<F, R>(self, f: F) -> crate::dev::Map<Self, F, R>
     where
         Self: Sized,
-        Self::Future: Unpin,
         F: FnMut(Self::Response) -> R + Unpin,
     {
         crate::dev::Map::new(self, f)
@@ -90,7 +89,6 @@ pub trait Service {
     fn map_err<F, E>(self, f: F) -> crate::dev::MapErr<Self, F, E>
     where
         Self: Sized,
-        Self::Future: Unpin,
         F: Fn(Self::Error) -> E,
     {
         crate::dev::MapErr::new(self, f)
@@ -140,7 +138,6 @@ pub trait ServiceFactory {
     fn map<F, R>(self, f: F) -> crate::map::MapServiceFactory<Self, F, R>
     where
         Self: Sized,
-        <Self::Service as Service>::Future: Unpin,
         F: FnMut(Self::Response) -> R + Unpin + Clone,
     {
         crate::map::MapServiceFactory::new(self, f)
@@ -150,7 +147,6 @@ pub trait ServiceFactory {
     fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrServiceFactory<Self, F, E>
     where
         Self: Sized,
-        <Self::Service as Service>::Future: Unpin,
         F: Fn(Self::Error) -> E + Unpin + Clone,
     {
         crate::map_err::MapErrServiceFactory::new(self, f)
@@ -160,7 +156,6 @@ pub trait ServiceFactory {
     fn map_init_err<F, E>(self, f: F) -> crate::map_init_err::MapInitErr<Self, F, E>
     where
         Self: Sized,
-        <Self::Service as Service>::Future: Unpin,
         F: Fn(Self::InitError) -> E + Unpin + Clone,
     {
         crate::map_init_err::MapInitErr::new(self, f)
@@ -299,6 +294,7 @@ pub mod dev {
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
     pub use crate::map::{Map, MapServiceFactory};
+    pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrServiceFactory};
     pub use crate::map_init_err::MapInitErr;
     pub use crate::then::{ThenService, ThenServiceFactory};

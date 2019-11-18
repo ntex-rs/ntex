@@ -8,7 +8,6 @@ use std::task::{Context, Poll};
 
 use actix_service::{Service, ServiceFactory};
 use futures::future::{err, ok, BoxFuture, Either, FutureExt, Ready};
-use pin_project::pin_project;
 use tokio_net::tcp::TcpStream;
 
 use super::connect::{Address, Connect, Connection};
@@ -94,7 +93,6 @@ impl<T: Address> Service for TcpConnector<T> {
     }
 }
 
-#[pin_project]
 #[doc(hidden)]
 /// Tcp stream connector response future
 pub struct TcpConnectorResponse<T> {
@@ -137,7 +135,7 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
     type Output = Result<Connection<T, TcpStream>, ConnectError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let this = self.project();
+        let this = self.get_mut();
 
         // connect
         loop {
@@ -167,7 +165,7 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
 
             // try to connect
             let addr = this.addrs.as_mut().unwrap().pop_front().unwrap();
-            *this.stream = Some(TcpStream::connect(addr).boxed());
+            this.stream = Some(TcpStream::connect(addr).boxed());
         }
     }
 }

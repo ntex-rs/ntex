@@ -43,7 +43,7 @@ impl<T: Service> Pipeline<T> {
     where
         Self: Sized,
         F: IntoService<U>,
-        U: Service<Request = T::Response, Error = T::Error> + Unpin,
+        U: Service<Request = T::Response, Error = T::Error>,
     {
         Pipeline {
             service: AndThenService::new(self.service, service.into_service()),

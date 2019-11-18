@@ -8,16 +8,7 @@ pub enum MappedConfig<'a, T> {
 }
 
 /// Adapt external config to a config for provided new service
-pub fn map_config<T, F, C>(
-    factory: T,
-    f: F,
-) -> impl ServiceFactory<
-    Config = C,
-    Request = T::Request,
-    Response = T::Response,
-    Error = T::Error,
-    InitError = T::InitError,
->
+pub fn map_config<T, F, C>(factory: T, f: F) -> MapConfig<T, F, C>
 where
     T: ServiceFactory,
     F: Fn(&C) -> MappedConfig<T::Config>,
@@ -26,23 +17,15 @@ where
 }
 
 /// Replace config with unit
-pub fn unit_config<T, C>(
-    new_service: T,
-) -> impl ServiceFactory<
-    Config = C,
-    Request = T::Request,
-    Response = T::Response,
-    Error = T::Error,
-    InitError = T::InitError,
->
+pub fn unit_config<T, C>(new_service: T) -> UnitConfig<T, C>
 where
     T: ServiceFactory<Config = ()>,
 {
     UnitConfig::new(new_service)
 }
 
-/// `MapInitErr` service combinator
-pub(crate) struct MapConfig<A, F, C> {
+/// `.map_config()` service combinator
+pub struct MapConfig<A, F, C> {
     a: A,
     f: F,
     e: PhantomData<C>,
@@ -50,7 +33,7 @@ pub(crate) struct MapConfig<A, F, C> {
 
 impl<A, F, C> MapConfig<A, F, C> {
     /// Create new `MapConfig` combinator
-    pub fn new(a: A, f: F) -> Self
+    pub(crate) fn new(a: A, f: F) -> Self
     where
         A: ServiceFactory,
         F: Fn(&C) -> MappedConfig<A::Config>,
@@ -99,8 +82,8 @@ where
     }
 }
 
-/// `MapInitErr` service combinator
-pub(crate) struct UnitConfig<A, C> {
+/// `unit_config()` config combinator
+pub struct UnitConfig<A, C> {
     a: A,
     e: PhantomData<C>,
 }

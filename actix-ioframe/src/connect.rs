@@ -5,7 +5,6 @@ use std::task::{Context, Poll};
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use actix_utils::mpsc;
 use futures::Stream;
-use pin_project::pin_project;
 
 use crate::dispatcher::FramedMessage;
 use crate::sink::Sink;
@@ -42,10 +41,8 @@ where
     }
 }
 
-#[pin_project]
 pub struct ConnectResult<Io, St, Codec: Encoder + Decoder> {
     pub(crate) state: St,
-    #[pin]
     pub(crate) framed: Framed<Io, Codec>,
     pub(crate) rx: mpsc::Receiver<FramedMessage<<Codec as Encoder>::Item>>,
     pub(crate) sink: Sink<<Codec as Encoder>::Item>,
@@ -78,6 +75,13 @@ impl<Io, St, Codec: Encoder + Decoder> ConnectResult<Io, St, Codec> {
     }
 }
 
+impl<Io, St, Codec> Unpin for ConnectResult<Io, St, Codec>
+where
+    Io: AsyncRead + AsyncWrite + Unpin,
+    Codec: Encoder + Decoder + Unpin,
+{
+}
+
 impl<Io, St, Codec> Stream for ConnectResult<Io, St, Codec>
 where
     Io: AsyncRead + AsyncWrite + Unpin,
@@ -86,7 +90,7 @@ where
     type Item = Result<<Codec as Decoder>::Item, <Codec as Decoder>::Error>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        self.project().framed.poll_next(cx)
+        self.get_mut().framed.next_item(cx)
     }
 }
 
@@ -98,21 +102,21 @@ where
     type Error = <Codec as Encoder>::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().framed.poll_ready(cx)
+        self.get_mut().framed.is_ready(cx)
     }
 
     fn start_send(
         self: Pin<&mut Self>,
         item: <Codec as Encoder>::Item,
     ) -> Result<(), Self::Error> {
-        self.project().framed.start_send(item)
+        self.get_mut().framed.write(item)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().framed.poll_flush(cx)
+        self.get_mut().framed.flush(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().framed.poll_close(cx)
+        self.get_mut().framed.close(cx)
     }
 }

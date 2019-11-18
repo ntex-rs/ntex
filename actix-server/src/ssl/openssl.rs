@@ -6,7 +6,6 @@ use std::task::{Context, Poll};
 use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 use open_ssl::ssl::SslAcceptor;
-use pin_project::pin_project;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::{HandshakeError, SslStream};
 
@@ -41,7 +40,9 @@ impl<T: AsyncRead + AsyncWrite, P> Clone for OpensslAcceptor<T, P> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + 'static, P> ServiceFactory for OpensslAcceptor<T, P> {
+impl<T: AsyncRead + AsyncWrite + Unpin + 'static, P: Unpin> ServiceFactory
+    for OpensslAcceptor<T, P>
+{
     type Request = Io<T, P>;
     type Response = Io<SslStream<T>, P>;
     type Error = HandshakeError<T>;
@@ -69,7 +70,9 @@ pub struct OpensslAcceptorService<T, P> {
     io: PhantomData<(T, P)>,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + 'static, P> Service for OpensslAcceptorService<T, P> {
+impl<T: AsyncRead + AsyncWrite + Unpin + 'static, P: Unpin> Service
+    for OpensslAcceptorService<T, P>
+{
     type Request = Io<T, P>;
     type Response = Io<SslStream<T>, P>;
     type Error = HandshakeError<T>;
@@ -98,24 +101,23 @@ impl<T: AsyncRead + AsyncWrite + Unpin + 'static, P> Service for OpensslAcceptor
     }
 }
 
-#[pin_project]
 pub struct OpensslAcceptorServiceFut<T, P>
 where
+    P: Unpin,
     T: AsyncRead + AsyncWrite,
 {
-    #[pin]
     fut: LocalBoxFuture<'static, Result<SslStream<T>, HandshakeError<T>>>,
     params: Option<P>,
     _guard: CounterGuard,
 }
 
-impl<T: AsyncRead + AsyncWrite, P> Future for OpensslAcceptorServiceFut<T, P> {
+impl<T: AsyncRead + AsyncWrite, P: Unpin> Future for OpensslAcceptorServiceFut<T, P> {
     type Output = Result<Io<SslStream<T>, P>, HandshakeError<T>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
+        let this = self.get_mut();
 
-        let io = futures::ready!(this.fut.poll(cx))?;
+        let io = futures::ready!(Pin::new(&mut this.fut).poll(cx))?;
         let proto = if let Some(protos) = io.ssl().selected_alpn_protocol() {
             const H2: &[u8] = b"\x02h2";
             const HTTP10: &[u8] = b"\x08http/1.0";

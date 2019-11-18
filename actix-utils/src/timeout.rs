@@ -10,7 +10,6 @@ use std::{fmt, time};
 
 use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, Ready};
-use pin_project::pin_project;
 use tokio_timer::{clock, delay, Delay};
 
 /// Applies a timeout to requests.
@@ -85,6 +84,7 @@ impl<E> Clone for Timeout<E> {
 impl<S, E> Transform<S> for Timeout<E>
 where
     S: Service,
+    S::Future: Unpin,
 {
     type Request = S::Request;
     type Response = S::Response;
@@ -126,6 +126,7 @@ where
 impl<S> Service for TimeoutService<S>
 where
     S: Service,
+    S::Future: Unpin,
 {
     type Request = S::Request;
     type Response = S::Response;
@@ -145,10 +146,8 @@ where
 }
 
 /// `TimeoutService` response future
-#[pin_project]
 #[derive(Debug)]
 pub struct TimeoutServiceResponse<T: Service> {
-    #[pin]
     fut: T::Future,
     sleep: Delay,
 }
@@ -156,14 +155,15 @@ pub struct TimeoutServiceResponse<T: Service> {
 impl<T> Future for TimeoutServiceResponse<T>
 where
     T: Service,
+    T::Future: Unpin,
 {
     type Output = Result<T::Response, TimeoutError<T::Error>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
+        let this = self.get_mut();
 
         // First, try polling the future
-        match this.fut.poll(cx) {
+        match Pin::new(&mut this.fut).poll(cx) {
             Poll::Ready(Ok(v)) => return Poll::Ready(Ok(v)),
             Poll::Ready(Err(e)) => return Poll::Ready(Err(TimeoutError::Service(e))),
             Poll::Pending => {}

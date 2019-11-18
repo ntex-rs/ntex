@@ -6,7 +6,6 @@ use std::task::{Context, Poll};
 
 use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, Either, Ready};
-use pin_project::pin_project;
 use trust_dns_resolver::lookup_ip::LookupIpFuture;
 use trust_dns_resolver::{AsyncResolver, Background};
 
@@ -129,12 +128,10 @@ impl<T: Address> Service for Resolver<T> {
     }
 }
 
-#[pin_project]
 #[doc(hidden)]
 /// Resolver future
 pub struct ResolverFuture<T: Address> {
     req: Option<Connect<T>>,
-    #[pin]
     lookup: Background<LookupIpFuture>,
 }
 
@@ -157,9 +154,9 @@ impl<T: Address> Future for ResolverFuture<T> {
     type Output = Result<Connect<T>, ConnectError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let this = self.project();
+        let this = self.get_mut();
 
-        match this.lookup.poll(cx) {
+        match Pin::new(&mut this.lookup).poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(ips)) => {
                 let req = this.req.take().unwrap();

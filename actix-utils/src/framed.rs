@@ -10,7 +10,6 @@ use actix_service::{IntoService, Service};
 use futures::future::{ready, FutureExt};
 use futures::{Future, Sink, Stream};
 use log::debug;
-use pin_project::pin_project;
 
 use crate::cell::Cell;
 use crate::mpsc;
@@ -78,7 +77,6 @@ type Inner<S: Service, U> = Cell<FramedTransportInner<<U as Encoder>::Item, S::E
 
 /// FramedTransport - is a future that reads frames from Framed object
 /// and pass then to the service.
-#[pin_project]
 pub struct FramedTransport<S, T, U>
 where
     S: Service<Request = Request<U>, Response = Response<U>>,
@@ -111,7 +109,7 @@ struct FramedTransportInner<I, E> {
 
 impl<S, T, U> FramedTransport<S, T, U>
 where
-    S: Service<Request = Request<U>, Response = Response<U>>,
+    S: Service<Request = Request<U>, Response = Response<U>> + Unpin,
     S::Error: 'static,
     S::Future: 'static,
     T: AsyncRead + AsyncWrite + Unpin,
@@ -167,27 +165,28 @@ where
 
 impl<S, T, U> Future for FramedTransport<S, T, U>
 where
-    S: Service<Request = Request<U>, Response = Response<U>>,
-    S::Error: 'static,
+    S: Service<Request = Request<U>, Response = Response<U>> + Unpin,
+    S::Error: Unpin + 'static,
     S::Future: 'static,
     T: AsyncRead + AsyncWrite + Unpin,
     U: Decoder + Encoder + Unpin,
     <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
+    <U as Encoder>::Error: Unpin + std::fmt::Debug,
+    <U as Decoder>::Error: Unpin + std::fmt::Debug,
 {
     type Output = Result<(), FramedTransportError<S::Error, U>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.inner.get_ref().task.register(cx.waker());
 
-        let this = self.project();
+        let this = self.get_mut();
         poll(
             cx,
-            this.service,
-            this.state,
-            this.framed,
-            this.rx,
-            this.inner,
+            &mut this.service,
+            &mut this.state,
+            &mut this.framed,
+            &mut this.rx,
+            &mut this.inner,
         )
     }
 }

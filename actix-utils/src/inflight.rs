@@ -5,7 +5,6 @@ use std::task::{Context, Poll};
 
 use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, Ready};
-use pin_project::pin_project;
 
 use super::counter::{Counter, CounterGuard};
 
@@ -29,7 +28,11 @@ impl Default for InFlight {
     }
 }
 
-impl<S: Service> Transform<S> for InFlight {
+impl<S> Transform<S> for InFlight
+where
+    S: Service,
+    S::Future: Unpin,
+{
     type Request = S::Request;
     type Response = S::Response;
     type Error = S::Error;
@@ -65,6 +68,7 @@ where
 impl<T> Service for InFlightService<T>
 where
     T: Service,
+    T::Future: Unpin,
 {
     type Request = T::Request;
     type Response = T::Response;
@@ -90,19 +94,20 @@ where
     }
 }
 
-#[pin_project]
 #[doc(hidden)]
 pub struct InFlightServiceResponse<T: Service> {
-    #[pin]
     fut: T::Future,
     _guard: CounterGuard,
 }
 
-impl<T: Service> Future for InFlightServiceResponse<T> {
+impl<T: Service> Future for InFlightServiceResponse<T>
+where
+    T::Future: Unpin,
+{
     type Output = Result<T::Response, T::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.project().fut.poll(cx)
+        Pin::new(&mut self.get_mut().fut).poll(cx)
     }
 }
 

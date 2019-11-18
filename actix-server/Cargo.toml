@@ -33,7 +33,6 @@ actix-server-config = "0.3.0-alpha.1"
 
 log = "0.4"
 num_cpus = "1.0"
-pin-project = "0.4.5"
 mio = "0.6.19"
 net2 = "0.2"
 futures = "0.3.1"

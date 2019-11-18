@@ -1,6 +1,5 @@
 //! Framed dispatcher service and related utilities
 use std::collections::VecDeque;
-use std::future::Future;
 use std::mem;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -31,7 +30,6 @@ pub(crate) enum FramedMessage<T> {
 
 /// FramedTransport - is a future that reads frames from Framed object
 /// and pass then to the service.
-#[pin_project::pin_project]
 pub(crate) struct FramedDispatcher<St, S, T, U>
 where
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
@@ -123,32 +121,45 @@ struct FramedDispatcherInner<I, E> {
     task: LocalWaker,
 }
 
-impl<St, S, T, U> Future for FramedDispatcher<St, S, T, U>
+impl<St, S, T, U> Unpin for FramedDispatcher<St, S, T, U>
 where
-    S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
-    S::Error: 'static,
-    S::Future: 'static,
+    S: Service<Request = Request<St, U>, Response = Option<Response<U>>> + Unpin,
+    S::Error: Unpin + 'static,
+    S::Future: Unpin + 'static,
     T: AsyncRead + AsyncWrite + Unpin,
     U: Decoder + Encoder + Unpin,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
-    type Output = Result<(), ServiceError<S::Error, U>>;
+}
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        unsafe { self.inner.get_ref().task.register(cx.waker()) };
+impl<St, S, T, U> FramedDispatcher<St, S, T, U>
+where
+    S: Service<Request = Request<St, U>, Response = Option<Response<U>>> + Unpin,
+    S::Error: 'static,
+    S::Future: Unpin + 'static,
+    T: AsyncRead + AsyncWrite + Unpin,
+    U: Decoder + Encoder + Unpin,
+    <U as Encoder>::Item: 'static,
+    <U as Encoder>::Error: std::fmt::Debug,
+{
+    pub(crate) fn poll(
+        &mut self,
+        cx: &mut Context,
+    ) -> Poll<Result<(), ServiceError<S::Error, U>>> {
+        let this = self;
+        unsafe { this.inner.get_ref().task.register(cx.waker()) };
 
-        let this = self.project();
         poll(
             cx,
-            this.service,
-            this.state,
-            this.sink,
-            this.framed,
-            this.dispatch_state,
-            this.rx,
-            this.inner,
-            this.disconnect,
+            &mut this.service,
+            &mut this.state,
+            &mut this.sink,
+            &mut this.framed,
+            &mut this.dispatch_state,
+            &mut this.rx,
+            &mut this.inner,
+            &mut this.disconnect,
         )
     }
 }

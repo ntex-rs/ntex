@@ -225,6 +225,15 @@ impl<T, U> Framed<T, U> {
         self.inner.get_mut().force_send(item)
     }
 
+    pub fn is_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), U::Error>>
+    where
+        T: AsyncWrite + Unpin,
+        U: Encoder + Unpin,
+        U::Error: From<io::Error>,
+    {
+        Pin::new(&mut self.inner.get_mut()).poll_ready(cx)
+    }
+
     pub fn next_item(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<U::Item, U::Error>>>
     where
         T: AsyncRead + Unpin,
@@ -239,6 +248,14 @@ impl<T, U> Framed<T, U> {
         U: Encoder + Unpin,
     {
         Pin::new(self.inner.get_mut()).poll_flush(cx)
+    }
+
+    pub fn close(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), U::Error>>
+    where
+        T: AsyncWrite + Unpin,
+        U: Encoder + Unpin,
+    {
+        Pin::new(&mut self.inner.get_mut()).poll_close(cx)
     }
 }
 

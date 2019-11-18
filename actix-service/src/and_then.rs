@@ -154,10 +154,8 @@ where
         InitError = A::InitError,
     >,
     A::Future: Unpin,
-    A::Service: Unpin,
     <A::Service as Service>::Future: Unpin,
     B::Future: Unpin,
-    B::Service: Unpin,
     <B::Service as Service>::Future: Unpin,
 {
     type Request = A::Request;
@@ -204,10 +202,8 @@ where
     A: ServiceFactory,
     B: ServiceFactory<Request = A::Response>,
     A::Future: Unpin,
-    A::Service: Unpin,
     <A::Service as Service>::Future: Unpin,
     B::Future: Unpin,
-    B::Service: Unpin,
     <B::Service as Service>::Future: Unpin,
 {
     fn new(fut_a: A::Future, fut_b: B::Future) -> Self {
@@ -220,15 +216,24 @@ where
     }
 }
 
+impl<A, B> Unpin for AndThenServiceFactoryResponse<A, B>
+where
+    A: ServiceFactory,
+    B: ServiceFactory<Request = A::Response, Error = A::Error, InitError = A::InitError>,
+    A::Future: Unpin,
+    <A::Service as Service>::Future: Unpin,
+    B::Future: Unpin,
+    <B::Service as Service>::Future: Unpin,
+{
+}
+
 impl<A, B> Future for AndThenServiceFactoryResponse<A, B>
 where
     A: ServiceFactory,
     B: ServiceFactory<Request = A::Response, Error = A::Error, InitError = A::InitError>,
     A::Future: Unpin,
-    A::Service: Unpin,
     <A::Service as Service>::Future: Unpin,
     B::Future: Unpin,
-    B::Service: Unpin,
     <B::Service as Service>::Future: Unpin,
 {
     type Output = Result<AndThenService<A::Service, B::Service>, A::InitError>;

@@ -23,7 +23,8 @@ pub fn apply_fn_factory<T, F, R, In, Out, Err, U>(
 ) -> ApplyServiceFactory<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R + Clone,
+    T::Future: Unpin,
+    F: FnMut(In, &mut T::Service) -> R + Unpin + Clone,
     R: Future<Output = Result<Out, Err>>,
     U: IntoServiceFactory<T>,
 {
