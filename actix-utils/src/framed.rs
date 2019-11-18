@@ -325,7 +325,7 @@ where
             if !buf_empty {
                 match inner.buf.pop_front().unwrap() {
                     Ok(msg) => {
-                        if let Err(err) = framed.force_send(msg) {
+                        if let Err(err) = framed.write(msg) {
                             *state =
                                 TransportState::FramedError(FramedTransportError::Encoder(err));
                             return true;
@@ -342,7 +342,7 @@ where
             if !rx_done && rx.is_some() {
                 match Pin::new(rx.as_mut().unwrap()).poll_next(cx) {
                     Poll::Ready(Some(FramedMessage::Message(msg))) => {
-                        if let Err(err) = framed.force_send(msg) {
+                        if let Err(err) = framed.write(msg) {
                             *state =
                                 TransportState::FramedError(FramedTransportError::Encoder(err));
                             return true;

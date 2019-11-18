@@ -326,7 +326,7 @@ impl ServerBuilder {
             async move {
                 Worker::start(rx1, rx2, services, avail, timeout);
             }
-            .boxed(),
+                .boxed(),
         );
 
         worker
@@ -401,7 +401,7 @@ impl ServerBuilder {
                                                 .await;
                                             System::current().stop();
                                         }
-                                        .boxed(),
+                                            .boxed(),
                                     );
                                 }
                                 ready(())

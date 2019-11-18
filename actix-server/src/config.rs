@@ -139,7 +139,7 @@ impl InternalServiceFactory for ConfiguredService {
             }
             return Ok(res);
         }
-        .boxed_local()
+            .boxed_local()
     }
 }
 
@@ -266,6 +266,6 @@ where
                 }
             };
         }
-        .boxed_local()
+            .boxed_local()
     }
 }

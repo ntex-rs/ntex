@@ -20,6 +20,10 @@ pub mod ssl;
 #[cfg(feature = "uri")]
 mod uri;
 
+use actix_rt::Arbiter;
+use actix_service::{pipeline, pipeline_factory, Service, ServiceFactory};
+use tokio_net::tcp::TcpStream;
+
 pub use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 pub use trust_dns_resolver::system_conf::read_system_conf;
 pub use trust_dns_resolver::{error::ResolveError, AsyncResolver};
@@ -29,10 +33,6 @@ pub use self::connector::{TcpConnector, TcpConnectorFactory};
 pub use self::error::ConnectError;
 pub use self::resolver::{Resolver, ResolverFactory};
 pub use self::service::{ConnectService, ConnectServiceFactory, TcpConnectService};
-
-use actix_rt::Arbiter;
-use actix_service::{pipeline, pipeline_factory, Service, ServiceFactory};
-use tokio_net::tcp::TcpStream;
 
 pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver {
     let (resolver, bg) = AsyncResolver::new(cfg, opts);
@@ -70,7 +70,7 @@ pub fn start_default_resolver() -> AsyncResolver {
 pub fn new_connector<T: Address>(
     resolver: AsyncResolver,
 ) -> impl Service<Request = Connect<T>, Response = Connection<T, TcpStream>, Error = ConnectError>
-{
+       + Clone {
     pipeline(Resolver::new(resolver)).and_then(TcpConnector::new())
 }
 
@@ -83,14 +83,14 @@ pub fn new_connector_factory<T: Address>(
     Response = Connection<T, TcpStream>,
     Error = ConnectError,
     InitError = (),
-> {
+> + Clone {
     pipeline_factory(ResolverFactory::new(resolver)).and_then(TcpConnectorFactory::new())
 }
 
 /// Create connector service with default parameters
 pub fn default_connector<T: Address>(
 ) -> impl Service<Request = Connect<T>, Response = Connection<T, TcpStream>, Error = ConnectError>
-{
+       + Clone {
     pipeline(Resolver::default()).and_then(TcpConnector::new())
 }
 
@@ -101,6 +101,6 @@ pub fn default_connector_factory<T: Address>() -> impl ServiceFactory<
     Response = Connection<T, TcpStream>,
     Error = ConnectError,
     InitError = (),
-> {
+> + Clone {
     pipeline_factory(ResolverFactory::default()).and_then(TcpConnectorFactory::new())
 }

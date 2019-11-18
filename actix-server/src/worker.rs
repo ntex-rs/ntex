@@ -187,7 +187,7 @@ impl Worker {
                 }
                 wrk.await
             }
-            .boxed_local(),
+                .boxed_local(),
         );
     }
 

@@ -216,11 +216,8 @@ impl<T, U> Framed<T, U> {
 }
 
 impl<T, U> Framed<T, U> {
-    /// Force send item
-    pub fn force_send(
-        &mut self,
-        item: <U as Encoder>::Item,
-    ) -> Result<(), <U as Encoder>::Error>
+    /// Serialize item and Write to the inner buffer
+    pub fn write(&mut self, item: <U as Encoder>::Item) -> Result<(), <U as Encoder>::Error>
     where
         T: AsyncWrite + Unpin,
         U: Encoder + Unpin,

@@ -445,7 +445,7 @@ impl Accept {
                                 delay(Instant::now() + Duration::from_millis(510)).await;
                                 let _ = r.set_readiness(mio::Ready::readable());
                             }
-                            .boxed(),
+                                .boxed(),
                         );
                         return;
                     }

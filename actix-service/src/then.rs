@@ -2,8 +2,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use pin_project::pin_project;
-
 use super::{Service, ServiceFactory};
 use crate::cell::Cell;
 
@@ -11,43 +9,45 @@ use crate::cell::Cell;
 /// another service.
 ///
 /// This is created by the `ServiceExt::then` method.
-pub(crate) struct Then<A, B> {
+pub struct ThenService<A, B> {
     a: A,
     b: Cell<B>,
 }
 
-impl<A, B> Then<A, B> {
-    /// Create new `Then` combinator
-    pub fn new(a: A, b: B) -> Then<A, B>
+impl<A, B> ThenService<A, B> {
+    /// Create new `.then()` combinator
+    pub(crate) fn new(a: A, b: B) -> ThenService<A, B>
     where
         A: Service,
         B: Service<Request = Result<A::Response, A::Error>, Error = A::Error>,
     {
-        Then { a, b: Cell::new(b) }
+        Self { a, b: Cell::new(b) }
     }
 }
 
-impl<A, B> Clone for Then<A, B>
+impl<A, B> Clone for ThenService<A, B>
 where
     A: Clone,
 {
     fn clone(&self) -> Self {
-        Then {
+        ThenService {
             a: self.a.clone(),
             b: self.b.clone(),
         }
     }
 }
 
-impl<A, B> Service for Then<A, B>
+impl<A, B> Service for ThenService<A, B>
 where
     A: Service,
     B: Service<Request = Result<A::Response, A::Error>, Error = A::Error>,
+    A::Future: Unpin,
+    B::Future: Unpin,
 {
     type Request = A::Request;
     type Response = B::Response;
     type Error = B::Error;
-    type Future = ThenFuture<A, B>;
+    type Future = ThenServiceResponse<A, B>;
 
     fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let not_ready = !self.a.poll_ready(ctx)?.is_ready();
@@ -59,30 +59,29 @@ where
     }
 
     fn call(&mut self, req: A::Request) -> Self::Future {
-        ThenFuture::new(self.a.call(req), self.b.clone())
+        ThenServiceResponse::new(self.a.call(req), self.b.clone())
     }
 }
 
-#[pin_project]
-pub(crate) struct ThenFuture<A, B>
+pub struct ThenServiceResponse<A, B>
 where
     A: Service,
     B: Service<Request = Result<A::Response, A::Error>>,
 {
     b: Cell<B>,
-    #[pin]
     fut_b: Option<B::Future>,
-    #[pin]
     fut_a: Option<A::Future>,
 }
 
-impl<A, B> ThenFuture<A, B>
+impl<A, B> ThenServiceResponse<A, B>
 where
     A: Service,
     B: Service<Request = Result<A::Response, A::Error>>,
+    A::Future: Unpin,
+    B::Future: Unpin,
 {
     fn new(a: A::Future, b: Cell<B>) -> Self {
-        ThenFuture {
+        ThenServiceResponse {
             b,
             fut_a: Some(a),
             fut_b: None,
@@ -90,34 +89,26 @@ where
     }
 }
 
-impl<A, B> Future for ThenFuture<A, B>
+impl<A, B> Future for ThenServiceResponse<A, B>
 where
     A: Service,
     B: Service<Request = Result<A::Response, A::Error>>,
+    A::Future: Unpin,
+    B::Future: Unpin,
 {
     type Output = Result<B::Response, B::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
+        let this = self.get_mut();
 
         loop {
-            let mut fut_a = this.fut_a.as_mut();
-            let mut fut_b = this.fut_b.as_mut();
-
-            if let Some(fut) = fut_b.as_mut().as_pin_mut() {
-                return fut.poll(cx);
+            if let Some(ref mut fut) = this.fut_b {
+                return Pin::new(fut).poll(cx);
             }
 
-            match fut_a
-                .as_mut()
-                .as_pin_mut()
-                .expect("Bug in actix-service")
-                .poll(cx)
-            {
+            match Pin::new(this.fut_a.as_mut().expect("Bug in actix-service")).poll(cx) {
                 Poll::Ready(r) => {
-                    fut_a.set(None);
-                    let new_fut = this.b.get_mut().call(r);
-                    fut_b.set(Some(new_fut));
+                    this.fut_b = Some(this.b.get_mut().call(r));
                 }
 
                 Poll::Pending => return Poll::Pending,
@@ -127,12 +118,12 @@ where
 }
 
 /// `.then()` service factory combinator
-pub(crate) struct ThenNewService<A, B> {
+pub struct ThenServiceFactory<A, B> {
     a: A,
     b: B,
 }
 
-impl<A, B> ThenNewService<A, B>
+impl<A, B> ThenServiceFactory<A, B>
 where
     A: ServiceFactory,
     B: ServiceFactory<
@@ -143,12 +134,12 @@ where
     >,
 {
     /// Create new `AndThen` combinator
-    pub fn new(a: A, b: B) -> Self {
+    pub(crate) fn new(a: A, b: B) -> Self {
         Self { a, b }
     }
 }
 
-impl<A, B> ServiceFactory for ThenNewService<A, B>
+impl<A, B> ServiceFactory for ThenServiceFactory<A, B>
 where
     A: ServiceFactory,
     B: ServiceFactory<
@@ -157,22 +148,28 @@ where
         Error = A::Error,
         InitError = A::InitError,
     >,
+    A::Future: Unpin,
+    A::Service: Unpin,
+    <A::Service as Service>::Future: Unpin,
+    B::Future: Unpin,
+    B::Service: Unpin,
+    <B::Service as Service>::Future: Unpin,
 {
     type Request = A::Request;
     type Response = B::Response;
     type Error = A::Error;
 
     type Config = A::Config;
-    type Service = Then<A::Service, B::Service>;
+    type Service = ThenService<A::Service, B::Service>;
     type InitError = A::InitError;
-    type Future = ThenNewServiceFuture<A, B>;
+    type Future = ThenServiceFactoryResponse<A, B>;
 
     fn new_service(&self, cfg: &A::Config) -> Self::Future {
-        ThenNewServiceFuture::new(self.a.new_service(cfg), self.b.new_service(cfg))
+        ThenServiceFactoryResponse::new(self.a.new_service(cfg), self.b.new_service(cfg))
     }
 }
 
-impl<A, B> Clone for ThenNewService<A, B>
+impl<A, B> Clone for ThenServiceFactory<A, B>
 where
     A: Clone,
     B: Clone,
@@ -185,8 +182,7 @@ where
     }
 }
 
-#[pin_project]
-pub(crate) struct ThenNewServiceFuture<A, B>
+pub struct ThenServiceFactoryResponse<A, B>
 where
     A: ServiceFactory,
     B: ServiceFactory<
@@ -196,15 +192,13 @@ where
         InitError = A::InitError,
     >,
 {
-    #[pin]
     fut_b: B::Future,
-    #[pin]
     fut_a: A::Future,
     a: Option<A::Service>,
     b: Option<B::Service>,
 }
 
-impl<A, B> ThenNewServiceFuture<A, B>
+impl<A, B> ThenServiceFactoryResponse<A, B>
 where
     A: ServiceFactory,
     B: ServiceFactory<
@@ -213,9 +207,15 @@ where
         Error = A::Error,
         InitError = A::InitError,
     >,
+    A::Future: Unpin,
+    A::Service: Unpin,
+    <A::Service as Service>::Future: Unpin,
+    B::Future: Unpin,
+    B::Service: Unpin,
+    <B::Service as Service>::Future: Unpin,
 {
     fn new(fut_a: A::Future, fut_b: B::Future) -> Self {
-        ThenNewServiceFuture {
+        Self {
             fut_a,
             fut_b,
             a: None,
@@ -224,7 +224,7 @@ where
     }
 }
 
-impl<A, B> Future for ThenNewServiceFuture<A, B>
+impl<A, B> Future for ThenServiceFactoryResponse<A, B>
 where
     A: ServiceFactory,
     B: ServiceFactory<
@@ -233,23 +233,30 @@ where
         Error = A::Error,
         InitError = A::InitError,
     >,
+    A::Future: Unpin,
+    A::Service: Unpin,
+    <A::Service as Service>::Future: Unpin,
+    B::Future: Unpin,
+    B::Service: Unpin,
+    <B::Service as Service>::Future: Unpin,
 {
-    type Output = Result<Then<A::Service, B::Service>, A::InitError>;
+    type Output = Result<ThenService<A::Service, B::Service>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
+        let this = self.get_mut();
+
         if this.a.is_none() {
-            if let Poll::Ready(service) = this.fut_a.poll(cx)? {
-                *this.a = Some(service);
+            if let Poll::Ready(service) = Pin::new(&mut this.fut_a).poll(cx)? {
+                this.a = Some(service);
             }
         }
         if this.b.is_none() {
-            if let Poll::Ready(service) = this.fut_b.poll(cx)? {
-                *this.b = Some(service);
+            if let Poll::Ready(service) = Pin::new(&mut this.fut_b).poll(cx)? {
+                this.b = Some(service);
             }
         }
         if this.a.is_some() && this.b.is_some() {
-            Poll::Ready(Ok(Then::new(
+            Poll::Ready(Ok(ThenService::new(
                 this.a.take().unwrap(),
                 this.b.take().unwrap(),
             )))

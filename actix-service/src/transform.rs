@@ -1,13 +1,11 @@
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::transform_err::TransformMapInitErr;
 use crate::{IntoServiceFactory, Service, ServiceFactory};
-
-use pin_project::pin_project;
 
 /// The `Transform` trait defines the interface of a Service factory. `Transform`
 /// is often implemented for middleware, defining how to construct a
@@ -45,7 +43,8 @@ pub trait Transform<S> {
     fn map_init_err<F, E>(self, f: F) -> TransformMapInitErr<Self, S, F, E>
     where
         Self: Sized,
-        F: Fn(Self::InitError) -> E,
+        Self::Future: Unpin,
+        F: Fn(Self::InitError) -> E + Unpin + Clone,
     {
         TransformMapInitErr::new(self, f)
     }
@@ -86,27 +85,19 @@ where
 /// Apply transform to a service. Function returns
 /// services factory that in initialization creates
 /// service and applies transform to this service.
-pub fn apply<T, S, U>(
-    t: T,
-    service: U,
-) -> impl ServiceFactory<
-    Config = S::Config,
-    Request = T::Request,
-    Response = T::Response,
-    Error = T::Error,
-    Service = T::Transform,
-    InitError = S::InitError,
-> + Clone
+pub fn apply<T, S, U>(t: T, service: U) -> ApplyTransform<T, S>
 where
     S: ServiceFactory,
+    S::Future: Unpin,
     T: Transform<S::Service, InitError = S::InitError>,
+    T::Future: Unpin,
     U: IntoServiceFactory<S>,
 {
     ApplyTransform::new(t, service.into_factory())
 }
 
 /// `Apply` transform to new service
-struct ApplyTransform<T, S> {
+pub struct ApplyTransform<T, S> {
     s: Rc<S>,
     t: Rc<T>,
 }
@@ -137,7 +128,9 @@ impl<T, S> Clone for ApplyTransform<T, S> {
 impl<T, S> ServiceFactory for ApplyTransform<T, S>
 where
     S: ServiceFactory,
+    S::Future: Unpin,
     T: Transform<S::Service, InitError = S::InitError>,
+    T::Future: Unpin,
 {
     type Request = T::Request;
     type Response = T::Response;
@@ -157,15 +150,12 @@ where
     }
 }
 
-#[pin_project]
-struct ApplyTransformFuture<T, S>
+pub struct ApplyTransformFuture<T, S>
 where
     S: ServiceFactory,
     T: Transform<S::Service, InitError = S::InitError>,
 {
-    #[pin]
     fut_a: S::Future,
-    #[pin]
     fut_t: Option<T::Future>,
     t_cell: Rc<T>,
 }
@@ -173,23 +163,114 @@ where
 impl<T, S> Future for ApplyTransformFuture<T, S>
 where
     S: ServiceFactory,
+    S::Future: Unpin,
     T: Transform<S::Service, InitError = S::InitError>,
+    T::Future: Unpin,
 {
     type Output = Result<T::Transform, T::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
+        let mut this = self.get_mut();
 
-        if this.fut_t.as_mut().as_pin_mut().is_none() {
-            if let Poll::Ready(service) = this.fut_a.poll(cx)? {
-                this.fut_t.set(Some(this.t_cell.new_transform(service)));
+        if this.fut_t.is_none() {
+            if let Poll::Ready(service) = Pin::new(&mut this.fut_a).poll(cx)? {
+                this.fut_t = Some(this.t_cell.new_transform(service));
+            } else {
+                return Poll::Pending;
             }
         }
 
-        if let Some(fut) = this.fut_t.as_mut().as_pin_mut() {
-            fut.poll(cx)
+        if let Some(ref mut fut) = this.fut_t {
+            Pin::new(fut).poll(cx)
         } else {
             Poll::Pending
         }
+    }
+}
+
+/// Transform for the `map_err` combinator, changing the type of a new
+/// transform's init error.
+///
+/// This is created by the `Transform::map_err` method.
+pub struct TransformMapInitErr<T, S, F, E> {
+    t: T,
+    f: F,
+    e: PhantomData<(S, E)>,
+}
+
+impl<T, S, F, E> TransformMapInitErr<T, S, F, E> {
+    /// Create new `TransformMapErr` new transform instance
+    pub(crate) fn new(t: T, f: F) -> Self
+    where
+        T: Transform<S>,
+        T::Future: Unpin,
+        F: Fn(T::InitError) -> E + Unpin + Clone,
+    {
+        Self {
+            t,
+            f,
+            e: PhantomData,
+        }
+    }
+}
+
+impl<T, S, F, E> Clone for TransformMapInitErr<T, S, F, E>
+where
+    T: Clone,
+    F: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            t: self.t.clone(),
+            f: self.f.clone(),
+            e: PhantomData,
+        }
+    }
+}
+
+impl<T, S, F, E> Transform<S> for TransformMapInitErr<T, S, F, E>
+where
+    T: Transform<S>,
+    T::Future: Unpin,
+    F: Fn(T::InitError) -> E + Unpin + Clone,
+{
+    type Request = T::Request;
+    type Response = T::Response;
+    type Error = T::Error;
+    type Transform = T::Transform;
+
+    type InitError = E;
+    type Future = TransformMapInitErrFuture<T, S, F, E>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        TransformMapInitErrFuture {
+            fut: self.t.new_transform(service),
+            f: self.f.clone(),
+        }
+    }
+}
+
+pub struct TransformMapInitErrFuture<T, S, F, E>
+where
+    T: Transform<S>,
+    T::Future: Unpin,
+    F: Fn(T::InitError) -> E + Unpin,
+{
+    fut: T::Future,
+    f: F,
+}
+
+impl<T, S, F, E> Future for TransformMapInitErrFuture<T, S, F, E>
+where
+    T: Transform<S>,
+    T::Future: Unpin,
+    F: Fn(T::InitError) -> E + Unpin + Clone,
+{
+    type Output = Result<T::Transform, E>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        Pin::new(&mut this.fut).poll(cx).map_err(&this.f)
     }
 }

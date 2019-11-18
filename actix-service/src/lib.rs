@@ -10,7 +10,6 @@ mod apply_cfg;
 pub mod boxed;
 mod cell;
 mod fn_service;
-mod into;
 mod map;
 mod map_config;
 mod map_err;
@@ -18,12 +17,10 @@ mod map_init_err;
 mod pipeline;
 mod then;
 mod transform;
-mod transform_err;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::apply_cfg::{apply_cfg, apply_cfg_factory};
 pub use self::fn_service::{factory_fn, factory_fn_cfg, service_fn, service_fn2};
-pub use self::into::{into_factory, into_service, ServiceFactoryMapper, ServiceMapper};
 pub use self::map_config::{map_config, unit_config, MappedConfig};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 pub use self::transform::{apply, Transform};
@@ -63,6 +60,41 @@ pub trait Service {
     /// Calling `call` without calling `poll_ready` is permitted. The
     /// implementation must be resilient to this fact.
     fn call(&mut self, req: Self::Request) -> Self::Future;
+
+    /// Map this service's output to a different type, returning a new service
+    /// of the resulting type.
+    ///
+    /// This function is similar to the `Option::map` or `Iterator::map` where
+    /// it will change the type of the underlying service.
+    ///
+    /// Note that this function consumes the receiving service and returns a
+    /// wrapped version of it, similar to the existing `map` methods in the
+    /// standard library.
+    fn map<F, R>(self, f: F) -> crate::dev::Map<Self, F, R>
+    where
+        Self: Sized,
+        Self::Future: Unpin,
+        F: FnMut(Self::Response) -> R + Unpin,
+    {
+        crate::dev::Map::new(self, f)
+    }
+
+    /// Map this service's error to a different error, returning a new service.
+    ///
+    /// This function is similar to the `Result::map_err` where it will change
+    /// the error type of the underlying service. This is useful for example to
+    /// ensure that services have the same error type.
+    ///
+    /// Note that this function consumes the receiving service and returns a
+    /// wrapped version of it.
+    fn map_err<F, E>(self, f: F) -> crate::dev::MapErr<Self, F, E>
+    where
+        Self: Sized,
+        Self::Future: Unpin,
+        F: Fn(Self::Error) -> E,
+    {
+        crate::dev::MapErr::new(self, f)
+    }
 }
 
 /// Creates new `Service` values.
@@ -102,6 +134,37 @@ pub trait ServiceFactory {
 
     /// Create and return a new service value asynchronously.
     fn new_service(&self, cfg: &Self::Config) -> Self::Future;
+
+    /// Map this service's output to a different type, returning a new service
+    /// of the resulting type.
+    fn map<F, R>(self, f: F) -> crate::map::MapServiceFactory<Self, F, R>
+    where
+        Self: Sized,
+        <Self::Service as Service>::Future: Unpin,
+        F: FnMut(Self::Response) -> R + Unpin + Clone,
+    {
+        crate::map::MapServiceFactory::new(self, f)
+    }
+
+    /// Map this service's error to a different error, returning a new service.
+    fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrServiceFactory<Self, F, E>
+    where
+        Self: Sized,
+        <Self::Service as Service>::Future: Unpin,
+        F: Fn(Self::Error) -> E + Unpin + Clone,
+    {
+        crate::map_err::MapErrServiceFactory::new(self, f)
+    }
+
+    /// Map this factory's init error to a different error, returning a new service.
+    fn map_init_err<F, E>(self, f: F) -> crate::map_init_err::MapInitErr<Self, F, E>
+    where
+        Self: Sized,
+        <Self::Service as Service>::Future: Unpin,
+        F: Fn(Self::InitError) -> E + Unpin + Clone,
+    {
+        crate::map_init_err::MapInitErr::new(self, f)
+    }
 }
 
 impl<'a, S> Service for &'a mut S
@@ -226,4 +289,18 @@ where
     fn into_factory(self) -> T {
         self
     }
+}
+
+pub mod dev {
+    pub use crate::and_then::{AndThenService, AndThenServiceFactory};
+    pub use crate::apply::{Apply, ApplyServiceFactory};
+    pub use crate::apply_cfg::{ApplyConfigService, ApplyConfigServiceFactory};
+    pub use crate::fn_service::{
+        FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
+    };
+    pub use crate::map::{Map, MapServiceFactory};
+    pub use crate::map_err::{MapErr, MapErrServiceFactory};
+    pub use crate::map_init_err::MapInitErr;
+    pub use crate::then::{ThenService, ThenServiceFactory};
+    pub use crate::transform::{ApplyTransform, TransformMapInitErr};
 }

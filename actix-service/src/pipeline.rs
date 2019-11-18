@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 
-use crate::and_then::{AndThen, AndThenNewService};
-use crate::then::{Then, ThenNewService};
+use crate::and_then::{AndThenService, AndThenServiceFactory};
+use crate::then::{ThenService, ThenServiceFactory};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 pub fn pipeline<F, T>(service: F) -> Pipeline<T>
@@ -39,17 +39,14 @@ impl<T: Service> Pipeline<T> {
     ///
     /// Note that this function consumes the receiving service and returns a
     /// wrapped version of it.
-    pub fn and_then<F, U>(
-        self,
-        service: F,
-    ) -> Pipeline<impl Service<Request = T::Request, Response = U::Response, Error = T::Error>>
+    pub fn and_then<F, U>(self, service: F) -> Pipeline<AndThenService<T, U>>
     where
         Self: Sized,
         F: IntoService<U>,
-        U: Service<Request = T::Response, Error = T::Error>,
+        U: Service<Request = T::Response, Error = T::Error> + Unpin,
     {
         Pipeline {
-            service: AndThen::new(self.service, service.into_service()),
+            service: AndThenService::new(self.service, service.into_service()),
         }
     }
 
@@ -58,17 +55,14 @@ impl<T: Service> Pipeline<T> {
     ///
     /// Note that this function consumes the receiving pipeline and returns a
     /// wrapped version of it.
-    pub fn then<F, U>(
-        self,
-        service: F,
-    ) -> Pipeline<impl Service<Request = T::Request, Response = U::Response, Error = T::Error>>
+    pub fn then<F, U>(self, service: F) -> Pipeline<ThenService<T, U>>
     where
         Self: Sized,
         F: IntoService<U>,
         U: Service<Request = Result<T::Response, T::Error>, Error = T::Error>,
     {
         Pipeline {
-            service: Then::new(self.service, service.into_service()),
+            service: ThenService::new(self.service, service.into_service()),
         }
     }
 }
@@ -108,18 +102,7 @@ pub struct PipelineFactory<T> {
 
 impl<T: ServiceFactory> PipelineFactory<T> {
     /// Call another service after call to this one has resolved successfully.
-    pub fn and_then<F, U>(
-        self,
-        factory: F,
-    ) -> PipelineFactory<
-        impl ServiceFactory<
-            Config = T::Config,
-            Request = T::Request,
-            Response = U::Response,
-            Error = T::Error,
-            InitError = T::InitError,
-        >,
-    >
+    pub fn and_then<F, U>(self, factory: F) -> PipelineFactory<AndThenServiceFactory<T, U>>
     where
         Self: Sized,
         F: IntoServiceFactory<U>,
@@ -131,7 +114,7 @@ impl<T: ServiceFactory> PipelineFactory<T> {
         >,
     {
         PipelineFactory {
-            factory: AndThenNewService::new(self.factory, factory.into_factory()),
+            factory: AndThenServiceFactory::new(self.factory, factory.into_factory()),
         }
     }
 
@@ -141,18 +124,7 @@ impl<T: ServiceFactory> PipelineFactory<T> {
     ///
     /// Note that this function consumes the receiving pipeline and returns a
     /// wrapped version of it.
-    pub fn then<F, U>(
-        self,
-        factory: F,
-    ) -> PipelineFactory<
-        impl ServiceFactory<
-            Config = T::Config,
-            Request = T::Request,
-            Response = U::Response,
-            Error = T::Error,
-            InitError = T::InitError,
-        >,
-    >
+    pub fn then<F, U>(self, factory: F) -> PipelineFactory<ThenServiceFactory<T, U>>
     where
         Self: Sized,
         F: IntoServiceFactory<U>,
@@ -164,7 +136,7 @@ impl<T: ServiceFactory> PipelineFactory<T> {
         >,
     {
         PipelineFactory {
-            factory: ThenNewService::new(self.factory, factory.into_factory()),
+            factory: ThenServiceFactory::new(self.factory, factory.into_factory()),
         }
     }
 }

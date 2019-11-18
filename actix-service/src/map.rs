@@ -3,14 +3,12 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use pin_project::pin_project;
-
 use super::{Service, ServiceFactory};
 
 /// Service for the `map` combinator, changing the type of a service's response.
 ///
 /// This is created by the `ServiceExt::map` method.
-pub(crate) struct Map<A, F, Response> {
+pub struct Map<A, F, Response> {
     service: A,
     f: F,
     _t: PhantomData<Response>,
@@ -18,7 +16,7 @@ pub(crate) struct Map<A, F, Response> {
 
 impl<A, F, Response> Map<A, F, Response> {
     /// Create new `Map` combinator
-    pub fn new(service: A, f: F) -> Self
+    pub(crate) fn new(service: A, f: F) -> Self
     where
         A: Service,
         F: FnMut(A::Response) -> Response,
@@ -48,7 +46,8 @@ where
 impl<A, F, Response> Service for Map<A, F, Response>
 where
     A: Service,
-    F: FnMut(A::Response) -> Response + Clone,
+    A::Future: Unpin,
+    F: FnMut(A::Response) -> Response + Unpin + Clone,
 {
     type Request = A::Request;
     type Response = Response;
@@ -64,14 +63,12 @@ where
     }
 }
 
-#[pin_project]
-pub(crate) struct MapFuture<A, F, Response>
+pub struct MapFuture<A, F, Response>
 where
     A: Service,
     F: FnMut(A::Response) -> Response,
 {
     f: F,
-    #[pin]
     fut: A::Future,
 }
 
@@ -88,13 +85,15 @@ where
 impl<A, F, Response> Future for MapFuture<A, F, Response>
 where
     A: Service,
-    F: FnMut(A::Response) -> Response,
+    A::Future: Unpin,
+    F: FnMut(A::Response) -> Response + Unpin,
 {
     type Output = Result<Response, A::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        match this.fut.poll(cx) {
+        let this = self.get_mut();
+
+        match Pin::new(&mut this.fut).poll(cx) {
             Poll::Ready(Ok(resp)) => Poll::Ready(Ok((this.f)(resp))),
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
             Poll::Pending => Poll::Pending,
@@ -103,18 +102,18 @@ where
 }
 
 /// `MapNewService` new service combinator
-pub(crate) struct MapNewService<A, F, Res> {
+pub struct MapServiceFactory<A, F, Res> {
     a: A,
     f: F,
     r: PhantomData<Res>,
 }
 
-impl<A, F, Res> MapNewService<A, F, Res> {
+impl<A, F, Res> MapServiceFactory<A, F, Res> {
     /// Create new `Map` new service instance
-    pub fn new(a: A, f: F) -> Self
+    pub(crate) fn new(a: A, f: F) -> Self
     where
         A: ServiceFactory,
-        F: FnMut(A::Response) -> Res,
+        F: FnMut(A::Response) -> Res + Unpin,
     {
         Self {
             a,
@@ -124,7 +123,7 @@ impl<A, F, Res> MapNewService<A, F, Res> {
     }
 }
 
-impl<A, F, Res> Clone for MapNewService<A, F, Res>
+impl<A, F, Res> Clone for MapServiceFactory<A, F, Res>
 where
     A: Clone,
     F: Clone,
@@ -138,10 +137,12 @@ where
     }
 }
 
-impl<A, F, Res> ServiceFactory for MapNewService<A, F, Res>
+impl<A, F, Res> ServiceFactory for MapServiceFactory<A, F, Res>
 where
     A: ServiceFactory,
-    F: FnMut(A::Response) -> Res + Clone,
+    A::Future: Unpin,
+    <A::Service as Service>::Future: Unpin,
+    F: FnMut(A::Response) -> Res + Unpin + Clone,
 {
     type Request = A::Request;
     type Response = Res;
@@ -150,44 +151,44 @@ where
     type Config = A::Config;
     type Service = Map<A::Service, F, Res>;
     type InitError = A::InitError;
-    type Future = MapNewServiceFuture<A, F, Res>;
+    type Future = MapServiceFuture<A, F, Res>;
 
     fn new_service(&self, cfg: &A::Config) -> Self::Future {
-        MapNewServiceFuture::new(self.a.new_service(cfg), self.f.clone())
+        MapServiceFuture::new(self.a.new_service(cfg), self.f.clone())
     }
 }
 
-#[pin_project]
-pub(crate) struct MapNewServiceFuture<A, F, Res>
+pub struct MapServiceFuture<A, F, Res>
 where
     A: ServiceFactory,
     F: FnMut(A::Response) -> Res,
 {
-    #[pin]
     fut: A::Future,
     f: Option<F>,
 }
 
-impl<A, F, Res> MapNewServiceFuture<A, F, Res>
+impl<A, F, Res> MapServiceFuture<A, F, Res>
 where
     A: ServiceFactory,
-    F: FnMut(A::Response) -> Res,
+    F: FnMut(A::Response) -> Res + Unpin,
 {
     fn new(fut: A::Future, f: F) -> Self {
-        MapNewServiceFuture { f: Some(f), fut }
+        MapServiceFuture { f: Some(f), fut }
     }
 }
 
-impl<A, F, Res> Future for MapNewServiceFuture<A, F, Res>
+impl<A, F, Res> Future for MapServiceFuture<A, F, Res>
 where
     A: ServiceFactory,
-    F: FnMut(A::Response) -> Res,
+    A::Future: Unpin,
+    F: FnMut(A::Response) -> Res + Unpin,
 {
     type Output = Result<Map<A::Service, F, Res>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        if let Poll::Ready(svc) = this.fut.poll(cx)? {
+        let this = self.get_mut();
+
+        if let Poll::Ready(svc) = Pin::new(&mut this.fut).poll(cx)? {
             Poll::Ready(Ok(Map::new(svc, this.f.take().unwrap())))
         } else {
             Poll::Pending
@@ -200,7 +201,7 @@ mod tests {
     use futures::future::{lazy, ok, Ready};
 
     use super::*;
-    use crate::{into_factory, into_service, Service};
+    use crate::{IntoServiceFactory, Service, ServiceFactory};
 
     struct Srv;
 
@@ -221,14 +222,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_ready() {
-        let mut srv = into_service(Srv).map(|_| "ok");
+        let mut srv = Srv.map(|_| "ok");
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
     }
 
     #[tokio::test]
     async fn test_call() {
-        let mut srv = into_service(Srv).map(|_| "ok");
+        let mut srv = Srv.map(|_| "ok");
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -236,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_service() {
-        let new_srv = into_factory(|| ok::<_, ()>(Srv)).map(|_| "ok");
+        let new_srv = (|| ok::<_, ()>(Srv)).into_factory().map(|_| "ok");
         let mut srv = new_srv.new_service(&()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_ok());

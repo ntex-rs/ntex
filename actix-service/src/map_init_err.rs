@@ -3,12 +3,10 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use pin_project::pin_project;
-
 use super::ServiceFactory;
 
 /// `MapInitErr` service combinator
-pub(crate) struct MapInitErr<A, F, E> {
+pub struct MapInitErr<A, F, E> {
     a: A,
     f: F,
     e: PhantomData<E>,
@@ -46,7 +44,8 @@ where
 impl<A, F, E> ServiceFactory for MapInitErr<A, F, E>
 where
     A: ServiceFactory,
-    F: Fn(A::InitError) -> E + Clone,
+    A::Future: Unpin,
+    F: Fn(A::InitError) -> E + Unpin + Clone,
 {
     type Request = A::Request;
     type Response = A::Response;
@@ -61,14 +60,13 @@ where
         MapInitErrFuture::new(self.a.new_service(cfg), self.f.clone())
     }
 }
-#[pin_project]
-pub(crate) struct MapInitErrFuture<A, F, E>
+
+pub struct MapInitErrFuture<A, F, E>
 where
     A: ServiceFactory,
     F: Fn(A::InitError) -> E,
 {
     f: F,
-    #[pin]
     fut: A::Future,
 }
 
@@ -85,12 +83,13 @@ where
 impl<A, F, E> Future for MapInitErrFuture<A, F, E>
 where
     A: ServiceFactory,
-    F: Fn(A::InitError) -> E,
+    A::Future: Unpin,
+    F: Fn(A::InitError) -> E + Unpin,
 {
     type Output = Result<A::Service, E>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        this.fut.poll(cx).map_err(this.f)
+        let this = self.get_mut();
+        Pin::new(&mut this.fut).poll(cx).map_err(&this.f)
     }
 }
