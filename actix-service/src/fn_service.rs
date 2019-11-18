@@ -152,6 +152,17 @@ where
     }
 }
 
+impl<F, Fut, Req, Res, Err, Cfg>
+    IntoServiceFactory<FnServiceFactory<F, Fut, Req, Res, Err, Cfg>> for F
+where
+    F: Fn(Req) -> Fut + Clone,
+    Fut: Future<Output = Result<Res, Err>>,
+{
+    fn into_factory(self) -> FnServiceFactory<F, Fut, Req, Res, Err, Cfg> {
+        FnServiceFactory::new(self)
+    }
+}
+
 /// Convert `Fn(&Config) -> Future<Service>` fn to NewService
 pub struct FnServiceConfig<F, Fut, Cfg, Srv, Err>
 where
