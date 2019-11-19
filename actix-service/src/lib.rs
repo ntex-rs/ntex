@@ -198,6 +198,24 @@ where
     }
 }
 
+impl<S> Service for RefCell<S>
+where
+    S: Service,
+{
+    type Request = S::Request;
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.borrow_mut().poll_ready(ctx)
+    }
+
+    fn call(&mut self, request: Self::Request) -> S::Future {
+        self.borrow_mut().call(request)
+    }
+}
+
 impl<S> Service for Rc<RefCell<S>>
 where
     S: Service,
