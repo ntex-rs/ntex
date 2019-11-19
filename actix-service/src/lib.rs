@@ -298,5 +298,5 @@ pub mod dev {
     pub use crate::map_err::{MapErr, MapErrServiceFactory};
     pub use crate::map_init_err::MapInitErr;
     pub use crate::then::{ThenService, ThenServiceFactory};
-    pub use crate::transform::{ApplyTransform, TransformMapInitErr};
+    pub use crate::transform::ApplyTransform;
 }

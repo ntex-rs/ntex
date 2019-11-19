@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -37,17 +36,6 @@ pub trait Transform<S> {
 
     /// Creates and returns a new Service component, asynchronously
     fn new_transform(&self, service: S) -> Self::Future;
-
-    /// Map this service's factory error to a different error,
-    /// returning a new transform service factory.
-    fn map_init_err<F, E>(self, f: F) -> TransformMapInitErr<Self, S, F, E>
-    where
-        Self: Sized,
-        Self::Future: Unpin,
-        F: Fn(Self::InitError) -> E + Unpin + Clone,
-    {
-        TransformMapInitErr::new(self, f)
-    }
 }
 
 impl<T, S> Transform<S> for Rc<T>
@@ -185,92 +173,5 @@ where
         } else {
             Poll::Pending
         }
-    }
-}
-
-/// Transform for the `map_err` combinator, changing the type of a new
-/// transform's init error.
-///
-/// This is created by the `Transform::map_err` method.
-pub struct TransformMapInitErr<T, S, F, E> {
-    t: T,
-    f: F,
-    e: PhantomData<(S, E)>,
-}
-
-impl<T, S, F, E> TransformMapInitErr<T, S, F, E> {
-    /// Create new `TransformMapErr` new transform instance
-    pub(crate) fn new(t: T, f: F) -> Self
-    where
-        T: Transform<S>,
-        T::Future: Unpin,
-        F: Fn(T::InitError) -> E + Unpin + Clone,
-    {
-        Self {
-            t,
-            f,
-            e: PhantomData,
-        }
-    }
-}
-
-impl<T, S, F, E> Clone for TransformMapInitErr<T, S, F, E>
-where
-    T: Clone,
-    F: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            t: self.t.clone(),
-            f: self.f.clone(),
-            e: PhantomData,
-        }
-    }
-}
-
-impl<T, S, F, E> Transform<S> for TransformMapInitErr<T, S, F, E>
-where
-    T: Transform<S>,
-    T::Future: Unpin,
-    F: Fn(T::InitError) -> E + Unpin + Clone,
-{
-    type Request = T::Request;
-    type Response = T::Response;
-    type Error = T::Error;
-    type Transform = T::Transform;
-
-    type InitError = E;
-    type Future = TransformMapInitErrFuture<T, S, F, E>;
-
-    fn new_transform(&self, service: S) -> Self::Future {
-        TransformMapInitErrFuture {
-            fut: self.t.new_transform(service),
-            f: self.f.clone(),
-        }
-    }
-}
-
-pub struct TransformMapInitErrFuture<T, S, F, E>
-where
-    T: Transform<S>,
-    T::Future: Unpin,
-    F: Fn(T::InitError) -> E + Unpin,
-{
-    fut: T::Future,
-    f: F,
-}
-
-impl<T, S, F, E> Future for TransformMapInitErrFuture<T, S, F, E>
-where
-    T: Transform<S>,
-    T::Future: Unpin,
-    F: Fn(T::InitError) -> E + Unpin + Clone,
-{
-    type Output = Result<T::Transform, E>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        Pin::new(&mut this.fut).poll(cx).map_err(&this.f)
     }
 }
