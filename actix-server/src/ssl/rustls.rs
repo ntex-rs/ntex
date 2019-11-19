@@ -111,10 +111,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin, P> Future for RustlsAcceptorServiceFut<T
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let params = this.params.take().unwrap();
-        Poll::Ready(
-            futures::ready!(Pin::new(&mut this.fut).poll(cx))
-                .map(move |io| Io::from_parts(io, params, Protocol::Unknown)),
-        )
+
+        let res = futures::ready!(Pin::new(&mut this.fut).poll(cx));
+        match res {
+            Ok(io) => {
+                let params = this.params.take().unwrap();
+                Poll::Ready(Ok(Io::from_parts(io, params, Protocol::Unknown)))
+            }
+            Err(e) => Poll::Ready(Err(e)),
+        }
     }
 }

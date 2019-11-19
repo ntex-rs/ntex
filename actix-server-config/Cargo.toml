@@ -25,4 +25,5 @@ rustls = ["tokio-rustls"]
 tokio-io = "0.2.0-alpha.6"
 tokio-net = "0.2.0-alpha.6"
 tokio-openssl = { version = "0.4.0-alpha.6", optional = true }
-tokio-rustls = { version = "0.12.0-alpha.8", optional = true }
+#tokio-rustls = { version = "0.12.0-alpha.8", optional = true }
+tokio-rustls = { git = "https://github.com/quininer/tokio-rustls.git", branch = "tokio-0.2", optional = true }
