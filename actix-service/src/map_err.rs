@@ -47,8 +47,7 @@ where
 impl<A, F, E> Service for MapErr<A, F, E>
 where
     A: Service,
-    A::Future: Unpin,
-    F: Fn(A::Error) -> E + Unpin + Clone,
+    F: Fn(A::Error) -> E + Clone,
 {
     type Request = A::Request;
     type Response = A::Response;
@@ -64,21 +63,21 @@ where
     }
 }
 
+#[pin_project::pin_project]
 pub struct MapErrFuture<A, F, E>
 where
     A: Service,
-    A::Future: Unpin,
-    F: Fn(A::Error) -> E + Unpin,
+    F: Fn(A::Error) -> E,
 {
     f: F,
+    #[pin]
     fut: A::Future,
 }
 
 impl<A, F, E> MapErrFuture<A, F, E>
 where
     A: Service,
-    A::Future: Unpin,
-    F: Fn(A::Error) -> E + Unpin,
+    F: Fn(A::Error) -> E,
 {
     fn new(fut: A::Future, f: F) -> Self {
         MapErrFuture { f, fut }
@@ -88,14 +87,13 @@ where
 impl<A, F, E> Future for MapErrFuture<A, F, E>
 where
     A: Service,
-    A::Future: Unpin,
-    F: Fn(A::Error) -> E + Unpin,
+    F: Fn(A::Error) -> E,
 {
     type Output = Result<A::Response, E>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        Pin::new(&mut this.fut).poll(cx).map_err(&this.f)
+        let this = self.project();
+        this.fut.poll(cx).map_err(this.f)
     }
 }
 
@@ -145,9 +143,7 @@ where
 impl<A, F, E> ServiceFactory for MapErrServiceFactory<A, F, E>
 where
     A: ServiceFactory,
-    A::Future: Unpin,
-    <A::Service as Service>::Future: Unpin,
-    F: Fn(A::Error) -> E + Unpin + Clone,
+    F: Fn(A::Error) -> E + Clone,
 {
     type Request = A::Request;
     type Response = A::Response;
@@ -163,11 +159,13 @@ where
     }
 }
 
+#[pin_project::pin_project]
 pub struct MapErrServiceFuture<A, F, E>
 where
     A: ServiceFactory,
     F: Fn(A::Error) -> E,
 {
+    #[pin]
     fut: A::Future,
     f: F,
 }
@@ -185,14 +183,13 @@ where
 impl<A, F, E> Future for MapErrServiceFuture<A, F, E>
 where
     A: ServiceFactory,
-    A::Future: Unpin,
-    F: Fn(A::Error) -> E + Unpin + Clone,
+    F: Fn(A::Error) -> E + Clone,
 {
     type Output = Result<MapErr<A::Service, F, E>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        if let Poll::Ready(svc) = Pin::new(&mut this.fut).poll(cx)? {
+        let this = self.project();
+        if let Poll::Ready(svc) = this.fut.poll(cx)? {
             Poll::Ready(Ok(MapErr::new(svc, this.f.clone())))
         } else {
             Poll::Pending

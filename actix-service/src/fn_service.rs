@@ -1,6 +1,5 @@
 use std::future::Future;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::future::{ok, Ready};
@@ -188,7 +187,7 @@ where
 impl<F, Fut, Cfg, Srv, Err> ServiceFactory for FnServiceConfig<F, Fut, Cfg, Srv, Err>
 where
     F: Fn(&Cfg) -> Fut,
-    Fut: Future<Output = Result<Srv, Err>> + Unpin,
+    Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service,
 {
     type Request = Srv::Request;
@@ -198,41 +197,10 @@ where
     type Config = Cfg;
     type Service = Srv;
     type InitError = Err;
-    type Future = NewServiceFnConfigFut<Fut, Srv, Err>;
+    type Future = Fut;
 
     fn new_service(&self, cfg: &Cfg) -> Self::Future {
-        NewServiceFnConfigFut {
-            fut: (self.f)(cfg),
-            _t: PhantomData,
-        }
-    }
-}
-
-pub struct NewServiceFnConfigFut<R, S, E>
-where
-    R: Future<Output = Result<S, E>> + Unpin,
-    S: Service,
-{
-    fut: R,
-    _t: PhantomData<(S,)>,
-}
-
-impl<R, S, E> Unpin for NewServiceFnConfigFut<R, S, E>
-where
-    R: Future<Output = Result<S, E>> + Unpin,
-    S: Service,
-{
-}
-
-impl<R, S, E> Future for NewServiceFnConfigFut<R, S, E>
-where
-    R: Future<Output = Result<S, E>> + Unpin,
-    S: Service,
-{
-    type Output = Result<S, E>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.get_mut().fut).poll(cx)
+        (self.f)(cfg)
     }
 }
 

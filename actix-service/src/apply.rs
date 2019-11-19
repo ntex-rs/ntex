@@ -23,8 +23,7 @@ pub fn apply_fn_factory<T, F, R, In, Out, Err, U>(
 ) -> ApplyServiceFactory<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    T::Future: Unpin,
-    F: FnMut(In, &mut T::Service) -> R + Unpin + Clone,
+    F: FnMut(In, &mut T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
     U: IntoServiceFactory<T>,
 {
@@ -106,8 +105,7 @@ where
 impl<T, F, R, In, Out, Err> ServiceFactory for ApplyServiceFactory<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    T::Future: Unpin,
-    F: FnMut(In, &mut T::Service) -> R + Unpin + Clone,
+    F: FnMut(In, &mut T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     type Request = In;
@@ -124,12 +122,14 @@ where
     }
 }
 
+#[pin_project::pin_project]
 pub struct ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
     F: FnMut(In, &mut T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
+    #[pin]
     fut: T::Future,
     f: Option<F>,
     r: PhantomData<(In, Out)>,
@@ -150,28 +150,18 @@ where
     }
 }
 
-impl<T, F, R, In, Out, Err> Unpin for ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
-where
-    T: ServiceFactory<Error = Err>,
-    T::Future: Unpin,
-    F: FnMut(In, &mut T::Service) -> R + Unpin + Clone,
-    R: Future<Output = Result<Out, Err>>,
-{
-}
-
 impl<T, F, R, In, Out, Err> Future for ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    T::Future: Unpin,
-    F: FnMut(In, &mut T::Service) -> R + Unpin + Clone,
+    F: FnMut(In, &mut T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     type Output = Result<Apply<T::Service, F, R, In, Out, Err>, T::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
+        let this = self.project();
 
-        if let Poll::Ready(svc) = Pin::new(&mut this.fut).poll(cx)? {
+        if let Poll::Ready(svc) = this.fut.poll(cx)? {
             Poll::Ready(Ok(Apply::new(svc, this.f.take().unwrap())))
         } else {
             Poll::Pending

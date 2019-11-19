@@ -30,7 +30,7 @@ impl<T, U> RustlsConnector<T, U> {
 
 impl<T, U> RustlsConnector<T, U>
 where
-    T: Address + Unpin,
+    T: Address,
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
 {
     pub fn service(connector: Arc<ClientConfig>) -> RustlsConnectorService<T, U> {
@@ -50,7 +50,7 @@ impl<T, U> Clone for RustlsConnector<T, U> {
     }
 }
 
-impl<T: Address + Unpin, U> ServiceFactory for RustlsConnector<T, U>
+impl<T: Address, U> ServiceFactory for RustlsConnector<T, U>
 where
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
 {
@@ -84,7 +84,7 @@ impl<T, U> Clone for RustlsConnectorService<T, U> {
     }
 }
 
-impl<T: Address + Unpin, U> Service for RustlsConnectorService<T, U>
+impl<T: Address, U> Service for RustlsConnectorService<T, U>
 where
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
 {
@@ -114,7 +114,7 @@ pub struct ConnectAsyncExt<T, U> {
     stream: Option<Connection<T, ()>>,
 }
 
-impl<T: Address + Unpin, U> Future for ConnectAsyncExt<T, U>
+impl<T: Address, U> Future for ConnectAsyncExt<T, U>
 where
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
 {

@@ -42,7 +42,7 @@ impl<T, P> Clone for RustlsAcceptor<T, P> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, P: Unpin> ServiceFactory for RustlsAcceptor<T, P> {
+impl<T: AsyncRead + AsyncWrite + Unpin, P> ServiceFactory for RustlsAcceptor<T, P> {
     type Request = Io<T, P>;
     type Response = Io<TlsStream<T>, P>;
     type Error = io::Error;
@@ -71,7 +71,7 @@ pub struct RustlsAcceptorService<T, P> {
     conns: Counter,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, P: Unpin> Service for RustlsAcceptorService<T, P> {
+impl<T: AsyncRead + AsyncWrite + Unpin, P> Service for RustlsAcceptorService<T, P> {
     type Request = Io<T, P>;
     type Response = Io<TlsStream<T>, P>;
     type Error = io::Error;
@@ -98,14 +98,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin, P: Unpin> Service for RustlsAcceptorServ
 pub struct RustlsAcceptorServiceFut<T, P>
 where
     T: AsyncRead + AsyncWrite + Unpin,
-    P: Unpin,
 {
     fut: Accept<T>,
     params: Option<P>,
     _guard: CounterGuard,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, P: Unpin> Future for RustlsAcceptorServiceFut<T, P> {
+impl<T: AsyncRead + AsyncWrite + Unpin, P> Unpin for RustlsAcceptorServiceFut<T, P> {}
+
+impl<T: AsyncRead + AsyncWrite + Unpin, P> Future for RustlsAcceptorServiceFut<T, P> {
     type Output = Result<Io<TlsStream<T>, P>, io::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {

@@ -33,7 +33,7 @@ impl<T, U> OpensslConnector<T, U> {
 
 impl<T, U> OpensslConnector<T, U>
 where
-    T: Address + Unpin + 'static,
+    T: Address + 'static,
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug + 'static,
 {
     pub fn service(connector: SslConnector) -> OpensslConnectorService<T, U> {
@@ -154,7 +154,7 @@ pub struct OpensslConnectServiceFactory<T> {
     openssl: OpensslConnector<T, TcpStream>,
 }
 
-impl<T: Unpin> OpensslConnectServiceFactory<T> {
+impl<T> OpensslConnectServiceFactory<T> {
     /// Construct new OpensslConnectService factory
     pub fn new(connector: SslConnector) -> Self {
         OpensslConnectServiceFactory {

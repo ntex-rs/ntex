@@ -41,8 +41,6 @@ impl<A, B> Service for ThenService<A, B>
 where
     A: Service,
     B: Service<Request = Result<A::Response, A::Error>, Error = A::Error>,
-    A::Future: Unpin,
-    B::Future: Unpin,
 {
     type Request = A::Request;
     type Response = B::Response;
@@ -63,13 +61,16 @@ where
     }
 }
 
+#[pin_project::pin_project]
 pub struct ThenServiceResponse<A, B>
 where
     A: Service,
     B: Service<Request = Result<A::Response, A::Error>>,
 {
     b: Cell<B>,
+    #[pin]
     fut_b: Option<B::Future>,
+    #[pin]
     fut_a: Option<A::Future>,
 }
 
@@ -77,8 +78,6 @@ impl<A, B> ThenServiceResponse<A, B>
 where
     A: Service,
     B: Service<Request = Result<A::Response, A::Error>>,
-    A::Future: Unpin,
-    B::Future: Unpin,
 {
     fn new(a: A::Future, b: Cell<B>) -> Self {
         ThenServiceResponse {
@@ -93,22 +92,26 @@ impl<A, B> Future for ThenServiceResponse<A, B>
 where
     A: Service,
     B: Service<Request = Result<A::Response, A::Error>>,
-    A::Future: Unpin,
-    B::Future: Unpin,
 {
     type Output = Result<B::Response, B::Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.as_mut().project();
 
         loop {
-            if let Some(ref mut fut) = this.fut_b {
-                return Pin::new(fut).poll(cx);
+            if let Some(fut) = this.fut_b.as_pin_mut() {
+                return fut.poll(cx);
             }
 
-            match Pin::new(this.fut_a.as_mut().expect("Bug in actix-service")).poll(cx) {
+            match this
+                .fut_a
+                .as_pin_mut()
+                .expect("Bug in actix-service")
+                .poll(cx)
+            {
                 Poll::Ready(r) => {
-                    this.fut_b = Some(this.b.get_mut().call(r));
+                    this = self.as_mut().project();
+                    this.fut_b.set(Some(this.b.get_mut().call(r)));
                 }
 
                 Poll::Pending => return Poll::Pending,
@@ -148,10 +151,6 @@ where
         Error = A::Error,
         InitError = A::InitError,
     >,
-    A::Future: Unpin,
-    <A::Service as Service>::Future: Unpin,
-    B::Future: Unpin,
-    <B::Service as Service>::Future: Unpin,
 {
     type Request = A::Request;
     type Response = B::Response;
@@ -180,6 +179,7 @@ where
     }
 }
 
+#[pin_project::pin_project]
 pub struct ThenServiceFactoryResponse<A, B>
 where
     A: ServiceFactory,
@@ -190,7 +190,9 @@ where
         InitError = A::InitError,
     >,
 {
+    #[pin]
     fut_b: B::Future,
+    #[pin]
     fut_a: A::Future,
     a: Option<A::Service>,
     b: Option<B::Service>,
@@ -205,10 +207,6 @@ where
         Error = A::Error,
         InitError = A::InitError,
     >,
-    A::Future: Unpin,
-    <A::Service as Service>::Future: Unpin,
-    B::Future: Unpin,
-    <B::Service as Service>::Future: Unpin,
 {
     fn new(fut_a: A::Future, fut_b: B::Future) -> Self {
         Self {
@@ -220,22 +218,6 @@ where
     }
 }
 
-impl<A, B> Unpin for ThenServiceFactoryResponse<A, B>
-where
-    A: ServiceFactory,
-    B: ServiceFactory<
-        Config = A::Config,
-        Request = Result<A::Response, A::Error>,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
-    A::Future: Unpin,
-    <A::Service as Service>::Future: Unpin,
-    B::Future: Unpin,
-    <B::Service as Service>::Future: Unpin,
-{
-}
-
 impl<A, B> Future for ThenServiceFactoryResponse<A, B>
 where
     A: ServiceFactory,
@@ -245,24 +227,20 @@ where
         Error = A::Error,
         InitError = A::InitError,
     >,
-    A::Future: Unpin,
-    <A::Service as Service>::Future: Unpin,
-    B::Future: Unpin,
-    <B::Service as Service>::Future: Unpin,
 {
     type Output = Result<ThenService<A::Service, B::Service>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
+        let this = self.project();
 
         if this.a.is_none() {
-            if let Poll::Ready(service) = Pin::new(&mut this.fut_a).poll(cx)? {
-                this.a = Some(service);
+            if let Poll::Ready(service) = this.fut_a.poll(cx)? {
+                *this.a = Some(service);
             }
         }
         if this.b.is_none() {
-            if let Poll::Ready(service) = Pin::new(&mut this.fut_b).poll(cx)? {
-                this.b = Some(service);
+            if let Poll::Ready(service) = this.fut_b.poll(cx)? {
+                *this.b = Some(service);
             }
         }
         if this.a.is_some() && this.b.is_some() {

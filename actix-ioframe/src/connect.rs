@@ -16,7 +16,7 @@ pub struct Connect<Io, St = (), Codec = ()> {
 
 impl<Io> Connect<Io>
 where
-    Io: AsyncRead + AsyncWrite + Unpin,
+    Io: AsyncRead + AsyncWrite,
 {
     pub(crate) fn new(io: Io) -> Self {
         Self {
@@ -27,7 +27,7 @@ where
 
     pub fn codec<Codec>(self, codec: Codec) -> ConnectResult<Io, (), Codec>
     where
-        Codec: Encoder + Decoder + Unpin,
+        Codec: Encoder + Decoder,
     {
         let (tx, rx) = mpsc::channel();
         let sink = Sink::new(tx);
@@ -41,6 +41,7 @@ where
     }
 }
 
+#[pin_project::pin_project]
 pub struct ConnectResult<Io, St, Codec: Encoder + Decoder> {
     pub(crate) state: St,
     pub(crate) framed: Framed<Io, Codec>,
@@ -75,41 +76,38 @@ impl<Io, St, Codec: Encoder + Decoder> ConnectResult<Io, St, Codec> {
     }
 }
 
-impl<Io, St, Codec> Unpin for ConnectResult<Io, St, Codec>
-where
-    Io: AsyncRead + AsyncWrite + Unpin,
-    Codec: Encoder + Decoder + Unpin,
-{
-}
-
 impl<Io, St, Codec> Stream for ConnectResult<Io, St, Codec>
 where
-    Io: AsyncRead + AsyncWrite + Unpin,
-    Codec: Encoder + Decoder + Unpin,
+    Io: AsyncRead + AsyncWrite,
+    Codec: Encoder + Decoder,
 {
     type Item = Result<<Codec as Decoder>::Item, <Codec as Decoder>::Error>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        self.get_mut().framed.next_item(cx)
+        self.project().framed.next_item(cx)
     }
 }
 
 impl<Io, St, Codec> futures::Sink<<Codec as Encoder>::Item> for ConnectResult<Io, St, Codec>
 where
-    Io: AsyncRead + AsyncWrite + Unpin,
-    Codec: Encoder + Decoder + Unpin,
+    Io: AsyncRead + AsyncWrite,
+    Codec: Encoder + Decoder,
 {
     type Error = <Codec as Encoder>::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.get_mut().framed.is_ready(cx)
+    fn poll_ready(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        if self.framed.is_ready() {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
+        }
     }
 
     fn start_send(
         self: Pin<&mut Self>,
         item: <Codec as Encoder>::Item,
     ) -> Result<(), Self::Error> {
-        self.get_mut().framed.write(item)
+        self.project().framed.write(item)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

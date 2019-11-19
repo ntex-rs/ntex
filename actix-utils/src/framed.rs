@@ -77,13 +77,14 @@ type Inner<S: Service, U> = Cell<FramedTransportInner<<U as Encoder>::Item, S::E
 
 /// FramedTransport - is a future that reads frames from Framed object
 /// and pass then to the service.
+#[pin_project::pin_project]
 pub struct FramedTransport<S, T, U>
 where
     S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Encoder + Decoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Encoder + Decoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
@@ -109,11 +110,11 @@ struct FramedTransportInner<I, E> {
 
 impl<S, T, U> FramedTransport<S, T, U>
 where
-    S: Service<Request = Request<U>, Response = Response<U>> + Unpin,
+    S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
@@ -165,28 +166,28 @@ where
 
 impl<S, T, U> Future for FramedTransport<S, T, U>
 where
-    S: Service<Request = Request<U>, Response = Response<U>> + Unpin,
-    S::Error: Unpin + 'static,
+    S: Service<Request = Request<U>, Response = Response<U>>,
+    S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: Unpin + std::fmt::Debug,
-    <U as Decoder>::Error: Unpin + std::fmt::Debug,
+    <U as Encoder>::Error: std::fmt::Debug,
+    <U as Decoder>::Error: std::fmt::Debug,
 {
     type Output = Result<(), FramedTransportError<S::Error, U>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.inner.get_ref().task.register(cx.waker());
 
-        let this = self.get_mut();
+        let this = self.project();
         poll(
             cx,
-            &mut this.service,
-            &mut this.state,
-            &mut this.framed,
-            &mut this.rx,
-            &mut this.inner,
+            this.service,
+            this.state,
+            this.framed,
+            this.rx,
+            this.inner,
         )
     }
 }
@@ -203,8 +204,8 @@ where
     S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
@@ -257,8 +258,8 @@ where
     S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
@@ -309,8 +310,8 @@ where
     S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {

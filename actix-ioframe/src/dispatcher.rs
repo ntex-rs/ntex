@@ -30,13 +30,14 @@ pub(crate) enum FramedMessage<T> {
 
 /// FramedTransport - is a future that reads frames from Framed object
 /// and pass then to the service.
+#[pin_project::pin_project]
 pub(crate) struct FramedDispatcher<St, S, T, U>
 where
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Encoder + Decoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Encoder + Decoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
@@ -55,8 +56,8 @@ where
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
@@ -84,7 +85,7 @@ where
     }
 }
 
-enum FramedState<S: Service, U: Encoder + Decoder + Unpin> {
+enum FramedState<S: Service, U: Encoder + Decoder> {
     Processing,
     Error(ServiceError<S::Error, U>),
     FramedError(ServiceError<S::Error, U>),
@@ -92,7 +93,7 @@ enum FramedState<S: Service, U: Encoder + Decoder + Unpin> {
     Stopping,
 }
 
-impl<S: Service, U: Encoder + Decoder + Unpin> FramedState<S, U> {
+impl<S: Service, U: Encoder + Decoder> FramedState<S, U> {
     fn stop(&mut self, tx: Option<oneshot::Sender<()>>) {
         match self {
             FramedState::FlushAndStop(ref mut vec) => {
@@ -121,25 +122,13 @@ struct FramedDispatcherInner<I, E> {
     task: LocalWaker,
 }
 
-impl<St, S, T, U> Unpin for FramedDispatcher<St, S, T, U>
-where
-    S: Service<Request = Request<St, U>, Response = Option<Response<U>>> + Unpin,
-    S::Error: Unpin + 'static,
-    S::Future: Unpin + 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
-    <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
-{
-}
-
 impl<St, S, T, U> FramedDispatcher<St, S, T, U>
 where
-    S: Service<Request = Request<St, U>, Response = Option<Response<U>>> + Unpin,
+    S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
-    S::Future: Unpin + 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
@@ -179,8 +168,8 @@ where
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
@@ -267,8 +256,8 @@ where
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {
@@ -328,8 +317,8 @@ where
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Decoder + Encoder + Unpin,
+    T: AsyncRead + AsyncWrite,
+    U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
 {

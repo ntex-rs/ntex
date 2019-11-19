@@ -46,8 +46,7 @@ where
 impl<A, F, Response> Service for Map<A, F, Response>
 where
     A: Service,
-    A::Future: Unpin,
-    F: FnMut(A::Response) -> Response + Unpin + Clone,
+    F: FnMut(A::Response) -> Response + Clone,
 {
     type Request = A::Request;
     type Response = Response;
@@ -63,12 +62,14 @@ where
     }
 }
 
+#[pin_project::pin_project]
 pub struct MapFuture<A, F, Response>
 where
     A: Service,
     F: FnMut(A::Response) -> Response,
 {
     f: F,
+    #[pin]
     fut: A::Future,
 }
 
@@ -85,15 +86,14 @@ where
 impl<A, F, Response> Future for MapFuture<A, F, Response>
 where
     A: Service,
-    A::Future: Unpin,
-    F: FnMut(A::Response) -> Response + Unpin,
+    F: FnMut(A::Response) -> Response,
 {
     type Output = Result<Response, A::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
+        let this = self.project();
 
-        match Pin::new(&mut this.fut).poll(cx) {
+        match this.fut.poll(cx) {
             Poll::Ready(Ok(resp)) => Poll::Ready(Ok((this.f)(resp))),
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
             Poll::Pending => Poll::Pending,
@@ -113,7 +113,7 @@ impl<A, F, Res> MapServiceFactory<A, F, Res> {
     pub(crate) fn new(a: A, f: F) -> Self
     where
         A: ServiceFactory,
-        F: FnMut(A::Response) -> Res + Unpin,
+        F: FnMut(A::Response) -> Res,
     {
         Self {
             a,
@@ -140,9 +140,7 @@ where
 impl<A, F, Res> ServiceFactory for MapServiceFactory<A, F, Res>
 where
     A: ServiceFactory,
-    A::Future: Unpin,
-    <A::Service as Service>::Future: Unpin,
-    F: FnMut(A::Response) -> Res + Unpin + Clone,
+    F: FnMut(A::Response) -> Res + Clone,
 {
     type Request = A::Request;
     type Response = Res;
@@ -158,11 +156,13 @@ where
     }
 }
 
+#[pin_project::pin_project]
 pub struct MapServiceFuture<A, F, Res>
 where
     A: ServiceFactory,
     F: FnMut(A::Response) -> Res,
 {
+    #[pin]
     fut: A::Future,
     f: Option<F>,
 }
@@ -170,7 +170,7 @@ where
 impl<A, F, Res> MapServiceFuture<A, F, Res>
 where
     A: ServiceFactory,
-    F: FnMut(A::Response) -> Res + Unpin,
+    F: FnMut(A::Response) -> Res,
 {
     fn new(fut: A::Future, f: F) -> Self {
         MapServiceFuture { f: Some(f), fut }
@@ -180,15 +180,14 @@ where
 impl<A, F, Res> Future for MapServiceFuture<A, F, Res>
 where
     A: ServiceFactory,
-    A::Future: Unpin,
-    F: FnMut(A::Response) -> Res + Unpin,
+    F: FnMut(A::Response) -> Res,
 {
     type Output = Result<Map<A::Service, F, Res>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
+        let this = self.project();
 
-        if let Poll::Ready(svc) = Pin::new(&mut this.fut).poll(cx)? {
+        if let Poll::Ready(svc) = this.fut.poll(cx)? {
             Poll::Ready(Ok(Map::new(svc, this.f.take().unwrap())))
         } else {
             Poll::Pending

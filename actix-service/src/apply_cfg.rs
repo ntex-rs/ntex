@@ -11,7 +11,7 @@ pub fn apply_cfg<F, C, T, R, S, E>(srv: T, f: F) -> ApplyConfigService<F, C, T, 
 where
     F: FnMut(&C, &mut T) -> R,
     T: Service,
-    R: Future<Output = Result<S, E>> + Unpin,
+    R: Future<Output = Result<S, E>>,
     S: Service,
 {
     ApplyConfigService {
@@ -75,8 +75,7 @@ impl<F, C, T, R, S, E> ServiceFactory for ApplyConfigService<F, C, T, R, S, E>
 where
     F: FnMut(&C, &mut T) -> R,
     T: Service,
-    T::Future: Unpin,
-    R: Future<Output = Result<S, E>> + Unpin,
+    R: Future<Output = Result<S, E>>,
     S: Service,
 {
     type Config = C;
@@ -86,41 +85,10 @@ where
     type Service = S;
 
     type InitError = E;
-    type Future = ApplyConfigServiceResponse<R, S, E>;
+    type Future = R;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
-        ApplyConfigServiceResponse {
-            fut: unsafe { (self.f.get_mut_unsafe())(cfg, self.srv.get_mut_unsafe()) },
-            _t: PhantomData,
-        }
-    }
-}
-
-pub struct ApplyConfigServiceResponse<R, S, E>
-where
-    R: Future<Output = Result<S, E>>,
-    S: Service,
-{
-    fut: R,
-    _t: PhantomData<(S,)>,
-}
-
-impl<R, S, E> Unpin for ApplyConfigServiceResponse<R, S, E>
-where
-    R: Future<Output = Result<S, E>> + Unpin,
-    S: Service,
-{
-}
-
-impl<R, S, E> Future for ApplyConfigServiceResponse<R, S, E>
-where
-    R: Future<Output = Result<S, E>> + Unpin,
-    S: Service,
-{
-    type Output = Result<S, E>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.get_mut().fut).poll(cx)
+        unsafe { (self.f.get_mut_unsafe())(cfg, self.srv.get_mut_unsafe()) }
     }
 }
 
@@ -160,9 +128,8 @@ where
     C: Clone,
     F: FnMut(&C, &mut T::Service) -> R,
     T: ServiceFactory<Config = ()>,
-    T::Future: Unpin,
     T::InitError: From<T::Error>,
-    R: Future<Output = Result<S, T::InitError>> + Unpin,
+    R: Future<Output = Result<S, T::InitError>>,
     S: Service,
 {
     type Config = C;
@@ -186,6 +153,7 @@ where
     }
 }
 
+#[pin_project::pin_project]
 pub struct ApplyConfigServiceFactoryResponse<F, C, T, R, S>
 where
     C: Clone,
@@ -198,21 +166,11 @@ where
     cfg: C,
     f: Cell<F>,
     srv: Option<T::Service>,
+    #[pin]
     srv_fut: Option<T::Future>,
+    #[pin]
     fut: Option<R>,
     _t: PhantomData<(S,)>,
-}
-
-impl<F, C, T, R, S> Unpin for ApplyConfigServiceFactoryResponse<F, C, T, R, S>
-where
-    C: Clone,
-    F: FnMut(&C, &mut T::Service) -> R,
-    T: ServiceFactory<Config = ()>,
-    T::Future: Unpin,
-    T::InitError: From<T::Error>,
-    R: Future<Output = Result<S, T::InitError>> + Unpin,
-    S: Service,
-{
 }
 
 impl<F, C, T, R, S> Future for ApplyConfigServiceFactoryResponse<F, C, T, R, S>
@@ -220,34 +178,36 @@ where
     C: Clone,
     F: FnMut(&C, &mut T::Service) -> R,
     T: ServiceFactory<Config = ()>,
-    T::Future: Unpin,
     T::InitError: From<T::Error>,
-    R: Future<Output = Result<S, T::InitError>> + Unpin,
+    R: Future<Output = Result<S, T::InitError>>,
     S: Service,
 {
     type Output = Result<S, T::InitError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.as_mut().project();
 
         loop {
-            if let Some(ref mut fut) = this.srv_fut {
-                match Pin::new(fut).poll(cx)? {
+            if let Some(fut) = this.srv_fut.as_pin_mut() {
+                match fut.poll(cx)? {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(srv) => {
-                        let _ = this.srv_fut.take();
-                        this.srv = Some(srv);
+                        this = self.as_mut().project();
+                        this.srv_fut.set(None);
+                        *this.srv = Some(srv);
                         continue;
                     }
                 }
             }
 
-            if let Some(ref mut fut) = this.fut {
-                return Pin::new(fut).poll(cx);
-            } else if let Some(ref mut srv) = this.srv {
+            if let Some(fut) = this.fut.as_pin_mut() {
+                return fut.poll(cx);
+            } else if let Some(srv) = this.srv {
                 match srv.poll_ready(cx)? {
                     Poll::Ready(_) => {
-                        this.fut = Some(this.f.get_mut()(&this.cfg, srv));
+                        let fut = this.f.get_mut()(&this.cfg, srv);
+                        this = self.as_mut().project();
+                        this.fut.set(Some(fut));
                         continue;
                     }
                     Poll::Pending => return Poll::Pending,

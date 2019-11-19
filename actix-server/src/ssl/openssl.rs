@@ -40,9 +40,7 @@ impl<T: AsyncRead + AsyncWrite, P> Clone for OpensslAcceptor<T, P> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + 'static, P: Unpin> ServiceFactory
-    for OpensslAcceptor<T, P>
-{
+impl<T: AsyncRead + AsyncWrite + Unpin + 'static, P> ServiceFactory for OpensslAcceptor<T, P> {
     type Request = Io<T, P>;
     type Response = Io<SslStream<T>, P>;
     type Error = HandshakeError<T>;
@@ -70,9 +68,7 @@ pub struct OpensslAcceptorService<T, P> {
     io: PhantomData<(T, P)>,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + 'static, P: Unpin> Service
-    for OpensslAcceptorService<T, P>
-{
+impl<T: AsyncRead + AsyncWrite + Unpin + 'static, P> Service for OpensslAcceptorService<T, P> {
     type Request = Io<T, P>;
     type Response = Io<SslStream<T>, P>;
     type Error = HandshakeError<T>;
@@ -103,7 +99,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin + 'static, P: Unpin> Service
 
 pub struct OpensslAcceptorServiceFut<T, P>
 where
-    P: Unpin,
     T: AsyncRead + AsyncWrite,
 {
     fut: LocalBoxFuture<'static, Result<SslStream<T>, HandshakeError<T>>>,
@@ -111,7 +106,9 @@ where
     _guard: CounterGuard,
 }
 
-impl<T: AsyncRead + AsyncWrite, P: Unpin> Future for OpensslAcceptorServiceFut<T, P> {
+impl<T: AsyncRead + AsyncWrite + Unpin, P> Unpin for OpensslAcceptorServiceFut<T, P> {}
+
+impl<T: AsyncRead + AsyncWrite + Unpin, P> Future for OpensslAcceptorServiceFut<T, P> {
     type Output = Result<Io<SslStream<T>, P>, HandshakeError<T>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

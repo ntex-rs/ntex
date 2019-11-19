@@ -83,8 +83,6 @@ where
         Error = A::Error,
         InitError = A::InitError,
     >,
-    A::Future: Unpin,
-    B::Future: Unpin,
 {
     type Request = either::Either<A::Request, B::Request>;
     type Response = A::Response;
@@ -114,39 +112,31 @@ impl<A: Clone, B: Clone> Clone for Either<A, B> {
 }
 
 #[doc(hidden)]
+#[pin_project::pin_project]
 pub struct EitherNewService<A: ServiceFactory, B: ServiceFactory> {
     left: Option<A::Service>,
     right: Option<B::Service>,
+    #[pin]
     left_fut: A::Future,
+    #[pin]
     right_fut: B::Future,
-}
-
-impl<A, B> Unpin for EitherNewService<A, B>
-where
-    A: ServiceFactory,
-    B: ServiceFactory<Response = A::Response, Error = A::Error, InitError = A::InitError>,
-    A::Future: Unpin,
-    B::Future: Unpin,
-{
 }
 
 impl<A, B> Future for EitherNewService<A, B>
 where
     A: ServiceFactory,
     B: ServiceFactory<Response = A::Response, Error = A::Error, InitError = A::InitError>,
-    A::Future: Unpin,
-    B::Future: Unpin,
 {
     type Output = Result<EitherService<A::Service, B::Service>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let this = self.get_mut();
+        let this = self.project();
 
         if this.left.is_none() {
-            this.left = Some(ready!(Pin::new(&mut this.left_fut).poll(cx))?);
+            *this.left = Some(ready!(this.left_fut.poll(cx))?);
         }
         if this.right.is_none() {
-            this.right = Some(ready!(Pin::new(&mut this.right_fut).poll(cx))?);
+            *this.right = Some(ready!(this.right_fut.poll(cx))?);
         }
 
         if this.left.is_some() && this.right.is_some() {

@@ -18,7 +18,7 @@ pub struct ConnectServiceFactory<T> {
     resolver: ResolverFactory<T>,
 }
 
-impl<T: Unpin> ConnectServiceFactory<T> {
+impl<T> ConnectServiceFactory<T> {
     /// Construct new ConnectService factory
     pub fn new() -> Self {
         ConnectServiceFactory {
@@ -70,7 +70,7 @@ impl<T> Clone for ConnectServiceFactory<T> {
     }
 }
 
-impl<T: Address + Unpin> ServiceFactory for ConnectServiceFactory<T> {
+impl<T: Address> ServiceFactory for ConnectServiceFactory<T> {
     type Request = Connect<T>;
     type Response = Connection<T, TcpStream>;
     type Error = ConnectError;
@@ -90,7 +90,7 @@ pub struct ConnectService<T> {
     resolver: Resolver<T>,
 }
 
-impl<T: Address + Unpin> Service for ConnectService<T> {
+impl<T: Address> Service for ConnectService<T> {
     type Request = Connect<T>;
     type Response = Connection<T, TcpStream>;
     type Error = ConnectError;
@@ -108,12 +108,12 @@ impl<T: Address + Unpin> Service for ConnectService<T> {
     }
 }
 
-enum ConnectState<T: Address + Unpin> {
+enum ConnectState<T: Address> {
     Resolve(<Resolver<T> as Service>::Future),
     Connect(<TcpConnector<T> as Service>::Future),
 }
 
-impl<T: Address + Unpin> ConnectState<T> {
+impl<T: Address> ConnectState<T> {
     fn poll(
         &mut self,
         cx: &mut Context,
@@ -129,12 +129,12 @@ impl<T: Address + Unpin> ConnectState<T> {
     }
 }
 
-pub struct ConnectServiceResponse<T: Address + Unpin> {
+pub struct ConnectServiceResponse<T: Address> {
     state: ConnectState<T>,
     tcp: TcpConnector<T>,
 }
 
-impl<T: Address + Unpin> Future for ConnectServiceResponse<T> {
+impl<T: Address> Future for ConnectServiceResponse<T> {
     type Output = Result<Connection<T, TcpStream>, ConnectError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
@@ -159,7 +159,7 @@ pub struct TcpConnectService<T> {
     resolver: Resolver<T>,
 }
 
-impl<T: Address + Unpin + 'static> Service for TcpConnectService<T> {
+impl<T: Address + 'static> Service for TcpConnectService<T> {
     type Request = Connect<T>;
     type Response = TcpStream;
     type Error = ConnectError;
@@ -177,12 +177,12 @@ impl<T: Address + Unpin + 'static> Service for TcpConnectService<T> {
     }
 }
 
-enum TcpConnectState<T: Address + Unpin> {
+enum TcpConnectState<T: Address> {
     Resolve(<Resolver<T> as Service>::Future),
     Connect(<TcpConnector<T> as Service>::Future),
 }
 
-impl<T: Address + Unpin> TcpConnectState<T> {
+impl<T: Address> TcpConnectState<T> {
     fn poll(
         &mut self,
         cx: &mut Context,
@@ -206,12 +206,12 @@ impl<T: Address + Unpin> TcpConnectState<T> {
     }
 }
 
-pub struct TcpConnectServiceResponse<T: Address + Unpin> {
+pub struct TcpConnectServiceResponse<T: Address> {
     state: TcpConnectState<T>,
     tcp: TcpConnector<T>,
 }
 
-impl<T: Address + Unpin> Future for TcpConnectServiceResponse<T> {
+impl<T: Address> Future for TcpConnectServiceResponse<T> {
     type Output = Result<TcpStream, ConnectError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {

@@ -31,7 +31,6 @@ impl Default for InFlight {
 impl<S> Transform<S> for InFlight
 where
     S: Service,
-    S::Future: Unpin,
 {
     type Request = S::Request;
     type Response = S::Response;
@@ -68,7 +67,6 @@ where
 impl<T> Service for InFlightService<T>
 where
     T: Service,
-    T::Future: Unpin,
 {
     type Request = T::Request;
     type Response = T::Response;
@@ -95,19 +93,18 @@ where
 }
 
 #[doc(hidden)]
+#[pin_project::pin_project]
 pub struct InFlightServiceResponse<T: Service> {
+    #[pin]
     fut: T::Future,
     _guard: CounterGuard,
 }
 
-impl<T: Service> Future for InFlightServiceResponse<T>
-where
-    T::Future: Unpin,
-{
+impl<T: Service> Future for InFlightServiceResponse<T> {
     type Output = Result<T::Response, T::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        Pin::new(&mut self.get_mut().fut).poll(cx)
+        self.project().fut.poll(cx)
     }
 }
 

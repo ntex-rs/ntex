@@ -76,9 +76,7 @@ where
 pub fn apply<T, S, U>(t: T, service: U) -> ApplyTransform<T, S>
 where
     S: ServiceFactory,
-    S::Future: Unpin,
     T: Transform<S::Service, InitError = S::InitError>,
-    T::Future: Unpin,
     U: IntoServiceFactory<S>,
 {
     ApplyTransform::new(t, service.into_factory())
@@ -116,9 +114,7 @@ impl<T, S> Clone for ApplyTransform<T, S> {
 impl<T, S> ServiceFactory for ApplyTransform<T, S>
 where
     S: ServiceFactory,
-    S::Future: Unpin,
     T: Transform<S::Service, InitError = S::InitError>,
-    T::Future: Unpin,
 {
     type Request = T::Request;
     type Response = T::Response;
@@ -138,12 +134,15 @@ where
     }
 }
 
+#[pin_project::pin_project]
 pub struct ApplyTransformFuture<T, S>
 where
     S: ServiceFactory,
     T: Transform<S::Service, InitError = S::InitError>,
 {
+    #[pin]
     fut_a: S::Future,
+    #[pin]
     fut_t: Option<T::Future>,
     t_cell: Rc<T>,
 }
@@ -151,27 +150,24 @@ where
 impl<T, S> Future for ApplyTransformFuture<T, S>
 where
     S: ServiceFactory,
-    S::Future: Unpin,
     T: Transform<S::Service, InitError = S::InitError>,
-    T::Future: Unpin,
 {
     type Output = Result<T::Transform, T::InitError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.get_mut();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.as_mut().project();
 
-        if this.fut_t.is_none() {
-            if let Poll::Ready(service) = Pin::new(&mut this.fut_a).poll(cx)? {
-                this.fut_t = Some(this.t_cell.new_transform(service));
-            } else {
-                return Poll::Pending;
-            }
+        if let Some(fut) = this.fut_t.as_pin_mut() {
+            return fut.poll(cx);
         }
 
-        if let Some(ref mut fut) = this.fut_t {
-            Pin::new(fut).poll(cx)
+        if let Poll::Ready(service) = this.fut_a.poll(cx)? {
+            let fut = this.t_cell.new_transform(service);
+            this = self.as_mut().project();
+            this.fut_t.set(Some(fut));
+            this.fut_t.as_pin_mut().unwrap().poll(cx)
         } else {
-            Poll::Pending
+            return Poll::Pending;
         }
     }
 }
