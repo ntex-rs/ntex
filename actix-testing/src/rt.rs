@@ -54,12 +54,16 @@ where
 ///
 /// Note that this function is intended to be used only for testing purpose.
 /// This function panics on nested call.
-pub fn block_fn<F, R>(f: F) -> F::Output
+pub fn block_fn<F, R>(f: F) -> R::Output
 where
     F: FnOnce() -> R,
     R: Future,
 {
-    RT.with(move |rt| rt.borrow_mut().get_mut().block_on(lazy(|_| f())))
+    RT.with(move |rt| {
+        let mut rt = rt.borrow_mut();
+        let fut = rt.get_mut().block_on(lazy(|_| f()));
+        rt.get_mut().block_on(fut)
+    })
 }
 
 /// Spawn future to the current test runtime.

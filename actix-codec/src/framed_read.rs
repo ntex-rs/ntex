@@ -231,15 +231,16 @@ where
             // got room for at least one byte to read to ensure that we don't
             // get a spurious 0 that looks like EOF
             this.buffer.reserve(1);
-            unsafe {
-                match Pin::new_unchecked(&mut this.inner).poll_read(cx, &mut this.buffer) {
+            let cnt = unsafe {
+                match Pin::new_unchecked(&mut this.inner).poll_read_buf(cx, &mut this.buffer) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
-                    Poll::Ready(Ok(0)) => {
-                        this.eof = true;
-                    }
-                    Poll::Ready(Ok(_cnt)) => {}
+                    Poll::Ready(Ok(cnt)) => cnt,
                 }
+            };
+
+            if cnt == 0 {
+                this.eof = true;
             }
             this.is_readable = true;
         }
