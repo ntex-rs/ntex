@@ -25,9 +25,9 @@ pub(crate) enum ServerMessage {
 }
 
 pub trait ServiceFactory<Stream: FromStream>: Send + Clone + 'static {
-    type NewService: actix::ServiceFactory<Config = ServerConfig, Request = Io<Stream>>;
+    type Factory: actix::ServiceFactory<Config = ServerConfig, Request = Io<Stream>>;
 
-    fn create(&self) -> Self::NewService;
+    fn create(&self) -> Self::Factory;
 }
 
 pub(crate) trait InternalServiceFactory: Send {
@@ -183,7 +183,7 @@ where
     T: actix::ServiceFactory<Config = ServerConfig, Request = Io<I>>,
     I: FromStream,
 {
-    type NewService = T;
+    type Factory = T;
 
     fn create(&self) -> T {
         (self)()

@@ -4,6 +4,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{self, Context, Poll};
 
+use futures::future::{ready, Ready};
+
 mod and_then;
 mod apply;
 mod apply_cfg;

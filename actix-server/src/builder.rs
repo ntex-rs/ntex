@@ -185,11 +185,11 @@ impl ServerBuilder {
         Ok(self)
     }
 
-    #[cfg(all(unix, feature = "uds"))]
+    #[cfg(all(unix))]
     /// Add new unix domain service to the server.
     pub fn bind_uds<F, U, N>(self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
-        F: ServiceFactory<tokio_uds::UnixStream>,
+        F: ServiceFactory<tokio_net::uds::UnixStream>,
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
     {
@@ -208,7 +208,7 @@ impl ServerBuilder {
         self.listen_uds(name, lst, factory)
     }
 
-    #[cfg(all(unix, feature = "uds"))]
+    #[cfg(all(unix))]
     /// Add new unix domain service to the server.
     /// Useful when running as a systemd service and
     /// a socket FD can be acquired using the systemd crate.
@@ -219,7 +219,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: ServiceFactory<tokio_uds::UnixStream>,
+        F: ServiceFactory<tokio_net::uds::UnixStream>,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();

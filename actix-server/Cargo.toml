@@ -44,7 +44,7 @@ tokio-net = { version = "0.2.0-alpha.6", features = ["signal"] }
 tokio-timer = "0.3.0-alpha.6"
 
 # unix domain sockets
-mio-uds = { version = "0.6.7", optional = true }
+mio-uds = { version = "0.6.7" }
 
 # nativetls
 native-tls = { version = "0.2", optional = true }

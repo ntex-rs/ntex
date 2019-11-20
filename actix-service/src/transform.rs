@@ -6,6 +6,18 @@ use std::task::{Context, Poll};
 
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
+/// Apply transform to a service. Function returns
+/// services factory that in initialization creates
+/// service and applies transform to this service.
+pub fn apply<T, S, U>(t: T, service: U) -> ApplyTransform<T, S>
+where
+    S: ServiceFactory,
+    T: Transform<S::Service, InitError = S::InitError>,
+    U: IntoServiceFactory<S>,
+{
+    ApplyTransform::new(t, service.into_factory())
+}
+
 /// The `Transform` trait defines the interface of a Service factory. `Transform`
 /// is often implemented for middleware, defining how to construct a
 /// middleware Service. A Service that is constructed by the factory takes
@@ -68,18 +80,6 @@ where
     fn new_transform(&self, service: S) -> T::Future {
         self.as_ref().new_transform(service)
     }
-}
-
-/// Apply transform to a service. Function returns
-/// services factory that in initialization creates
-/// service and applies transform to this service.
-pub fn apply<T, S, U>(t: T, service: U) -> ApplyTransform<T, S>
-where
-    S: ServiceFactory,
-    T: Transform<S::Service, InitError = S::InitError>,
-    U: IntoServiceFactory<S>,
-{
-    ApplyTransform::new(t, service.into_factory())
 }
 
 /// `Apply` transform to new service
