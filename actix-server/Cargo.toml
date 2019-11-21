@@ -24,7 +24,7 @@ path = "src/lib.rs"
 default = []
 nativetls = ["native-tls", "tokio-tls"]
 openssl = ["open-ssl", "tokio-openssl", "actix-server-config/openssl"]
-rustls = ["rust-tls", "tokio-rustls", "webpki", "webpki-roots", "actix-server-config/rustls"]
+#rustls = ["rust-tls", "tokio-rustls", "webpki", "webpki-roots", "actix-server-config/rustls"]
 
 [dependencies]
 actix-rt = "1.0.0-alpha.1"
@@ -40,7 +40,7 @@ slab = "0.4"
 
 tokio = "0.2.0-alpha.6"
 tokio-io = "0.2.0-alpha.6"
-tokio-net = { version = "0.2.0-alpha.6", features = ["signal"] }
+tokio-net = { version = "0.2.0-alpha.6", features = ["signal", "tcp", "uds"] }
 tokio-timer = "0.3.0-alpha.6"
 
 # unix domain sockets

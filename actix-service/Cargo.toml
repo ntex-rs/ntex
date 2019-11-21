@@ -28,4 +28,4 @@ pin-project = "0.4.5"
 
 [dev-dependencies]
 tokio = "0.2.0-alpha.6"
-actix-rt = "0.2"
+# actix-rt = "1.0.0-alpha.1"
