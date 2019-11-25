@@ -1,5 +1,7 @@
 //! A runtime implementation that runs everything on the current thread.
 
+pub use actix_macros::{main, test};
+
 mod arbiter;
 mod builder;
 mod runtime;

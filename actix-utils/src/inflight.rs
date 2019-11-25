@@ -137,36 +137,33 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_transform() {
+    #[actix_rt::test]
+    async fn test_transform() {
         let wait_time = Duration::from_millis(50);
-        let _ = actix_rt::System::new("test").block_on(async {
-            let mut srv = InFlightService::new(1, SleepService(wait_time));
-            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-            let res = srv.call(());
-            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+        let mut srv = InFlightService::new(1, SleepService(wait_time));
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-            let _ = res.await;
-            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        });
+        let res = srv.call(());
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let _ = res.await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
 
-    #[test]
-    fn test_newtransform() {
+    #[actix_rt::test]
+    async fn test_newtransform() {
         let wait_time = Duration::from_millis(50);
 
-        actix_rt::System::new("test").block_on(async {
-            let srv = apply(InFlight::new(1), factory_fn(|| ok(SleepService(wait_time))));
+        let srv = apply(InFlight::new(1), factory_fn(|| ok(SleepService(wait_time))));
 
-            let mut srv = srv.new_service(&()).await.unwrap();
-            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        let mut srv = srv.new_service(&()).await.unwrap();
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-            let res = srv.call(());
-            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+        let res = srv.call(());
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
-            let _ = res.await;
-            assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        });
+        let _ = res.await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
 }

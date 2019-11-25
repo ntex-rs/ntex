@@ -9,7 +9,7 @@ use std::{fmt, thread};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot::{channel, Canceled, Sender};
 use futures::{future, Future, FutureExt, Stream};
-use tokio::runtime::current_thread::spawn;
+use tokio_executor::current_thread::spawn;
 
 use crate::builder::Builder;
 use crate::system::System;

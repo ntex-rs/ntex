@@ -1,9 +1,9 @@
 use std::cell::RefCell;
+use std::future::Future;
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::channel::mpsc::UnboundedSender;
-use futures::Future;
 use tokio::runtime::current_thread::Handle;
 
 use crate::arbiter::{Arbiter, SystemCommand};

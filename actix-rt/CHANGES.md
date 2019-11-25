@@ -1,5 +1,19 @@
 # Changes
 
+## [1.0.0-alpha.2] - 2019-11-xx
+
+Added
+
+* Export `main` and `test` attribute macros
+
+
+## [1.0.0-alpha.1] - 2019-11-22
+
+### Changed
+
+* Migrate to std::future and tokio 0.2
+
+
 ## [0.2.6] - 2019-11-14
 
 ### Fixed

@@ -10,8 +10,7 @@ use net2::TcpBuilder;
 use tokio_net::driver::Handle;
 use tokio_net::tcp::TcpStream;
 
-mod rt;
-pub use self::rt::*;
+pub use actix_macros::test;
 
 /// The `TestServer` type.
 ///

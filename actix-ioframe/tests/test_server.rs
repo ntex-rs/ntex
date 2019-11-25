@@ -5,7 +5,7 @@ use std::time::Duration;
 use actix_codec::BytesCodec;
 use actix_server_config::Io;
 use actix_service::{apply_fn_factory, service_fn, Service};
-use actix_testing::{self as test, TestServer};
+use actix_testing::TestServer;
 use futures::future::ok;
 use tokio_net::tcp::TcpStream;
 use tokio_timer::delay_for;
@@ -14,8 +14,8 @@ use actix_ioframe::{Builder, Connect};
 
 struct State;
 
-#[test]
-fn test_disconnect() -> std::io::Result<()> {
+#[actix_rt::test]
+async fn test_disconnect() -> std::io::Result<()> {
     let disconnect = Arc::new(AtomicBool::new(false));
     let disconnect1 = disconnect.clone();
 
@@ -43,14 +43,13 @@ fn test_disconnect() -> std::io::Result<()> {
         })
         .finish(service_fn(|_t| ok(None)));
 
-    let conn = test::block_on(
-        actix_connect::default_connector()
-            .call(actix_connect::Connect::with(String::new(), srv.addr())),
-    )
-    .unwrap();
+    let conn = actix_connect::default_connector()
+        .call(actix_connect::Connect::with(String::new(), srv.addr()))
+        .await
+        .unwrap();
 
-    test::block_on(client.call(conn.into_parts().0)).unwrap();
-    let _ = test::block_on(delay_for(Duration::from_millis(100)));
+    client.call(conn.into_parts().0).await.unwrap();
+    let _ = delay_for(Duration::from_millis(100)).await;
     assert!(disconnect.load(Ordering::Relaxed));
 
     Ok(())

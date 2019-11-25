@@ -230,8 +230,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_inorder() {
+    #[actix_rt::test]
+    async fn test_inorder() {
         let (tx1, rx1) = oneshot::channel();
         let (tx2, rx2) = oneshot::channel();
         let (tx3, rx3) = oneshot::channel();
@@ -269,7 +269,7 @@ mod tests {
         let _ = tx2.send(2);
         let _ = tx1.send(1);
 
-        let _ = actix_rt::System::new("test").block_on(rx_stop);
+        let _ = rx_stop.await;
         let _ = h.join();
     }
 }

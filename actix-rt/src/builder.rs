@@ -3,17 +3,16 @@ use std::io;
 
 use futures::channel::mpsc::unbounded;
 use futures::channel::oneshot::{channel, Receiver};
-use futures::future::{lazy, Future};
-use futures::{future, FutureExt};
+use futures::future::{lazy, Future, FutureExt};
 
 use tokio::runtime::current_thread::Handle;
+use tokio_executor::current_thread::CurrentThread;
 use tokio_net::driver::Reactor;
 use tokio_timer::{clock::Clock, timer::Timer};
 
 use crate::arbiter::{Arbiter, SystemArbiter};
 use crate::runtime::Runtime;
 use crate::system::System;
-use tokio_executor::current_thread::CurrentThread;
 
 /// Builder struct for a actix runtime.
 ///
@@ -163,7 +162,7 @@ impl AsyncSystemRunner {
         let AsyncSystemRunner { stop, .. } = self;
 
         // run loop
-        future::lazy(|_| {
+        lazy(|_| {
             Arbiter::run_system();
             async {
                 let res = match stop.await {

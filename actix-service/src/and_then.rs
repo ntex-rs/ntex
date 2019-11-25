@@ -292,7 +292,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[actix_rt::test]
     async fn test_poll_ready() {
         let cnt = Rc::new(Cell::new(0));
         let mut srv = pipeline(Srv1(cnt.clone())).and_then(Srv2(cnt.clone()));
@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(cnt.get(), 2);
     }
 
-    #[tokio::test]
+    #[actix_rt::test]
     async fn test_call() {
         let cnt = Rc::new(Cell::new(0));
         let mut srv = pipeline(Srv1(cnt.clone())).and_then(Srv2(cnt));
@@ -310,7 +310,7 @@ mod tests {
         assert_eq!(res.unwrap(), (("srv1", "srv2")));
     }
 
-    #[tokio::test]
+    #[actix_rt::test]
     async fn test_new_service() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();

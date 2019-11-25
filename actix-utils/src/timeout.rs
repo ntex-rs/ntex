@@ -204,44 +204,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_success() {
+    #[actix_rt::test]
+    async fn test_success() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
 
-        let res = actix_rt::System::new("test").block_on(async {
-            let mut timeout = TimeoutService::new(resolution, SleepService(wait_time));
-            timeout.call(()).await
-        });
-        assert_eq!(res, Ok(()));
+        let mut timeout = TimeoutService::new(resolution, SleepService(wait_time));
+        assert_eq!(timeout.call(()).await, Ok(()));
     }
 
-    #[test]
-    fn test_timeout() {
+    #[actix_rt::test]
+    async fn test_timeout() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(150);
 
-        let res = actix_rt::System::new("test").block_on(async {
-            let mut timeout = TimeoutService::new(resolution, SleepService(wait_time));
-            timeout.call(()).await
-        });
-        assert_eq!(res, Err(TimeoutError::Timeout));
+        let mut timeout = TimeoutService::new(resolution, SleepService(wait_time));
+        assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
-    #[test]
-    fn test_timeout_newservice() {
+    #[actix_rt::test]
+    async fn test_timeout_newservice() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(150);
 
-        let res = actix_rt::System::new("test").block_on(async {
-            let timeout = apply(
-                Timeout::new(resolution),
-                factory_fn(|| ok::<_, ()>(SleepService(wait_time))),
-            );
-            let mut srv = timeout.new_service(&()).await.unwrap();
+        let timeout = apply(
+            Timeout::new(resolution),
+            factory_fn(|| ok::<_, ()>(SleepService(wait_time))),
+        );
+        let mut srv = timeout.new_service(&()).await.unwrap();
 
-            srv.call(()).await
-        });
-        assert_eq!(res, Err(TimeoutError::Timeout));
+        assert_eq!(srv.call(()).await, Err(TimeoutError::Timeout));
     }
 }
