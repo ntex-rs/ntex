@@ -211,7 +211,7 @@ mod tests {
     use super::*;
     use actix_service::Service;
     use futures::channel::oneshot;
-    use futures::future::{lazy, LocalBoxFuture};
+    use futures::future::{lazy, FutureExt, LocalBoxFuture};
 
     struct Srv;
 

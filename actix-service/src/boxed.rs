@@ -1,26 +1,18 @@
 use std::task::{Context, Poll};
 
-use futures::future::{FutureExt, LocalBoxFuture};
+use futures::future::FutureExt;
 
-use crate::{Service, ServiceFactory};
+use crate::{BoxFuture, Service, ServiceFactory};
 
-pub type BoxedService<Req, Res, Err> = Box<
-    dyn Service<
-        Request = Req,
-        Response = Res,
-        Error = Err,
-        Future = BoxedServiceResponse<Res, Err>,
-    >,
->;
+pub type BoxService<Req, Res, Err> =
+    Box<dyn Service<Request = Req, Response = Res, Error = Err, Future = BoxFuture<Res, Err>>>;
 
-pub type BoxedServiceResponse<Res, Err> = LocalBoxFuture<'static, Result<Res, Err>>;
-
-pub struct BoxedNewService<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
+pub struct BoxServiceFactory<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
 
 /// Create boxed new service
 pub fn factory<T>(
     factory: T,
-) -> BoxedNewService<T::Config, T::Request, T::Response, T::Error, T::InitError>
+) -> BoxServiceFactory<T::Config, T::Request, T::Response, T::Error, T::InitError>
 where
     T: ServiceFactory + 'static,
     T::Request: 'static,
@@ -30,14 +22,14 @@ where
     T::Error: 'static,
     T::InitError: 'static,
 {
-    BoxedNewService(Box::new(FactoryWrapper {
+    BoxServiceFactory(Box::new(FactoryWrapper {
         factory,
         _t: std::marker::PhantomData,
     }))
 }
 
 /// Create boxed service
-pub fn service<T>(service: T) -> BoxedService<T::Request, T::Response, T::Error>
+pub fn service<T>(service: T) -> BoxService<T::Request, T::Response, T::Error>
 where
     T: Service + 'static,
     T::Future: 'static,
@@ -52,12 +44,12 @@ type Inner<C, Req, Res, Err, InitErr> = Box<
         Response = Res,
         Error = Err,
         InitError = InitErr,
-        Service = BoxedService<Req, Res, Err>,
-        Future = LocalBoxFuture<'static, Result<BoxedService<Req, Res, Err>, InitErr>>,
+        Service = BoxService<Req, Res, Err>,
+        Future = BoxFuture<BoxService<Req, Res, Err>, InitErr>,
     >,
 >;
 
-impl<C, Req, Res, Err, InitErr> ServiceFactory for BoxedNewService<C, Req, Res, Err, InitErr>
+impl<C, Req, Res, Err, InitErr> ServiceFactory for BoxServiceFactory<C, Req, Res, Err, InitErr>
 where
     Req: 'static,
     Res: 'static,
@@ -69,9 +61,9 @@ where
     type Error = Err;
     type InitError = InitErr;
     type Config = C;
-    type Service = BoxedService<Req, Res, Err>;
+    type Service = BoxService<Req, Res, Err>;
 
-    type Future = LocalBoxFuture<'static, Result<Self::Service, InitErr>>;
+    type Future = BoxFuture<Self::Service, InitErr>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
         self.0.new_service(cfg)
@@ -105,14 +97,15 @@ where
     type Error = Err;
     type InitError = InitErr;
     type Config = C;
-    type Service = BoxedService<Req, Res, Err>;
-    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
+    type Service = BoxService<Req, Res, Err>;
+    type Future = BoxFuture<Self::Service, Self::InitError>;
 
     fn new_service(&self, cfg: &C) -> Self::Future {
-        self.factory
-            .new_service(cfg)
-            .map(|res| res.map(ServiceWrapper::boxed))
-            .boxed_local()
+        Box::pin(
+            self.factory
+                .new_service(cfg)
+                .map(|res| res.map(ServiceWrapper::boxed)),
+        )
     }
 }
 
@@ -123,7 +116,7 @@ where
     T: Service + 'static,
     T::Future: 'static,
 {
-    fn boxed(service: T) -> BoxedService<T::Request, T::Response, T::Error> {
+    fn boxed(service: T) -> BoxService<T::Request, T::Response, T::Error> {
         Box::new(ServiceWrapper(service))
     }
 }
@@ -136,13 +129,13 @@ where
     type Request = Req;
     type Response = Res;
     type Error = Err;
-    type Future = LocalBoxFuture<'static, Result<Res, Err>>;
+    type Future = BoxFuture<Res, Err>;
 
     fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.0.poll_ready(ctx)
     }
 
     fn call(&mut self, req: Self::Request) -> Self::Future {
-        self.0.call(req).boxed_local()
+        Box::pin(self.0.call(req))
     }
 }

@@ -1,5 +1,21 @@
 # Changes
 
+## [1.0.0-alpha.2] - 2019-11-xx
+
+### Renamed BoxedNewService/BoxedService to BoxServiceFactory/BoxService
+
+
+## [1.0.0-alpha.1] - 2019-11-25
+
+### Changed
+
+* Migraded to `std::future`
+
+* `NewService` renamed to `ServiceFactory`
+
+* Added `pipeline` and `pipeline_factory` function
+
+
 ## [0.4.2] - 2019-08-27
 
 ### Fixed
