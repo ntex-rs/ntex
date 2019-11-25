@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use actix_service::{IntoService, Service, Transform};
-use futures::future::{ok, ready, FutureExt, Ready};
+use futures::future::{ok, Ready};
 
 use crate::oneshot;
 use crate::task::LocalWaker;
@@ -173,11 +173,12 @@ where
         self.acks.push_back(Record { rx: rx1, tx: tx2 });
 
         let task = self.task.clone();
-        tokio_executor::current_thread::spawn(self.service.call(request).then(move |res| {
+        let fut = self.service.call(request);
+        tokio_executor::current_thread::spawn(async move {
+            let res = fut.await;
             task.wake();
             let _ = tx1.send(res);
-            ready(())
-        }));
+        });
 
         InOrderServiceResponse { rx: rx2 }
     }

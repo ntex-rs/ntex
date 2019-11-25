@@ -37,7 +37,7 @@ actix-service = "1.0.0-alpha.1"
 actix-codec = "0.2.0-alpha.1"
 actix-utils = "0.5.0-alpha.1"
 actix-rt = "1.0.0-alpha.1"
-derive_more = "0.15"
+derive_more = "0.99"
 either = "1.5.2"
 futures = "0.3.1"
 http = { version = "0.1.17", optional = true }
