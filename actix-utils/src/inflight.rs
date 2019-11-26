@@ -131,7 +131,7 @@ mod tests {
         }
 
         fn call(&mut self, _: ()) -> Self::Future {
-            tokio_timer::delay_for(self.0)
+            actix_rt::time::delay_for(self.0)
                 .then(|_| ok::<_, ()>(()))
                 .boxed_local()
         }

@@ -2,11 +2,11 @@ use std::sync::mpsc as sync_mpsc;
 use std::time::{Duration, Instant};
 use std::{io, thread};
 
+use actix_rt::time::delay;
 use actix_rt::System;
 use futures::FutureExt;
 use log::{error, info};
 use slab::Slab;
-use tokio_timer::delay;
 
 use crate::server::Server;
 use crate::socket::{SocketAddr, SocketListener, StdListener};

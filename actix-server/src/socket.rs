@@ -1,6 +1,6 @@
 use std::{fmt, io, net};
 
-use tokio_io::{AsyncRead, AsyncWrite};
+use actix_codec::{AsyncRead, AsyncWrite};
 use tokio_net::driver::Handle;
 use tokio_net::tcp::TcpStream;
 

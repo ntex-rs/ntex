@@ -174,7 +174,7 @@ where
 
         let task = self.task.clone();
         let fut = self.service.call(request);
-        tokio_executor::current_thread::spawn(async move {
+        actix_rt::spawn(async move {
             let res = fut.await;
             task.wake();
             let _ = tx1.send(res);
@@ -252,7 +252,7 @@ mod tests {
                 let _ = lazy(|cx| srv.poll_ready(cx)).await;
 
                 // dispatcher do this
-                tokio_timer::delay_for(Duration::from_millis(100)).await;
+                actix_rt::time::delay_for(Duration::from_millis(100)).await;
                 let _ = lazy(|cx| srv.poll_ready(cx)).await;
 
                 assert_eq!(res1.await.unwrap(), 1);

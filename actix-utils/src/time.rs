@@ -2,9 +2,9 @@ use std::convert::Infallible;
 use std::task::{Context, Poll};
 use std::time::{self, Duration, Instant};
 
+use actix_rt::time::delay_for;
 use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, ready, FutureExt, Ready};
-use tokio_timer::delay_for;
 
 use super::cell::Cell;
 
@@ -79,7 +79,7 @@ impl LowResTimeService {
                 b.resolution
             };
 
-            tokio_executor::current_thread::spawn(delay_for(interval).then(move |_| {
+            actix_rt::spawn(delay_for(interval).then(move |_| {
                 inner.get_mut().current.take();
                 ready(())
             }));
@@ -144,7 +144,7 @@ impl SystemTimeService {
                 b.resolution
             };
 
-            tokio_executor::current_thread::spawn(delay_for(interval).then(move |_| {
+            actix_rt::spawn(delay_for(interval).then(move |_| {
                 inner.get_mut().current.take();
                 ready(())
             }));

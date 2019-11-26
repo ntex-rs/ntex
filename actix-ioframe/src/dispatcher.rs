@@ -279,22 +279,21 @@ where
                 };
 
                 let mut cell = inner.clone();
-                tokio_executor::current_thread::spawn(
-                    srv.call(Item::new(state.clone(), sink.clone(), item))
-                        .then(move |item| {
-                            let item = match item {
-                                Ok(Some(item)) => Ok(item),
-                                Ok(None) => return ready(()),
-                                Err(err) => Err(err),
-                            };
-                            unsafe {
-                                let inner = cell.get_mut();
-                                inner.buf.push_back(item);
-                                inner.task.wake();
-                            }
-                            ready(())
-                        }),
-                );
+                actix_rt::spawn(srv.call(Item::new(state.clone(), sink.clone(), item)).then(
+                    move |item| {
+                        let item = match item {
+                            Ok(Some(item)) => Ok(item),
+                            Ok(None) => return ready(()),
+                            Err(err) => Err(err),
+                        };
+                        unsafe {
+                            let inner = cell.get_mut();
+                            inner.buf.push_back(item);
+                            inner.task.wake();
+                        }
+                        ready(())
+                    },
+                ));
             }
             Poll::Pending => return false,
             Poll::Ready(Err(err)) => {

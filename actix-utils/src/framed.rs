@@ -287,7 +287,7 @@ where
                     inner.task.wake();
                     ready(())
                 });
-                tokio_executor::current_thread::spawn(fut);
+                actix_rt::spawn(fut);
             }
             Poll::Pending => return false,
             Poll::Ready(Err(err)) => {

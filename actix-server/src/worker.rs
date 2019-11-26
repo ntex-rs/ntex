@@ -4,13 +4,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{mem, time};
 
+use actix_rt::time::{delay, Delay};
 use actix_rt::{spawn, Arbiter};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot;
 use futures::future::{join_all, LocalBoxFuture, MapOk};
 use futures::{Future, FutureExt, Stream, TryFutureExt};
 use log::{error, info, trace};
-use tokio_timer::{delay, Delay};
 
 use crate::accept::AcceptNotify;
 use crate::counter::Counter;

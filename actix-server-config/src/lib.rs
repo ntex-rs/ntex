@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::{fmt, io, net, ops, time};
 
-use tokio_io::{AsyncRead, AsyncWrite};
+use actix_codec::{AsyncRead, AsyncWrite};
 use tokio_net::tcp::TcpStream;
 
 #[derive(Debug, Clone)]

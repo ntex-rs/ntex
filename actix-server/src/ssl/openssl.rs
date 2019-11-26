@@ -3,10 +3,10 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use actix_codec::{AsyncRead, AsyncWrite};
 use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 use open_ssl::ssl::SslAcceptor;
-use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_openssl::{HandshakeError, SslStream};
 
 use crate::counter::{Counter, CounterGuard};

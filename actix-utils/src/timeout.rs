@@ -8,9 +8,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, time};
 
+use actix_rt::time::{delay_for, Delay};
 use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, Ready};
-use tokio_timer::{clock, delay, Delay};
 
 /// Applies a timeout to requests.
 #[derive(Debug)]
@@ -138,7 +138,7 @@ where
     fn call(&mut self, request: S::Request) -> Self::Future {
         TimeoutServiceResponse {
             fut: self.service.call(request),
-            sleep: delay(clock::now() + self.timeout),
+            sleep: delay_for(self.timeout),
         }
     }
 }
@@ -198,7 +198,7 @@ mod tests {
         }
 
         fn call(&mut self, _: ()) -> Self::Future {
-            tokio_timer::delay_for(self.0)
+            actix_rt::time::delay_for(self.0)
                 .then(|_| ok::<_, ()>(()))
                 .boxed_local()
         }

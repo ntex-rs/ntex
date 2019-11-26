@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{io, mem, net};
 
-use actix_rt::{spawn, Arbiter, System};
+use actix_rt::{spawn, time::delay, Arbiter, System};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use futures::future::ready;
 use futures::stream::FuturesUnordered;
@@ -12,7 +12,6 @@ use log::{error, info};
 use net2::TcpBuilder;
 use num_cpus;
 use tokio_net::tcp::TcpStream;
-use tokio_timer::delay;
 
 use crate::accept::{AcceptLoop, AcceptNotify, Command};
 use crate::config::{ConfiguredService, ServiceConfig};

@@ -48,7 +48,7 @@ async fn test_rustls_string() {
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
 }
 
-#[tokio::test]
+#[actix_rt::test]
 async fn test_static_str() {
     let srv = TestServer::with(|| {
         service_fn(|io: Io<tokio_net::tcp::TcpStream>| {

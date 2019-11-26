@@ -5,10 +5,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use actix_codec::{AsyncRead, AsyncWrite};
 use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, Ready};
 use rust_tls::ServerConfig;
-use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_rustls::{server::TlsStream, Accept, TlsAcceptor};
 
 use crate::counter::{Counter, CounterGuard};

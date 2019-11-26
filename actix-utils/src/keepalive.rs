@@ -5,9 +5,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use actix_rt::time::{delay, Delay};
 use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, Ready};
-use tokio_timer::{delay, Delay};
 
 use super::time::{LowResTime, LowResTimeService};
 
