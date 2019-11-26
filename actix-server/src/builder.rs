@@ -18,7 +18,7 @@ use crate::accept::{AcceptLoop, AcceptNotify, Command};
 use crate::config::{ConfiguredService, ServiceConfig};
 use crate::server::{Server, ServerCommand};
 use crate::service::{InternalServiceFactory, ServiceFactory, StreamNewService};
-// use crate::signals::{Signal, Signals};
+use crate::signals::{Signal, Signals};
 use crate::socket::StdListener;
 use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use crate::{ssl, Token};
@@ -305,7 +305,7 @@ impl ServerBuilder {
 
             // handle signals
             if !self.no_signals {
-                // Signals::start(self.server.clone());
+                Signals::start(self.server.clone()).unwrap();
             }
 
             // start http server actor
@@ -344,37 +344,37 @@ impl ServerBuilder {
                 self.accept.send(Command::Resume);
                 let _ = tx.send(());
             }
-            // ServerCommand::Signal(sig) => {
-            // Signals support
-            // Handle `SIGINT`, `SIGTERM`, `SIGQUIT` signals and stop actix system
-            // match sig {
-            //     Signal::Int => {
-            //         info!("SIGINT received, exiting");
-            //         self.exit = true;
-            //         self.handle_cmd(ServerCommand::Stop {
-            //             graceful: false,
-            //             completion: None,
-            //         })
-            //     }
-            //     Signal::Term => {
-            //         info!("SIGTERM received, stopping");
-            //         self.exit = true;
-            //         self.handle_cmd(ServerCommand::Stop {
-            //             graceful: true,
-            //             completion: None,
-            //         })
-            //     }
-            //     Signal::Quit => {
-            //         info!("SIGQUIT received, exiting");
-            //         self.exit = true;
-            //         self.handle_cmd(ServerCommand::Stop {
-            //             graceful: false,
-            //             completion: None,
-            //         })
-            //     }
-            //     _ => (),
-            // }
-            // }
+            ServerCommand::Signal(sig) => {
+                // Signals support
+                // Handle `SIGINT`, `SIGTERM`, `SIGQUIT` signals and stop actix system
+                match sig {
+                    Signal::Int => {
+                        info!("SIGINT received, exiting");
+                        self.exit = true;
+                        self.handle_cmd(ServerCommand::Stop {
+                            graceful: false,
+                            completion: None,
+                        })
+                    }
+                    Signal::Term => {
+                        info!("SIGTERM received, stopping");
+                        self.exit = true;
+                        self.handle_cmd(ServerCommand::Stop {
+                            graceful: true,
+                            completion: None,
+                        })
+                    }
+                    Signal::Quit => {
+                        info!("SIGQUIT received, exiting");
+                        self.exit = true;
+                        self.handle_cmd(ServerCommand::Stop {
+                            graceful: false,
+                            completion: None,
+                        })
+                    }
+                    _ => (),
+                }
+            }
             ServerCommand::Notify(tx) => {
                 self.notify.push(tx);
             }

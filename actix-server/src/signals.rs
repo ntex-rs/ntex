@@ -3,11 +3,7 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_rt::spawn;
-use futures::future::LocalBoxFuture;
-use futures::stream::{futures_unordered, FuturesUnordered, LocalBoxStream};
-use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStream, TryStreamExt};
-use tokio_net::signal::unix::signal;
+use futures_core::stream::Stream;
 
 use crate::server::Server;
 
@@ -27,126 +23,74 @@ pub(crate) enum Signal {
 pub(crate) struct Signals {
     srv: Server,
     #[cfg(not(unix))]
-    stream: SigStream,
+    stream: tokio_net::signal::CtrlC,
     #[cfg(unix)]
-    streams: Vec<SigStream>,
+    streams: Vec<(Signal, tokio_net::signal::unix::Signal)>,
 }
 
-type SigStream = LocalBoxStream<'static, Result<Signal, io::Error>>;
-
 impl Signals {
-    pub(crate) fn start(srv: Server) {
-        let fut = {
+    pub(crate) fn start(srv: Server) -> io::Result<()> {
+        actix_rt::spawn({
             #[cfg(not(unix))]
             {
-                tokio_net::signal::ctrl_c()
-                    .map_err(|_| ())
-                    .and_then(move |stream| Signals {
-                        srv,
-                        stream: Box::new(stream.map(|_| Signal::Int)),
-                    })
+                let stream = tokio_net::signal::ctrl_c()?;
+                Signals { srv, stream }
             }
 
             #[cfg(unix)]
             {
                 use tokio_net::signal::unix;
 
-                let mut sigs: Vec<_> = Vec::new();
+                let mut streams = Vec::new();
 
-                let mut SIG_MAP = [
-                    (
-                        tokio_net::signal::unix::SignalKind::interrupt(),
-                        Signal::Int,
-                    ),
-                    (tokio_net::signal::unix::SignalKind::hangup(), Signal::Hup),
-                    (
-                        tokio_net::signal::unix::SignalKind::terminate(),
-                        Signal::Term,
-                    ),
-                    (tokio_net::signal::unix::SignalKind::quit(), Signal::Quit),
+                let sig_map = [
+                    (unix::SignalKind::interrupt(), Signal::Int),
+                    (unix::SignalKind::hangup(), Signal::Hup),
+                    (unix::SignalKind::terminate(), Signal::Term),
+                    (unix::SignalKind::quit(), Signal::Quit),
                 ];
 
-                for (kind, sig) in SIG_MAP.into_iter() {
+                for (kind, sig) in sig_map.into_iter() {
                     let sig = sig.clone();
-                    let fut = signal(*kind).unwrap();
-                    sigs.push(fut.map(move |_| Ok(sig)).boxed_local());
+                    let fut = unix::signal(*kind)?;
+                    streams.push((sig, fut));
                 }
-                /* TODO: Finish rewriting this
-                sigs.push(
-                    tokio_net::signal::unix::signal(tokio_net::signal::si).unwrap()
-                        .map(|stream| {
-                            let s: SigStream = Box::new(stream.map(|_| Signal::Int));
-                            s
-                        }).boxed()
-                );
-                sigs.push(
 
-                    tokio_net::signal::unix::signal(tokio_net::signal::unix::SignalKind::hangup()).unwrap()
-                        .map(|stream: unix::Signal| {
-                            let s: SigStream = Box::new(stream.map(|_| Signal::Hup));
-                            s
-                        }).boxed()
-                );
-                sigs.push(
-                    tokio_net::signal::unix::signal(
-                        tokio_net::signal::unix::SignalKind::terminate()
-                    ).unwrap()
-                        .map(|stream| {
-                            let s: SigStream = Box::new(stream.map(|_| Signal::Term));
-                            s
-                        }).boxed(),
-                );
-                sigs.push(
-                    tokio_net::signal::unix::signal(
-                        tokio_net::signal::unix::SignalKind::quit()
-                    ).unwrap()
-                        .map(|stream| {
-                            let s: SigStream = Box::new(stream.map(|_| Signal::Quit));
-                            s
-                        }).boxed()
-                );
-                */
-
-                Signals { srv, streams: sigs }
+                Signals { srv, streams }
             }
-        };
-        spawn(async {});
+        });
+
+        Ok(())
     }
 }
 
 impl Future for Signals {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        unimplemented!()
-    }
-
-    /*
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         #[cfg(not(unix))]
         loop {
-            match self.stream.poll() {
-                Ok(Async::Ready(None)) | Err(_) => return Ok(Async::Ready(())),
-                Ok(Async::Ready(Some(sig))) => self.srv.signal(sig),
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
+            match Pin::new(&mut self.stream).poll_next(cx) {
+                Poll::Ready(Ok(Some(_))) => self.srv.signal(Signal::Int),
+                Poll::Ready(None) => return Poll::Ready(()),
+                Poll::Pending => return Poll::Pending,
             }
         }
         #[cfg(unix)]
         {
-            for s in &mut self.streams {
+            for idx in 0..self.streams.len() {
                 loop {
-                    match s.poll() {
-                        Ok(Async::Ready(None)) | Err(_) => return Ok(Async::Ready(())),
-                        Ok(Async::NotReady) => break,
-                        Ok(Async::Ready(Some(sig))) => self.srv.signal(sig),
+                    match Pin::new(&mut self.streams[idx].1).poll_next(cx) {
+                        Poll::Ready(None) => return Poll::Ready(()),
+                        Poll::Pending => break,
+                        Poll::Ready(Some(_)) => {
+                            let sig = self.streams[idx].0;
+                            self.srv.signal(sig);
+                        }
                     }
                 }
             }
-            Ok(Async::NotReady)
+            Poll::Pending
         }
     }
-    */
 }

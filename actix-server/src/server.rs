@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -7,14 +8,14 @@ use futures::channel::oneshot;
 use futures::FutureExt;
 
 use crate::builder::ServerBuilder;
-// use crate::signals::Signal;
+use crate::signals::Signal;
 
 #[derive(Debug)]
 pub(crate) enum ServerCommand {
     WorkerFaulted(usize),
     Pause(oneshot::Sender<()>),
     Resume(oneshot::Sender<()>),
-    // Signal(Signal),
+    Signal(Signal),
     /// Whether to try and shut down gracefully
     Stop {
         graceful: bool,
@@ -40,9 +41,9 @@ impl Server {
         ServerBuilder::default()
     }
 
-    // pub(crate) fn signal(&self, sig: Signal) {
-    //     let _ = self.0.unbounded_send(ServerCommand::Signal(sig));
-    // }
+    pub(crate) fn signal(&self, sig: Signal) {
+        let _ = self.0.unbounded_send(ServerCommand::Signal(sig));
+    }
 
     pub(crate) fn worker_faulted(&self, idx: usize) {
         let _ = self.0.unbounded_send(ServerCommand::WorkerFaulted(idx));
@@ -85,7 +86,7 @@ impl Clone for Server {
 }
 
 impl Future for Server {
-    type Output = ();
+    type Output = io::Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -93,15 +94,15 @@ impl Future for Server {
         if this.1.is_none() {
             let (tx, rx) = oneshot::channel();
             if this.0.unbounded_send(ServerCommand::Notify(tx)).is_err() {
-                return Poll::Ready(());
+                return Poll::Ready(Ok(()));
             }
             this.1 = Some(rx);
         }
 
         match Pin::new(this.1.as_mut().unwrap()).poll(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(_)) => Poll::Ready(()),
-            Poll::Ready(Err(_)) => Poll::Ready(()),
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(_)) => Poll::Ready(Ok(())),
         }
     }
 }

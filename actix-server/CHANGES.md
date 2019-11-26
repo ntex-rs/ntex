@@ -1,5 +1,19 @@
 # Changes
 
+## [0.8.0-alpha.2] - 2019-11-xx
+
+### Changed
+
+* Allow to wait on `Server` until server stops
+
+
+## [0.8.0-alpha.1] - 2019-11-22
+
+### Changed
+
+* Migrate to `std::future`
+
+
 ## [0.7.0] - 2019-10-04
 
 ### Changed

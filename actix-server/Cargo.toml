@@ -40,6 +40,8 @@ futures = "0.3.1"
 slab = "0.4"
 tokio-net = { version = "0.2.0-alpha.6", features = ["signal", "tcp", "uds"] }
 
+futures-core-preview = "0.3.0-alpha.19"
+
 # unix domain sockets
 mio-uds = { version = "0.6.7" }
 
