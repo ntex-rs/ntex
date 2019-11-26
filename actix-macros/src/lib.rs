@@ -68,9 +68,12 @@ pub fn test(_: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     if input.sig.asyncness.is_none() {
-        return syn::Error::new_spanned(input.sig.fn_token, "only async fn is supported")
-            .to_compile_error()
-            .into();
+        return syn::Error::new_spanned(
+            input.sig.fn_token,
+            format!("only async fn is supported, {:?}", input.sig.fn_token),
+        )
+        .to_compile_error()
+        .into();
     }
 
     let result = if has_test_attr {
