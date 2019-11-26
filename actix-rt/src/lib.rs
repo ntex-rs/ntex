@@ -37,6 +37,7 @@ pub mod time {
 
     pub use tokio_timer::Interval;
     pub use tokio_timer::{delay, delay_for, Delay};
+    pub use tokio_timer::{timeout, Timeout};
 
     /// Creates new `Interval` that yields with interval of `duration`. The first
     /// tick completes immediately.

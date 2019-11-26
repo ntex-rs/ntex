@@ -6,7 +6,7 @@ Added
 
 * Export `main` and `test` attribute macros
 
-* Export `timer` module (re-export of tokio-timer)
+* Export `time` module (re-export of tokio-timer)
 
 
 ## [1.0.0-alpha.1] - 2019-11-22
