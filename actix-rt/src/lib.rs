@@ -30,3 +30,23 @@ where
 
     Arbiter::spawn(f);
 }
+
+/// Utilities for tracking time.
+pub mod time {
+    use std::time::{Duration, Instant};
+
+    pub use tokio_timer::Interval;
+    pub use tokio_timer::{delay, delay_for, Delay};
+
+    /// Creates new `Interval` that yields with interval of `duration`. The first
+    /// tick completes immediately.
+    pub fn interval(duration: Duration) -> Interval {
+        Interval::new(Instant::now(), duration)
+    }
+
+    /// Creates new `Interval` that yields with interval of `period` with the
+    /// first tick completing at `at`.
+    pub fn interval_at(start: Instant, duration: Duration) -> Interval {
+        Interval::new(start, duration)
+    }
+}
