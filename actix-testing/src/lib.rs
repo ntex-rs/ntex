@@ -10,6 +10,7 @@ use net2::TcpBuilder;
 use tokio_net::driver::Handle;
 use tokio_net::tcp::TcpStream;
 
+#[cfg(not(test))] // Work around for rust-lang/rust#62127
 pub use actix_macros::test;
 
 /// The `TestServer` type.

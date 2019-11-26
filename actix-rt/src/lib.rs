@@ -1,5 +1,6 @@
 //! A runtime implementation that runs everything on the current thread.
 
+#[cfg(not(test))] // Work around for rust-lang/rust#62127
 pub use actix_macros::{main, test};
 
 mod arbiter;
