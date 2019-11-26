@@ -5,6 +5,7 @@ use std::{io, mem, net};
 
 use actix_rt::{spawn, time::delay, Arbiter, System};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
+use futures::channel::oneshot;
 use futures::future::ready;
 use futures::stream::FuturesUnordered;
 use futures::{ready, Future, FutureExt, Stream, StreamExt};
@@ -36,6 +37,7 @@ pub struct ServerBuilder {
     no_signals: bool,
     cmd: UnboundedReceiver<ServerCommand>,
     server: Server,
+    notify: Vec<oneshot::Sender<()>>,
 }
 
 impl Default for ServerBuilder {
@@ -62,6 +64,7 @@ impl ServerBuilder {
             shutdown_timeout: Duration::from_secs(30),
             no_signals: false,
             cmd: rx,
+            notify: Vec::new(),
             server,
         }
     }
@@ -372,6 +375,9 @@ impl ServerBuilder {
             //     _ => (),
             // }
             // }
+            ServerCommand::Notify(tx) => {
+                self.notify.push(tx);
+            }
             ServerCommand::Stop {
                 graceful,
                 completion,
@@ -380,6 +386,7 @@ impl ServerBuilder {
 
                 // stop accept thread
                 self.accept.send(Command::Stop);
+                let notify = std::mem::replace(&mut self.notify, Vec::new());
 
                 // stop workers
                 if !self.workers.is_empty() && graceful {
@@ -391,6 +398,9 @@ impl ServerBuilder {
                             .collect::<Vec<_>>()
                             .then(move |_| {
                                 if let Some(tx) = completion {
+                                    let _ = tx.send(());
+                                }
+                                for tx in notify {
                                     let _ = tx.send(());
                                 }
                                 if exit {
@@ -417,6 +427,9 @@ impl ServerBuilder {
                         );
                     }
                     if let Some(tx) = completion {
+                        let _ = tx.send(());
+                    }
+                    for tx in notify {
                         let _ = tx.send(());
                     }
                 }
