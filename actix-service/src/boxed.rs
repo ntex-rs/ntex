@@ -1,8 +1,12 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::future::FutureExt;
 
-use crate::{BoxFuture, Service, ServiceFactory};
+use crate::{Service, ServiceFactory};
+
+pub type BoxFuture<I, E> = Pin<Box<dyn Future<Output = Result<I, E>>>>;
 
 pub type BoxService<Req, Res, Err> =
     Box<dyn Service<Request = Req, Response = Res, Error = Err, Future = BoxFuture<Res, Err>>>;
