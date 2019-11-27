@@ -27,7 +27,7 @@ default = ["uri"]
 openssl = ["open-ssl", "tokio-openssl"]
 
 # rustls
-rustls = ["rust-tls", "tokio-rustls", "webpki"]
+# rustls = ["rust-tls", "tokio-rustls", "webpki"]
 
 # support http::Uri as connect address
 uri = ["http"]
@@ -52,7 +52,7 @@ tokio-openssl = { version = "0.4.0-alpha.6", optional = true }
 # rustls
 rust-tls = { version = "0.16.0", package = "rustls", optional = true }
 # tokio-rustls = { version = "0.10.0", optional = true }
-tokio-rustls = { git = "https://github.com/quininer/tokio-rustls.git", branch = "tokio-0.2", optional = true }
+# tokio-rustls = { git = "https://github.com/quininer/tokio-rustls.git", branch = "tokio-0.2", optional = true }
 webpki = { version = "0.21", optional = true }
 
 [dev-dependencies]

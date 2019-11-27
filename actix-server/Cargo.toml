@@ -24,7 +24,7 @@ path = "src/lib.rs"
 default = []
 nativetls = ["native-tls", "tokio-tls"]
 openssl = ["open-ssl", "tokio-openssl", "actix-server-config/openssl"]
-rustls = ["rust-tls", "tokio-rustls", "webpki", "webpki-roots", "actix-server-config/rustls"]
+# rustls = ["rust-tls", "tokio-rustls", "webpki", "webpki-roots", "actix-server-config/rustls"]
 
 [dependencies]
 actix-service = "1.0.0-alpha.1"
@@ -56,7 +56,7 @@ tokio-openssl = { version = "0.4.0-alpha.6", optional = true }
 # rustls
 rust-tls = { version = "0.16.0", package = "rustls", optional = true }
 # tokio-rustls = { version = "0.12.0-alpha.2", optional = true }
-tokio-rustls = { git = "https://github.com/quininer/tokio-rustls.git", branch = "tokio-0.2", optional = true }
+# tokio-rustls = { git = "https://github.com/quininer/tokio-rustls.git", branch = "tokio-0.2", optional = true }
 webpki = { version = "0.21", optional = true }
 webpki-roots = { version = "0.17", optional = true }
 
