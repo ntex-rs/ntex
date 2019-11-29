@@ -23,8 +23,7 @@ where
 impl<S, T> StreamDispatcher<S, T>
 where
     S: Stream,
-    T: Service<Request = S::Item, Response = ()>,
-    T::Future: 'static,
+    T: Service<Request = S::Item, Response = ()> + 'static,
 {
     pub fn new<F>(stream: S, service: F) -> Self
     where

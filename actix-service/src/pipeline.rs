@@ -1,6 +1,9 @@
 use std::task::{Context, Poll};
 
 use crate::and_then::{AndThenService, AndThenServiceFactory};
+use crate::map::{Map, MapServiceFactory};
+use crate::map_err::{MapErr, MapErrServiceFactory};
+use crate::map_init_err::MapInitErr;
 use crate::then::{ThenService, ThenServiceFactory};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
@@ -63,6 +66,43 @@ impl<T: Service> Pipeline<T> {
     {
         Pipeline {
             service: ThenService::new(self.service, service.into_service()),
+        }
+    }
+
+    /// Map this service's output to a different type, returning a new service
+    /// of the resulting type.
+    ///
+    /// This function is similar to the `Option::map` or `Iterator::map` where
+    /// it will change the type of the underlying service.
+    ///
+    /// Note that this function consumes the receiving service and returns a
+    /// wrapped version of it, similar to the existing `map` methods in the
+    /// standard library.
+    pub fn map<F, R>(self, f: F) -> Pipeline<Map<T, F, R>>
+    where
+        Self: Sized,
+        F: FnMut(T::Response) -> R,
+    {
+        Pipeline {
+            service: Map::new(self.service, f),
+        }
+    }
+
+    /// Map this service's error to a different error, returning a new service.
+    ///
+    /// This function is similar to the `Result::map_err` where it will change
+    /// the error type of the underlying service. This is useful for example to
+    /// ensure that services have the same error type.
+    ///
+    /// Note that this function consumes the receiving service and returns a
+    /// wrapped version of it.
+    pub fn map_err<F, E>(self, f: F) -> Pipeline<MapErr<T, F, E>>
+    where
+        Self: Sized,
+        F: Fn(T::Error) -> E,
+    {
+        Pipeline {
+            service: MapErr::new(self.service, f),
         }
     }
 }
@@ -137,6 +177,40 @@ impl<T: ServiceFactory> PipelineFactory<T> {
     {
         PipelineFactory {
             factory: ThenServiceFactory::new(self.factory, factory.into_factory()),
+        }
+    }
+
+    /// Map this service's output to a different type, returning a new service
+    /// of the resulting type.
+    pub fn map<F, R>(self, f: F) -> PipelineFactory<MapServiceFactory<T, F, R>>
+    where
+        Self: Sized,
+        F: FnMut(T::Response) -> R + Clone,
+    {
+        PipelineFactory {
+            factory: MapServiceFactory::new(self.factory, f),
+        }
+    }
+
+    /// Map this service's error to a different error, returning a new service.
+    pub fn map_err<F, E>(self, f: F) -> PipelineFactory<MapErrServiceFactory<T, F, E>>
+    where
+        Self: Sized,
+        F: Fn(T::Error) -> E + Clone,
+    {
+        PipelineFactory {
+            factory: MapErrServiceFactory::new(self.factory, f),
+        }
+    }
+
+    /// Map this factory's init error to a different error, returning a new service.
+    pub fn map_init_err<F, E>(self, f: F) -> PipelineFactory<MapInitErr<T, F, E>>
+    where
+        Self: Sized,
+        F: Fn(T::InitError) -> E + Clone,
+    {
+        PipelineFactory {
+            factory: MapInitErr::new(self.factory, f),
         }
     }
 }
