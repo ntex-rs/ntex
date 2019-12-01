@@ -2,6 +2,7 @@
 name = "actix-macros"
 version = "0.1.0-alpha.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+description = "Actix runtime macros"
 repository = "https://github.com/actix/actix-net"
 documentation = "https://docs.rs/actix-macros/"
 categories = ["network-programming", "asynchronous"]
