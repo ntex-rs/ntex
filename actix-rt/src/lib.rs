@@ -52,3 +52,15 @@ pub mod time {
         Interval::new(start, duration)
     }
 }
+
+pub mod net {
+    pub use tokio::net::UdpSocket;
+    pub use tokio::net::{TcpListener, TcpStream};
+
+    #[cfg(unix)]
+    mod unix {
+        pub use tokio::net::{UnixDatagram, UnixListener, UnixStream};
+    }
+
+    pub use self::unix::*;
+}
