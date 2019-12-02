@@ -89,7 +89,7 @@ async fn test_new_service() {
 
     let factory = actix_connect::new_connector_factory(resolver);
 
-    let mut conn = factory.new_service(&()).await.unwrap();
+    let mut conn = factory.new_service(()).await.unwrap();
     let con = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
 }

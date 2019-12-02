@@ -121,7 +121,7 @@ impl InternalServiceFactory for ConfiguredService {
             }
             let mut res = vec![];
             for (token, ns) in services.into_iter() {
-                let newserv = ns.new_service(&());
+                let newserv = ns.new_service(());
                 match newserv.await {
                     Ok(serv) => {
                         res.push((token, serv));
@@ -250,8 +250,8 @@ where
     type Service = BoxedServerService;
     type Future = LocalBoxFuture<'static, Result<BoxedServerService, ()>>;
 
-    fn new_service(&self, cfg: &()) -> Self::Future {
-        let fut = self.inner.new_service(cfg);
+    fn new_service(&self, _: ()) -> Self::Future {
+        let fut = self.inner.new_service(());
         async move {
             return match fut.await {
                 Ok(s) => Ok(Box::new(StreamService::new(s)) as BoxedServerService),

@@ -63,6 +63,7 @@ impl<A, B> Either<A, B> {
     pub fn new(left: A, right: B) -> Either<A, B>
     where
         A: ServiceFactory,
+        A::Config: Clone,
         B: ServiceFactory<
             Config = A::Config,
             Response = A::Response,
@@ -77,6 +78,7 @@ impl<A, B> Either<A, B> {
 impl<A, B> ServiceFactory for Either<A, B>
 where
     A: ServiceFactory,
+    A::Config: Clone,
     B: ServiceFactory<
         Config = A::Config,
         Response = A::Response,
@@ -92,11 +94,11 @@ where
     type Service = EitherService<A::Service, B::Service>;
     type Future = EitherNewService<A, B>;
 
-    fn new_service(&self, cfg: &A::Config) -> Self::Future {
+    fn new_service(&self, cfg: A::Config) -> Self::Future {
         EitherNewService {
             left: None,
             right: None,
-            left_fut: self.left.new_service(cfg),
+            left_fut: self.left.new_service(cfg.clone()),
             right_fut: self.right.new_service(cfg),
         }
     }

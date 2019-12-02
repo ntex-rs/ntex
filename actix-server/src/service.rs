@@ -150,7 +150,7 @@ where
         let token = self.token;
         self.inner
             .create()
-            .new_service(&())
+            .new_service(())
             .map_err(|_| ())
             .map_ok(move |inner| {
                 let service: BoxedServerService = Box::new(StreamService::new(inner));

@@ -2,16 +2,11 @@ use std::marker::PhantomData;
 
 use super::ServiceFactory;
 
-pub enum MappedConfig<'a, T> {
-    Ref(&'a T),
-    Owned(T),
-}
-
 /// Adapt external config to a config for provided new service
 pub fn map_config<T, F, C>(factory: T, f: F) -> MapConfig<T, F, C>
 where
     T: ServiceFactory,
-    F: Fn(&C) -> MappedConfig<T::Config>,
+    F: Fn(C) -> T::Config,
 {
     MapConfig::new(factory, f)
 }
@@ -36,7 +31,7 @@ impl<A, F, C> MapConfig<A, F, C> {
     pub(crate) fn new(a: A, f: F) -> Self
     where
         A: ServiceFactory,
-        F: Fn(&C) -> MappedConfig<A::Config>,
+        F: Fn(C) -> A::Config,
     {
         Self {
             a,
@@ -63,7 +58,7 @@ where
 impl<A, F, C> ServiceFactory for MapConfig<A, F, C>
 where
     A: ServiceFactory,
-    F: Fn(&C) -> MappedConfig<A::Config>,
+    F: Fn(C) -> A::Config,
 {
     type Request = A::Request;
     type Response = A::Response;
@@ -74,11 +69,8 @@ where
     type InitError = A::InitError;
     type Future = A::Future;
 
-    fn new_service(&self, cfg: &C) -> Self::Future {
-        match (self.f)(cfg) {
-            MappedConfig::Ref(cfg) => self.a.new_service(cfg),
-            MappedConfig::Owned(cfg) => self.a.new_service(&cfg),
-        }
+    fn new_service(&self, cfg: C) -> Self::Future {
+        self.a.new_service((self.f)(cfg))
     }
 }
 
@@ -123,7 +115,7 @@ where
     type InitError = A::InitError;
     type Future = A::Future;
 
-    fn new_service(&self, _: &C) -> Self::Future {
-        self.a.new_service(&())
+    fn new_service(&self, _: C) -> Self::Future {
+        self.a.new_service(())
     }
 }

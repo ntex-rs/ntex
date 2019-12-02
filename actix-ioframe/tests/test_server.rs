@@ -10,6 +10,7 @@ use futures::future::ok;
 
 use actix_ioframe::{Builder, Connect};
 
+#[derive(Clone)]
 struct State;
 
 #[actix_rt::test]

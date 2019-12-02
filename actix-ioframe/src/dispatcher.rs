@@ -17,7 +17,6 @@ use crate::cell::Cell;
 use crate::error::ServiceError;
 use crate::item::Item;
 use crate::sink::Sink;
-use crate::state::State;
 
 type Request<S, U> = Item<S, U>;
 type Response<U> = <U as Encoder>::Item;
@@ -33,6 +32,7 @@ pub(crate) enum FramedMessage<T> {
 #[pin_project::pin_project]
 pub(crate) struct FramedDispatcher<St, S, T, U>
 where
+    St: Clone,
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
@@ -43,7 +43,7 @@ where
 {
     service: S,
     sink: Sink<<U as Encoder>::Item>,
-    state: State<St>,
+    state: St,
     dispatch_state: FramedState<S, U>,
     framed: Framed<T, U>,
     rx: Option<mpsc::Receiver<FramedMessage<<U as Encoder>::Item>>>,
@@ -53,6 +53,7 @@ where
 
 impl<St, S, T, U> FramedDispatcher<St, S, T, U>
 where
+    St: Clone,
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
@@ -63,7 +64,7 @@ where
 {
     pub(crate) fn new<F: IntoService<S>>(
         framed: Framed<T, U>,
-        state: State<St>,
+        state: St,
         service: F,
         rx: mpsc::Receiver<FramedMessage<<U as Encoder>::Item>>,
         sink: Sink<<U as Encoder>::Item>,
@@ -124,6 +125,7 @@ struct FramedDispatcherInner<I, E> {
 
 impl<St, S, T, U> FramedDispatcher<St, S, T, U>
 where
+    St: Clone,
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
@@ -156,7 +158,7 @@ where
 fn poll<St, S, T, U>(
     cx: &mut Context,
     srv: &mut S,
-    state: &mut State<St>,
+    state: &mut St,
     sink: &mut Sink<<U as Encoder>::Item>,
     framed: &mut Framed<T, U>,
     dispatch_state: &mut FramedState<S, U>,
@@ -165,6 +167,7 @@ fn poll<St, S, T, U>(
     disconnect: &mut Option<Rc<dyn Fn(&mut St, bool)>>,
 ) -> Poll<Result<(), ServiceError<S::Error, U>>>
 where
+    St: Clone,
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
@@ -199,7 +202,7 @@ where
                     || framed.is_write_buf_empty())
             {
                 if let Some(ref disconnect) = disconnect {
-                    (&*disconnect)(&mut *state.get_mut(), true);
+                    (&*disconnect)(&mut *state, true);
                 }
                 Poll::Ready(Err(err))
             } else {
@@ -224,19 +227,19 @@ where
                 let _ = tx.send(());
             }
             if let Some(ref disconnect) = disconnect {
-                (&*disconnect)(&mut *state.get_mut(), false);
+                (&*disconnect)(&mut *state, false);
             }
             Poll::Ready(Ok(()))
         }
         FramedState::FramedError(err) => {
             if let Some(ref disconnect) = disconnect {
-                (&*disconnect)(&mut *state.get_mut(), true);
+                (&*disconnect)(&mut *state, true);
             }
             Poll::Ready(Err(err))
         }
         FramedState::Stopping => {
             if let Some(ref disconnect) = disconnect {
-                (&*disconnect)(&mut *state.get_mut(), false);
+                (&*disconnect)(&mut *state, false);
             }
             Poll::Ready(Ok(()))
         }
@@ -246,13 +249,14 @@ where
 fn poll_read<St, S, T, U>(
     cx: &mut Context,
     srv: &mut S,
-    state: &mut State<St>,
+    state: &mut St,
     sink: &mut Sink<<U as Encoder>::Item>,
     framed: &mut Framed<T, U>,
     dispatch_state: &mut FramedState<S, U>,
     inner: &mut Cell<FramedDispatcherInner<<U as Encoder>::Item, S::Error>>,
 ) -> bool
 where
+    St: Clone,
     S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,

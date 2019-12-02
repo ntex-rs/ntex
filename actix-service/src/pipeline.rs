@@ -145,6 +145,7 @@ impl<T: ServiceFactory> PipelineFactory<T> {
     pub fn and_then<F, U>(self, factory: F) -> PipelineFactory<AndThenServiceFactory<T, U>>
     where
         Self: Sized,
+        T::Config: Clone,
         F: IntoServiceFactory<U>,
         U: ServiceFactory<
             Config = T::Config,
@@ -167,6 +168,7 @@ impl<T: ServiceFactory> PipelineFactory<T> {
     pub fn then<F, U>(self, factory: F) -> PipelineFactory<ThenServiceFactory<T, U>>
     where
         Self: Sized,
+        T::Config: Clone,
         F: IntoServiceFactory<U>,
         U: ServiceFactory<
             Config = T::Config,
@@ -236,7 +238,7 @@ impl<T: ServiceFactory> ServiceFactory for PipelineFactory<T> {
     type Future = T::Future;
 
     #[inline]
-    fn new_service(&self, cfg: &T::Config) -> Self::Future {
+    fn new_service(&self, cfg: T::Config) -> Self::Future {
         self.factory.new_service(cfg)
     }
 }

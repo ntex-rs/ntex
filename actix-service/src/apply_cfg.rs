@@ -9,7 +9,7 @@ use crate::{Service, ServiceFactory};
 /// Convert `Fn(&Config, &mut Service) -> Future<Service>` fn to a NewService
 pub fn apply_cfg<F, C, T, R, S, E>(srv: T, f: F) -> ApplyConfigService<F, C, T, R, S, E>
 where
-    F: FnMut(&C, &mut T) -> R,
+    F: FnMut(C, &mut T) -> R,
     T: Service,
     R: Future<Output = Result<S, E>>,
     S: Service,
@@ -28,8 +28,7 @@ pub fn apply_cfg_factory<F, C, T, R, S>(
     f: F,
 ) -> ApplyConfigServiceFactory<F, C, T, R, S>
 where
-    C: Clone,
-    F: FnMut(&C, &mut T::Service) -> R,
+    F: FnMut(C, &mut T::Service) -> R,
     T: ServiceFactory<Config = ()>,
     T::InitError: From<T::Error>,
     R: Future<Output = Result<S, T::InitError>>,
@@ -45,7 +44,7 @@ where
 /// Convert `Fn(&Config) -> Future<Service>` fn to NewService\
 pub struct ApplyConfigService<F, C, T, R, S, E>
 where
-    F: FnMut(&C, &mut T) -> R,
+    F: FnMut(C, &mut T) -> R,
     T: Service,
     R: Future<Output = Result<S, E>>,
     S: Service,
@@ -57,7 +56,7 @@ where
 
 impl<F, C, T, R, S, E> Clone for ApplyConfigService<F, C, T, R, S, E>
 where
-    F: FnMut(&C, &mut T) -> R,
+    F: FnMut(C, &mut T) -> R,
     T: Service,
     R: Future<Output = Result<S, E>>,
     S: Service,
@@ -73,7 +72,7 @@ where
 
 impl<F, C, T, R, S, E> ServiceFactory for ApplyConfigService<F, C, T, R, S, E>
 where
-    F: FnMut(&C, &mut T) -> R,
+    F: FnMut(C, &mut T) -> R,
     T: Service,
     R: Future<Output = Result<S, E>>,
     S: Service,
@@ -87,7 +86,7 @@ where
     type InitError = E;
     type Future = R;
 
-    fn new_service(&self, cfg: &C) -> Self::Future {
+    fn new_service(&self, cfg: C) -> Self::Future {
         unsafe { (self.f.get_mut_unsafe())(cfg, self.srv.get_mut_unsafe()) }
     }
 }
@@ -95,8 +94,7 @@ where
 /// Convert `Fn(&Config) -> Future<Service>` fn to NewService
 pub struct ApplyConfigServiceFactory<F, C, T, R, S>
 where
-    C: Clone,
-    F: FnMut(&C, &mut T::Service) -> R,
+    F: FnMut(C, &mut T::Service) -> R,
     T: ServiceFactory<Config = ()>,
     R: Future<Output = Result<S, T::InitError>>,
     S: Service,
@@ -108,8 +106,7 @@ where
 
 impl<F, C, T, R, S> Clone for ApplyConfigServiceFactory<F, C, T, R, S>
 where
-    C: Clone,
-    F: FnMut(&C, &mut T::Service) -> R,
+    F: FnMut(C, &mut T::Service) -> R,
     T: ServiceFactory<Config = ()>,
     R: Future<Output = Result<S, T::InitError>>,
     S: Service,
@@ -125,8 +122,7 @@ where
 
 impl<F, C, T, R, S> ServiceFactory for ApplyConfigServiceFactory<F, C, T, R, S>
 where
-    C: Clone,
-    F: FnMut(&C, &mut T::Service) -> R,
+    F: FnMut(C, &mut T::Service) -> R,
     T: ServiceFactory<Config = ()>,
     T::InitError: From<T::Error>,
     R: Future<Output = Result<S, T::InitError>>,
@@ -141,13 +137,13 @@ where
     type InitError = T::InitError;
     type Future = ApplyConfigServiceFactoryResponse<F, C, T, R, S>;
 
-    fn new_service(&self, cfg: &C) -> Self::Future {
+    fn new_service(&self, cfg: C) -> Self::Future {
         ApplyConfigServiceFactoryResponse {
             f: self.f.clone(),
-            cfg: cfg.clone(),
+            cfg: Some(cfg),
             fut: None,
             srv: None,
-            srv_fut: Some(self.srv.get_ref().new_service(&())),
+            srv_fut: Some(self.srv.get_ref().new_service(())),
             _t: PhantomData,
         }
     }
@@ -156,14 +152,13 @@ where
 #[pin_project::pin_project]
 pub struct ApplyConfigServiceFactoryResponse<F, C, T, R, S>
 where
-    C: Clone,
-    F: FnMut(&C, &mut T::Service) -> R,
+    F: FnMut(C, &mut T::Service) -> R,
     T: ServiceFactory<Config = ()>,
     T::InitError: From<T::Error>,
     R: Future<Output = Result<S, T::InitError>>,
     S: Service,
 {
-    cfg: C,
+    cfg: Option<C>,
     f: Cell<F>,
     srv: Option<T::Service>,
     #[pin]
@@ -175,8 +170,7 @@ where
 
 impl<F, C, T, R, S> Future for ApplyConfigServiceFactoryResponse<F, C, T, R, S>
 where
-    C: Clone,
-    F: FnMut(&C, &mut T::Service) -> R,
+    F: FnMut(C, &mut T::Service) -> R,
     T: ServiceFactory<Config = ()>,
     T::InitError: From<T::Error>,
     R: Future<Output = Result<S, T::InitError>>,
@@ -205,7 +199,7 @@ where
             } else if let Some(srv) = this.srv {
                 match srv.poll_ready(cx)? {
                     Poll::Ready(_) => {
-                        let fut = this.f.get_mut()(&this.cfg, srv);
+                        let fut = this.f.get_mut()(this.cfg.take().unwrap(), srv);
                         this = self.as_mut().project();
                         this.fut.set(Some(fut));
                         continue;

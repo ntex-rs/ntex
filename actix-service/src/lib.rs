@@ -21,7 +21,7 @@ mod transform;
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::apply_cfg::{apply_cfg, apply_cfg_factory};
 pub use self::fn_service::{factory_fn, factory_fn_cfg, service_fn, service_fn2};
-pub use self::map_config::{map_config, unit_config, MappedConfig};
+pub use self::map_config::{map_config, unit_config};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 pub use self::transform::{apply, Transform};
 
@@ -131,7 +131,7 @@ pub trait ServiceFactory {
     type Future: Future<Output = Result<Self::Service, Self::InitError>>;
 
     /// Create and return a new service value asynchronously.
-    fn new_service(&self, cfg: &Self::Config) -> Self::Future;
+    fn new_service(&self, cfg: Self::Config) -> Self::Future;
 
     /// Map this service's output to a different type, returning a new service
     /// of the resulting type.
@@ -246,7 +246,7 @@ where
     type InitError = S::InitError;
     type Future = S::Future;
 
-    fn new_service(&self, cfg: &S::Config) -> S::Future {
+    fn new_service(&self, cfg: S::Config) -> S::Future {
         self.as_ref().new_service(cfg)
     }
 }
@@ -263,7 +263,7 @@ where
     type InitError = S::InitError;
     type Future = S::Future;
 
-    fn new_service(&self, cfg: &S::Config) -> S::Future {
+    fn new_service(&self, cfg: S::Config) -> S::Future {
         self.as_ref().new_service(cfg)
     }
 }

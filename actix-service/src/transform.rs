@@ -125,7 +125,7 @@ where
     type InitError = T::InitError;
     type Future = ApplyTransformFuture<T, S>;
 
-    fn new_service(&self, cfg: &S::Config) -> Self::Future {
+    fn new_service(&self, cfg: S::Config) -> Self::Future {
         ApplyTransformFuture {
             t_cell: self.t.clone(),
             fut_a: self.s.new_service(cfg),

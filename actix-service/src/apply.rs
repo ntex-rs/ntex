@@ -117,7 +117,7 @@ where
     type InitError = T::InitError;
     type Future = ApplyServiceFactoryResponse<T, F, R, In, Out, Err>;
 
-    fn new_service(&self, cfg: &T::Config) -> Self::Future {
+    fn new_service(&self, cfg: T::Config) -> Self::Future {
         ApplyServiceFactoryResponse::new(self.service.new_service(cfg), self.f.clone())
     }
 }
@@ -226,7 +226,7 @@ mod tests {
             },
         ));
 
-        let mut srv = new_srv.new_service(&()).await.unwrap();
+        let mut srv = new_srv.new_service(()).await.unwrap();
 
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 

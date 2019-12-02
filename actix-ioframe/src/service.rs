@@ -14,7 +14,6 @@ use crate::connect::{Connect, ConnectResult};
 use crate::dispatcher::FramedDispatcher;
 use crate::error::ServiceError;
 use crate::item::Item;
-use crate::state::State;
 
 type RequestItem<S, U> = Item<S, U>;
 type ResponseItem<U> = Option<<U as Encoder>::Item>;
@@ -23,7 +22,7 @@ type ResponseItem<U> = Option<<U as Encoder>::Item>;
 /// for building instances for framed services.
 pub struct Builder<St, Codec>(PhantomData<(St, Codec)>);
 
-impl<St, Codec> Builder<St, Codec> {
+impl<St: Clone, Codec> Builder<St, Codec> {
     pub fn new() -> Builder<St, Codec> {
         Builder(PhantomData)
     }
@@ -73,7 +72,7 @@ pub struct ServiceBuilder<St, C, Io, Codec> {
 
 impl<St, C, Io, Codec> ServiceBuilder<St, C, Io, Codec>
 where
-    St: 'static,
+    St: Clone,
     C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
     C::Error: 'static,
     Io: AsyncRead + AsyncWrite,
@@ -121,7 +120,7 @@ pub struct NewServiceBuilder<St, C, Io, Codec> {
 
 impl<St, C, Io, Codec> NewServiceBuilder<St, C, Io, Codec>
 where
-    St: 'static,
+    St: Clone,
     Io: AsyncRead + AsyncWrite,
     C: ServiceFactory<
         Config = (),
@@ -174,7 +173,7 @@ pub struct FramedService<St, C, T, Io, Codec, Cfg> {
 
 impl<St, C, T, Io, Codec, Cfg> ServiceFactory for FramedService<St, C, T, Io, Codec, Cfg>
 where
-    St: 'static,
+    St: Clone + 'static,
     Io: AsyncRead + AsyncWrite,
     C: ServiceFactory<
         Config = (),
@@ -203,13 +202,13 @@ where
     type Service = FramedServiceImpl<St, C::Service, T, Io, Codec>;
     type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
-    fn new_service(&self, _: &Cfg) -> Self::Future {
+    fn new_service(&self, _: Cfg) -> Self::Future {
         let handler = self.handler.clone();
         let disconnect = self.disconnect.clone();
 
         // create connect service and then create service impl
         self.connect
-            .new_service(&())
+            .new_service(())
             .map(move |result| {
                 result.map(move |connect| FramedServiceImpl {
                     connect,
@@ -231,6 +230,7 @@ pub struct FramedServiceImpl<St, C, T, Io, Codec> {
 
 impl<St, C, T, Io, Codec> Service for FramedServiceImpl<St, C, T, Io, Codec>
 where
+    St: Clone,
     Io: AsyncRead + AsyncWrite,
     C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
     C::Error: 'static,
@@ -269,6 +269,7 @@ where
 #[pin_project::pin_project]
 pub struct FramedServiceImplResponse<St, Io, Codec, C, T>
 where
+    St: Clone,
     C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
     C::Error: 'static,
     T: ServiceFactory<
@@ -290,6 +291,7 @@ where
 
 impl<St, Io, Codec, C, T> Future for FramedServiceImplResponse<St, Io, Codec, C, T>
 where
+    St: Clone,
     C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
     C::Error: 'static,
     T: ServiceFactory<
@@ -325,6 +327,7 @@ where
 #[pin_project::pin_project]
 enum FramedServiceImplResponseInner<St, Io, Codec, C, T>
 where
+    St: Clone,
     C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
     C::Error: 'static,
     T: ServiceFactory<
@@ -351,6 +354,7 @@ where
 
 impl<St, Io, Codec, C, T> FramedServiceImplResponseInner<St, Io, Codec, C, T>
 where
+    St: Clone,
     C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
     C::Error: 'static,
     T: ServiceFactory<
@@ -380,7 +384,7 @@ where
                 match fut.poll(cx) {
                     Poll::Ready(Ok(res)) => {
                         Either::Left(FramedServiceImplResponseInner::Handler(
-                            handler.new_service(&res.state),
+                            handler.new_service(res.state.clone()),
                             Some(res),
                             disconnect.take(),
                         ))
@@ -396,7 +400,7 @@ where
                     Either::Left(FramedServiceImplResponseInner::Dispatcher(
                         FramedDispatcher::new(
                             res.framed,
-                            State::new(res.state),
+                            res.state,
                             handler,
                             res.rx,
                             res.sink,

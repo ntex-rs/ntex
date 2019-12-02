@@ -134,6 +134,7 @@ where
 impl<A, B> AndThenServiceFactory<A, B>
 where
     A: ServiceFactory,
+    A::Config: Clone,
     B: ServiceFactory<
         Config = A::Config,
         Request = A::Response,
@@ -142,7 +143,7 @@ where
     >,
 {
     /// Create new `AndThenFactory` combinator
-    pub fn new(a: A, b: B) -> Self {
+    pub(crate) fn new(a: A, b: B) -> Self {
         Self { a, b }
     }
 }
@@ -150,6 +151,7 @@ where
 impl<A, B> ServiceFactory for AndThenServiceFactory<A, B>
 where
     A: ServiceFactory,
+    A::Config: Clone,
     B: ServiceFactory<
         Config = A::Config,
         Request = A::Response,
@@ -166,8 +168,11 @@ where
     type InitError = A::InitError;
     type Future = AndThenServiceFactoryResponse<A, B>;
 
-    fn new_service(&self, cfg: &A::Config) -> Self::Future {
-        AndThenServiceFactoryResponse::new(self.a.new_service(cfg), self.b.new_service(cfg))
+    fn new_service(&self, cfg: A::Config) -> Self::Future {
+        AndThenServiceFactoryResponse::new(
+            self.a.new_service(cfg.clone()),
+            self.b.new_service(cfg),
+        )
     }
 }
 
@@ -318,7 +323,7 @@ mod tests {
             pipeline_factory(factory_fn(move || ready(Ok::<_, ()>(Srv1(cnt2.clone())))))
                 .and_then(move || ready(Ok(Srv2(cnt.clone()))));
 
-        let mut srv = new_srv.new_service(&()).await.unwrap();
+        let mut srv = new_srv.new_service(()).await.unwrap();
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));

@@ -51,7 +51,7 @@ impl ServiceFactory for LowResTime {
     type Service = LowResTimeService;
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
-    fn new_service(&self, _: &()) -> Self::Future {
+    fn new_service(&self, _: ()) -> Self::Future {
         ok(self.timer())
     }
 }

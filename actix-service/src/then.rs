@@ -129,6 +129,7 @@ pub struct ThenServiceFactory<A, B> {
 impl<A, B> ThenServiceFactory<A, B>
 where
     A: ServiceFactory,
+    A::Config: Clone,
     B: ServiceFactory<
         Config = A::Config,
         Request = Result<A::Response, A::Error>,
@@ -145,6 +146,7 @@ where
 impl<A, B> ServiceFactory for ThenServiceFactory<A, B>
 where
     A: ServiceFactory,
+    A::Config: Clone,
     B: ServiceFactory<
         Config = A::Config,
         Request = Result<A::Response, A::Error>,
@@ -161,8 +163,11 @@ where
     type InitError = A::InitError;
     type Future = ThenServiceFactoryResponse<A, B>;
 
-    fn new_service(&self, cfg: &A::Config) -> Self::Future {
-        ThenServiceFactoryResponse::new(self.a.new_service(cfg), self.b.new_service(cfg))
+    fn new_service(&self, cfg: A::Config) -> Self::Future {
+        ThenServiceFactoryResponse::new(
+            self.a.new_service(cfg.clone()),
+            self.b.new_service(cfg),
+        )
     }
 }
 

@@ -69,7 +69,7 @@ where
 
     type Future = BoxFuture<Self::Service, InitErr>;
 
-    fn new_service(&self, cfg: &C) -> Self::Future {
+    fn new_service(&self, cfg: C) -> Self::Future {
         self.0.new_service(cfg)
     }
 }
@@ -104,7 +104,7 @@ where
     type Service = BoxService<Req, Res, Err>;
     type Future = BoxFuture<Self::Service, Self::InitError>;
 
-    fn new_service(&self, cfg: &C) -> Self::Future {
+    fn new_service(&self, cfg: C) -> Self::Future {
         Box::pin(
             self.factory
                 .new_service(cfg)

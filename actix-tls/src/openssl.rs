@@ -49,7 +49,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + 'static> ServiceFactory for Acceptor<T>
     type InitError = ();
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
-    fn new_service(&self, _: &()) -> Self::Future {
+    fn new_service(&self, _: ()) -> Self::Future {
         MAX_CONN_COUNTER.with(|conns| {
             ok(AcceptorService {
                 acceptor: self.acceptor.clone(),

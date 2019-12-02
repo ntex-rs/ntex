@@ -154,7 +154,7 @@ where
     type InitError = A::InitError;
     type Future = MapErrServiceFuture<A, F, E>;
 
-    fn new_service(&self, cfg: &A::Config) -> Self::Future {
+    fn new_service(&self, cfg: A::Config) -> Self::Future {
         MapErrServiceFuture::new(self.a.new_service(cfg), self.f.clone())
     }
 }

@@ -38,7 +38,7 @@ where
 /// Create `ServiceFactory` for function that can produce services with configuration
 pub fn factory_fn_cfg<F, Fut, Cfg, Srv, Err>(f: F) -> FnServiceConfig<F, Fut, Cfg, Srv, Err>
 where
-    F: Fn(&Cfg) -> Fut,
+    F: Fn(Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service,
 {
@@ -146,7 +146,7 @@ where
     type InitError = ();
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
-    fn new_service(&self, _: &Cfg) -> Self::Future {
+    fn new_service(&self, _: Cfg) -> Self::Future {
         ok(FnService::new(self.f.clone()))
     }
 }
@@ -165,7 +165,7 @@ where
 /// Convert `Fn(&Config) -> Future<Service>` fn to NewService
 pub struct FnServiceConfig<F, Fut, Cfg, Srv, Err>
 where
-    F: Fn(&Cfg) -> Fut,
+    F: Fn(Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service,
 {
@@ -175,7 +175,7 @@ where
 
 impl<F, Fut, Cfg, Srv, Err> FnServiceConfig<F, Fut, Cfg, Srv, Err>
 where
-    F: Fn(&Cfg) -> Fut,
+    F: Fn(Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service,
 {
@@ -186,7 +186,7 @@ where
 
 impl<F, Fut, Cfg, Srv, Err> ServiceFactory for FnServiceConfig<F, Fut, Cfg, Srv, Err>
 where
-    F: Fn(&Cfg) -> Fut,
+    F: Fn(Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service,
 {
@@ -199,7 +199,7 @@ where
     type InitError = Err;
     type Future = Fut;
 
-    fn new_service(&self, cfg: &Cfg) -> Self::Future {
+    fn new_service(&self, cfg: Cfg) -> Self::Future {
         (self.f)(cfg)
     }
 }
@@ -240,7 +240,7 @@ where
     type InitError = E;
     type Future = R;
 
-    fn new_service(&self, _: &C) -> Self::Future {
+    fn new_service(&self, _: C) -> Self::Future {
         (self.f)()
     }
 }
