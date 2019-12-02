@@ -1,5 +1,11 @@
 # Changes
 
+## [0.3.0] - 2019-12-02
+
+### Changed
+
+* Expect `Result` type as a function return type
+
 ## [0.2.0] - 2019-11-21
 
 ### Changed
