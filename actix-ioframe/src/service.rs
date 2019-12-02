@@ -22,6 +22,12 @@ type ResponseItem<U> = Option<<U as Encoder>::Item>;
 /// for building instances for framed services.
 pub struct Builder<St, Codec>(PhantomData<(St, Codec)>);
 
+impl<St: Clone, Codec> Default for Builder<St, Codec> {
+    fn default() -> Builder<St, Codec> {
+        Builder::new()
+    }
+}
+
 impl<St: Clone, Codec> Builder<St, Codec> {
     pub fn new() -> Builder<St, Codec> {
         Builder(PhantomData)
@@ -251,7 +257,7 @@ where
     type Error = ServiceError<C::Error, Codec>;
     type Future = FramedServiceImplResponse<St, Io, Codec, C, T>;
 
-    fn poll_ready(&mut self, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.connect.poll_ready(cx).map_err(|e| e.into())
     }
 
@@ -309,7 +315,7 @@ where
 {
     type Output = Result<(), ServiceError<C::Error, Codec>>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
         loop {
@@ -373,7 +379,7 @@ where
     #[project]
     fn poll(
         self: Pin<&mut Self>,
-        cx: &mut Context,
+        cx: &mut Context<'_>,
     ) -> Either<
         FramedServiceImplResponseInner<St, Io, Codec, C, T>,
         Poll<Result<(), ServiceError<C::Error, Codec>>>,

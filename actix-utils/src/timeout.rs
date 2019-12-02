@@ -34,7 +34,7 @@ impl<E> From<E> for TimeoutError<E> {
 }
 
 impl<E: fmt::Debug> fmt::Debug for TimeoutError<E> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TimeoutError::Service(e) => write!(f, "TimeoutError::Service({:?})", e),
             TimeoutError::Timeout => write!(f, "TimeoutError::Timeout"),
@@ -43,7 +43,7 @@ impl<E: fmt::Debug> fmt::Debug for TimeoutError<E> {
 }
 
 impl<E: fmt::Display> fmt::Display for TimeoutError<E> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TimeoutError::Service(e) => e.fmt(f),
             TimeoutError::Timeout => write!(f, "Service call timeout"),
@@ -193,7 +193,7 @@ mod tests {
         type Error = ();
         type Future = LocalBoxFuture<'static, Result<(), ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 

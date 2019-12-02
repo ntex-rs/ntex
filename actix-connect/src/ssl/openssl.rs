@@ -38,7 +38,7 @@ where
 {
     pub fn service(connector: SslConnector) -> OpensslConnectorService<T, U> {
         OpensslConnectorService {
-            connector: connector,
+            connector,
             _t: PhantomData,
         }
     }
@@ -98,7 +98,7 @@ where
     type Error = io::Error;
     type Future = Either<ConnectAsyncExt<T, U>, Ready<Result<Self::Response, Self::Error>>>;
 
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -131,7 +131,7 @@ where
 {
     type Output = Result<Connection<T, SslStream<U>>, io::Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
         match Pin::new(&mut this.fut).poll(cx) {
@@ -218,7 +218,7 @@ impl<T: Address + 'static> Service for OpensslConnectService<T> {
     type Error = ConnectError;
     type Future = OpensslConnectServiceResponse<T>;
 
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -240,14 +240,14 @@ pub struct OpensslConnectServiceResponse<T: Address + 'static> {
 impl<T: Address> Future for OpensslConnectServiceResponse<T> {
     type Output = Result<SslStream<TcpStream>, ConnectError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if let Some(ref mut fut) = self.fut1 {
             match futures::ready!(Pin::new(fut).poll(cx)) {
                 Ok(res) => {
                     let _ = self.fut1.take();
                     self.fut2 = Some(self.openssl.call(res));
                 }
-                Err(e) => return Poll::Ready(Err(e.into())),
+                Err(e) => return Poll::Ready(Err(e)),
             }
         }
 

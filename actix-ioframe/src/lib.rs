@@ -1,3 +1,6 @@
+#![deny(rust_2018_idioms, warnings)]
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
+
 mod cell;
 mod connect;
 mod dispatcher;

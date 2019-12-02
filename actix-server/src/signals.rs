@@ -50,10 +50,8 @@ impl Signals {
                     (unix::SignalKind::quit(), Signal::Quit),
                 ];
 
-                for (kind, sig) in sig_map.into_iter() {
-                    let sig = sig.clone();
-                    let fut = unix::signal(*kind)?;
-                    streams.push((sig, fut));
+                for (kind, sig) in sig_map.iter() {
+                    streams.push((*sig, unix::signal(*kind)?));
                 }
 
                 Signals { srv, streams }

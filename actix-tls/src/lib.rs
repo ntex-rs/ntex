@@ -1,4 +1,7 @@
 //! SSL Services
+#![deny(rust_2018_idioms, warnings)]
+#![allow(clippy::type_complexity)]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use actix_utils::counter::Counter;

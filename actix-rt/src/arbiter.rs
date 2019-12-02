@@ -32,7 +32,7 @@ pub(crate) enum ArbiterCommand {
 }
 
 impl fmt::Debug for ArbiterCommand {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ArbiterCommand::Stop => write!(f, "ArbiterCommand::Stop"),
             ArbiterCommand::Execute(_) => write!(f, "ArbiterCommand::Execute"),

@@ -76,7 +76,7 @@ where
     Codec: Encoder + Decoder,
     <Codec as Decoder>::Item: fmt::Debug,
 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("FramedItem").field(&self.item).finish()
     }
 }

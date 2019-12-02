@@ -24,7 +24,7 @@ where
     <U as Encoder>::Error: fmt::Debug,
     <U as Decoder>::Error: fmt::Debug,
 {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             ServiceError::Service(ref e) => write!(fmt, "ServiceError::Service({:?})", e),
             ServiceError::Encoder(ref e) => write!(fmt, "ServiceError::Encoder({:?})", e),
@@ -39,7 +39,7 @@ where
     <U as Encoder>::Error: fmt::Debug,
     <U as Decoder>::Error: fmt::Debug,
 {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             ServiceError::Service(ref e) => write!(fmt, "{}", e),
             ServiceError::Encoder(ref e) => write!(fmt, "{:?}", e),

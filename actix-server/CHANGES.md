@@ -1,8 +1,10 @@
 # Changes
 
-## [0.8.0-alpha.2] - 2019-11-xx
+## [1.0.0-alpha.2] - 2019-12-02
 
 ### Changed
+
+* Simplify server service (remove actix-server-config)
 
 * Allow to wait on `Server` until server stops
 

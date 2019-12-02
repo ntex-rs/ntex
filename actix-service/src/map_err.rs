@@ -63,15 +63,16 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct MapErrFuture<A, F, E>
-where
-    A: Service,
-    F: Fn(A::Error) -> E,
-{
-    f: F,
-    #[pin]
-    fut: A::Future,
+pin_project! {
+    pub struct MapErrFuture<A, F, E>
+    where
+        A: Service,
+        F: Fn(A::Error) -> E,
+    {
+        f: F,
+        #[pin]
+        fut: A::Future,
+    }
 }
 
 impl<A, F, E> MapErrFuture<A, F, E>
@@ -159,15 +160,16 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct MapErrServiceFuture<A, F, E>
-where
-    A: ServiceFactory,
-    F: Fn(A::Error) -> E,
-{
-    #[pin]
-    fut: A::Future,
-    f: F,
+pin_project! {
+    pub struct MapErrServiceFuture<A, F, E>
+    where
+        A: ServiceFactory,
+        F: Fn(A::Error) -> E,
+    {
+        #[pin]
+        fut: A::Future,
+        f: F,
+    }
 }
 
 impl<A, F, E> MapErrServiceFuture<A, F, E>
@@ -212,7 +214,7 @@ mod tests {
         type Error = ();
         type Future = Ready<Result<(), ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Err(()))
         }
 

@@ -33,7 +33,7 @@ impl Counter {
 
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
-    pub fn available(&self, cx: &mut task::Context) -> bool {
+    pub fn available(&self, cx: &mut task::Context<'_>) -> bool {
         self.0.available(cx)
     }
 
@@ -73,7 +73,7 @@ impl CounterInner {
         }
     }
 
-    fn available(&self, cx: &mut task::Context) -> bool {
+    fn available(&self, cx: &mut task::Context<'_>) -> bool {
         if self.count.get() < self.capacity {
             true
         } else {

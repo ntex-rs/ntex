@@ -1,6 +1,8 @@
 # Changes
 
-## [1.0.0-alpha.2] - 2019-11-xx
+## [1.0.0-alpha.2] - 2019-12-02
+
+### Use owned config value for service factory
 
 ### Renamed BoxedNewService/BoxedService to BoxServiceFactory/BoxService
 

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0-alpha.2] - 2019-12-02
+
+* Migrate to `std::future`
+
 
 ## [0.1.1] - 2019-10-14
 

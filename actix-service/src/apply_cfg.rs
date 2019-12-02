@@ -149,23 +149,24 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct ApplyConfigServiceFactoryResponse<F, C, T, R, S>
-where
-    F: FnMut(C, &mut T::Service) -> R,
-    T: ServiceFactory<Config = ()>,
-    T::InitError: From<T::Error>,
-    R: Future<Output = Result<S, T::InitError>>,
-    S: Service,
-{
-    cfg: Option<C>,
-    f: Cell<F>,
-    srv: Option<T::Service>,
-    #[pin]
-    srv_fut: Option<T::Future>,
-    #[pin]
-    fut: Option<R>,
-    _t: PhantomData<(S,)>,
+pin_project! {
+    pub struct ApplyConfigServiceFactoryResponse<F, C, T, R, S>
+    where
+        F: FnMut(C, &mut T::Service) -> R,
+        T: ServiceFactory<Config = ()>,
+        T::InitError: From<T::Error>,
+        R: Future<Output = Result<S, T::InitError>>,
+        S: Service,
+    {
+        cfg: Option<C>,
+        f: Cell<F>,
+        srv: Option<T::Service>,
+        #[pin]
+        srv_fut: Option<T::Future>,
+        #[pin]
+        fut: Option<R>,
+        _t: PhantomData<(S,)>,
+    }
 }
 
 impl<F, C, T, R, S> Future for ApplyConfigServiceFactoryResponse<F, C, T, R, S>

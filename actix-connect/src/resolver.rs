@@ -108,7 +108,7 @@ impl<T: Address> Service for Resolver<T> {
     type Error = ConnectError;
     type Future = Either<ResolverFuture<T>, Ready<Result<Connect<T>, Self::Error>>>;
 
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -153,7 +153,7 @@ impl<T: Address> ResolverFuture<T> {
 impl<T: Address> Future for ResolverFuture<T> {
     type Output = Result<Connect<T>, ConnectError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
         match Pin::new(&mut this.lookup).poll(cx) {

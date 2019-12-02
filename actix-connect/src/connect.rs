@@ -132,7 +132,7 @@ impl<T: Address> From<T> for Connect<T> {
 }
 
 impl<T: Address> fmt::Display for Connect<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.host(), self.port())
     }
 }
@@ -163,7 +163,7 @@ impl Iterator for ConnectAddrsIter<'_> {
 }
 
 impl fmt::Debug for ConnectAddrsIter<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.clone()).finish()
     }
 }
@@ -275,7 +275,7 @@ impl<T, U> std::ops::DerefMut for Connection<T, U> {
 }
 
 impl<T, U: fmt::Debug> fmt::Debug for Connection<T, U> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Stream {{{:?}}}", self.io)
     }
 }

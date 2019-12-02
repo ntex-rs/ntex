@@ -1,5 +1,10 @@
 # Changes
 
+## [0.2.0-alpha.2]
+
+* Migrated to `std::future`
+
+
 ## [0.1.2] - 2019-03-27
 
 * Added `Framed::map_io()` method.

@@ -62,15 +62,16 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct MapFuture<A, F, Response>
-where
-    A: Service,
-    F: FnMut(A::Response) -> Response,
-{
-    f: F,
-    #[pin]
-    fut: A::Future,
+pin_project! {
+    pub struct MapFuture<A, F, Response>
+    where
+        A: Service,
+        F: FnMut(A::Response) -> Response,
+    {
+        f: F,
+        #[pin]
+        fut: A::Future,
+    }
 }
 
 impl<A, F, Response> MapFuture<A, F, Response>
@@ -156,15 +157,16 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct MapServiceFuture<A, F, Res>
-where
-    A: ServiceFactory,
-    F: FnMut(A::Response) -> Res,
-{
-    #[pin]
-    fut: A::Future,
-    f: Option<F>,
+pin_project! {
+    pub struct MapServiceFuture<A, F, Res>
+    where
+        A: ServiceFactory,
+        F: FnMut(A::Response) -> Res,
+    {
+        #[pin]
+        fut: A::Future,
+        f: Option<F>,
+    }
 }
 
 impl<A, F, Res> MapServiceFuture<A, F, Res>
@@ -210,7 +212,7 @@ mod tests {
         type Error = ();
         type Future = Ready<Result<(), ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 

@@ -253,7 +253,7 @@ impl<T, U> Framed<T, U> {
         len < self.write_hw
     }
 
-    pub fn next_item(&mut self, cx: &mut Context) -> Poll<Option<Result<U::Item, U::Error>>>
+    pub fn next_item(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<U::Item, U::Error>>>
     where
         T: AsyncRead,
         U: Decoder,
@@ -311,7 +311,7 @@ impl<T, U> Framed<T, U> {
         }
     }
 
-    pub fn flush(&mut self, cx: &mut Context) -> Poll<Result<(), U::Error>>
+    pub fn flush(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), U::Error>>
     where
         T: AsyncWrite,
         U: Encoder,
@@ -346,7 +346,7 @@ impl<T, U> Framed<T, U> {
         Poll::Ready(Ok(()))
     }
 
-    pub fn close(&mut self, cx: &mut Context) -> Poll<Result<(), U::Error>>
+    pub fn close(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), U::Error>>
     where
         T: AsyncWrite,
         U: Encoder,
@@ -365,7 +365,7 @@ where
 {
     type Item = Result<U::Item, U::Error>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.next_item(cx)
     }
 }
@@ -378,7 +378,7 @@ where
 {
     type Error = U::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if self.is_ready() {
             Poll::Ready(Ok(()))
         } else {
@@ -393,11 +393,17 @@ where
         self.write(item)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
         self.flush(cx)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_close(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
         self.close(cx)
     }
 }
@@ -407,7 +413,7 @@ where
     T: fmt::Debug,
     U: fmt::Debug,
 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Framed")
             .field("io", &self.io)
             .field("codec", &self.codec)

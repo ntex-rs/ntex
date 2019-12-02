@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use actix_rt::spawn;
 use actix_service::{self as actix, Service, ServiceFactory as ActixServiceFactory};
+use actix_utils::counter::CounterGuard;
 use futures::future::{err, ok, LocalBoxFuture, Ready};
 use futures::{FutureExt, TryFutureExt};
 use log::error;
 
 use super::Token;
-use crate::counter::CounterGuard;
 use crate::socket::{FromStream, StdStream};
 
 /// Server message

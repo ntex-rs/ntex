@@ -34,7 +34,7 @@ where
     type Error = A::Error;
     type Future = future::Either<A::Future, B::Future>;
 
-    fn poll_ready(&mut self, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let left = self.left.poll_ready(cx)?;
         let right = self.right.poll_ready(cx)?;
 
@@ -131,7 +131,7 @@ where
 {
     type Output = Result<EitherService<A::Service, B::Service>, A::InitError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
         if this.left.is_none() {

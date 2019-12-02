@@ -29,11 +29,11 @@ openssl = ["open-ssl", "tokio-openssl"]
 rustls = ["rust-tls", "webpki"]
 
 [dependencies]
-actix-service = "1.0.0-alpha.1"
-actix-codec = "0.2.0-alpha.1"
-actix-utils = "0.5.0-alpha.1"
-actix-rt = "1.0.0-alpha.1"
-derive_more = "0.99"
+actix-service = "1.0.0-alpha.2"
+actix-codec = "0.2.0-alpha.2"
+actix-utils = "1.0.0-alpha.2"
+actix-rt = "1.0.0-alpha.2"
+derive_more = "0.99.2"
 either = "1.5.2"
 futures = "0.3.1"
 log = "0.4"
@@ -51,4 +51,4 @@ webpki-roots = { version = "0.17", optional = true }
 
 [dev-dependencies]
 bytes = "0.4"
-actix-testing = { version="0.3.0-alpha.1" }
+actix-testing = { version="1.0.0-alpha.2" }

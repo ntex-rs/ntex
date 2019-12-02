@@ -134,17 +134,18 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct ApplyTransformFuture<T, S>
-where
-    S: ServiceFactory,
-    T: Transform<S::Service, InitError = S::InitError>,
-{
-    #[pin]
-    fut_a: S::Future,
-    #[pin]
-    fut_t: Option<T::Future>,
-    t_cell: Rc<T>,
+pin_project! {
+    pub struct ApplyTransformFuture<T, S>
+    where
+        S: ServiceFactory,
+        T: Transform<S::Service, InitError = S::InitError>,
+    {
+        #[pin]
+        fut_a: S::Future,
+        #[pin]
+        fut_t: Option<T::Future>,
+        t_cell: Rc<T>,
+    }
 }
 
 impl<T, S> Future for ApplyTransformFuture<T, S>
@@ -167,7 +168,7 @@ where
             this.fut_t.set(Some(fut));
             this.fut_t.as_pin_mut().unwrap().poll(cx)
         } else {
-            return Poll::Pending;
+            Poll::Pending
         }
     }
 }

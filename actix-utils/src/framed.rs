@@ -37,7 +37,7 @@ where
     <U as Encoder>::Error: fmt::Debug,
     <U as Decoder>::Error: fmt::Debug,
 {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             FramedTransportError::Service(ref e) => {
                 write!(fmt, "FramedTransportError::Service({:?})", e)
@@ -58,7 +58,7 @@ where
     <U as Encoder>::Error: fmt::Debug,
     <U as Decoder>::Error: fmt::Debug,
 {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             FramedTransportError::Service(ref e) => write!(fmt, "{}", e),
             FramedTransportError::Encoder(ref e) => write!(fmt, "{:?}", e),
@@ -177,7 +177,7 @@ where
 {
     type Output = Result<(), FramedTransportError<S::Error, U>>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.inner.get_ref().task.register(cx.waker());
 
         let this = self.project();
@@ -193,7 +193,7 @@ where
 }
 
 fn poll<S, T, U>(
-    cx: &mut Context,
+    cx: &mut Context<'_>,
     srv: &mut S,
     state: &mut TransportState<S, U>,
     framed: &mut Framed<T, U>,
@@ -248,7 +248,7 @@ where
 }
 
 fn poll_read<S, T, U>(
-    cx: &mut Context,
+    cx: &mut Context<'_>,
     srv: &mut S,
     state: &mut TransportState<S, U>,
     framed: &mut Framed<T, U>,
@@ -300,7 +300,7 @@ where
 
 /// write to framed object
 fn poll_write<S, T, U>(
-    cx: &mut Context,
+    cx: &mut Context<'_>,
     state: &mut TransportState<S, U>,
     framed: &mut Framed<T, U>,
     rx: &mut Rx<U>,

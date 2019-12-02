@@ -19,6 +19,7 @@ use std::{fmt, rc};
 ///
 /// A single `AtomicWaker` may be reused for any number of calls to `register` or
 /// `wake`.
+#[derive(Default)]
 pub struct LocalWaker {
     waker: UnsafeCell<Option<Waker>>,
     _t: PhantomData<rc::Rc<()>>,

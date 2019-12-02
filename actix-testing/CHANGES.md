@@ -1,6 +1,6 @@
 # Changes
 
-## [0.3.0-alpha.2] - 2019-11-xx
+## [1.0.0-alpha.2] - 2019-12-02
 
 * Re-export `test` attribute macros
 

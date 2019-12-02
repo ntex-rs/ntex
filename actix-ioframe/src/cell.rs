@@ -17,7 +17,7 @@ impl<T> Clone for Cell<T> {
 }
 
 impl<T: fmt::Debug> fmt::Debug for Cell<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.inner.fmt(f)
     }
 }

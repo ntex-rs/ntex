@@ -60,15 +60,16 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct MapInitErrFuture<A, F, E>
-where
-    A: ServiceFactory,
-    F: Fn(A::InitError) -> E,
-{
-    f: F,
-    #[pin]
-    fut: A::Future,
+pin_project! {
+    pub struct MapInitErrFuture<A, F, E>
+    where
+        A: ServiceFactory,
+        F: Fn(A::InitError) -> E,
+    {
+        f: F,
+        #[pin]
+        fut: A::Future,
+    }
 }
 
 impl<A, F, E> MapInitErrFuture<A, F, E>

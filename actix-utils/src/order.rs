@@ -33,7 +33,7 @@ impl<E> From<E> for InOrderError<E> {
 }
 
 impl<E: fmt::Debug> fmt::Debug for InOrderError<E> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InOrderError::Service(e) => write!(f, "InOrderError::Service({:?})", e),
             InOrderError::Disconnected => write!(f, "InOrderError::Disconnected"),
@@ -42,7 +42,7 @@ impl<E: fmt::Debug> fmt::Debug for InOrderError<E> {
 }
 
 impl<E: fmt::Display> fmt::Display for InOrderError<E> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InOrderError::Service(e) => e.fmt(f),
             InOrderError::Disconnected => write!(f, "InOrder service disconnected"),
@@ -140,7 +140,7 @@ where
     type Error = InOrderError<S::Error>;
     type Future = InOrderServiceResponse<S>;
 
-    fn poll_ready(&mut self, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // poll_ready could be called from different task
         self.task.register(cx.waker());
 
@@ -192,7 +192,7 @@ pub struct InOrderServiceResponse<S: Service> {
 impl<S: Service> Future for InOrderServiceResponse<S> {
     type Output = Result<S::Response, InOrderError<S::Error>>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match Pin::new(&mut self.rx).poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(Ok(res))) => Poll::Ready(Ok(res)),
@@ -221,7 +221,7 @@ mod tests {
         type Error = ();
         type Future = LocalBoxFuture<'static, Result<usize, ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 

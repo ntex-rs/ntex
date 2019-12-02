@@ -76,7 +76,7 @@ impl<T: Address> Service for TcpConnector<T> {
     type Error = ConnectError;
     type Future = Either<TcpConnectorResponse<T>, Ready<Result<Self::Response, Self::Error>>>;
 
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -134,7 +134,7 @@ impl<T: Address> TcpConnectorResponse<T> {
 impl<T: Address> Future for TcpConnectorResponse<T> {
     type Output = Result<Connection<T, TcpStream>, ConnectError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
         // connect

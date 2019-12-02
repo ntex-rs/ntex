@@ -61,17 +61,18 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct ThenServiceResponse<A, B>
-where
-    A: Service,
-    B: Service<Request = Result<A::Response, A::Error>>,
-{
-    b: Cell<B>,
-    #[pin]
-    fut_b: Option<B::Future>,
-    #[pin]
-    fut_a: Option<A::Future>,
+pin_project! {
+    pub struct ThenServiceResponse<A, B>
+    where
+        A: Service,
+        B: Service<Request = Result<A::Response, A::Error>>,
+    {
+        b: Cell<B>,
+        #[pin]
+        fut_b: Option<B::Future>,
+        #[pin]
+        fut_a: Option<A::Future>,
+    }
 }
 
 impl<A, B> ThenServiceResponse<A, B>
@@ -184,23 +185,23 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct ThenServiceFactoryResponse<A, B>
-where
-    A: ServiceFactory,
-    B: ServiceFactory<
-        Config = A::Config,
-        Request = Result<A::Response, A::Error>,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
-{
-    #[pin]
-    fut_b: B::Future,
-    #[pin]
-    fut_a: A::Future,
-    a: Option<A::Service>,
-    b: Option<B::Service>,
+pin_project! {
+    pub struct ThenServiceFactoryResponse<A, B>
+    where
+        A: ServiceFactory,
+        B: ServiceFactory<
+          Config = A::Config,
+          Request = Result<A::Response, A::Error>,
+          Error = A::Error,
+          InitError = A::InitError>
+    {
+        #[pin]
+        fut_b: B::Future,
+        #[pin]
+        fut_a: A::Future,
+        a: Option<A::Service>,
+        b: Option<B::Service>,
+    }
 }
 
 impl<A, B> ThenServiceFactoryResponse<A, B>

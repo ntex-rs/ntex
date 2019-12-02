@@ -1,4 +1,6 @@
 //! Actix utils - various helper services
+#![deny(rust_2018_idioms, warnings)]
+#![allow(clippy::type_complexity)]
 
 mod cell;
 pub mod counter;

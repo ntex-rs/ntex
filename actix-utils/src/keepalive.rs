@@ -102,7 +102,7 @@ where
     type Error = E;
     type Future = Ready<Result<R, E>>;
 
-    fn poll_ready(&mut self, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match Pin::new(&mut self.delay).poll(cx) {
             Poll::Ready(_) => {
                 let now = self.time.now();

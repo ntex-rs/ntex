@@ -3,6 +3,7 @@ use std::{fmt, io, net};
 
 use actix_rt::net::TcpStream;
 use actix_service as actix;
+use actix_utils::counter::CounterGuard;
 use futures::future::{Future, FutureExt, LocalBoxFuture};
 use log::error;
 
@@ -11,7 +12,6 @@ use super::service::{
     BoxedServerService, InternalServiceFactory, ServerMessage, StreamService,
 };
 use super::Token;
-use crate::counter::CounterGuard;
 
 pub struct ServiceConfig {
     pub(crate) services: Vec<(String, net::TcpListener)>,
@@ -126,9 +126,9 @@ impl InternalServiceFactory for ConfiguredService {
                     Ok(serv) => {
                         res.push((token, serv));
                     }
-                    Err(e) => {
-                        error!("Can not construct service {:?}", e);
-                        return Err(e);
+                    Err(_) => {
+                        error!("Can not construct service");
+                        return Err(());
                     }
                 };
             }

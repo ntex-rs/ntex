@@ -83,7 +83,7 @@ where
 {
     type Item = Result<<Codec as Decoder>::Item, <Codec as Decoder>::Error>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.project().framed.next_item(cx)
     }
 }
@@ -95,7 +95,7 @@ where
 {
     type Error = <Codec as Encoder>::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if self.framed.is_ready() {
             Poll::Ready(Ok(()))
         } else {

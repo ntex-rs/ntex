@@ -32,7 +32,7 @@ pub struct RunError {
 }
 
 impl fmt::Display for RunError {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(fmt, "{}", self.inner)
     }
 }

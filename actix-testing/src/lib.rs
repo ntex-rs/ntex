@@ -1,10 +1,12 @@
 //! Various helpers for Actix applications to use during testing.
+#![deny(rust_2018_idioms, warnings)]
+#![allow(clippy::type_complexity)]
+
 use std::sync::mpsc;
 use std::{net, thread};
 
 use actix_rt::{net::TcpStream, System};
 use actix_server::{Server, ServerBuilder, ServiceFactory};
-pub use actix_server_config::{Io, ServerConfig};
 
 use net2::TcpBuilder;
 use tokio_net::driver::Handle;
@@ -46,7 +48,7 @@ pub struct TestServerRuntime {
 
 impl TestServer {
     /// Start new server with server builder
-    pub fn new<F>(mut factory: F) -> TestServerRuntime
+    pub fn start<F>(mut factory: F) -> TestServerRuntime
     where
         F: FnMut(ServerBuilder) -> ServerBuilder + Send + 'static,
     {

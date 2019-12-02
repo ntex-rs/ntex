@@ -1,9 +1,10 @@
 //! General purpose tcp server
+#![deny(rust_2018_idioms, warnings)]
+#![allow(clippy::type_complexity)]
 
 mod accept;
 mod builder;
 mod config;
-mod counter;
 mod server;
 mod service;
 mod signals;

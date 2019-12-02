@@ -136,7 +136,7 @@ where
 {
     pub(crate) fn poll(
         &mut self,
-        cx: &mut Context,
+        cx: &mut Context<'_>,
     ) -> Poll<Result<(), ServiceError<S::Error, U>>> {
         let this = self;
         unsafe { this.inner.get_ref().task.register(cx.waker()) };
@@ -156,7 +156,7 @@ where
 }
 
 fn poll<St, S, T, U>(
-    cx: &mut Context,
+    cx: &mut Context<'_>,
     srv: &mut S,
     state: &mut St,
     sink: &mut Sink<<U as Encoder>::Item>,
@@ -247,7 +247,7 @@ where
 }
 
 fn poll_read<St, S, T, U>(
-    cx: &mut Context,
+    cx: &mut Context<'_>,
     srv: &mut S,
     state: &mut St,
     sink: &mut Sink<<U as Encoder>::Item>,
@@ -310,7 +310,7 @@ where
 
 /// write to framed object
 fn poll_write<St, S, T, U>(
-    cx: &mut Context,
+    cx: &mut Context<'_>,
     framed: &mut Framed<T, U>,
     dispatch_state: &mut FramedState<S, U>,
     rx: &mut Option<mpsc::Receiver<FramedMessage<<U as Encoder>::Item>>>,

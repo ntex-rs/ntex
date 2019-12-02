@@ -6,6 +6,7 @@ use std::{mem, time};
 
 use actix_rt::time::{delay, Delay};
 use actix_rt::{spawn, Arbiter};
+use actix_utils::counter::Counter;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot;
 use futures::future::{join_all, LocalBoxFuture, MapOk};
@@ -13,7 +14,6 @@ use futures::{Future, FutureExt, Stream, TryFutureExt};
 use log::{error, info, trace};
 
 use crate::accept::AcceptNotify;
-use crate::counter::Counter;
 use crate::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
 use crate::socket::{SocketAddr, StdStream};
 use crate::Token;
@@ -332,11 +332,11 @@ impl Future for Worker {
                             }
                         }
                         self.availability.set(true);
-                        return self.poll(cx);
+                        self.poll(cx)
                     }
                     Ok(false) => {
                         self.state = WorkerState::Unavailable(conns);
-                        return Poll::Pending;
+                        Poll::Pending
                     }
                     Err((token, idx)) => {
                         trace!(
@@ -345,7 +345,7 @@ impl Future for Worker {
                         );
                         self.state =
                             WorkerState::Restarting(idx, token, self.factories[idx].create());
-                        return self.poll(cx);
+                        self.poll(cx)
                     }
                 }
             }
@@ -372,7 +372,7 @@ impl Future for Worker {
                         return Poll::Pending;
                     }
                 }
-                return self.poll(cx);
+                self.poll(cx)
             }
             WorkerState::Shutdown(mut t1, mut t2, tx) => {
                 let num = num_connections();
@@ -402,7 +402,7 @@ impl Future for Worker {
                     }
                 }
                 self.state = WorkerState::Shutdown(t1, t2, tx);
-                return Poll::Pending;
+                Poll::Pending
             }
             WorkerState::Available => {
                 loop {
@@ -448,6 +448,6 @@ impl Future for Worker {
                 }
             }
             WorkerState::None => panic!(),
-        };
+        }
     }
 }

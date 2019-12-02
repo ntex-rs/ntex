@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0-alpha.2] - 2019-12-02
+
+* Migrate to `std::future`
+
 ## [0.4.7] - 2019-10-14
 
 * Re-register task on every framed transport poll.

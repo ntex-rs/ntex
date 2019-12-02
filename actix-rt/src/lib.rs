@@ -1,4 +1,6 @@
 //! A runtime implementation that runs everything on the current thread.
+#![deny(rust_2018_idioms, warnings)]
+#![allow(clippy::type_complexity)]
 
 #[cfg(not(test))] // Work around for rust-lang/rust#62127
 pub use actix_macros::{main, test};

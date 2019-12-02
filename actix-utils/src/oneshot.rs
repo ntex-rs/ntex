@@ -111,7 +111,7 @@ impl<T> Sender<T> {
     /// able to receive a message if sent. The current task, however, is
     /// scheduled to receive a notification if the corresponding `Receiver` goes
     /// away.
-    pub fn poll_canceled(&mut self, cx: &mut Context) -> Poll<()> {
+    pub fn poll_canceled(&mut self, cx: &mut Context<'_>) -> Poll<()> {
         match self.inner.upgrade() {
             Some(inner) => {
                 inner.borrow_mut().tx_task.register(cx.waker());

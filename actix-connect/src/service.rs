@@ -96,7 +96,7 @@ impl<T: Address> Service for ConnectService<T> {
     type Error = ConnectError;
     type Future = ConnectServiceResponse<T>;
 
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -116,7 +116,7 @@ enum ConnectState<T: Address> {
 impl<T: Address> ConnectState<T> {
     fn poll(
         &mut self,
-        cx: &mut Context,
+        cx: &mut Context<'_>,
     ) -> Either<Poll<Result<Connection<T, TcpStream>, ConnectError>>, Connect<T>> {
         match self {
             ConnectState::Resolve(ref mut fut) => match Pin::new(fut).poll(cx) {
@@ -137,7 +137,7 @@ pub struct ConnectServiceResponse<T: Address> {
 impl<T: Address> Future for ConnectServiceResponse<T> {
     type Output = Result<Connection<T, TcpStream>, ConnectError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let res = match self.state.poll(cx) {
             Either::Right(res) => {
                 self.state = ConnectState::Connect(self.tcp.call(res));
@@ -165,7 +165,7 @@ impl<T: Address + 'static> Service for TcpConnectService<T> {
     type Error = ConnectError;
     type Future = TcpConnectServiceResponse<T>;
 
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -185,7 +185,7 @@ enum TcpConnectState<T: Address> {
 impl<T: Address> TcpConnectState<T> {
     fn poll(
         &mut self,
-        cx: &mut Context,
+        cx: &mut Context<'_>,
     ) -> Either<Poll<Result<TcpStream, ConnectError>>, Connect<T>> {
         match self {
             TcpConnectState::Resolve(ref mut fut) => match Pin::new(fut).poll(cx) {
@@ -214,7 +214,7 @@ pub struct TcpConnectServiceResponse<T: Address> {
 impl<T: Address> Future for TcpConnectServiceResponse<T> {
     type Output = Result<TcpStream, ConnectError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let res = match self.state.poll(cx) {
             Either::Right(res) => {
                 self.state = TcpConnectState::Connect(self.tcp.call(res));

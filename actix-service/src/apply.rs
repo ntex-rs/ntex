@@ -122,17 +122,18 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
-where
-    T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R + Clone,
-    R: Future<Output = Result<Out, Err>>,
-{
-    #[pin]
-    fut: T::Future,
-    f: Option<F>,
-    r: PhantomData<(In, Out)>,
+pin_project! {
+    pub struct ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
+    where
+        T: ServiceFactory<Error = Err>,
+        F: FnMut(In, &mut T::Service) -> R,
+        R: Future<Output = Result<Out, Err>>,
+    {
+        #[pin]
+        fut: T::Future,
+        f: Option<F>,
+        r: PhantomData<(In, Out)>,
+    }
 }
 
 impl<T, F, R, In, Out, Err> ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
@@ -187,7 +188,7 @@ mod tests {
         type Error = ();
         type Future = Ready<Result<(), ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 

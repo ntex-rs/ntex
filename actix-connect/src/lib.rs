@@ -2,9 +2,10 @@
 //!
 //! ## Package feature
 //!
-//! * `ssl` - enables ssl support via `openssl` crate
-//! * `rust-tls` - enables ssl support via `rustls` crate
-
+//! * `openssl` - enables ssl support via `openssl` crate
+//! * `rustls` - enables ssl support via `rustls` crate
+#![deny(rust_2018_idioms, warnings)]
+#![allow(clippy::type_complexity)]
 #![recursion_limit = "128"]
 
 #[macro_use]
@@ -43,7 +44,7 @@ struct DefaultResolver(AsyncResolver);
 
 pub(crate) fn get_default_resolver() -> AsyncResolver {
     if Arbiter::contains_item::<DefaultResolver>() {
-        return Arbiter::get_item(|item: &DefaultResolver| item.0.clone());
+        Arbiter::get_item(|item: &DefaultResolver| item.0.clone())
     } else {
         let (cfg, opts) = match read_system_conf() {
             Ok((cfg, opts)) => (cfg, opts),

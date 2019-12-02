@@ -61,17 +61,18 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct AndThenServiceResponse<A, B>
-where
-    A: Service,
-    B: Service<Request = A::Response, Error = A::Error>,
-{
-    b: Cell<B>,
-    #[pin]
-    fut_b: Option<B::Future>,
-    #[pin]
-    fut_a: Option<A::Future>,
+pin_project! {
+    pub struct AndThenServiceResponse<A, B>
+    where
+        A: Service,
+        B: Service<Request = A::Response, Error = A::Error>,
+    {
+        b: Cell<B>,
+        #[pin]
+        fut_b: Option<B::Future>,
+        #[pin]
+        fut_a: Option<A::Future>,
+    }
 }
 
 impl<A, B> AndThenServiceResponse<A, B>
@@ -189,19 +190,20 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct AndThenServiceFactoryResponse<A, B>
-where
-    A: ServiceFactory,
-    B: ServiceFactory<Request = A::Response>,
-{
-    #[pin]
-    fut_b: B::Future,
-    #[pin]
-    fut_a: A::Future,
+pin_project! {
+    pub struct AndThenServiceFactoryResponse<A, B>
+    where
+        A: ServiceFactory,
+        B: ServiceFactory<Request = A::Response>,
+    {
+        #[pin]
+        fut_b: B::Future,
+        #[pin]
+        fut_a: A::Future,
 
-    a: Option<A::Service>,
-    b: Option<B::Service>,
+        a: Option<A::Service>,
+        b: Option<B::Service>,
+    }
 }
 
 impl<A, B> AndThenServiceFactoryResponse<A, B>
@@ -287,7 +289,7 @@ mod tests {
         type Error = ();
         type Future = Ready<Result<Self::Response, ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.set(self.0.get() + 1);
             Poll::Ready(Ok(()))
         }

@@ -72,7 +72,7 @@ impl<T> Clone for Sender<T> {
 impl<T> Sink<T> for Sender<T> {
     type Error = SendError<T>;
 
-    fn poll_ready(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -80,11 +80,11 @@ impl<T> Sink<T> for Sender<T> {
         self.send(item)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), SendError<T>>> {
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), SendError<T>>> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_close(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 }
@@ -144,7 +144,7 @@ impl<T> Receiver<T> {
 impl<T> Stream for Receiver<T> {
     type Item = T;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let me = match self.state {
             State::Open(ref mut me) => me,
             State::Closed(ref mut items) => return Poll::Ready(items.pop_front()),
@@ -177,13 +177,13 @@ impl<T> Drop for Receiver<T> {
 pub struct SendError<T>(T);
 
 impl<T> fmt::Debug for SendError<T> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_tuple("SendError").field(&"...").finish()
     }
 }
 
 impl<T> fmt::Display for SendError<T> {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(fmt, "send failed because receiver is gone")
     }
 }

@@ -73,7 +73,7 @@ where
     type Error = T::Error;
     type Future = InFlightServiceResponse<T>;
 
-    fn poll_ready(&mut self, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if let Poll::Pending = self.service.poll_ready(cx)? {
             Poll::Pending
         } else if !self.count.available(cx) {
@@ -103,7 +103,7 @@ pub struct InFlightServiceResponse<T: Service> {
 impl<T: Service> Future for InFlightServiceResponse<T> {
     type Output = Result<T::Response, T::Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.project().fut.poll(cx)
     }
 }
@@ -126,7 +126,7 @@ mod tests {
         type Error = ();
         type Future = LocalBoxFuture<'static, Result<(), ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 

@@ -1,12 +1,14 @@
 # Changes
 
-## [1.0.0-alpha.2] - 2019-11-xx
+## [1.0.0-alpha.2] - 2019-12-02
 
 Added
 
 * Export `main` and `test` attribute macros
 
 * Export `time` module (re-export of tokio-timer)
+
+* Export `net` module (re-export of tokio-net)
 
 
 ## [1.0.0-alpha.1] - 2019-11-22
