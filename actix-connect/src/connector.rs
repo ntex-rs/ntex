@@ -6,9 +6,9 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use actix_rt::net::TcpStream;
 use actix_service::{Service, ServiceFactory};
 use futures::future::{err, ok, BoxFuture, Either, FutureExt, Ready};
-use tokio_net::tcp::TcpStream;
 
 use super::connect::{Address, Connect, Connection};
 use super::error::ConnectError;

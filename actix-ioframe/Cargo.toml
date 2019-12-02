@@ -31,5 +31,3 @@ log = "0.4"
 [dev-dependencies]
 actix-connect = "1.0.0-alpha.1"
 actix-testing = "0.3.0-alpha.1"
-actix-server-config = "0.3.0-alpha.1"
-tokio-net = "=0.2.0-alpha.6"

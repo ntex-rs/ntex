@@ -2,10 +2,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use actix_rt::net::TcpStream;
 use actix_service::{Service, ServiceFactory};
 use either::Either;
 use futures::future::{ok, Ready};
-use tokio_net::tcp::TcpStream;
 use trust_dns_resolver::AsyncResolver;
 
 use crate::connect::{Address, Connect, Connection};

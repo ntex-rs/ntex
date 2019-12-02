@@ -42,7 +42,6 @@ either = "1.5.2"
 futures = "0.3.1"
 http = { version = "0.1.17", optional = true }
 log = "0.4"
-tokio-net = "=0.2.0-alpha.6"
 trust-dns-resolver = { version="0.18.0-alpha.1", default-features = false }
 
 # openssl
@@ -58,4 +57,3 @@ webpki = { version = "0.21", optional = true }
 [dev-dependencies]
 bytes = "0.4"
 actix-testing = { version="0.3.0-alpha.1" }
-actix-server-config = "0.3.0-alpha.1"

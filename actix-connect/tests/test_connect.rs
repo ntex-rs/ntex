@@ -1,7 +1,7 @@
 use std::io;
 
 use actix_codec::{BytesCodec, Framed};
-use actix_server_config::Io;
+use actix_rt::net::TcpStream;
 use actix_service::{service_fn, Service, ServiceFactory};
 use actix_testing::TestServer;
 use bytes::Bytes;
@@ -14,9 +14,9 @@ use actix_connect::Connect;
 #[actix_rt::test]
 async fn test_string() {
     let srv = TestServer::with(|| {
-        service_fn(|io: Io<tokio_net::tcp::TcpStream>| {
+        service_fn(|io: TcpStream| {
             async {
-                let mut framed = Framed::new(io.into_parts().0, BytesCodec);
+                let mut framed = Framed::new(io, BytesCodec);
                 framed.send(Bytes::from_static(b"test")).await?;
                 Ok::<_, io::Error>(())
             }
@@ -33,9 +33,9 @@ async fn test_string() {
 #[actix_rt::test]
 async fn test_rustls_string() {
     let srv = TestServer::with(|| {
-        service_fn(|io: Io<tokio_net::tcp::TcpStream>| {
+        service_fn(|io: TcpStream| {
             async {
-                let mut framed = Framed::new(io.into_parts().0, BytesCodec);
+                let mut framed = Framed::new(io, BytesCodec);
                 framed.send(Bytes::from_static(b"test")).await?;
                 Ok::<_, io::Error>(())
             }
@@ -51,9 +51,9 @@ async fn test_rustls_string() {
 #[actix_rt::test]
 async fn test_static_str() {
     let srv = TestServer::with(|| {
-        service_fn(|io: Io<tokio_net::tcp::TcpStream>| {
+        service_fn(|io: TcpStream| {
             async {
-                let mut framed = Framed::new(io.into_parts().0, BytesCodec);
+                let mut framed = Framed::new(io, BytesCodec);
                 framed.send(Bytes::from_static(b"test")).await?;
                 Ok::<_, io::Error>(())
             }
@@ -75,9 +75,9 @@ async fn test_static_str() {
 #[actix_rt::test]
 async fn test_new_service() {
     let srv = TestServer::with(|| {
-        service_fn(|io: Io<tokio_net::tcp::TcpStream>| {
+        service_fn(|io: TcpStream| {
             async {
-                let mut framed = Framed::new(io.into_parts().0, BytesCodec);
+                let mut framed = Framed::new(io, BytesCodec);
                 framed.send(Bytes::from_static(b"test")).await?;
                 Ok::<_, io::Error>(())
             }
@@ -100,9 +100,9 @@ async fn test_uri() {
     use http::HttpTryFrom;
 
     let srv = TestServer::with(|| {
-        service_fn(|io: Io<tokio_net::tcp::TcpStream>| {
+        service_fn(|io: TcpStream| {
             async {
-                let mut framed = Framed::new(io.into_parts().0, BytesCodec);
+                let mut framed = Framed::new(io, BytesCodec);
                 framed.send(Bytes::from_static(b"test")).await?;
                 Ok::<_, io::Error>(())
             }
@@ -121,9 +121,9 @@ async fn test_rustls_uri() {
     use http::HttpTryFrom;
 
     let srv = TestServer::with(|| {
-        service_fn(|io: Io<tokio_net::tcp::TcpStream>| {
+        service_fn(|io: TcpStream| {
             async {
-                let mut framed = Framed::new(io.into_parts().0, BytesCodec);
+                let mut framed = Framed::new(io, BytesCodec);
                 framed.send(Bytes::from_static(b"test")).await?;
                 Ok::<_, io::Error>(())
             }

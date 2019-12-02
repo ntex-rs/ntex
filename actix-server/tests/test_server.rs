@@ -3,12 +3,12 @@ use std::sync::mpsc;
 use std::{net, thread, time};
 
 use actix_codec::{BytesCodec, Framed};
-use actix_server::{Io, Server, ServerConfig};
-use actix_service::{factory_fn_cfg, service_fn, service_fn2};
+use actix_rt::net::TcpStream;
+use actix_server::Server;
+use actix_service::service_fn;
 use bytes::Bytes;
 use futures::{future::ok, SinkExt};
 use net2::TcpBuilder;
-use tokio_net::tcp::TcpStream;
 
 fn unused_addr() -> net::SocketAddr {
     let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -27,12 +27,7 @@ fn test_bind() {
     let h = thread::spawn(move || {
         let sys = actix_rt::System::new("test");
         let srv = Server::build()
-            .bind("test", addr, move || {
-                factory_fn_cfg(move |cfg: &ServerConfig| {
-                    assert_eq!(cfg.local_addr(), addr);
-                    ok::<_, ()>(service_fn2(|_| ok::<_, ()>(())))
-                })
-            })
+            .bind("test", addr, move || service_fn(|_| ok::<_, ()>(())))
             .unwrap()
             .start();
         let _ = tx.send((srv, actix_rt::System::current()));
@@ -47,26 +42,6 @@ fn test_bind() {
 }
 
 #[test]
-fn test_bind_no_config() {
-    let addr = unused_addr();
-    let (tx, rx) = mpsc::channel();
-
-    let h = thread::spawn(move || {
-        let sys = actix_rt::System::new("test");
-        let srv = Server::build()
-            .bind("test", addr, move || service_fn(|_| ok::<_, ()>(())))
-            .unwrap()
-            .start();
-        let _ = tx.send((srv, actix_rt::System::current()));
-        let _ = sys.run();
-    });
-    let (_, sys) = rx.recv().unwrap();
-    assert!(net::TcpStream::connect(addr).is_ok());
-    let _ = sys.stop();
-    let _ = h.join();
-}
-
-#[test]
 fn test_listen() {
     let addr = unused_addr();
     let (tx, rx) = mpsc::channel();
@@ -75,12 +50,7 @@ fn test_listen() {
         let sys = actix_rt::System::new("test");
         let lst = net::TcpListener::bind(addr).unwrap();
         let srv = Server::build()
-            .listen("test", lst, move || {
-                factory_fn_cfg(move |cfg: &ServerConfig| {
-                    assert_eq!(cfg.local_addr(), addr);
-                    ok::<_, ()>(service_fn2(|_| ok::<_, ()>(())))
-                })
-            })
+            .listen("test", lst, move || service_fn(|_| ok::<_, ()>(())))
             .unwrap()
             .start();
         let _ = tx.send((srv, actix_rt::System::current()));
@@ -105,18 +75,12 @@ fn test_start() {
         let srv: Server = Server::build()
             .backlog(100)
             .bind("test", addr, move || {
-                factory_fn_cfg(move |cfg: &ServerConfig| {
-                    assert_eq!(cfg.local_addr(), addr);
-
-                    let srv = service_fn2(|io: Io<TcpStream>| {
-                        async {
-                            let mut f = Framed::new(io.into_parts().0, BytesCodec);
-                            f.send(Bytes::from_static(b"test")).await.unwrap();
-                            Ok::<_, ()>(())
-                        }
-                    });
-
-                    ok::<_, ()>(srv)
+                service_fn(|io: TcpStream| {
+                    async move {
+                        let mut f = Framed::new(io, BytesCodec);
+                        f.send(Bytes::from_static(b"test")).await.unwrap();
+                        Ok::<_, ()>(())
+                    }
                 })
             })
             .unwrap()
