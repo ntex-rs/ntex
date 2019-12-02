@@ -23,9 +23,9 @@ pub(crate) enum Signal {
 pub(crate) struct Signals {
     srv: Server,
     #[cfg(not(unix))]
-    stream: tokio_net::signal::CtrlC,
+    stream: actix_rt::signal::CtrlC,
     #[cfg(unix)]
-    streams: Vec<(Signal, tokio_net::signal::unix::Signal)>,
+    streams: Vec<(Signal, actix_rt::signal::unix::Signal)>,
 }
 
 impl Signals {
@@ -33,13 +33,13 @@ impl Signals {
         actix_rt::spawn({
             #[cfg(not(unix))]
             {
-                let stream = tokio_net::signal::ctrl_c()?;
+                let stream = actix_rt::signal::ctrl_c()?;
                 Signals { srv, stream }
             }
 
             #[cfg(unix)]
             {
-                use tokio_net::signal::unix;
+                use actix_rt::signal::unix;
 
                 let mut streams = Vec::new();
 

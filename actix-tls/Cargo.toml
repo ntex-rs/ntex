@@ -1,0 +1,57 @@
+[package]
+name = "actix-tls"
+version = "1.0.0-alpha.1"
+authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+description = "Actix tls services"
+keywords = ["network", "framework", "async", "futures"]
+homepage = "https://actix.rs"
+repository = "https://github.com/actix/actix-net.git"
+documentation = "https://docs.rs/actix-tls/"
+categories = ["network-programming", "asynchronous"]
+license = "MIT/Apache-2.0"
+edition = "2018"
+workspace = ".."
+
+[package.metadata.docs.rs]
+features = ["server", "openssl", "rustls"]
+
+[lib]
+name = "actix_tls"
+path = "src/lib.rs"
+
+[features]
+default = []
+
+# openssl
+openssl = ["open-ssl", "tokio-openssl"]
+
+# rustls
+rustls = ["rust-tls", "webpki"]
+
+[dependencies]
+actix-service = "1.0.0-alpha.1"
+actix-codec = "0.2.0-alpha.1"
+actix-utils = "0.5.0-alpha.1"
+actix-rt = "1.0.0-alpha.1"
+derive_more = "0.99"
+either = "1.5.2"
+futures = "0.3.1"
+log = "0.4"
+
+# server feature
+actix-server = { version = "0.8.0-alpha.1", optional=true }
+
+# openssl
+open-ssl = { version="0.10", package = "openssl", optional = true }
+tokio-openssl = { version = "=0.4.0-alpha.6", optional = true }
+
+# rustls
+rust-tls = { version = "0.16.0", package = "rustls", optional = true }
+webpki = { version = "0.21", optional = true }
+webpki-roots = { version = "0.17", optional = true }
+# tokio-rustls = { version = "0.12.0-alpha.2", optional = true }
+# tokio-rustls = { git = "https://github.com/quininer/tokio-rustls.git", branch = "tokio-0.2", optional = true }
+
+[dev-dependencies]
+bytes = "0.4"
+actix-testing = { version="0.3.0-alpha.1" }

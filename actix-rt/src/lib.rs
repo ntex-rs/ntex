@@ -32,6 +32,28 @@ where
     Arbiter::spawn(f);
 }
 
+/// Asynchronous signal handling
+pub mod signal {
+    #[cfg(unix)]
+    pub mod unix {
+        pub use tokio_net::signal::unix::*;
+    }
+    pub use tokio_net::signal::{ctrl_c, CtrlC};
+}
+
+/// TCP/UDP/Unix bindings
+pub mod net {
+    pub use tokio::net::UdpSocket;
+    pub use tokio::net::{TcpListener, TcpStream};
+
+    #[cfg(unix)]
+    mod unix {
+        pub use tokio::net::{UnixDatagram, UnixListener, UnixStream};
+    }
+
+    pub use self::unix::*;
+}
+
 /// Utilities for tracking time.
 pub mod time {
     use std::time::{Duration, Instant};
@@ -51,16 +73,4 @@ pub mod time {
     pub fn interval_at(start: Instant, duration: Duration) -> Interval {
         Interval::new(start, duration)
     }
-}
-
-pub mod net {
-    pub use tokio::net::UdpSocket;
-    pub use tokio::net::{TcpListener, TcpStream};
-
-    #[cfg(unix)]
-    mod unix {
-        pub use tokio::net::{UnixDatagram, UnixListener, UnixStream};
-    }
-
-    pub use self::unix::*;
 }

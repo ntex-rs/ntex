@@ -8,10 +8,7 @@ mod server;
 mod service;
 mod signals;
 mod socket;
-pub mod ssl;
 mod worker;
-
-pub use actix_server_config::{Io, IoStream, Protocol, ServerConfig};
 
 pub use self::builder::ServerBuilder;
 pub use self::config::{ServiceConfig, ServiceRuntime};

@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::{fmt, io, net};
 
-use actix_server_config::{Io, ServerConfig};
+use actix_rt::net::TcpStream;
 use actix_service as actix;
 use futures::future::{Future, FutureExt, LocalBoxFuture};
 use log::error;
-use tokio_net::tcp::TcpStream;
 
 use super::builder::bind_addr;
 use super::service::{
@@ -113,8 +112,6 @@ impl InternalServiceFactory for ConfiguredService {
         self.rt.configure(&mut rt);
         rt.validate();
 
-        let names = self.names.clone();
-
         // construct services
         async move {
             let services = rt.services;
@@ -124,9 +121,7 @@ impl InternalServiceFactory for ConfiguredService {
             }
             let mut res = vec![];
             for (token, ns) in services.into_iter() {
-                let config = ServerConfig::new(names[&token].1);
-
-                let newserv = ns.new_service(&config);
+                let newserv = ns.new_service(&());
                 match newserv.await {
                     Ok(serv) => {
                         res.push((token, serv));
@@ -196,7 +191,7 @@ impl ServiceRuntime {
     pub fn service<T, F>(&mut self, name: &str, service: F)
     where
         F: actix::IntoServiceFactory<T>,
-        T: actix::ServiceFactory<Config = ServerConfig, Request = Io<TcpStream>> + 'static,
+        T: actix::ServiceFactory<Config = (), Request = TcpStream> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -229,7 +224,7 @@ type BoxedNewService = Box<
         Response = (),
         Error = (),
         InitError = (),
-        Config = ServerConfig,
+        Config = (),
         Service = BoxedServerService,
         Future = LocalBoxFuture<'static, Result<BoxedServerService, ()>>,
     >,
@@ -241,7 +236,7 @@ struct ServiceFactory<T> {
 
 impl<T> actix::ServiceFactory for ServiceFactory<T>
 where
-    T: actix::ServiceFactory<Config = ServerConfig, Request = Io<TcpStream>>,
+    T: actix::ServiceFactory<Config = (), Request = TcpStream>,
     T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,
@@ -251,11 +246,11 @@ where
     type Response = ();
     type Error = ();
     type InitError = ();
-    type Config = ServerConfig;
+    type Config = ();
     type Service = BoxedServerService;
     type Future = LocalBoxFuture<'static, Result<BoxedServerService, ()>>;
 
-    fn new_service(&self, cfg: &ServerConfig) -> Self::Future {
+    fn new_service(&self, cfg: &()) -> Self::Future {
         let fut = self.inner.new_service(cfg);
         async move {
             return match fut.await {

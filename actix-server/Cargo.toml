@@ -1,6 +1,6 @@
 [package]
 name = "actix-server"
-version = "0.8.0-alpha.1"
+version = "0.8.0-alpha.2"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix server - General purpose tcp server"
 keywords = ["network", "framework", "async", "futures"]
@@ -13,23 +13,16 @@ exclude = [".gitignore", ".travis.yml", ".cargo/config", "appveyor.yml"]
 edition = "2018"
 workspace = ".."
 
-[package.metadata.docs.rs]
-features = ["nativetls", "openssl", "rustls", "uds"]
-
 [lib]
 name = "actix_server"
 path = "src/lib.rs"
 
 [features]
 default = []
-nativetls = ["native-tls", "tokio-tls"]
-openssl = ["open-ssl", "tokio-openssl", "actix-server-config/openssl"]
-# rustls = ["rust-tls", "tokio-rustls", "webpki", "webpki-roots", "actix-server-config/rustls"]
 
 [dependencies]
 actix-service = "1.0.0-alpha.1"
-actix-server-config = "0.3.0-alpha.1"
-actix-rt = "1.0.0-alpha.1"
+actix-rt = "1.0.0-alpha.2"
 actix-codec = "0.2.0-alpha.1"
 
 log = "0.4"
@@ -38,27 +31,12 @@ mio = "0.6.19"
 net2 = "0.2"
 futures = "0.3.1"
 slab = "0.4"
-tokio-net = { version = "0.2.0-alpha.6", features = ["signal", "tcp", "uds"] }
 
+tokio-net = { version = "0.2.0-alpha.6", features = ["signal", "tcp", "uds"] }
 futures-core-preview = "0.3.0-alpha.19"
 
 # unix domain sockets
 mio-uds = { version = "0.6.7" }
-
-# nativetls
-native-tls = { version = "0.2", optional = true }
-tokio-tls = { version = "0.3.0-alpha.6", optional = true }
-
-# openssl
-open-ssl = { version = "0.10", package = "openssl", optional = true }
-tokio-openssl = { version = "0.4.0-alpha.6", optional = true }
-
-# rustls
-rust-tls = { version = "0.16.0", package = "rustls", optional = true }
-# tokio-rustls = { version = "0.12.0-alpha.2", optional = true }
-# tokio-rustls = { git = "https://github.com/quininer/tokio-rustls.git", branch = "tokio-0.2", optional = true }
-webpki = { version = "0.21", optional = true }
-webpki-roots = { version = "0.17", optional = true }
 
 [dev-dependencies]
 bytes = "0.4"

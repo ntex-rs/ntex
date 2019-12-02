@@ -52,6 +52,8 @@ impl CounterGuard {
     }
 }
 
+impl Unpin for CounterGuard {}
+
 impl Drop for CounterGuard {
     fn drop(&mut self) {
         self.0.dec();

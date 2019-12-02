@@ -4,7 +4,6 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use actix_rt::spawn;
-use actix_server_config::{Io, ServerConfig};
 use actix_service::{self as actix, Service, ServiceFactory as ActixServiceFactory};
 use futures::future::{err, ok, LocalBoxFuture, Ready};
 use futures::{FutureExt, TryFutureExt};
@@ -25,7 +24,7 @@ pub(crate) enum ServerMessage {
 }
 
 pub trait ServiceFactory<Stream: FromStream>: Send + Clone + 'static {
-    type Factory: actix::ServiceFactory<Config = ServerConfig, Request = Io<Stream>>;
+    type Factory: actix::ServiceFactory<Config = (), Request = Stream>;
 
     fn create(&self) -> Self::Factory;
 }
@@ -59,7 +58,7 @@ impl<T> StreamService<T> {
 
 impl<T, I> Service for StreamService<T>
 where
-    T: Service<Request = Io<I>>,
+    T: Service<Request = I>,
     T::Future: 'static,
     T::Error: 'static,
     I: FromStream,
@@ -81,7 +80,7 @@ where
                 });
 
                 if let Ok(stream) = stream {
-                    let f = self.service.call(Io::new(stream));
+                    let f = self.service.call(stream);
                     spawn(
                         async move {
                             let _ = f.await;
@@ -149,11 +148,9 @@ where
 
     fn create(&self) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         let token = self.token;
-        let config = ServerConfig::new(self.addr);
-
         self.inner
             .create()
-            .new_service(&config)
+            .new_service(&())
             .map_err(|_| ())
             .map_ok(move |inner| {
                 let service: BoxedServerService = Box::new(StreamService::new(inner));
@@ -180,7 +177,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 impl<F, T, I> ServiceFactory<I> for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: actix::ServiceFactory<Config = ServerConfig, Request = Io<I>>,
+    T: actix::ServiceFactory<Config = (), Request = I>,
     I: FromStream,
 {
     type Factory = T;

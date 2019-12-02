@@ -3,6 +3,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{io, mem, net};
 
+use actix_rt::net::TcpStream;
 use actix_rt::{spawn, time::delay, Arbiter, System};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use futures::channel::oneshot;
@@ -12,7 +13,6 @@ use futures::{ready, Future, FutureExt, Stream, StreamExt};
 use log::{error, info};
 use net2::TcpBuilder;
 use num_cpus;
-use tokio_net::tcp::TcpStream;
 
 use crate::accept::{AcceptLoop, AcceptNotify, Command};
 use crate::config::{ConfiguredService, ServiceConfig};
@@ -21,7 +21,7 @@ use crate::service::{InternalServiceFactory, ServiceFactory, StreamNewService};
 use crate::signals::{Signal, Signals};
 use crate::socket::StdListener;
 use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
-use crate::{ssl, Token};
+use crate::Token;
 
 /// Server builder
 pub struct ServerBuilder {
@@ -104,17 +104,6 @@ impl ServerBuilder {
         self
     }
 
-    /// Sets the maximum per-worker concurrent connection establish process.
-    ///
-    /// All listeners will stop accepting connections when this limit is reached. It
-    /// can be used to limit the global SSL CPU usage.
-    ///
-    /// By default max connections is set to a 256.
-    pub fn maxconnrate(self, num: usize) -> Self {
-        ssl::max_concurrent_ssl_connect(num);
-        self
-    }
-
     /// Stop actix system.
     pub fn system_exit(mut self) -> Self {
         self.exit = true;
@@ -191,7 +180,7 @@ impl ServerBuilder {
     /// Add new unix domain service to the server.
     pub fn bind_uds<F, U, N>(self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
-        F: ServiceFactory<tokio_net::uds::UnixStream>,
+        F: ServiceFactory<actix_rt::net::UnixStream>,
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
     {
@@ -221,7 +210,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: ServiceFactory<tokio_net::uds::UnixStream>,
+        F: ServiceFactory<actix_rt::net::UnixStream>,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();
