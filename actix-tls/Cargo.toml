@@ -13,7 +13,7 @@ edition = "2018"
 workspace = ".."
 
 [package.metadata.docs.rs]
-features = ["server", "openssl", "rustls"]
+features = ["openssl", "rustls"]
 
 [lib]
 name = "actix_tls"
@@ -37,9 +37,6 @@ derive_more = "0.99"
 either = "1.5.2"
 futures = "0.3.1"
 log = "0.4"
-
-# server feature
-actix-server = { version = "0.8.0-alpha.1", optional=true }
 
 # openssl
 open-ssl = { version="0.10", package = "openssl", optional = true }

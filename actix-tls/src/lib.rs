@@ -33,19 +33,3 @@ pub enum SslError<E1, E2> {
     Ssl(E1),
     Service(E2),
 }
-
-pub trait ServerBuilderExt: Sized {
-    /// Sets the maximum per-worker concurrent connection establish process.
-    ///
-    /// All listeners will stop accepting connections when this limit is reached. It
-    /// can be used to limit the global SSL CPU usage.
-    ///
-    /// By default max connections is set to a 256.
-    fn maxconnrate(self, num: usize) -> Self {
-        max_concurrent_ssl_connect(num);
-        self
-    }
-}
-
-#[cfg(feature = "server")]
-impl ServerBuilderExt for actix_server::ServerBuilder {}
