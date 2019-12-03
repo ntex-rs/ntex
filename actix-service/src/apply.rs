@@ -102,6 +102,21 @@ where
     }
 }
 
+impl<T, F, R, In, Out, Err> Clone for ApplyServiceFactory<T, F, R, In, Out, Err>
+where
+    T: ServiceFactory<Error = Err> + Clone,
+    F: FnMut(In, &mut T::Service) -> R + Clone,
+    R: Future<Output = Result<Out, Err>>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            service: self.service.clone(),
+            f: self.f.clone(),
+            r: PhantomData,
+        }
+    }
+}
+
 impl<T, F, R, In, Out, Err> ServiceFactory for ApplyServiceFactory<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
