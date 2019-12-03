@@ -184,6 +184,20 @@ where
     }
 }
 
+impl<F, Fut, Cfg, Srv, Err> Clone for FnServiceConfig<F, Fut, Cfg, Srv, Err>
+where
+    F: Fn(Cfg) -> Fut + Clone,
+    Fut: Future<Output = Result<Srv, Err>>,
+    Srv: Service,
+{
+    fn clone(&self) -> Self {
+        FnServiceConfig {
+            f: self.f.clone(),
+            _t: PhantomData,
+        }
+    }
+}
+
 impl<F, Fut, Cfg, Srv, Err> ServiceFactory for FnServiceConfig<F, Fut, Cfg, Srv, Err>
 where
     F: Fn(Cfg) -> Fut,

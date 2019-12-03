@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0-alpha.3] - 2019-12-xx
+
+### Add missing Clone impl for factory_fn_cfg
+
 ## [1.0.0-alpha.2] - 2019-12-02
 
 ### Use owned config value for service factory
