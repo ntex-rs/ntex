@@ -53,6 +53,7 @@ pub mod net {
         pub use tokio::net::{UnixDatagram, UnixListener, UnixStream};
     }
 
+    #[cfg(unix)]
     pub use self::unix::*;
 }
 

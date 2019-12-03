@@ -11,12 +11,15 @@ use crate::server::Server;
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub(crate) enum Signal {
     /// SIGHUP
+    #[cfg_attr(not(unix), allow(dead_code))]
     Hup,
     /// SIGINT
     Int,
     /// SIGTERM
+    #[cfg_attr(not(unix), allow(dead_code))]
     Term,
     /// SIGQUIT
+    #[cfg_attr(not(unix), allow(dead_code))]
     Quit,
 }
 
@@ -69,7 +72,7 @@ impl Future for Signals {
         #[cfg(not(unix))]
         loop {
             match Pin::new(&mut self.stream).poll_next(cx) {
-                Poll::Ready(Ok(Some(_))) => self.srv.signal(Signal::Int),
+                Poll::Ready(Some(_)) => self.srv.signal(Signal::Int),
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Pending => return Poll::Pending,
             }
