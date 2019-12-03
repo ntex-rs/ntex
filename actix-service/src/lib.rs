@@ -23,6 +23,7 @@ mod map_init_err;
 mod pipeline;
 mod then;
 mod transform;
+mod transform_err;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::apply_cfg::{apply_cfg, apply_cfg_factory};
@@ -323,4 +324,5 @@ pub mod dev {
     pub use crate::map_init_err::MapInitErr;
     pub use crate::then::{ThenService, ThenServiceFactory};
     pub use crate::transform::ApplyTransform;
+    pub use crate::transform_err::TransformMapInitErr;
 }

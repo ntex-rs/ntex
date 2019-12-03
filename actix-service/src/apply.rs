@@ -80,6 +80,8 @@ where
 pub struct ApplyServiceFactory<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
+    F: FnMut(In, &mut T::Service) -> R + Clone,
+    R: Future<Output = Result<Out, Err>>,
 {
     service: T,
     f: F,

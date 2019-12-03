@@ -126,7 +126,13 @@ where
 pub struct AndThenServiceFactory<A, B>
 where
     A: ServiceFactory,
-    B: ServiceFactory,
+    A::Config: Clone,
+    B: ServiceFactory<
+        Config = A::Config,
+        Request = A::Response,
+        Error = A::Error,
+        InitError = A::InitError,
+    >,
 {
     a: A,
     b: B,
@@ -180,7 +186,13 @@ where
 impl<A, B> Clone for AndThenServiceFactory<A, B>
 where
     A: ServiceFactory + Clone,
-    B: ServiceFactory + Clone,
+    A::Config: Clone,
+    B: ServiceFactory<
+            Config = A::Config,
+            Request = A::Response,
+            Error = A::Error,
+            InitError = A::InitError,
+        > + Clone,
 {
     fn clone(&self) -> Self {
         Self {

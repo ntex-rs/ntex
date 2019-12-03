@@ -4,6 +4,9 @@
 
 ### Add missing Clone impls
 
+### Restore `Transform::map_init_err()` combinator
+
+
 ## [1.0.0-alpha.2] - 2019-12-02
 
 ### Use owned config value for service factory

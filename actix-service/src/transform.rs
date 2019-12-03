@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::transform_err::TransformMapInitErr;
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply transform to a service. Function returns
@@ -48,6 +49,16 @@ pub trait Transform<S> {
 
     /// Creates and returns a new Service component, asynchronously
     fn new_transform(&self, service: S) -> Self::Future;
+
+    /// Map this transforms's factory error to a different error,
+    /// returning a new transform service factory.
+    fn map_init_err<F, E>(self, f: F) -> TransformMapInitErr<Self, S, F, E>
+    where
+        Self: Sized,
+        F: Fn(Self::InitError) -> E + Clone,
+    {
+        TransformMapInitErr::new(self, f)
+    }
 }
 
 impl<T, S> Transform<S> for Rc<T>
