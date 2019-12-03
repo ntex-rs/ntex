@@ -6,6 +6,7 @@
 
 ### Restore `Transform::map_init_err()` combinator
 
+### Restore `Service/Factory::apply_fn()` in form of `Pipeline/Factory::and_then_apply_fn()`
 
 ## [1.0.0-alpha.2] - 2019-12-02
 

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::task::{self, Context, Poll};
 
 mod and_then;
+mod and_then_apply_fn;
 mod apply;
 mod apply_cfg;
 pub mod boxed;
@@ -313,6 +314,7 @@ where
 
 pub mod dev {
     pub use crate::and_then::{AndThenService, AndThenServiceFactory};
+    pub use crate::and_then_apply_fn::{AndThenApplyFn, AndThenApplyFnFactory};
     pub use crate::apply::{Apply, ApplyServiceFactory};
     pub use crate::apply_cfg::{ApplyConfigService, ApplyConfigServiceFactory};
     pub use crate::fn_service::{

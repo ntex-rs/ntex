@@ -1,6 +1,8 @@
+use std::future::Future;
 use std::task::{Context, Poll};
 
 use crate::and_then::{AndThenService, AndThenServiceFactory};
+use crate::and_then_apply_fn::{AndThenApplyFn, AndThenApplyFnFactory};
 use crate::map::{Map, MapServiceFactory};
 use crate::map_err::{MapErr, MapErrServiceFactory};
 use crate::map_init_err::MapInitErr;
@@ -50,6 +52,28 @@ impl<T: Service> Pipeline<T> {
     {
         Pipeline {
             service: AndThenService::new(self.service, service.into_service()),
+        }
+    }
+
+    /// Apply function to specified service and use it as a next service in
+    /// chain.
+    ///
+    /// Short version of `pipeline_factory(...).and_then(apply_fn_factory(...))`
+    pub fn and_then_apply_fn<U, I, F, Fut, Res, Err>(
+        self,
+        service: I,
+        f: F,
+    ) -> Pipeline<AndThenApplyFn<T, U, F, Fut, Res, Err>>
+    where
+        Self: Sized,
+        I: IntoService<U>,
+        U: Service,
+        F: FnMut(T::Response, &mut U) -> Fut,
+        Fut: Future<Output = Result<Res, Err>>,
+        Err: From<T::Error> + From<U::Error>,
+    {
+        Pipeline {
+            service: AndThenApplyFn::new(self.service, service.into_service(), f),
         }
     }
 
@@ -156,6 +180,29 @@ impl<T: ServiceFactory> PipelineFactory<T> {
     {
         PipelineFactory {
             factory: AndThenServiceFactory::new(self.factory, factory.into_factory()),
+        }
+    }
+
+    /// Apply function to specified service and use it as a next service in
+    /// chain.
+    ///
+    /// Short version of `pipeline_factory(...).and_then(apply_fn_factory(...))`
+    pub fn and_then_apply_fn<U, I, F, Fut, Res, Err>(
+        self,
+        factory: I,
+        f: F,
+    ) -> PipelineFactory<AndThenApplyFnFactory<T, U, F, Fut, Res, Err>>
+    where
+        Self: Sized,
+        T::Config: Clone,
+        I: IntoServiceFactory<U>,
+        U: ServiceFactory<Config = T::Config, InitError = T::InitError>,
+        F: FnMut(T::Response, &mut U::Service) -> Fut,
+        Fut: Future<Output = Result<Res, Err>>,
+        Err: From<T::Error> + From<U::Error>,
+    {
+        PipelineFactory {
+            factory: AndThenApplyFnFactory::new(self.factory, factory.into_factory(), f),
         }
     }
 
