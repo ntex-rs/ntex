@@ -200,7 +200,7 @@ impl Worker {
                                 wrk.services.push(WorkerService {
                                     factory,
                                     service,
-                                    status: WorkerServiceStatus::Available,
+                                    status: WorkerServiceStatus::Unavailable,
                                 });
                             }
                         }
