@@ -3,14 +3,14 @@
 //! This channel is similar to that in `sync::oneshot` but cannot be sent across
 //! threads.
 
-use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::task::{Context, Poll};
 
 pub use futures::channel::oneshot::Canceled;
 
+use crate::cell::{Cell, WeakCell};
 use crate::task::LocalWaker;
 
 /// Creates a new futures-aware, one-shot channel.
@@ -18,13 +18,12 @@ use crate::task::LocalWaker;
 /// This function is the same as `sync::oneshot::channel` except that the
 /// returned values cannot be sent across threads.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-    let inner = Rc::new(RefCell::new(Inner {
+    let inner = Cell::new(Inner {
         value: None,
-        tx_task: LocalWaker::new(),
         rx_task: LocalWaker::new(),
-    }));
+    });
     let tx = Sender {
-        inner: Rc::downgrade(&inner),
+        inner: inner.downgrade(),
     };
     let rx = Receiver {
         state: State::Open(inner),
@@ -40,7 +39,7 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 /// across threads.
 #[derive(Debug)]
 pub struct Sender<T> {
-    inner: Weak<RefCell<Inner<T>>>,
+    inner: WeakCell<Inner<T>>,
 }
 
 /// A future representing the completion of a computation happening elsewhere in
@@ -61,14 +60,13 @@ impl<T> Unpin for Sender<T> {}
 
 #[derive(Debug)]
 enum State<T> {
-    Open(Rc<RefCell<Inner<T>>>),
+    Open(Cell<Inner<T>>),
     Closed(Option<T>),
 }
 
 #[derive(Debug)]
 struct Inner<T> {
     value: Option<T>,
-    tx_task: LocalWaker,
     rx_task: LocalWaker,
 }
 
@@ -84,40 +82,13 @@ impl<T> Sender<T> {
     /// this function was called, however, then `Err` is returned with the value
     /// provided.
     pub fn send(self, val: T) -> Result<(), T> {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.borrow_mut().value = Some(val);
+        if let Some(mut inner) = self.inner.upgrade() {
+            let inner = inner.get_mut();
+            inner.value = Some(val);
+            inner.rx_task.wake();
             Ok(())
         } else {
             Err(val)
-        }
-    }
-
-    /// Polls this `Sender` half to detect whether the `Receiver` this has
-    /// paired with has gone away.
-    ///
-    /// This function can be used to learn about when the `Receiver` (consumer)
-    /// half has gone away and nothing will be able to receive a message sent
-    /// from `complete`.
-    ///
-    /// Like `Future::poll`, this function will panic if it's not called from
-    /// within the context of a task. In other words, this should only ever be
-    /// called from inside another future.
-    ///
-    /// If `Ready` is returned then it means that the `Receiver` has disappeared
-    /// and the result this `Sender` would otherwise produce should no longer
-    /// be produced.
-    ///
-    /// If `NotReady` is returned then the `Receiver` is still alive and may be
-    /// able to receive a message if sent. The current task, however, is
-    /// scheduled to receive a notification if the corresponding `Receiver` goes
-    /// away.
-    pub fn poll_canceled(&mut self, cx: &mut Context<'_>) -> Poll<()> {
-        match self.inner.upgrade() {
-            Some(inner) => {
-                inner.borrow_mut().tx_task.register(cx.waker());
-                Poll::Pending
-            }
-            None => Poll::Ready(()),
         }
     }
 
@@ -141,11 +112,9 @@ impl<T> Sender<T> {
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        let inner = match self.inner.upgrade() {
-            Some(inner) => inner,
-            None => return,
+        if let Some(inner) = self.inner.upgrade() {
+            inner.get_ref().rx_task.wake();
         };
-        inner.borrow().rx_task.wake();
     }
 }
 
@@ -158,12 +127,8 @@ impl<T> Receiver<T> {
     /// `Canceled` is returned from `poll` then no message was sent.
     pub fn close(&mut self) {
         match self.state {
-            State::Open(ref inner) => {
-                let mut inner = inner.borrow_mut();
-                inner.tx_task.wake();
-                let value = inner.value.take();
-                drop(inner);
-
+            State::Open(ref mut inner) => {
+                let value = inner.get_mut().value.take();
                 self.state = State::Closed(value);
             }
             State::Closed(_) => {}
@@ -186,17 +151,17 @@ impl<T> Future for Receiver<T> {
         };
 
         // If we've got a value, then skip the logic below as we're done.
-        if let Some(val) = inner.borrow_mut().value.take() {
+        if let Some(val) = inner.get_mut().value.take() {
             return Poll::Ready(Ok(val));
         }
 
         // If we can get mutable access, then the sender has gone away. We
         // didn't see a value above, so we're canceled. Otherwise we park
         // our task and wait for a value to come in.
-        if Rc::get_mut(inner).is_some() {
+        if Rc::get_mut(&mut inner.inner).is_some() {
             Poll::Ready(Err(Canceled))
         } else {
-            inner.borrow().rx_task.register(cx.waker());
+            inner.get_ref().rx_task.register(cx.waker());
             Poll::Pending
         }
     }

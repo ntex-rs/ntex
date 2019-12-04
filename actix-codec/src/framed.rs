@@ -5,7 +5,7 @@ use std::io::{self};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use futures::{ready, Sink, Stream};
 use pin_project::pin_project;
 use tokio_codec::{Decoder, Encoder};
@@ -240,17 +240,18 @@ impl<T, U> Framed<T, U> {
         T: AsyncWrite,
         U: Encoder,
     {
-        let len = self.write_buf.len();
-        if len < self.write_lw {
-            self.write_buf.reserve(self.write_hw - len)
+        let remaining = self.write_buf.remaining_mut();
+        if remaining < self.write_lw {
+            self.write_buf.reserve(self.write_hw - remaining);
         }
+
         self.codec.encode(item, &mut self.write_buf)?;
         Ok(())
     }
 
+    /// Check if framed is able to write more data
     pub fn is_ready(&self) -> bool {
-        let len = self.write_buf.len();
-        len < self.write_hw
+        self.write_buf.len() < self.write_hw
     }
 
     pub fn next_item(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<U::Item, U::Error>>>
@@ -292,16 +293,17 @@ impl<T, U> Framed<T, U> {
 
             assert!(!self.eof);
 
-            // Otherwise, try to read more data and try again. Make sure we've
-            // got room for at least one byte to read to ensure that we don't
-            // get a spurious 0 that looks like EOF
-            self.read_buf.reserve(1);
-            let cnt = unsafe {
-                match Pin::new_unchecked(&mut self.io).poll_read_buf(cx, &mut self.read_buf) {
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
-                    Poll::Ready(Ok(cnt)) => cnt,
-                }
+            // Otherwise, try to read more data and try again. Make sure we've got room
+            let remaining = self.read_buf.remaining_mut();
+            if remaining < LW {
+                self.read_buf.reserve(HW - remaining)
+            }
+            let cnt = match unsafe {
+                Pin::new_unchecked(&mut self.io).poll_read_buf(cx, &mut self.read_buf)
+            } {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
+                Poll::Ready(Ok(cnt)) => cnt,
             };
 
             if cnt == 0 {
@@ -321,9 +323,9 @@ impl<T, U> Framed<T, U> {
         while !self.write_buf.is_empty() {
             log::trace!("writing; remaining={}", self.write_buf.len());
 
-            let n = ready!(
-                unsafe { Pin::new_unchecked(&mut self.io) }.poll_write(cx, &self.write_buf)
-            )?;
+            let n = ready!(unsafe {
+                Pin::new_unchecked(&mut self.io).poll_write(cx, &self.write_buf)
+            })?;
 
             if n == 0 {
                 return Poll::Ready(Err(io::Error::new(
@@ -340,7 +342,7 @@ impl<T, U> Framed<T, U> {
         }
 
         // Try flushing the underlying IO
-        ready!(unsafe { Pin::new_unchecked(&mut self.io) }.poll_flush(cx))?;
+        ready!(unsafe { Pin::new_unchecked(&mut self.io).poll_flush(cx) })?;
 
         log::trace!("framed transport flushed");
         Poll::Ready(Ok(()))
@@ -351,9 +353,10 @@ impl<T, U> Framed<T, U> {
         T: AsyncWrite,
         U: Encoder,
     {
-        ready!(unsafe { Pin::new_unchecked(&mut self.io) }.poll_flush(cx))?;
-        ready!(unsafe { Pin::new_unchecked(&mut self.io) }.poll_shutdown(cx))?;
-
+        unsafe {
+            ready!(Pin::new_unchecked(&mut self.io).poll_flush(cx))?;
+            ready!(Pin::new_unchecked(&mut self.io).poll_shutdown(cx))?;
+        }
         Poll::Ready(Ok(()))
     }
 }

@@ -21,7 +21,7 @@ use std::{fmt, rc};
 /// `wake`.
 #[derive(Default)]
 pub struct LocalWaker {
-    waker: UnsafeCell<Option<Waker>>,
+    pub(crate) waker: UnsafeCell<Option<Waker>>,
     _t: PhantomData<rc::Rc<()>>,
 }
 
@@ -38,10 +38,7 @@ impl LocalWaker {
     /// Registers the waker to be notified on calls to `wake`.
     pub fn register(&self, waker: &Waker) {
         unsafe {
-            let w = self.waker.get();
-            if (*w).is_none() {
-                *w = Some(waker.clone())
-            }
+            *self.waker.get() = Some(waker.clone());
         }
     }
 

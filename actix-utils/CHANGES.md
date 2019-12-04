@@ -1,5 +1,7 @@
 # Changes
 
+* Fix oneshot
+
 ## [1.0.0-alpha.2] - 2019-12-02
 
 * Migrate to `std::future`

@@ -1,5 +1,7 @@
 # Changes
 
+* Fix low/high watermark for write/read buffers
+
 ## [0.2.0-alpha.2]
 
 * Migrated to `std::future`
