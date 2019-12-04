@@ -25,7 +25,7 @@ pub(crate) struct Token(usize);
 
 impl Token {
     pub(crate) fn next(&mut self) -> Token {
-        let token = Token(self.0 + 1);
+        let token = Token(self.0);
         self.0 += 1;
         token
     }
