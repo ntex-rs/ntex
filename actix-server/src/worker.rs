@@ -188,31 +188,29 @@ impl Worker {
             }));
         }
 
-        spawn(
-            async move {
-                let res = join_all(fut).await;
-                let res: Result<Vec<_>, _> = res.into_iter().collect();
-                match res {
-                    Ok(services) => {
-                        for item in services {
-                            for (factory, token, service) in item {
-                                assert_eq!(token.0, wrk.services.len());
-                                wrk.services.push(WorkerService {
-                                    factory,
-                                    service,
-                                    status: WorkerServiceStatus::Unavailable,
-                                });
-                            }
+        spawn(async move {
+            let res = join_all(fut).await;
+            let res: Result<Vec<_>, _> = res.into_iter().collect();
+            match res {
+                Ok(services) => {
+                    for item in services {
+                        for (factory, token, service) in item {
+                            assert_eq!(token.0, wrk.services.len());
+                            wrk.services.push(WorkerService {
+                                factory,
+                                service,
+                                status: WorkerServiceStatus::Unavailable,
+                            });
                         }
                     }
-                    Err(e) => {
-                        error!("Can not start worker: {:?}", e);
-                        Arbiter::current().stop();
-                    }
                 }
-                wrk.await
+                Err(e) => {
+                    error!("Can not start worker: {:?}", e);
+                    Arbiter::current().stop();
+                }
             }
-        );
+            wrk.await
+        });
     }
 
     fn shutdown(&mut self, force: bool) {

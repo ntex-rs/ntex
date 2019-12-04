@@ -81,12 +81,10 @@ where
 
                 if let Ok(stream) = stream {
                     let f = self.service.call(stream);
-                    spawn(
-                        async move {
-                            let _ = f.await;
-                            drop(guard);
-                        }
-                    );
+                    spawn(async move {
+                        let _ = f.await;
+                        drop(guard);
+                    });
                     ok(())
                 } else {
                     err(())

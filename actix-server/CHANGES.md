@@ -6,6 +6,8 @@
 
 * Fix compilation on non-unix platforms
 
+* Better handling server configuration
+
 
 ## [1.0.0-alpha.2] - 2019-12-02
 

@@ -4,7 +4,7 @@ use std::{fmt, io, net};
 use actix_rt::net::TcpStream;
 use actix_service as actix;
 use actix_utils::counter::CounterGuard;
-use futures::future::{Future, FutureExt, LocalBoxFuture};
+use futures::future::{ok, Future, FutureExt, LocalBoxFuture};
 use log::error;
 
 use super::builder::bind_addr;
@@ -75,7 +75,8 @@ impl ServiceConfig {
 pub(super) struct ConfiguredService {
     rt: Box<dyn ServiceRuntimeConfiguration>,
     names: HashMap<Token, (String, net::SocketAddr)>,
-    services: HashMap<String, Token>,
+    topics: HashMap<String, Token>,
+    services: Vec<Token>,
 }
 
 impl ConfiguredService {
@@ -83,13 +84,15 @@ impl ConfiguredService {
         ConfiguredService {
             rt,
             names: HashMap::new(),
-            services: HashMap::new(),
+            topics: HashMap::new(),
+            services: Vec::new(),
         }
     }
 
     pub(super) fn stream(&mut self, token: Token, name: String, addr: net::SocketAddr) {
         self.names.insert(token, (name.clone(), addr));
-        self.services.insert(name, token);
+        self.topics.insert(name.clone(), token);
+        self.services.push(token);
     }
 }
 
@@ -102,34 +105,50 @@ impl InternalServiceFactory for ConfiguredService {
         Box::new(Self {
             rt: self.rt.clone(),
             names: self.names.clone(),
+            topics: self.topics.clone(),
             services: self.services.clone(),
         })
     }
 
     fn create(&self) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         // configure services
-        let mut rt = ServiceRuntime::new(self.services.clone());
+        let mut rt = ServiceRuntime::new(self.topics.clone());
         self.rt.configure(&mut rt);
         rt.validate();
+        let mut names = self.names.clone();
+        let tokens = self.services.clone();
 
         // construct services
         async move {
-            let services = rt.services;
+            let mut services = rt.services;
             // TODO: Proper error handling here
             for f in rt.onstart.into_iter() {
                 f.await;
             }
             let mut res = vec![];
-            for (token, ns) in services.into_iter() {
-                let newserv = ns.new_service(());
-                match newserv.await {
-                    Ok(serv) => {
-                        res.push((token, serv));
+            for token in tokens {
+                if let Some(srv) = services.remove(&token) {
+                    let newserv = srv.new_service(());
+                    match newserv.await {
+                        Ok(serv) => {
+                            res.push((token, serv));
+                        }
+                        Err(_) => {
+                            error!("Can not construct service");
+                            return Err(());
+                        }
                     }
-                    Err(_) => {
-                        error!("Can not construct service");
-                        return Err(());
-                    }
+                } else {
+                    let name = names.remove(&token).unwrap().0;
+                    res.push((
+                        token,
+                        Box::new(StreamService::new(actix::service_fn2(
+                            move |_: TcpStream| {
+                                error!("Service {:?} is not configured", name);
+                                ok::<_, ()>(())
+                            },
+                        ))),
+                    ));
                 };
             }
             return Ok(res);

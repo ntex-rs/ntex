@@ -1,5 +1,6 @@
 use std::io::Read;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::{mpsc, Arc};
 use std::{net, thread, time};
 
 use actix_codec::{BytesCodec, Framed};
@@ -7,7 +8,8 @@ use actix_rt::net::TcpStream;
 use actix_server::Server;
 use actix_service::service_fn;
 use bytes::Bytes;
-use futures::{future::ok, SinkExt};
+use futures::future::{lazy, ok};
+use futures::SinkExt;
 use net2::TcpBuilder;
 
 fn unused_addr() -> net::SocketAddr {
@@ -123,6 +125,53 @@ fn test_start() {
     assert!(net::TcpStream::connect(addr).is_err());
 
     thread::sleep(time::Duration::from_millis(100));
+    let _ = sys.stop();
+    let _ = h.join();
+}
+
+#[test]
+fn test_configure() {
+    let addr1 = unused_addr();
+    let addr2 = unused_addr();
+    let addr3 = unused_addr();
+    let (tx, rx) = mpsc::channel();
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let h = thread::spawn(move || {
+        let num = num2.clone();
+        let sys = actix_rt::System::new("test");
+        let srv = Server::build()
+            .configure(move |cfg| {
+                let num = num.clone();
+                let lst = net::TcpListener::bind(addr3).unwrap();
+                cfg.bind("addr1", addr1)
+                    .unwrap()
+                    .bind("addr2", addr2)
+                    .unwrap()
+                    .listen("addr3", lst)
+                    .apply(move |rt| {
+                        let num = num.clone();
+                        rt.service("addr1", service_fn(|_| ok::<_, ()>(())));
+                        rt.service("addr3", service_fn(|_| ok::<_, ()>(())));
+                        rt.on_start(lazy(move |_| {
+                            let _ = num.fetch_add(1, Relaxed);
+                        }))
+                    })
+            })
+            .unwrap()
+            .workers(1)
+            .start();
+        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = sys.run();
+    });
+    let (_, sys) = rx.recv().unwrap();
+    thread::sleep(time::Duration::from_millis(500));
+
+    assert!(net::TcpStream::connect(addr1).is_ok());
+    assert!(net::TcpStream::connect(addr2).is_ok());
+    assert!(net::TcpStream::connect(addr3).is_ok());
+    assert_eq!(num.load(Relaxed), 1);
     let _ = sys.stop();
     let _ = h.join();
 }
