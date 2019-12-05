@@ -26,7 +26,7 @@ default = []
 openssl = ["open-ssl", "tokio-openssl"]
 
 # rustls
-rustls = ["rust-tls", "webpki"]
+rustls = ["rust-tls", "webpki", "webpki-roots", "tokio-rustls"]
 
 # nativetls
 nativetls = ["native-tls", "tokio-tls"]
