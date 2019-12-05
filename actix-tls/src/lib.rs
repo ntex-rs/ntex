@@ -9,10 +9,11 @@ use actix_utils::counter::Counter;
 #[cfg(feature = "openssl")]
 pub mod openssl;
 
-//#[cfg(feature = "rustls")]
-//mod rustls;
-//#[cfg(feature = "rustls")]
-//pub use self::rustls::RustlsAcceptor;
+#[cfg(feature = "rustls")]
+pub mod rustls;
+
+#[cfg(feature = "nativetls")]
+pub mod nativetls;
 
 /// Sets the maximum per-worker concurrent ssl connection establish process.
 ///

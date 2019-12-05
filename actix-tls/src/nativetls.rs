@@ -1,26 +1,24 @@
-use std::convert::Infallible;
 use std::marker::PhantomData;
 use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_service::{Service, ServiceFactory};
-use futures::future::{self, FutureExt as _, LocalBoxFuture, TryFutureExt as _};
-use native_tls::Error;
-use tokio_tls::{TlsAcceptor, TlsStream};
+use actix_utils::counter::Counter;
+use futures::future::{self, FutureExt, LocalBoxFuture, TryFutureExt};
+pub use native_tls::Error;
+pub use tokio_tls::{TlsAcceptor, TlsStream};
 
-use crate::counter::Counter;
-use crate::ssl::MAX_CONN_COUNTER;
-use crate::{Io, ServerConfig};
+use crate::MAX_CONN_COUNTER;
 
 /// Support `SSL` connections via native-tls package
 ///
 /// `tls` feature enables `NativeTlsAcceptor` type
-pub struct NativeTlsAcceptor<T, P = ()> {
+pub struct NativeTlsAcceptor<T> {
     acceptor: TlsAcceptor,
-    io: PhantomData<(T, P)>,
+    io: PhantomData<T>,
 }
 
-impl<T, P> NativeTlsAcceptor<T, P>
+impl<T> NativeTlsAcceptor<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -34,7 +32,7 @@ where
     }
 }
 
-impl<T, P> Clone for NativeTlsAcceptor<T, P> {
+impl<T> Clone for NativeTlsAcceptor<T> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -44,23 +42,20 @@ impl<T, P> Clone for NativeTlsAcceptor<T, P> {
     }
 }
 
-impl<T, P> ServiceFactory for NativeTlsAcceptor<T, P>
+impl<T> ServiceFactory for NativeTlsAcceptor<T>
 where
     T: AsyncRead + AsyncWrite + Unpin + 'static,
-    P: 'static,
 {
-    type Request = Io<T, P>;
-    type Response = Io<TlsStream<T>, P>;
+    type Request = T;
+    type Response = TlsStream<T>;
     type Error = Error;
+    type Service = NativeTlsAcceptorService<T>;
 
-    type Config = ServerConfig;
-    type Service = NativeTlsAcceptorService<T, P>;
-    type InitError = Infallible;
+    type Config = ();
+    type InitError = ();
     type Future = future::Ready<Result<Self::Service, Self::InitError>>;
 
-    fn new_service(&self, cfg: &ServerConfig) -> Self::Future {
-        cfg.set_secure();
-
+    fn new_service(&self, _: ()) -> Self::Future {
         MAX_CONN_COUNTER.with(|conns| {
             future::ok(NativeTlsAcceptorService {
                 acceptor: self.acceptor.clone(),
@@ -71,13 +66,13 @@ where
     }
 }
 
-pub struct NativeTlsAcceptorService<T, P> {
+pub struct NativeTlsAcceptorService<T> {
     acceptor: TlsAcceptor,
-    io: PhantomData<(T, P)>,
+    io: PhantomData<T>,
     conns: Counter,
 }
 
-impl<T, P> Clone for NativeTlsAcceptorService<T, P> {
+impl<T> Clone for NativeTlsAcceptorService<T> {
     fn clone(&self) -> Self {
         Self {
             acceptor: self.acceptor.clone(),
@@ -87,15 +82,14 @@ impl<T, P> Clone for NativeTlsAcceptorService<T, P> {
     }
 }
 
-impl<T, P> Service for NativeTlsAcceptorService<T, P>
+impl<T> Service for NativeTlsAcceptorService<T>
 where
     T: AsyncRead + AsyncWrite + Unpin + 'static,
-    P: 'static,
 {
-    type Request = Io<T, P>;
-    type Response = Io<TlsStream<T>, P>;
+    type Request = T;
+    type Response = TlsStream<T>;
     type Error = Error;
-    type Future = LocalBoxFuture<'static, Result<Io<TlsStream<T>, P>, Error>>;
+    type Future = LocalBoxFuture<'static, Result<TlsStream<T>, Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if self.conns.available(cx) {
@@ -108,9 +102,7 @@ where
     fn call(&mut self, req: Self::Request) -> Self::Future {
         let guard = self.conns.get();
         let this = self.clone();
-        let (io, params, proto) = req.into_parts();
-        async move { this.acceptor.accept(io).await }
-            .map_ok(move |stream| Io::from_parts(stream, params, proto))
+        async move { this.acceptor.accept(req).await }
             .map_ok(move |io| {
                 // Required to preserve `CounterGuard` until `Self::Future`
                 // is completely resolved.
