@@ -1,13 +1,7 @@
 //! SSL Services
 
 #[cfg(feature = "openssl")]
-mod openssl;
-#[cfg(feature = "openssl")]
-pub use self::openssl::{
-    OpensslConnectService, OpensslConnectServiceFactory, OpensslConnector,
-};
+pub mod openssl;
 
 #[cfg(feature = "rustls")]
-mod rustls;
-#[cfg(feature = "rustls")]
-pub use self::rustls::RustlsConnector;
+pub mod rustls;

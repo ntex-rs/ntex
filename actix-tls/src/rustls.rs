@@ -11,8 +11,9 @@ use actix_utils::counter::{Counter, CounterGuard};
 use futures::future::{ok, Ready};
 use tokio_rustls::{Accept, TlsAcceptor};
 
-pub use rust_tls::ServerConfig;
+pub use rust_tls::{ServerConfig, Session};
 pub use tokio_rustls::server::TlsStream;
+pub use webpki_roots::TLS_SERVER_ROOTS;
 
 use crate::MAX_CONN_COUNTER;
 

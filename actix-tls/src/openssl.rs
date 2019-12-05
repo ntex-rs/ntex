@@ -3,13 +3,13 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+pub use open_ssl::ssl::{SslAcceptor, SslAcceptorBuilder};
 pub use tokio_openssl::{HandshakeError, SslStream};
 
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_service::{Service, ServiceFactory};
 use actix_utils::counter::{Counter, CounterGuard};
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
-use open_ssl::ssl::SslAcceptor;
 
 use crate::MAX_CONN_COUNTER;
 

@@ -5,10 +5,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+pub use rust_tls::Session;
+pub use tokio_rustls::{client::TlsStream, rustls::ClientConfig};
+
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, Ready};
-use tokio_rustls::{client::TlsStream, rustls::ClientConfig, Connect, TlsConnector};
+use tokio_rustls::{Connect, TlsConnector};
 use webpki::DNSNameRef;
 
 use crate::{Address, Connection};
