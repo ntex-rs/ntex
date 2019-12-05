@@ -18,7 +18,7 @@ name = "actix_ioframe"
 path = "src/lib.rs"
 
 [dependencies]
-actix-service = "1.0.0-alpha.2"
+actix-service = "1.0.0-alpha.3"
 actix-codec = "0.2.0-alpha.2"
 actix-utils = "1.0.0-alpha.2"
 actix-rt = "1.0.0-alpha.2"

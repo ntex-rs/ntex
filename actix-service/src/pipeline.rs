@@ -197,7 +197,7 @@ impl<T: ServiceFactory> PipelineFactory<T> {
         T::Config: Clone,
         I: IntoServiceFactory<U>,
         U: ServiceFactory<Config = T::Config, InitError = T::InitError>,
-        F: FnMut(T::Response, &mut U::Service) -> Fut,
+        F: FnMut(T::Response, &mut U::Service) -> Fut + Clone,
         Fut: Future<Output = Result<Res, Err>>,
         Err: From<T::Error> + From<U::Error>,
     {

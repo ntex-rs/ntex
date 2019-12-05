@@ -94,10 +94,7 @@ where
 }
 
 /// `Apply` transform to new service
-pub struct ApplyTransform<T, S> {
-    s: Rc<S>,
-    t: Rc<T>,
-}
+pub struct ApplyTransform<T, S>(Rc<(T, S)>);
 
 impl<T, S> ApplyTransform<T, S>
 where
@@ -106,19 +103,13 @@ where
 {
     /// Create new `ApplyTransform` new service instance
     fn new(t: T, service: S) -> Self {
-        Self {
-            s: Rc::new(service),
-            t: Rc::new(t),
-        }
+        Self(Rc::new((t, service)))
     }
 }
 
 impl<T, S> Clone for ApplyTransform<T, S> {
     fn clone(&self) -> Self {
-        ApplyTransform {
-            s: self.s.clone(),
-            t: self.t.clone(),
-        }
+        ApplyTransform(self.0.clone())
     }
 }
 
@@ -138,25 +129,31 @@ where
 
     fn new_service(&self, cfg: S::Config) -> Self::Future {
         ApplyTransformFuture {
-            t_cell: self.t.clone(),
-            fut_a: self.s.new_service(cfg),
-            fut_t: None,
+            store: self.0.clone(),
+            state: ApplyTransformFutureState::A(self.0.as_ref().1.new_service(cfg)),
         }
     }
 }
 
-pin_project! {
-    pub struct ApplyTransformFuture<T, S>
-    where
-        S: ServiceFactory,
-        T: Transform<S::Service, InitError = S::InitError>,
-    {
-        #[pin]
-        fut_a: S::Future,
-        #[pin]
-        fut_t: Option<T::Future>,
-        t_cell: Rc<T>,
-    }
+#[pin_project::pin_project]
+pub struct ApplyTransformFuture<T, S>
+where
+    S: ServiceFactory,
+    T: Transform<S::Service, InitError = S::InitError>,
+{
+    store: Rc<(T, S)>,
+    #[pin]
+    state: ApplyTransformFutureState<T, S>,
+}
+
+#[pin_project::pin_project]
+pub enum ApplyTransformFutureState<T, S>
+where
+    S: ServiceFactory,
+    T: Transform<S::Service, InitError = S::InitError>,
+{
+    A(#[pin] S::Future),
+    B(#[pin] T::Future),
 }
 
 impl<T, S> Future for ApplyTransformFuture<T, S>
@@ -166,20 +163,21 @@ where
 {
     type Output = Result<T::Transform, T::InitError>;
 
+    #[pin_project::project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        if let Some(fut) = this.fut_t.as_pin_mut() {
-            return fut.poll(cx);
-        }
-
-        if let Poll::Ready(service) = this.fut_a.poll(cx)? {
-            let fut = this.t_cell.new_transform(service);
-            this = self.as_mut().project();
-            this.fut_t.set(Some(fut));
-            this.fut_t.as_pin_mut().unwrap().poll(cx)
-        } else {
-            Poll::Pending
+        #[project]
+        match this.state.as_mut().project() {
+            ApplyTransformFutureState::A(fut) => match fut.poll(cx)? {
+                Poll::Ready(srv) => {
+                    let fut = this.store.0.new_transform(srv);
+                    this.state.set(ApplyTransformFutureState::B(fut));
+                    self.poll(cx)
+                }
+                Poll::Pending => Poll::Pending,
+            },
+            ApplyTransformFutureState::B(fut) => fut.poll(cx),
         }
     }
 }

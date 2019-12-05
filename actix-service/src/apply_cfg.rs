@@ -15,8 +15,7 @@ where
     S: Service,
 {
     ApplyConfigService {
-        f: Cell::new(f),
-        srv: Cell::new(srv),
+        srv: Cell::new((srv, f)),
         _t: PhantomData,
     }
 }
@@ -35,8 +34,7 @@ where
     S: Service,
 {
     ApplyConfigServiceFactory {
-        f: Cell::new(f),
-        srv: Cell::new(srv),
+        srv: Cell::new((srv, f)),
         _t: PhantomData,
     }
 }
@@ -49,8 +47,7 @@ where
     R: Future<Output = Result<S, E>>,
     S: Service,
 {
-    f: Cell<F>,
-    srv: Cell<T>,
+    srv: Cell<(T, F)>,
     _t: PhantomData<(C, R, S)>,
 }
 
@@ -63,7 +60,6 @@ where
 {
     fn clone(&self) -> Self {
         ApplyConfigService {
-            f: self.f.clone(),
             srv: self.srv.clone(),
             _t: PhantomData,
         }
@@ -87,7 +83,10 @@ where
     type Future = R;
 
     fn new_service(&self, cfg: C) -> Self::Future {
-        unsafe { (self.f.get_mut_unsafe())(cfg, self.srv.get_mut_unsafe()) }
+        unsafe {
+            let srv = self.srv.get_mut_unsafe();
+            (srv.1)(cfg, &mut srv.0)
+        }
     }
 }
 
@@ -99,8 +98,7 @@ where
     R: Future<Output = Result<S, T::InitError>>,
     S: Service,
 {
-    f: Cell<F>,
-    srv: Cell<T>,
+    srv: Cell<(T, F)>,
     _t: PhantomData<(C, R, S)>,
 }
 
@@ -113,7 +111,6 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            f: self.f.clone(),
             srv: self.srv.clone(),
             _t: PhantomData,
         }
@@ -139,34 +136,39 @@ where
 
     fn new_service(&self, cfg: C) -> Self::Future {
         ApplyConfigServiceFactoryResponse {
-            f: self.f.clone(),
             cfg: Some(cfg),
-            fut: None,
-            srv: None,
-            srv_fut: Some(self.srv.get_ref().new_service(())),
-            _t: PhantomData,
+            store: self.srv.clone(),
+            state: State::A(self.srv.get_ref().0.new_service(())),
         }
     }
 }
 
-pin_project! {
-    pub struct ApplyConfigServiceFactoryResponse<F, C, T, R, S>
-    where
-        F: FnMut(C, &mut T::Service) -> R,
-        T: ServiceFactory<Config = ()>,
-        T::InitError: From<T::Error>,
-        R: Future<Output = Result<S, T::InitError>>,
-        S: Service,
-    {
-        cfg: Option<C>,
-        f: Cell<F>,
-        srv: Option<T::Service>,
-        #[pin]
-        srv_fut: Option<T::Future>,
-        #[pin]
-        fut: Option<R>,
-        _t: PhantomData<(S,)>,
-    }
+#[pin_project::pin_project]
+pub struct ApplyConfigServiceFactoryResponse<F, C, T, R, S>
+where
+    F: FnMut(C, &mut T::Service) -> R,
+    T: ServiceFactory<Config = ()>,
+    T::InitError: From<T::Error>,
+    R: Future<Output = Result<S, T::InitError>>,
+    S: Service,
+{
+    cfg: Option<C>,
+    store: Cell<(T, F)>,
+    #[pin]
+    state: State<T, R, S>,
+}
+
+#[pin_project::pin_project]
+enum State<T, R, S>
+where
+    T: ServiceFactory<Config = ()>,
+    T::InitError: From<T::Error>,
+    R: Future<Output = Result<S, T::InitError>>,
+    S: Service,
+{
+    A(#[pin] T::Future),
+    B(T::Service),
+    C(#[pin] R),
 }
 
 impl<F, C, T, R, S> Future for ApplyConfigServiceFactoryResponse<F, C, T, R, S>
@@ -179,37 +181,28 @@ where
 {
     type Output = Result<S, T::InitError>;
 
+    #[pin_project::project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        loop {
-            if let Some(fut) = this.srv_fut.as_pin_mut() {
-                match fut.poll(cx)? {
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(srv) => {
-                        this = self.as_mut().project();
-                        this.srv_fut.set(None);
-                        *this.srv = Some(srv);
-                        continue;
-                    }
+        #[project]
+        match this.state.as_mut().project() {
+            State::A(fut) => match fut.poll(cx)? {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(srv) => {
+                    this.state.set(State::B(srv));
+                    self.poll(cx)
                 }
-            }
-
-            if let Some(fut) = this.fut.as_pin_mut() {
-                return fut.poll(cx);
-            } else if let Some(srv) = this.srv {
-                match srv.poll_ready(cx)? {
-                    Poll::Ready(_) => {
-                        let fut = this.f.get_mut()(this.cfg.take().unwrap(), srv);
-                        this = self.as_mut().project();
-                        this.fut.set(Some(fut));
-                        continue;
-                    }
-                    Poll::Pending => return Poll::Pending,
+            },
+            State::B(srv) => match srv.poll_ready(cx)? {
+                Poll::Ready(_) => {
+                    let fut = (this.store.get_mut().1)(this.cfg.take().unwrap(), srv);
+                    this.state.set(State::C(fut));
+                    self.poll(cx)
                 }
-            } else {
-                return Poll::Pending;
-            }
+                Poll::Pending => Poll::Pending,
+            },
+            State::C(fut) => fut.poll(cx),
         }
     }
 }

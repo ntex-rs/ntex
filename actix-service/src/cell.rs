@@ -1,4 +1,5 @@
 //! Custom cell impl, internal use only
+use std::task::{Context, Poll};
 use std::{cell::UnsafeCell, fmt, rc::Rc};
 
 pub(crate) struct Cell<T> {
@@ -37,5 +38,20 @@ impl<T> Cell<T> {
     #[allow(clippy::mut_from_ref)]
     pub(crate) unsafe fn get_mut_unsafe(&self) -> &mut T {
         &mut *self.inner.as_ref().get()
+    }
+}
+
+impl<T: crate::Service> crate::Service for Cell<T> {
+    type Request = T::Request;
+    type Response = T::Response;
+    type Error = T::Error;
+    type Future = T::Future;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.get_mut().poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Self::Request) -> Self::Future {
+        self.get_mut().call(req)
     }
 }

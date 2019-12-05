@@ -2,17 +2,24 @@
 
 ## [1.0.0-alpha.3] - 2019-12-xx
 
-### Add missing Clone impls
+### Changed
 
-### Restore `Transform::map_init_err()` combinator
+* Add missing Clone impls
 
-### Restore `Service/Factory::apply_fn()` in form of `Pipeline/Factory::and_then_apply_fn()`
+* Restore `Transform::map_init_err()` combinator
+
+* Restore `Service/Factory::apply_fn()` in form of `Pipeline/Factory::and_then_apply_fn()`
+
+* Optimize service combinators and futures memory layout
+
 
 ## [1.0.0-alpha.2] - 2019-12-02
 
-### Use owned config value for service factory
+### Changed
 
-### Renamed BoxedNewService/BoxedService to BoxServiceFactory/BoxService
+* Use owned config value for service factory
+
+* Renamed BoxedNewService/BoxedService to BoxServiceFactory/BoxService
 
 
 ## [1.0.0-alpha.1] - 2019-11-25

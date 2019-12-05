@@ -9,10 +9,7 @@ use crate::cell::Cell;
 /// of another service which completes successfully.
 ///
 /// This is created by the `ServiceExt::and_then` method.
-pub struct AndThenService<A, B> {
-    a: A,
-    b: Cell<B>,
-}
+pub struct AndThenService<A, B>(Cell<(A, B)>);
 
 impl<A, B> AndThenService<A, B> {
     /// Create new `AndThen` combinator
@@ -21,19 +18,13 @@ impl<A, B> AndThenService<A, B> {
         A: Service,
         B: Service<Request = A::Response, Error = A::Error>,
     {
-        Self { a, b: Cell::new(b) }
+        Self(Cell::new((a, b)))
     }
 }
 
-impl<A, B> Clone for AndThenService<A, B>
-where
-    A: Clone,
-{
+impl<A, B> Clone for AndThenService<A, B> {
     fn clone(&self) -> Self {
-        AndThenService {
-            a: self.a.clone(),
-            b: self.b.clone(),
-        }
+        AndThenService(self.0.clone())
     }
 }
 
@@ -48,8 +39,10 @@ where
     type Future = AndThenServiceResponse<A, B>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let not_ready = !self.a.poll_ready(cx)?.is_ready();
-        if !self.b.get_mut().poll_ready(cx)?.is_ready() || not_ready {
+        let srv = self.0.get_mut();
+
+        let not_ready = !srv.0.poll_ready(cx)?.is_ready();
+        if !srv.1.poll_ready(cx)?.is_ready() || not_ready {
             Poll::Pending
         } else {
             Poll::Ready(Ok(()))
@@ -57,36 +50,30 @@ where
     }
 
     fn call(&mut self, req: A::Request) -> Self::Future {
-        AndThenServiceResponse::new(self.a.call(req), self.b.clone())
+        AndThenServiceResponse {
+            state: State::A(self.0.get_mut().0.call(req), self.0.clone()),
+        }
     }
 }
 
-pin_project! {
-    pub struct AndThenServiceResponse<A, B>
-    where
-        A: Service,
-        B: Service<Request = A::Response, Error = A::Error>,
-    {
-        b: Cell<B>,
-        #[pin]
-        fut_b: Option<B::Future>,
-        #[pin]
-        fut_a: Option<A::Future>,
-    }
-}
-
-impl<A, B> AndThenServiceResponse<A, B>
+#[pin_project::pin_project]
+pub struct AndThenServiceResponse<A, B>
 where
     A: Service,
     B: Service<Request = A::Response, Error = A::Error>,
 {
-    fn new(a: A::Future, b: Cell<B>) -> Self {
-        AndThenServiceResponse {
-            b,
-            fut_a: Some(a),
-            fut_b: None,
-        }
-    }
+    #[pin]
+    state: State<A, B>,
+}
+
+#[pin_project::pin_project]
+enum State<A, B>
+where
+    A: Service,
+    B: Service<Request = A::Response, Error = A::Error>,
+{
+    A(#[pin] A::Future, Cell<(A, B)>),
+    B(#[pin] B::Future),
 }
 
 impl<A, B> Future for AndThenServiceResponse<A, B>
@@ -96,28 +83,21 @@ where
 {
     type Output = Result<B::Response, A::Error>;
 
+    #[pin_project::project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        loop {
-            if let Some(fut) = this.fut_b.as_pin_mut() {
-                return fut.poll(cx);
-            }
-
-            match this
-                .fut_a
-                .as_pin_mut()
-                .expect("Bug in actix-service")
-                .poll(cx)
-            {
-                Poll::Ready(Ok(resp)) => {
-                    this = self.as_mut().project();
-                    this.fut_a.set(None);
-                    this.fut_b.set(Some(this.b.get_mut().call(resp)));
+        #[project]
+        match this.state.as_mut().project() {
+            State::A(fut, b) => match fut.poll(cx)? {
+                Poll::Ready(res) => {
+                    let fut = b.get_mut().1.call(res);
+                    this.state.set(State::B(fut));
+                    self.poll(cx)
                 }
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                Poll::Pending => return Poll::Pending,
-            }
+                Poll::Pending => Poll::Pending,
+            },
+            State::B(fut) => fut.poll(cx),
         }
     }
 }
@@ -202,20 +182,19 @@ where
     }
 }
 
-pin_project! {
-    pub struct AndThenServiceFactoryResponse<A, B>
-    where
-        A: ServiceFactory,
-        B: ServiceFactory<Request = A::Response>,
-    {
-        #[pin]
-        fut_b: B::Future,
-        #[pin]
-        fut_a: A::Future,
+#[pin_project::pin_project]
+pub struct AndThenServiceFactoryResponse<A, B>
+where
+    A: ServiceFactory,
+    B: ServiceFactory<Request = A::Response>,
+{
+    #[pin]
+    fut_a: A::Future,
+    #[pin]
+    fut_b: B::Future,
 
-        a: Option<A::Service>,
-        b: Option<B::Service>,
-    }
+    a: Option<A::Service>,
+    b: Option<B::Service>,
 }
 
 impl<A, B> AndThenServiceFactoryResponse<A, B>
@@ -270,7 +249,7 @@ mod tests {
     use std::rc::Rc;
     use std::task::{Context, Poll};
 
-    use futures::future::{lazy, ok, ready, Ready};
+    use futures_util::future::{lazy, ok, ready, Ready};
 
     use crate::{factory_fn, pipeline, pipeline_factory, Service, ServiceFactory};
 

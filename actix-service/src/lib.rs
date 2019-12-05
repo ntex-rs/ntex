@@ -1,9 +1,6 @@
 #![deny(rust_2018_idioms, warnings)]
 #![allow(clippy::type_complexity)]
 
-#[macro_use]
-extern crate pin_project_lite;
-
 use std::cell::RefCell;
 use std::future::Future;
 use std::rc::Rc;

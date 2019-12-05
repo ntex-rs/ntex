@@ -3,8 +3,6 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures::ready;
-
 use crate::cell::Cell;
 use crate::{Service, ServiceFactory};
 
@@ -18,8 +16,7 @@ where
     Err: From<A::Error> + From<B::Error>,
 {
     a: A,
-    b: Cell<B>,
-    f: Cell<F>,
+    b: Cell<(B, F)>,
     r: PhantomData<(Fut, Res, Err)>,
 }
 
@@ -35,8 +32,7 @@ where
     pub(crate) fn new(a: A, b: B, f: F) -> Self {
         Self {
             a,
-            f: Cell::new(f),
-            b: Cell::new(b),
+            b: Cell::new((b, f)),
             r: PhantomData,
         }
     }
@@ -54,7 +50,6 @@ where
         AndThenApplyFn {
             a: self.a.clone(),
             b: self.b.clone(),
-            f: self.f.clone(),
             r: PhantomData,
         }
     }
@@ -75,7 +70,7 @@ where
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let not_ready = self.a.poll_ready(cx)?.is_pending();
-        if self.b.get_mut().poll_ready(cx)?.is_pending() || not_ready {
+        if self.b.get_mut().0.poll_ready(cx)?.is_pending() || not_ready {
             Poll::Pending
         } else {
             Poll::Ready(Ok(()))
@@ -84,31 +79,37 @@ where
 
     fn call(&mut self, req: A::Request) -> Self::Future {
         AndThenApplyFnFuture {
-            b: self.b.clone(),
-            f: self.f.clone(),
-            fut_a: Some(self.a.call(req)),
-            fut_b: None,
+            state: State::A(self.a.call(req), self.b.clone()),
         }
     }
 }
 
-pin_project! {
-    pub struct AndThenApplyFnFuture<A, B, F, Fut, Res, Err>
-    where
-        A: Service,
-        B: Service,
-        F: FnMut(A::Response, &mut B) -> Fut,
-        Fut: Future<Output = Result<Res, Err>>,
-        Err: From<A::Error>,
-        Err: From<B::Error>,
-    {
-        b: Cell<B>,
-        f: Cell<F>,
-        #[pin]
-        fut_a: Option<A::Future>,
-        #[pin]
-        fut_b: Option<Fut>,
-    }
+#[pin_project::pin_project]
+pub struct AndThenApplyFnFuture<A, B, F, Fut, Res, Err>
+where
+    A: Service,
+    B: Service,
+    F: FnMut(A::Response, &mut B) -> Fut,
+    Fut: Future<Output = Result<Res, Err>>,
+    Err: From<A::Error>,
+    Err: From<B::Error>,
+{
+    #[pin]
+    state: State<A, B, F, Fut, Res, Err>,
+}
+
+#[pin_project::pin_project]
+enum State<A, B, F, Fut, Res, Err>
+where
+    A: Service,
+    B: Service,
+    F: FnMut(A::Response, &mut B) -> Fut,
+    Fut: Future<Output = Result<Res, Err>>,
+    Err: From<A::Error>,
+    Err: From<B::Error>,
+{
+    A(#[pin] A::Future, Cell<(B, F)>),
+    B(#[pin] Fut),
 }
 
 impl<A, B, F, Fut, Res, Err> Future for AndThenApplyFnFuture<A, B, F, Fut, Res, Err>
@@ -121,28 +122,22 @@ where
 {
     type Output = Result<Res, Err>;
 
+    #[pin_project::project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        if let Some(fut) = this.fut_b.as_pin_mut() {
-            return Poll::Ready(ready!(fut.poll(cx)).map_err(|e| e.into()));
-        }
-
-        match this
-            .fut_a
-            .as_pin_mut()
-            .expect("Bug in actix-service")
-            .poll(cx)
-        {
-            Poll::Ready(Ok(resp)) => {
-                this = self.as_mut().project();
-                this.fut_b
-                    .set(Some((&mut *this.f.get_mut())(resp, this.b.get_mut())));
-                this.fut_a.set(None);
-                self.poll(cx)
-            }
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(err)) => Poll::Ready(Err(err.into())),
+        #[project]
+        match this.state.as_mut().project() {
+            State::A(fut, b) => match fut.poll(cx)? {
+                Poll::Ready(res) => {
+                    let b = b.get_mut();
+                    let fut = (&mut b.1)(res, &mut b.0);
+                    this.state.set(State::B(fut));
+                    self.poll(cx)
+                }
+                Poll::Pending => Poll::Pending,
+            },
+            State::B(fut) => fut.poll(cx),
         }
     }
 }
@@ -151,7 +146,7 @@ where
 pub struct AndThenApplyFnFactory<A, B, F, Fut, Res, Err> {
     a: A,
     b: B,
-    f: Cell<F>,
+    f: F,
     r: PhantomData<(Fut, Res, Err)>,
 }
 
@@ -159,7 +154,7 @@ impl<A, B, F, Fut, Res, Err> AndThenApplyFnFactory<A, B, F, Fut, Res, Err>
 where
     A: ServiceFactory,
     B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Fut,
+    F: FnMut(A::Response, &mut B::Service) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
@@ -168,7 +163,7 @@ where
         Self {
             a: a,
             b: b,
-            f: Cell::new(f),
+            f: f,
             r: PhantomData,
         }
     }
@@ -178,6 +173,7 @@ impl<A, B, F, Fut, Res, Err> Clone for AndThenApplyFnFactory<A, B, F, Fut, Res, 
 where
     A: Clone,
     B: Clone,
+    F: Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -194,7 +190,7 @@ where
     A: ServiceFactory,
     A::Config: Clone,
     B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Fut,
+    F: FnMut(A::Response, &mut B::Service) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
@@ -217,31 +213,30 @@ where
     }
 }
 
-pin_project! {
-    pub struct AndThenApplyFnFactoryResponse<A, B, F, Fut, Res, Err>
-    where
-        A: ServiceFactory,
-        B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
-        F: FnMut(A::Response, &mut B::Service) -> Fut,
-        Fut: Future<Output = Result<Res, Err>>,
-        Err: From<A::Error>,
-        Err: From<B::Error>,
-    {
-        #[pin]
-        fut_b: B::Future,
-        #[pin]
-        fut_a: A::Future,
-        f: Cell<F>,
-        a: Option<A::Service>,
-        b: Option<B::Service>,
-    }
+#[pin_project::pin_project]
+pub struct AndThenApplyFnFactoryResponse<A, B, F, Fut, Res, Err>
+where
+    A: ServiceFactory,
+    B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
+    F: FnMut(A::Response, &mut B::Service) -> Fut + Clone,
+    Fut: Future<Output = Result<Res, Err>>,
+    Err: From<A::Error>,
+    Err: From<B::Error>,
+{
+    #[pin]
+    fut_b: B::Future,
+    #[pin]
+    fut_a: A::Future,
+    f: F,
+    a: Option<A::Service>,
+    b: Option<B::Service>,
 }
 
 impl<A, B, F, Fut, Res, Err> Future for AndThenApplyFnFactoryResponse<A, B, F, Fut, Res, Err>
 where
     A: ServiceFactory,
     B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Fut,
+    F: FnMut(A::Response, &mut B::Service) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
@@ -265,9 +260,8 @@ where
 
         if this.a.is_some() && this.b.is_some() {
             Poll::Ready(Ok(AndThenApplyFn {
-                f: this.f.clone(),
                 a: this.a.take().unwrap(),
-                b: Cell::new(this.b.take().unwrap()),
+                b: Cell::new((this.b.take().unwrap(), this.f.clone())),
                 r: PhantomData,
             }))
         } else {
@@ -280,7 +274,7 @@ where
 mod tests {
     use super::*;
 
-    use futures::future::{lazy, ok, Ready, TryFutureExt};
+    use futures_util::future::{lazy, ok, Ready, TryFutureExt};
 
     use crate::{pipeline, pipeline_factory, service_fn2, Service, ServiceFactory};
 

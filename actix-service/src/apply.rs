@@ -67,8 +67,8 @@ where
     type Error = Err;
     type Future = R;
 
-    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(futures::ready!(self.service.poll_ready(ctx)))
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(futures_util::ready!(self.service.poll_ready(cx)))
     }
 
     fn call(&mut self, req: In) -> Self::Future {
@@ -139,24 +139,23 @@ where
     }
 }
 
-pin_project! {
-    pub struct ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
-    where
-        T: ServiceFactory<Error = Err>,
-        F: FnMut(In, &mut T::Service) -> R,
-        R: Future<Output = Result<Out, Err>>,
-    {
-        #[pin]
-        fut: T::Future,
-        f: Option<F>,
-        r: PhantomData<(In, Out)>,
-    }
+#[pin_project::pin_project]
+pub struct ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
+where
+    T: ServiceFactory<Error = Err>,
+    F: FnMut(In, &mut T::Service) -> R,
+    R: Future<Output = Result<Out, Err>>,
+{
+    #[pin]
+    fut: T::Future,
+    f: Option<F>,
+    r: PhantomData<(In, Out)>,
 }
 
 impl<T, F, R, In, Out, Err> ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R + Clone,
+    F: FnMut(In, &mut T::Service) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     fn new(fut: T::Future, f: F) -> Self {
@@ -171,7 +170,7 @@ where
 impl<T, F, R, In, Out, Err> Future for ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R + Clone,
+    F: FnMut(In, &mut T::Service) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Output = Result<Apply<T::Service, F, R, In, Out, Err>, T::InitError>;
@@ -191,7 +190,7 @@ where
 mod tests {
     use std::task::{Context, Poll};
 
-    use futures::future::{lazy, ok, Ready};
+    use futures_util::future::{lazy, ok, Ready};
 
     use super::*;
     use crate::{pipeline, pipeline_factory, Service, ServiceFactory};

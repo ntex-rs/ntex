@@ -57,36 +57,30 @@ where
     }
 
     fn call(&mut self, req: A::Request) -> Self::Future {
-        ThenServiceResponse::new(self.a.call(req), self.b.clone())
+        ThenServiceResponse {
+            state: ThenServiceResponseState::A(self.a.call(req), self.b.clone()),
+        }
     }
 }
 
-pin_project! {
-    pub struct ThenServiceResponse<A, B>
-    where
-        A: Service,
-        B: Service<Request = Result<A::Response, A::Error>>,
-    {
-        b: Cell<B>,
-        #[pin]
-        fut_b: Option<B::Future>,
-        #[pin]
-        fut_a: Option<A::Future>,
-    }
-}
-
-impl<A, B> ThenServiceResponse<A, B>
+#[pin_project::pin_project]
+pub struct ThenServiceResponse<A, B>
 where
     A: Service,
     B: Service<Request = Result<A::Response, A::Error>>,
 {
-    fn new(a: A::Future, b: Cell<B>) -> Self {
-        ThenServiceResponse {
-            b,
-            fut_a: Some(a),
-            fut_b: None,
-        }
-    }
+    #[pin]
+    state: ThenServiceResponseState<A, B>,
+}
+
+#[pin_project::pin_project]
+enum ThenServiceResponseState<A, B>
+where
+    A: Service,
+    B: Service<Request = Result<A::Response, A::Error>>,
+{
+    A(#[pin] A::Future, Cell<B>),
+    B(#[pin] B::Future),
 }
 
 impl<A, B> Future for ThenServiceResponse<A, B>
@@ -96,27 +90,21 @@ where
 {
     type Output = Result<B::Response, B::Error>;
 
+    #[pin_project::project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        loop {
-            if let Some(fut) = this.fut_b.as_pin_mut() {
-                return fut.poll(cx);
-            }
-
-            match this
-                .fut_a
-                .as_pin_mut()
-                .expect("Bug in actix-service")
-                .poll(cx)
-            {
-                Poll::Ready(r) => {
-                    this = self.as_mut().project();
-                    this.fut_b.set(Some(this.b.get_mut().call(r)));
+        #[project]
+        match this.state.as_mut().project() {
+            ThenServiceResponseState::A(fut, b) => match fut.poll(cx) {
+                Poll::Ready(res) => {
+                    let fut = b.get_mut().call(res);
+                    this.state.set(ThenServiceResponseState::B(fut));
+                    self.poll(cx)
                 }
-
-                Poll::Pending => return Poll::Pending,
-            }
+                Poll::Pending => Poll::Pending,
+            },
+            ThenServiceResponseState::B(fut) => fut.poll(cx),
         }
     }
 }
@@ -185,23 +173,23 @@ where
     }
 }
 
-pin_project! {
-    pub struct ThenServiceFactoryResponse<A, B>
-    where
-        A: ServiceFactory,
-        B: ServiceFactory<
-          Config = A::Config,
-          Request = Result<A::Response, A::Error>,
-          Error = A::Error,
-          InitError = A::InitError>
-    {
-        #[pin]
-        fut_b: B::Future,
-        #[pin]
-        fut_a: A::Future,
-        a: Option<A::Service>,
-        b: Option<B::Service>,
-    }
+#[pin_project::pin_project]
+pub struct ThenServiceFactoryResponse<A, B>
+where
+    A: ServiceFactory,
+    B: ServiceFactory<
+        Config = A::Config,
+        Request = Result<A::Response, A::Error>,
+        Error = A::Error,
+        InitError = A::InitError,
+    >,
+{
+    #[pin]
+    fut_b: B::Future,
+    #[pin]
+    fut_a: A::Future,
+    a: Option<A::Service>,
+    b: Option<B::Service>,
 }
 
 impl<A, B> ThenServiceFactoryResponse<A, B>
@@ -266,7 +254,7 @@ mod tests {
     use std::rc::Rc;
     use std::task::{Context, Poll};
 
-    use futures::future::{err, lazy, ok, ready, Ready};
+    use futures_util::future::{err, lazy, ok, ready, Ready};
 
     use crate::{pipeline, pipeline_factory, Service, ServiceFactory};
 

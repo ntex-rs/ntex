@@ -2,7 +2,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::task::{Context, Poll};
 
-use futures::future::{ok, Ready};
+use futures_util::future::{ok, Ready};
 
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
