@@ -1,6 +1,6 @@
 [package]
 name = "actix-server"
-version = "1.0.0-alpha.2"
+version = "1.0.0-alpha.3"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix server - General purpose tcp server"
 keywords = ["network", "framework", "async", "futures"]
@@ -22,9 +22,9 @@ default = []
 
 [dependencies]
 actix-service = "1.0.0-alpha.3"
-actix-rt = "1.0.0-alpha.2"
-actix-codec = "0.2.0-alpha.2"
-actix-utils = "1.0.0-alpha.2"
+actix-rt = "1.0.0-alpha.3"
+actix-codec = "0.2.0-alpha.3"
+actix-utils = "1.0.0-alpha.3"
 
 log = "0.4"
 num_cpus = "1.0"
@@ -33,13 +33,10 @@ net2 = "0.2"
 futures = "0.3.1"
 slab = "0.4"
 
-tokio-net = { version = "0.2.0-alpha.6", features = ["signal", "tcp", "uds"] }
-futures-core-preview = "0.3.0-alpha.19"
-
 # unix domain sockets
 mio-uds = { version = "0.6.7" }
 
 [dev-dependencies]
-bytes = "0.4"
+bytes = "0.5"
 env_logger = "0.6"
-actix-testing = "1.0.0-alpha.2"
+actix-testing = "1.0.0-alpha.3"

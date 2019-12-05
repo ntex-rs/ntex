@@ -38,9 +38,9 @@ where
 pub mod signal {
     #[cfg(unix)]
     pub mod unix {
-        pub use tokio_net::signal::unix::*;
+        pub use tokio::signal::unix::*;
     }
-    pub use tokio_net::signal::{ctrl_c, CtrlC};
+    pub use tokio::signal::ctrl_c;
 }
 
 /// TCP/UDP/Unix bindings
@@ -59,21 +59,8 @@ pub mod net {
 
 /// Utilities for tracking time.
 pub mod time {
-    use std::time::{Duration, Instant};
-
-    pub use tokio_timer::Interval;
-    pub use tokio_timer::{delay, delay_for, Delay};
-    pub use tokio_timer::{timeout, Timeout};
-
-    /// Creates new `Interval` that yields with interval of `duration`. The first
-    /// tick completes immediately.
-    pub fn interval(duration: Duration) -> Interval {
-        Interval::new(Instant::now(), duration)
-    }
-
-    /// Creates new `Interval` that yields with interval of `period` with the
-    /// first tick completing at `at`.
-    pub fn interval_at(start: Instant, duration: Duration) -> Interval {
-        Interval::new(start, duration)
-    }
+    pub use tokio::time::Instant;
+    pub use tokio::time::{delay_for, delay_until, Delay};
+    pub use tokio::time::{interval, interval_at, Interval};
+    pub use tokio::time::{timeout, Timeout};
 }

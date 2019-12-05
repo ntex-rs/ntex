@@ -9,9 +9,8 @@ use std::{fmt, thread};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot::{channel, Canceled, Sender};
 use futures::{future, Future, FutureExt, Stream};
-use tokio_executor::current_thread::spawn;
 
-use crate::builder::Builder;
+use crate::runtime::Runtime;
 use crate::system::System;
 
 use copyless::BoxHelper;
@@ -19,7 +18,7 @@ use copyless::BoxHelper;
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = RefCell::new(None);
     static RUNNING: Cell<bool> = Cell::new(false);
-    static Q: RefCell<Vec<Box<dyn Future<Output = ()>>>> = RefCell::new(Vec::new());
+    static Q: RefCell<Vec<Pin<Box<dyn Future<Output = ()>>>>> = RefCell::new(Vec::new());
     static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::new());
 );
 
@@ -101,7 +100,7 @@ impl Arbiter {
         let handle = thread::Builder::new()
             .name(name.clone())
             .spawn(move || {
-                let mut rt = Builder::new().build_rt().expect("Can not create Runtime");
+                let mut rt = Runtime::new().expect("Can not create Runtime");
                 let arb = Arbiter::with_sender(arb_tx);
 
                 let (stop, stop_rx) = channel();
@@ -143,14 +142,16 @@ impl Arbiter {
         }
     }
 
-    pub(crate) fn run_system() {
+    pub(crate) fn run_system(rt: Option<&Runtime>) {
         RUNNING.with(|cell| cell.set(true));
         Q.with(|cell| {
             let mut v = cell.borrow_mut();
             for fut in v.drain(..) {
-                // We pin the boxed future, so it can never again be moved.
-                let fut = unsafe { Pin::new_unchecked(fut) };
-                tokio_executor::current_thread::spawn(fut);
+                if let Some(rt) = rt {
+                    rt.spawn(fut);
+                } else {
+                    tokio::task::spawn_local(fut);
+                }
             }
         });
     }
@@ -169,11 +170,14 @@ impl Arbiter {
         RUNNING.with(move |cell| {
             if cell.get() {
                 // Spawn the future on running executor
-                spawn(future);
+                tokio::task::spawn_local(future);
             } else {
                 // Box the future and push it to the queue, this results in double boxing
                 // because the executor boxes the future again, but works for now
-                Q.with(move |cell| cell.borrow_mut().push(Box::alloc().init(future)));
+                Q.with(move |cell| {
+                    cell.borrow_mut()
+                        .push(unsafe { Pin::new_unchecked(Box::alloc().init(future)) })
+                });
             }
         });
     }
@@ -325,7 +329,7 @@ impl Future for ArbiterController {
                         return Poll::Ready(());
                     }
                     ArbiterCommand::Execute(fut) => {
-                        spawn(fut);
+                        tokio::task::spawn_local(fut);
                     }
                     ArbiterCommand::ExecuteFn(f) => {
                         f.call_box();

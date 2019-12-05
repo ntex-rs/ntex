@@ -4,7 +4,7 @@ use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::channel::mpsc::UnboundedSender;
-use tokio::runtime::current_thread::Handle;
+use tokio::task::LocalSet;
 
 use crate::arbiter::{Arbiter, SystemCommand};
 use crate::builder::{Builder, SystemRunner};
@@ -58,16 +58,16 @@ impl System {
     }
 
     #[allow(clippy::new_ret_no_self)]
-    /// Create new system using provided CurrentThread Handle.
+    /// Create new system using provided tokio Handle.
     ///
     /// This method panics if it can not spawn system arbiter
-    pub fn run_in_executor<T: Into<String>>(
+    pub fn run_in_tokio<T: Into<String>>(
         name: T,
-        executor: Handle,
-    ) -> impl Future<Output = Result<(), io::Error>> + Send {
+        local: &LocalSet,
+    ) -> impl Future<Output = io::Result<()>> {
         Self::builder()
             .name(name)
-            .build_async(executor)
+            .build_async(local)
             .run_nonblocking()
     }
 

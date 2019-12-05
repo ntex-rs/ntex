@@ -7,9 +7,7 @@ use std::{net, thread};
 
 use actix_rt::{net::TcpStream, System};
 use actix_server::{Server, ServerBuilder, ServiceFactory};
-
 use net2::TcpBuilder;
-use tokio_net::driver::Handle;
 
 #[cfg(not(test))] // Work around for rust-lang/rust#62127
 pub use actix_macros::test;
@@ -25,7 +23,8 @@ pub use actix_macros::test;
 /// use actix_service::{service_fn};
 /// use actix_testing::TestServer;
 ///
-/// fn main() {
+/// #[actix_rt::main]
+/// async fn main() {
 ///     let srv = TestServer::with(|| service_fn(
 ///         |sock| async move {
 ///             println!("New connection: {:?}", sock);
@@ -142,7 +141,7 @@ impl TestServerRuntime {
 
     /// Connect to server, return tokio TcpStream
     pub fn connect(&self) -> std::io::Result<TcpStream> {
-        TcpStream::from_std(net::TcpStream::connect(self.addr)?, &Handle::default())
+        TcpStream::from_std(net::TcpStream::connect(self.addr)?)
     }
 }
 

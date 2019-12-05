@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0-alpha.3] - 2019-12-xx
+
+* Migrate to `tokio=0.2.2`
+
 ## [1.0.0-alpha.2] - 2019-12-02
 
 * Re-export `test` attribute macros

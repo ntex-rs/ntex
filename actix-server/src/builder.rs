@@ -1,10 +1,11 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{io, mem, net};
 
 use actix_rt::net::TcpStream;
-use actix_rt::{spawn, time::delay, Arbiter, System};
+use actix_rt::time::{delay_until, Instant};
+use actix_rt::{spawn, System};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use futures::channel::oneshot;
 use futures::future::ready;
@@ -305,22 +306,11 @@ impl ServerBuilder {
     }
 
     fn start_worker(&self, idx: usize, notify: AcceptNotify) -> WorkerClient {
-        let (tx1, rx1) = unbounded();
-        let (tx2, rx2) = unbounded();
-        let timeout = self.shutdown_timeout;
         let avail = WorkerAvailability::new(notify);
-        let worker = WorkerClient::new(idx, tx1, tx2, avail.clone());
         let services: Vec<Box<dyn InternalServiceFactory>> =
             self.services.iter().map(|v| v.clone_factory()).collect();
 
-        Arbiter::new().send(
-            async move {
-                Worker::start(rx1, rx2, services, avail, timeout);
-            }
-                .boxed(),
-        );
-
-        worker
+        Worker::start(idx, services, avail, self.shutdown_timeout)
     }
 
     fn handle_cmd(&mut self, item: ServerCommand) {
@@ -395,8 +385,10 @@ impl ServerBuilder {
                                 if exit {
                                     spawn(
                                         async {
-                                            delay(Instant::now() + Duration::from_millis(300))
-                                                .await;
+                                            delay_until(
+                                                Instant::now() + Duration::from_millis(300),
+                                            )
+                                            .await;
                                             System::current().stop();
                                         }
                                             .boxed(),
@@ -409,10 +401,12 @@ impl ServerBuilder {
                     // we need to stop system if server was spawned
                     if self.exit {
                         spawn(
-                            delay(Instant::now() + Duration::from_millis(300)).then(|_| {
-                                System::current().stop();
-                                ready(())
-                            }),
+                            delay_until(Instant::now() + Duration::from_millis(300)).then(
+                                |_| {
+                                    System::current().stop();
+                                    ready(())
+                                },
+                            ),
                         );
                     }
                     if let Some(tx) = completion {

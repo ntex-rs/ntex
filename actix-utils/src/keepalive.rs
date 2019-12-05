@@ -3,9 +3,9 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use actix_rt::time::{delay, Delay};
+use actix_rt::time::{delay_until, Delay, Instant};
 use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, Ready};
 
@@ -81,13 +81,13 @@ where
     F: Fn() -> E,
 {
     pub fn new(ka: Duration, time: LowResTimeService, f: F) -> Self {
-        let expire = time.now() + ka;
+        let expire = Instant::from_std(time.now() + ka);
         KeepAliveService {
             f,
             ka,
             time,
             expire,
-            delay: delay(expire),
+            delay: delay_until(expire),
             _t: PhantomData,
         }
     }
@@ -105,7 +105,7 @@ where
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match Pin::new(&mut self.delay).poll(cx) {
             Poll::Ready(_) => {
-                let now = self.time.now();
+                let now = Instant::from_std(self.time.now());
                 if self.expire <= now {
                     Poll::Ready(Err((self.f)()))
                 } else {
@@ -119,7 +119,7 @@ where
     }
 
     fn call(&mut self, req: R) -> Self::Future {
-        self.expire = self.time.now() + self.ka;
+        self.expire = Instant::from_std(self.time.now() + self.ka);
         ok(req)
     }
 }

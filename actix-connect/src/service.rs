@@ -11,7 +11,7 @@ use trust_dns_resolver::AsyncResolver;
 use crate::connect::{Address, Connect, Connection};
 use crate::connector::{TcpConnector, TcpConnectorFactory};
 use crate::error::ConnectError;
-use crate::resolver::{Resolver, ResolverFactory};
+use crate::resolve::{Resolver, ResolverFactory};
 
 pub struct ConnectServiceFactory<T> {
     tcp: TcpConnectorFactory<T>,

@@ -200,7 +200,8 @@ fn restore_ch(d1: u8, d2: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use http::{HttpTryFrom, Uri};
+    use http::Uri;
+    use std::convert::TryFrom;
 
     use super::*;
     use crate::{Path, ResourceDef};

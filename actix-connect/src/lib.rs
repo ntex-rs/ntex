@@ -14,7 +14,7 @@ extern crate log;
 mod connect;
 mod connector;
 mod error;
-mod resolver;
+mod resolve;
 mod service;
 pub mod ssl;
 
@@ -23,15 +23,20 @@ mod uri;
 
 use actix_rt::{net::TcpStream, Arbiter};
 use actix_service::{pipeline, pipeline_factory, Service, ServiceFactory};
+use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
+use trust_dns_resolver::system_conf::read_system_conf;
+use trust_dns_resolver::AsyncResolver;
 
-pub use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
-pub use trust_dns_resolver::system_conf::read_system_conf;
-pub use trust_dns_resolver::{error::ResolveError, AsyncResolver};
+pub mod resolver {
+    pub use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
+    pub use trust_dns_resolver::system_conf::read_system_conf;
+    pub use trust_dns_resolver::{error::ResolveError, AsyncResolver};
+}
 
 pub use self::connect::{Address, Connect, Connection};
 pub use self::connector::{TcpConnector, TcpConnectorFactory};
 pub use self::error::ConnectError;
-pub use self::resolver::{Resolver, ResolverFactory};
+pub use self::resolve::{Resolver, ResolverFactory};
 pub use self::service::{ConnectService, ConnectServiceFactory, TcpConnectService};
 
 pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver {

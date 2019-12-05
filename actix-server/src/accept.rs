@@ -1,10 +1,9 @@
 use std::sync::mpsc as sync_mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{io, thread};
 
-use actix_rt::time::delay;
+use actix_rt::time::{delay_until, Instant};
 use actix_rt::System;
-use futures::FutureExt;
 use log::{error, info};
 use slab::Slab;
 
@@ -440,13 +439,10 @@ impl Accept {
                         info.timeout = Some(Instant::now() + Duration::from_millis(500));
 
                         let r = self.timer.1.clone();
-                        System::current().arbiter().send(
-                            async move {
-                                delay(Instant::now() + Duration::from_millis(510)).await;
-                                let _ = r.set_readiness(mio::Ready::readable());
-                            }
-                                .boxed(),
-                        );
+                        System::current().arbiter().send(Box::pin(async move {
+                            delay_until(Instant::now() + Duration::from_millis(510)).await;
+                            let _ = r.set_readiness(mio::Ready::readable());
+                        }));
                         return;
                     }
                 }

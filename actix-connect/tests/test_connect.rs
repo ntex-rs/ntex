@@ -6,8 +6,8 @@ use actix_service::{service_fn, Service, ServiceFactory};
 use actix_testing::TestServer;
 use bytes::Bytes;
 use futures::SinkExt;
-use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 
+use actix_connect::resolver::{ResolverConfig, ResolverOpts};
 use actix_connect::Connect;
 
 #[cfg(feature = "openssl")]
@@ -97,7 +97,7 @@ async fn test_new_service() {
 #[cfg(feature = "openssl")]
 #[actix_rt::test]
 async fn test_uri() {
-    use http::HttpTryFrom;
+    use std::convert::TryFrom;
 
     let srv = TestServer::with(|| {
         service_fn(|io: TcpStream| {
@@ -118,7 +118,7 @@ async fn test_uri() {
 #[cfg(feature = "rustls")]
 #[actix_rt::test]
 async fn test_rustls_uri() {
-    use http::HttpTryFrom;
+    use std::convert::TryFrom;
 
     let srv = TestServer::with(|| {
         service_fn(|io: TcpStream| {

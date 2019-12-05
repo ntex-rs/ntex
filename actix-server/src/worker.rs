@@ -4,10 +4,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time;
 
-use actix_rt::time::{delay, Delay};
+use actix_rt::time::{delay_until, Delay, Instant};
 use actix_rt::{spawn, Arbiter};
 use actix_utils::counter::Counter;
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot;
 use futures::future::{join_all, LocalBoxFuture, MapOk};
 use futures::{Future, FutureExt, Stream, TryFutureExt};
@@ -161,56 +161,66 @@ enum WorkerServiceStatus {
 
 impl Worker {
     pub(crate) fn start(
-        rx: UnboundedReceiver<WorkerCommand>,
-        rx2: UnboundedReceiver<StopCommand>,
+        idx: usize,
         factories: Vec<Box<dyn InternalServiceFactory>>,
         availability: WorkerAvailability,
         shutdown_timeout: time::Duration,
-    ) {
-        availability.set(false);
-        let mut wrk = MAX_CONNS_COUNTER.with(|conns| Worker {
-            rx,
-            rx2,
-            availability,
-            factories,
-            shutdown_timeout,
-            services: Vec::new(),
-            conns: conns.clone(),
-            state: WorkerState::Unavailable(Vec::new()),
-        });
+    ) -> WorkerClient {
+        let (tx1, rx) = unbounded();
+        let (tx2, rx2) = unbounded();
+        let avail = availability.clone();
 
-        let mut fut: Vec<MapOk<LocalBoxFuture<'static, _>, _>> = Vec::new();
-        for (idx, factory) in wrk.factories.iter().enumerate() {
-            fut.push(factory.create().map_ok(move |r| {
-                r.into_iter()
-                    .map(|(t, s): (Token, _)| (idx, t, s))
-                    .collect::<Vec<_>>()
-            }));
-        }
+        Arbiter::new().send(
+            async move {
+                availability.set(false);
+                let mut wrk = MAX_CONNS_COUNTER.with(move |conns| Worker {
+                    rx,
+                    rx2,
+                    availability,
+                    factories,
+                    shutdown_timeout,
+                    services: Vec::new(),
+                    conns: conns.clone(),
+                    state: WorkerState::Unavailable(Vec::new()),
+                });
 
-        spawn(async move {
-            let res = join_all(fut).await;
-            let res: Result<Vec<_>, _> = res.into_iter().collect();
-            match res {
-                Ok(services) => {
-                    for item in services {
-                        for (factory, token, service) in item {
-                            assert_eq!(token.0, wrk.services.len());
-                            wrk.services.push(WorkerService {
-                                factory,
-                                service,
-                                status: WorkerServiceStatus::Unavailable,
-                            });
+                let mut fut: Vec<MapOk<LocalBoxFuture<'static, _>, _>> = Vec::new();
+                for (idx, factory) in wrk.factories.iter().enumerate() {
+                    fut.push(factory.create().map_ok(move |r| {
+                        r.into_iter()
+                            .map(|(t, s): (Token, _)| (idx, t, s))
+                            .collect::<Vec<_>>()
+                    }));
+                }
+
+                spawn(async move {
+                    let res = join_all(fut).await;
+                    let res: Result<Vec<_>, _> = res.into_iter().collect();
+                    match res {
+                        Ok(services) => {
+                            for item in services {
+                                for (factory, token, service) in item {
+                                    assert_eq!(token.0, wrk.services.len());
+                                    wrk.services.push(WorkerService {
+                                        factory,
+                                        service,
+                                        status: WorkerServiceStatus::Unavailable,
+                                    });
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Can not start worker: {:?}", e);
+                            Arbiter::current().stop();
                         }
                     }
-                }
-                Err(e) => {
-                    error!("Can not start worker: {:?}", e);
-                    Arbiter::current().stop();
-                }
+                    wrk.await
+                });
             }
-            wrk.await
-        });
+                .boxed(),
+        );
+
+        WorkerClient::new(idx, tx1, tx2, avail)
     }
 
     fn shutdown(&mut self, force: bool) {
@@ -322,8 +332,8 @@ impl Future for Worker {
                 if num != 0 {
                     info!("Graceful worker shutdown, {} connections", num);
                     self.state = WorkerState::Shutdown(
-                        Box::pin(delay(time::Instant::now() + time::Duration::from_secs(1))),
-                        Box::pin(delay(time::Instant::now() + self.shutdown_timeout)),
+                        Box::pin(delay_until(Instant::now() + time::Duration::from_secs(1))),
+                        Box::pin(delay_until(Instant::now() + self.shutdown_timeout)),
                         Some(result),
                     );
                 } else {
@@ -399,7 +409,6 @@ impl Future for Worker {
                         );
                     }
                     Poll::Pending => {
-                        // self.state = WorkerState::Restarting(idx, token, fut);
                         return Poll::Pending;
                     }
                 }
@@ -428,19 +437,18 @@ impl Future for Worker {
                 match t1.as_mut().poll(cx) {
                     Poll::Pending => (),
                     Poll::Ready(_) => {
-                        *t1 = Box::pin(delay(
-                            time::Instant::now() + time::Duration::from_secs(1),
+                        *t1 = Box::pin(delay_until(
+                            Instant::now() + time::Duration::from_secs(1),
                         ));
                         let _ = t1.as_mut().poll(cx);
                     }
                 }
-                // self.state = WorkerState::Shutdown(t1, t2, tx);
                 Poll::Pending
             }
             WorkerState::Available => {
                 loop {
                     match Pin::new(&mut self.rx).poll_next(cx) {
-                        // handle incoming tcp stream
+                        // handle incoming io stream
                         Poll::Ready(Some(WorkerCommand(msg))) => {
                             match self.check_readiness(cx) {
                                 Ok(true) => {

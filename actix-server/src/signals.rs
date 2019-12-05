@@ -3,7 +3,7 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures_core::stream::Stream;
+use futures::future::lazy;
 
 use crate::server::Server;
 
@@ -33,11 +33,13 @@ pub(crate) struct Signals {
 
 impl Signals {
     pub(crate) fn start(srv: Server) -> io::Result<()> {
-        actix_rt::spawn({
+        actix_rt::spawn(lazy(|_| {
             #[cfg(not(unix))]
             {
-                let stream = actix_rt::signal::ctrl_c()?;
-                Signals { srv, stream }
+                match actix_rt::signal::ctrl_c() {
+                    Ok(stream) => actix_rt::spawn(Signals { srv, stream }),
+                    Err(e) => log::error!("Can not initialize ctrl-c handler err: {}", e),
+                }
             }
 
             #[cfg(unix)]
@@ -54,12 +56,19 @@ impl Signals {
                 ];
 
                 for (kind, sig) in sig_map.iter() {
-                    streams.push((*sig, unix::signal(*kind)?));
+                    match unix::signal(*kind) {
+                        Ok(stream) => streams.push((*sig, stream)),
+                        Err(e) => log::error!(
+                            "Can not initialize stream handler for {:?} err: {}",
+                            sig,
+                            e
+                        ),
+                    }
                 }
 
-                Signals { srv, streams }
+                actix_rt::spawn(Signals { srv, streams })
             }
-        });
+        }));
 
         Ok(())
     }
@@ -81,7 +90,7 @@ impl Future for Signals {
         {
             for idx in 0..self.streams.len() {
                 loop {
-                    match Pin::new(&mut self.streams[idx].1).poll_next(cx) {
+                    match self.streams[idx].1.poll_recv(cx) {
                         Poll::Ready(None) => return Poll::Ready(()),
                         Poll::Pending => break,
                         Poll::Ready(Some(_)) => {

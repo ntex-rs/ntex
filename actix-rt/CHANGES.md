@@ -6,6 +6,10 @@
 
 * Fix compilation on non-unix platforms
 
+### Changed
+
+* Migrate to `tokio=0.2.2`
+
 
 ## [1.0.0-alpha.2] - 2019-12-02
 

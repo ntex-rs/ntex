@@ -29,6 +29,8 @@ fn test_bind() {
     let h = thread::spawn(move || {
         let sys = actix_rt::System::new("test");
         let srv = Server::build()
+            .workers(1)
+            .disable_signals()
             .bind("test", addr, move || service_fn(|_| ok::<_, ()>(())))
             .unwrap()
             .start();
@@ -51,14 +53,16 @@ fn test_listen() {
     let h = thread::spawn(move || {
         let sys = actix_rt::System::new("test");
         let lst = net::TcpListener::bind(addr).unwrap();
-        let srv = Server::build()
+        Server::build()
+            .disable_signals()
+            .workers(1)
             .listen("test", lst, move || service_fn(|_| ok::<_, ()>(())))
             .unwrap()
             .start();
-        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = tx.send(actix_rt::System::current());
         let _ = sys.run();
     });
-    let (_, sys) = rx.recv().unwrap();
+    let sys = rx.recv().unwrap();
 
     thread::sleep(time::Duration::from_millis(500));
     assert!(net::TcpStream::connect(addr).is_ok());
@@ -72,10 +76,12 @@ fn test_start() {
     let addr = unused_addr();
     let (tx, rx) = mpsc::channel();
 
-    let h = thread::spawn(move || {
+    let _ = thread::spawn(move || {
         let sys = actix_rt::System::new("test");
         let srv: Server = Server::build()
             .backlog(100)
+            .workers(1)
+            .disable_signals()
             .bind("test", addr, move || {
                 service_fn(|io: TcpStream| {
                     async move {
@@ -126,7 +132,7 @@ fn test_start() {
 
     thread::sleep(time::Duration::from_millis(100));
     let _ = sys.stop();
-    let _ = h.join();
+    // let _ = h.join();
 }
 
 #[test]
@@ -142,6 +148,7 @@ fn test_configure() {
         let num = num2.clone();
         let sys = actix_rt::System::new("test");
         let srv = Server::build()
+            .disable_signals()
             .configure(move |cfg| {
                 let num = num.clone();
                 let lst = net::TcpListener::bind(addr3).unwrap();

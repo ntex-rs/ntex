@@ -491,7 +491,8 @@ pub(crate) fn insert_slash(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::{HttpTryFrom, Uri};
+    use http::Uri;
+    use std::convert::TryFrom;
 
     #[test]
     fn test_parse_static() {

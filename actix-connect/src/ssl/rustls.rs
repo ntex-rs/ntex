@@ -62,7 +62,7 @@ where
     type InitError = ();
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
-    fn new_service(&self, _: &()) -> Self::Future {
+    fn new_service(&self, _: ()) -> Self::Future {
         ok(RustlsConnectorService {
             connector: self.connector.clone(),
             _t: PhantomData,
@@ -93,7 +93,7 @@ where
     type Error = std::io::Error;
     type Future = ConnectAsyncExt<T, U>;
 
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -120,7 +120,7 @@ where
 {
     type Output = Result<Connection<T, TlsStream<U>>, std::io::Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         Poll::Ready(
             futures::ready!(Pin::new(&mut this.fut).poll(cx)).map(|stream| {

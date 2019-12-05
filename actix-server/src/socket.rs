@@ -3,8 +3,6 @@ use std::{fmt, io, net};
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_rt::net::TcpStream;
 
-use tokio_net::driver::Handle;
-
 pub(crate) enum StdListener {
     Tcp(net::TcpListener),
     #[cfg(all(unix))]
@@ -152,7 +150,7 @@ pub trait FromStream: AsyncRead + AsyncWrite + Sized {
 impl FromStream for TcpStream {
     fn from_stdstream(sock: StdStream) -> io::Result<Self> {
         match sock {
-            StdStream::Tcp(stream) => TcpStream::from_std(stream, &Handle::default()),
+            StdStream::Tcp(stream) => TcpStream::from_std(stream),
             #[cfg(all(unix))]
             StdStream::Uds(_) => {
                 panic!("Should not happen, bug in server impl");
@@ -166,9 +164,7 @@ impl FromStream for actix_rt::net::UnixStream {
     fn from_stdstream(sock: StdStream) -> io::Result<Self> {
         match sock {
             StdStream::Tcp(_) => panic!("Should not happen, bug in server impl"),
-            StdStream::Uds(stream) => {
-                actix_rt::net::UnixStream::from_std(stream, &Handle::default())
-            }
+            StdStream::Uds(stream) => actix_rt::net::UnixStream::from_std(stream),
         }
     }
 }

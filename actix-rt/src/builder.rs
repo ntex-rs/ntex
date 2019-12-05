@@ -4,11 +4,7 @@ use std::io;
 use futures::channel::mpsc::unbounded;
 use futures::channel::oneshot::{channel, Receiver};
 use futures::future::{lazy, Future, FutureExt};
-
-use tokio::runtime::current_thread::Handle;
-use tokio_executor::current_thread::CurrentThread;
-use tokio_net::driver::Reactor;
-use tokio_timer::{clock::Clock, timer::Timer};
+use tokio::task::LocalSet;
 
 use crate::arbiter::{Arbiter, SystemArbiter};
 use crate::runtime::Runtime;
@@ -23,9 +19,6 @@ pub struct Builder {
     /// Name of the System. Defaults to "actix" if unset.
     name: Cow<'static, str>,
 
-    /// The clock to use
-    clock: Clock,
-
     /// Whether the Arbiter will stop the whole System on uncaught panic. Defaults to false.
     stop_on_panic: bool,
 }
@@ -34,7 +27,6 @@ impl Builder {
     pub(crate) fn new() -> Self {
         Builder {
             name: Cow::Borrowed("actix"),
-            clock: Clock::new(),
             stop_on_panic: false,
         }
     }
@@ -42,14 +34,6 @@ impl Builder {
     /// Sets the name of the System.
     pub fn name<T: Into<String>>(mut self, name: T) -> Self {
         self.name = Cow::Owned(name.into());
-        self
-    }
-
-    /// Set the Clock instance that will be used by this System.
-    ///
-    /// Defaults to the system clock.
-    pub fn clock(mut self, clock: Clock) -> Self {
-        self.clock = clock;
         self
     }
 
@@ -72,8 +56,8 @@ impl Builder {
     /// Create new System that can run asynchronously.
     ///
     /// This method panics if it cannot start the system arbiter
-    pub(crate) fn build_async(self, executor: Handle) -> AsyncSystemRunner {
-        self.create_async_runtime(executor)
+    pub(crate) fn build_async(self, local: &LocalSet) -> AsyncSystemRunner {
+        self.create_async_runtime(local)
     }
 
     /// This function will start tokio runtime and will finish once the
@@ -86,7 +70,7 @@ impl Builder {
         self.create_runtime(f).run()
     }
 
-    fn create_async_runtime(self, executor: Handle) -> AsyncSystemRunner {
+    fn create_async_runtime(self, local: &LocalSet) -> AsyncSystemRunner {
         let (stop_tx, stop) = channel();
         let (sys_sender, sys_receiver) = unbounded();
 
@@ -96,7 +80,7 @@ impl Builder {
         let arb = SystemArbiter::new(stop_tx, sys_receiver);
 
         // start the system arbiter
-        executor.spawn(arb).expect("could not start system arbiter");
+        let _ = local.spawn_local(arb);
 
         AsyncSystemRunner { stop, system }
     }
@@ -113,39 +97,13 @@ impl Builder {
         // system arbiter
         let arb = SystemArbiter::new(stop_tx, sys_receiver);
 
-        let mut rt = self.build_rt().unwrap();
+        let mut rt = Runtime::new().unwrap();
         rt.spawn(arb);
 
         // init system arbiter and run configuration method
-        let _ = rt.block_on(lazy(move |_| {
-            f();
-            Ok::<_, ()>(())
-        }));
+        rt.block_on(lazy(move |_| f()));
 
         SystemRunner { rt, stop, system }
-    }
-
-    pub(crate) fn build_rt(&self) -> io::Result<Runtime> {
-        // We need a reactor to receive events about IO objects from kernel
-        let reactor = Reactor::new()?;
-        let reactor_handle = reactor.handle();
-
-        // Place a timer wheel on top of the reactor. If there are no timeouts to fire, it'll let the
-        // reactor pick up some new external events.
-        let timer = Timer::new_with_now(reactor, self.clock.clone());
-        let timer_handle = timer.handle();
-
-        // And now put a single-threaded executor on top of the timer. When there are no futures ready
-        // to do something, it'll let the timer or the reactor to generate some new stimuli for the
-        // futures to continue in their life.
-        let executor = CurrentThread::new_with_park(timer);
-
-        Ok(Runtime::new2(
-            reactor_handle,
-            timer_handle,
-            self.clock.clone(),
-            executor,
-        ))
     }
 }
 
@@ -163,7 +121,7 @@ impl AsyncSystemRunner {
 
         // run loop
         lazy(|_| {
-            Arbiter::run_system();
+            Arbiter::run_system(None);
             async {
                 let res = match stop.await {
                     Ok(code) => {
@@ -202,10 +160,7 @@ impl SystemRunner {
         let SystemRunner { mut rt, stop, .. } = self;
 
         // run loop
-        let _ = rt.block_on(async {
-            Arbiter::run_system();
-            Ok::<_, ()>(())
-        });
+        Arbiter::run_system(Some(&rt));
         let result = match rt.block_on(stop) {
             Ok(code) => {
                 if code != 0 {
@@ -226,17 +181,11 @@ impl SystemRunner {
     /// Execute a future and wait for result.
     pub fn block_on<F, O>(&mut self, fut: F) -> O
     where
-        F: Future<Output = O>,
+        F: Future<Output = O> + 'static,
     {
-        self.rt.block_on(async {
-            Arbiter::run_system();
-        });
-
+        Arbiter::run_system(Some(&self.rt));
         let res = self.rt.block_on(fut);
-        self.rt.block_on(async {
-            Arbiter::stop_system();
-        });
-
+        Arbiter::stop_system();
         res
     }
 }
