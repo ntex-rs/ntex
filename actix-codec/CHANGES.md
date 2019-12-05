@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-alpha.3]
+
+* Use tokio 0.2
+
 * Fix low/high watermark for write/read buffers
 
 ## [0.2.0-alpha.2]

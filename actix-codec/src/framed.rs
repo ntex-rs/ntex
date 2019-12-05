@@ -1,19 +1,22 @@
-#![allow(deprecated)]
-
-use std::fmt;
-use std::io::{self};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{fmt, io};
 
 use bytes::{BufMut, BytesMut};
 use futures::{ready, Sink, Stream};
 use pin_project::pin_project;
-use tokio_codec::{Decoder, Encoder};
-use tokio_io::{AsyncRead, AsyncWrite};
+
+use crate::{AsyncRead, AsyncWrite, Decoder, Encoder};
 
 const LW: usize = 1024;
 const HW: usize = 8 * 1024;
-const INITIAL_CAPACITY: usize = 8 * 1024;
+
+bitflags::bitflags! {
+    struct Flags: u8 {
+        const EOF = 0b0001;
+        const READABLE = 0b0010;
+    }
+}
 
 /// A unified `Stream` and `Sink` interface to an underlying I/O object, using
 /// the `Encoder` and `Decoder` traits to encode and decode frames.
@@ -23,12 +26,9 @@ const INITIAL_CAPACITY: usize = 8 * 1024;
 pub struct Framed<T, U> {
     io: T,
     codec: U,
-    eof: bool,
-    is_readable: bool,
+    flags: Flags,
     read_buf: BytesMut,
     write_buf: BytesMut,
-    write_lw: usize,
-    write_hw: usize,
 }
 
 impl<T, U> Framed<T, U>
@@ -57,27 +57,9 @@ where
         Framed {
             io,
             codec,
-            eof: false,
-            is_readable: false,
-            read_buf: BytesMut::with_capacity(INITIAL_CAPACITY),
+            flags: Flags::empty(),
+            read_buf: BytesMut::with_capacity(HW),
             write_buf: BytesMut::with_capacity(HW),
-            write_lw: LW,
-            write_hw: HW,
-        }
-    }
-
-    /// Same as `Framed::new()` with ability to specify write buffer low/high capacity watermarks.
-    pub fn new_with_caps(io: T, codec: U, lw: usize, hw: usize) -> Framed<T, U> {
-        debug_assert!((lw < hw) && hw != 0);
-        Framed {
-            io,
-            codec,
-            eof: false,
-            is_readable: false,
-            read_buf: BytesMut::with_capacity(INITIAL_CAPACITY),
-            write_buf: BytesMut::with_capacity(hw),
-            write_lw: lw,
-            write_hw: hw,
         }
     }
 }
@@ -108,11 +90,8 @@ impl<T, U> Framed<T, U> {
         Framed {
             io: parts.io,
             codec: parts.codec,
-            eof: false,
-            is_readable: false,
+            flags: parts.flags,
             write_buf: parts.write_buf,
-            write_lw: parts.write_buf_lw,
-            write_hw: parts.write_buf_hw,
             read_buf: parts.read_buf,
         }
     }
@@ -154,7 +133,7 @@ impl<T, U> Framed<T, U> {
 
     /// Check if write buffer is full.
     pub fn is_write_buf_full(&self) -> bool {
-        self.write_buf.len() >= self.write_hw
+        self.write_buf.len() >= HW
     }
 
     /// Consumes the `Frame`, returning its underlying I/O stream.
@@ -169,14 +148,11 @@ impl<T, U> Framed<T, U> {
     /// Consume the `Frame`, returning `Frame` with different codec.
     pub fn into_framed<U2>(self, codec: U2) -> Framed<T, U2> {
         Framed {
-            io: self.io,
             codec,
-            eof: self.eof,
-            is_readable: self.is_readable,
+            io: self.io,
+            flags: self.flags,
             read_buf: self.read_buf,
             write_buf: self.write_buf,
-            write_lw: self.write_lw,
-            write_hw: self.write_hw,
         }
     }
 
@@ -188,12 +164,9 @@ impl<T, U> Framed<T, U> {
         Framed {
             io: f(self.io),
             codec: self.codec,
-            eof: self.eof,
-            is_readable: self.is_readable,
+            flags: self.flags,
             read_buf: self.read_buf,
             write_buf: self.write_buf,
-            write_lw: self.write_lw,
-            write_hw: self.write_hw,
         }
     }
 
@@ -205,12 +178,9 @@ impl<T, U> Framed<T, U> {
         Framed {
             io: self.io,
             codec: f(self.codec),
-            eof: self.eof,
-            is_readable: self.is_readable,
+            flags: self.flags,
             read_buf: self.read_buf,
             write_buf: self.write_buf,
-            write_lw: self.write_lw,
-            write_hw: self.write_hw,
         }
     }
 
@@ -224,11 +194,9 @@ impl<T, U> Framed<T, U> {
         FramedParts {
             io: self.io,
             codec: self.codec,
+            flags: self.flags,
             read_buf: self.read_buf,
             write_buf: self.write_buf,
-            write_buf_lw: self.write_lw,
-            write_buf_hw: self.write_hw,
-            _priv: (),
         }
     }
 }
@@ -241,8 +209,8 @@ impl<T, U> Framed<T, U> {
         U: Encoder,
     {
         let remaining = self.write_buf.remaining_mut();
-        if remaining < self.write_lw {
-            self.write_buf.reserve(self.write_hw - remaining);
+        if remaining < LW {
+            self.write_buf.reserve(HW - remaining);
         }
 
         self.codec.encode(item, &mut self.write_buf)?;
@@ -251,7 +219,7 @@ impl<T, U> Framed<T, U> {
 
     /// Check if framed is able to write more data
     pub fn is_ready(&self) -> bool {
-        self.write_buf.len() < self.write_hw
+        self.write_buf.len() < HW
     }
 
     pub fn next_item(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<U::Item, U::Error>>>
@@ -266,8 +234,8 @@ impl<T, U> Framed<T, U> {
             // readable, it can be assumed that the decoder will never become
             // readable again, at which point the stream is terminated.
 
-            if self.is_readable {
-                if self.eof {
+            if self.flags.contains(Flags::READABLE) {
+                if self.flags.contains(Flags::EOF) {
                     match self.codec.decode_eof(&mut self.read_buf) {
                         Ok(Some(frame)) => return Poll::Ready(Some(Ok(frame))),
                         Ok(None) => return Poll::Ready(None),
@@ -288,10 +256,10 @@ impl<T, U> Framed<T, U> {
                     }
                 }
 
-                self.is_readable = false;
+                self.flags.remove(Flags::READABLE);
             }
 
-            assert!(!self.eof);
+            debug_assert!(!self.flags.contains(Flags::EOF));
 
             // Otherwise, try to read more data and try again. Make sure we've got room
             let remaining = self.read_buf.remaining_mut();
@@ -307,9 +275,9 @@ impl<T, U> Framed<T, U> {
             };
 
             if cnt == 0 {
-                self.eof = true;
+                self.flags.insert(Flags::EOF);
             }
-            self.is_readable = true;
+            self.flags.insert(Flags::READABLE);
         }
     }
 
@@ -441,15 +409,7 @@ pub struct FramedParts<T, U> {
     /// A buffer with unprocessed data which are not written yet.
     pub write_buf: BytesMut,
 
-    /// A buffer low watermark capacity
-    pub write_buf_lw: usize,
-
-    /// A buffer high watermark capacity
-    pub write_buf_hw: usize,
-
-    /// This private field allows us to add additional fields in the future in a
-    /// backwards compatible way.
-    _priv: (),
+    flags: Flags,
 }
 
 impl<T, U> FramedParts<T, U> {
@@ -458,11 +418,9 @@ impl<T, U> FramedParts<T, U> {
         FramedParts {
             io,
             codec,
+            flags: Flags::empty(),
             read_buf: BytesMut::new(),
             write_buf: BytesMut::new(),
-            write_buf_lw: LW,
-            write_buf_hw: HW,
-            _priv: (),
         }
     }
 
@@ -472,10 +430,8 @@ impl<T, U> FramedParts<T, U> {
             io,
             codec,
             read_buf,
+            flags: Flags::empty(),
             write_buf: BytesMut::new(),
-            write_buf_lw: LW,
-            write_buf_hw: HW,
-            _priv: (),
         }
     }
 }

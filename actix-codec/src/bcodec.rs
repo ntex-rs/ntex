@@ -1,7 +1,7 @@
+use bytes::{BufMut, Bytes, BytesMut};
 use std::io;
 
-use bytes::{Bytes, BytesMut};
-use tokio_codec::{Decoder, Encoder};
+use super::{Decoder, Encoder};
 
 /// Bytes codec.
 ///
@@ -14,7 +14,8 @@ impl Encoder for BytesCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        dst.extend_from_slice(&item[..]);
+        dst.reserve(item.len());
+        dst.put(item);
         Ok(())
     }
 }
@@ -27,7 +28,8 @@ impl Decoder for BytesCodec {
         if src.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(src.take()))
+            let len = src.len();
+            Ok(Some(src.split_to(len)))
         }
     }
 }
