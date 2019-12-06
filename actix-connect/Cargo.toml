@@ -43,7 +43,7 @@ futures = "0.3.1"
 http = { version = "0.2.0", optional = true }
 log = "0.4"
 # trust-dns-resolver = { version="0.18.0", default-features = false }
-trust-dns-resolver = { git = "https://github.com/bluejekyll/trust-dns.git", branch = "update-tokio-0.2-alpha.2" }
+trust-dns-resolver = { git = "https://github.com/bluejekyll/trust-dns.git" }
 
 # openssl
 open-ssl = { version="0.10", package = "openssl", optional = true }
