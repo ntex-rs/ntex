@@ -58,7 +58,7 @@ where
 
     fn call(&mut self, req: A::Request) -> Self::Future {
         ThenServiceResponse {
-            state: ThenServiceResponseState::A(self.a.call(req), self.b.clone()),
+            state: State::A(self.a.call(req), Some(self.b.clone())),
         }
     }
 }
@@ -70,17 +70,18 @@ where
     B: Service<Request = Result<A::Response, A::Error>>,
 {
     #[pin]
-    state: ThenServiceResponseState<A, B>,
+    state: State<A, B>,
 }
 
 #[pin_project::pin_project]
-enum ThenServiceResponseState<A, B>
+enum State<A, B>
 where
     A: Service,
     B: Service<Request = Result<A::Response, A::Error>>,
 {
-    A(#[pin] A::Future, Cell<B>),
+    A(#[pin] A::Future, Option<Cell<B>>),
     B(#[pin] B::Future),
+    Empty
 }
 
 impl<A, B> Future for ThenServiceResponse<A, B>
@@ -96,15 +97,21 @@ where
 
         #[project]
         match this.state.as_mut().project() {
-            ThenServiceResponseState::A(fut, b) => match fut.poll(cx) {
+            State::A(fut, b) => match fut.poll(cx) {
                 Poll::Ready(res) => {
+                    let mut b = b.take().unwrap();
+                    this.state.set(State::Empty); // drop fut A
                     let fut = b.get_mut().call(res);
-                    this.state.set(ThenServiceResponseState::B(fut));
+                    this.state.set(State::B(fut));
                     self.poll(cx)
                 }
                 Poll::Pending => Poll::Pending,
             },
-            ThenServiceResponseState::B(fut) => fut.poll(cx),
+            State::B(fut) => fut.poll(cx).map(|r| {
+                this.state.set(State::Empty);
+                r
+            }),
+            State::Empty => panic!("future must not be polled after it returned `Poll::Ready`")
         }
     }
 }

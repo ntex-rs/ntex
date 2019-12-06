@@ -51,7 +51,7 @@ where
 
     fn call(&mut self, req: A::Request) -> Self::Future {
         AndThenServiceResponse {
-            state: State::A(self.0.get_mut().0.call(req), self.0.clone()),
+            state: State::A(self.0.get_mut().0.call(req), Some(self.0.clone())),
         }
     }
 }
@@ -72,8 +72,9 @@ where
     A: Service,
     B: Service<Request = A::Response, Error = A::Error>,
 {
-    A(#[pin] A::Future, Cell<(A, B)>),
+    A(#[pin] A::Future, Option<Cell<(A, B)>>),
     B(#[pin] B::Future),
+    Empty,
 }
 
 impl<A, B> Future for AndThenServiceResponse<A, B>
@@ -91,13 +92,19 @@ where
         match this.state.as_mut().project() {
             State::A(fut, b) => match fut.poll(cx)? {
                 Poll::Ready(res) => {
+                    let mut b = b.take().unwrap();
+                    this.state.set(State::Empty); // drop fut A
                     let fut = b.get_mut().1.call(res);
                     this.state.set(State::B(fut));
                     self.poll(cx)
                 }
                 Poll::Pending => Poll::Pending,
             },
-            State::B(fut) => fut.poll(cx),
+            State::B(fut) => fut.poll(cx).map(|r| {
+                this.state.set(State::Empty);
+                r
+            }),
+            State::Empty => panic!("future must not be polled after it returned `Poll::Ready`"),
         }
     }
 }
