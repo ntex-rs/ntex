@@ -8,25 +8,23 @@ use futures::future::lazy;
 use crate::server::Server;
 
 /// Different types of process signals
+#[allow(dead_code)]
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub(crate) enum Signal {
     /// SIGHUP
-    #[cfg_attr(not(unix), allow(dead_code))]
     Hup,
     /// SIGINT
     Int,
     /// SIGTERM
-    #[cfg_attr(not(unix), allow(dead_code))]
     Term,
     /// SIGQUIT
-    #[cfg_attr(not(unix), allow(dead_code))]
     Quit,
 }
 
 pub(crate) struct Signals {
     srv: Server,
     #[cfg(not(unix))]
-    stream: actix_rt::signal::CtrlC,
+    stream: Pin<Box<dyn Future<Output = io::Result<()>>>>,
     #[cfg(unix)]
     streams: Vec<(Signal, actix_rt::signal::unix::Signal)>,
 }
@@ -36,12 +34,11 @@ impl Signals {
         actix_rt::spawn(lazy(|_| {
             #[cfg(not(unix))]
             {
-                match actix_rt::signal::ctrl_c() {
-                    Ok(stream) => actix_rt::spawn(Signals { srv, stream }),
-                    Err(e) => log::error!("Can not initialize ctrl-c handler err: {}", e),
-                }
+                actix_rt::spawn(Signals {
+                    srv,
+                    stream: Box::pin(actix_rt::signal::ctrl_c()),
+                });
             }
-
             #[cfg(unix)]
             {
                 use actix_rt::signal::unix;
@@ -79,12 +76,12 @@ impl Future for Signals {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         #[cfg(not(unix))]
-        loop {
-            match Pin::new(&mut self.stream).poll_next(cx) {
-                Poll::Ready(Some(_)) => self.srv.signal(Signal::Int),
-                Poll::Ready(None) => return Poll::Ready(()),
-                Poll::Pending => return Poll::Pending,
+        match Pin::new(&mut self.stream).poll(cx) {
+            Poll::Ready(_) => {
+                self.srv.signal(Signal::Int);
+                Poll::Ready(())
             }
+            Poll::Pending => return Poll::Pending,
         }
         #[cfg(unix)]
         {
