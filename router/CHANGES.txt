@@ -6,6 +6,8 @@
 
 * Update regex to 1.3
 
+* Use bytestring instead of string
+
 ## [0.1.5] - 2019-05-15
 
 * Remove debug prints
