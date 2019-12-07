@@ -1,6 +1,6 @@
 [package]
 name = "actix-ioframe"
-version = "0.3.0-alpha.2"
+version = "0.3.0-alpha.3"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix framed service"
 keywords = ["network", "framework", "async", "futures"]
