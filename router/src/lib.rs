@@ -29,7 +29,7 @@ impl<'a> ResourcePath for &'a str {
     }
 }
 
-impl<T: AsRef<[u8]>> ResourcePath for string::String<T> {
+impl ResourcePath for bytesrting::ByteString {
     fn path(&self) -> &str {
         &*self
     }
