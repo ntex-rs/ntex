@@ -29,7 +29,7 @@ impl<'a> ResourcePath for &'a str {
     }
 }
 
-impl ResourcePath for bytesrting::ByteString {
+impl ResourcePath for bytestring::ByteString {
     fn path(&self) -> &str {
         &*self
     }
