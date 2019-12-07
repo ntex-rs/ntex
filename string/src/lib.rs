@@ -30,6 +30,11 @@ impl ByteString {
     pub fn from_static(src: &'static str) -> ByteString {
         Self(Bytes::from_static(src.as_ref()))
     }
+
+    /// Creates a new `ByteString` from a Bytes.
+    pub unsafe fn from_bytes_unchecked(src: Bytes) -> ByteString {
+        Self(src)
+    }
 }
 
 impl PartialEq<str> for ByteString {
