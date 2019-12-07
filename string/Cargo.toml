@@ -1,6 +1,6 @@
 [package]
 name = "bytestring"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "A UTF-8 encoded string with Bytes as a storage"
 keywords = ["actix"]

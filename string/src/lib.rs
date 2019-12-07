@@ -45,7 +45,7 @@ impl PartialEq<str> for ByteString {
 
 impl hash::Hash for ByteString {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
+        (**self).hash(state);
     }
 }
 
@@ -144,6 +144,19 @@ impl fmt::Display for ByteString {
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    #[test]
+    fn test_hash() {
+        let mut hasher1 = DefaultHasher::default();
+        "str".hash(&mut hasher1);
+
+        let mut hasher2 = DefaultHasher::default();
+        let s = ByteString::from_static("str");
+        s.hash(&mut hasher2);
+        assert_eq!(hasher1.finish(), hasher2.finish());
+    }
 
     #[test]
     fn test_from_string() {
