@@ -186,7 +186,7 @@ mod tests {
     #[actix_rt::test]
     async fn system_time_service_time_updates_after_resolution_interval() {
         let resolution = Duration::from_millis(100);
-        let wait_time = Duration::from_millis(150);
+        let wait_time = Duration::from_millis(300);
 
         let time_service = SystemTimeService::with(resolution);
 
@@ -212,7 +212,7 @@ mod tests {
     #[actix_rt::test]
     async fn lowres_time_service_time_updates_after_resolution_interval() {
         let resolution = Duration::from_millis(100);
-        let wait_time = Duration::from_millis(150);
+        let wait_time = Duration::from_millis(300);
         let time_service = LowResTimeService::with(resolution);
 
         let first_time = time_service.now();
