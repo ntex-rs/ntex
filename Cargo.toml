@@ -12,6 +12,7 @@ members = [
   "actix-tls",
   "actix-utils",
   "router",
+  "string",
 ]
 
 [patch.crates-io]
@@ -27,3 +28,4 @@ actix-threadpool = { path = "actix-threadpool" }
 actix-tls = { path = "actix-tls" }
 actix-utils = { path = "actix-utils" }
 actix-router = { path = "router" }
+bytestring = { path = "string" }

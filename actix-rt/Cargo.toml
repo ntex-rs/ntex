@@ -22,4 +22,4 @@ actix-macros = "0.1.0-alpha.1"
 actix-threadpool = "0.3"
 futures = "0.3.1"
 copyless = "0.1.4"
-tokio = { version = "0.2.2", default-features=false, features = ["rt-core", "rt-util", "io-driver", "tcp", "uds", "udp", "time", "signal", "stream"] }
+tokio = { version = "0.2.3", default-features=false, features = ["rt-core", "rt-util", "io-driver", "tcp", "uds", "udp", "time", "signal", "stream"] }

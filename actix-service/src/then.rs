@@ -81,7 +81,7 @@ where
 {
     A(#[pin] A::Future, Option<Cell<B>>),
     B(#[pin] B::Future),
-    Empty
+    Empty,
 }
 
 impl<A, B> Future for ThenServiceResponse<A, B>
@@ -111,7 +111,7 @@ where
                 this.state.set(State::Empty);
                 r
             }),
-            State::Empty => panic!("future must not be polled after it returned `Poll::Ready`")
+            State::Empty => panic!("future must not be polled after it returned `Poll::Ready`"),
         }
     }
 }

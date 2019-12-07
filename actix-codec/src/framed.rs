@@ -4,7 +4,6 @@ use std::{fmt, io};
 
 use bytes::{BufMut, BytesMut};
 use futures::{ready, Sink, Stream};
-use pin_project::pin_project;
 
 use crate::{AsyncRead, AsyncWrite, Decoder, Encoder};
 
@@ -22,7 +21,6 @@ bitflags::bitflags! {
 /// the `Encoder` and `Decoder` traits to encode and decode frames.
 ///
 /// You can create a `Framed` instance by using the `AsyncRead::framed` adapter.
-#[pin_project]
 pub struct Framed<T, U> {
     io: T,
     codec: U,
@@ -30,6 +28,8 @@ pub struct Framed<T, U> {
     read_buf: BytesMut,
     write_buf: BytesMut,
 }
+
+impl<T, U> Unpin for Framed<T, U> {}
 
 impl<T, U> Framed<T, U>
 where

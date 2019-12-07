@@ -1,6 +1,6 @@
 # Changes
 
-## [1.0.0-alpha.3] - 2019-12-xx
+## [1.0.0-alpha.3] - 2019-12-07
 
 ### Fixed
 
@@ -8,7 +8,7 @@
 
 ### Changed
 
-* Migrate to `tokio=0.2.2`
+* Migrate to tokio 0.2
 
 
 ## [1.0.0-alpha.2] - 2019-12-02

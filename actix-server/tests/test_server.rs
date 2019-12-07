@@ -76,11 +76,10 @@ fn test_start() {
     let addr = unused_addr();
     let (tx, rx) = mpsc::channel();
 
-    let _ = thread::spawn(move || {
+    let h = thread::spawn(move || {
         let sys = actix_rt::System::new("test");
         let srv: Server = Server::build()
             .backlog(100)
-            .workers(1)
             .disable_signals()
             .bind("test", addr, move || {
                 service_fn(|io: TcpStream| {
@@ -132,7 +131,7 @@ fn test_start() {
 
     thread::sleep(time::Duration::from_millis(100));
     let _ = sys.stop();
-    // let _ = h.join();
+    let _ = h.join();
 }
 
 #[test]

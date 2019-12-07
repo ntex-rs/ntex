@@ -216,7 +216,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_timeout() {
         let resolution = Duration::from_millis(100);
-        let wait_time = Duration::from_millis(150);
+        let wait_time = Duration::from_millis(500);
 
         let mut timeout = TimeoutService::new(resolution, SleepService(wait_time));
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
@@ -225,7 +225,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_timeout_newservice() {
         let resolution = Duration::from_millis(100);
-        let wait_time = Duration::from_millis(150);
+        let wait_time = Duration::from_millis(500);
 
         let timeout = apply(
             Timeout::new(resolution),
