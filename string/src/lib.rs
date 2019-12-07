@@ -90,6 +90,24 @@ impl TryFrom<Vec<u8>> for ByteString {
     }
 }
 
+impl TryFrom<Bytes> for ByteString {
+    type Error = str::Utf8Error;
+
+    fn try_from(value: Bytes) -> Result<Self, Self::Error> {
+        let _ = str::from_utf8(value.as_ref())?;
+        Ok(ByteString(value))
+    }
+}
+
+impl TryFrom<bytes::BytesMut> for ByteString {
+    type Error = str::Utf8Error;
+
+    fn try_from(value: bytes::BytesMut) -> Result<Self, Self::Error> {
+        let _ = str::from_utf8(value.as_ref())?;
+        Ok(ByteString(value.freeze()))
+    }
+}
+
 macro_rules! array_impls {
     ($($len:expr)+) => {
         $(
@@ -139,7 +157,17 @@ mod test {
     }
 
     #[test]
-    fn test_try_from_bytes() {
+    fn test_try_from_rbytes() {
         let _ = ByteString::try_from(b"nice bytes").unwrap();
+    }
+
+    #[test]
+    fn test_try_from_bytes() {
+        let _ = ByteString::try_from(Bytes::from_static(b"nice bytes")).unwrap();
+    }
+
+    #[test]
+    fn test_try_from_bytesmut() {
+        let _ = ByteString::try_from(bytes::BytesMut::from(&b"nice bytes"[..])).unwrap();
     }
 }
