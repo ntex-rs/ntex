@@ -1,6 +1,6 @@
 [package]
 name = "actix-server"
-version = "1.0.0-alpha.3"
+version = "1.0.0-alpha.4"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix server - General purpose tcp server"
 keywords = ["network", "framework", "async", "futures"]
@@ -21,7 +21,7 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
-actix-service = "1.0.0-alpha.3"
+actix-service = "1.0.0-alpha.4"
 actix-rt = "1.0.0-alpha.3"
 actix-codec = "0.2.0-alpha.3"
 actix-utils = "1.0.0-alpha.3"

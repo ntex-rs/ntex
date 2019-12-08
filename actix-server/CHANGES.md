@@ -1,5 +1,11 @@
 # Changes
 
+## [1.0.0-alpha.4] - 2019-12-08
+
+### Changed
+
+* Use actix-service 1.0.0-alpha.4
+
 ## [1.0.0-alpha.3] - 2019-12-07
 
 ### Changed
