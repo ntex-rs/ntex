@@ -6,7 +6,7 @@ use std::{net, thread, time};
 use actix_codec::{BytesCodec, Framed};
 use actix_rt::net::TcpStream;
 use actix_server::Server;
-use actix_service::service_fn;
+use actix_service::fn_service;
 use bytes::Bytes;
 use futures::future::{lazy, ok};
 use futures::SinkExt;
@@ -31,7 +31,7 @@ fn test_bind() {
         let srv = Server::build()
             .workers(1)
             .disable_signals()
-            .bind("test", addr, move || service_fn(|_| ok::<_, ()>(())))
+            .bind("test", addr, move || fn_service(|_| ok::<_, ()>(())))
             .unwrap()
             .start();
         let _ = tx.send((srv, actix_rt::System::current()));
@@ -56,7 +56,7 @@ fn test_listen() {
         Server::build()
             .disable_signals()
             .workers(1)
-            .listen("test", lst, move || service_fn(|_| ok::<_, ()>(())))
+            .listen("test", lst, move || fn_service(|_| ok::<_, ()>(())))
             .unwrap()
             .start();
         let _ = tx.send(actix_rt::System::current());
@@ -82,7 +82,7 @@ fn test_start() {
             .backlog(100)
             .disable_signals()
             .bind("test", addr, move || {
-                service_fn(|io: TcpStream| {
+                fn_service(|io: TcpStream| {
                     async move {
                         let mut f = Framed::new(io, BytesCodec);
                         f.send(Bytes::from_static(b"test")).await.unwrap();
@@ -158,8 +158,8 @@ fn test_configure() {
                     .listen("addr3", lst)
                     .apply(move |rt| {
                         let num = num.clone();
-                        rt.service("addr1", service_fn(|_| ok::<_, ()>(())));
-                        rt.service("addr3", service_fn(|_| ok::<_, ()>(())));
+                        rt.service("addr1", fn_service(|_| ok::<_, ()>(())));
+                        rt.service("addr3", fn_service(|_| ok::<_, ()>(())));
                         rt.on_start(lazy(move |_| {
                             let _ = num.fetch_add(1, Relaxed);
                         }))

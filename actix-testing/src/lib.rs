@@ -20,12 +20,12 @@ pub use actix_macros::test;
 /// # Examples
 ///
 /// ```rust
-/// use actix_service::{service_fn};
+/// use actix_service::fn_service;
 /// use actix_testing::TestServer;
 ///
 /// #[actix_rt::main]
 /// async fn main() {
-///     let srv = TestServer::with(|| service_fn(
+///     let srv = TestServer::with(|| fn_service(
 ///         |sock| async move {
 ///             println!("New connection: {:?}", sock);
 ///             Ok::<_, ()>(())

@@ -142,7 +142,7 @@ impl InternalServiceFactory for ConfiguredService {
                     let name = names.remove(&token).unwrap().0;
                     res.push((
                         token,
-                        Box::new(StreamService::new(actix::service_fn2(
+                        Box::new(StreamService::new(actix::fn_service(
                             move |_: TcpStream| {
                                 error!("Service {:?} is not configured", name);
                                 ok::<_, ()>(())

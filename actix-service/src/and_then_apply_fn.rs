@@ -283,7 +283,7 @@ mod tests {
 
     use futures_util::future::{lazy, ok, Ready, TryFutureExt};
 
-    use crate::{pipeline, pipeline_factory, service_fn2, Service, ServiceFactory};
+    use crate::{fn_service, pipeline, pipeline_factory, Service, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv;
@@ -318,7 +318,7 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_service_factory() {
-        let new_srv = pipeline_factory(|| ok::<_, ()>(service_fn2(|r: &'static str| ok(r))))
+        let new_srv = pipeline_factory(|| ok::<_, ()>(fn_service(|r: &'static str| ok(r))))
             .and_then_apply_fn(
                 || ok(Srv),
                 |req: &'static str, s| s.call(()).map_ok(move |res| (req, res)),

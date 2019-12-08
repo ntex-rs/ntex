@@ -258,7 +258,7 @@ mod tests {
 
     use futures_util::future::{lazy, ok, ready, Ready};
 
-    use crate::{factory_fn, pipeline, pipeline_factory, Service, ServiceFactory};
+    use crate::{fn_factory, pipeline, pipeline_factory, Service, ServiceFactory};
 
     struct Srv1(Rc<Cell<usize>>);
 
@@ -320,7 +320,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
         let new_srv =
-            pipeline_factory(factory_fn(move || ready(Ok::<_, ()>(Srv1(cnt2.clone())))))
+            pipeline_factory(fn_factory(move || ready(Ok::<_, ()>(Srv1(cnt2.clone())))))
                 .and_then(move || ready(Ok(Srv2(cnt.clone()))));
 
         let mut srv = new_srv.new_service(()).await.unwrap();

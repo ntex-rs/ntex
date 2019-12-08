@@ -25,7 +25,7 @@ mod transform_err;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::apply_cfg::{apply_cfg, apply_cfg_factory};
-pub use self::fn_service::{factory_fn, factory_fn_cfg, service_fn, service_fn2};
+pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::map_config::{map_config, unit_config};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 pub use self::transform::{apply, Transform};

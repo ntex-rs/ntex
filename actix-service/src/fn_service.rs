@@ -7,7 +7,7 @@ use futures_util::future::{ok, Ready};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Create `ServiceFactory` for function that can act as a `Service`
-pub fn service_fn<F, Fut, Req, Res, Err, Cfg>(
+pub fn fn_service<F, Fut, Req, Res, Err, Cfg>(
     f: F,
 ) -> FnServiceFactory<F, Fut, Req, Res, Err, Cfg>
 where
@@ -17,16 +17,8 @@ where
     FnServiceFactory::new(f)
 }
 
-pub fn service_fn2<F, Fut, Req, Res, Err>(f: F) -> FnService<F, Fut, Req, Res, Err>
-where
-    F: FnMut(Req) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>,
-{
-    FnService::new(f)
-}
-
 /// Create `ServiceFactory` for function that can produce services
-pub fn factory_fn<F, Cfg, Srv, Fut, Err>(f: F) -> FnServiceNoConfig<F, Cfg, Srv, Fut, Err>
+pub fn fn_factory<F, Cfg, Srv, Fut, Err>(f: F) -> FnServiceNoConfig<F, Cfg, Srv, Fut, Err>
 where
     Srv: Service,
     F: Fn() -> Fut,
@@ -35,8 +27,10 @@ where
     FnServiceNoConfig::new(f)
 }
 
-/// Create `ServiceFactory` for function that can produce services with configuration
-pub fn factory_fn_cfg<F, Fut, Cfg, Srv, Err>(f: F) -> FnServiceConfig<F, Fut, Cfg, Srv, Err>
+/// Create `ServiceFactory` for function that accepts config and can produce services
+pub fn fn_factory_with_config<F, Fut, Cfg, Srv, Err>(
+    f: F,
+) -> FnServiceConfig<F, Fut, Cfg, Srv, Err>
 where
     F: Fn(Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
@@ -129,6 +123,25 @@ where
 {
     fn clone(&self) -> Self {
         Self::new(self.f.clone())
+    }
+}
+
+impl<F, Fut, Req, Res, Err> Service for FnServiceFactory<F, Fut, Req, Res, Err, ()>
+where
+    F: FnMut(Req) -> Fut + Clone,
+    Fut: Future<Output = Result<Res, Err>>,
+{
+    type Request = Req;
+    type Response = Res;
+    type Error = Err;
+    type Future = Fut;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Self::Request) -> Self::Future {
+        (self.f)(req)
     }
 }
 
@@ -278,5 +291,49 @@ where
 {
     fn into_factory(self) -> FnServiceNoConfig<F, C, S, R, E> {
         FnServiceNoConfig::new(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::task::Poll;
+
+    use futures_util::future::{lazy, ok};
+
+    use super::*;
+    use crate::{Service, ServiceFactory};
+
+    #[actix_rt::test]
+    async fn test_fn_service() {
+        let new_srv = fn_service(|()| ok::<_, ()>("srv"));
+
+        let mut srv = new_srv.new_service(()).await.unwrap();
+        let res = srv.call(()).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "srv");
+    }
+
+    #[actix_rt::test]
+    async fn test_fn_service_service() {
+        let mut srv = fn_service(|()| ok::<_, ()>("srv"));
+
+        let res = srv.call(()).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "srv");
+    }
+
+    #[actix_rt::test]
+    async fn test_fn_service_with_config() {
+        let new_srv = fn_factory_with_config(|cfg: usize| {
+            ok::<_, ()>(fn_service(move |()| ok::<_, ()>(("srv", cfg))))
+        });
+
+        let mut srv = new_srv.new_service(1).await.unwrap();
+        let res = srv.call(()).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), ("srv", 1));
     }
 }

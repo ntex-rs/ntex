@@ -182,7 +182,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use actix_service::{apply, factory_fn, Service, ServiceFactory};
+    use actix_service::{apply, fn_factory, Service, ServiceFactory};
     use futures::future::{ok, FutureExt, LocalBoxFuture};
 
     struct SleepService(Duration);
@@ -229,7 +229,7 @@ mod tests {
 
         let timeout = apply(
             Timeout::new(resolution),
-            factory_fn(|| ok::<_, ()>(SleepService(wait_time))),
+            fn_factory(|| ok::<_, ()>(SleepService(wait_time))),
         );
         let mut srv = timeout.new_service(&()).await.unwrap();
 

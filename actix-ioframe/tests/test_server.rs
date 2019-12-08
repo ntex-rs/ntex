@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use actix_codec::BytesCodec;
 use actix_rt::time::delay_for;
-use actix_service::{service_fn, Service};
+use actix_service::{fn_service, Service};
 use actix_testing::TestServer;
 use futures::future::ok;
 
@@ -22,13 +22,13 @@ async fn test_disconnect() -> std::io::Result<()> {
         let disconnect1 = disconnect1.clone();
 
         Builder::new()
-            .factory(service_fn(|conn: Connect<_>| {
+            .factory(fn_service(|conn: Connect<_>| {
                 ok(conn.codec(BytesCodec).state(State))
             }))
             .disconnect(move |_, _| {
                 disconnect1.store(true, Ordering::Relaxed);
             })
-            .finish(service_fn(|_t| ok(None)))
+            .finish(fn_service(|_t| ok(None)))
     });
 
     let mut client = Builder::new()
@@ -37,7 +37,7 @@ async fn test_disconnect() -> std::io::Result<()> {
             conn.sink().close();
             ok(conn)
         })
-        .finish(service_fn(|_t| ok(None)));
+        .finish(fn_service(|_t| ok(None)));
 
     let conn = actix_connect::default_connector()
         .call(actix_connect::Connect::with(String::new(), srv.addr()))

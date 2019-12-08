@@ -115,7 +115,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use actix_service::{apply, factory_fn, Service, ServiceFactory};
+    use actix_service::{apply, fn_factory, Service, ServiceFactory};
     use futures::future::{lazy, ok, FutureExt, LocalBoxFuture};
 
     struct SleepService(Duration);
@@ -155,7 +155,7 @@ mod tests {
     async fn test_newtransform() {
         let wait_time = Duration::from_millis(50);
 
-        let srv = apply(InFlight::new(1), factory_fn(|| ok(SleepService(wait_time))));
+        let srv = apply(InFlight::new(1), fn_factory(|| ok(SleepService(wait_time))));
 
         let mut srv = srv.new_service(&()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));

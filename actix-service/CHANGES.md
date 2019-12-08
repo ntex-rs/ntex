@@ -1,5 +1,16 @@
 # Changes
 
+## [1.0.0-alpha.4] - 2019-12-xx
+
+### Changed
+
+* Renamed `service_fn` to `fn_service`
+
+* Renamed `factory_fn` to `fn_factory`
+
+* Renamed `factory_fn_cfg` to `fn_factory_with_config`
+
+
 ## [1.0.0-alpha.3] - 2019-12-06
 
 ### Changed
