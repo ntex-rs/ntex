@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, io};
 
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use futures::{ready, Sink, Stream};
 
 use crate::{AsyncRead, AsyncWrite, Decoder, Encoder};
@@ -208,7 +208,7 @@ impl<T, U> Framed<T, U> {
         T: AsyncWrite,
         U: Encoder,
     {
-        let remaining = self.write_buf.remaining_mut();
+        let remaining = self.write_buf.capacity() - self.write_buf.len();
         if remaining < LW {
             self.write_buf.reserve(HW - remaining);
         }
@@ -262,7 +262,7 @@ impl<T, U> Framed<T, U> {
             debug_assert!(!self.flags.contains(Flags::EOF));
 
             // Otherwise, try to read more data and try again. Make sure we've got room
-            let remaining = self.read_buf.remaining_mut();
+            let remaining = self.read_buf.capacity() - self.read_buf.len();
             if remaining < LW {
                 self.read_buf.reserve(HW - remaining)
             }

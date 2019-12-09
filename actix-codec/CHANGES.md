@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-alpha.4]
+
+* Fix buffer remaining capacity calcualtion
+
 ## [0.2.0-alpha.3]
 
 * Use tokio 0.2
