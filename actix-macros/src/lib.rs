@@ -17,25 +17,26 @@ use quote::quote;
 #[proc_macro_attribute]
 #[cfg(not(test))] // Work around for rust-lang/rust#62127
 pub fn main(_: TokenStream, item: TokenStream) -> TokenStream {
-    let input = syn::parse_macro_input!(item as syn::ItemFn);
-
-    let ret = &input.sig.output;
-    let name = &input.sig.ident;
-    let inputs = &input.sig.inputs;
-    let body = &input.block;
+    let mut input = syn::parse_macro_input!(item as syn::ItemFn);
     let attrs = &input.attrs;
+    let vis = &input.vis;
+    let sig = &mut input.sig;
+    let body = &input.block;
+    let name = &sig.ident;
 
-    if input.sig.asyncness.is_none() {
-        return syn::Error::new_spanned(input.sig.fn_token, "only async fn is supported")
+    if sig.asyncness.is_none() {
+        return syn::Error::new_spanned(sig.fn_token, "only async fn is supported")
             .to_compile_error()
             .into();
     }
 
+    sig.asyncness = None;
+
     (quote! {
         #(#attrs)*
-        fn #name(#inputs) #ret {
-            actix_rt::System::new("main")
-                .block_on(async { #body })
+        #vis #sig {
+            actix_rt::System::new(stringify!(#name))
+                .block_on(async move { #body })
         }
     })
     .into()
