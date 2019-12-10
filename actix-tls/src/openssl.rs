@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-pub use open_ssl::ssl::{SslAcceptor, SslAcceptorBuilder, AlpnError};
+pub use open_ssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 pub use tokio_openssl::{HandshakeError, SslStream};
 
 use actix_codec::{AsyncRead, AsyncWrite};

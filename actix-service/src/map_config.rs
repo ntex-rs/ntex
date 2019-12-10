@@ -2,7 +2,10 @@ use std::marker::PhantomData;
 
 use super::ServiceFactory;
 
-/// Adapt external config to a config for provided new service
+/// Adapt external config argument to a config for provided service factory
+///
+/// Note that this function consumes the receiving service factory and returns
+/// a wrapped version of it.
 pub fn map_config<T, F, C>(factory: T, f: F) -> MapConfig<T, F, C>
 where
     T: ServiceFactory,

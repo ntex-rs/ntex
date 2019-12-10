@@ -31,6 +31,42 @@ pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 pub use self::transform::{apply, Transform};
 
 /// An asynchronous function from `Request` to a `Response`.
+///
+/// `Service` represents a service that represanting interation, taking requests and giving back
+/// replies. You can think about service as a function with one argument and result as a return
+/// type. In general form it looks like `async fn(Req) -> Result<Res, Err>`. `Service`
+/// trait just generalizing form of this function. Each parameter described as an assotiated type.
+///
+/// Services provides a symmetric and uniform API, same abstractions represents
+/// clients and servers. Services describe only `transforamtion` operation
+/// which encorouge to simplify api surface and phrases `value transformation`.
+/// That leads to simplier design of each service. That also allows better testability
+/// and better composition.
+///
+/// Services could be represented in several different forms. In general,
+/// Service is a type that implements `Service` trait.
+///
+/// ```rust,ignore
+/// struct MyService;
+///
+/// impl Service for MyService {
+///      type Request = u8;
+///      type Response = u64;
+///      type Error = MyError;
+///      type Future = Pin<Box<Future<Output=Result<Self::Response, Self::Error>>>;
+///
+///      fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> { ... }
+///
+///      fn call(&mut self) -> Self::Future { ... }
+/// }
+/// ```
+///
+/// Service can have mutable state that influence computation.
+/// This service could be rewritten as a simple function:
+///
+/// ```rust,ignore
+/// async fn my_service(req: u8) -> Result<u64, MyError>;
+/// ```
 pub trait Service {
     /// Requests handled by the service.
     type Request;
@@ -53,6 +89,12 @@ pub trait Service {
     /// This is a **best effort** implementation. False positives are permitted.
     /// It is permitted for the service to return `Ready` from a `poll_ready`
     /// call and the next invocation of `call` results in an error.
+    ///
+    /// There are several notes to consider:
+    ///
+    /// 1. `.poll_ready()` might be called on different task from actual service call.
+    ///
+    /// 2. In case of chained services, `.poll_ready()` get called for all services at once.
     fn poll_ready(&mut self, ctx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>>;
 
     /// Process the request and return the response asynchronously.
@@ -287,7 +329,7 @@ pub trait IntoServiceFactory<T>
 where
     T: ServiceFactory,
 {
-    /// Convert `Self` an `ServiceFactory`
+    /// Convert `Self` to a `ServiceFactory`
     fn into_factory(self) -> T;
 }
 

@@ -7,7 +7,6 @@
 //! [`AsyncRead`]: #
 //! [`AsyncWrite`]: #
 #![deny(rust_2018_idioms, warnings)]
-#![allow(clippy::type_complexity)]
 
 mod bcodec;
 mod framed;

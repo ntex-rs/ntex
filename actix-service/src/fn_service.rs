@@ -18,6 +18,41 @@ where
 }
 
 /// Create `ServiceFactory` for function that can produce services
+///
+/// # Example
+///
+/// ```rust
+/// use std::io;
+/// use actix_service::{fn_factory, fn_service, Service, ServiceFactory};
+/// use futures_util::future::ok;
+///
+/// /// Service that divides two usize values.
+/// async fn div((x, y): (usize, usize)) -> Result<usize, io::Error> {
+///     if y == 0 {
+///         Err(io::Error::new(io::ErrorKind::Other, "divide by zdro"))
+///     } else {
+///         Ok(x / y)
+///     }
+/// }
+///
+/// #[actix_rt::main]
+/// async fn main() -> io::Result<()> {
+///     // Create service factory that produces `div` services
+///     let factory = fn_factory(|| {
+///         ok::<_, io::Error>(fn_service(div))
+///     });
+///
+///     // construct new service
+///     let mut srv = factory.new_service(()).await?;
+///
+///     // now we can use `div` service
+///     let result = srv.call((10, 20)).await?;
+///
+///     println!("10 / 20 = {}", result);
+///
+///     Ok(())
+/// }
+/// ```
 pub fn fn_factory<F, Cfg, Srv, Fut, Err>(f: F) -> FnServiceNoConfig<F, Cfg, Srv, Fut, Err>
 where
     Srv: Service,
@@ -27,7 +62,36 @@ where
     FnServiceNoConfig::new(f)
 }
 
-/// Create `ServiceFactory` for function that accepts config and can produce services
+/// Create `ServiceFactory` for function that accepts config argument and can produce services
+///
+/// Any function that has following form `Fn(Config) -> Future<Output = Service>` could
+/// act as a `ServiceFactory`.
+///
+/// # Example
+///
+/// ```rust
+/// use std::io;
+/// use actix_service::{fn_factory_with_config, fn_service, Service, ServiceFactory};
+/// use futures_util::future::ok;
+///
+/// #[actix_rt::main]
+/// async fn main() -> io::Result<()> {
+///     // Create service factory. factory uses config argument for
+///     // services it generates.
+///     let factory = fn_factory_with_config(|y: usize| {
+///         ok::<_, io::Error>(fn_service(move |x: usize| ok::<_, io::Error>(x * y)))
+///     });
+///
+///     // construct new service with config argument
+///     let mut srv = factory.new_service(10).await?;
+///
+///     let result = srv.call(10).await?;
+///     assert_eq!(result, 100);
+///
+///     println!("10 * 10 = {}", result);
+///     Ok(())
+/// }
+/// ```
 pub fn fn_factory_with_config<F, Fut, Cfg, Srv, Err>(
     f: F,
 ) -> FnServiceConfig<F, Fut, Cfg, Srv, Err>

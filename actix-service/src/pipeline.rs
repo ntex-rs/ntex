@@ -9,6 +9,7 @@ use crate::map_init_err::MapInitErr;
 use crate::then::{ThenService, ThenServiceFactory};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
+/// Contruct new pipeline with one service in pipeline chain.
 pub fn pipeline<F, T>(service: F) -> Pipeline<T>
 where
     F: IntoService<T>,
@@ -19,6 +20,7 @@ where
     }
 }
 
+/// Contruct new pipeline factory with one service factory.
 pub fn pipeline_factory<T, F>(factory: F) -> PipelineFactory<T>
 where
     T: ServiceFactory,
