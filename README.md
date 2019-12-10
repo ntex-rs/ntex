@@ -30,14 +30,16 @@ fn main() -> io::Result<()> {
                 let num = num.clone();
                 let acceptor = acceptor.clone();
 
-                // service for converting incoming TcpStream to a SslStream<TcpStream>
-                fn_service(move |stream: Io<tokio_tcp::TcpStream>| {
-                    SslAcceptorExt::accept_async(&acceptor, stream.into_parts().0)
-                        .map_err(|e| println!("Openssl error: {}", e))
-                })
-                // .and_then() combinator uses other service to convert incoming `Request` to a
-                // `Response` and then uses that response as an input for next
-                // service. in this case, on success we use `logger` service
+                // construct transformation pipeline
+                pipeline(
+                    // service for converting incoming TcpStream to a SslStream<TcpStream>
+                    fn_service(move |stream: actix_rt::net::TcpStream| async move {
+                        SslAcceptorExt::accept_async(&acceptor, stream.into_parts().0).await
+                            .map_err(|e| println!("Openssl error: {}", e))
+                    }))
+                // .and_then() combinator chains result of previos service call to argument
+                /// for next service calll. in this case, on success we chain
+                /// ssl stream to the `logger` service.
                 .and_then(fn_service(logger))
                 // Next service counts number of connections
                 .and_then(move |_| {

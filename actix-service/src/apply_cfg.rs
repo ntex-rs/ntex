@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use crate::cell::Cell;
 use crate::{Service, ServiceFactory};
 
-/// Convert `Fn(&Config, &mut Service) -> Future<Service>` fn to a NewService
+/// Convert `Fn(Config, &mut Service1) -> Future<Service2>` fn to a service factory
 pub fn apply_cfg<F, C, T, R, S, E>(srv: T, f: F) -> ApplyConfigService<F, C, T, R, S, E>
 where
     F: FnMut(C, &mut T) -> R,
@@ -20,10 +20,11 @@ where
     }
 }
 
-/// Convert `Fn(&Config, &mut Service) -> Future<Service>` fn to a NewService
-/// Service get constructor from NewService.
+/// Convert `Fn(Config, &mut Service1) -> Future<Service2>` fn to a service factory
+///
+/// Service1 get constructed from `T` factory.
 pub fn apply_cfg_factory<F, C, T, R, S>(
-    srv: T,
+    factory: T,
     f: F,
 ) -> ApplyConfigServiceFactory<F, C, T, R, S>
 where
@@ -34,12 +35,12 @@ where
     S: Service,
 {
     ApplyConfigServiceFactory {
-        srv: Cell::new((srv, f)),
+        srv: Cell::new((factory, f)),
         _t: PhantomData,
     }
 }
 
-/// Convert `Fn(&Config) -> Future<Service>` fn to NewService\
+/// Convert `Fn(Config, &mut Server) -> Future<Service>` fn to NewService\
 pub struct ApplyConfigService<F, C, T, R, S, E>
 where
     F: FnMut(C, &mut T) -> R,

@@ -13,7 +13,7 @@ pub type BoxService<Req, Res, Err> =
 
 pub struct BoxServiceFactory<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
 
-/// Create boxed new service
+/// Create boxed service factory
 pub fn factory<T>(
     factory: T,
 ) -> BoxServiceFactory<T::Config, T::Request, T::Response, T::Error, T::InitError>

@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 
 use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
-/// Apply tranform function to a service
+/// Apply tranform function to a service.
 pub fn apply_fn<T, F, R, In, Out, Err, U>(service: U, f: F) -> Apply<T, F, R, In, Out, Err>
 where
     T: Service<Error = Err>,
@@ -16,7 +16,7 @@ where
     Apply::new(service.into_service(), f)
 }
 
-/// Create factory for `apply` service.
+/// Service factory that prodices `apply_fn` service.
 pub fn apply_fn_factory<T, F, R, In, Out, Err, U>(
     service: U,
     f: F,

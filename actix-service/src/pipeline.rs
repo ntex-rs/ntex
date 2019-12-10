@@ -31,7 +31,7 @@ where
     }
 }
 
-/// Pipeline service
+/// Pipeline service - pipeline allows to compose multiple service into one service.
 pub struct Pipeline<T> {
     service: T,
 }
@@ -161,7 +161,7 @@ impl<T: Service> Service for Pipeline<T> {
     }
 }
 
-/// Pipeline constructor
+/// Pipeline factory
 pub struct PipelineFactory<T> {
     factory: T,
 }
