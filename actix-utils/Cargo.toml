@@ -20,7 +20,7 @@ path = "src/lib.rs"
 [dependencies]
 actix-service = "1.0.0-alpha.3"
 actix-rt = "1.0.0-alpha.3"
-actix-codec = "0.2.0-alpha.3"
+actix-codec = "0.2.0"
 bytes = "0.5.2"
 either = "1.5.2"
 futures = "0.3.1"

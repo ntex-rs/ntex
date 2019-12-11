@@ -96,7 +96,7 @@ where
     type Error = <Codec as Encoder>::Error;
 
     fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.framed.is_ready() {
+        if self.framed.is_write_ready() {
             Poll::Ready(Ok(()))
         } else {
             Poll::Pending
