@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.1] - 2019-12-11
+
+* Optimize InOrder service
+
 ## [1.0.0] - 2019-12-11
 
 * Simplify oneshot and mpsc implementations
