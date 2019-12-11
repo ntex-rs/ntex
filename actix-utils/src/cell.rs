@@ -41,6 +41,7 @@ impl<T> Cell<T> {
         unsafe { &mut *self.inner.as_ref().get() }
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub(crate) unsafe fn get_mut_unsafe(&self) -> &mut T {
         &mut *self.inner.as_ref().get()
     }
