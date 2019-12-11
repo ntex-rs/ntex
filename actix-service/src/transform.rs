@@ -7,16 +7,14 @@ use std::task::{Context, Poll};
 use crate::transform_err::TransformMapInitErr;
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
-/// Apply transform to a service. Function returns
-/// services factory that in initialization creates
-/// service and applies transform to this service.
-pub fn apply<T, S, U>(t: T, service: U) -> ApplyTransform<T, S>
+/// Apply transform to a service.
+pub fn apply<T, S, U>(t: T, factory: U) -> ApplyTransform<T, S>
 where
     S: ServiceFactory,
     T: Transform<S::Service, InitError = S::InitError>,
     U: IntoServiceFactory<S>,
 {
-    ApplyTransform::new(t, service.into_factory())
+    ApplyTransform::new(t, factory.into_factory())
 }
 
 /// The `Transform` trait defines the interface of a service factory that wraps inner service

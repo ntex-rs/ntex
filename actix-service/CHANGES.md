@@ -1,5 +1,7 @@
 # Changes
 
+## [1.0.0] - 2019-12-11
+
 ### Added
 
 * Add Clone impl for Apply service
