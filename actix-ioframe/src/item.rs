@@ -5,19 +5,19 @@ use actix_codec::{Decoder, Encoder};
 
 use crate::sink::Sink;
 
-pub struct Item<St, Codec: Encoder + Decoder, E> {
+pub struct Item<St, Codec: Encoder + Decoder> {
     state: St,
-    sink: Sink<<Codec as Encoder>::Item, E>,
+    sink: Sink<<Codec as Encoder>::Item>,
     item: <Codec as Decoder>::Item,
 }
 
-impl<St, Codec, E> Item<St, Codec, E>
+impl<St, Codec> Item<St, Codec>
 where
     Codec: Encoder + Decoder,
 {
     pub(crate) fn new(
         state: St,
-        sink: Sink<<Codec as Encoder>::Item, E>,
+        sink: Sink<<Codec as Encoder>::Item>,
         item: <Codec as Decoder>::Item,
     ) -> Self {
         Item { state, sink, item }
@@ -34,7 +34,7 @@ where
     }
 
     #[inline]
-    pub fn sink(&self) -> &Sink<<Codec as Encoder>::Item, E> {
+    pub fn sink(&self) -> &Sink<<Codec as Encoder>::Item> {
         &self.sink
     }
 
@@ -44,18 +44,12 @@ where
     }
 
     #[inline]
-    pub fn into_parts(
-        self,
-    ) -> (
-        St,
-        Sink<<Codec as Encoder>::Item, E>,
-        <Codec as Decoder>::Item,
-    ) {
+    pub fn into_parts(self) -> (St, Sink<<Codec as Encoder>::Item>, <Codec as Decoder>::Item) {
         (self.state, self.sink, self.item)
     }
 }
 
-impl<St, Codec, E> Deref for Item<St, Codec, E>
+impl<St, Codec> Deref for Item<St, Codec>
 where
     Codec: Encoder + Decoder,
 {
@@ -67,7 +61,7 @@ where
     }
 }
 
-impl<St, Codec, E> DerefMut for Item<St, Codec, E>
+impl<St, Codec> DerefMut for Item<St, Codec>
 where
     Codec: Encoder + Decoder,
 {
@@ -77,7 +71,7 @@ where
     }
 }
 
-impl<St, Codec, E> fmt::Debug for Item<St, Codec, E>
+impl<St, Codec> fmt::Debug for Item<St, Codec>
 where
     Codec: Encoder + Decoder,
     <Codec as Decoder>::Item: fmt::Debug,

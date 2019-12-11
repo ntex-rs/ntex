@@ -1,43 +1,44 @@
 use std::fmt;
+use std::rc::Rc;
 
-use actix_utils::{mpsc, oneshot};
+use actix_utils::oneshot;
 use futures::future::{Future, FutureExt};
 
 use crate::dispatcher::Message;
 
-pub struct Sink<T, E>(mpsc::Sender<Result<Message<T>, E>>);
+pub struct Sink<T>(Rc<dyn Fn(Message<T>)>);
 
-impl<T, E> Clone for Sink<T, E> {
+impl<T> Clone for Sink<T> {
     fn clone(&self) -> Self {
         Sink(self.0.clone())
     }
 }
 
-impl<T, E> Sink<T, E> {
-    pub(crate) fn new(tx: mpsc::Sender<Result<Message<T>, E>>) -> Self {
+impl<T> Sink<T> {
+    pub(crate) fn new(tx: Rc<dyn Fn(Message<T>)>) -> Self {
         Sink(tx)
     }
 
     /// Close connection
     pub fn close(&self) {
-        let _ = self.0.send(Ok(Message::Close));
+        (self.0)(Message::Close);
     }
 
     /// Close connection
     pub fn wait_close(&self) -> impl Future<Output = ()> {
         let (tx, rx) = oneshot::channel();
-        let _ = self.0.send(Ok(Message::WaitClose(tx)));
+        (self.0)(Message::WaitClose(tx));
 
         rx.map(|_| ())
     }
 
     /// Send item
     pub fn send(&self, item: T) {
-        let _ = self.0.send(Ok(Message::Item(item)));
+        (self.0)(Message::Item(item));
     }
 }
 
-impl<T, E> fmt::Debug for Sink<T, E> {
+impl<T> fmt::Debug for Sink<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("Sink").finish()
     }

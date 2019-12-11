@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0] - 2019-12-1
+
+* Remove `E` param
+
 ## [0.3.0-alpha.3] - 2019-12-07
 
 * Migrate to tokio 0.2

@@ -7,21 +7,21 @@ use futures::Stream;
 
 use crate::sink::Sink;
 
-pub struct Connect<Io, Codec, Err, St = ()>
+pub struct Connect<Io, Codec, St = ()>
 where
     Codec: Encoder + Decoder,
 {
     io: Io,
-    sink: Sink<<Codec as Encoder>::Item, Err>,
+    sink: Sink<<Codec as Encoder>::Item>,
     _t: PhantomData<(St, Codec)>,
 }
 
-impl<Io, Codec, Err> Connect<Io, Codec, Err>
+impl<Io, Codec> Connect<Io, Codec>
 where
     Io: AsyncRead + AsyncWrite,
     Codec: Encoder + Decoder,
 {
-    pub(crate) fn new(io: Io, sink: Sink<<Codec as Encoder>::Item, Err>) -> Self {
+    pub(crate) fn new(io: Io, sink: Sink<<Codec as Encoder>::Item>) -> Self {
         Self {
             io,
             sink,
@@ -29,7 +29,7 @@ where
         }
     }
 
-    pub fn codec(self, codec: Codec) -> ConnectResult<Io, (), Codec, Err> {
+    pub fn codec(self, codec: Codec) -> ConnectResult<Io, (), Codec> {
         ConnectResult {
             state: (),
             sink: self.sink,
@@ -39,15 +39,15 @@ where
 }
 
 #[pin_project::pin_project]
-pub struct ConnectResult<Io, St, Codec: Encoder + Decoder, Err> {
+pub struct ConnectResult<Io, St, Codec: Encoder + Decoder> {
     pub(crate) state: St,
     pub(crate) framed: Framed<Io, Codec>,
-    pub(crate) sink: Sink<<Codec as Encoder>::Item, Err>,
+    pub(crate) sink: Sink<<Codec as Encoder>::Item>,
 }
 
-impl<Io, St, Codec: Encoder + Decoder, Err> ConnectResult<Io, St, Codec, Err> {
+impl<Io, St, Codec: Encoder + Decoder> ConnectResult<Io, St, Codec> {
     #[inline]
-    pub fn sink(&self) -> &Sink<<Codec as Encoder>::Item, Err> {
+    pub fn sink(&self) -> &Sink<<Codec as Encoder>::Item> {
         &self.sink
     }
 
@@ -62,7 +62,7 @@ impl<Io, St, Codec: Encoder + Decoder, Err> ConnectResult<Io, St, Codec, Err> {
     }
 
     #[inline]
-    pub fn state<S>(self, state: S) -> ConnectResult<Io, S, Codec, Err> {
+    pub fn state<S>(self, state: S) -> ConnectResult<Io, S, Codec> {
         ConnectResult {
             state,
             framed: self.framed,
@@ -71,7 +71,7 @@ impl<Io, St, Codec: Encoder + Decoder, Err> ConnectResult<Io, St, Codec, Err> {
     }
 }
 
-impl<Io, St, Codec, Err> Stream for ConnectResult<Io, St, Codec, Err>
+impl<Io, St, Codec> Stream for ConnectResult<Io, St, Codec>
 where
     Io: AsyncRead + AsyncWrite,
     Codec: Encoder + Decoder,
@@ -83,8 +83,7 @@ where
     }
 }
 
-impl<Io, St, Codec, Err> futures::Sink<<Codec as Encoder>::Item>
-    for ConnectResult<Io, St, Codec, Err>
+impl<Io, St, Codec> futures::Sink<<Codec as Encoder>::Item> for ConnectResult<Io, St, Codec>
 where
     Io: AsyncRead + AsyncWrite,
     Codec: Encoder + Decoder,

@@ -13,7 +13,7 @@ use crate::error::ServiceError;
 use crate::item::Item;
 use crate::sink::Sink;
 
-type Request<S, U, E> = Item<S, U, E>;
+type Request<S, U> = Item<S, U>;
 type Response<U> = <U as Encoder>::Item;
 
 pub(crate) enum Message<T> {
@@ -25,10 +25,10 @@ pub(crate) enum Message<T> {
 /// FramedTransport - is a future that reads frames from Framed object
 /// and pass then to the service.
 #[pin_project::pin_project]
-pub(crate) struct Dispatcher<St, S, T, U, E>
+pub(crate) struct Dispatcher<St, S, T, U>
 where
     St: Clone,
-    S: Service<Request = Request<St, U, E>, Response = Option<Response<U>>, Error = E>,
+    S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
     T: AsyncRead + AsyncWrite,
@@ -37,19 +37,19 @@ where
     <U as Encoder>::Error: std::fmt::Debug,
 {
     service: S,
-    sink: Sink<<U as Encoder>::Item, E>,
+    sink: Sink<<U as Encoder>::Item>,
     state: St,
     dispatch_state: FramedState<S, U>,
     framed: Framed<T, U>,
-    rx: mpsc::Receiver<Result<Message<<U as Encoder>::Item>, E>>,
-    tx: mpsc::Sender<Result<Message<<U as Encoder>::Item>, E>>,
+    rx: mpsc::Receiver<Result<Message<<U as Encoder>::Item>, S::Error>>,
+    tx: mpsc::Sender<Result<Message<<U as Encoder>::Item>, S::Error>>,
     disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
 }
 
-impl<St, S, T, U, E> Dispatcher<St, S, T, U, E>
+impl<St, S, T, U> Dispatcher<St, S, T, U>
 where
     St: Clone,
-    S: Service<Request = Request<St, U, E>, Response = Option<Response<U>>, Error = E>,
+    S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
     T: AsyncRead + AsyncWrite,
@@ -61,8 +61,8 @@ where
         framed: Framed<T, U>,
         state: St,
         service: F,
-        sink: Sink<<U as Encoder>::Item, E>,
-        rx: mpsc::Receiver<Result<Message<<U as Encoder>::Item>, E>>,
+        sink: Sink<<U as Encoder>::Item>,
+        rx: mpsc::Receiver<Result<Message<<U as Encoder>::Item>, S::Error>>,
         disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
     ) -> Self {
         let tx = rx.sender();
@@ -126,10 +126,10 @@ impl<S: Service, U: Encoder + Decoder> FramedState<S, U> {
     }
 }
 
-impl<St, S, T, U, E> Dispatcher<St, S, T, U, E>
+impl<St, S, T, U> Dispatcher<St, S, T, U>
 where
     St: Clone,
-    S: Service<Request = Request<St, U, E>, Response = Option<Response<U>>, Error = E>,
+    S: Service<Request = Request<St, U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
     T: AsyncRead + AsyncWrite,
