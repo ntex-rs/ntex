@@ -67,6 +67,12 @@ impl<T> Sender<T> {
             Err(val)
         }
     }
+
+    /// Tests to see whether this `Sender`'s corresponding `Receiver`
+    /// has gone away.
+    pub fn is_canceled(&self) -> bool {
+        self.inner.strong_count() == 1
+    }
 }
 
 impl<T> Drop for Sender<T> {
@@ -110,7 +116,9 @@ mod tests {
         assert_eq!(rx.await.unwrap(), "test");
 
         let (tx, rx) = channel();
+        assert!(!tx.is_canceled());
         drop(rx);
+        assert!(tx.is_canceled());
         assert!(tx.send("test").is_err());
 
         let (tx, rx) = channel::<&'static str>();

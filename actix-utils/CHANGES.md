@@ -4,6 +4,8 @@
 
 * Allow to create `framed::Dispatcher` with custom `mpsc::Receiver`
 
+* Add `oneshot::Sender::is_canceled()` method
+
 ## [1.0.1] - 2019-12-11
 
 * Optimize InOrder service
