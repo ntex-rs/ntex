@@ -6,17 +6,20 @@ use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use actix_service::{IntoService, IntoServiceFactory, Service, ServiceFactory};
+use actix_utils::mpsc;
 use either::Either;
 use futures::future::{FutureExt, LocalBoxFuture};
 use pin_project::project;
 
 use crate::connect::{Connect, ConnectResult};
-use crate::dispatcher::FramedDispatcher;
+use crate::dispatcher::{Dispatcher, Message};
 use crate::error::ServiceError;
 use crate::item::Item;
+use crate::sink::Sink;
 
-type RequestItem<S, U> = Item<S, U>;
+type RequestItem<S, U, E> = Item<S, U, E>;
 type ResponseItem<U> = Option<<U as Encoder>::Item>;
+type ServiceResult<U, E> = Result<Message<<U as Encoder>::Item>, E>;
 
 /// Service builder - structure that follows the builder pattern
 /// for building instances for framed services.
@@ -34,11 +37,15 @@ impl<St: Clone, Codec> Builder<St, Codec> {
     }
 
     /// Construct framed handler service with specified connect service
-    pub fn service<Io, C, F>(self, connect: F) -> ServiceBuilder<St, C, Io, Codec>
+    pub fn service<Io, C, F, E>(self, connect: F) -> ServiceBuilder<St, C, Io, Codec, E>
     where
         F: IntoService<C>,
         Io: AsyncRead + AsyncWrite,
-        C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
+        C: Service<
+            Request = Connect<Io, Codec, E>,
+            Response = ConnectResult<Io, St, Codec, E>,
+            Error = E,
+        >,
         Codec: Decoder + Encoder,
     {
         ServiceBuilder {
@@ -49,16 +56,17 @@ impl<St: Clone, Codec> Builder<St, Codec> {
     }
 
     /// Construct framed handler new service with specified connect service
-    pub fn factory<Io, C, F>(self, connect: F) -> NewServiceBuilder<St, C, Io, Codec>
+    pub fn factory<Io, C, F, E>(self, connect: F) -> NewServiceBuilder<St, C, Io, Codec, E>
     where
         F: IntoServiceFactory<C>,
+        E: 'static,
         Io: AsyncRead + AsyncWrite,
         C: ServiceFactory<
             Config = (),
-            Request = Connect<Io>,
-            Response = ConnectResult<Io, St, Codec>,
+            Request = Connect<Io, Codec, E>,
+            Response = ConnectResult<Io, St, Codec, E>,
+            Error = E,
         >,
-        C::Error: 'static,
         C::Future: 'static,
         Codec: Decoder + Encoder,
     {
@@ -70,17 +78,20 @@ impl<St: Clone, Codec> Builder<St, Codec> {
     }
 }
 
-pub struct ServiceBuilder<St, C, Io, Codec> {
+pub struct ServiceBuilder<St, C, Io, Codec, Err> {
     connect: C,
     disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
-    _t: PhantomData<(St, Io, Codec)>,
+    _t: PhantomData<(St, Io, Codec, Err)>,
 }
 
-impl<St, C, Io, Codec> ServiceBuilder<St, C, Io, Codec>
+impl<St, C, Io, Codec, Err> ServiceBuilder<St, C, Io, Codec, Err>
 where
     St: Clone,
-    C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
-    C::Error: 'static,
+    C: Service<
+        Request = Connect<Io, Codec, Err>,
+        Response = ConnectResult<Io, St, Codec, Err>,
+        Error = Err,
+    >,
     Io: AsyncRead + AsyncWrite,
     Codec: Decoder + Encoder,
     <Codec as Encoder>::Item: 'static,
@@ -98,16 +109,16 @@ where
     }
 
     /// Provide stream items handler service and construct service factory.
-    pub fn finish<F, T>(self, service: F) -> FramedServiceImpl<St, C, T, Io, Codec>
+    pub fn finish<F, T>(self, service: F) -> FramedServiceImpl<St, C, T, Io, Codec, Err>
     where
         F: IntoServiceFactory<T>,
         T: ServiceFactory<
-                Config = St,
-                Request = RequestItem<St, Codec>,
-                Response = ResponseItem<Codec>,
-                Error = C::Error,
-                InitError = C::Error,
-            > + 'static,
+            Config = St,
+            Request = RequestItem<St, Codec, Err>,
+            Response = ResponseItem<Codec>,
+            Error = Err,
+            InitError = Err,
+        >,
     {
         FramedServiceImpl {
             connect: self.connect,
@@ -118,22 +129,23 @@ where
     }
 }
 
-pub struct NewServiceBuilder<St, C, Io, Codec> {
+pub struct NewServiceBuilder<St, C, Io, Codec, Err> {
     connect: C,
     disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
-    _t: PhantomData<(St, Io, Codec)>,
+    _t: PhantomData<(St, Io, Codec, Err)>,
 }
 
-impl<St, C, Io, Codec> NewServiceBuilder<St, C, Io, Codec>
+impl<St, C, Io, Codec, Err> NewServiceBuilder<St, C, Io, Codec, Err>
 where
     St: Clone,
     Io: AsyncRead + AsyncWrite,
+    Err: 'static,
     C: ServiceFactory<
         Config = (),
-        Request = Connect<Io>,
-        Response = ConnectResult<Io, St, Codec>,
+        Request = Connect<Io, Codec, Err>,
+        Response = ConnectResult<Io, St, Codec, Err>,
+        Error = Err,
     >,
-    C::Error: 'static,
     C::Future: 'static,
     Codec: Decoder + Encoder,
     <Codec as Encoder>::Item: 'static,
@@ -150,15 +162,15 @@ where
         self
     }
 
-    pub fn finish<F, T, Cfg>(self, service: F) -> FramedService<St, C, T, Io, Codec, Cfg>
+    pub fn finish<F, T, Cfg>(self, service: F) -> FramedService<St, C, T, Io, Codec, Err, Cfg>
     where
         F: IntoServiceFactory<T>,
         T: ServiceFactory<
                 Config = St,
-                Request = RequestItem<St, Codec>,
+                Request = RequestItem<St, Codec, Err>,
                 Response = ResponseItem<Codec>,
-                Error = C::Error,
-                InitError = C::Error,
+                Error = Err,
+                InitError = Err,
             > + 'static,
     {
         FramedService {
@@ -170,32 +182,34 @@ where
     }
 }
 
-pub struct FramedService<St, C, T, Io, Codec, Cfg> {
+pub struct FramedService<St, C, T, Io, Codec, Err, Cfg> {
     connect: C,
     handler: Rc<T>,
     disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
-    _t: PhantomData<(St, Io, Codec, Cfg)>,
+    _t: PhantomData<(St, Io, Codec, Err, Cfg)>,
 }
 
-impl<St, C, T, Io, Codec, Cfg> ServiceFactory for FramedService<St, C, T, Io, Codec, Cfg>
+impl<St, C, T, Io, Codec, Err, Cfg> ServiceFactory
+    for FramedService<St, C, T, Io, Codec, Err, Cfg>
 where
     St: Clone + 'static,
     Io: AsyncRead + AsyncWrite,
     C: ServiceFactory<
         Config = (),
-        Request = Connect<Io>,
-        Response = ConnectResult<Io, St, Codec>,
+        Request = Connect<Io, Codec, Err>,
+        Response = ConnectResult<Io, St, Codec, Err>,
+        Error = Err,
     >,
-    C::Error: 'static,
     C::Future: 'static,
     T: ServiceFactory<
             Config = St,
-            Request = RequestItem<St, Codec>,
+            Request = RequestItem<St, Codec, Err>,
             Response = ResponseItem<Codec>,
-            Error = C::Error,
-            InitError = C::Error,
+            Error = Err,
+            InitError = Err,
         > + 'static,
     <T::Service as Service>::Future: 'static,
+    Err: 'static,
     Codec: Decoder + Encoder,
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,
@@ -205,7 +219,7 @@ where
     type Response = ();
     type Error = ServiceError<C::Error, Codec>;
     type InitError = C::InitError;
-    type Service = FramedServiceImpl<St, C::Service, T, Io, Codec>;
+    type Service = FramedServiceImpl<St, C::Service, T, Io, Codec, Err>;
     type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: Cfg) -> Self::Future {
@@ -227,25 +241,29 @@ where
     }
 }
 
-pub struct FramedServiceImpl<St, C, T, Io, Codec> {
+pub struct FramedServiceImpl<St, C, T, Io, Codec, Err> {
     connect: C,
     handler: Rc<T>,
     disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
-    _t: PhantomData<(St, Io, Codec)>,
+    _t: PhantomData<(St, Io, Codec, Err)>,
 }
 
-impl<St, C, T, Io, Codec> Service for FramedServiceImpl<St, C, T, Io, Codec>
+impl<St, C, T, Io, Codec, Err> Service for FramedServiceImpl<St, C, T, Io, Codec, Err>
 where
     St: Clone,
     Io: AsyncRead + AsyncWrite,
-    C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
-    C::Error: 'static,
+    C: Service<
+        Request = Connect<Io, Codec, Err>,
+        Response = ConnectResult<Io, St, Codec, Err>,
+        Error = Err,
+    >,
+    Err: 'static,
     T: ServiceFactory<
         Config = St,
-        Request = RequestItem<St, Codec>,
+        Request = RequestItem<St, Codec, Err>,
         Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
+        Error = Err,
+        InitError = Err,
     >,
     <T::Service as Service>::Future: 'static,
     Codec: Decoder + Encoder,
@@ -254,36 +272,43 @@ where
 {
     type Request = Io;
     type Response = ();
-    type Error = ServiceError<C::Error, Codec>;
-    type Future = FramedServiceImplResponse<St, Io, Codec, C, T>;
+    type Error = ServiceError<Err, Codec>;
+    type Future = FramedServiceImplResponse<St, Io, Codec, Err, C, T>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.connect.poll_ready(cx).map_err(|e| e.into())
     }
 
     fn call(&mut self, req: Io) -> Self::Future {
+        let (tx, rx) = mpsc::channel();
+        let sink = Sink::new(tx);
         FramedServiceImplResponse {
             inner: FramedServiceImplResponseInner::Connect(
-                self.connect.call(Connect::new(req)),
+                self.connect.call(Connect::new(req, sink.clone())),
                 self.handler.clone(),
                 self.disconnect.clone(),
+                Some(rx),
             ),
         }
     }
 }
 
 #[pin_project::pin_project]
-pub struct FramedServiceImplResponse<St, Io, Codec, C, T>
+pub struct FramedServiceImplResponse<St, Io, Codec, Err, C, T>
 where
     St: Clone,
-    C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
-    C::Error: 'static,
+    C: Service<
+        Request = Connect<Io, Codec, Err>,
+        Response = ConnectResult<Io, St, Codec, Err>,
+        Error = Err,
+    >,
+    Err: 'static,
     T: ServiceFactory<
         Config = St,
-        Request = RequestItem<St, Codec>,
+        Request = RequestItem<St, Codec, Err>,
         Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
+        Error = Err,
+        InitError = Err,
     >,
     <T::Service as Service>::Future: 'static,
     Io: AsyncRead + AsyncWrite,
@@ -292,20 +317,24 @@ where
     <Codec as Encoder>::Error: std::fmt::Debug,
 {
     #[pin]
-    inner: FramedServiceImplResponseInner<St, Io, Codec, C, T>,
+    inner: FramedServiceImplResponseInner<St, Io, Codec, Err, C, T>,
 }
 
-impl<St, Io, Codec, C, T> Future for FramedServiceImplResponse<St, Io, Codec, C, T>
+impl<St, Io, Codec, Err, C, T> Future for FramedServiceImplResponse<St, Io, Codec, Err, C, T>
 where
     St: Clone,
-    C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
-    C::Error: 'static,
+    C: Service<
+        Request = Connect<Io, Codec, Err>,
+        Response = ConnectResult<Io, St, Codec, Err>,
+        Error = Err,
+    >,
+    Err: 'static,
     T: ServiceFactory<
         Config = St,
-        Request = RequestItem<St, Codec>,
+        Request = RequestItem<St, Codec, Err>,
         Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
+        Error = Err,
+        InitError = Err,
     >,
     <T::Service as Service>::Future: 'static,
     Io: AsyncRead + AsyncWrite,
@@ -313,7 +342,7 @@ where
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,
 {
-    type Output = Result<(), ServiceError<C::Error, Codec>>;
+    type Output = Result<(), ServiceError<Err, Codec>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
@@ -331,17 +360,21 @@ where
 }
 
 #[pin_project::pin_project]
-enum FramedServiceImplResponseInner<St, Io, Codec, C, T>
+enum FramedServiceImplResponseInner<St, Io, Codec, Err, C, T>
 where
     St: Clone,
-    C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
-    C::Error: 'static,
+    C: Service<
+        Request = Connect<Io, Codec, Err>,
+        Response = ConnectResult<Io, St, Codec, Err>,
+        Error = Err,
+    >,
+    Err: 'static,
     T: ServiceFactory<
         Config = St,
-        Request = RequestItem<St, Codec>,
+        Request = RequestItem<St, Codec, Err>,
         Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
+        Error = Err,
+        InitError = Err,
     >,
     <T::Service as Service>::Future: 'static,
     Io: AsyncRead + AsyncWrite,
@@ -349,26 +382,36 @@ where
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,
 {
-    Connect(#[pin] C::Future, Rc<T>, Option<Rc<dyn Fn(&mut St, bool)>>),
+    Connect(
+        #[pin] C::Future,
+        Rc<T>,
+        Option<Rc<dyn Fn(&mut St, bool)>>,
+        Option<mpsc::Receiver<ServiceResult<Codec, Err>>>,
+    ),
     Handler(
         #[pin] T::Future,
-        Option<ConnectResult<Io, St, Codec>>,
+        Option<ConnectResult<Io, St, Codec, Err>>,
         Option<Rc<dyn Fn(&mut St, bool)>>,
+        Option<mpsc::Receiver<ServiceResult<Codec, Err>>>,
     ),
-    Dispatcher(#[pin] FramedDispatcher<St, T::Service, Io, Codec>),
+    Dispatcher(Dispatcher<St, T::Service, Io, Codec, Err>),
 }
 
-impl<St, Io, Codec, C, T> FramedServiceImplResponseInner<St, Io, Codec, C, T>
+impl<St, Io, Codec, Err, C, T> FramedServiceImplResponseInner<St, Io, Codec, Err, C, T>
 where
     St: Clone,
-    C: Service<Request = Connect<Io>, Response = ConnectResult<Io, St, Codec>>,
-    C::Error: 'static,
+    C: Service<
+        Request = Connect<Io, Codec, Err>,
+        Response = ConnectResult<Io, St, Codec, Err>,
+        Error = Err,
+    >,
+    Err: 'static,
     T: ServiceFactory<
         Config = St,
-        Request = RequestItem<St, Codec>,
+        Request = RequestItem<St, Codec, Err>,
         Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
+        Error = Err,
+        InitError = Err,
     >,
     <T::Service as Service>::Future: 'static,
     Io: AsyncRead + AsyncWrite,
@@ -381,42 +424,44 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Either<
-        FramedServiceImplResponseInner<St, Io, Codec, C, T>,
-        Poll<Result<(), ServiceError<C::Error, Codec>>>,
+        FramedServiceImplResponseInner<St, Io, Codec, Err, C, T>,
+        Poll<Result<(), ServiceError<Err, Codec>>>,
     > {
         #[project]
         match self.project() {
-            FramedServiceImplResponseInner::Connect(fut, handler, disconnect) => {
+            FramedServiceImplResponseInner::Connect(fut, handler, disconnect, rx) => {
                 match fut.poll(cx) {
                     Poll::Ready(Ok(res)) => {
                         Either::Left(FramedServiceImplResponseInner::Handler(
                             handler.new_service(res.state.clone()),
                             Some(res),
                             disconnect.take(),
+                            rx.take(),
                         ))
                     }
                     Poll::Pending => Either::Right(Poll::Pending),
                     Poll::Ready(Err(e)) => Either::Right(Poll::Ready(Err(e.into()))),
                 }
             }
-            FramedServiceImplResponseInner::Handler(fut, res, disconnect) => match fut.poll(cx)
-            {
-                Poll::Ready(Ok(handler)) => {
-                    let res = res.take().unwrap();
-                    Either::Left(FramedServiceImplResponseInner::Dispatcher(
-                        FramedDispatcher::new(
-                            res.framed,
-                            res.state,
-                            handler,
-                            res.rx,
-                            res.sink,
-                            disconnect.take(),
-                        ),
-                    ))
+            FramedServiceImplResponseInner::Handler(fut, res, disconnect, rx) => {
+                match fut.poll(cx) {
+                    Poll::Ready(Ok(handler)) => {
+                        let res = res.take().unwrap();
+                        Either::Left(FramedServiceImplResponseInner::Dispatcher(
+                            Dispatcher::new(
+                                res.framed,
+                                res.state,
+                                handler,
+                                res.sink,
+                                rx.take().unwrap(),
+                                disconnect.take(),
+                            ),
+                        ))
+                    }
+                    Poll::Pending => Either::Right(Poll::Pending),
+                    Poll::Ready(Err(e)) => Either::Right(Poll::Ready(Err(e.into()))),
                 }
-                Poll::Pending => Either::Right(Poll::Pending),
-                Poll::Ready(Err(e)) => Either::Right(Poll::Ready(Err(e.into()))),
-            },
+            }
             FramedServiceImplResponseInner::Dispatcher(ref mut fut) => {
                 Either::Right(fut.poll(cx))
             }

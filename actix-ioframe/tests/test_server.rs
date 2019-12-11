@@ -22,7 +22,7 @@ async fn test_disconnect() -> std::io::Result<()> {
         let disconnect1 = disconnect1.clone();
 
         Builder::new()
-            .factory(fn_service(|conn: Connect<_>| {
+            .factory(fn_service(|conn: Connect<_, _, _>| {
                 ok(conn.codec(BytesCodec).state(State))
             }))
             .disconnect(move |_, _| {
@@ -32,7 +32,7 @@ async fn test_disconnect() -> std::io::Result<()> {
     });
 
     let mut client = Builder::new()
-        .service(|conn: Connect<_>| {
+        .service(|conn: Connect<_, _, _>| {
             let conn = conn.codec(BytesCodec).state(State);
             conn.sink().close();
             ok(conn)
