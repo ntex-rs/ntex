@@ -127,30 +127,44 @@ where
         }
     }
 
+    /// Construct new `Dispatcher` instance with customer `mpsc::Receiver`
+    pub fn with_rx<F: IntoService<S>>(
+        framed: Framed<T, U>,
+        service: F,
+        rx: mpsc::Receiver<Result<Message<<U as Encoder>::Item>, S::Error>>,
+    ) -> Self {
+        let tx = rx.sender();
+        Dispatcher {
+            framed,
+            rx,
+            tx,
+            service: service.into_service(),
+            state: State::Processing,
+        }
+    }
+
     /// Get sink
     pub fn get_sink(&self) -> mpsc::Sender<Result<Message<<U as Encoder>::Item>, S::Error>> {
         self.tx.clone()
     }
 
-    /// Get reference to a service wrapped by `FramedTransport` instance.
+    /// Get reference to a service wrapped by `Dispatcher` instance.
     pub fn get_ref(&self) -> &S {
         &self.service
     }
 
-    /// Get mutable reference to a service wrapped by `FramedTransport`
-    /// instance.
+    /// Get mutable reference to a service wrapped by `Dispatcher` instance.
     pub fn get_mut(&mut self) -> &mut S {
         &mut self.service
     }
 
-    /// Get reference to a framed instance wrapped by `FramedTransport`
+    /// Get reference to a framed instance wrapped by `Dispatcher`
     /// instance.
     pub fn get_framed(&self) -> &Framed<T, U> {
         &self.framed
     }
 
-    /// Get mutable reference to a framed instance wrapped by `FramedTransport`
-    /// instance.
+    /// Get mutable reference to a framed instance wrapped by `Dispatcher` instance.
     pub fn get_framed_mut(&mut self) -> &mut Framed<T, U> {
         &mut self.framed
     }

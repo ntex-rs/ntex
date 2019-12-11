@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.2] - 2019-12-11
+
+* Allow to create `framed::Dispatcher` with custom `mpsc::Receiver`
+
 ## [1.0.1] - 2019-12-11
 
 * Optimize InOrder service
