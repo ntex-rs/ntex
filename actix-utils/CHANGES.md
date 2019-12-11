@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.3] - 2019-12-11
+
+* Revert InOrder service changes
+
 ## [1.0.2] - 2019-12-11
 
 * Allow to create `framed::Dispatcher` with custom `mpsc::Receiver`

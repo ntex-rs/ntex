@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::fmt;
+use std::rc::Rc;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -10,6 +11,7 @@ use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, Ready};
 
 use crate::oneshot;
+use crate::task::LocalWaker;
 
 struct Record<I, E> {
     rx: oneshot::Receiver<Result<I, E>>,
@@ -103,6 +105,7 @@ where
 
 pub struct InOrderService<S: Service> {
     service: S,
+    waker: Rc<LocalWaker>,
     acks: VecDeque<Record<S::Response, S::Error>>,
 }
 
@@ -120,6 +123,7 @@ where
         Self {
             service: service.into_service(),
             acks: VecDeque::new(),
+            waker: Rc::new(LocalWaker::new()),
         }
     }
 }
@@ -137,6 +141,9 @@ where
     type Future = InOrderServiceResponse<S>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // poll_ready could be called from different task
+        self.waker.register(cx.waker());
+
         // check acks
         while !self.acks.is_empty() {
             let rec = self.acks.front_mut().unwrap();
@@ -165,9 +172,11 @@ where
         let (tx2, rx2) = oneshot::channel();
         self.acks.push_back(Record { rx: rx1, tx: tx2 });
 
+        let waker = self.waker.clone();
         let fut = self.service.call(request);
         actix_rt::spawn(async move {
             let res = fut.await;
+            waker.wake();
             let _ = tx1.send(res);
         });
 
