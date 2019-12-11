@@ -274,15 +274,11 @@ where
                 State::Error(_) => {
                     // flush write buffer
                     if !self.framed.is_write_buf_empty() {
-                        match self.framed.flush(cx) {
-                            Poll::Pending => Poll::Pending,
-                            Poll::Ready(Ok(_)) | Poll::Ready(Err(_)) => {
-                                Poll::Ready(Err(self.state.take_error()))
-                            }
+                        if let Poll::Pending = self.framed.flush(cx) {
+                            return Poll::Pending;
                         }
-                    } else {
-                        Poll::Ready(Err(self.state.take_error()))
                     }
+                    Poll::Ready(Err(self.state.take_error()))
                 }
                 State::FlushAndStop => {
                     if !this.framed.is_write_buf_empty() {

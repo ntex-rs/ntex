@@ -53,6 +53,14 @@ impl<T> Sender<T> {
         shared.blocked_recv.wake();
         Ok(())
     }
+
+    /// Closes the sender half
+    ///
+    /// This prevents any further messages from being sent on the channel while
+    /// still enabling the receiver to drain messages that are buffered.
+    pub fn close(&mut self) {
+        self.shared.get_mut().has_receiver = false;
+    }
 }
 
 impl<T> Clone for Sender<T> {
@@ -102,6 +110,15 @@ impl<T> Drop for Sender<T> {
 #[derive(Debug)]
 pub struct Receiver<T> {
     shared: Cell<Shared<T>>,
+}
+
+impl<T> Receiver<T> {
+    /// Create Sender
+    pub fn sender(&self) -> Sender<T> {
+        Sender {
+            shared: self.shared.clone(),
+        }
+    }
 }
 
 impl<T> Unpin for Receiver<T> {}
@@ -192,5 +209,11 @@ mod tests {
         tx.send("test").unwrap();
         drop(rx);
         assert!(tx.send("test").is_err());
+
+        let (mut tx, _) = channel();
+        let tx2 = tx.clone();
+        tx.close();
+        assert!(tx.send("test").is_err());
+        assert!(tx2.send("test").is_err());
     }
 }
