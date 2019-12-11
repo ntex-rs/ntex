@@ -1,6 +1,10 @@
 # Changes
 
-## [0.4.0] - 2019-12-1
+## [0.4.1] - 2019-12-11
+
+* Disconnect callback accepts owned state
+
+## [0.4.0] - 2019-12-11
 
 * Remove `E` param
 

@@ -75,7 +75,7 @@ impl<St: Clone, Codec> Builder<St, Codec> {
 
 pub struct ServiceBuilder<St, C, Io, Codec> {
     connect: C,
-    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(St, bool)>>,
     _t: PhantomData<(St, Io, Codec)>,
 }
 
@@ -93,7 +93,7 @@ where
     /// Second parameter indicates error occured during disconnect.
     pub fn disconnect<F, Out>(mut self, disconnect: F) -> Self
     where
-        F: Fn(&mut St, bool) + 'static,
+        F: Fn(St, bool) + 'static,
     {
         self.disconnect = Some(Rc::new(disconnect));
         self
@@ -122,7 +122,7 @@ where
 
 pub struct NewServiceBuilder<St, C, Io, Codec> {
     connect: C,
-    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(St, bool)>>,
     _t: PhantomData<(St, Io, Codec)>,
 }
 
@@ -146,7 +146,7 @@ where
     /// Second parameter indicates error occured during disconnect.
     pub fn disconnect<F>(mut self, disconnect: F) -> Self
     where
-        F: Fn(&mut St, bool) + 'static,
+        F: Fn(St, bool) + 'static,
     {
         self.disconnect = Some(Rc::new(disconnect));
         self
@@ -175,7 +175,7 @@ where
 pub struct FramedService<St, C, T, Io, Codec, Cfg> {
     connect: C,
     handler: Rc<T>,
-    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(St, bool)>>,
     _t: PhantomData<(St, Io, Codec, Cfg)>,
 }
 
@@ -232,7 +232,7 @@ where
 pub struct FramedServiceImpl<St, C, T, Io, Codec> {
     connect: C,
     handler: Rc<T>,
-    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(St, bool)>>,
     _t: PhantomData<(St, Io, Codec)>,
 }
 
@@ -359,13 +359,13 @@ where
     Connect(
         #[pin] C::Future,
         Rc<T>,
-        Option<Rc<dyn Fn(&mut St, bool)>>,
+        Option<Rc<dyn Fn(St, bool)>>,
         Option<mpsc::Receiver<ServiceResult<Codec, C::Error>>>,
     ),
     Handler(
         #[pin] T::Future,
         Option<ConnectResult<Io, St, Codec>>,
-        Option<Rc<dyn Fn(&mut St, bool)>>,
+        Option<Rc<dyn Fn(St, bool)>>,
         Option<mpsc::Receiver<ServiceResult<Codec, C::Error>>>,
     ),
     Dispatcher(Dispatcher<St, T::Service, Io, Codec>),

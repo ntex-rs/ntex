@@ -43,7 +43,7 @@ where
     framed: Framed<T, U>,
     rx: mpsc::Receiver<Result<Message<<U as Encoder>::Item>, S::Error>>,
     tx: mpsc::Sender<Result<Message<<U as Encoder>::Item>, S::Error>>,
-    disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
+    disconnect: Option<Rc<dyn Fn(St, bool)>>,
 }
 
 impl<St, S, T, U> Dispatcher<St, S, T, U>
@@ -63,7 +63,7 @@ where
         service: F,
         sink: Sink<<U as Encoder>::Item>,
         rx: mpsc::Receiver<Result<Message<<U as Encoder>::Item>, S::Error>>,
-        disconnect: Option<Rc<dyn Fn(&mut St, bool)>>,
+        disconnect: Option<Rc<dyn Fn(St, bool)>>,
     ) -> Self {
         let tx = rx.sender();
 
@@ -245,7 +245,7 @@ where
                     }
                 }
                 if let Some(ref disconnect) = self.disconnect {
-                    (&*disconnect)(&mut self.state, true);
+                    (&*disconnect)(self.state.clone(), true);
                 }
                 Poll::Ready(Err(self.dispatch_state.take_error()))
             }
@@ -265,19 +265,19 @@ where
                     let _ = tx.send(());
                 }
                 if let Some(ref disconnect) = self.disconnect {
-                    (&*disconnect)(&mut self.state, false);
+                    (&*disconnect)(self.state.clone(), false);
                 }
                 Poll::Ready(Ok(()))
             }
             FramedState::FramedError(_) => {
                 if let Some(ref disconnect) = self.disconnect {
-                    (&*disconnect)(&mut self.state, true);
+                    (&*disconnect)(self.state.clone(), true);
                 }
                 Poll::Ready(Err(self.dispatch_state.take_framed_error()))
             }
             FramedState::Stopping => {
                 if let Some(ref disconnect) = self.disconnect {
-                    (&*disconnect)(&mut self.state, false);
+                    (&*disconnect)(self.state.clone(), false);
                 }
                 Poll::Ready(Ok(()))
             }
