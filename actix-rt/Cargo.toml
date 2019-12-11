@@ -1,6 +1,6 @@
 [package]
 name = "actix-rt"
-version = "1.0.0-alpha.3"
+version = "1.0.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -9,7 +9,6 @@ repository = "https://github.com/actix/actix-net.git"
 documentation = "https://docs.rs/actix-rt/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT/Apache-2.0"
-exclude = [".gitignore", ".travis.yml", ".cargo/config", "appveyor.yml"]
 edition = "2018"
 workspace = ".."
 
@@ -18,7 +17,7 @@ name = "actix_rt"
 path = "src/lib.rs"
 
 [dependencies]
-actix-macros = "0.1.0-alpha.1"
+actix-macros = "0.1.0"
 actix-threadpool = "0.3"
 futures = "0.3.1"
 copyless = "0.1.4"

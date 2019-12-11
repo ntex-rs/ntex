@@ -32,7 +32,7 @@ rustls = ["rust-tls", "webpki", "webpki-roots", "tokio-rustls"]
 nativetls = ["native-tls", "tokio-tls"]
 
 [dependencies]
-actix-service = "1.0.0-alpha.3"
+actix-service = "1.0.0"
 actix-codec = "0.2.0"
 actix-utils = "1.0.0-alpha.3"
 actix-rt = "1.0.0-alpha.3"
