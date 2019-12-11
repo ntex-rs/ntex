@@ -1,34 +1,27 @@
-//! A multi-producer, single-consumer, futures-aware, FIFO queue with back
-//! pressure, for use communicating between tasks on the same thread.
-//!
-//! These queues are the same as those in `futures::sync`, except they're not
-//! intended to be sent across threads.
-
+//! A multi-producer, single-consumer, futures-aware, FIFO queue.
 use std::any::Any;
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::error::Error;
+use std::fmt;
 use std::pin::Pin;
-use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
-use std::{fmt, mem};
 
 use futures::{Sink, Stream};
 
+use crate::cell::Cell;
 use crate::task::LocalWaker;
 
 /// Creates a unbounded in-memory channel with buffered storage.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
-    let shared = Rc::new(RefCell::new(Shared {
+    let shared = Cell::new(Shared {
+        has_receiver: true,
         buffer: VecDeque::new(),
         blocked_recv: LocalWaker::new(),
-    }));
+    });
     let sender = Sender {
-        shared: Rc::downgrade(&shared),
+        shared: shared.clone(),
     };
-    let receiver = Receiver {
-        state: State::Open(shared),
-    };
+    let receiver = Receiver { shared };
     (sender, receiver)
 }
 
@@ -36,6 +29,7 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 struct Shared<T> {
     buffer: VecDeque<T>,
     blocked_recv: LocalWaker,
+    has_receiver: bool,
 }
 
 /// The transmission end of a channel.
@@ -43,18 +37,18 @@ struct Shared<T> {
 /// This is created by the `channel` function.
 #[derive(Debug)]
 pub struct Sender<T> {
-    shared: Weak<RefCell<Shared<T>>>,
+    shared: Cell<Shared<T>>,
 }
+
+impl<T> Unpin for Sender<T> {}
 
 impl<T> Sender<T> {
     /// Sends the provided message along this channel.
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
-        let shared = match self.shared.upgrade() {
-            Some(shared) => shared,
-            None => return Err(SendError(item)), // receiver was dropped
+        let shared = unsafe { self.shared.get_mut_unsafe() };
+        if !shared.has_receiver {
+            return Err(SendError(item)); // receiver was dropped
         };
-        let mut shared = shared.borrow_mut();
-
         shared.buffer.push_back(item);
         shared.blocked_recv.wake();
         Ok(())
@@ -91,17 +85,13 @@ impl<T> Sink<T> for Sender<T> {
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        let shared = match self.shared.upgrade() {
-            Some(shared) => shared,
-            None => return,
-        };
-        // The number of existing `Weak` indicates if we are possibly the last
-        // `Sender`. If we are the last, we possibly must notify a blocked
-        // `Receiver`. `self.shared` is always one of the `Weak` to this shared
-        // data. Therefore the smallest possible Rc::weak_count(&shared) is 1.
-        if Rc::weak_count(&shared) == 1 {
+        let count = self.shared.strong_count();
+        let shared = self.shared.get_mut();
+
+        // check is last sender is about to drop
+        if shared.has_receiver && count == 2 {
             // Wake up receiver as its stream has ended
-            shared.borrow_mut().blocked_recv.wake();
+            shared.blocked_recv.wake();
         }
     }
 }
@@ -111,56 +101,23 @@ impl<T> Drop for Sender<T> {
 /// This is created by the `channel` function.
 #[derive(Debug)]
 pub struct Receiver<T> {
-    state: State<T>,
+    shared: Cell<Shared<T>>,
 }
 
 impl<T> Unpin for Receiver<T> {}
-
-/// Possible states of a receiver. We're either Open (can receive more messages)
-/// or we're closed with a list of messages we have left to receive.
-#[derive(Debug)]
-enum State<T> {
-    Open(Rc<RefCell<Shared<T>>>),
-    Closed(VecDeque<T>),
-}
-
-impl<T> Receiver<T> {
-    /// Closes the receiving half
-    ///
-    /// This prevents any further messages from being sent on the channel while
-    /// still enabling the receiver to drain messages that are buffered.
-    pub fn close(&mut self) {
-        let items = match self.state {
-            State::Open(ref state) => {
-                let mut state = state.borrow_mut();
-                mem::replace(&mut state.buffer, VecDeque::new())
-            }
-            State::Closed(_) => return,
-        };
-        self.state = State::Closed(items);
-    }
-}
 
 impl<T> Stream for Receiver<T> {
     type Item = T;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let me = match self.state {
-            State::Open(ref mut me) => me,
-            State::Closed(ref mut items) => return Poll::Ready(items.pop_front()),
-        };
-
-        if let Some(shared) = Rc::get_mut(me) {
+        if self.shared.strong_count() == 1 {
             // All senders have been dropped, so drain the buffer and end the
             // stream.
-            return Poll::Ready(shared.borrow_mut().buffer.pop_front());
-        }
-
-        let mut shared = me.borrow_mut();
-        if let Some(msg) = shared.buffer.pop_front() {
+            Poll::Ready(self.shared.get_mut().buffer.pop_front())
+        } else if let Some(msg) = self.shared.get_mut().buffer.pop_front() {
             Poll::Ready(Some(msg))
         } else {
-            shared.blocked_recv.register(cx.waker());
+            self.shared.get_mut().blocked_recv.register(cx.waker());
             Poll::Pending
         }
     }
@@ -168,7 +125,9 @@ impl<T> Stream for Receiver<T> {
 
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
-        self.close();
+        let shared = self.shared.get_mut();
+        shared.buffer.clear();
+        shared.has_receiver = false;
     }
 }
 
@@ -198,5 +157,40 @@ impl<T> SendError<T> {
     /// Returns the message that was attempted to be sent but failed.
     pub fn into_inner(self) -> T {
         self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::future::lazy;
+    use futures::{Stream, StreamExt};
+
+    #[actix_rt::test]
+    async fn test_mpsc() {
+        let (tx, mut rx) = channel();
+        tx.send("test").unwrap();
+        assert_eq!(rx.next().await.unwrap(), "test");
+
+        let tx2 = tx.clone();
+        tx2.send("test2").unwrap();
+        assert_eq!(rx.next().await.unwrap(), "test2");
+
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut rx).poll_next(cx)).await,
+            Poll::Pending
+        );
+        drop(tx2);
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut rx).poll_next(cx)).await,
+            Poll::Pending
+        );
+        drop(tx);
+        assert_eq!(rx.next().await, None);
+
+        let (tx, rx) = channel();
+        tx.send("test").unwrap();
+        drop(rx);
+        assert!(tx.send("test").is_err());
     }
 }

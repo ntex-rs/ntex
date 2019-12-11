@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0] - 2019-12-11
+
+* Simplify oneshot and mpsc implementations
+
 ## [1.0.0-alpha.3] - 2019-12-07
 
 * Migrate to tokio 0.2
