@@ -39,4 +39,4 @@ mio-uds = { version = "0.6.7" }
 [dev-dependencies]
 bytes = "0.5"
 env_logger = "0.6"
-actix-testing = "1.0.0-alpha.3"
+actix-testing = "1.0.0"

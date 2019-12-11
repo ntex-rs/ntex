@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0] - 2019-12-11
+
+* Update actix-server to 1.0.0
+
 ## [1.0.0-alpha.3] - 2019-12-07
 
 * Migrate to tokio 0.2
