@@ -3,7 +3,8 @@ use std::task::{Context, Poll};
 use std::{fmt, io};
 
 use bytes::BytesMut;
-use futures::{ready, Sink, Stream};
+use futures_core::{ready, Stream};
+use futures_sink::Sink;
 
 use crate::{AsyncRead, AsyncWrite, Decoder, Encoder};
 
@@ -19,8 +20,6 @@ bitflags::bitflags! {
 
 /// A unified `Stream` and `Sink` interface to an underlying I/O object, using
 /// the `Encoder` and `Decoder` traits to encode and decode frames.
-///
-/// You can create a `Framed` instance by using the `AsyncRead::framed` adapter.
 pub struct Framed<T, U> {
     io: T,
     codec: U,
@@ -49,10 +48,6 @@ where
     /// `Sink`; grouping this into a single object is often useful for layering
     /// things like gzip or TLS, which require both read and write access to the
     /// underlying object.
-    ///
-    /// If you want to work more directly with the streams and sink, consider
-    /// calling `split` on the `Framed` returned by this method, which will
-    /// break them into separate objects, allowing them to interact more easily.
     pub fn new(io: T, codec: U) -> Framed<T, U> {
         Framed {
             io,
@@ -82,10 +77,6 @@ impl<T, U> Framed<T, U> {
     /// This objects takes a stream and a readbuffer and a writebuffer. These
     /// field can be obtained from an existing `Framed` with the
     /// `into_parts` method.
-    ///
-    /// If you want to work more directly with the streams and sink, consider
-    /// calling `split` on the `Framed` returned by this method, which will
-    /// break them into separate objects, allowing them to interact more easily.
     pub fn from_parts(parts: FramedParts<T, U>) -> Framed<T, U> {
         Framed {
             io: parts.io,
@@ -134,15 +125,6 @@ impl<T, U> Framed<T, U> {
     /// Check if write buffer is full.
     pub fn is_write_buf_full(&self) -> bool {
         self.write_buf.len() >= HW
-    }
-
-    /// Consumes the `Frame`, returning its underlying I/O stream.
-    ///
-    /// Note that care should be taken to not tamper with the underlying stream
-    /// of data coming in as it may corrupt the stream of frames otherwise
-    /// being worked with.
-    pub fn into_inner(self) -> T {
-        self.io
     }
 
     /// Consume the `Frame`, returning `Frame` with different codec.
@@ -217,11 +199,14 @@ impl<T, U> Framed<T, U> {
         Ok(())
     }
 
-    /// Check if framed is able to write more data
-    pub fn is_ready(&self) -> bool {
+    /// Check if framed is able to write more data.
+    ///
+    /// `Framed` object considers ready if there is free space in write buffer.
+    pub fn is_write_ready(&self) -> bool {
         self.write_buf.len() < HW
     }
 
+    /// Try to read underlying I/O stream and decode item.
     pub fn next_item(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<U::Item, U::Error>>>
     where
         T: AsyncRead,
@@ -251,9 +236,7 @@ impl<T, U> Framed<T, U> {
                         return Poll::Ready(Some(Ok(frame)));
                     }
                     Err(e) => return Poll::Ready(Some(Err(e))),
-                    _ => {
-                        // Need more data
-                    }
+                    _ => (), // Need more data
                 }
 
                 self.flags.remove(Flags::READABLE);
@@ -281,6 +264,7 @@ impl<T, U> Framed<T, U> {
         }
     }
 
+    /// Flush write buffer to underlying I/O stream.
     pub fn flush(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), U::Error>>
     where
         T: AsyncWrite,
@@ -298,14 +282,12 @@ impl<T, U> Framed<T, U> {
             if n == 0 {
                 return Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::WriteZero,
-                    "failed to \
-                     write frame to transport",
+                    "failed to write frame to transport",
                 )
                 .into()));
             }
 
-            // TODO: Add a way to `bytes` to do this w/o returning the drained
-            // data.
+            // remove written data
             let _ = self.write_buf.split_to(n);
         }
 
@@ -316,6 +298,7 @@ impl<T, U> Framed<T, U> {
         Poll::Ready(Ok(()))
     }
 
+    /// Flush write buffer and shutdown underlying I/O stream.
     pub fn close(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), U::Error>>
     where
         T: AsyncWrite,
@@ -350,7 +333,7 @@ where
     type Error = U::Error;
 
     fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.is_ready() {
+        if self.is_write_ready() {
             Poll::Ready(Ok(()))
         } else {
             Poll::Pending

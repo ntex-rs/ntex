@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0] - 2019-12-10
+
+* Use specific futures dependencies
+
 ## [0.2.0-alpha.4]
 
 * Fix buffer remaining capacity calcualtion
@@ -14,16 +18,13 @@
 
 * Migrated to `std::future`
 
-
 ## [0.1.2] - 2019-03-27
 
 * Added `Framed::map_io()` method.
 
-
 ## [0.1.1] - 2019-03-06
 
 * Added `FramedParts::with_read_buffer()` method.
-
 
 ## [0.1.0] - 2018-12-09
 
