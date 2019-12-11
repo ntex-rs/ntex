@@ -1,5 +1,12 @@
 # Changes
 
+## [1.0.0] - 2019-12-11
+
+### Changed
+
+* Use actix-net releases
+
+
 ## [1.0.0-alpha.4] - 2019-12-08
 
 ### Changed
