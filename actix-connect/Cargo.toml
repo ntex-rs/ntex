@@ -55,4 +55,4 @@ webpki = { version = "0.21", optional = true }
 
 [dev-dependencies]
 bytes = "0.5.2"
-actix-testing = { version="1.0.0-alpha.2" }
+actix-testing = { version="1.0.0" }

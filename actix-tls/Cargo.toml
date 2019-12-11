@@ -57,4 +57,4 @@ tokio-tls = { version="0.3", optional = true }
 
 [dev-dependencies]
 bytes = "0.5"
-actix-testing = { version="1.0.0-alpha.3" }
+actix-testing = { version="1.0.0" }

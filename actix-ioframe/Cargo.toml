@@ -30,4 +30,4 @@ log = "0.4"
 
 [dev-dependencies]
 actix-connect = "1.0.0-alpha.2"
-actix-testing = "1.0.0-alpha.2"
+actix-testing = "1.0.0"
