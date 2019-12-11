@@ -1,6 +1,6 @@
 [package]
 name = "actix-tls"
-version = "1.0.0-alpha.3"
+version = "1.0.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix tls services"
 keywords = ["network", "framework", "async", "futures"]
