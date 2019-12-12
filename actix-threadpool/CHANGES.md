@@ -1,5 +1,11 @@
 # Changes
 
+## [0.3.1] - 2019-12-12
+
+### Changed
+
+* Use parking_lot 0.10
+
 ## [0.3.0] - 2019-12-02
 
 ### Changed

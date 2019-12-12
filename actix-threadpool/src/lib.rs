@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use derive_more::Display;
-use futures::channel::oneshot;
+use futures_channel::oneshot;
 use parking_lot::Mutex;
 use threadpool::ThreadPool;
 
@@ -79,9 +79,12 @@ impl<I, E: fmt::Debug> Future for CpuFuture<I, E> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let rx = Pin::new(&mut self.rx);
-        let res = futures::ready!(rx.poll(cx))
-            .map_err(|_| BlockingError::Canceled)
-            .and_then(|res| res.map_err(BlockingError::Error));
+        let res = match rx.poll(cx) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(res) => res
+                .map_err(|_| BlockingError::Canceled)
+                .and_then(|res| res.map_err(BlockingError::Error)),
+        };
         Poll::Ready(res)
     }
 }
