@@ -1,10 +1,10 @@
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::fmt;
-use std::rc::Rc;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use actix_service::{IntoService, Service, Transform};
@@ -211,7 +211,7 @@ mod tests {
     use super::*;
     use actix_service::Service;
     use futures::channel::oneshot;
-    use futures::future::{lazy, FutureExt, LocalBoxFuture};
+    use futures::future::{lazy, poll_fn, FutureExt, LocalBoxFuture};
 
     struct Srv;
 
@@ -245,15 +245,18 @@ mod tests {
             let _ = actix_rt::System::new("test").block_on(async {
                 let mut srv = InOrderService::new(Srv);
 
+                let _ = lazy(|cx| srv.poll_ready(cx)).await;
                 let res1 = srv.call(rx1);
                 let res2 = srv.call(rx2);
                 let res3 = srv.call(rx3);
 
-                let _ = lazy(|cx| srv.poll_ready(cx)).await;
-
-                // dispatcher do this
-                actix_rt::time::delay_for(Duration::from_millis(100)).await;
-                let _ = lazy(|cx| srv.poll_ready(cx)).await;
+                actix_rt::spawn(async move {
+                    let _ = poll_fn(|cx| {
+                        let _ = srv.poll_ready(cx);
+                        Poll::<()>::Pending
+                    })
+                    .await;
+                });
 
                 assert_eq!(res1.await.unwrap(), 1);
                 assert_eq!(res2.await.unwrap(), 2);
