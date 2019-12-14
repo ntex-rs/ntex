@@ -71,7 +71,7 @@ pub fn test(_: TokenStream, item: TokenStream) -> TokenStream {
     if input.sig.asyncness.is_none() {
         return syn::Error::new_spanned(
             input.sig.fn_token,
-            format!("only async fn is supported, {:?}", input.sig.ident),
+            format!("only async fn is supported, {}", input.sig.ident),
         )
         .to_compile_error()
         .into();
