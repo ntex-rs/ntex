@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.1] - 2019-12-15
+
+* Fix trust-dns-resolver compilation
+
 ## [1.0.0] - 2019-12-11
 
 * Release
