@@ -1,5 +1,7 @@
 # Changes
 
+* Use `.advance()` intead of `.split_to()`
+
 ## [0.2.0] - 2019-12-10
 
 * Use specific futures dependencies

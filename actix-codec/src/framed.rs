@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, io};
 
-use bytes::BytesMut;
+use bytes::{Buf, BytesMut};
 use futures_core::{ready, Stream};
 use futures_sink::Sink;
 
@@ -288,7 +288,7 @@ impl<T, U> Framed<T, U> {
             }
 
             // remove written data
-            let _ = self.write_buf.split_to(n);
+            self.write_buf.advance(n);
         }
 
         // Try flushing the underlying IO
