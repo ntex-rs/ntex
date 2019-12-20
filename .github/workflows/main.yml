@@ -2,6 +2,9 @@ name: CI
 
 on: [push, pull_request]
 
+env:
+  VCPKGRS_DYNAMIC: 1
+
 jobs:
   build_and_test:
     strategy:
@@ -18,10 +21,12 @@ jobs:
         include:
         - toolchain: x86_64-pc-windows-msvc
           os: windows-latest
+          arch: x64
         - toolchain: x86_64-pc-windows-gnu
           os: windows-latest
         - toolchain: i686-pc-windows-msvc
           os: windows-latest
+          arch: x86
         - toolchain: x86_64-apple-darwin
           os: macOS-latest
 
@@ -36,6 +41,13 @@ jobs:
         with:
           toolchain: ${{ matrix.version }}-${{ matrix.toolchain }}
           default: true
+
+
+      - name: Install OpenSSL
+        if: matrix.toolchain == 'x86_64-pc-windows-msvc' || matrix.toolchain == 'i686-pc-windows-msvc'
+        run: |
+          vcpkg integrate install
+          vcpkg install openssl:${{ matrix.arch }}-windows
 
       - name: check nightly
         if: matrix.version == 'nightly'
@@ -52,6 +64,14 @@ jobs:
           args: --all --bins --examples --tests
 
       - name: tests
+        if: matrix.toolchain != 'x86_64-pc-windows-gnu'
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all --all-features -- --nocapture
+
+      - name: tests on x86_64-pc-windows-gnu
+        if: matrix.toolchain == 'x86_64-pc-windows-gnu'
         uses: actions-rs/cargo@v1
         with:
           command: test
