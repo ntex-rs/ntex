@@ -1,6 +1,6 @@
 [package]
 name = "actix-utils"
-version = "1.0.3"
+version = "1.0.4"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix utils - various actix net related services"
 keywords = ["network", "framework", "async", "futures"]
@@ -10,7 +10,6 @@ documentation = "https://docs.rs/actix-utils/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT/Apache-2.0"
 edition = "2018"
-workspace = ".."
 
 [lib]
 name = "actix_utils"
@@ -20,8 +19,8 @@ path = "src/lib.rs"
 actix-service = "1.0.0"
 actix-rt = "1.0.0"
 actix-codec = "0.2.0"
-bytes = "0.5.2"
-either = "1.5.2"
+bytes = "0.5.3"
+either = "1.5.3"
 futures = "0.3.1"
 pin-project = "0.4.6"
 log = "0.4"

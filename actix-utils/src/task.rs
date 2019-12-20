@@ -35,10 +35,21 @@ impl LocalWaker {
     }
 
     #[inline]
+    /// Check if waker has been registered.
+    pub fn is_registed(&self) -> bool {
+        unsafe { (*self.waker.get()).is_some() }
+    }
+
+    #[inline]
     /// Registers the waker to be notified on calls to `wake`.
-    pub fn register(&self, waker: &Waker) {
+    ///
+    /// Returns `true` if waker was registered before.
+    pub fn register(&self, waker: &Waker) -> bool {
         unsafe {
-            *self.waker.get() = Some(waker.clone());
+            let w = self.waker.get();
+            let is_registered = (*w).is_some();
+            *w = Some(waker.clone());
+            is_registered
         }
     }
 

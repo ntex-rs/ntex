@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.4] - 2019-12-20
+
+* Add methods to check `LocalWaker` registration state.
+
 ## [1.0.3] - 2019-12-11
 
 * Revert InOrder service changes
