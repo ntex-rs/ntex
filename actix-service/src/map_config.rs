@@ -1,28 +1,30 @@
 use std::marker::PhantomData;
 
-use super::ServiceFactory;
+use super::{IntoServiceFactory, ServiceFactory};
 
 /// Adapt external config argument to a config for provided service factory
 ///
 /// Note that this function consumes the receiving service factory and returns
 /// a wrapped version of it.
-pub fn map_config<T, F, C>(factory: T, f: F) -> MapConfig<T, F, C>
+pub fn map_config<T, U, F, C>(factory: U, f: F) -> MapConfig<T, F, C>
 where
     T: ServiceFactory,
+    U: IntoServiceFactory<T>,
     F: Fn(C) -> T::Config,
 {
-    MapConfig::new(factory, f)
+    MapConfig::new(factory.into_factory(), f)
 }
 
 /// Replace config with unit
-pub fn unit_config<T, C>(new_service: T) -> UnitConfig<T, C>
+pub fn unit_config<T, U, C>(factory: U) -> UnitConfig<T, C>
 where
     T: ServiceFactory<Config = ()>,
+    U: IntoServiceFactory<T>,
 {
-    UnitConfig::new(new_service)
+    UnitConfig::new(factory.into_factory())
 }
 
-/// `.map_config()` service combinator
+/// `map_config()` adapter service factory
 pub struct MapConfig<A, F, C> {
     a: A,
     f: F,

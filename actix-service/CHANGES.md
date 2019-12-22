@@ -1,5 +1,12 @@
 # Changes
 
+## [1.0.1] - 2019-12-22
+
+### Changed
+
+* `map_config()` and `unit_config()` accepts `IntoServiceFactory` type
+
+
 ## [1.0.0] - 2019-12-11
 
 ### Added
