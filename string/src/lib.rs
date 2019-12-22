@@ -6,14 +6,14 @@ use bytes::Bytes;
 
 /// A utf-8 encoded string with [`Bytes`] as a storage.
 ///
-/// [`Bytes`]: https://docs.rs/bytes/0.5.2/bytes/struct.Bytes.html
+/// [`Bytes`]: https://docs.rs/bytes/0.5.3/bytes/struct.Bytes.html
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
 pub struct ByteString(Bytes);
 
 impl ByteString {
     /// Creates a new `ByteString`.
-    pub fn new() -> String {
-        String::default()
+    pub fn new() -> Self {
+        ByteString(Bytes::new())
     }
 
     /// Get a reference to the underlying bytes object.
@@ -27,12 +27,12 @@ impl ByteString {
     }
 
     /// Creates a new `ByteString` from a static str.
-    pub fn from_static(src: &'static str) -> ByteString {
-        Self(Bytes::from_static(src.as_ref()))
+    pub const fn from_static(src: &'static str) -> ByteString {
+        Self(Bytes::from_static(src.as_bytes()))
     }
 
     /// Creates a new `ByteString` from a Bytes.
-    pub unsafe fn from_bytes_unchecked(src: Bytes) -> ByteString {
+    pub const unsafe fn from_bytes_unchecked(src: Bytes) -> ByteString {
         Self(src)
     }
 }
@@ -148,6 +148,11 @@ mod test {
     use std::hash::{Hash, Hasher};
 
     #[test]
+    fn test_new() {
+        let _: ByteString = ByteString::new();
+    }
+
+    #[test]
     fn test_hash() {
         let mut hasher1 = DefaultHasher::default();
         "str".hash(&mut hasher1);
@@ -171,6 +176,7 @@ mod test {
 
     #[test]
     fn test_from_static_str() {
+        const _S: ByteString = ByteString::from_static("hello");
         let _ = ByteString::from_static("str");
     }
 
