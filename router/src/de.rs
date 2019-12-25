@@ -492,7 +492,7 @@ mod tests {
 
     #[derive(Deserialize)]
     struct Id {
-        id: String,
+        _id: String,
     }
 
     #[derive(Debug, Deserialize)]

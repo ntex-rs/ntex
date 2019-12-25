@@ -5,7 +5,7 @@ use std::rc::Rc;
 use regex::{escape, Regex, RegexSet};
 
 use crate::path::{Path, PathItem};
-use crate::{IntoPatterns, Resource, ResourcePath};
+use crate::{IntoPattern, Resource, ResourcePath};
 
 const MAX_DYNAMIC_SEGMENTS: usize = 16;
 
@@ -39,24 +39,12 @@ impl ResourceDef {
     /// Parse path pattern and create new `Pattern` instance.
     ///
     /// Panics if path pattern is malformed.
-    pub fn new<T: IntoPatterns>(path: T) -> Self {
+    pub fn new<T: IntoPattern>(path: T) -> Self {
         if path.is_single() {
             let patterns = path.patterns();
             ResourceDef::with_prefix(&patterns[0], false)
         } else {
-            ResourceDef::new_set(path)
-        }
-    }
-
-    /// Parse path pattern and create new `Pattern` instance.
-    ///
-    /// Panics if any of paths pattern is malformed. Every set element
-    /// must contain same set of capture elements.
-    pub fn new_set<T: IntoPatterns>(set: T) -> Self {
-        if set.is_single() {
-            ResourceDef::new(set)
-        } else {
-            let set = set.patterns();
+            let set = path.patterns();
             let mut data = Vec::new();
             let mut re_set = Vec::new();
 
@@ -709,7 +697,7 @@ mod tests {
 
     #[test]
     fn test_dynamic_set() {
-        let re = ResourceDef::new_set(vec![
+        let re = ResourceDef::new(vec![
             "/user/{id}",
             "/v{version}/resource/{id}",
             "/{id:[[:digit:]]{6}}",
@@ -744,6 +732,26 @@ mod tests {
         let mut path = Path::new("/012345");
         assert!(re.match_path(&mut path));
         assert_eq!(path.get("id").unwrap(), "012345");
+
+        let re = ResourceDef::new([
+            "/user/{id}",
+            "/v{version}/resource/{id}",
+            "/{id:[[:digit:]]{6}}",
+        ]);
+        assert!(re.is_match("/user/profile"));
+        assert!(re.is_match("/user/2345"));
+        assert!(!re.is_match("/user/2345/"));
+        assert!(!re.is_match("/user/2345/sdg"));
+
+        let re = ResourceDef::new([
+            "/user/{id}".to_string(),
+            "/v{version}/resource/{id}".to_string(),
+            "/{id:[[:digit:]]{6}}".to_string(),
+        ]);
+        assert!(re.is_match("/user/profile"));
+        assert!(re.is_match("/user/2345"));
+        assert!(!re.is_match("/user/2345/"));
+        assert!(!re.is_match("/user/2345/sdg"));
     }
 
     #[test]

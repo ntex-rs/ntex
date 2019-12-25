@@ -36,14 +36,14 @@ impl ResourcePath for bytestring::ByteString {
 }
 
 /// Helper trait for type that could be converted to path pattern
-pub trait IntoPatterns {
+pub trait IntoPattern {
     /// Signle patter
     fn is_single(&self) -> bool;
 
     fn patterns(&self) -> Vec<String>;
 }
 
-impl IntoPatterns for String {
+impl IntoPattern for String {
     fn is_single(&self) -> bool {
         true
     }
@@ -53,7 +53,7 @@ impl IntoPatterns for String {
     }
 }
 
-impl<'a> IntoPatterns for &'a str {
+impl<'a> IntoPattern for &'a str {
     fn is_single(&self) -> bool {
         true
     }
@@ -63,7 +63,7 @@ impl<'a> IntoPatterns for &'a str {
     }
 }
 
-impl<T: AsRef<str>> IntoPatterns for Vec<T> {
+impl<T: AsRef<str>> IntoPattern for Vec<T> {
     fn is_single(&self) -> bool {
         self.len() == 1
     }
@@ -72,6 +72,52 @@ impl<T: AsRef<str>> IntoPatterns for Vec<T> {
         self.into_iter().map(|v| v.as_ref().to_string()).collect()
     }
 }
+
+macro_rules! array_patterns (($tp:ty, $num:tt) => {
+    impl IntoPattern for [$tp; $num] {
+        fn is_single(&self) -> bool {
+            $num == 1
+        }
+
+        fn patterns(&self) -> Vec<String> {
+            self.iter().map(|v| v.to_string()).collect()
+        }
+    }
+});
+
+array_patterns!(&str, 1);
+array_patterns!(&str, 2);
+array_patterns!(&str, 3);
+array_patterns!(&str, 4);
+array_patterns!(&str, 5);
+array_patterns!(&str, 6);
+array_patterns!(&str, 7);
+array_patterns!(&str, 8);
+array_patterns!(&str, 9);
+array_patterns!(&str, 10);
+array_patterns!(&str, 11);
+array_patterns!(&str, 12);
+array_patterns!(&str, 13);
+array_patterns!(&str, 14);
+array_patterns!(&str, 15);
+array_patterns!(&str, 16);
+
+array_patterns!(String, 1);
+array_patterns!(String, 2);
+array_patterns!(String, 3);
+array_patterns!(String, 4);
+array_patterns!(String, 5);
+array_patterns!(String, 6);
+array_patterns!(String, 7);
+array_patterns!(String, 8);
+array_patterns!(String, 9);
+array_patterns!(String, 10);
+array_patterns!(String, 11);
+array_patterns!(String, 12);
+array_patterns!(String, 13);
+array_patterns!(String, 14);
+array_patterns!(String, 15);
+array_patterns!(String, 16);
 
 #[cfg(feature = "http")]
 mod url;
