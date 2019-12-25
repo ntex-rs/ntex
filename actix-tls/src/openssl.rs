@@ -88,7 +88,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + 'static> Service for AcceptorService<T>
                 let acc = acc;
                 tokio_openssl::accept(&acc, req).await
             }
-                .boxed_local(),
+            .boxed_local(),
         }
     }
 }

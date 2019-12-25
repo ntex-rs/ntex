@@ -217,7 +217,7 @@ impl Worker {
                     wrk.await
                 });
             }
-                .boxed(),
+            .boxed(),
         );
 
         WorkerClient::new(idx, tx1, tx2, avail)

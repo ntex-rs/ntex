@@ -391,7 +391,7 @@ impl ServerBuilder {
                                             .await;
                                             System::current().stop();
                                         }
-                                            .boxed(),
+                                        .boxed(),
                                     );
                                 }
                                 ready(())
