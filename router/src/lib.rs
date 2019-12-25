@@ -53,6 +53,16 @@ impl IntoPattern for String {
     }
 }
 
+impl<'a> IntoPattern for &'a String {
+    fn is_single(&self) -> bool {
+        true
+    }
+
+    fn patterns(&self) -> Vec<String> {
+        vec![self.as_str().to_string()]
+    }
+}
+
 impl<'a> IntoPattern for &'a str {
     fn is_single(&self) -> bool {
         true

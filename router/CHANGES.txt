@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.3] - 2019-12-25
+
+* Add impl `IntoPattern` for `&String`
+
 ## [0.2.2] - 2019-12-25
 
 * Use `IntoPattern` for `RouterBuilder::path()`
