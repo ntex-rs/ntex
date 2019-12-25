@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.2] - 2019-12-25
+
+* Use `IntoPattern` for `RouterBuilder::path()`
+
 ## [0.2.1] - 2019-12-25
 
 * Add `IntoPattern` trait
