@@ -2,7 +2,7 @@ use std::cmp::min;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use regex::{escape, Regex};
+use regex::{escape, Regex, RegexSet};
 
 use crate::path::{Path, PathItem};
 use crate::{Resource, ResourcePath};
@@ -32,21 +32,56 @@ enum PatternType {
     Static(String),
     Prefix(String),
     Dynamic(Regex, Vec<Rc<String>>, usize),
+    DynamicSet(RegexSet, Vec<(Regex, Vec<Rc<String>>, usize)>),
 }
 
 impl ResourceDef {
     /// Parse path pattern and create new `Pattern` instance.
     ///
-    /// Panics if path pattern is wrong.
+    /// Panics if path pattern is malformed.
     pub fn new(path: &str) -> Self {
         ResourceDef::with_prefix(path, false)
     }
 
     /// Parse path pattern and create new `Pattern` instance.
     ///
+    /// Panics if any of paths pattern is malformed. Every set element
+    /// must contain same set of capture elements.
+    pub fn new_set<T: Iterator<Item = U>, U: AsRef<str>>(set: T) -> Self {
+        let mut data = Vec::new();
+        let mut re_set = Vec::new();
+
+        for item in set {
+            let path = item.as_ref().to_owned();
+            let (pattern, _, _, len) = ResourceDef::parse(&path, false);
+
+            let re = match Regex::new(&pattern) {
+                Ok(re) => re,
+                Err(err) => panic!("Wrong path pattern: \"{}\" {}", path, err),
+            };
+            // actix creates one router per thread
+            let names: Vec<_> = re
+                .capture_names()
+                .filter_map(|name| name.map(|name| Rc::new(name.to_owned())))
+                .collect();
+            data.push((re, names, len));
+            re_set.push(pattern);
+        }
+
+        ResourceDef {
+            id: 0,
+            tp: PatternType::DynamicSet(RegexSet::new(re_set).unwrap(), data),
+            elements: Vec::new(),
+            name: String::new(),
+            pattern: "".to_owned(),
+        }
+    }
+
+    /// Parse path pattern and create new `Pattern` instance.
+    ///
     /// Use `prefix` type instead of `static`.
     ///
-    /// Panics if path regex pattern is wrong.
+    /// Panics if path regex pattern is malformed.
     pub fn prefix(path: &str) -> Self {
         ResourceDef::with_prefix(path, true)
     }
@@ -57,7 +92,7 @@ impl ResourceDef {
     ///
     /// Use `prefix` type instead of `static`.
     ///
-    /// Panics if path regex pattern is wrong.
+    /// Panics if path regex pattern is malformed.
     pub fn root_prefix(path: &str) -> Self {
         ResourceDef::with_prefix(&insert_slash(path), true)
     }
@@ -123,8 +158,9 @@ impl ResourceDef {
     pub fn is_match(&self, path: &str) -> bool {
         match self.tp {
             PatternType::Static(ref s) => s == path,
-            PatternType::Dynamic(ref re, _, _) => re.is_match(path),
             PatternType::Prefix(ref s) => path.starts_with(s),
+            PatternType::Dynamic(ref re, _, _) => re.is_match(path),
+            PatternType::DynamicSet(ref re, _) => re.is_match(path),
         }
     }
 
@@ -176,6 +212,30 @@ impl ResourceDef {
                 };
                 Some(min(plen, len))
             }
+            PatternType::DynamicSet(ref re, ref params) => {
+                if let Some(idx) = re.matches(path).into_iter().next() {
+                    let (ref pattern, _, len) = params[idx];
+                    if let Some(captures) = pattern.captures(path) {
+                        let mut pos = 0;
+                        let mut passed = false;
+                        for capture in captures.iter() {
+                            if let Some(ref m) = capture {
+                                if !passed {
+                                    passed = true;
+                                    continue;
+                                }
+
+                                pos = m.end();
+                            }
+                        }
+                        Some(pos + len)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -189,6 +249,25 @@ impl ResourceDef {
                 } else {
                     false
                 }
+            }
+            PatternType::Prefix(ref s) => {
+                let rpath = path.path();
+                let len = if s == rpath {
+                    s.len()
+                } else if rpath.starts_with(s)
+                    && (s.ends_with('/') || rpath.split_at(s.len()).1.starts_with('/'))
+                {
+                    if s.ends_with('/') {
+                        s.len() - 1
+                    } else {
+                        s.len()
+                    }
+                } else {
+                    return false;
+                };
+                let rpath_len = rpath.len();
+                path.skip(min(rpath_len, len) as u16);
+                true
             }
             PatternType::Dynamic(ref re, ref names, len) => {
                 let mut idx = 0;
@@ -219,24 +298,40 @@ impl ResourceDef {
                 path.skip((pos + len) as u16);
                 true
             }
-            PatternType::Prefix(ref s) => {
-                let rpath = path.path();
-                let len = if s == rpath {
-                    s.len()
-                } else if rpath.starts_with(s)
-                    && (s.ends_with('/') || rpath.split_at(s.len()).1.starts_with('/'))
-                {
-                    if s.ends_with('/') {
-                        s.len() - 1
+            PatternType::DynamicSet(ref re, ref params) => {
+                if let Some(idx) = re.matches(path.path()).into_iter().next() {
+                    let (ref pattern, ref names, len) = params[idx];
+                    let mut idx = 0;
+                    let mut pos = 0;
+                    let mut segments: [PathItem; MAX_DYNAMIC_SEGMENTS] =
+                        [PathItem::Static(""); MAX_DYNAMIC_SEGMENTS];
+
+                    if let Some(captures) = pattern.captures(path.path()) {
+                        for (no, name) in names.iter().enumerate() {
+                            if let Some(m) = captures.name(&name) {
+                                idx += 1;
+                                pos = m.end();
+                                segments[no] =
+                                    PathItem::Segment(m.start() as u16, m.end() as u16);
+                            } else {
+                                log::error!(
+                                    "Dynamic path match but not all segments found: {}",
+                                    name
+                                );
+                                return false;
+                            }
+                        }
                     } else {
-                        s.len()
+                        return false;
                     }
+                    for idx in 0..idx {
+                        path.add(names[idx].clone(), segments[idx]);
+                    }
+                    path.skip((pos + len) as u16);
+                    true
                 } else {
-                    return false;
-                };
-                let rpath_len = rpath.len();
-                path.skip(min(rpath_len, len) as u16);
-                true
+                    false
+                }
             }
         }
     }
@@ -262,6 +357,30 @@ impl ResourceDef {
                 } else {
                     false
                 }
+            }
+            PatternType::Prefix(ref s) => {
+                let len = {
+                    let rpath = res.resource_path().path();
+                    if s == rpath {
+                        s.len()
+                    } else if rpath.starts_with(s)
+                        && (s.ends_with('/') || rpath.split_at(s.len()).1.starts_with('/'))
+                    {
+                        if s.ends_with('/') {
+                            s.len() - 1
+                        } else {
+                            s.len()
+                        }
+                    } else {
+                        return false;
+                    }
+                };
+                if !check(res, user_data) {
+                    return false;
+                }
+                let path = res.resource_path();
+                path.skip(min(path.path().len(), len) as u16);
+                true
             }
             PatternType::Dynamic(ref re, ref names, len) => {
                 let mut idx = 0;
@@ -298,29 +417,47 @@ impl ResourceDef {
                 path.skip((pos + len) as u16);
                 true
             }
-            PatternType::Prefix(ref s) => {
-                let len = {
-                    let rpath = res.resource_path().path();
-                    if s == rpath {
-                        s.len()
-                    } else if rpath.starts_with(s)
-                        && (s.ends_with('/') || rpath.split_at(s.len()).1.starts_with('/'))
-                    {
-                        if s.ends_with('/') {
-                            s.len() - 1
-                        } else {
-                            s.len()
+            PatternType::DynamicSet(ref re, ref params) => {
+                let path = res.resource_path().path();
+                if let Some(idx) = re.matches(path).into_iter().next() {
+                    let (ref pattern, ref names, len) = params[idx];
+                    let mut idx = 0;
+                    let mut pos = 0;
+                    let mut segments: [PathItem; MAX_DYNAMIC_SEGMENTS] =
+                        [PathItem::Static(""); MAX_DYNAMIC_SEGMENTS];
+
+                    if let Some(captures) = pattern.captures(path) {
+                        for (no, name) in names.iter().enumerate() {
+                            if let Some(m) = captures.name(&name) {
+                                idx += 1;
+                                pos = m.end();
+                                segments[no] =
+                                    PathItem::Segment(m.start() as u16, m.end() as u16);
+                            } else {
+                                log::error!(
+                                    "Dynamic path match but not all segments found: {}",
+                                    name
+                                );
+                                return false;
+                            }
                         }
                     } else {
                         return false;
                     }
-                };
-                if !check(res, user_data) {
-                    return false;
+
+                    if !check(res, user_data) {
+                        return false;
+                    }
+
+                    let path = res.resource_path();
+                    for idx in 0..idx {
+                        path.add(names[idx].clone(), segments[idx]);
+                    }
+                    path.skip((pos + len) as u16);
+                    true
+                } else {
+                    false
                 }
-                let path = res.resource_path();
-                path.skip(min(path.path().len(), len) as u16);
-                true
             }
         }
     }
@@ -348,7 +485,10 @@ impl ResourceDef {
                     }
                 }
             }
-        };
+            PatternType::DynamicSet(..) => {
+                return false;
+            }
+        }
         true
     }
 
@@ -548,6 +688,48 @@ mod tests {
         assert_eq!(path.get("id").unwrap(), "adahg32");
 
         let re = ResourceDef::new("/{id:[[:digit:]]{6}}");
+        assert!(re.is_match("/012345"));
+        assert!(!re.is_match("/012"));
+        assert!(!re.is_match("/01234567"));
+        assert!(!re.is_match("/XXXXXX"));
+
+        let mut path = Path::new("/012345");
+        assert!(re.match_path(&mut path));
+        assert_eq!(path.get("id").unwrap(), "012345");
+    }
+
+    #[test]
+    fn test_dynamic_set() {
+        let re = ResourceDef::new_set(
+            vec![
+                "/user/{id}",
+                "/v{version}/resource/{id}",
+                "/{id:[[:digit:]]{6}}",
+            ]
+            .iter(),
+        );
+        assert!(re.is_match("/user/profile"));
+        assert!(re.is_match("/user/2345"));
+        assert!(!re.is_match("/user/2345/"));
+        assert!(!re.is_match("/user/2345/sdg"));
+
+        let mut path = Path::new("/user/profile");
+        assert!(re.match_path(&mut path));
+        assert_eq!(path.get("id").unwrap(), "profile");
+
+        let mut path = Path::new("/user/1245125");
+        assert!(re.match_path(&mut path));
+        assert_eq!(path.get("id").unwrap(), "1245125");
+
+        assert!(re.is_match("/v1/resource/320120"));
+        assert!(!re.is_match("/v/resource/1"));
+        assert!(!re.is_match("/resource"));
+
+        let mut path = Path::new("/v151/resource/adahg32");
+        assert!(re.match_path(&mut path));
+        assert_eq!(path.get("version").unwrap(), "151");
+        assert_eq!(path.get("id").unwrap(), "adahg32");
+
         assert!(re.is_match("/012345"));
         assert!(!re.is_match("/012"));
         assert!(!re.is_match("/01234567"));

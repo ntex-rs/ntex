@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.1] - 2019-12-xx
+
+* Add multi-pattern resources
+
 ## [0.2.0] - 2019-12-07
 
 * Update http to 0.2
