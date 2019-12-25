@@ -5,7 +5,7 @@ use std::rc::Rc;
 use regex::{escape, Regex, RegexSet};
 
 use crate::path::{Path, PathItem};
-use crate::{Resource, ResourcePath};
+use crate::{IntoPatterns, Resource, ResourcePath};
 
 const MAX_DYNAMIC_SEGMENTS: usize = 16;
 
@@ -39,41 +39,50 @@ impl ResourceDef {
     /// Parse path pattern and create new `Pattern` instance.
     ///
     /// Panics if path pattern is malformed.
-    pub fn new(path: &str) -> Self {
-        ResourceDef::with_prefix(path, false)
+    pub fn new<T: IntoPatterns>(path: T) -> Self {
+        if path.is_single() {
+            let patterns = path.patterns();
+            ResourceDef::with_prefix(&patterns[0], false)
+        } else {
+            ResourceDef::new_set(path)
+        }
     }
 
     /// Parse path pattern and create new `Pattern` instance.
     ///
     /// Panics if any of paths pattern is malformed. Every set element
     /// must contain same set of capture elements.
-    pub fn new_set<T: Iterator<Item = U>, U: AsRef<str>>(set: T) -> Self {
-        let mut data = Vec::new();
-        let mut re_set = Vec::new();
+    pub fn new_set<T: IntoPatterns>(set: T) -> Self {
+        if set.is_single() {
+            ResourceDef::new(set)
+        } else {
+            let set = set.patterns();
+            let mut data = Vec::new();
+            let mut re_set = Vec::new();
 
-        for item in set {
-            let path = item.as_ref().to_owned();
-            let (pattern, _, _, len) = ResourceDef::parse(&path, false);
+            for path in set {
+                let (pattern, _, _, len) = ResourceDef::parse(&path, false);
 
-            let re = match Regex::new(&pattern) {
-                Ok(re) => re,
-                Err(err) => panic!("Wrong path pattern: \"{}\" {}", path, err),
-            };
-            // actix creates one router per thread
-            let names: Vec<_> = re
-                .capture_names()
-                .filter_map(|name| name.map(|name| Rc::new(name.to_owned())))
-                .collect();
-            data.push((re, names, len));
-            re_set.push(pattern);
-        }
+                let re = match Regex::new(&pattern) {
+                    Ok(re) => re,
+                    Err(err) => panic!("Wrong path pattern: \"{}\" {}", path, err),
+                };
+                // actix creates one router per thread
+                let names: Vec<_> = re
+                    .capture_names()
+                    .filter_map(|name| name.map(|name| Rc::new(name.to_owned())))
+                    .collect();
+                data.push((re, names, len));
+                re_set.push(pattern);
+            }
 
-        ResourceDef {
-            id: 0,
-            tp: PatternType::DynamicSet(RegexSet::new(re_set).unwrap(), data),
-            elements: Vec::new(),
-            name: String::new(),
-            pattern: "".to_owned(),
+            ResourceDef {
+                id: 0,
+                tp: PatternType::DynamicSet(RegexSet::new(re_set).unwrap(), data),
+                elements: Vec::new(),
+                name: String::new(),
+                pattern: "".to_owned(),
+            }
         }
     }
 
@@ -616,7 +625,7 @@ impl<'a> From<&'a str> for ResourceDef {
 
 impl From<String> for ResourceDef {
     fn from(path: String) -> ResourceDef {
-        ResourceDef::new(&path)
+        ResourceDef::new(path)
     }
 }
 
@@ -700,14 +709,11 @@ mod tests {
 
     #[test]
     fn test_dynamic_set() {
-        let re = ResourceDef::new_set(
-            vec![
-                "/user/{id}",
-                "/v{version}/resource/{id}",
-                "/{id:[[:digit:]]{6}}",
-            ]
-            .iter(),
-        );
+        let re = ResourceDef::new_set(vec![
+            "/user/{id}",
+            "/v{version}/resource/{id}",
+            "/{id:[[:digit:]]{6}}",
+        ]);
         assert!(re.is_match("/user/profile"));
         assert!(re.is_match("/user/2345"));
         assert!(!re.is_match("/user/2345/"));
