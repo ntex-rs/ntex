@@ -3,17 +3,15 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
+use actix_utils::mpsc::Receiver;
 use futures::Stream;
 
-use crate::sink::Sink;
-
-pub struct Connect<Io, Codec, St = ()>
+pub struct Connect<Io, Codec>
 where
     Codec: Encoder + Decoder,
 {
     io: Io,
-    sink: Sink<<Codec as Encoder>::Item>,
-    _t: PhantomData<(St, Codec)>,
+    _t: PhantomData<Codec>,
 }
 
 impl<Io, Codec> Connect<Io, Codec>
@@ -21,36 +19,33 @@ where
     Io: AsyncRead + AsyncWrite,
     Codec: Encoder + Decoder,
 {
-    pub(crate) fn new(io: Io, sink: Sink<<Codec as Encoder>::Item>) -> Self {
+    pub(crate) fn new(io: Io) -> Self {
         Self {
             io,
-            sink,
             _t: PhantomData,
         }
     }
 
-    pub fn codec(self, codec: Codec) -> ConnectResult<Io, (), Codec> {
+    pub fn codec(
+        self,
+        codec: Codec,
+    ) -> ConnectResult<Io, (), Codec, Receiver<<Codec as Encoder>::Item>> {
         ConnectResult {
             state: (),
-            sink: self.sink,
+            out: None,
             framed: Framed::new(self.io, codec),
         }
     }
 }
 
 #[pin_project::pin_project]
-pub struct ConnectResult<Io, St, Codec: Encoder + Decoder> {
+pub struct ConnectResult<Io, St, Codec: Encoder + Decoder, Out> {
     pub(crate) state: St,
+    pub(crate) out: Option<Out>,
     pub(crate) framed: Framed<Io, Codec>,
-    pub(crate) sink: Sink<<Codec as Encoder>::Item>,
 }
 
-impl<Io, St, Codec: Encoder + Decoder> ConnectResult<Io, St, Codec> {
-    #[inline]
-    pub fn sink(&self) -> &Sink<<Codec as Encoder>::Item> {
-        &self.sink
-    }
-
+impl<Io, St, Codec: Encoder + Decoder, Out: Unpin> ConnectResult<Io, St, Codec, Out> {
     #[inline]
     pub fn get_ref(&self) -> &Io {
         self.framed.get_ref()
@@ -61,17 +56,28 @@ impl<Io, St, Codec: Encoder + Decoder> ConnectResult<Io, St, Codec> {
         self.framed.get_mut()
     }
 
+    pub fn out<U>(self, out: U) -> ConnectResult<Io, St, Codec, U>
+    where
+        U: Stream<Item = <Codec as Encoder>::Item> + Unpin,
+    {
+        ConnectResult {
+            state: self.state,
+            framed: self.framed,
+            out: Some(out),
+        }
+    }
+
     #[inline]
-    pub fn state<S>(self, state: S) -> ConnectResult<Io, S, Codec> {
+    pub fn state<S>(self, state: S) -> ConnectResult<Io, S, Codec, Out> {
         ConnectResult {
             state,
             framed: self.framed,
-            sink: self.sink,
+            out: self.out,
         }
     }
 }
 
-impl<Io, St, Codec> Stream for ConnectResult<Io, St, Codec>
+impl<Io, St, Codec, Out> Stream for ConnectResult<Io, St, Codec, Out>
 where
     Io: AsyncRead + AsyncWrite,
     Codec: Encoder + Decoder,
@@ -83,7 +89,8 @@ where
     }
 }
 
-impl<Io, St, Codec> futures::Sink<<Codec as Encoder>::Item> for ConnectResult<Io, St, Codec>
+impl<Io, St, Codec, Out> futures::Sink<<Codec as Encoder>::Item>
+    for ConnectResult<Io, St, Codec, Out>
 where
     Io: AsyncRead + AsyncWrite,
     Codec: Encoder + Decoder,

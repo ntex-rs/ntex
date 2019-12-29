@@ -1,5 +1,13 @@
 # Changes
 
+## [0.5.0] - 2019-12-29
+
+* Simplify state management
+
+* Allow to set custom output stream
+
+* Removed disconnect callback
+
 ## [0.4.1] - 2019-12-11
 
 * Disconnect callback accepts owned state
