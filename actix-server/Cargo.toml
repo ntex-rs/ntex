@@ -1,6 +1,6 @@
 [package]
 name = "actix-server"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix server - General purpose tcp server"
 keywords = ["network", "framework", "async", "futures"]
@@ -21,10 +21,10 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
-actix-service = "1.0.0"
+actix-service = "1.0.1"
 actix-rt = "1.0.0"
 actix-codec = "0.2.0"
-actix-utils = "1.0.0"
+actix-utils = "1.0.4"
 
 log = "0.4"
 num_cpus = "1.11"
@@ -38,5 +38,5 @@ mio-uds = { version = "0.6.7" }
 
 [dev-dependencies]
 bytes = "0.5"
-env_logger = "0.6"
+env_logger = "0.7"
 actix-testing = "1.0.0"

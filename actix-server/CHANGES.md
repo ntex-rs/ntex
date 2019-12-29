@@ -1,5 +1,11 @@
 # Changes
 
+## [1.0.1] - 2019-12-29
+
+### Changed
+
+* Rename `.start()` method to `.run()`
+
 ## [1.0.0] - 2019-12-11
 
 ### Changed

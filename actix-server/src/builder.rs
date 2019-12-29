@@ -31,7 +31,7 @@ pub struct ServerBuilder {
     backlog: i32,
     workers: Vec<(usize, WorkerClient)>,
     services: Vec<Box<dyn InternalServiceFactory>>,
-    sockets: Vec<(Token, StdListener)>,
+    sockets: Vec<(Token, String, StdListener)>,
     accept: AcceptLoop,
     exit: bool,
     shutdown_timeout: Duration,
@@ -146,8 +146,8 @@ impl ServerBuilder {
             let mut srv = ConfiguredService::new(apply);
             for (name, lst) in cfg.services {
                 let token = self.token.next();
-                srv.stream(token, name, lst.local_addr()?);
-                self.sockets.push((token, StdListener::Tcp(lst)));
+                srv.stream(token, name.clone(), lst.local_addr()?);
+                self.sockets.push((token, name, StdListener::Tcp(lst)));
             }
             self.services.push(Box::new(srv));
         }
@@ -172,7 +172,8 @@ impl ServerBuilder {
                 factory.clone(),
                 lst.local_addr()?,
             ));
-            self.sockets.push((token, StdListener::Tcp(lst)));
+            self.sockets
+                .push((token, name.as_ref().to_string(), StdListener::Tcp(lst)));
         }
         Ok(self)
     }
@@ -222,7 +223,8 @@ impl ServerBuilder {
             factory.clone(),
             addr,
         ));
-        self.sockets.push((token, StdListener::Uds(lst)));
+        self.sockets
+            .push((token, name.as_ref().to_string(), StdListener::Uds(lst)));
         Ok(self)
     }
 
@@ -243,36 +245,18 @@ impl ServerBuilder {
             factory,
             lst.local_addr()?,
         ));
-        self.sockets.push((token, StdListener::Tcp(lst)));
+        self.sockets
+            .push((token, name.as_ref().to_string(), StdListener::Tcp(lst)));
         Ok(self)
     }
 
-    /// Spawn new thread and start listening for incoming connections.
-    ///
-    /// This method spawns new thread and starts new actix system. Other than
-    /// that it is similar to `start()` method. This method blocks.
-    ///
-    /// This methods panics if no socket addresses get bound.
-    ///
-    /// ```rust,ignore
-    /// use actix_web::*;
-    ///
-    /// fn main() -> std::io::Result<()> {
-    ///     Server::new().
-    ///         .service(
-    ///            HttpServer::new(|| App::new().service(web::service("/").to(|| HttpResponse::Ok())))
-    ///                .bind("127.0.0.1:0")
-    ///         .run()
-    /// }
-    /// ```
-    pub fn run(self) -> io::Result<()> {
-        let sys = System::new("http-server");
-        self.start();
-        sys.run()
+    #[doc(hidden)]
+    pub fn start(self) -> Server {
+        self.run()
     }
 
     /// Starts processing incoming connections and return server controller.
-    pub fn start(mut self) -> Server {
+    pub fn run(mut self) -> Server {
         if self.sockets.is_empty() {
             panic!("Server should have at least one bound socket");
         } else {
@@ -288,10 +272,15 @@ impl ServerBuilder {
 
             // start accept thread
             for sock in &self.sockets {
-                info!("Starting server on {}", sock.1);
+                info!("Starting \"{}\" service on {}", sock.1, sock.2);
             }
-            self.accept
-                .start(mem::replace(&mut self.sockets, Vec::new()), workers);
+            self.accept.start(
+                mem::replace(&mut self.sockets, Vec::new())
+                    .into_iter()
+                    .map(|t| (t.0, t.2))
+                    .collect(),
+                workers,
+            );
 
             // handle signals
             if !self.no_signals {
