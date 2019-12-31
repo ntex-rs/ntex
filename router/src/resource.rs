@@ -1,6 +1,5 @@
 use std::cmp::min;
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 use regex::{escape, Regex, RegexSet};
 
@@ -31,8 +30,8 @@ enum PatternElement {
 enum PatternType {
     Static(String),
     Prefix(String),
-    Dynamic(Regex, Vec<Rc<String>>, usize),
-    DynamicSet(RegexSet, Vec<(Regex, Vec<Rc<String>>, usize)>),
+    Dynamic(Regex, Vec<&'static str>, usize),
+    DynamicSet(RegexSet, Vec<(Regex, Vec<&'static str>, usize)>),
 }
 
 impl ResourceDef {
@@ -58,7 +57,9 @@ impl ResourceDef {
                 // actix creates one router per thread
                 let names: Vec<_> = re
                     .capture_names()
-                    .filter_map(|name| name.map(|name| Rc::new(name.to_owned())))
+                    .filter_map(|name| {
+                        name.map(|name| Box::leak(Box::new(name.to_owned())).as_str())
+                    })
                     .collect();
                 data.push((re, names, len));
                 re_set.push(pattern);
@@ -117,7 +118,9 @@ impl ResourceDef {
             // actix creates one router per thread
             let names = re
                 .capture_names()
-                .filter_map(|name| name.map(|name| Rc::new(name.to_owned())))
+                .filter_map(|name| {
+                    name.map(|name| Box::leak(Box::new(name.to_owned())).as_str())
+                })
                 .collect();
             PatternType::Dynamic(re, names, len)
         } else if for_prefix {

@@ -1,5 +1,4 @@
 use std::ops::Index;
-use std::rc::Rc;
 
 use serde::de;
 
@@ -19,7 +18,7 @@ pub(crate) enum PathItem {
 pub struct Path<T> {
     path: T,
     pub(crate) skip: u16,
-    pub(crate) segments: Vec<(Rc<String>, PathItem)>,
+    pub(crate) segments: Vec<(&'static str, PathItem)>,
 }
 
 impl<T: Default> Default for Path<T> {
@@ -96,7 +95,7 @@ impl<T: ResourcePath> Path<T> {
         self.skip += n;
     }
 
-    pub(crate) fn add(&mut self, name: Rc<String>, value: PathItem) {
+    pub(crate) fn add(&mut self, name: &'static str, value: PathItem) {
         match value {
             PathItem::Static(s) => self.segments.push((name, PathItem::Static(s))),
             PathItem::Segment(begin, end) => self
@@ -106,9 +105,8 @@ impl<T: ResourcePath> Path<T> {
     }
 
     #[doc(hidden)]
-    pub fn add_static(&mut self, name: &str, value: &'static str) {
-        self.segments
-            .push((Rc::new(name.to_string()), PathItem::Static(value)));
+    pub fn add_static(&mut self, name: &'static str, value: &'static str) {
+        self.segments.push((name, PathItem::Static(value)));
     }
 
     #[inline]
@@ -126,7 +124,7 @@ impl<T: ResourcePath> Path<T> {
     /// Get matched parameter by name without type conversion
     pub fn get(&self, key: &str) -> Option<&str> {
         for item in self.segments.iter() {
-            if key == item.0.as_str() {
+            if key == item.0 {
                 return match item.1 {
                     PathItem::Static(ref s) => Some(&s),
                     PathItem::Segment(s, e) => {
