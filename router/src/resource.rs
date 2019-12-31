@@ -1,11 +1,10 @@
 use std::cmp::min;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use regex::{escape, Regex, RegexSet};
 
 use crate::path::{Path, PathItem};
-use crate::{IntoPattern, Resource, ResourceElements, ResourcePath};
+use crate::{IntoPattern, Resource, ResourcePath};
 
 const MAX_DYNAMIC_SEGMENTS: usize = 16;
 
@@ -464,66 +463,26 @@ impl ResourceDef {
     }
 
     /// Build resource path from elements. Returns `true` on success.
-    pub fn resource_path<U: ResourceElements>(&self, path: &mut String, data: U) -> bool {
+    pub fn resource_path<U, I>(&self, path: &mut String, elements: &mut U) -> bool
+    where
+        U: Iterator<Item = I>,
+        I: AsRef<str>,
+    {
         match self.tp {
             PatternType::Prefix(ref p) => path.push_str(p),
             PatternType::Static(ref p) => path.push_str(p),
             PatternType::Dynamic(..) => {
-                let mut iter = self.elements.iter();
-                let mut map = HashMap::new();
-
-                let result = data.elements(|item| match item {
-                    either::Either::Left(val) => loop {
-                        if let Some(el) = iter.next() {
-                            match *el {
-                                PatternElement::Str(ref s) => path.push_str(s),
-                                PatternElement::Var(_) => {
-                                    path.push_str(val.as_ref());
-                                    return None;
-                                }
-                            }
-                        } else {
-                            return Some(false);
-                        }
-                    },
-                    either::Either::Right((name, val)) => {
-                        map.insert(name.to_string(), val.to_string());
-                        None
-                    }
-                });
-
-                if result.is_some() {
-                    return true;
-                } else {
-                    if map.is_empty() {
-                        // push static sections
-                        loop {
-                            if let Some(el) = iter.next() {
-                                match *el {
-                                    PatternElement::Str(ref s) => path.push_str(s),
-                                    PatternElement::Var(_) => {
-                                        return false;
-                                    }
-                                }
+                for el in &self.elements {
+                    match *el {
+                        PatternElement::Str(ref s) => path.push_str(s),
+                        PatternElement::Var(_) => {
+                            if let Some(val) = elements.next() {
+                                path.push_str(val.as_ref())
                             } else {
-                                break;
-                            }
-                        }
-                    } else {
-                        for el in iter {
-                            match *el {
-                                PatternElement::Str(ref s) => path.push_str(s),
-                                PatternElement::Var(ref name) => {
-                                    if let Some(val) = map.get(name) {
-                                        path.push_str(val);
-                                        continue;
-                                    }
-                                    return false;
-                                }
+                                return false;
                             }
                         }
                     }
-                    return true;
                 }
             }
             PatternType::DynamicSet(..) => {
@@ -673,7 +632,6 @@ pub(crate) fn insert_slash(path: &str) -> String {
 mod tests {
     use super::*;
     use http::Uri;
-    use std::collections::HashMap;
     use std::convert::TryFrom;
 
     #[test]
@@ -899,72 +857,5 @@ mod tests {
         assert!(re.match_path(&mut path));
         assert_eq!(&path["name"], "test2");
         assert_eq!(&path[0], "test2");
-    }
-
-    #[test]
-    fn test_resource_path() {
-        let mut s = String::new();
-        let resource = ResourceDef::new("/user/{item1}/test");
-        assert!(resource.resource_path(&mut s, &["user1"]));
-        assert_eq!(s, "/user/user1/test");
-
-        let mut s = String::new();
-        assert!(resource.resource_path(&mut s, (("item1", "user1"),)));
-        assert_eq!(s, "/user/user1/test");
-
-        let mut s = String::new();
-        let resource = ResourceDef::new("/user/{item1}/{item2}/test");
-        assert!(resource.resource_path(&mut s, &["item", "item2"]));
-        assert_eq!(s, "/user/item/item2/test");
-
-        let mut s = String::new();
-        assert!(resource.resource_path(&mut s, (("item1", "item"), ("item2", "item2"))));
-        assert_eq!(s, "/user/item/item2/test");
-
-        let mut s = String::new();
-        let resource = ResourceDef::new("/user/{item1}/{item2}");
-        assert!(resource.resource_path(&mut s, &["item", "item2"]));
-        assert_eq!(s, "/user/item/item2");
-
-        let mut s = String::new();
-        assert!(resource.resource_path(&mut s, (("item1", "item"), ("item2", "item2"))));
-        assert_eq!(s, "/user/item/item2");
-
-        let mut s = String::new();
-        let resource = ResourceDef::new("/user/{item1}/{item2}/");
-        assert!(resource.resource_path(&mut s, &["item", "item2"]));
-        assert_eq!(s, "/user/item/item2/");
-
-        let mut s = String::new();
-        assert!(!resource.resource_path(&mut s, &["item"]));
-
-        let mut s = String::new();
-        assert!(resource.resource_path(&mut s, &["item", "item2"]));
-        assert_eq!(s, "/user/item/item2/");
-        assert!(!resource.resource_path(&mut s, &["item"]));
-
-        let mut s = String::new();
-        assert!(resource.resource_path(&mut s, vec!["item", "item2"]));
-        assert_eq!(s, "/user/item/item2/");
-
-        let mut s = String::new();
-        assert!(resource.resource_path(&mut s, &vec!["item", "item2"]));
-        assert_eq!(s, "/user/item/item2/");
-
-        let mut s = String::new();
-        assert!(resource.resource_path(&mut s, &vec!["item", "item2"][..]));
-        assert_eq!(s, "/user/item/item2/");
-
-        let mut map = HashMap::new();
-        map.insert("item1", "item");
-        map.insert("item2", "item2");
-
-        let mut s = String::new();
-        assert!(resource.resource_path(&mut s, map));
-        assert_eq!(s, "/user/item/item2/");
-
-        let mut s = String::new();
-        assert!(resource.resource_path(&mut s, (("item1", "item"), ("item2", "item2"))));
-        assert_eq!(s, "/user/item/item2/");
     }
 }
