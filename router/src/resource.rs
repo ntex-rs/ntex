@@ -1,4 +1,5 @@
 use std::cmp::min;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use regex::{escape, Regex, RegexSet};
@@ -492,6 +493,41 @@ impl ResourceDef {
         true
     }
 
+    /// Build resource path from elements. Returns `true` on success.
+    pub fn resource_path_named<K, V, S>(
+        &self,
+        path: &mut String,
+        elements: &HashMap<K, V, S>,
+    ) -> bool
+    where
+        K: std::borrow::Borrow<str> + Eq + Hash,
+        V: AsRef<str>,
+        S: std::hash::BuildHasher,
+    {
+        match self.tp {
+            PatternType::Prefix(ref p) => path.push_str(p),
+            PatternType::Static(ref p) => path.push_str(p),
+            PatternType::Dynamic(..) => {
+                for el in &self.elements {
+                    match *el {
+                        PatternElement::Str(ref s) => path.push_str(s),
+                        PatternElement::Var(ref name) => {
+                            if let Some(val) = elements.get(name) {
+                                path.push_str(val.as_ref())
+                            } else {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            PatternType::DynamicSet(..) => {
+                return false;
+            }
+        }
+        true
+    }
+
     fn parse_param(pattern: &str) -> (PatternElement, String, &str, bool) {
         const DEFAULT_PATTERN: &str = "[^/]+";
         const DEFAULT_PATTERN_TAIL: &str = ".*";
@@ -857,5 +893,51 @@ mod tests {
         assert!(re.match_path(&mut path));
         assert_eq!(&path["name"], "test2");
         assert_eq!(&path[0], "test2");
+    }
+
+    #[test]
+    fn test_resource_path() {
+        let mut s = String::new();
+        let resource = ResourceDef::new("/user/{item1}/test");
+        assert!(resource.resource_path(&mut s, &mut (&["user1"]).into_iter()));
+        assert_eq!(s, "/user/user1/test");
+
+        let mut s = String::new();
+        let resource = ResourceDef::new("/user/{item1}/{item2}/test");
+        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).into_iter()));
+        assert_eq!(s, "/user/item/item2/test");
+
+        let mut s = String::new();
+        let resource = ResourceDef::new("/user/{item1}/{item2}");
+        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).into_iter()));
+        assert_eq!(s, "/user/item/item2");
+
+        let mut s = String::new();
+        let resource = ResourceDef::new("/user/{item1}/{item2}/");
+        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).into_iter()));
+        assert_eq!(s, "/user/item/item2/");
+
+        let mut s = String::new();
+        assert!(!resource.resource_path(&mut s, &mut (&["item"]).into_iter()));
+
+        let mut s = String::new();
+        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).into_iter()));
+        assert_eq!(s, "/user/item/item2/");
+        assert!(!resource.resource_path(&mut s, &mut (&["item"]).into_iter()));
+
+        let mut s = String::new();
+        assert!(resource.resource_path(&mut s, &mut vec!["item", "item2"].into_iter()));
+        assert_eq!(s, "/user/item/item2/");
+
+        let mut map = HashMap::new();
+        map.insert("item1", "item");
+
+        let mut s = String::new();
+        assert!(!resource.resource_path_named(&mut s, &map));
+
+        let mut s = String::new();
+        map.insert("item2", "item2");
+        assert!(resource.resource_path_named(&mut s, &map));
+        assert_eq!(s, "/user/item/item2/");
     }
 }

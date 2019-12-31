@@ -1,6 +1,8 @@
 # Changes
 
-## [0.2.4] - 2019-12-xx
+## [0.2.4] - 2019-12-31
+
+* Add `ResourceDef::resource_path_named()` path generation method
 
 ## [0.2.3] - 2019-12-25
 
