@@ -14,6 +14,12 @@ struct Inner {
     data: Slab<Option<LocalWaker>>,
 }
 
+impl Default for Condition {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Condition {
     pub fn new() -> Condition {
         Condition(Cell::new(Inner { data: Slab::new() }))
@@ -49,6 +55,16 @@ impl Drop for Condition {
 pub struct Waiter {
     token: usize,
     inner: Cell<Inner>,
+}
+
+impl Clone for Waiter {
+    fn clone(&self) -> Self {
+        let token = unsafe { self.inner.get_mut_unsafe() }.data.insert(None);
+        Waiter {
+            token,
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 impl Future for Waiter {
@@ -98,7 +114,14 @@ mod tests {
             lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
             Poll::Pending
         );
+        let mut waiter2 = waiter.clone();
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter2).poll(cx)).await,
+            Poll::Pending
+        );
+
         drop(cond);
         assert_eq!(waiter.await, ());
+        assert_eq!(waiter2.await, ());
     }
 }

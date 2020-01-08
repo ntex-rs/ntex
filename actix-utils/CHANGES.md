@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.6] - 2020-01-08
+
+* Add `Clone` impl for `condition::Waiter`
+
 ## [1.0.5] - 2020-01-08
 
 * Add `Condition` type.
