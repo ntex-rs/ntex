@@ -1,5 +1,11 @@
 # Changes
 
+## [1.0.5] - 2020-01-08
+
+* Add `Condition` type.
+
+* Add `Pool` of one-shot's.
+
 ## [1.0.4] - 2019-12-20
 
 * Add methods to check `LocalWaker` registration state.

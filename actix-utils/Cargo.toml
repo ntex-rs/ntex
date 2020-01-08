@@ -1,6 +1,6 @@
 [package]
 name = "actix-utils"
-version = "1.0.4"
+version = "1.0.5"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix utils - various actix net related services"
 keywords = ["network", "framework", "async", "futures"]
@@ -16,11 +16,13 @@ name = "actix_utils"
 path = "src/lib.rs"
 
 [dependencies]
-actix-service = "1.0.0"
+actix-service = "1.0.1"
 actix-rt = "1.0.0"
 actix-codec = "0.2.0"
+bitflags = "1.2"
 bytes = "0.5.3"
 either = "1.5.3"
 futures = "0.3.1"
 pin-project = "0.4.6"
 log = "0.4"
+slab = "0.4"
