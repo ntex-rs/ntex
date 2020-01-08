@@ -351,6 +351,15 @@ where
     }
 }
 
+/// Convert object of type `T` to a service `S`
+pub fn into_service<T, S>(tp: T) -> S
+where
+    S: Service,
+    T: IntoService<S>,
+{
+    tp.into_service()
+}
+
 pub mod dev {
     pub use crate::and_then::{AndThenService, AndThenServiceFactory};
     pub use crate::and_then_apply_fn::{AndThenApplyFn, AndThenApplyFnFactory};

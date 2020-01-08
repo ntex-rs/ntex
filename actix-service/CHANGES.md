@@ -1,5 +1,12 @@
 # Changes
 
+## [1.0.2] - 2020-01-08
+
+### Added
+
+* Add `into_service` helper function
+
+
 ## [1.0.1] - 2019-12-22
 
 ### Changed
