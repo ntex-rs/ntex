@@ -43,6 +43,18 @@ impl PartialEq<str> for ByteString {
     }
 }
 
+impl<T: AsRef<str>> PartialEq<T> for ByteString {
+    fn eq(&self, other: &T) -> bool {
+        &self[..] == other.as_ref()
+    }
+}
+
+impl AsRef<[u8]> for ByteString {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
 impl hash::Hash for ByteString {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         (**self).hash(state);
@@ -146,6 +158,14 @@ mod test {
     use super::*;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+
+    #[test]
+    fn test_partial_eq() {
+        let s: ByteString = ByteString::from_static("test");
+        assert_eq!(s, "test");
+        assert_eq!(s, *"test");
+        assert_eq!(s, "test".to_string());
+    }
 
     #[test]
     fn test_new() {
