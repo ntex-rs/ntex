@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.4] - 2020-01-14
+
+* Fix `AsRef<str>` impl
+
 ## [0.1.3] - 2020-01-13
 
 * Add `PartialEq<T: AsRef<str>>`, `AsRef<[u8]>` impls

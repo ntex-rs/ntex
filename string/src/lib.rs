@@ -7,7 +7,7 @@ use bytes::Bytes;
 /// A utf-8 encoded string with [`Bytes`] as a storage.
 ///
 /// [`Bytes`]: https://docs.rs/bytes/0.5.3/bytes/struct.Bytes.html
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
+#[derive(Clone, Eq, Ord, PartialOrd, Default)]
 pub struct ByteString(Bytes);
 
 impl ByteString {
@@ -52,6 +52,12 @@ impl<T: AsRef<str>> PartialEq<T> for ByteString {
 impl AsRef<[u8]> for ByteString {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
+    }
+}
+
+impl AsRef<str> for ByteString {
+    fn as_ref(&self) -> &str {
+        &*self
     }
 }
 
@@ -187,6 +193,8 @@ mod test {
     fn test_from_string() {
         let s: ByteString = "hello".to_string().into();
         assert_eq!(&s, "hello");
+        let t: &str = s.as_ref();
+        assert_eq!(t, "hello");
     }
 
     #[test]
