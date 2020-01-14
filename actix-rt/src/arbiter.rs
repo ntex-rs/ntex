@@ -42,8 +42,8 @@ impl fmt::Debug for ArbiterCommand {
 
 #[derive(Debug)]
 /// Arbiters provide an asynchronous execution environment for actors, functions
-/// and futures. When an Arbiter is created, they spawn a new OS thread, and
-/// host an event loop. Some Arbiter functions execute on the current thread.
+/// and futures. When an Arbiter is created, it spawns a new OS thread, and
+/// hosts an event loop. Some Arbiter functions execute on the current thread.
 pub struct Arbiter {
     sender: UnboundedSender<ArbiterCommand>,
     thread_handle: Option<thread::JoinHandle<()>>,

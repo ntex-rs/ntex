@@ -57,7 +57,7 @@ pub use self::transform::{apply, Transform};
 ///
 ///      fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> { ... }
 ///
-///      fn call(&mut self) -> Self::Future { ... }
+///      fn call(&mut self, req: Self::Request) -> Self::Future { ... }
 /// }
 /// ```
 ///
@@ -82,7 +82,7 @@ pub trait Service {
 
     /// Returns `Ready` when the service is able to process requests.
     ///
-    /// If the service is at capacity, then `NotReady` is returned and the task
+    /// If the service is at capacity, then `Pending` is returned and the task
     /// is notified when the service becomes ready again. This function is
     /// expected to be called while on a task.
     ///
