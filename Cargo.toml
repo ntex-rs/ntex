@@ -27,6 +27,7 @@ actix-service = { path = "actix-service" }
 actix-testing = { path = "actix-testing" }
 actix-threadpool = { path = "actix-threadpool" }
 actix-tls = { path = "actix-tls" }
+actix-tracing = { path = "actix-tracing" }
 actix-utils = { path = "actix-utils" }
 actix-router = { path = "router" }
 bytestring = { path = "string" }
