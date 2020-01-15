@@ -1,5 +1,11 @@
 # Changes
 
+## [1.0.3] - 2020-01-15
+
+### Fixed
+
+* Fixed unsoundness in `AndThenService` impl
+
 ## [1.0.2] - 2020-01-08
 
 ### Added
