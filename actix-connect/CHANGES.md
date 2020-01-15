@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.2] - 2020-01-15
+
+* Fix actix-service 1.0.3 compatibility
+
 ## [1.0.1] - 2019-12-15
 
 * Fix trust-dns-resolver compilation
