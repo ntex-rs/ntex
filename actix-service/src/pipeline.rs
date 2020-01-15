@@ -50,7 +50,7 @@ impl<T: Service> Pipeline<T> {
     where
         Self: Sized,
         F: IntoService<U>,
-        U: Service<Request = T::Response, Error = T::Error> + 'static,
+        U: Service<Request = T::Response, Error = T::Error>,
     {
         Pipeline {
             service: AndThenService::new(self.service, service.into_service()),
@@ -69,7 +69,7 @@ impl<T: Service> Pipeline<T> {
     where
         Self: Sized,
         I: IntoService<U>,
-        U: Service + 'static,
+        U: Service,
         F: FnMut(T::Response, &mut U) -> Fut,
         Fut: Future<Output = Result<Res, Err>>,
         Err: From<T::Error> + From<U::Error>,
@@ -88,7 +88,7 @@ impl<T: Service> Pipeline<T> {
     where
         Self: Sized,
         F: IntoService<U>,
-        U: Service<Request = Result<T::Response, T::Error>, Error = T::Error> + 'static,
+        U: Service<Request = Result<T::Response, T::Error>, Error = T::Error>,
     {
         Pipeline {
             service: ThenService::new(self.service, service.into_service()),
@@ -179,7 +179,6 @@ impl<T: ServiceFactory> PipelineFactory<T> {
             Error = T::Error,
             InitError = T::InitError,
         >,
-        U::Service: 'static,
     {
         PipelineFactory {
             factory: AndThenServiceFactory::new(self.factory, factory.into_factory()),
@@ -200,7 +199,6 @@ impl<T: ServiceFactory> PipelineFactory<T> {
         T::Config: Clone,
         I: IntoServiceFactory<U>,
         U: ServiceFactory<Config = T::Config, InitError = T::InitError>,
-        U::Service: 'static,
         F: FnMut(T::Response, &mut U::Service) -> Fut + Clone,
         Fut: Future<Output = Result<Res, Err>>,
         Err: From<T::Error> + From<U::Error>,
@@ -227,7 +225,6 @@ impl<T: ServiceFactory> PipelineFactory<T> {
             Error = T::Error,
             InitError = T::InitError,
         >,
-        U::Service: 'static,
     {
         PipelineFactory {
             factory: ThenServiceFactory::new(self.factory, factory.into_factory()),

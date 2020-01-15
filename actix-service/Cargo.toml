@@ -1,6 +1,6 @@
 [package]
 name = "actix-service"
-version = "1.0.3"
+version = "1.0.4"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix service"
 keywords = ["network", "framework", "async", "futures"]
@@ -13,7 +13,6 @@ edition = "2018"
 
 [badges]
 travis-ci = { repository = "actix/actix-service", branch = "master" }
-appveyor = { repository = "actix/actix-net" }
 codecov = { repository = "actix/actix-service", branch = "master", service = "github" }
 
 [lib]

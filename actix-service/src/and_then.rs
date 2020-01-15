@@ -9,7 +9,7 @@ use crate::cell::Cell;
 /// of another service which completes successfully.
 ///
 /// This is created by the `ServiceExt::and_then` method.
-pub struct AndThenService<A, B>(Cell<(A, B)>);
+pub struct AndThenService<A, B>(Cell<A>, Cell<B>);
 
 impl<A, B> AndThenService<A, B> {
     /// Create new `AndThen` combinator
@@ -18,13 +18,13 @@ impl<A, B> AndThenService<A, B> {
         A: Service,
         B: Service<Request = A::Response, Error = A::Error>,
     {
-        Self(Cell::new((a, b)))
+        Self(Cell::new(a), Cell::new(b))
     }
 }
 
 impl<A, B> Clone for AndThenService<A, B> {
     fn clone(&self) -> Self {
-        AndThenService(self.0.clone())
+        AndThenService(self.0.clone(), self.1.clone())
     }
 }
 
@@ -39,10 +39,8 @@ where
     type Future = AndThenServiceResponse<A, B>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let srv = self.0.get_mut();
-
-        let not_ready = !srv.0.poll_ready(cx)?.is_ready();
-        if !srv.1.poll_ready(cx)?.is_ready() || not_ready {
+        let not_ready = { !self.0.get_mut().poll_ready(cx)?.is_ready() };
+        if !self.1.poll_ready(cx)?.is_ready() || not_ready {
             Poll::Pending
         } else {
             Poll::Ready(Ok(()))
@@ -51,7 +49,7 @@ where
 
     fn call(&mut self, req: A::Request) -> Self::Future {
         AndThenServiceResponse {
-            state: State::A(self.0.get_mut().0.call(req), Some(self.0.clone())),
+            state: State::A(self.0.get_mut().call(req), Some(self.1.clone())),
         }
     }
 }
@@ -72,7 +70,7 @@ where
     A: Service,
     B: Service<Request = A::Response, Error = A::Error>,
 {
-    A(#[pin] A::Future, Option<Cell<(A, B)>>),
+    A(#[pin] A::Future, Option<Cell<B>>),
     B(#[pin] B::Future),
     Empty,
 }
@@ -94,7 +92,7 @@ where
                 Poll::Ready(res) => {
                     let mut b = b.take().unwrap();
                     this.state.set(State::Empty); // drop fut A
-                    let fut = b.get_mut().1.call(res);
+                    let fut = b.get_mut().call(res);
                     this.state.set(State::B(fut));
                     self.poll(cx)
                 }
