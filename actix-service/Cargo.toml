@@ -1,6 +1,6 @@
 [package]
 name = "actix-service"
-version = "1.0.4"
+version = "1.0.5"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix service"
 keywords = ["network", "framework", "async", "futures"]

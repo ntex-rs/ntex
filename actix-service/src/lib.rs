@@ -361,10 +361,7 @@ where
 }
 
 pub mod dev {
-    pub use crate::and_then::{AndThenService, AndThenServiceFactory};
-    pub use crate::and_then_apply_fn::{AndThenApplyFn, AndThenApplyFnFactory};
     pub use crate::apply::{Apply, ApplyServiceFactory};
-    pub use crate::apply_cfg::{ApplyConfigService, ApplyConfigServiceFactory};
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
@@ -372,7 +369,6 @@ pub mod dev {
     pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrServiceFactory};
     pub use crate::map_init_err::MapInitErr;
-    pub use crate::then::{ThenService, ThenServiceFactory};
     pub use crate::transform::ApplyTransform;
     pub use crate::transform_err::TransformMapInitErr;
 }
