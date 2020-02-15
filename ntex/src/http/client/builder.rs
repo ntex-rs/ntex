@@ -4,12 +4,14 @@ use std::fmt;
 use std::rc::Rc;
 use std::time::Duration;
 
-use actix_http::client::{Connect, ConnectError, Connection, Connector};
-use actix_http::http::{header, Error as HttpError, HeaderMap, HeaderName};
 use actix_service::Service;
 
-use crate::connect::ConnectorWrapper;
-use crate::{Client, ClientConfig};
+use crate::http::error::HttpError;
+use crate::http::header::{self, HeaderMap, HeaderName};
+
+use super::connect::ConnectorWrapper;
+use super::error::ConnectError;
+use super::{Client, ClientConfig, Connect, Connection, Connector};
 
 /// An HTTP Client builder
 ///

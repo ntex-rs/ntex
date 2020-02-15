@@ -3,12 +3,73 @@ use std::io;
 
 use actix_connect::resolver::ResolveError;
 use derive_more::{Display, From};
+use serde_json::error::Error as JsonError;
 
 #[cfg(feature = "openssl")]
 use actix_connect::ssl::openssl::{HandshakeError, SslError};
 
-use crate::http::error::{Error, HttpError, ParseError, ResponseError};
+use crate::http::error::{Error, HttpError, ParseError, PayloadError, ResponseError};
+use crate::http::header::HeaderValue;
 use crate::http::StatusCode;
+use crate::ws::ProtocolError;
+
+/// Websocket client error
+#[derive(Debug, Display, From)]
+pub enum WsClientError {
+    /// Invalid response status
+    #[display(fmt = "Invalid response status")]
+    InvalidResponseStatus(StatusCode),
+    /// Invalid upgrade header
+    #[display(fmt = "Invalid upgrade header")]
+    InvalidUpgradeHeader,
+    /// Invalid connection header
+    #[display(fmt = "Invalid connection header")]
+    InvalidConnectionHeader(HeaderValue),
+    /// Missing CONNECTION header
+    #[display(fmt = "Missing CONNECTION header")]
+    MissingConnectionHeader,
+    /// Missing SEC-WEBSOCKET-ACCEPT header
+    #[display(fmt = "Missing SEC-WEBSOCKET-ACCEPT header")]
+    MissingWebSocketAcceptHeader,
+    /// Invalid challenge response
+    #[display(fmt = "Invalid challenge response")]
+    InvalidChallengeResponse(String, HeaderValue),
+    /// Protocol error
+    #[display(fmt = "{}", _0)]
+    Protocol(ProtocolError),
+    /// Send request error
+    #[display(fmt = "{}", _0)]
+    SendRequest(SendRequestError),
+}
+
+impl From<InvalidUrl> for WsClientError {
+    fn from(err: InvalidUrl) -> Self {
+        WsClientError::SendRequest(err.into())
+    }
+}
+
+impl From<HttpError> for WsClientError {
+    fn from(err: HttpError) -> Self {
+        WsClientError::SendRequest(err.into())
+    }
+}
+
+/// A set of errors that can occur during parsing json payloads
+#[derive(Debug, Display, From)]
+pub enum JsonPayloadError {
+    /// Content type error
+    #[display(fmt = "Content type error")]
+    ContentType,
+    /// Deserialize error
+    #[display(fmt = "Json deserialize error: {}", _0)]
+    Deserialize(JsonError),
+    /// Payload error
+    #[display(fmt = "Error that occur during reading payload: {}", _0)]
+    Payload(PayloadError),
+}
+
+/// Return `InternalServerError` for `JsonPayloadError`
+impl ResponseError for JsonPayloadError {}
 
 /// A set of errors that can occur while connecting to an HTTP host
 #[derive(Debug, Display, From)]

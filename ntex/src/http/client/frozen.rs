@@ -7,13 +7,13 @@ use bytes::Bytes;
 use futures_core::Stream;
 use serde::Serialize;
 
-use actix_http::body::Body;
-use actix_http::http::header::IntoHeaderValue;
-use actix_http::http::{Error as HttpError, HeaderMap, HeaderName, Method, Uri};
-use actix_http::{Error, RequestHead};
+use crate::http::body::Body;
+use crate::http::error::{Error, HttpError};
+use crate::http::header::{HeaderMap, HeaderName, IntoHeaderValue};
+use crate::http::{Method, RequestHead, Uri};
 
-use crate::sender::{RequestSender, SendClientRequest};
-use crate::ClientConfig;
+use super::sender::{RequestSender, SendClientRequest};
+use super::ClientConfig;
 
 /// `FrozenClientRequest` struct represents clonable client request.
 /// It could be used to send same request multiple times.

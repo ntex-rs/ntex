@@ -5,16 +5,15 @@ use std::task::{Context, Poll};
 use std::{fmt, io, mem, net};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_http::body::Body;
-use actix_http::client::{
-    Connect as ClientConnect, ConnectError, Connection, SendRequestError,
-};
-use actix_http::h1::ClientCodec;
-use actix_http::http::HeaderMap;
-use actix_http::{RequestHead, RequestHeadType, ResponseHead};
 use actix_service::Service;
 
-use crate::response::ClientResponse;
+use crate::http::body::Body;
+use crate::http::h1::ClientCodec;
+use crate::http::{HeaderMap, RequestHead, RequestHeadType, ResponseHead};
+
+use super::error::{ConnectError, SendRequestError};
+use super::response::ClientResponse;
+use super::{Connect as ClientConnect, Connection};
 
 pub(crate) struct ConnectorWrapper<T>(pub T);
 

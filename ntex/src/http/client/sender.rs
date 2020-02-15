@@ -11,21 +11,21 @@ use futures_core::{Future, Stream};
 use serde::Serialize;
 use serde_json;
 
-use actix_http::body::{Body, BodyStream};
-use actix_http::http::header::{self, IntoHeaderValue};
-use actix_http::http::{Error as HttpError, HeaderMap, HeaderName};
-use actix_http::{Error, RequestHead};
+use crate::http::body::{Body, BodyStream};
+use crate::http::error::{Error, HttpError};
+use crate::http::header::{self, HeaderMap, HeaderName, IntoHeaderValue};
+use crate::http::RequestHead;
 
 #[cfg(feature = "compress")]
-use actix_http::encoding::Decoder;
+use crate::http::encoding::Decoder;
 #[cfg(feature = "compress")]
-use actix_http::http::header::ContentEncoding;
+use crate::http::header::ContentEncoding;
 #[cfg(feature = "compress")]
-use actix_http::{Payload, PayloadStream};
+use crate::http::{Payload, PayloadStream};
 
-use crate::error::{FreezeRequestError, InvalidUrl, SendRequestError};
-use crate::response::ClientResponse;
-use crate::ClientConfig;
+use super::error::{FreezeRequestError, InvalidUrl, SendRequestError};
+use super::response::ClientResponse;
+use super::ClientConfig;
 
 #[derive(Debug, From)]
 pub(crate) enum PrepForSendingError {

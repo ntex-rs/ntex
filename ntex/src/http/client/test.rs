@@ -2,14 +2,15 @@
 use std::convert::TryFrom;
 use std::fmt::Write as FmtWrite;
 
-use actix_http::cookie::{Cookie, CookieJar, USERINFO};
-use actix_http::http::header::{self, Header, HeaderValue, IntoHeaderValue};
-use actix_http::http::{Error as HttpError, HeaderName, StatusCode, Version};
-use actix_http::{h1, Payload, ResponseHead};
 use bytes::Bytes;
 use percent_encoding::percent_encode;
 
-use crate::ClientResponse;
+use crate::http::cookie::{Cookie, CookieJar, USERINFO};
+use crate::http::header::{self, HeaderName, HeaderValue, IntoHeaderValue};
+use crate::http::{h1, Payload, ResponseHead};
+use crate::http::{Error as HttpError, StatusCode, Version};
+
+use super::ClientResponse;
 
 /// Test `ClientResponse` builder
 pub struct TestResponse {
@@ -43,15 +44,6 @@ impl TestResponse {
     pub fn version(mut self, ver: Version) -> Self {
         self.head.version = ver;
         self
-    }
-
-    /// Set a header
-    pub fn set<H: Header>(mut self, hdr: H) -> Self {
-        if let Ok(value) = hdr.try_into() {
-            self.head.headers.append(H::name(), value);
-            return self;
-        }
-        panic!("Can not set header");
     }
 
     /// Append a header

@@ -6,15 +6,15 @@ use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
 use futures_core::{ready, Future, Stream};
-
-use actix_http::cookie::Cookie;
-use actix_http::error::{CookieParseError, PayloadError};
-use actix_http::http::header::{CONTENT_LENGTH, SET_COOKIE};
-use actix_http::http::{HeaderMap, StatusCode, Version};
-use actix_http::{Extensions, HttpMessage, Payload, PayloadStream, ResponseHead};
 use serde::de::DeserializeOwned;
 
-use crate::error::JsonPayloadError;
+use crate::http::cookie::Cookie;
+use crate::http::error::{CookieParseError, PayloadError};
+use crate::http::header::{CONTENT_LENGTH, SET_COOKIE};
+use crate::http::{Extensions, HttpMessage, Payload, PayloadStream, ResponseHead};
+use crate::http::{HeaderMap, StatusCode, Version};
+
+use super::error::JsonPayloadError;
 
 /// Client Response
 pub struct ClientResponse<S = PayloadStream> {

@@ -9,19 +9,16 @@ use futures_core::Stream;
 use percent_encoding::percent_encode;
 use serde::Serialize;
 
-use actix_http::body::Body;
-use actix_http::cookie::{Cookie, CookieJar, USERINFO};
-use actix_http::http::header::{self, Header, IntoHeaderValue};
-use actix_http::http::{
-    uri, ConnectionType, Error as HttpError, HeaderMap, HeaderName, HeaderValue, Method,
-    Uri, Version,
-};
-use actix_http::{Error, RequestHead};
+use crate::http::body::Body;
+use crate::http::cookie::{Cookie, CookieJar, USERINFO};
+use crate::http::error::{Error, HttpError};
+use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, IntoHeaderValue};
+use crate::http::{uri, ConnectionType, Method, RequestHead, Uri, Version};
 
-use crate::error::{FreezeRequestError, InvalidUrl};
-use crate::frozen::FrozenClientRequest;
-use crate::sender::{PrepForSendingError, RequestSender, SendClientRequest};
-use crate::ClientConfig;
+use super::error::{FreezeRequestError, InvalidUrl};
+use super::frozen::FrozenClientRequest;
+use super::sender::{PrepForSendingError, RequestSender, SendClientRequest};
+use super::ClientConfig;
 
 #[cfg(any(feature = "flate2-zlib", feature = "flate2-rust"))]
 const HTTPS_ENCODING: &str = "br, gzip, deflate";
@@ -150,29 +147,6 @@ impl ClientRequest {
     /// Returns request's mutable headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.head.headers
-    }
-
-    /// Set a header.
-    ///
-    /// ```rust
-    /// fn main() {
-    /// # actix_rt::System::new("test").block_on(futures::future::lazy(|_| {
-    ///     let req = awc::Client::new()
-    ///         .get("http://www.rust-lang.org")
-    ///         .set(awc::http::header::Date::now())
-    ///         .set(awc::http::header::ContentType(mime::TEXT_HTML));
-    /// #   Ok::<_, ()>(())
-    /// # }));
-    /// }
-    /// ```
-    pub fn set<H: Header>(mut self, hdr: H) -> Self {
-        match hdr.try_into() {
-            Ok(value) => {
-                self.head.headers.insert(H::name(), value);
-            }
-            Err(e) => self.err = Some(e.into()),
-        }
-        self
     }
 
     /// Append a header.

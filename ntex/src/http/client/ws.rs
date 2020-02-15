@@ -6,24 +6,24 @@ use std::rc::Rc;
 use std::{fmt, str};
 
 use actix_codec::Framed;
-use actix_http::cookie::{Cookie, CookieJar};
-use actix_http::{ws, Payload, RequestHead};
 use actix_rt::time::timeout;
 use percent_encoding::percent_encode;
 
-use actix_http::cookie::USERINFO;
-pub use actix_http::ws::{CloseCode, CloseReason, Codec, Frame, Message};
+pub use crate::ws::{self, CloseCode, CloseReason, Codec, Frame, Message};
 
-use crate::connect::BoxedSocket;
-use crate::error::{InvalidUrl, SendRequestError, WsClientError};
+use crate::http::cookie::USERINFO;
+use crate::http::cookie::{Cookie, CookieJar};
+use crate::http::error::HttpError;
 use crate::http::header::{
     self, HeaderName, HeaderValue, IntoHeaderValue, AUTHORIZATION,
 };
-use crate::http::{
-    ConnectionType, Error as HttpError, Method, StatusCode, Uri, Version,
-};
-use crate::response::ClientResponse;
-use crate::ClientConfig;
+use crate::http::{ConnectionType, Method, StatusCode, Uri, Version};
+use crate::http::{Payload, RequestHead};
+
+use super::connect::BoxedSocket;
+use super::error::{InvalidUrl, SendRequestError, WsClientError};
+use super::response::ClientResponse;
+use super::ClientConfig;
 
 /// `WebSocket` connection
 pub struct WebsocketsRequest {
@@ -219,7 +219,7 @@ impl WebsocketsRequest {
         mut self,
     ) -> Result<(ClientResponse, Framed<BoxedSocket, Codec>), WsClientError> {
         if let Some(e) = self.err.take() {
-            return Err(e.into());
+            return Err(WsClientError::from(e));
         }
 
         // validate uri
