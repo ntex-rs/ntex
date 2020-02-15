@@ -1,5 +1,4 @@
 ignore: # ignore codecoverage on following paths
   - "**/tests"
-  - "test-server"
   - "**/benches"
   - "**/examples"

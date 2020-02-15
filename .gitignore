@@ -5,7 +5,6 @@ guide/build/
 
 *.so
 *.out
-*.pyc
 *.pid
 *.sock
 *~
