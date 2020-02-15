@@ -4,11 +4,11 @@ use bytes::{Buf, BufMut, BytesMut};
 use log::debug;
 use rand;
 
-use crate::ws::mask::apply_mask;
-use crate::ws::proto::{CloseCode, CloseReason, OpCode};
-use crate::ws::ProtocolError;
+use super::mask::apply_mask;
+use super::proto::{CloseCode, CloseReason, OpCode};
+use super::ProtocolError;
 
-/// A struct representing a `WebSocket` frame.
+/// WebSocket frame parser.
 #[derive(Debug)]
 pub struct Parser;
 

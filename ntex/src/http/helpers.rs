@@ -3,7 +3,7 @@ use std::{io, mem, ptr, slice};
 use bytes::{BufMut, BytesMut};
 use http::Version;
 
-use crate::extensions::Extensions;
+use super::extensions::Extensions;
 
 const DEC_DIGITS_LUT: &[u8] = b"0001020304050607080910111213141516171819\
       2021222324252627282930313233343536373839\

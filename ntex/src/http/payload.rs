@@ -5,7 +5,7 @@ use bytes::Bytes;
 use futures_core::Stream;
 use h2::RecvStream;
 
-use crate::error::PayloadError;
+use super::error::PayloadError;
 
 /// Type represent boxed payload
 pub type PayloadStream = Pin<Box<dyn Stream<Item = Result<Bytes, PayloadError>>>>;
@@ -13,26 +13,26 @@ pub type PayloadStream = Pin<Box<dyn Stream<Item = Result<Bytes, PayloadError>>>
 /// Type represent streaming payload
 pub enum Payload<S = PayloadStream> {
     None,
-    H1(crate::h1::Payload),
-    H2(crate::h2::Payload),
+    H1(crate::http::h1::Payload),
+    H2(crate::http::h2::Payload),
     Stream(S),
 }
 
-impl<S> From<crate::h1::Payload> for Payload<S> {
-    fn from(v: crate::h1::Payload) -> Self {
+impl<S> From<crate::http::h1::Payload> for Payload<S> {
+    fn from(v: crate::http::h1::Payload) -> Self {
         Payload::H1(v)
     }
 }
 
-impl<S> From<crate::h2::Payload> for Payload<S> {
-    fn from(v: crate::h2::Payload) -> Self {
+impl<S> From<crate::http::h2::Payload> for Payload<S> {
+    fn from(v: crate::http::h2::Payload) -> Self {
         Payload::H2(v)
     }
 }
 
 impl<S> From<RecvStream> for Payload<S> {
     fn from(v: RecvStream) -> Self {
-        Payload::H2(crate::h2::Payload::new(v))
+        Payload::H2(crate::http::h2::Payload::new(v))
     }
 }
 

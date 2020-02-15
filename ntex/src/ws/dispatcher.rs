@@ -8,6 +8,7 @@ use actix_utils::framed;
 
 use super::{Codec, Frame, Message};
 
+/// WebSockets protocol dispatcher
 pub struct Dispatcher<S, T>
 where
     S: Service<Request = Frame, Response = Message> + 'static,

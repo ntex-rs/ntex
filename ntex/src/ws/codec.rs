@@ -5,7 +5,7 @@ use super::frame::Parser;
 use super::proto::{CloseReason, OpCode};
 use super::ProtocolError;
 
-/// `WebSocket` Message
+/// WebSocket message
 #[derive(Debug, PartialEq)]
 pub enum Message {
     /// Text message
@@ -24,7 +24,7 @@ pub enum Message {
     Nop,
 }
 
-/// `WebSocket` frame
+/// WebSocket frame
 #[derive(Debug, PartialEq)]
 pub enum Frame {
     /// Text frame, codec does not verify utf8 encoding
@@ -41,7 +41,7 @@ pub enum Frame {
     Close(Option<CloseReason>),
 }
 
-/// `WebSocket` continuation item
+/// WebSocket continuation item
 #[derive(Debug, PartialEq)]
 pub enum Item {
     FirstText(Bytes),

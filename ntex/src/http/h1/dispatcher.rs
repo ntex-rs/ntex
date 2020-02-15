@@ -11,15 +11,15 @@ use bitflags::bitflags;
 use bytes::{Buf, BytesMut};
 use log::{error, trace};
 
-use crate::body::{Body, BodySize, MessageBody, ResponseBody};
-use crate::cloneable::CloneableService;
-use crate::config::ServiceConfig;
-use crate::error::{DispatchError, Error};
-use crate::error::{ParseError, PayloadError};
-use crate::helpers::DataFactory;
-use crate::httpmessage::HttpMessage;
-use crate::request::Request;
-use crate::response::Response;
+use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
+use crate::http::cloneable::CloneableService;
+use crate::http::config::ServiceConfig;
+use crate::http::error::{DispatchError, Error};
+use crate::http::error::{ParseError, PayloadError};
+use crate::http::helpers::DataFactory;
+use crate::http::httpmessage::HttpMessage;
+use crate::http::request::Request;
+use crate::http::response::Response;
 
 use super::codec::Codec;
 use super::payload::{Payload, PayloadSender, PayloadStatus};
@@ -531,7 +531,7 @@ where
                             if pl == MessageType::Payload || pl == MessageType::Stream {
                                 let (ps, pl) = Payload::create(false);
                                 let (req1, _) =
-                                    req.replace_payload(crate::Payload::H1(pl));
+                                    req.replace_payload(crate::http::Payload::H1(pl));
                                 req = req1;
                                 self.payload = Some(ps);
                             }

@@ -8,7 +8,7 @@ use futures_core::Stream;
 use futures_util::ready;
 use pin_project::{pin_project, project};
 
-use crate::error::Error;
+use super::error::Error;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 /// Body size hint

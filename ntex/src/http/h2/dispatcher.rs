@@ -14,16 +14,16 @@ use h2::SendStream;
 use http::header::{HeaderValue, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
 use log::{error, trace};
 
-use crate::body::{BodySize, MessageBody, ResponseBody};
-use crate::cloneable::CloneableService;
-use crate::config::ServiceConfig;
-use crate::error::{DispatchError, Error};
-use crate::helpers::DataFactory;
-use crate::httpmessage::HttpMessage;
-use crate::message::ResponseHead;
-use crate::payload::Payload;
-use crate::request::Request;
-use crate::response::Response;
+use crate::http::body::{BodySize, MessageBody, ResponseBody};
+use crate::http::cloneable::CloneableService;
+use crate::http::config::ServiceConfig;
+use crate::http::error::{DispatchError, Error};
+use crate::http::helpers::DataFactory;
+use crate::http::httpmessage::HttpMessage;
+use crate::http::message::ResponseHead;
+use crate::http::payload::Payload;
+use crate::http::request::Request;
+use crate::http::response::Response;
 
 const CHUNK_SIZE: usize = 16_384;
 
@@ -118,9 +118,9 @@ where
 
                     let (parts, body) = req.into_parts();
                     let mut req = Request::with_payload(Payload::<
-                        crate::payload::PayloadStream,
+                        crate::http::payload::PayloadStream,
                     >::H2(
-                        crate::h2::Payload::new(body)
+                        crate::http::h2::Payload::new(body),
                     ));
 
                     let head = &mut req.head_mut();

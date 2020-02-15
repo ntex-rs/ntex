@@ -5,15 +5,15 @@ use std::{fmt, net};
 use actix_codec::Framed;
 use actix_service::{IntoServiceFactory, Service, ServiceFactory};
 
-use crate::body::MessageBody;
-use crate::config::{KeepAlive, ServiceConfig};
-use crate::error::Error;
-use crate::h1::{Codec, ExpectHandler, H1Service, UpgradeHandler};
-use crate::h2::H2Service;
-use crate::helpers::{Data, DataFactory};
-use crate::request::Request;
-use crate::response::Response;
-use crate::service::HttpService;
+use crate::http::body::MessageBody;
+use crate::http::config::{KeepAlive, ServiceConfig};
+use crate::http::error::Error;
+use crate::http::h1::{Codec, ExpectHandler, H1Service, UpgradeHandler};
+use crate::http::h2::H2Service;
+use crate::http::helpers::{Data, DataFactory};
+use crate::http::request::Request;
+use crate::http::response::Response;
+use crate::http::service::HttpService;
 
 /// A http service builder
 ///

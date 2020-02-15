@@ -5,11 +5,11 @@ use encoding_rs::{Encoding, UTF_8};
 use http::header;
 use mime::Mime;
 
-use crate::cookie::Cookie;
-use crate::error::{ContentTypeError, CookieParseError, ParseError};
-use crate::extensions::Extensions;
-use crate::header::{Header, HeaderMap};
-use crate::payload::Payload;
+use super::cookie::Cookie;
+use super::error::{ContentTypeError, CookieParseError, ParseError};
+use super::extensions::Extensions;
+use super::header::HeaderMap;
+use super::payload::Payload;
 
 struct Cookies(Vec<Cookie<'static>>);
 
@@ -29,19 +29,6 @@ pub trait HttpMessage: Sized {
 
     /// Mutable reference to a the request's extensions container
     fn extensions_mut(&self) -> RefMut<'_, Extensions>;
-
-    #[doc(hidden)]
-    /// Get a header
-    fn get_header<H: Header>(&self) -> Option<H>
-    where
-        Self: Sized,
-    {
-        if self.headers().contains_key(H::name()) {
-            H::parse(self).ok()
-        } else {
-            None
-        }
-    }
 
     /// Read the request content type. If request does not contain
     /// *Content-Type* header, empty str get returned.

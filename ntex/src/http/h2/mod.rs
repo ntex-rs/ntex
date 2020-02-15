@@ -11,7 +11,7 @@ mod service;
 
 pub use self::dispatcher::Dispatcher;
 pub use self::service::H2Service;
-use crate::error::PayloadError;
+use crate::http::error::PayloadError;
 
 /// H2 receive stream
 pub struct Payload {

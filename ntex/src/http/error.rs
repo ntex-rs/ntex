@@ -1,38 +1,32 @@
-//! Error and Result module
+//! Various http related errors
 use std::any::TypeId;
 use std::cell::RefCell;
 use std::io::Write;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
-use std::{fmt, io, result};
+use std::{fmt, io};
 
 use actix_codec::{Decoder, Encoder};
-pub use actix_threadpool::BlockingError;
 use actix_utils::framed::DispatcherError as FramedDispatcherError;
 use actix_utils::timeout::TimeoutError;
 use bytes::BytesMut;
 use derive_more::{Display, From};
-pub use futures_channel::oneshot::Canceled;
 use http::uri::InvalidUri;
-use http::{header, Error as HttpError, StatusCode};
+use http::{header, StatusCode};
 use httparse;
 use serde::de::value::Error as DeError;
 use serde_json::error::Error as JsonError;
 use serde_urlencoded::ser::Error as FormError;
 
 // re-export for convinience
-use crate::body::Body;
-pub use crate::cookie::ParseError as CookieParseError;
-use crate::helpers::Writer;
-use crate::response::{Response, ResponseBuilder};
+pub use super::cookie::ParseError as CookieParseError;
+pub use actix_threadpool::BlockingError;
+pub use futures_channel::oneshot::Canceled;
+pub use http::Error as HttpError;
 
-/// A specialized [`Result`](https://doc.rust-lang.org/std/result/enum.Result.html)
-/// for actix web operations
-///
-/// This typedef is generally used to avoid writing out
-/// `actix_http::error::Error` directly and is otherwise a direct mapping to
-/// `Result`.
-pub type Result<T, E = Error> = result::Result<T, E>;
+use super::body::Body;
+use super::helpers::Writer;
+use super::response::{Response, ResponseBuilder};
 
 /// General purpose actix web error.
 ///
@@ -394,7 +388,7 @@ impl ResponseError for PayloadError {
 }
 
 /// Return `BadRequest` for `cookie::ParseError`
-impl ResponseError for crate::cookie::ParseError {
+impl ResponseError for crate::http::cookie::ParseError {
     fn status_code(&self) -> StatusCode {
         StatusCode::BAD_REQUEST
     }

@@ -3,11 +3,11 @@ use std::{fmt, net};
 
 use http::{header, Method, Uri, Version};
 
-use crate::extensions::Extensions;
-use crate::header::HeaderMap;
-use crate::httpmessage::HttpMessage;
-use crate::message::{Message, RequestHead};
-use crate::payload::{Payload, PayloadStream};
+use crate::http::extensions::Extensions;
+use crate::http::header::HeaderMap;
+use crate::http::httpmessage::HttpMessage;
+use crate::http::message::{Message, RequestHead};
+use crate::http::payload::{Payload, PayloadStream};
 
 /// Request
 pub struct Request<P = PayloadStream> {

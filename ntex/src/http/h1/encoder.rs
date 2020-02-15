@@ -6,14 +6,14 @@ use std::{cmp, io};
 
 use bytes::{buf::BufMutExt, BufMut, BytesMut};
 
-use crate::body::BodySize;
-use crate::config::ServiceConfig;
-use crate::header::map;
-use crate::helpers;
+use crate::http::body::BodySize;
+use crate::http::config::ServiceConfig;
+use crate::http::header::map;
 use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
+use crate::http::helpers;
+use crate::http::message::{ConnectionType, RequestHeadType};
+use crate::http::response::Response;
 use crate::http::{HeaderMap, StatusCode, Version};
-use crate::message::{ConnectionType, RequestHeadType};
-use crate::response::Response;
 
 const AVERAGE_HEADER_SIZE: usize = 30;
 

@@ -11,13 +11,13 @@ use actix_service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactor
 use futures_core::ready;
 use futures_util::future::{ok, Ready};
 
-use crate::body::MessageBody;
-use crate::cloneable::CloneableService;
-use crate::config::ServiceConfig;
-use crate::error::{DispatchError, Error, ParseError};
-use crate::helpers::DataFactory;
-use crate::request::Request;
-use crate::response::Response;
+use crate::http::body::MessageBody;
+use crate::http::cloneable::CloneableService;
+use crate::http::config::ServiceConfig;
+use crate::http::error::{DispatchError, Error, ParseError};
+use crate::http::helpers::DataFactory;
+use crate::http::request::Request;
+use crate::http::response::Response;
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;

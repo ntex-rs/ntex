@@ -11,14 +11,14 @@ use futures_core::Stream;
 use serde::Serialize;
 use serde_json;
 
-use crate::body::{Body, BodyStream, MessageBody, ResponseBody};
-use crate::cookie::{Cookie, CookieJar};
-use crate::error::Error;
-use crate::extensions::Extensions;
-use crate::header::{Header, IntoHeaderValue};
-use crate::http::header::{self, HeaderName, HeaderValue};
-use crate::http::{Error as HttpError, HeaderMap, StatusCode};
-use crate::message::{BoxedResponseHead, ConnectionType, ResponseHead};
+use crate::http::body::{Body, BodyStream, MessageBody, ResponseBody};
+use crate::http::cookie::{Cookie, CookieJar};
+use crate::http::error::{Error, HttpError};
+use crate::http::extensions::Extensions;
+use crate::http::header::{self};
+use crate::http::header::{HeaderMap, HeaderName, HeaderValue, IntoHeaderValue};
+use crate::http::message::{BoxedResponseHead, ConnectionType, ResponseHead};
+use crate::http::StatusCode;
 
 /// An HTTP Response
 pub struct Response<B = Body> {
@@ -338,32 +338,6 @@ impl ResponseBuilder {
     pub fn status(&mut self, status: StatusCode) -> &mut Self {
         if let Some(parts) = parts(&mut self.head, &self.err) {
             parts.status = status;
-        }
-        self
-    }
-
-    /// Set a header.
-    ///
-    /// ```rust
-    /// use actix_http::{http, Request, Response, Result};
-    ///
-    /// fn index(req: Request) -> Result<Response> {
-    ///     Ok(Response::Ok()
-    ///         .set(http::header::IfModifiedSince(
-    ///             "Sun, 07 Nov 1994 08:48:37 GMT".parse()?,
-    ///         ))
-    ///         .finish())
-    /// }
-    /// ```
-    #[doc(hidden)]
-    pub fn set<H: Header>(&mut self, hdr: H) -> &mut Self {
-        if let Some(parts) = parts(&mut self.head, &self.err) {
-            match hdr.try_into() {
-                Ok(value) => {
-                    parts.headers.append(H::name(), value);
-                }
-                Err(e) => self.err = Some(e.into()),
-            }
         }
         self
     }

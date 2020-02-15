@@ -1,8 +1,7 @@
 //! Basic http responses
 #![allow(non_upper_case_globals)]
-use http::StatusCode;
 
-use crate::response::{Response, ResponseBuilder};
+use super::{Response, ResponseBuilder, StatusCode};
 
 macro_rules! STATIC_RESP {
     ($name:ident, $status:expr) => {

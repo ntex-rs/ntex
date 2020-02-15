@@ -3,8 +3,8 @@ use std::task::{Context, Poll};
 use actix_service::{Service, ServiceFactory};
 use futures_util::future::{ok, Ready};
 
-use crate::error::Error;
-use crate::request::Request;
+use crate::http::error::Error;
+use crate::http::request::Request;
 
 pub struct ExpectHandler;
 

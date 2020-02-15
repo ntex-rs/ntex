@@ -5,15 +5,16 @@ use bitflags::bitflags;
 use bytes::BytesMut;
 use http::{Method, Version};
 
+use crate::http::body::BodySize;
+use crate::http::config::ServiceConfig;
+use crate::http::error::ParseError;
+use crate::http::message::ConnectionType;
+use crate::http::request::Request;
+use crate::http::response::Response;
+
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 use super::{decoder, encoder};
 use super::{Message, MessageType};
-use crate::body::BodySize;
-use crate::config::ServiceConfig;
-use crate::error::ParseError;
-use crate::message::ConnectionType;
-use crate::request::Request;
-use crate::response::Response;
 
 bitflags! {
     struct Flags: u8 {

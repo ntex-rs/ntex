@@ -10,7 +10,7 @@ use time::{offset, Duration};
 
 use super::{Cookie, CookieStr, SameSite};
 
-use crate::time_parser;
+use crate::http::time_parser;
 
 /// Enum corresponding to a parsing error.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

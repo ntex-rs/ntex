@@ -21,13 +21,7 @@ use slab::Slab;
 use super::connection::{ConnectionType, IoConnection};
 use super::error::ConnectError;
 use super::Connect;
-
-#[derive(Clone, Copy, PartialEq)]
-/// Protocol version
-pub enum Protocol {
-    Http1,
-    Http2,
-}
+use crate::http::Protocol;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub(crate) struct Key {

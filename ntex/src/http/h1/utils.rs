@@ -4,10 +4,10 @@ use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
 
-use crate::body::{BodySize, MessageBody, ResponseBody};
-use crate::error::Error;
-use crate::h1::{Codec, Message};
-use crate::response::Response;
+use crate::http::body::{BodySize, MessageBody, ResponseBody};
+use crate::http::error::Error;
+use crate::http::h1::{Codec, Message};
+use crate::http::response::Response;
 
 /// Send http/1 response
 #[pin_project::pin_project]

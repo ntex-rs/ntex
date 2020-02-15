@@ -10,17 +10,16 @@ use futures_core::Stream;
 use futures_util::future::poll_fn;
 use futures_util::{SinkExt, StreamExt};
 
-use crate::error::PayloadError;
-use crate::h1;
-use crate::header::HeaderMap;
-use crate::http::header::{IntoHeaderValue, HOST};
-use crate::message::{RequestHeadType, ResponseHead};
-use crate::payload::{Payload, PayloadStream};
+use crate::http::body::{BodySize, MessageBody};
+use crate::http::error::PayloadError;
+use crate::http::h1;
+use crate::http::header::{HeaderMap, IntoHeaderValue, HOST};
+use crate::http::message::{RequestHeadType, ResponseHead};
+use crate::http::payload::{Payload, PayloadStream};
 
 use super::connection::{ConnectionLifetime, ConnectionType, IoConnection};
 use super::error::{ConnectError, SendRequestError};
 use super::pool::Acquired;
-use crate::body::{BodySize, MessageBody};
 
 pub(crate) async fn send_request<T, B>(
     io: T,

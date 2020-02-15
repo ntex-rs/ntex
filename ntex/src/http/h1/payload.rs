@@ -9,7 +9,7 @@ use actix_utils::task::LocalWaker;
 use bytes::Bytes;
 use futures_core::Stream;
 
-use crate::error::PayloadError;
+use crate::http::error::PayloadError;
 
 /// max buffer size 32k
 pub(crate) const MAX_BUFFER_SIZE: usize = 32_768;

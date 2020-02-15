@@ -1,3 +1,4 @@
+//! Http client errors
 use std::io;
 
 use actix_connect::resolver::ResolveError;
@@ -6,8 +7,8 @@ use derive_more::{Display, From};
 #[cfg(feature = "openssl")]
 use actix_connect::ssl::openssl::{HandshakeError, SslError};
 
-use crate::error::{Error, ParseError, ResponseError};
-use crate::http::{Error as HttpError, StatusCode};
+use crate::http::error::{Error, HttpError, ParseError, ResponseError};
+use crate::http::StatusCode;
 
 /// A set of errors that can occur while connecting to an HTTP host
 #[derive(Debug, Display, From)]
@@ -83,7 +84,7 @@ pub enum InvalidUrl {
     #[display(fmt = "Missing host name")]
     MissingHost,
     #[display(fmt = "Url parse error: {}", _0)]
-    HttpError(http::Error),
+    Http(HttpError),
 }
 
 /// A set of errors that can occur during request sending and response reading

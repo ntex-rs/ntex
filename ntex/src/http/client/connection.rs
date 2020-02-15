@@ -8,13 +8,14 @@ use futures_util::future::{err, Either, Future, FutureExt, LocalBoxFuture, Ready
 use h2::client::SendRequest;
 use pin_project::{pin_project, project};
 
-use crate::body::MessageBody;
-use crate::h1::ClientCodec;
-use crate::message::{RequestHeadType, ResponseHead};
-use crate::payload::Payload;
+use crate::http::body::MessageBody;
+use crate::http::h1::ClientCodec;
+use crate::http::message::{RequestHeadType, ResponseHead};
+use crate::http::payload::Payload;
+use crate::http::Protocol;
 
 use super::error::SendRequestError;
-use super::pool::{Acquired, Protocol};
+use super::pool::Acquired;
 use super::{h1proto, h2proto};
 
 pub(crate) enum ConnectionType<Io> {

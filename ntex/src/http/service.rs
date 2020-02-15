@@ -12,15 +12,15 @@ use futures_util::future::ok;
 use h2::server::{self, Handshake};
 use pin_project::{pin_project, project};
 
-use crate::body::MessageBody;
-use crate::builder::HttpServiceBuilder;
-use crate::cloneable::CloneableService;
-use crate::config::{KeepAlive, ServiceConfig};
-use crate::error::{DispatchError, Error};
-use crate::helpers::DataFactory;
-use crate::request::Request;
-use crate::response::Response;
-use crate::{h1, h2::Dispatcher, Protocol};
+use super::body::MessageBody;
+use super::builder::HttpServiceBuilder;
+use super::cloneable::CloneableService;
+use super::config::{KeepAlive, ServiceConfig};
+use super::error::{DispatchError, Error};
+use super::helpers::DataFactory;
+use super::request::Request;
+use super::response::Response;
+use super::{h1, h2::Dispatcher, Protocol};
 
 /// `ServiceFactory` HTTP1.1/HTTP2 transport implementation
 pub struct HttpService<T, S, B, X = h1::ExpectHandler, U = h1::UpgradeHandler<T>> {

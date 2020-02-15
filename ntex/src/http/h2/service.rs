@@ -16,13 +16,13 @@ use futures_util::future::ok;
 use h2::server::{self, Handshake};
 use log::error;
 
-use crate::body::MessageBody;
-use crate::cloneable::CloneableService;
-use crate::config::ServiceConfig;
-use crate::error::{DispatchError, Error};
-use crate::helpers::DataFactory;
-use crate::request::Request;
-use crate::response::Response;
+use crate::http::body::MessageBody;
+use crate::http::cloneable::CloneableService;
+use crate::http::config::ServiceConfig;
+use crate::http::error::{DispatchError, Error};
+use crate::http::helpers::DataFactory;
+use crate::http::request::Request;
+use crate::http::response::Response;
 
 use super::dispatcher::Dispatcher;
 

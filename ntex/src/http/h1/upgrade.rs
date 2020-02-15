@@ -5,9 +5,9 @@ use actix_codec::Framed;
 use actix_service::{Service, ServiceFactory};
 use futures_util::future::Ready;
 
-use crate::error::Error;
-use crate::h1::Codec;
-use crate::request::Request;
+use crate::http::error::Error;
+use crate::http::h1::Codec;
+use crate::http::request::Request;
 
 pub struct UpgradeHandler<T>(PhantomData<T>);
 

@@ -9,11 +9,12 @@ use actix_connect::{
 use actix_rt::net::TcpStream;
 use actix_service::{apply_fn, Service};
 use actix_utils::timeout::{TimeoutError, TimeoutService};
-use http::Uri;
+
+use crate::http::{Protocol, Uri};
 
 use super::connection::Connection;
 use super::error::ConnectError;
-use super::pool::{ConnectionPool, Protocol};
+use super::pool::ConnectionPool;
 use super::Connect;
 
 #[cfg(feature = "openssl")]
@@ -340,7 +341,7 @@ mod connect_impl {
     use futures_util::future::{err, Either, Ready};
 
     use super::*;
-    use crate::client::connection::IoConnection;
+    use crate::http::client::connection::IoConnection;
 
     pub(crate) struct InnerConnector<T, Io>
     where

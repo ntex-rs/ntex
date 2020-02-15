@@ -11,10 +11,10 @@ use http::{header, Method, StatusCode, Uri, Version};
 use httparse;
 use log::{debug, error, trace};
 
-use crate::error::ParseError;
-use crate::header::HeaderMap;
-use crate::message::{ConnectionType, ResponseHead};
-use crate::request::Request;
+use crate::http::error::ParseError;
+use crate::http::header::HeaderMap;
+use crate::http::message::{ConnectionType, ResponseHead};
+use crate::http::request::Request;
 
 const MAX_BUFFER_SIZE: usize = 131_072;
 const MAX_HEADERS: usize = 96;
