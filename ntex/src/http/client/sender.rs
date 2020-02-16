@@ -7,7 +7,7 @@ use std::time::Duration;
 use actix_rt::time::{delay_for, Delay};
 use bytes::Bytes;
 use derive_more::From;
-use futures_core::{Future, Stream};
+use futures::{Future, Stream};
 use serde::Serialize;
 use serde_json;
 

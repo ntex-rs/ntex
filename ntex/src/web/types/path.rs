@@ -2,15 +2,16 @@
 use std::sync::Arc;
 use std::{fmt, ops};
 
-use actix_http::error::{Error, ErrorNotFound};
 use actix_router::PathDeserializer;
 use futures::future::{ready, Ready};
 use serde::de;
 
-use crate::dev::Payload;
-use crate::error::PathError;
-use crate::request::HttpRequest;
-use crate::FromRequest;
+use crate::http::error::{Error, ErrorNotFound};
+use crate::http::Payload;
+
+use crate::web::error::PathError;
+use crate::web::request::HttpRequest;
+use crate::web::FromRequest;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 /// Extract typed information from the request's path.

@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use futures_core::Stream;
+use futures::Stream;
 use h2::RecvStream;
 
 mod dispatcher;

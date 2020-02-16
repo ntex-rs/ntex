@@ -4,22 +4,22 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use actix_http::body::{Body, MessageBody};
-use actix_http::Extensions;
 use actix_service::boxed::{self, BoxServiceFactory};
 use actix_service::{
     apply, apply_fn_factory, IntoServiceFactory, ServiceFactory, Transform,
 };
 use futures::future::{FutureExt, LocalBoxFuture};
 
-use crate::app_service::{AppEntry, AppInit, AppRoutingFactory};
-use crate::config::ServiceConfig;
-use crate::data::{Data, DataFactory};
-use crate::dev::ResourceDef;
-use crate::error::Error;
-use crate::resource::Resource;
-use crate::route::Route;
-use crate::service::{
+use crate::http::body::{Body, MessageBody};
+use crate::http::{Error, Extensions};
+
+use super::app_service::{AppEntry, AppInit, AppRoutingFactory};
+use super::config::ServiceConfig;
+use super::data::{Data, DataFactory};
+use super::dev::ResourceDef;
+use super::resource::Resource;
+use super::route::Route;
+use super::service::{
     AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, ServiceRequest,
     ServiceResponse,
 };

@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 
 use actix_utils::task::LocalWaker;
 use bytes::Bytes;
-use futures_core::Stream;
+use futures::Stream;
 
 use crate::http::error::PayloadError;
 
@@ -226,7 +226,7 @@ impl Inner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::future::poll_fn;
+    use futures::future::poll_fn;
 
     #[actix_rt::test]
     async fn test_unread_data() {

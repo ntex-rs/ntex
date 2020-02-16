@@ -1,13 +1,13 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use actix_http::error::{Error, ErrorInternalServerError};
-use actix_http::Extensions;
 use futures::future::{err, ok, Ready};
 
-use crate::dev::Payload;
-use crate::extract::FromRequest;
-use crate::request::HttpRequest;
+use crate::http::error::{Error, ErrorInternalServerError};
+use crate::http::{Extensions, Payload};
+
+use crate::web::extract::FromRequest;
+use crate::web::request::HttpRequest;
 
 /// Application data factory
 pub(crate) trait DataFactory {

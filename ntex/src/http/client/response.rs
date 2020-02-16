@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
-use futures_core::{ready, Future, Stream};
+use futures::{ready, Future, Stream};
 use serde::de::DeserializeOwned;
 
 #[cfg(feature = "cookie")]

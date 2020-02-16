@@ -11,8 +11,8 @@ use actix_service::{
     ServiceFactory,
 };
 use bytes::Bytes;
-use futures_core::ready;
-use futures_util::future::ok;
+use futures::future::ok;
+use futures::ready;
 use h2::server::{self, Handshake};
 use log::error;
 

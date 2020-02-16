@@ -1,17 +1,17 @@
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use actix_http::Extensions;
 use actix_router::ResourceDef;
 use actix_service::{boxed, IntoServiceFactory, ServiceFactory};
 
-use crate::data::{Data, DataFactory};
-use crate::error::Error;
-use crate::guard::Guard;
-use crate::resource::Resource;
-use crate::rmap::ResourceMap;
-use crate::route::Route;
-use crate::service::{
+use crate::http::{Error, Extensions};
+
+use super::data::{Data, DataFactory};
+use super::guard::Guard;
+use super::resource::Resource;
+use super::rmap::ResourceMap;
+use super::route::Route;
+use super::service::{
     AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, ServiceRequest,
     ServiceResponse,
 };

@@ -1,9 +1,3 @@
-#![deny(rust_2018_idioms, warnings)]
-#![allow(
-    clippy::needless_doctest_main,
-    clippy::type_complexity,
-    clippy::borrow_interior_mutable_const
-)]
 //! Actix web is a small, pragmatic, and extremely fast web framework
 //! for Rust.
 //!
@@ -87,7 +81,7 @@ mod extract;
 pub mod guard;
 mod handler;
 mod info;
-pub mod middleware;
+// pub mod middleware;
 mod request;
 mod resource;
 mod responder;
@@ -97,24 +91,25 @@ mod scope;
 mod server;
 mod service;
 pub mod test;
-mod types;
-pub mod web;
+pub mod types;
+mod web;
 
-#[doc(hidden)]
-pub use actix_web_codegen::*;
+// #[doc(hidden)]
+// pub use actix_web_codegen::*;
 
-// re-export for convenience
-pub use actix_http::Response as HttpResponse;
-pub use actix_http::{body, cookie, http, Error, HttpMessage, ResponseError, Result};
+pub use crate::http::Response as HttpResponse;
 
-pub use crate::app::App;
-pub use crate::extract::FromRequest;
-pub use crate::request::HttpRequest;
-pub use crate::resource::Resource;
-pub use crate::responder::{Either, Responder};
-pub use crate::route::Route;
-pub use crate::scope::Scope;
-pub use crate::server::HttpServer;
+pub use self::app::App;
+pub use self::data::Data;
+pub use self::extract::FromRequest;
+pub use self::request::HttpRequest;
+pub use self::resource::Resource;
+pub use self::responder::{Either, Responder};
+pub use self::route::Route;
+pub use self::scope::Scope;
+pub use self::server::HttpServer;
+pub use self::service::WebService;
+pub use self::web::*;
 
 pub mod dev {
     //! The `actix-web` prelude for library developers
@@ -127,29 +122,19 @@ pub mod dev {
     //! use actix_web::dev::*;
     //! ```
 
-    pub use crate::config::{AppConfig, AppService};
+    pub use crate::web::config::{AppConfig, AppService, ServiceConfig};
     #[doc(hidden)]
-    pub use crate::handler::Factory;
-    pub use crate::info::ConnectionInfo;
-    pub use crate::rmap::ResourceMap;
-    pub use crate::service::{
+    pub use crate::web::handler::Factory;
+    pub use crate::web::info::ConnectionInfo;
+    pub use crate::web::rmap::ResourceMap;
+    pub use crate::web::service::{
         HttpServiceFactory, ServiceRequest, ServiceResponse, WebService,
     };
 
-    pub use crate::types::form::UrlEncoded;
-    pub use crate::types::json::JsonBody;
-    pub use crate::types::readlines::Readlines;
+    pub use crate::web::types::form::UrlEncoded;
+    pub use crate::web::types::json::JsonBody;
 
-    pub use actix_http::body::{Body, BodySize, MessageBody, ResponseBody, SizedStream};
-    #[cfg(feature = "compress")]
-    pub use actix_http::encoding::Decoder as Decompress;
-    pub use actix_http::ResponseBuilder as HttpResponseBuilder;
-    pub use actix_http::{
-        Extensions, Payload, PayloadStream, RequestHead, ResponseHead,
-    };
     pub use actix_router::{Path, ResourceDef, ResourcePath, Url};
-    pub use actix_server::Server;
-    pub use actix_service::{Service, Transform};
 
     pub(crate) fn insert_slash(mut patterns: Vec<String>) -> Vec<String> {
         for path in &mut patterns {
@@ -161,7 +146,7 @@ pub mod dev {
     }
 
     use crate::http::header::ContentEncoding;
-    use actix_http::{Response, ResponseBuilder};
+    use crate::http::{Response, ResponseBuilder};
 
     struct Enc(ContentEncoding);
 
@@ -203,30 +188,4 @@ pub mod dev {
             self
         }
     }
-}
-
-pub mod client {
-    //! An HTTP Client
-    //!
-    //! ```rust
-    //! use actix_web::client::Client;
-    //!
-    //! #[actix_rt::main]
-    //! async fn main() {
-    //!    let mut client = Client::default();
-    //!
-    //!    // Create request builder and send request
-    //!    let response = client.get("http://www.rust-lang.org")
-    //!       .header("User-Agent", "Actix-web")
-    //!       .send().await;                      // <- Send http request
-    //!
-    //!    println!("Response: {:?}", response);
-    //! }
-    //! ```
-    pub use awc::error::{
-        ConnectError, InvalidUrl, PayloadError, SendRequestError, WsClientError,
-    };
-    pub use awc::{
-        test, Client, ClientBuilder, ClientRequest, ClientResponse, Connector,
-    };
 }

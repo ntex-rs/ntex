@@ -5,19 +5,19 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use actix_http::{Extensions, Request, Response};
 use actix_router::{Path, ResourceDef, ResourceInfo, Router, Url};
 use actix_service::boxed::{self, BoxService, BoxServiceFactory};
 use actix_service::{fn_service, Service, ServiceFactory};
 use futures::future::{ok, FutureExt, LocalBoxFuture};
 
-use crate::config::{AppConfig, AppService};
-use crate::data::DataFactory;
-use crate::error::Error;
-use crate::guard::Guard;
-use crate::request::{HttpRequest, HttpRequestPool};
-use crate::rmap::ResourceMap;
-use crate::service::{AppServiceFactory, ServiceRequest, ServiceResponse};
+use crate::http::{Error, Extensions, Request, Response};
+
+use super::config::{AppConfig, AppService};
+use super::data::DataFactory;
+use super::guard::Guard;
+use super::request::{HttpRequest, HttpRequestPool};
+use super::rmap::ResourceMap;
+use super::service::{AppServiceFactory, ServiceRequest, ServiceResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService = BoxService<ServiceRequest, ServiceResponse, Error>;

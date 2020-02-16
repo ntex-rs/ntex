@@ -6,17 +6,12 @@ use std::sync::mpsc;
 use std::{fmt, net, thread, time};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_http::http::header::{ContentType, Header, HeaderName, IntoHeaderValue};
-use actix_http::http::{Error as HttpError, Method, StatusCode, Uri, Version};
-use actix_http::test::TestRequest as HttpTestRequest;
-use actix_http::{cookie::Cookie, ws, Extensions, HttpService, Request};
 use actix_router::{Path, ResourceDef, Url};
 use actix_rt::{time::delay_for, System};
+use actix_server::Server;
 use actix_service::{
     map_config, IntoService, IntoServiceFactory, Service, ServiceFactory,
 };
-use awc::error::PayloadError;
-use awc::{Client, ClientRequest, ClientResponse, Connector};
 use bytes::{Bytes, BytesMut};
 use futures::future::ok;
 use futures::stream::{Stream, StreamExt};
@@ -25,15 +20,24 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json;
 
-pub use actix_http::test::TestBuffer;
+#[cfg(feature = "cookie")]
+use coo_kie::Cookie;
 
-use crate::config::AppConfig;
-use crate::data::Data;
-use crate::dev::{Body, MessageBody, Payload, Server};
-use crate::request::HttpRequestPool;
-use crate::rmap::ResourceMap;
-use crate::service::{ServiceRequest, ServiceResponse};
-use crate::{Error, HttpRequest, HttpResponse};
+use crate::http::body::{Body, MessageBody};
+use crate::http::client::error::WsClientError;
+use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::http::error::{Error, HttpError, PayloadError};
+use crate::http::header::{HeaderName, IntoHeaderValue, CONTENT_TYPE};
+use crate::http::test::TestRequest as HttpTestRequest;
+use crate::http::{
+    Extensions, HttpService, Method, Payload, Request, StatusCode, Uri, Version,
+};
+
+use crate::web::config::AppConfig;
+use crate::web::request::HttpRequestPool;
+use crate::web::rmap::ResourceMap;
+use crate::web::service::{ServiceRequest, ServiceResponse};
+use crate::web::{HttpRequest, HttpResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service(
@@ -324,11 +328,6 @@ impl TestRequest {
     }
 
     /// Create TestRequest and set header
-    pub fn with_hdr<H: Header>(hdr: H) -> TestRequest {
-        TestRequest::default().set(hdr)
-    }
-
-    /// Create TestRequest and set header
     pub fn with_header<K, V>(key: K, value: V) -> TestRequest
     where
         HeaderName: TryFrom<K>,
@@ -382,12 +381,6 @@ impl TestRequest {
     }
 
     /// Set a header
-    pub fn set<H: Header>(mut self, hdr: H) -> Self {
-        self.req.set(hdr);
-        self
-    }
-
-    /// Set a header
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -398,6 +391,7 @@ impl TestRequest {
         self
     }
 
+    #[cfg(feature = "cookie")]
     /// Set cookie for this request
     pub fn cookie(mut self, cookie: Cookie<'_>) -> Self {
         self.req.cookie(cookie);
@@ -428,7 +422,8 @@ impl TestRequest {
         let bytes = serde_urlencoded::to_string(data)
             .expect("Failed to serialize test data as a urlencoded form");
         self.req.set_payload(bytes);
-        self.req.set(ContentType::form_url_encoded());
+        self.req
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded");
         self
     }
 
@@ -438,20 +433,13 @@ impl TestRequest {
         let bytes =
             serde_json::to_string(data).expect("Failed to serialize test data to json");
         self.req.set_payload(bytes);
-        self.req.set(ContentType::json());
+        self.req.header(CONTENT_TYPE, "application/json");
         self
     }
 
     /// Set application data. This is equivalent of `App::data()` method
     /// for testing purpose.
     pub fn data<T: 'static>(mut self, data: T) -> Self {
-        self.app_data.insert(Data::new(data));
-        self
-    }
-
-    /// Set application data. This is equivalent of `App::app_data()` method
-    /// for testing purpose.
-    pub fn app_data<T: 'static>(mut self, data: T) -> Self {
         self.app_data.insert(data);
         self
     }
@@ -844,7 +832,7 @@ pub fn unused_addr() -> net::SocketAddr {
 /// Test server controller
 pub struct TestServer {
     addr: net::SocketAddr,
-    client: awc::Client,
+    client: Client,
     system: actix_rt::System,
     ssl: bool,
     server: Server,
@@ -921,7 +909,7 @@ impl TestServer {
     pub async fn ws_at(
         &mut self,
         path: &str,
-    ) -> Result<Framed<impl AsyncRead + AsyncWrite, ws::Codec>, awc::error::WsClientError>
+    ) -> Result<Framed<impl AsyncRead + AsyncWrite, crate::ws::Codec>, WsClientError>
     {
         let url = self.url(path);
         let connect = self.client.ws(url).connect();
@@ -931,7 +919,7 @@ impl TestServer {
     /// Connect to a websocket server
     pub async fn ws(
         &mut self,
-    ) -> Result<Framed<impl AsyncRead + AsyncWrite, ws::Codec>, awc::error::WsClientError>
+    ) -> Result<Framed<impl AsyncRead + AsyncWrite, crate::ws::Codec>, WsClientError>
     {
         self.ws_at("/").await
     }
@@ -1051,8 +1039,8 @@ mod tests {
     #[actix_rt::test]
     async fn test_response_json() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
-            web::post().to(|person: web::Json<Person>| {
-                async { HttpResponse::Ok().json(person.into_inner()) }
+            web::post().to(|person: web::Json<Person>| async {
+                HttpResponse::Ok().json(person.into_inner())
             }),
         )))
         .await;
@@ -1072,8 +1060,8 @@ mod tests {
     #[actix_rt::test]
     async fn test_request_response_form() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
-            web::post().to(|person: web::Form<Person>| {
-                async { HttpResponse::Ok().json(person.into_inner()) }
+            web::post().to(|person: web::Form<Person>| async {
+                HttpResponse::Ok().json(person.into_inner())
             }),
         )))
         .await;
@@ -1098,8 +1086,8 @@ mod tests {
     #[actix_rt::test]
     async fn test_request_response_json() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
-            web::post().to(|person: web::Json<Person>| {
-                async { HttpResponse::Ok().json(person.into_inner()) }
+            web::post().to(|person: web::Json<Person>| async {
+                HttpResponse::Ok().json(person.into_inner())
             }),
         )))
         .await;

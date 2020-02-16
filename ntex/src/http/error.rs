@@ -23,7 +23,7 @@ pub use coo_kie::ParseError as CookieParseError;
 
 // re-export for convinience
 pub use actix_threadpool::BlockingError;
-pub use futures_channel::oneshot::Canceled;
+pub use futures::channel::oneshot::Canceled;
 pub use http::Error as HttpError;
 
 use super::body::Body;

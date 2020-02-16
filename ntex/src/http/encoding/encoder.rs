@@ -8,7 +8,7 @@ use actix_threadpool::{run, CpuFuture};
 use brotli2::write::BrotliEncoder;
 use bytes::Bytes;
 use flate2::write::{GzEncoder, ZlibEncoder};
-use futures_core::ready;
+use futures::ready;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::{ContentEncoding, HeaderValue, CONTENT_ENCODING};

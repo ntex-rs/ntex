@@ -3,11 +3,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_http::error::Error;
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
-use crate::dev::Payload;
-use crate::request::HttpRequest;
+use crate::http::{error::Error, Payload};
+use crate::web::request::HttpRequest;
 
 /// Trait implemented by types that can be extracted from request.
 ///

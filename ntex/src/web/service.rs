@@ -2,22 +2,22 @@ use std::cell::{Ref, RefMut};
 use std::rc::Rc;
 use std::{fmt, net};
 
-use actix_http::body::{Body, MessageBody, ResponseBody};
-use actix_http::http::{HeaderMap, Method, StatusCode, Uri, Version};
-use actix_http::{
-    Error, Extensions, HttpMessage, Payload, PayloadStream, RequestHead, Response,
-    ResponseHead,
-};
 use actix_router::{IntoPattern, Path, Resource, ResourceDef, Url};
 use actix_service::{IntoServiceFactory, ServiceFactory};
 
-use crate::config::{AppConfig, AppService};
-use crate::data::Data;
-use crate::dev::insert_slash;
-use crate::guard::Guard;
-use crate::info::ConnectionInfo;
-use crate::request::HttpRequest;
-use crate::rmap::ResourceMap;
+use crate::http::body::{Body, MessageBody, ResponseBody};
+use crate::http::{
+    Error, Extensions, HeaderMap, HttpMessage, Method, Payload, PayloadStream,
+    RequestHead, Response, ResponseHead, StatusCode, Uri, Version,
+};
+
+use super::config::{AppConfig, AppService};
+use super::data::Data;
+use super::dev::insert_slash;
+use super::guard::Guard;
+use super::info::ConnectionInfo;
+use super::request::HttpRequest;
+use super::rmap::ResourceMap;
 
 pub trait HttpServiceFactory {
     fn register(self, config: &mut AppService);

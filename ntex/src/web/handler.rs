@@ -4,16 +4,17 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_http::{Error, Response};
 use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, Ready};
 use futures::ready;
 use pin_project::pin_project;
 
-use crate::extract::FromRequest;
-use crate::request::HttpRequest;
-use crate::responder::Responder;
-use crate::service::{ServiceRequest, ServiceResponse};
+use crate::http::{Error, Response};
+
+use super::extract::FromRequest;
+use super::request::HttpRequest;
+use super::responder::Responder;
+use super::service::{ServiceRequest, ServiceResponse};
 
 /// Async handler converter factory
 pub trait Factory<T, R, O>: Clone + 'static

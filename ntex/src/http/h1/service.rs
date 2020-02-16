@@ -8,8 +8,8 @@ use std::{fmt, net};
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use actix_rt::net::TcpStream;
 use actix_service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
-use futures_core::ready;
-use futures_util::future::{ok, Ready};
+use futures::future::{ok, Ready};
+use futures::ready;
 
 use crate::http::body::MessageBody;
 use crate::http::cloneable::CloneableService;

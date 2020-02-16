@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::{fmt, ops};
 
-use actix_http::{Error, HttpMessage, Payload, Response};
 use bytes::BytesMut;
 use encoding_rs::{Encoding, UTF_8};
 use futures::future::{err, ok, FutureExt, LocalBoxFuture, Ready};
@@ -15,15 +14,13 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 #[cfg(feature = "compress")]
-use crate::dev::Decompress;
-use crate::error::UrlencodedError;
-use crate::extract::FromRequest;
-use crate::http::{
-    header::{ContentType, CONTENT_LENGTH},
-    StatusCode,
-};
-use crate::request::HttpRequest;
-use crate::responder::Responder;
+use crate::http::encoding::Decompress;
+use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use crate::http::{Error, HttpMessage, Payload, Response, StatusCode};
+use crate::web::error::UrlencodedError;
+use crate::web::extract::FromRequest;
+use crate::web::request::HttpRequest;
+use crate::web::responder::Responder;
 
 /// Form data helper (`application/x-www-form-urlencoded`)
 ///
@@ -164,7 +161,7 @@ impl<T: Serialize> Responder for Form<T> {
         };
 
         ok(Response::build(StatusCode::OK)
-            .set(ContentType::form_url_encoded())
+            .header(CONTENT_TYPE, "application/json")
             .body(body))
     }
 }

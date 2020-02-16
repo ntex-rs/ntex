@@ -23,6 +23,8 @@ pub mod header;
 pub mod test;
 pub mod ws;
 
+pub(crate) use self::message::Message;
+
 pub use self::builder::HttpServiceBuilder;
 pub use self::config::{KeepAlive, ServiceConfig};
 pub use self::error::{Error, ResponseError};

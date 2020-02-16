@@ -5,7 +5,6 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use actix_http::{Error, Extensions, Response};
 use actix_router::IntoPattern;
 use actix_service::boxed::{self, BoxService, BoxServiceFactory};
 use actix_service::{
@@ -13,14 +12,15 @@ use actix_service::{
 };
 use futures::future::{ok, Either, LocalBoxFuture, Ready};
 
-use crate::data::Data;
-use crate::dev::{insert_slash, AppService, HttpServiceFactory, ResourceDef};
-use crate::extract::FromRequest;
-use crate::guard::Guard;
-use crate::handler::Factory;
-use crate::responder::Responder;
-use crate::route::{CreateRouteService, Route, RouteService};
-use crate::service::{ServiceRequest, ServiceResponse};
+use crate::http::{Error, Extensions, Response};
+use crate::web::data::Data;
+use crate::web::dev::{insert_slash, AppService, HttpServiceFactory, ResourceDef};
+use crate::web::extract::FromRequest;
+use crate::web::guard::Guard;
+use crate::web::handler::Factory;
+use crate::web::responder::Responder;
+use crate::web::route::{CreateRouteService, Route, RouteService};
+use crate::web::service::{ServiceRequest, ServiceResponse};
 
 type HttpService = BoxService<ServiceRequest, ServiceResponse, Error>;
 type HttpNewService = BoxServiceFactory<(), ServiceRequest, ServiceResponse, Error, ()>;
@@ -649,11 +649,9 @@ mod tests {
     #[actix_rt::test]
     async fn test_to() {
         let mut srv =
-            init_service(App::new().service(web::resource("/test").to(|| {
-                async {
-                    delay_for(Duration::from_millis(100)).await;
-                    Ok::<_, Error>(HttpResponse::Ok())
-                }
+            init_service(App::new().service(web::resource("/test").to(|| async {
+                delay_for(Duration::from_millis(100)).await;
+                Ok::<_, Error>(HttpResponse::Ok())
             })))
             .await;
         let req = TestRequest::with_uri("/test").to_request();

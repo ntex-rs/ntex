@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 
 use actix_codec::Framed;
 use actix_service::{Service, ServiceFactory};
-use futures_util::future::Ready;
+use futures::future::Ready;
 
 use crate::http::error::Error;
 use crate::http::h1::Codec;

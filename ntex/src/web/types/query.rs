@@ -3,15 +3,14 @@
 use std::sync::Arc;
 use std::{fmt, ops};
 
-use actix_http::error::Error;
 use futures::future::{err, ok, Ready};
 use serde::de;
 use serde_urlencoded;
 
-use crate::dev::Payload;
-use crate::error::QueryPayloadError;
-use crate::extract::FromRequest;
-use crate::request::HttpRequest;
+use crate::http::{Error, Payload};
+use crate::web::error::QueryPayloadError;
+use crate::web::extract::FromRequest;
+use crate::web::request::HttpRequest;
 
 /// Extract typed information from the request's query.
 ///

@@ -1,25 +1,17 @@
 //! Essentials helper functions and types for application registration.
-use actix_http::http::Method;
+use std::future::Future;
+
 use actix_router::IntoPattern;
-use futures::Future;
 
-pub use actix_http::Response as HttpResponse;
-pub use bytes::{Bytes, BytesMut};
-pub use futures::channel::oneshot::Canceled;
+use crate::http::{error::BlockingError, Method};
 
-use crate::error::BlockingError;
-use crate::extract::FromRequest;
-use crate::handler::Factory;
-use crate::resource::Resource;
-use crate::responder::Responder;
-use crate::route::Route;
-use crate::scope::Scope;
-use crate::service::WebService;
-
-pub use crate::config::ServiceConfig;
-pub use crate::data::Data;
-pub use crate::request::HttpRequest;
-pub use crate::types::*;
+use super::extract::FromRequest;
+use super::handler::Factory;
+use super::resource::Resource;
+use super::responder::Responder;
+use super::route::Route;
+use super::scope::Scope;
+use super::service::WebService;
 
 /// Create resource for a specific path.
 ///

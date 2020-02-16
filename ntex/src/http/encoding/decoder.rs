@@ -7,7 +7,7 @@ use actix_threadpool::{run, CpuFuture};
 use brotli2::write::BrotliDecoder;
 use bytes::Bytes;
 use flate2::write::{GzDecoder, ZlibDecoder};
-use futures_core::{ready, Stream};
+use futures::{ready, Stream};
 
 use super::Writer;
 use crate::http::error::PayloadError;

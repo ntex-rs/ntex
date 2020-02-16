@@ -27,8 +27,7 @@
 #![allow(non_snake_case)]
 use std::convert::TryFrom;
 
-use actix_http::http::{self, header, uri::Uri};
-use actix_http::RequestHead;
+use crate::http::{header, RequestHead, Uri};
 
 /// Trait defines resource guards. Guards are used for route selection.
 ///

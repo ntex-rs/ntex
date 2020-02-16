@@ -7,8 +7,8 @@ use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use actix_rt::net::TcpStream;
 use actix_service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 use bytes::Bytes;
-use futures_core::{ready, Future};
-use futures_util::future::ok;
+use futures::future::ok;
+use futures::{ready, Future};
 use h2::server::{self, Handshake};
 use pin_project::{pin_project, project};
 

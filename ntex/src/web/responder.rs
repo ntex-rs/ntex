@@ -4,17 +4,15 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_http::error::InternalError;
-use actix_http::http::{
-    header::IntoHeaderValue, Error as HttpError, HeaderMap, HeaderName, StatusCode,
-};
-use actix_http::{Error, Response, ResponseBuilder};
 use bytes::{Bytes, BytesMut};
 use futures::future::{err, ok, Either as EitherFuture, Ready};
 use futures::ready;
 use pin_project::{pin_project, project};
 
-use crate::request::HttpRequest;
+use crate::http::error::{HttpError, InternalError};
+use crate::http::header::{HeaderMap, HeaderName, IntoHeaderValue};
+use crate::http::{Error, Response, ResponseBuilder, StatusCode};
+use crate::web::request::HttpRequest;
 
 /// Trait implemented by types that can be converted to a http response.
 ///

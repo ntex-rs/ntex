@@ -2,16 +2,19 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::rc::Rc;
 use std::{fmt, net};
 
-use actix_http::http::{HeaderMap, Method, Uri, Version};
-use actix_http::{Error, Extensions, HttpMessage, Message, Payload, RequestHead};
 use actix_router::{Path, Url};
 use futures::future::{ok, Ready};
 
-use crate::config::AppConfig;
-use crate::error::UrlGenerationError;
-use crate::extract::FromRequest;
-use crate::info::ConnectionInfo;
-use crate::rmap::ResourceMap;
+use crate::http::{
+    Error, Extensions, HeaderMap, HttpMessage, Message, Method, Payload, RequestHead,
+    Uri, Version,
+};
+
+use crate::web::config::AppConfig;
+use crate::web::error::UrlGenerationError;
+use crate::web::extract::FromRequest;
+use crate::web::info::ConnectionInfo;
+use crate::web::rmap::ResourceMap;
 
 #[derive(Clone)]
 /// An HTTP Request

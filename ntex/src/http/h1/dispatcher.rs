@@ -890,7 +890,7 @@ where
 #[cfg(test)]
 mod tests {
     use actix_service::IntoService;
-    use futures_util::future::{lazy, ok};
+    use futures::future::{lazy, ok};
 
     use super::*;
     use crate::error::Error;

@@ -2,25 +2,25 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::{fmt, io, net};
 
-use actix_http::{body::MessageBody, Error, HttpService, KeepAlive, Request, Response};
 use actix_server::{Server, ServerBuilder};
 use actix_service::{map_config, IntoServiceFactory, Service, ServiceFactory};
 
-use net2::TcpBuilder;
-
-#[cfg(unix)]
-use actix_http::Protocol;
 #[cfg(unix)]
 use actix_service::pipeline_factory;
-#[cfg(unix)]
-use futures::future::ok;
-
 #[cfg(feature = "openssl")]
 use actix_tls::openssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
 use actix_tls::rustls::ServerConfig as RustlsServerConfig;
+#[cfg(unix)]
+use futures::future::ok;
 
-use crate::config::AppConfig;
+use net2::TcpBuilder;
+
+#[cfg(unix)]
+use crate::http::Protocol;
+use crate::http::{body::MessageBody, Error, HttpService, KeepAlive, Request, Response};
+
+use crate::web::config::AppConfig;
 
 struct Socket {
     scheme: &'static str,

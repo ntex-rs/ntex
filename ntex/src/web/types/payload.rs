@@ -4,18 +4,16 @@ use std::pin::Pin;
 use std::str;
 use std::task::{Context, Poll};
 
-use actix_http::error::{Error, ErrorBadRequest, PayloadError};
-use actix_http::HttpMessage;
 use bytes::{Bytes, BytesMut};
 use encoding_rs::UTF_8;
 use futures::future::{err, ok, Either, FutureExt, LocalBoxFuture, Ready};
 use futures::{Stream, StreamExt};
 use mime::Mime;
 
-use crate::dev;
-use crate::extract::FromRequest;
-use crate::http::header;
-use crate::request::HttpRequest;
+use crate::http::error::{Error, ErrorBadRequest, PayloadError};
+use crate::http::{header, HttpMessage};
+use crate::web::extract::FromRequest;
+use crate::web::request::HttpRequest;
 
 /// Payload extractor returns request 's payload stream.
 ///
@@ -44,11 +42,11 @@ use crate::request::HttpRequest;
 ///     );
 /// }
 /// ```
-pub struct Payload(pub crate::dev::Payload);
+pub struct Payload(pub crate::http::Payload);
 
 impl Payload {
     /// Deconstruct to a inner value
-    pub fn into_inner(self) -> crate::dev::Payload {
+    pub fn into_inner(self) -> crate::http::Payload {
         self.0
     }
 }
@@ -98,7 +96,10 @@ impl FromRequest for Payload {
     type Future = Ready<Result<Payload, Error>>;
 
     #[inline]
-    fn from_request(_: &HttpRequest, payload: &mut dev::Payload) -> Self::Future {
+    fn from_request(
+        _: &HttpRequest,
+        payload: &mut crate::http::Payload,
+    ) -> Self::Future {
         ok(Payload(payload.take()))
     }
 }
@@ -137,7 +138,10 @@ impl FromRequest for Bytes {
     >;
 
     #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut dev::Payload) -> Self::Future {
+    fn from_request(
+        req: &HttpRequest,
+        payload: &mut crate::http::Payload,
+    ) -> Self::Future {
         let tmp;
         let cfg = if let Some(cfg) = req.app_data::<PayloadConfig>() {
             cfg
@@ -192,7 +196,10 @@ impl FromRequest for String {
     >;
 
     #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut dev::Payload) -> Self::Future {
+    fn from_request(
+        req: &HttpRequest,
+        payload: &mut crate::http::Payload,
+    ) -> Self::Future {
         let tmp;
         let cfg = if let Some(cfg) = req.app_data::<PayloadConfig>() {
             cfg
@@ -302,16 +309,19 @@ pub struct HttpMessageBody {
     limit: usize,
     length: Option<usize>,
     #[cfg(feature = "compress")]
-    stream: Option<dev::Decompress<dev::Payload>>,
+    stream: Option<crate::http::encoding::Decompress<crate::http::Payload>>,
     #[cfg(not(feature = "compress"))]
-    stream: Option<dev::Payload>,
+    stream: Option<crate::http::Payload>,
     err: Option<PayloadError>,
     fut: Option<LocalBoxFuture<'static, Result<Bytes, PayloadError>>>,
 }
 
 impl HttpMessageBody {
     /// Create `MessageBody` for request.
-    pub fn new(req: &HttpRequest, payload: &mut dev::Payload) -> HttpMessageBody {
+    pub fn new(
+        req: &HttpRequest,
+        payload: &mut crate::http::Payload,
+    ) -> HttpMessageBody {
         let mut len = None;
         if let Some(l) = req.headers().get(&header::CONTENT_LENGTH) {
             if let Ok(s) = l.to_str() {
@@ -326,7 +336,10 @@ impl HttpMessageBody {
         }
 
         #[cfg(feature = "compress")]
-        let stream = Some(dev::Decompress::from_headers(payload.take(), req.headers()));
+        let stream = Some(crate::http::encoding::Decompress::from_headers(
+            payload.take(),
+            req.headers(),
+        ));
         #[cfg(not(feature = "compress"))]
         let stream = Some(payload.take());
 

@@ -1,11 +1,10 @@
 //! Error and Result module
-pub use actix_http::error::*;
 use derive_more::{Display, From};
-use serde_json::error::Error as JsonError;
-use url::ParseError as UrlParseError;
+pub use serde_json::error::Error as JsonError;
+pub use url::ParseError as UrlParseError;
 
-use crate::http::StatusCode;
-use crate::HttpResponse;
+use crate::http::{error, ResponseError, StatusCode};
+use crate::web::HttpResponse;
 
 /// Errors which can occur when attempting to generate resource uri.
 #[derive(Debug, PartialEq, Display, From)]
@@ -48,7 +47,7 @@ pub enum UrlencodedError {
     Parse,
     /// Payload error
     #[display(fmt = "Error that occur during reading payload: {}", _0)]
-    Payload(PayloadError),
+    Payload(error::PayloadError),
 }
 
 /// Return `BadRequest` for `UrlencodedError`
@@ -73,10 +72,10 @@ pub enum JsonPayloadError {
     ContentType,
     /// Deserialize error
     #[display(fmt = "Json deserialize error: {}", _0)]
-    Deserialize(JsonError),
+    Deserialize(serde_json::error::Error),
     /// Payload error
     #[display(fmt = "Error that occur during reading payload: {}", _0)]
-    Payload(PayloadError),
+    Payload(error::PayloadError),
 }
 
 /// Return `BadRequest` for `JsonPayloadError`
@@ -130,13 +129,13 @@ pub enum ReadlinesError {
     EncodingError,
     /// Payload error.
     #[display(fmt = "Error that occur during reading payload: {}", _0)]
-    Payload(PayloadError),
+    Payload(error::PayloadError),
     /// Line limit exceeded.
     #[display(fmt = "Line limit exceeded")]
     LimitOverflow,
     /// ContentType error.
     #[display(fmt = "Content-type error")]
-    ContentTypeError(ContentTypeError),
+    ContentTypeError(error::ContentTypeError),
 }
 
 /// Return `BadRequest` for `ReadlinesError`

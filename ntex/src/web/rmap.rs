@@ -5,8 +5,8 @@ use actix_router::ResourceDef;
 use fxhash::FxHashMap;
 use url::Url;
 
-use crate::error::UrlGenerationError;
-use crate::request::HttpRequest;
+use crate::web::error::UrlGenerationError;
+use crate::web::request::HttpRequest;
 
 #[derive(Clone, Debug)]
 pub struct ResourceMap {

@@ -12,5 +12,9 @@
 #[macro_use]
 extern crate log;
 
+#[cfg(not(test))] // Work around for rust-lang/rust#62127
+pub use actix_macros::{main, test};
+
 pub mod http;
+pub mod web;
 pub mod ws;

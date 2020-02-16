@@ -4,7 +4,7 @@ use std::time::Duration;
 use std::{fmt, net};
 
 use bytes::Bytes;
-use futures_core::Stream;
+use futures::Stream;
 use serde::Serialize;
 
 #[cfg(feature = "cookie")]
