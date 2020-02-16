@@ -11,8 +11,10 @@ use futures_core::Stream;
 use serde::Serialize;
 use serde_json;
 
+#[cfg(feature = "cookie")]
+use coo_kie::{Cookie, CookieJar};
+
 use crate::http::body::{Body, BodyStream, MessageBody, ResponseBody};
-use crate::http::cookie::{Cookie, CookieJar};
 use crate::http::error::{Error, HttpError};
 use crate::http::extensions::Extensions;
 use crate::http::header::{self};
@@ -128,6 +130,7 @@ impl<B> Response<B> {
         &mut self.head.headers
     }
 
+    #[cfg(feature = "cookie")]
     /// Get an iterator for the cookies set by this response
     #[inline]
     pub fn cookies(&self) -> CookieIter<'_> {
@@ -136,6 +139,7 @@ impl<B> Response<B> {
         }
     }
 
+    #[cfg(feature = "cookie")]
     /// Add a cookie to this response
     #[inline]
     pub fn add_cookie(&mut self, cookie: &Cookie<'_>) -> Result<(), HttpError> {
@@ -147,6 +151,7 @@ impl<B> Response<B> {
             .map_err(|e| e.into())
     }
 
+    #[cfg(feature = "cookie")]
     /// Remove all cookies with the given name from this response. Returns
     /// the number of cookies removed.
     #[inline]
@@ -294,10 +299,12 @@ impl Future for Response {
     }
 }
 
+#[cfg(feature = "cookie")]
 pub struct CookieIter<'a> {
     iter: header::GetAll<'a>,
 }
 
+#[cfg(feature = "cookie")]
 impl<'a> Iterator for CookieIter<'a> {
     type Item = Cookie<'a>;
 
@@ -319,6 +326,7 @@ impl<'a> Iterator for CookieIter<'a> {
 pub struct ResponseBuilder {
     head: Option<BoxedResponseHead>,
     err: Option<HttpError>,
+    #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
 }
 
@@ -329,6 +337,7 @@ impl ResponseBuilder {
         ResponseBuilder {
             head: Some(BoxedResponseHead::new(status)),
             err: None,
+            #[cfg(feature = "cookie")]
             cookies: None,
         }
     }
@@ -478,6 +487,7 @@ impl ResponseBuilder {
         self.header(header::CONTENT_LENGTH, len)
     }
 
+    #[cfg(feature = "cookie")]
     /// Set a cookie
     ///
     /// ```rust
@@ -507,6 +517,7 @@ impl ResponseBuilder {
         self
     }
 
+    #[cfg(feature = "cookie")]
     /// Remove cookie
     ///
     /// ```rust
@@ -587,14 +598,18 @@ impl ResponseBuilder {
             return Response::from(Error::from(e)).into_body();
         }
 
+        #[allow(unused_mut)]
         let mut response = self.head.take().expect("cannot reuse response builder");
 
-        if let Some(ref jar) = self.cookies {
-            for cookie in jar.delta() {
-                match HeaderValue::from_str(&cookie.to_string()) {
-                    Ok(val) => response.headers.append(header::SET_COOKIE, val),
-                    Err(e) => return Response::from(Error::from(e)).into_body(),
-                };
+        #[cfg(feature = "cookie")]
+        {
+            if let Some(ref jar) = self.cookies {
+                for cookie in jar.delta() {
+                    match HeaderValue::from_str(&cookie.to_string()) {
+                        Ok(val) => response.headers.append(header::SET_COOKIE, val),
+                        Err(e) => return Response::from(Error::from(e)).into_body(),
+                    };
+                }
             }
         }
 
@@ -659,6 +674,7 @@ impl ResponseBuilder {
         ResponseBuilder {
             head: self.head.take(),
             err: self.err.take(),
+            #[cfg(feature = "cookie")]
             cookies: self.cookies.take(),
         }
     }
@@ -678,22 +694,32 @@ fn parts<'a>(
 /// Convert `Response` to a `ResponseBuilder`. Body get dropped.
 impl<B> From<Response<B>> for ResponseBuilder {
     fn from(res: Response<B>) -> ResponseBuilder {
-        // If this response has cookies, load them into a jar
-        let mut jar: Option<CookieJar> = None;
-        for c in res.cookies() {
-            if let Some(ref mut j) = jar {
-                j.add_original(c.into_owned());
-            } else {
-                let mut j = CookieJar::new();
-                j.add_original(c.into_owned());
-                jar = Some(j);
+        #[cfg(feature = "cookie")]
+        {
+            // If this response has cookies, load them into a jar
+            let mut jar: Option<CookieJar> = None;
+            for c in res.cookies() {
+                if let Some(ref mut j) = jar {
+                    j.add_original(c.into_owned());
+                } else {
+                    let mut j = CookieJar::new();
+                    j.add_original(c.into_owned());
+                    jar = Some(j);
+                }
+            }
+
+            ResponseBuilder {
+                head: Some(res.head),
+                err: None,
+                cookies: jar,
             }
         }
-
-        ResponseBuilder {
-            head: Some(res.head),
-            err: None,
-            cookies: jar,
+        #[cfg(not(feature = "cookie"))]
+        {
+            ResponseBuilder {
+                head: Some(res.head),
+                err: None,
+            }
         }
     }
 }
@@ -701,22 +727,6 @@ impl<B> From<Response<B>> for ResponseBuilder {
 /// Convert `ResponseHead` to a `ResponseBuilder`
 impl<'a> From<&'a ResponseHead> for ResponseBuilder {
     fn from(head: &'a ResponseHead) -> ResponseBuilder {
-        // If this response has cookies, load them into a jar
-        let mut jar: Option<CookieJar> = None;
-
-        let cookies = CookieIter {
-            iter: head.headers.get_all(header::SET_COOKIE),
-        };
-        for c in cookies {
-            if let Some(ref mut j) = jar {
-                j.add_original(c.into_owned());
-            } else {
-                let mut j = CookieJar::new();
-                j.add_original(c.into_owned());
-                jar = Some(j);
-            }
-        }
-
         let mut msg = BoxedResponseHead::new(head.status);
         msg.version = head.version;
         msg.reason = head.reason;
@@ -725,10 +735,36 @@ impl<'a> From<&'a ResponseHead> for ResponseBuilder {
         }
         msg.no_chunking(!head.chunked());
 
-        ResponseBuilder {
-            head: Some(msg),
-            err: None,
-            cookies: jar,
+        #[cfg(feature = "cookie")]
+        {
+            // If this response has cookies, load them into a jar
+            let mut jar: Option<CookieJar> = None;
+
+            let cookies = CookieIter {
+                iter: head.headers.get_all(header::SET_COOKIE),
+            };
+            for c in cookies {
+                if let Some(ref mut j) = jar {
+                    j.add_original(c.into_owned());
+                } else {
+                    let mut j = CookieJar::new();
+                    j.add_original(c.into_owned());
+                    jar = Some(j);
+                }
+            }
+            ResponseBuilder {
+                head: Some(msg),
+                err: None,
+                cookies: jar,
+            }
+        }
+
+        #[cfg(not(feature = "cookie"))]
+        {
+            ResponseBuilder {
+                head: Some(msg),
+                err: None,
+            }
         }
     }
 }

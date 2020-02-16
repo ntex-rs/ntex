@@ -10,10 +10,9 @@ use bytes::Bytes;
 use flate2::write::{GzEncoder, ZlibEncoder};
 use futures_core::ready;
 
-use crate::body::{Body, BodySize, MessageBody, ResponseBody};
-use crate::http::header::{ContentEncoding, CONTENT_ENCODING};
-use crate::http::{HeaderValue, StatusCode};
-use crate::{Error, ResponseHead};
+use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
+use crate::http::header::{ContentEncoding, HeaderValue, CONTENT_ENCODING};
+use crate::http::{Error, ResponseHead, StatusCode};
 
 use super::Writer;
 

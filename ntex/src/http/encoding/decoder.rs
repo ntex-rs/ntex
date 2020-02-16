@@ -10,7 +10,7 @@ use flate2::write::{GzDecoder, ZlibDecoder};
 use futures_core::{ready, Stream};
 
 use super::Writer;
-use crate::error::PayloadError;
+use crate::http::error::PayloadError;
 use crate::http::header::{ContentEncoding, HeaderMap, CONTENT_ENCODING};
 
 const INPLACE: usize = 2049;

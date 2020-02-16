@@ -34,8 +34,8 @@ mod pool;
 mod request;
 mod response;
 mod sender;
-pub mod test;
-pub mod ws;
+mod test;
+mod ws;
 
 pub use self::builder::ClientBuilder;
 pub use self::connect::BoxedSocket;
@@ -45,6 +45,8 @@ pub use self::frozen::{FrozenClientRequest, FrozenSendBuilder};
 pub use self::request::ClientRequest;
 pub use self::response::{ClientResponse, JsonBody, MessageBody};
 pub use self::sender::SendClientRequest;
+pub use self::test::TestResponse;
+pub use self::ws::WebsocketsRequest;
 
 use crate::http::error::HttpError;
 use crate::http::{HeaderMap, Method, RequestHead, Uri};

@@ -1,16 +1,16 @@
 use std::convert::TryFrom;
-use std::fmt::Write as FmtWrite;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{fmt, net};
 
 use bytes::Bytes;
 use futures_core::Stream;
-use percent_encoding::percent_encode;
 use serde::Serialize;
 
+#[cfg(feature = "cookie")]
+use coo_kie::{Cookie, CookieJar};
+
 use crate::http::body::Body;
-use crate::http::cookie::{Cookie, CookieJar, USERINFO};
 use crate::http::error::{Error, HttpError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, IntoHeaderValue};
 use crate::http::{uri, ConnectionType, Method, RequestHead, Uri, Version};
@@ -51,6 +51,7 @@ pub struct ClientRequest {
     pub(crate) head: RequestHead,
     err: Option<HttpError>,
     addr: Option<net::SocketAddr>,
+    #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
     response_decompress: bool,
     timeout: Option<Duration>,
@@ -69,6 +70,7 @@ impl ClientRequest {
             head: RequestHead::default(),
             err: None,
             addr: None,
+            #[cfg(feature = "cookie")]
             cookies: None,
             timeout: None,
             response_decompress: true,
@@ -279,6 +281,7 @@ impl ClientRequest {
         self.header(header::AUTHORIZATION, format!("Bearer {}", token))
     }
 
+    #[cfg(feature = "cookie")]
     /// Set a cookie
     ///
     /// ```rust
@@ -479,6 +482,7 @@ impl ClientRequest {
         )
     }
 
+    #[allow(unused_mut)]
     fn prep_for_sending(mut self) -> Result<Self, PrepForSendingError> {
         if let Some(e) = self.err {
             return Err(e.into());
@@ -500,17 +504,29 @@ impl ClientRequest {
         }
 
         // set cookies
-        if let Some(ref mut jar) = self.cookies {
-            let mut cookie = String::new();
-            for c in jar.delta() {
-                let name = percent_encode(c.name().as_bytes(), USERINFO);
-                let value = percent_encode(c.value().as_bytes(), USERINFO);
-                let _ = write!(&mut cookie, "; {}={}", name, value);
+        #[cfg(feature = "cookie")]
+        {
+            use percent_encoding::percent_encode;
+            use std::fmt::Write as FmtWrite;
+
+            if let Some(ref mut jar) = self.cookies {
+                let mut cookie = String::new();
+                for c in jar.delta() {
+                    let name = percent_encode(
+                        c.name().as_bytes(),
+                        crate::http::helpers::USERINFO,
+                    );
+                    let value = percent_encode(
+                        c.value().as_bytes(),
+                        crate::http::helpers::USERINFO,
+                    );
+                    let _ = write!(&mut cookie, "; {}={}", name, value);
+                }
+                self.head.headers.insert(
+                    header::COOKIE,
+                    HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
+                );
             }
-            self.head.headers.insert(
-                header::COOKIE,
-                HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
-            );
         }
 
         let mut slf = self;

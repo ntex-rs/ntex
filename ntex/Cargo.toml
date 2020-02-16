@@ -14,7 +14,7 @@ license = "MIT"
 edition = "2018"
 
 [package.metadata.docs.rs]
-features = ["openssl", "rustls", "compress"]
+features = ["openssl", "rustls", "compress", "cookie"]
 
 [lib]
 name = "ntex"
@@ -31,6 +31,9 @@ rustls = ["actix-tls/rustls", "actix-connect/rustls"]
 
 # enable compressison support
 compress = ["flate2", "brotli2"]
+
+# enable cookie support
+cookie = ["coo-kie", "coo-kie/percent-encode"]
 
 [dependencies]
 actix-service = "1.0.1"
@@ -68,9 +71,7 @@ sha-1 = "0.8"
 slab = "0.4"
 serde_urlencoded = "0.6.1"
 time = { version = "0.2.5", default-features = false, features = ["std"] }
-
-# for secure cookie
-ring = { version = "0.16.9", optional = true }
+coo-kie = { version = "0.13.3", package = "cookie", optional = true }
 
 # compression
 brotli2 = { version="0.3.2", optional = true }

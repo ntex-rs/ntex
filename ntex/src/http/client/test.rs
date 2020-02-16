@@ -1,12 +1,12 @@
 //! Test helpers for actix http client to use during testing.
 use std::convert::TryFrom;
-use std::fmt::Write as FmtWrite;
 
 use bytes::Bytes;
-use percent_encoding::percent_encode;
 
-use crate::http::cookie::{Cookie, CookieJar, USERINFO};
-use crate::http::header::{self, HeaderName, HeaderValue, IntoHeaderValue};
+#[cfg(feature = "cookie")]
+use coo_kie::{Cookie, CookieJar};
+
+use crate::http::header::{HeaderName, IntoHeaderValue};
 use crate::http::{h1, Payload, ResponseHead};
 use crate::http::{Error as HttpError, StatusCode, Version};
 
@@ -15,16 +15,18 @@ use super::ClientResponse;
 /// Test `ClientResponse` builder
 pub struct TestResponse {
     head: ResponseHead,
-    cookies: CookieJar,
     payload: Option<Payload>,
+    #[cfg(feature = "cookie")]
+    cookies: CookieJar,
 }
 
 impl Default for TestResponse {
     fn default() -> TestResponse {
         TestResponse {
             head: ResponseHead::new(StatusCode::OK),
-            cookies: CookieJar::new(),
             payload: None,
+            #[cfg(feature = "cookie")]
+            cookies: CookieJar::new(),
         }
     }
 }
@@ -62,6 +64,7 @@ impl TestResponse {
         panic!("Can not create header");
     }
 
+    #[cfg(feature = "cookie")]
     /// Set cookie for this response
     pub fn cookie(mut self, cookie: Cookie<'_>) -> Self {
         self.cookies.add(cookie.into_owned());
@@ -78,19 +81,30 @@ impl TestResponse {
 
     /// Complete response creation and generate `ClientResponse` instance
     pub fn finish(self) -> ClientResponse {
+        #[allow(unused_mut)]
         let mut head = self.head;
 
-        let mut cookie = String::new();
-        for c in self.cookies.delta() {
-            let name = percent_encode(c.name().as_bytes(), USERINFO);
-            let value = percent_encode(c.value().as_bytes(), USERINFO);
-            let _ = write!(&mut cookie, "; {}={}", name, value);
-        }
-        if !cookie.is_empty() {
-            head.headers.insert(
-                header::SET_COOKIE,
-                HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
-            );
+        #[cfg(feature = "cookie")]
+        {
+            use percent_encoding::percent_encode;
+            use std::fmt::Write as FmtWrite;
+
+            use crate::http::header::{self, HeaderValue};
+
+            let mut cookie = String::new();
+            for c in self.cookies.delta() {
+                let name =
+                    percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
+                let value =
+                    percent_encode(c.value().as_bytes(), crate::http::helpers::USERINFO);
+                let _ = write!(&mut cookie, "; {}={}", name, value);
+            }
+            if !cookie.is_empty() {
+                head.headers.insert(
+                    header::SET_COOKIE,
+                    HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
+                );
+            }
         }
 
         if let Some(pl) = self.payload {

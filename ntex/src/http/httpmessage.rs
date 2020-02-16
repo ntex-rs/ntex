@@ -5,12 +5,15 @@ use encoding_rs::{Encoding, UTF_8};
 use http::header;
 use mime::Mime;
 
-use super::cookie::Cookie;
-use super::error::{ContentTypeError, CookieParseError, ParseError};
+#[cfg(feature = "cookie")]
+use coo_kie::Cookie;
+
+use super::error::{ContentTypeError, ParseError};
 use super::extensions::Extensions;
 use super::header::HeaderMap;
 use super::payload::Payload;
 
+#[cfg(feature = "cookie")]
 struct Cookies(Vec<Cookie<'static>>);
 
 /// Trait that implements general purpose operations on http messages
@@ -90,14 +93,15 @@ pub trait HttpMessage: Sized {
         }
     }
 
+    #[cfg(feature = "cookie")]
     /// Load request cookies.
     #[inline]
-    fn cookies(&self) -> Result<Ref<'_, Vec<Cookie<'static>>>, CookieParseError> {
+    fn cookies(&self) -> Result<Ref<'_, Vec<Cookie<'static>>>, coo_kie::ParseError> {
         if self.extensions().get::<Cookies>().is_none() {
             let mut cookies = Vec::new();
             for hdr in self.headers().get_all(header::COOKIE) {
                 let s =
-                    str::from_utf8(hdr.as_bytes()).map_err(CookieParseError::from)?;
+                    str::from_utf8(hdr.as_bytes()).map_err(coo_kie::ParseError::from)?;
                 for cookie_str in s.split(';').map(|s| s.trim()) {
                     if !cookie_str.is_empty() {
                         cookies.push(Cookie::parse_encoded(cookie_str)?.into_owned());
@@ -111,6 +115,7 @@ pub trait HttpMessage: Sized {
         }))
     }
 
+    #[cfg(feature = "cookie")]
     /// Return request cookie.
     fn cookie(&self, name: &str) -> Option<Cookie<'static>> {
         if let Ok(cookies) = self.cookies() {

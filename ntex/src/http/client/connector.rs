@@ -35,7 +35,8 @@ enum SslConnector {
 #[cfg(not(any(feature = "openssl", feature = "rustls")))]
 type SslConnector = ();
 
-/// Manages http client network connectivity
+/// Manages http client network connectivity.
+///
 /// The `Connector` type uses a builder-like combinator pattern for service
 /// construction that finishes by calling the `.finish()` method.
 ///
@@ -405,7 +406,7 @@ mod connect_impl {
     use futures_util::future::Either;
 
     use super::*;
-    use crate::client::connection::EitherConnection;
+    use crate::http::client::connection::EitherConnection;
 
     pub(crate) struct InnerConnector<T1, T2, Io1, Io2>
     where

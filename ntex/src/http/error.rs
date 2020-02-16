@@ -18,8 +18,10 @@ use serde::de::value::Error as DeError;
 use serde_json::error::Error as JsonError;
 use serde_urlencoded::ser::Error as FormError;
 
+#[cfg(feature = "cookie")]
+pub use coo_kie::ParseError as CookieParseError;
+
 // re-export for convinience
-pub use super::cookie::ParseError as CookieParseError;
 pub use actix_threadpool::BlockingError;
 pub use futures_channel::oneshot::Canceled;
 pub use http::Error as HttpError;
@@ -387,8 +389,9 @@ impl ResponseError for PayloadError {
     }
 }
 
+#[cfg(feature = "cookie")]
 /// Return `BadRequest` for `cookie::ParseError`
-impl ResponseError for crate::http::cookie::ParseError {
+impl ResponseError for coo_kie::ParseError {
     fn status_code(&self) -> StatusCode {
         StatusCode::BAD_REQUEST
     }
@@ -978,6 +981,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    #[cfg(feature = "cookie")]
     #[test]
     fn test_cookie_parse() {
         let resp: Response = CookieParseError::EmptyName.error_response();

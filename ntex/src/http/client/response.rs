@@ -8,9 +8,11 @@ use bytes::{Bytes, BytesMut};
 use futures_core::{ready, Future, Stream};
 use serde::de::DeserializeOwned;
 
-use crate::http::cookie::Cookie;
-use crate::http::error::{CookieParseError, PayloadError};
-use crate::http::header::{CONTENT_LENGTH, SET_COOKIE};
+#[cfg(feature = "cookie")]
+use coo_kie::{Cookie, ParseError as CookieParseError};
+
+use crate::http::error::PayloadError;
+use crate::http::header::CONTENT_LENGTH;
 use crate::http::{Extensions, HttpMessage, Payload, PayloadStream, ResponseHead};
 use crate::http::{HeaderMap, StatusCode, Version};
 
@@ -41,9 +43,11 @@ impl<S> HttpMessage for ClientResponse<S> {
         std::mem::replace(&mut self.payload, Payload::None)
     }
 
+    #[cfg(feature = "cookie")]
     /// Load request cookies.
-    #[inline]
     fn cookies(&self) -> Result<Ref<'_, Vec<Cookie<'static>>>, CookieParseError> {
+        use crate::http::header::SET_COOKIE;
+
         struct Cookies(Vec<Cookie<'static>>);
 
         if self.extensions().get::<Cookies>().is_none() {

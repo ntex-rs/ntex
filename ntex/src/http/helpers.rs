@@ -2,6 +2,7 @@ use std::{io, mem, ptr, slice};
 
 use bytes::{BufMut, BytesMut};
 use http::Version;
+use percent_encoding::{AsciiSet, CONTROLS};
 
 use super::extensions::Extensions;
 
@@ -193,6 +194,25 @@ impl<T: Clone + 'static> DataFactory for Data<T> {
         ext.insert(self.0.clone())
     }
 }
+
+/// https://url.spec.whatwg.org/#fragment-percent-encode-set
+const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
+
+/// https://url.spec.whatwg.org/#path-percent-encode-set
+const PATH: &AsciiSet = &FRAGMENT.add(b'#').add(b'?').add(b'{').add(b'}');
+
+/// https://url.spec.whatwg.org/#userinfo-percent-encode-set
+pub(crate) const USERINFO: &AsciiSet = &PATH
+    .add(b'/')
+    .add(b':')
+    .add(b';')
+    .add(b'=')
+    .add(b'@')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'|');
 
 #[cfg(test)]
 mod tests {

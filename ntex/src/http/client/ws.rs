@@ -1,24 +1,22 @@
 //! Websockets client
 use std::convert::TryFrom;
-use std::fmt::Write as FmtWrite;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::{fmt, str};
 
 use actix_codec::Framed;
 use actix_rt::time::timeout;
-use percent_encoding::percent_encode;
 
-pub use crate::ws::{self, CloseCode, CloseReason, Codec, Frame, Message};
+#[cfg(feature = "cookie")]
+use coo_kie::{Cookie, CookieJar};
 
-use crate::http::cookie::USERINFO;
-use crate::http::cookie::{Cookie, CookieJar};
 use crate::http::error::HttpError;
 use crate::http::header::{
     self, HeaderName, HeaderValue, IntoHeaderValue, AUTHORIZATION,
 };
 use crate::http::{ConnectionType, Method, StatusCode, Uri, Version};
 use crate::http::{Payload, RequestHead};
+use crate::ws;
 
 use super::connect::BoxedSocket;
 use super::error::{InvalidUrl, SendRequestError, WsClientError};
@@ -34,6 +32,7 @@ pub struct WebsocketsRequest {
     addr: Option<SocketAddr>,
     max_size: usize,
     server_mode: bool,
+    #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
     config: Rc<ClientConfig>,
 }
@@ -64,6 +63,7 @@ impl WebsocketsRequest {
             protocols: None,
             max_size: 65_536,
             server_mode: false,
+            #[cfg(feature = "cookie")]
             cookies: None,
         }
     }
@@ -91,6 +91,7 @@ impl WebsocketsRequest {
         self
     }
 
+    #[cfg(feature = "cookie")]
     /// Set a cookie
     pub fn cookie(mut self, cookie: Cookie<'_>) -> Self {
         if self.cookies.is_none() {
@@ -217,7 +218,7 @@ impl WebsocketsRequest {
     /// Complete request construction and connect to a websockets server.
     pub async fn connect(
         mut self,
-    ) -> Result<(ClientResponse, Framed<BoxedSocket, Codec>), WsClientError> {
+    ) -> Result<(ClientResponse, Framed<BoxedSocket, ws::Codec>), WsClientError> {
         if let Some(e) = self.err.take() {
             return Err(WsClientError::from(e));
         }
@@ -244,18 +245,30 @@ impl WebsocketsRequest {
             );
         }
 
-        // set cookies
-        if let Some(ref mut jar) = self.cookies {
-            let mut cookie = String::new();
-            for c in jar.delta() {
-                let name = percent_encode(c.name().as_bytes(), USERINFO);
-                let value = percent_encode(c.value().as_bytes(), USERINFO);
-                let _ = write!(&mut cookie, "; {}={}", name, value);
+        #[cfg(feature = "cookie")]
+        {
+            use percent_encoding::percent_encode;
+            use std::fmt::Write as FmtWrite;
+
+            // set cookies
+            if let Some(ref mut jar) = self.cookies {
+                let mut cookie = String::new();
+                for c in jar.delta() {
+                    let name = percent_encode(
+                        c.name().as_bytes(),
+                        crate::http::helpers::USERINFO,
+                    );
+                    let value = percent_encode(
+                        c.value().as_bytes(),
+                        crate::http::helpers::USERINFO,
+                    );
+                    let _ = write!(&mut cookie, "; {}={}", name, value);
+                }
+                self.head.headers.insert(
+                    header::COOKIE,
+                    HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
+                );
             }
-            self.head.headers.insert(
-                header::COOKIE,
-                HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
-            );
         }
 
         // origin
@@ -467,6 +480,7 @@ mod tests {
         let _ = req.connect();
     }
 
+    #[cfg(feature = "cookie")]
     #[actix_rt::test]
     async fn basics() {
         let req = Client::new()
