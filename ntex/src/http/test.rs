@@ -1,4 +1,4 @@
-//! Test Various helpers for Actix applications to use during testing.
+//! Test helpers to use during testing.
 use std::convert::TryFrom;
 use std::io::{self, Read, Write};
 use std::pin::Pin;
@@ -24,7 +24,7 @@ use super::Request;
 /// # use actix_web::*;
 /// use actix_web::test::TestRequest;
 ///
-/// fn index(req: &HttpRequest) -> Response {
+/// fn index(req: HttpRequest) -> Response {
 ///     if let Some(hdr) = req.headers().get(header::CONTENT_TYPE) {
 ///         Response::Ok().into()
 ///     } else {

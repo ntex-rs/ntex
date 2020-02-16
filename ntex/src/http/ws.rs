@@ -1,3 +1,4 @@
+//! Websockets protocol helpers
 use derive_more::Display;
 
 use crate::http::error::ResponseError;

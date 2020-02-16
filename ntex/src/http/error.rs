@@ -1,4 +1,4 @@
-//! Various http related errors
+//! Http related errors
 use std::any::TypeId;
 use std::cell::RefCell;
 use std::io::Write;

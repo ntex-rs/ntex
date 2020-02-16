@@ -1,4 +1,4 @@
-//! An HTTP Client
+//! HTTP Client
 //!
 //! ```rust
 //! use futures::future::{lazy, Future};

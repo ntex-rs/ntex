@@ -254,7 +254,7 @@ impl From<serde_json::Value> for Body {
 
 impl<S> From<SizedStream<S>> for Body
 where
-    S: Stream<Item = Result<Bytes, Error>> + 'static,
+    S: Stream<Item = Result<Bytes, Error>> + Unpin + 'static,
 {
     fn from(s: SizedStream<S>) -> Body {
         Body::from_message(s)
@@ -263,7 +263,7 @@ where
 
 impl<S, E> From<BodyStream<S, E>> for Body
 where
-    S: Stream<Item = Result<Bytes, E>> + 'static,
+    S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
     E: Into<Error> + 'static,
 {
     fn from(s: BodyStream<S, E>) -> Body {
@@ -383,7 +383,7 @@ where
 
 impl<S, E> MessageBody for BodyStream<S, E>
 where
-    S: Stream<Item = Result<Bytes, E>>,
+    S: Stream<Item = Result<Bytes, E>> + Unpin,
     E: Into<Error>,
 {
     fn size(&self) -> BodySize {
@@ -417,7 +417,7 @@ pub struct SizedStream<S> {
 
 impl<S> SizedStream<S>
 where
-    S: Stream<Item = Result<Bytes, Error>>,
+    S: Stream<Item = Result<Bytes, Error>> + Unpin,
 {
     pub fn new(size: u64, stream: S) -> Self {
         SizedStream { size, stream }
@@ -426,7 +426,7 @@ where
 
 impl<S> MessageBody for SizedStream<S>
 where
-    S: Stream<Item = Result<Bytes, Error>>,
+    S: Stream<Item = Result<Bytes, Error>> + Unpin,
 {
     fn size(&self) -> BodySize {
         BodySize::Sized64(self.size)
