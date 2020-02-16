@@ -90,8 +90,9 @@ impl<P> Request<P> {
         std::mem::replace(&mut self.payload, Payload::None)
     }
 
+    #[allow(dead_code)]
     /// Split request into request head and payload
-    pub fn into_parts(self) -> (Message<RequestHead>, Payload<P>) {
+    pub(crate) fn into_parts(self) -> (Message<RequestHead>, Payload<P>) {
         (self.head, self.payload)
     }
 

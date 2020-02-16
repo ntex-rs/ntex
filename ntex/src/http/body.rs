@@ -36,7 +36,10 @@ impl BodySize {
 pub trait MessageBody {
     fn size(&self) -> BodySize;
 
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>>;
+    fn poll_next_chunk(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>>;
 }
 
 impl MessageBody for () {
@@ -44,7 +47,10 @@ impl MessageBody for () {
         BodySize::Empty
     }
 
-    fn poll_next(&mut self, _: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         Poll::Ready(None)
     }
 }
@@ -54,8 +60,11 @@ impl<T: MessageBody> MessageBody for Box<T> {
         self.as_ref().size()
     }
 
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
-        self.as_mut().poll_next(cx)
+    fn poll_next_chunk(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
+        self.as_mut().poll_next_chunk(cx)
     }
 }
 
@@ -98,10 +107,13 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
         }
     }
 
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         match self {
-            ResponseBody::Body(ref mut body) => body.poll_next(cx),
-            ResponseBody::Other(ref mut body) => body.poll_next(cx),
+            ResponseBody::Body(ref mut body) => body.poll_next_chunk(cx),
+            ResponseBody::Other(ref mut body) => body.poll_next_chunk(cx),
         }
     }
 }
@@ -116,8 +128,8 @@ impl<B: MessageBody> Stream for ResponseBody<B> {
     ) -> Poll<Option<Self::Item>> {
         #[project]
         match self.project() {
-            ResponseBody::Body(ref mut body) => body.poll_next(cx),
-            ResponseBody::Other(ref mut body) => body.poll_next(cx),
+            ResponseBody::Body(ref mut body) => body.poll_next_chunk(cx),
+            ResponseBody::Other(ref mut body) => body.poll_next_chunk(cx),
         }
     }
 }
@@ -156,7 +168,10 @@ impl MessageBody for Body {
         }
     }
 
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         match self {
             Body::None => Poll::Ready(None),
             Body::Empty => Poll::Ready(None),
@@ -168,7 +183,7 @@ impl MessageBody for Body {
                     Poll::Ready(Some(Ok(mem::replace(bin, Bytes::new()))))
                 }
             }
-            Body::Message(ref mut body) => body.poll_next(cx),
+            Body::Message(ref mut body) => body.poll_next_chunk(cx),
         }
     }
 }
@@ -276,7 +291,10 @@ impl MessageBody for Bytes {
         BodySize::Sized(self.len())
     }
 
-    fn poll_next(&mut self, _: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -290,7 +308,10 @@ impl MessageBody for BytesMut {
         BodySize::Sized(self.len())
     }
 
-    fn poll_next(&mut self, _: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -304,7 +325,10 @@ impl MessageBody for &'static str {
         BodySize::Sized(self.len())
     }
 
-    fn poll_next(&mut self, _: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -320,7 +344,10 @@ impl MessageBody for &'static [u8] {
         BodySize::Sized(self.len())
     }
 
-    fn poll_next(&mut self, _: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -334,7 +361,10 @@ impl MessageBody for Vec<u8> {
         BodySize::Sized(self.len())
     }
 
-    fn poll_next(&mut self, _: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -348,7 +378,10 @@ impl MessageBody for String {
         BodySize::Sized(self.len())
     }
 
-    fn poll_next(&mut self, _: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -395,7 +428,10 @@ where
     /// Empty values are skipped to prevent [`BodyStream`]'s transmission being
     /// ended on a zero-length chunk, but rather proceed until the underlying
     /// [`Stream`] ends.
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         let mut stream = unsafe { Pin::new_unchecked(self) }.project().stream;
         loop {
             return Poll::Ready(match ready!(stream.as_mut().poll_next(cx)) {
@@ -437,7 +473,10 @@ where
     /// Empty values are skipped to prevent [`SizedStream`]'s transmission being
     /// ended on a zero-length chunk, but rather proceed until the underlying
     /// [`Stream`] ends.
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         let mut stream = unsafe { Pin::new_unchecked(self) }.project().stream;
         loop {
             return Poll::Ready(match ready!(stream.as_mut().poll_next(cx)) {
@@ -480,7 +519,7 @@ mod tests {
 
         assert_eq!("test".size(), BodySize::Sized(4));
         assert_eq!(
-            poll_fn(|cx| "test".poll_next(cx)).await.unwrap().ok(),
+            poll_fn(|cx| "test".poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))
         );
     }
@@ -497,7 +536,7 @@ mod tests {
 
         assert_eq!((&b"test"[..]).size(), BodySize::Sized(4));
         assert_eq!(
-            poll_fn(|cx| (&b"test"[..]).poll_next(cx))
+            poll_fn(|cx| (&b"test"[..]).poll_next_chunk(cx))
                 .await
                 .unwrap()
                 .ok(),
@@ -512,7 +551,7 @@ mod tests {
 
         assert_eq!(Vec::from("test").size(), BodySize::Sized(4));
         assert_eq!(
-            poll_fn(|cx| Vec::from("test").poll_next(cx))
+            poll_fn(|cx| Vec::from("test").poll_next_chunk(cx))
                 .await
                 .unwrap()
                 .ok(),
@@ -528,7 +567,7 @@ mod tests {
 
         assert_eq!(b.size(), BodySize::Sized(4));
         assert_eq!(
-            poll_fn(|cx| b.poll_next(cx)).await.unwrap().ok(),
+            poll_fn(|cx| b.poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))
         );
     }
@@ -541,7 +580,7 @@ mod tests {
 
         assert_eq!(b.size(), BodySize::Sized(4));
         assert_eq!(
-            poll_fn(|cx| b.poll_next(cx)).await.unwrap().ok(),
+            poll_fn(|cx| b.poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))
         );
     }
@@ -556,7 +595,7 @@ mod tests {
 
         assert_eq!(b.size(), BodySize::Sized(4));
         assert_eq!(
-            poll_fn(|cx| b.poll_next(cx)).await.unwrap().ok(),
+            poll_fn(|cx| b.poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))
         );
     }
@@ -564,14 +603,14 @@ mod tests {
     #[actix_rt::test]
     async fn test_unit() {
         assert_eq!(().size(), BodySize::Empty);
-        assert!(poll_fn(|cx| ().poll_next(cx)).await.is_none());
+        assert!(poll_fn(|cx| ().poll_next_chunk(cx)).await.is_none());
     }
 
     #[actix_rt::test]
     async fn test_box() {
         let mut val = Box::new(());
         assert_eq!(val.size(), BodySize::Empty);
-        assert!(poll_fn(|cx| val.poll_next(cx)).await.is_none());
+        assert!(poll_fn(|cx| val.poll_next_chunk(cx)).await.is_none());
     }
 
     #[actix_rt::test]
@@ -618,11 +657,11 @@ mod tests {
                     .map(|&v| Ok(Bytes::from(v)) as Result<Bytes, ()>),
             ));
             assert_eq!(
-                poll_fn(|cx| body.poll_next(cx)).await.unwrap().ok(),
+                poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
                 Some(Bytes::from("1")),
             );
             assert_eq!(
-                poll_fn(|cx| body.poll_next(cx)).await.unwrap().ok(),
+                poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
                 Some(Bytes::from("2")),
             );
         }
@@ -638,11 +677,11 @@ mod tests {
                 stream::iter(["1", "", "2"].iter().map(|&v| Ok(Bytes::from(v)))),
             );
             assert_eq!(
-                poll_fn(|cx| body.poll_next(cx)).await.unwrap().ok(),
+                poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
                 Some(Bytes::from("1")),
             );
             assert_eq!(
-                poll_fn(|cx| body.poll_next(cx)).await.unwrap().ok(),
+                poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
                 Some(Bytes::from("2")),
             );
         }

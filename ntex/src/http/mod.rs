@@ -29,9 +29,7 @@ pub use self::error::{Error, ResponseError};
 pub use self::extensions::Extensions;
 pub use self::header::HeaderMap;
 pub use self::httpmessage::HttpMessage;
-pub use self::message::{
-    ConnectionType, Message, RequestHead, RequestHeadType, ResponseHead,
-};
+pub use self::message::{ConnectionType, RequestHead, RequestHeadType, ResponseHead};
 pub use self::payload::{Payload, PayloadStream};
 pub use self::request::Request;
 pub use self::response::{Response, ResponseBuilder};

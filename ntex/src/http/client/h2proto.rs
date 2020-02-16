@@ -129,7 +129,7 @@ async fn send_body<B: MessageBody>(
     let mut buf = None;
     loop {
         if buf.is_none() {
-            match poll_fn(|cx| body.poll_next(cx)).await {
+            match poll_fn(|cx| body.poll_next_chunk(cx)).await {
                 Some(Ok(b)) => {
                     send.reserve_capacity(b.len());
                     buf = Some(b);

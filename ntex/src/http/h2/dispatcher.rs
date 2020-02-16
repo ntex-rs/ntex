@@ -335,7 +335,7 @@ where
                             }
                         }
                     } else {
-                        match body.poll_next(cx) {
+                        match body.poll_next_chunk(cx) {
                             Poll::Pending => return Poll::Pending,
                             Poll::Ready(None) => {
                                 if let Err(e) = stream.send_data(Bytes::new(), true) {

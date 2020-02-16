@@ -337,7 +337,7 @@ impl ResponseHead {
     }
 }
 
-pub struct Message<T: Head> {
+pub(crate) struct Message<T: Head> {
     head: Rc<T>,
 }
 

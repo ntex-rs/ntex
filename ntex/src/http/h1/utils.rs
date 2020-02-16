@@ -49,7 +49,7 @@ where
             // send body
             if this.res.is_none() && this.body.is_some() {
                 while body_ready && this.body.is_some() && !framed.is_write_buf_full() {
-                    match this.body.as_mut().unwrap().poll_next(cx)? {
+                    match this.body.as_mut().unwrap().poll_next_chunk(cx)? {
                         Poll::Ready(item) => {
                             // body is done
                             if item.is_none() {

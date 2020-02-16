@@ -129,7 +129,7 @@ where
     let mut eof = false;
     while !eof {
         while !eof && !framed.is_write_buf_full() {
-            match poll_fn(|cx| body.poll_next(cx)).await {
+            match poll_fn(|cx| body.poll_next_chunk(cx)).await {
                 Some(result) => {
                     framed.write(h1::Message::Chunk(Some(result?)))?;
                 }

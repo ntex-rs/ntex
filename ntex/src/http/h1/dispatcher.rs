@@ -404,7 +404,7 @@ where
                 State::SendPayload(ref mut stream) => {
                     loop {
                         if self.write_buf.len() < HW_BUFFER_SIZE {
-                            match stream.poll_next(cx) {
+                            match stream.poll_next_chunk(cx) {
                                 Poll::Ready(Some(Ok(item))) => {
                                     self.codec.encode(
                                         Message::Chunk(Some(item)),
