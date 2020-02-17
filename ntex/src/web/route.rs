@@ -141,7 +141,7 @@ impl Route {
     /// Add method guard to the route.
     ///
     /// ```rust
-    /// # use actix_web::*;
+    /// # use ntex::web::{self, *};
     /// # fn main() {
     /// App::new().service(web::resource("/path").route(
     ///     web::get()
@@ -161,7 +161,7 @@ impl Route {
     /// Add guard to the route.
     ///
     /// ```rust
-    /// # use actix_web::*;
+    /// # use ntex::web::{self, *};
     /// # fn main() {
     /// App::new().service(web::resource("/path").route(
     ///     web::route()
@@ -179,7 +179,7 @@ impl Route {
     /// Set handler function, use request extractors for parameters.
     ///
     /// ```rust
-    /// use actix_web::{web, http, App};
+    /// use ntex::web;
     /// use serde_derive::Deserialize;
     ///
     /// #[derive(Deserialize)]
@@ -188,12 +188,12 @@ impl Route {
     /// }
     ///
     /// /// extract path info using serde
-    /// async fn index(info: web::Path<Info>) -> String {
+    /// async fn index(info: web::types::Path<Info>) -> String {
     ///     format!("Welcome {}!", info.username)
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new().service(
+    ///     let app = web::App::new().service(
     ///         web::resource("/{username}/index.html") // <- define path parameters
     ///             .route(web::get().to(index))        // <- register handler
     ///     );
@@ -205,7 +205,7 @@ impl Route {
     /// ```rust
     /// # use std::collections::HashMap;
     /// # use serde_derive::Deserialize;
-    /// use actix_web::{web, App};
+    /// use ntex::web;
     ///
     /// #[derive(Deserialize)]
     /// struct Info {
@@ -213,12 +213,12 @@ impl Route {
     /// }
     ///
     /// /// extract path info using serde
-    /// async fn index(path: web::Path<Info>, query: web::Query<HashMap<String, String>>, body: web::Json<Info>) -> String {
+    /// async fn index(path: web::types::Path<Info>, query: web::types::Query<HashMap<String, String>>, body: web::types::Json<Info>) -> String {
     ///     format!("Welcome {}!", path.username)
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new().service(
+    ///     let app = web::App::new().service(
     ///         web::resource("/{username}/index.html") // <- define path parameters
     ///             .route(web::get().to(index))
     ///     );
@@ -319,7 +319,6 @@ where
     }
 
     fn call(&mut self, req: ServiceRequest) -> Self::Future {
-        // let mut fut = self.service.call(req);
         self.service
             .call(req)
             .map(|res| match res {
@@ -327,15 +326,6 @@ where
                 Err((err, req)) => Ok(req.error_response(err)),
             })
             .boxed_local()
-
-        // match fut.poll() {
-        //     Poll::Ready(Ok(res)) => Either::Left(ok(res)),
-        //     Poll::Ready(Err((e, req))) => Either::Left(ok(req.error_response(e))),
-        //     Poll::Pending => Either::Right(Box::new(fut.then(|res| match res {
-        //         Ok(res) => Ok(res),
-        //         Err((err, req)) => Ok(req.error_response(err)),
-        //     }))),
-        // }
     }
 }
 
@@ -347,9 +337,9 @@ mod tests {
     use bytes::Bytes;
     use serde_derive::Serialize;
 
-    use crate::http::{Method, StatusCode};
-    use crate::test::{call_service, init_service, read_body, TestRequest};
-    use crate::{error, web, App, HttpResponse};
+    use crate::http::{error, Method, StatusCode};
+    use crate::web::test::{call_service, init_service, read_body, TestRequest};
+    use crate::web::{self, App, HttpResponse};
 
     #[derive(Serialize, PartialEq, Debug)]
     struct MyObject {
@@ -377,7 +367,7 @@ mod tests {
                 )
                 .service(web::resource("/json").route(web::get().to(|| async {
                     delay_for(Duration::from_millis(25)).await;
-                    web::Json(MyObject {
+                    web::types::Json(MyObject {
                         name: "test".to_string(),
                     })
                 }))),

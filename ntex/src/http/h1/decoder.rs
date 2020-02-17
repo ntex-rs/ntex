@@ -640,12 +640,11 @@ impl ChunkedState {
 #[cfg(test)]
 mod tests {
     use bytes::{Bytes, BytesMut};
-    use http::{Method, Version};
 
     use super::*;
-    use crate::error::ParseError;
+    use crate::http::error::ParseError;
     use crate::http::header::{HeaderName, SET_COOKIE};
-    use crate::httpmessage::HttpMessage;
+    use crate::http::{HttpMessage, Method, Version};
 
     impl PayloadType {
         fn unwrap(self) -> PayloadDecoder {

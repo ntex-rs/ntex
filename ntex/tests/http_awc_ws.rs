@@ -1,11 +1,14 @@
 use std::io;
 
 use actix_codec::Framed;
-use actix_http::{body::BodySize, h1, ws, Error, HttpService, Request, Response};
-use actix_http_test::test_server;
 use bytes::Bytes;
 use futures::future::ok;
 use futures::{SinkExt, StreamExt};
+
+use ntex::http::test::server as test_server;
+use ntex::http::ws::handshake_response;
+use ntex::http::{body::BodySize, h1, Error, HttpService, Request, Response};
+use ntex::ws;
 
 async fn ws_service(req: ws::Frame) -> Result<ws::Message, io::Error> {
     match req {
@@ -19,13 +22,13 @@ async fn ws_service(req: ws::Frame) -> Result<ws::Message, io::Error> {
     }
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_simple() {
     let mut srv = test_server(|| {
         HttpService::build()
             .upgrade(|(req, mut framed): (Request, Framed<_, _>)| {
                 async move {
-                    let res = ws::handshake_response(req.head()).finish();
+                    let res = handshake_response(req.head()).finish();
                     // send handshake response
                     framed
                         .send(h1::Message::Item((res.drop_body(), BodySize::None)))

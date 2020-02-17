@@ -367,7 +367,8 @@ mod tests {
     use super::*;
     use serde::{Deserialize, Serialize};
 
-    use crate::{http::header, test::TestResponse};
+    use crate::http::client::test::TestResponse;
+    use crate::http::header;
 
     #[actix_rt::test]
     async fn test_body() {

@@ -4,14 +4,16 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_http::{body, h1, ws, Error, HttpService, Request, Response};
-use actix_http_test::test_server;
 use actix_service::{fn_factory, Service};
 use actix_utils::framed::Dispatcher;
 use bytes::Bytes;
 use futures::future;
 use futures::task::{Context, Poll};
 use futures::{Future, SinkExt, StreamExt};
+
+use ntex::http::ws::handshake;
+use ntex::http::{body, h1, test, Error, HttpService, Request, Response};
+use ntex::ws;
 
 struct WsService<T>(Arc<Mutex<(PhantomData<T>, Cell<bool>)>>);
 
@@ -51,7 +53,7 @@ where
 
     fn call(&mut self, (req, mut framed): Self::Request) -> Self::Future {
         let fut = async move {
-            let res = ws::handshake(req.head()).unwrap().message_body(());
+            let res = handshake(req.head()).unwrap().message_body(());
 
             framed
                 .send((res, body::BodySize::None).into())
@@ -81,10 +83,10 @@ async fn service(msg: ws::Frame) -> Result<ws::Message, Error> {
     Ok(msg)
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_simple() {
     let ws_service = WsService::new();
-    let mut srv = test_server({
+    let mut srv = test::server({
         let ws_service = ws_service.clone();
         move || {
             let ws_service = ws_service.clone();

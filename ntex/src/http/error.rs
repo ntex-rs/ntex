@@ -477,11 +477,10 @@ where
 /// default.
 ///
 /// ```rust
-/// # use std::io;
-/// # use actix_http::*;
+/// use ntex::http::{error, Request};
 ///
-/// fn index(req: Request) -> Result<&'static str> {
-///     Err(error::ErrorBadRequest(io::Error::new(io::ErrorKind::Other, "error")))
+/// fn index(req: Request) -> Result<&'static str, error::Error> {
+///     Err(error::ErrorBadRequest(std::io::Error::new(std::io::ErrorKind::Other, "error")))
 /// }
 /// ```
 pub struct InternalError<T> {

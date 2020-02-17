@@ -1,7 +1,7 @@
-use actix_web::{get, middleware, web, App, HttpRequest, HttpResponse, HttpServer};
+use ntex::web::{self, get, middleware, App, HttpRequest, HttpResponse, HttpServer};
 
 #[get("/resource1/{name}/index.html")]
-async fn index(req: HttpRequest, name: web::Path<String>) -> String {
+async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {
     println!("REQ: {:?}", req);
     format!("Hello: {}!\r\n", name)
 }

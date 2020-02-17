@@ -448,9 +448,10 @@ impl WebService {
     /// Add match guard to a web service.
     ///
     /// ```rust
-    /// use actix_web::{web, guard, dev, App, Error, HttpResponse};
+    /// use ntex::http;
+    /// use ntex::web::{self, guard, dev, App, HttpResponse};
     ///
-    /// async fn index(req: dev::ServiceRequest) -> Result<dev::ServiceResponse, Error> {
+    /// async fn index(req: dev::ServiceRequest) -> Result<dev::ServiceResponse, http::Error> {
     ///     Ok(req.into_response(HttpResponse::Ok().finish()))
     /// }
     ///
@@ -527,11 +528,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test::{init_service, TestRequest};
-    use crate::{guard, http, web, App, HttpResponse};
-    use actix_service::Service;
     use futures::future::ok;
+
+    use super::*;
+    use crate::http::{Method, StatusCode};
+    use crate::service::Service;
+    use crate::web::test::{init_service, TestRequest};
+    use crate::web::{self, guard, App, HttpResponse};
 
     #[test]
     fn test_service_request() {
@@ -564,7 +567,7 @@ mod tests {
         .await;
         let req = TestRequest::with_uri("/test").to_request();
         let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), http::StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::OK);
 
         let mut srv = init_service(
             App::new().service(web::service("/test").guard(guard::Get()).finish(
@@ -573,10 +576,10 @@ mod tests {
         )
         .await;
         let req = TestRequest::with_uri("/test")
-            .method(http::Method::PUT)
+            .method(Method::PUT)
             .to_request();
         let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

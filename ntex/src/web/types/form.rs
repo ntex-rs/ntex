@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 #[cfg(feature = "compress")]
-use crate::http::encoding::Decompress;
+use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{Error, HttpMessage, Payload, Response, StatusCode};
 use crate::web::error::UrlencodedError;
@@ -37,7 +37,7 @@ use crate::web::responder::Responder;
 ///
 /// ### Example
 /// ```rust
-/// use actix_web::web;
+/// use ntex::web;
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize)]
@@ -48,7 +48,7 @@ use crate::web::responder::Responder;
 /// /// Extract form data using serde.
 /// /// This handler get called only if content type is *x-www-form-urlencoded*
 /// /// and content of the request could be deserialized to a `FormData` struct
-/// fn index(form: web::Form<FormData>) -> String {
+/// fn index(form: web::types::Form<FormData>) -> String {
 ///     format!("Welcome {}!", form.username)
 /// }
 /// # fn main() {}
@@ -62,7 +62,7 @@ use crate::web::responder::Responder;
 ///
 /// ### Example
 /// ```rust
-/// use actix_web::*;
+/// use ntex::web;
 /// use serde_derive::Serialize;
 ///
 /// #[derive(Serialize)]
@@ -74,8 +74,8 @@ use crate::web::responder::Responder;
 /// // Will return a 200 response with header
 /// // `Content-Type: application/x-www-form-urlencoded`
 /// // and body "name=actix&age=123"
-/// fn index() -> web::Form<SomeForm> {
-///     web::Form(SomeForm {
+/// fn index() -> web::types::Form<SomeForm> {
+///     web::types::Form(SomeForm {
 ///         name: "actix".into(),
 ///         age: 123
 ///     })
@@ -161,7 +161,7 @@ impl<T: Serialize> Responder for Form<T> {
         };
 
         ok(Response::build(StatusCode::OK)
-            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(body))
     }
 }
@@ -169,7 +169,8 @@ impl<T: Serialize> Responder for Form<T> {
 /// Form extractor configuration
 ///
 /// ```rust
-/// use actix_web::{web, App, FromRequest, Result};
+/// use ntex::http::Error;
+/// use ntex::web::{self, App, FromRequest};
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize)]
@@ -179,7 +180,7 @@ impl<T: Serialize> Responder for Form<T> {
 ///
 /// /// Extract form data using serde.
 /// /// Custom configuration is used for this handler, max payload size is 4k
-/// async fn index(form: web::Form<FormData>) -> Result<String> {
+/// async fn index(form: web::types::Form<FormData>) -> Result<String, Error> {
 ///     Ok(format!("Welcome {}!", form.username))
 /// }
 ///
@@ -188,7 +189,7 @@ impl<T: Serialize> Responder for Form<T> {
 ///         web::resource("/index.html")
 ///             // change `Form` extractor configuration
 ///             .app_data(
-///                 web::Form::<FormData>::configure(|cfg| cfg.limit(4097))
+///                 web::types::Form::<FormData>::configure(|cfg| cfg.limit(4097))
 ///             )
 ///             .route(web::get().to(index))
 ///     );
@@ -239,7 +240,7 @@ impl Default for FormConfig {
 ///
 pub struct UrlEncoded<U> {
     #[cfg(feature = "compress")]
-    stream: Option<Decompress<Payload>>,
+    stream: Option<Decoder<Payload>>,
     #[cfg(not(feature = "compress"))]
     stream: Option<Payload>,
     limit: usize,
@@ -275,7 +276,7 @@ impl<U> UrlEncoded<U> {
         };
 
         #[cfg(feature = "compress")]
-        let payload = Decompress::from_headers(payload.take(), req.headers());
+        let payload = Decoder::from_headers(payload.take(), req.headers());
         #[cfg(not(feature = "compress"))]
         let payload = payload.take();
 
@@ -375,7 +376,7 @@ mod tests {
 
     use super::*;
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
-    use crate::test::TestRequest;
+    use crate::web::test::TestRequest;
 
     #[derive(Deserialize, Serialize, Debug, PartialEq)]
     struct Info {
@@ -495,7 +496,6 @@ mod tests {
             HeaderValue::from_static("application/x-www-form-urlencoded")
         );
 
-        use crate::responder::tests::BodyTest;
         assert_eq!(resp.body().bin_ref(), b"hello=world&counter=123");
     }
 }

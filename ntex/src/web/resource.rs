@@ -36,7 +36,7 @@ type HttpNewService = BoxServiceFactory<(), ServiceRequest, ServiceResponse, Err
 /// guards, route considered matched and route handler get called.
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpResponse};
+/// use ntex::web::{self, App, HttpResponse};
 ///
 /// fn main() {
 ///     let app = App::new().service(
@@ -96,9 +96,9 @@ where
     /// Add match guard to a resource.
     ///
     /// ```rust
-    /// use actix_web::{web, guard, App, HttpResponse};
+    /// use ntex::web::{self, guard, App, HttpResponse};
     ///
-    /// async fn index(data: web::Path<(String, String)>) -> &'static str {
+    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
     ///     "Welcome!"
     /// }
     ///
@@ -129,7 +129,7 @@ where
     /// Register a new route.
     ///
     /// ```rust
-    /// use actix_web::{web, guard, App, HttpResponse};
+    /// use ntex::web::{self, guard, App, HttpResponse};
     ///
     /// fn main() {
     ///     let app = App::new().service(
@@ -146,7 +146,7 @@ where
     /// match guards for route selection.
     ///
     /// ```rust
-    /// use actix_web::{web, guard, App};
+    /// use ntex::web::{self, guard, App};
     ///
     /// fn main() {
     ///     let app = App::new().service(
@@ -156,9 +156,9 @@ where
     ///              .route(web::delete().to(delete_handler))
     ///     );
     /// }
-    /// # async fn get_handler() -> impl actix_web::Responder { actix_web::HttpResponse::Ok() }
-    /// # async fn post_handler() -> impl actix_web::Responder { actix_web::HttpResponse::Ok() }
-    /// # async fn delete_handler() -> impl actix_web::Responder { actix_web::HttpResponse::Ok() }
+    /// # async fn get_handler() -> impl web::Responder { web::HttpResponse::Ok() }
+    /// # async fn post_handler() -> impl web::Responder { web::HttpResponse::Ok() }
+    /// # async fn delete_handler() -> impl web::Responder { web::HttpResponse::Ok() }
     /// ```
     pub fn route(mut self, route: Route) -> Self {
         self.routes.push(route);
@@ -171,7 +171,7 @@ where
     /// Resource data overrides data registered by `App::data()` method.
     ///
     /// ```rust
-    /// use actix_web::{web, App, FromRequest};
+    /// use ntex::web::{self, App, FromRequest};
     ///
     /// /// extract text data from request
     /// async fn index(body: String) -> String {
@@ -210,7 +210,7 @@ where
     /// Register a new route and add handler. This route matches all requests.
     ///
     /// ```rust
-    /// use actix_web::*;
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
     ///
     /// fn index(req: HttpRequest) -> HttpResponse {
     ///     unimplemented!()
@@ -222,8 +222,7 @@ where
     /// This is shortcut for:
     ///
     /// ```rust
-    /// # extern crate actix_web;
-    /// # use actix_web::*;
+    /// # use ntex::web::{self, *};
     /// # fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
     /// App::new().service(web::resource("/").route(web::route().to(index)));
     /// ```
@@ -288,9 +287,9 @@ where
     /// type (i.e modify response's body).
     ///
     /// ```rust
-    /// use actix_service::Service;
-    /// use actix_web::{web, App};
-    /// use actix_web::http::{header::CONTENT_TYPE, HeaderValue};
+    /// use ntex::service::Service;
+    /// use ntex::web::{self, App};
+    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
     ///
     /// async fn index() -> &'static str {
     ///     "Welcome!"
@@ -586,11 +585,12 @@ mod tests {
     use actix_service::Service;
     use futures::future::ok;
 
-    use crate::http::{header, HeaderValue, Method, StatusCode};
-    use crate::middleware::DefaultHeaders;
-    use crate::service::ServiceRequest;
-    use crate::test::{call_service, init_service, TestRequest};
-    use crate::{guard, web, App, Error, HttpResponse};
+    use crate::http::header::{self, HeaderValue};
+    use crate::http::{Error, Method, StatusCode};
+    use crate::web::middleware::DefaultHeaders;
+    use crate::web::service::ServiceRequest;
+    use crate::web::test::{call_service, init_service, TestRequest};
+    use crate::web::{self, guard, App, HttpResponse};
 
     #[actix_rt::test]
     async fn test_middleware() {

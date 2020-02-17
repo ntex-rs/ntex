@@ -524,11 +524,10 @@ mod tests {
     use std::rc::Rc;
 
     use bytes::Bytes;
-    use http::header::AUTHORIZATION;
 
     use super::*;
-    use crate::http::header::{HeaderValue, CONTENT_TYPE};
-    use crate::RequestHead;
+    use crate::http::header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+    use crate::http::RequestHead;
 
     #[test]
     fn test_chunked_te() {

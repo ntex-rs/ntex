@@ -38,7 +38,7 @@ pub(crate) trait DataFactory {
 ///
 /// ```rust
 /// use std::sync::Mutex;
-/// use actix_web::{web, App, HttpResponse, Responder};
+/// use ntex::web::{self, App, HttpResponse, Responder};
 ///
 /// struct MyData {
 ///     counter: usize,
@@ -140,8 +140,8 @@ mod tests {
 
     use super::*;
     use crate::http::StatusCode;
-    use crate::test::{self, init_service, TestRequest};
-    use crate::{web, App, HttpResponse};
+    use crate::web::test::{self, init_service, TestRequest};
+    use crate::web::{self, App, HttpResponse};
 
     #[actix_rt::test]
     async fn test_data_extractor() {

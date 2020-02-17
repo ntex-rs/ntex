@@ -16,5 +16,10 @@ extern crate log;
 pub use actix_macros::{main, test};
 
 pub mod http;
+pub mod server;
 pub mod web;
 pub mod ws;
+
+pub mod service {
+    pub use actix_service::*;
+}

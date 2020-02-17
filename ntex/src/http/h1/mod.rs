@@ -57,7 +57,7 @@ pub(crate) fn reserve_readbuf(src: &mut BytesMut) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::request::Request;
+    use crate::http::request::Request;
 
     impl Message<Request> {
         pub fn message(self) -> Request {

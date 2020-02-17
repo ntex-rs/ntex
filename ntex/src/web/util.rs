@@ -1,16 +1,22 @@
 //! Essentials helper functions and types for application registration.
+use std::fmt;
 use std::future::Future;
 
 use actix_router::IntoPattern;
+use actix_service::{IntoServiceFactory, Service, ServiceFactory};
 
-use crate::http::{error::BlockingError, Method};
+use crate::http::body::MessageBody;
+use crate::http::error::{BlockingError, Error};
+use crate::http::{Method, Request, Response};
 
+use super::config::AppConfig;
 use super::extract::FromRequest;
 use super::handler::Factory;
 use super::resource::Resource;
 use super::responder::Responder;
 use super::route::Route;
 use super::scope::Scope;
+use super::server::HttpServer;
 use super::service::WebService;
 
 /// Create resource for a specific path.
@@ -34,13 +40,12 @@ use super::service::WebService;
 /// the exposed `Params` object:
 ///
 /// ```rust
-/// # extern crate actix_web;
-/// use actix_web::{web, App, HttpResponse};
+/// use ntex::web;
 ///
-/// let app = App::new().service(
+/// let app = web::App::new().service(
 ///     web::resource("/users/{userid}/{friend}")
-///         .route(web::get().to(|| HttpResponse::Ok()))
-///         .route(web::head().to(|| HttpResponse::MethodNotAllowed()))
+///         .route(web::get().to(|| web::HttpResponse::Ok()))
+///         .route(web::head().to(|| web::HttpResponse::MethodNotAllowed()))
 /// );
 /// ```
 pub fn resource<T: IntoPattern>(path: T) -> Resource {
@@ -53,13 +58,13 @@ pub fn resource<T: IntoPattern>(path: T) -> Resource {
 /// Scope path can contain variable path segments as resources.
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpResponse};
+/// use ntex::web;
 ///
-/// let app = App::new().service(
+/// let app = web::App::new().service(
 ///     web::scope("/{project_id}")
-///         .service(web::resource("/path1").to(|| HttpResponse::Ok()))
-///         .service(web::resource("/path2").to(|| HttpResponse::Ok()))
-///         .service(web::resource("/path3").to(|| HttpResponse::MethodNotAllowed()))
+///         .service(web::resource("/path1").to(|| web::HttpResponse::Ok()))
+///         .service(web::resource("/path2").to(|| web::HttpResponse::Ok()))
+///         .service(web::resource("/path3").to(|| web::HttpResponse::MethodNotAllowed()))
 /// );
 /// ```
 ///
@@ -80,11 +85,11 @@ pub fn route() -> Route {
 /// Create *route* with `GET` method guard.
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpResponse};
+/// use ntex::web;
 ///
-/// let app = App::new().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///        .route(web::get().to(|| HttpResponse::Ok()))
+///        .route(web::get().to(|| web::HttpResponse::Ok()))
 /// );
 /// ```
 ///
@@ -98,11 +103,11 @@ pub fn get() -> Route {
 /// Create *route* with `POST` method guard.
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpResponse};
+/// use ntex::web;
 ///
-/// let app = App::new().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::post().to(|| HttpResponse::Ok()))
+///         .route(web::post().to(|| web::HttpResponse::Ok()))
 /// );
 /// ```
 ///
@@ -116,11 +121,11 @@ pub fn post() -> Route {
 /// Create *route* with `PUT` method guard.
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpResponse};
+/// use ntex::web;
 ///
-/// let app = App::new().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::put().to(|| HttpResponse::Ok()))
+///         .route(web::put().to(|| web::HttpResponse::Ok()))
 /// );
 /// ```
 ///
@@ -134,11 +139,11 @@ pub fn put() -> Route {
 /// Create *route* with `PATCH` method guard.
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpResponse};
+/// use ntex::web;
 ///
-/// let app = App::new().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::patch().to(|| HttpResponse::Ok()))
+///         .route(web::patch().to(|| web::HttpResponse::Ok()))
 /// );
 /// ```
 ///
@@ -152,11 +157,11 @@ pub fn patch() -> Route {
 /// Create *route* with `DELETE` method guard.
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpResponse};
+/// use ntex::web;
 ///
-/// let app = App::new().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::delete().to(|| HttpResponse::Ok()))
+///         .route(web::delete().to(|| web::HttpResponse::Ok()))
 /// );
 /// ```
 ///
@@ -170,11 +175,11 @@ pub fn delete() -> Route {
 /// Create *route* with `HEAD` method guard.
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpResponse};
+/// use ntex::web;
 ///
-/// let app = App::new().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::head().to(|| HttpResponse::Ok()))
+///         .route(web::head().to(|| web::HttpResponse::Ok()))
 /// );
 /// ```
 ///
@@ -188,11 +193,11 @@ pub fn head() -> Route {
 /// Create *route* and add method guard.
 ///
 /// ```rust
-/// use actix_web::{web, http, App, HttpResponse};
+/// use ntex::web;
 ///
-/// let app = App::new().service(
+/// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::method(http::Method::GET).to(|| HttpResponse::Ok()))
+///         .route(web::method(http::Method::GET).to(|| web::HttpResponse::Ok()))
 /// );
 /// ```
 ///
@@ -206,15 +211,14 @@ pub fn method(method: Method) -> Route {
 /// Create a new route and add handler.
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpResponse, Responder};
+/// use ntex::web;
 ///
-/// async fn index() -> impl Responder {
-///    HttpResponse::Ok()
+/// async fn index() -> impl web::Responder {
+///    web::HttpResponse::Ok()
 /// }
 ///
-/// App::new().service(
-///     web::resource("/").route(
-///         web::to(index))
+/// web::App::new().service(
+///     web::resource("/").route(web::to(index))
 /// );
 /// ```
 pub fn to<F, I, R, U>(handler: F) -> Route
@@ -230,7 +234,8 @@ where
 /// Create raw service for a specific path.
 ///
 /// ```rust
-/// use actix_web::{dev, web, guard, App, Error, HttpResponse};
+/// use ntex::http::Error;
+/// use ntex::web::{self, dev, guard, App, HttpResponse};
 ///
 /// async fn my_service(req: dev::ServiceRequest) -> Result<dev::ServiceResponse, Error> {
 ///     Ok(req.into_response(HttpResponse::Ok().finish()))
@@ -255,4 +260,33 @@ where
     E: Send + std::fmt::Debug + 'static,
 {
     actix_threadpool::run(f).await
+}
+
+/// Create new http server with application factory.
+///
+/// ```rust,no_run
+/// use ntex::web;
+///
+/// #[ntex::main]
+/// async fn main() -> std::io::Result<()> {
+///     web::server(
+///         || web::App::new()
+///             .service(web::resource("/").to(|| web::HttpResponse::Ok())))
+///         .bind("127.0.0.1:59090")?
+///         .run()
+///         .await
+/// }
+/// ```
+pub fn server<F, I, S, B>(factory: F) -> HttpServer<F, I, S, B>
+where
+    F: Fn() -> I + Send + Clone + 'static,
+    I: IntoServiceFactory<S>,
+    S: ServiceFactory<Config = AppConfig, Request = Request>,
+    S::Error: Into<Error> + 'static,
+    S::InitError: fmt::Debug,
+    S::Response: Into<Response<B>> + 'static,
+    <S::Service as Service>::Future: 'static,
+    B: MessageBody + 'static,
+{
+    HttpServer::new(factory)
 }

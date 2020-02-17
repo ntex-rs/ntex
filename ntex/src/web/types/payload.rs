@@ -20,13 +20,15 @@ use crate::web::request::HttpRequest;
 /// ## Example
 ///
 /// ```rust
+/// use bytes::BytesMut;
 /// use futures::{Future, Stream, StreamExt};
-/// use actix_web::{web, error, App, Error, HttpResponse};
+/// use ntex::http;
+/// use ntex::web::{self, App, HttpResponse};
 ///
 /// /// extract binary data from request
-/// async fn index(mut body: web::Payload) -> Result<HttpResponse, Error>
+/// async fn index(mut body: web::types::Payload) -> Result<HttpResponse, http::Error>
 /// {
-///     let mut bytes = web::BytesMut::new();
+///     let mut bytes = BytesMut::new();
 ///     while let Some(item) = body.next().await {
 ///         bytes.extend_from_slice(&item?);
 ///     }
@@ -68,13 +70,15 @@ impl Stream for Payload {
 /// ## Example
 ///
 /// ```rust
+/// use bytes::BytesMut;
 /// use futures::{Future, Stream, StreamExt};
-/// use actix_web::{web, error, App, Error, HttpResponse};
+/// use ntex::http;
+/// use ntex::web::{self, App, HttpResponse};
 ///
 /// /// extract binary data from request
-/// async fn index(mut body: web::Payload) -> Result<HttpResponse, Error>
+/// async fn index(mut body: web::types::Payload) -> Result<HttpResponse, http::Error>
 /// {
-///     let mut bytes = web::BytesMut::new();
+///     let mut bytes = BytesMut::new();
 ///     while let Some(item) = body.next().await {
 ///         bytes.extend_from_slice(&item?);
 ///     }
@@ -115,7 +119,7 @@ impl FromRequest for Payload {
 ///
 /// ```rust
 /// use bytes::Bytes;
-/// use actix_web::{web, App};
+/// use ntex::web;
 ///
 /// /// extract binary data from request
 /// async fn index(body: Bytes) -> String {
@@ -123,7 +127,7 @@ impl FromRequest for Payload {
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = web::App::new().service(
 ///         web::resource("/index.html").route(
 ///             web::get().to(index))
 ///     );
@@ -170,7 +174,7 @@ impl FromRequest for Bytes {
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{web, App, FromRequest};
+/// use ntex::web::{self, App, FromRequest};
 ///
 /// /// extract text data from request
 /// async fn index(text: String) -> String {
@@ -309,7 +313,7 @@ pub struct HttpMessageBody {
     limit: usize,
     length: Option<usize>,
     #[cfg(feature = "compress")]
-    stream: Option<crate::http::encoding::Decompress<crate::http::Payload>>,
+    stream: Option<crate::http::encoding::Decoder<crate::http::Payload>>,
     #[cfg(not(feature = "compress"))]
     stream: Option<crate::http::Payload>,
     err: Option<PayloadError>,
@@ -336,7 +340,7 @@ impl HttpMessageBody {
         }
 
         #[cfg(feature = "compress")]
-        let stream = Some(crate::http::encoding::Decompress::from_headers(
+        let stream = Some(crate::http::encoding::Decoder::from_headers(
             payload.take(),
             req.headers(),
         ));
@@ -416,7 +420,7 @@ mod tests {
 
     use super::*;
     use crate::http::header;
-    use crate::test::TestRequest;
+    use crate::web::test::TestRequest;
 
     #[actix_rt::test]
     async fn test_payload_config() {

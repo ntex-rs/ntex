@@ -6,16 +6,17 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
 
-use actix_http::body::MessageBody;
-use actix_http::encoding::Encoder;
-use actix_http::http::header::{ContentEncoding, ACCEPT_ENCODING};
-use actix_http::Error;
-use actix_service::{Service, Transform};
 use futures::future::{ok, Ready};
 use pin_project::pin_project;
 
-use crate::dev::BodyEncoding;
-use crate::service::{ServiceRequest, ServiceResponse};
+use crate::http::body::MessageBody;
+use crate::http::encoding::Encoder;
+use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
+use crate::http::Error;
+use crate::service::{Service, Transform};
+
+use crate::web::dev::BodyEncoding;
+use crate::web::service::{ServiceRequest, ServiceResponse};
 
 #[derive(Debug, Clone)]
 /// `Middleware` for compressing response body.
@@ -24,7 +25,7 @@ use crate::service::{ServiceRequest, ServiceResponse};
 /// To disable compression set encoding to `ContentEncoding::Identity` value.
 ///
 /// ```rust
-/// use actix_web::{web, middleware, App, HttpResponse};
+/// use ntex::web::{self, middleware, App, HttpResponse};
 ///
 /// fn main() {
 ///     let app = App::new()

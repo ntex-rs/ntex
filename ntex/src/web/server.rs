@@ -39,9 +39,9 @@ struct Config {
 /// Create new http server with application factory.
 ///
 /// ```rust,no_run
-/// use actix_web::{web, App, HttpResponse, HttpServer};
+/// use ntex::web::{self, App, HttpResponse, HttpServer};
 ///
-/// #[actix_rt::main]
+/// #[ntex::main]
 /// async fn main() -> std::io::Result<()> {
 ///     HttpServer::new(
 ///         || App::new()
@@ -546,11 +546,10 @@ where
     /// configured.
     ///
     /// ```rust,no_run
-    /// use std::io;
-    /// use actix_web::{web, App, HttpResponse, HttpServer};
+    /// use ntex::web::{self, App, HttpResponse, HttpServer};
     ///
-    /// #[actix_rt::main]
-    /// async fn main() -> io::Result<()> {
+    /// #[ntex::main]
+    /// async fn main() -> std::io::Result<()> {
     ///     HttpServer::new(|| App::new().service(web::resource("/").to(|| HttpResponse::Ok())))
     ///         .bind("127.0.0.1:0")?
     ///         .run()

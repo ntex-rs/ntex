@@ -80,6 +80,28 @@ impl ResponseBody<Body> {
             ResponseBody::Other(b) => ResponseBody::Other(b),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn bin_ref(&self) -> &[u8] {
+        match self {
+            ResponseBody::Body(ref b) => match b {
+                Body::Bytes(ref bin) => &bin,
+                _ => panic!(),
+            },
+            ResponseBody::Other(ref b) => match b {
+                Body::Bytes(ref bin) => &bin,
+                _ => panic!(),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn body(&self) -> &Body {
+        match self {
+            ResponseBody::Body(ref b) => b,
+            ResponseBody::Other(ref b) => b,
+        }
+    }
 }
 
 impl<B> ResponseBody<B> {

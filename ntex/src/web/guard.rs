@@ -13,13 +13,14 @@
 //! Extensions containers are available via the `RequestHead::extensions()` method.
 //!
 //! ```rust
-//! use actix_web::{web, http, dev, guard, App, HttpResponse};
+//! use ntex::http::Method;
+//! use ntex::web::{self, guard, App, HttpResponse};
 //!
 //! fn main() {
 //!     App::new().service(web::resource("/index.html").route(
 //!         web::route()
 //!              .guard(guard::Post())
-//!              .guard(guard::fn_guard(|head| head.method == http::Method::GET))
+//!              .guard(guard::fn_guard(|head| head.method == Method::GET))
 //!              .to(|| HttpResponse::MethodNotAllowed()))
 //!     );
 //! }
@@ -42,7 +43,7 @@ pub trait Guard {
 /// Create guard object for supplied function.
 ///
 /// ```rust
-/// use actix_web::{guard, web, App, HttpResponse};
+/// use ntex::web::{self, guard, App, HttpResponse};
 ///
 /// fn main() {
 ///     App::new().service(web::resource("/index.html").route(
@@ -85,7 +86,7 @@ where
 /// Return guard that matches if any of supplied guards.
 ///
 /// ```rust
-/// use actix_web::{web, guard, App, HttpResponse};
+/// use ntex::web::{self, guard, App, HttpResponse};
 ///
 /// fn main() {
 ///     App::new().service(web::resource("/index.html").route(
@@ -124,7 +125,7 @@ impl Guard for AnyGuard {
 /// Return guard that matches if all of the supplied guards.
 ///
 /// ```rust
-/// use actix_web::{guard, web, App, HttpResponse};
+/// use ntex::web::{self, guard, App, HttpResponse};
 ///
 /// fn main() {
 ///     App::new().service(web::resource("/index.html").route(
@@ -259,7 +260,7 @@ impl Guard for HeaderGuard {
 /// Return predicate that matches if request contains specified Host name.
 ///
 /// ```rust
-/// use actix_web::{web, guard::Host, App, HttpResponse};
+/// use ntex::web::{self, guard::Host, App, HttpResponse};
 ///
 /// fn main() {
 ///     App::new().service(
@@ -322,10 +323,9 @@ impl Guard for HostGuard {
 
 #[cfg(test)]
 mod tests {
-    use actix_http::http::{header, Method};
-
     use super::*;
-    use crate::test::TestRequest;
+    use crate::http::{header, Method};
+    use crate::web::test::TestRequest;
 
     #[test]
     fn test_header() {

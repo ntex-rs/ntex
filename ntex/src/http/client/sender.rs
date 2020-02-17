@@ -90,7 +90,7 @@ impl Future for SendClientRequest {
                     }
                 }
 
-                let res = futures_core::ready!(Pin::new(send).poll(cx)).map(|res| {
+                let res = futures::ready!(Pin::new(send).poll(cx)).map(|res| {
                     res.map_body(|head, payload| {
                         if *response_decompress {
                             Payload::Stream(Decoder::from_headers(

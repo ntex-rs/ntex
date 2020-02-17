@@ -23,7 +23,7 @@ use crate::web::request::HttpRequest;
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{web, App};
+/// use ntex::web;
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Debug, Deserialize)]
@@ -41,12 +41,12 @@ use crate::web::request::HttpRequest;
 /// // Use `Query` extractor for query information (and destructure it within the signature).
 /// // This handler gets called only if the request's query string contains a `username` field.
 /// // The correct request for this handler would be `/index.html?id=64&response_type=Code"`.
-/// async fn index(web::Query(info): web::Query<AuthRequest>) -> String {
+/// async fn index(web::types::Query(info): web::types::Query<AuthRequest>) -> String {
 ///     format!("Authorization request for client with id={} and type={:?}!", info.id, info.response_type)
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = web::App::new().service(
 ///        web::resource("/index.html").route(web::get().to(index))); // <- use `Query` extractor
 /// }
 /// ```
@@ -101,7 +101,7 @@ impl<T: fmt::Display> fmt::Display for Query<T> {
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{web, App};
+/// use ntex::web;
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Debug, Deserialize)]
@@ -119,12 +119,12 @@ impl<T: fmt::Display> fmt::Display for Query<T> {
 /// // Use `Query` extractor for query information.
 /// // This handler get called only if request's query contains `username` field
 /// // The correct request for this handler would be `/index.html?id=64&response_type=Code"`
-/// async fn index(info: web::Query<AuthRequest>) -> String {
+/// async fn index(info: web::types::Query<AuthRequest>) -> String {
 ///     format!("Authorization request for client with id={} and type={:?}!", info.id, info.response_type)
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = web::App::new().service(
 ///        web::resource("/index.html")
 ///            .route(web::get().to(index))); // <- use `Query` extractor
 /// }
@@ -171,7 +171,8 @@ where
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{error, web, App, FromRequest, HttpResponse};
+/// use ntex::http::error;
+/// use ntex::web::{self, App, FromRequest, HttpResponse};
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize)]
@@ -180,7 +181,7 @@ where
 /// }
 ///
 /// /// deserialize `Info` from request's querystring
-/// async fn index(info: web::Query<Info>) -> String {
+/// async fn index(info: web::types::Query<Info>) -> String {
 ///     format!("Welcome {}!", info.username)
 /// }
 ///
@@ -188,7 +189,7 @@ where
 ///     let app = App::new().service(
 ///         web::resource("/index.html").app_data(
 ///             // change query extractor configuration
-///             web::Query::<Info>::configure(|cfg| {
+///             web::types::Query::<Info>::configure(|cfg| {
 ///                 cfg.error_handler(|err, req| {  // <- create custom error response
 ///                     error::InternalError::from_response(
 ///                         err, HttpResponse::Conflict().finish()).into()
@@ -223,14 +224,14 @@ impl Default for QueryConfig {
 
 #[cfg(test)]
 mod tests {
-    use actix_http::http::StatusCode;
     use derive_more::Display;
     use serde_derive::Deserialize;
 
     use super::*;
-    use crate::error::InternalError;
-    use crate::test::TestRequest;
-    use crate::HttpResponse;
+    use crate::http::error::InternalError;
+    use crate::http::StatusCode;
+    use crate::web::test::TestRequest;
+    use crate::web::HttpResponse;
 
     #[derive(Deserialize, Debug, Display)]
     struct Id {
@@ -274,7 +275,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_custom_error_responder() {
         let req = TestRequest::with_uri("/name/user1/")
-            .app_data(QueryConfig::default().error_handler(|e, _| {
+            .data(QueryConfig::default().error_handler(|e, _| {
                 let resp = HttpResponse::UnprocessableEntity().finish();
                 InternalError::from_response(e, resp).into()
             }))

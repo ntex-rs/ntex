@@ -893,9 +893,9 @@ mod tests {
     use futures::future::{lazy, ok};
 
     use super::*;
-    use crate::error::Error;
-    use crate::h1::{ExpectHandler, UpgradeHandler};
-    use crate::test::TestBuffer;
+    use crate::http::error::Error;
+    use crate::http::h1::{ExpectHandler, UpgradeHandler};
+    use crate::http::test::TestBuffer;
 
     #[actix_rt::test]
     async fn test_req_parse_err() {

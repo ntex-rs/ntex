@@ -2,10 +2,9 @@
 //!
 //! ```rust
 //! use futures::future::{lazy, Future};
-//! use actix_rt::System;
-//! use awc::Client;
+//! use ntex::http::client::Client;
 //!
-//! #[actix_rt::main]
+//! #[ntex::main]
 //! async fn main() {
 //!    let mut client = Client::default();
 //!
@@ -62,9 +61,9 @@ pub struct Connect {
 /// An HTTP Client
 ///
 /// ```rust
-/// use awc::Client;
+/// use ntex::http::client::Client;
 ///
-/// #[actix_rt::main]
+/// #[ntex::main]
 /// async fn main() {
 ///     let mut client = Client::default();
 ///

@@ -17,7 +17,7 @@ use crate::http::{header::CONTENT_LENGTH, StatusCode};
 use crate::http::{Error, HttpMessage, Payload, Response};
 
 #[cfg(feature = "compress")]
-use crate::http::encoding::Decompress;
+use crate::http::encoding::Decoder;
 
 use crate::web::error::JsonPayloadError;
 use crate::web::extract::FromRequest;
@@ -39,7 +39,7 @@ use crate::web::responder::Responder;
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{web, App};
+/// use ntex::web;
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize)]
@@ -48,12 +48,12 @@ use crate::web::responder::Responder;
 /// }
 ///
 /// /// deserialize `Info` from request's body
-/// async fn index(info: web::Json<Info>) -> String {
+/// async fn index(info: web::types::Json<Info>) -> String {
 ///     format!("Welcome {}!", info.username)
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = web::App::new().service(
 ///        web::resource("/index.html").route(
 ///            web::post().to(index))
 ///     );
@@ -66,7 +66,8 @@ use crate::web::responder::Responder;
 /// trait from *serde*.
 ///
 /// ```rust
-/// use actix_web::*;
+/// use ntex::web;
+/// use ntex::http::Error;
 /// use serde_derive::Serialize;
 ///
 /// #[derive(Serialize)]
@@ -74,8 +75,8 @@ use crate::web::responder::Responder;
 ///     name: String,
 /// }
 ///
-/// fn index(req: HttpRequest) -> Result<web::Json<MyObj>> {
-///     Ok(web::Json(MyObj {
+/// fn index(req: web::HttpRequest) -> Result<web::types::Json<MyObj>, Error> {
+///     Ok(web::types::Json(MyObj {
 ///         name: req.match_info().get("name").unwrap().to_string(),
 ///     }))
 /// }
@@ -150,7 +151,7 @@ impl<T: Serialize> Responder for Json<T> {
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{web, App};
+/// use ntex::web;
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize)]
@@ -159,12 +160,12 @@ impl<T: Serialize> Responder for Json<T> {
 /// }
 ///
 /// /// deserialize `Info` from request's body
-/// async fn index(info: web::Json<Info>) -> String {
+/// async fn index(info: web::types::Json<Info>) -> String {
 ///     format!("Welcome {}!", info.username)
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = web::App::new().service(
 ///         web::resource("/index.html").route(
 ///            web::post().to(index))
 ///     );
@@ -210,7 +211,8 @@ where
 /// Json extractor configuration
 ///
 /// ```rust
-/// use actix_web::{error, web, App, FromRequest, HttpResponse};
+/// use ntex::http::error;
+/// use ntex::web::{self, App, FromRequest, HttpResponse};
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize)]
@@ -219,7 +221,7 @@ where
 /// }
 ///
 /// /// deserialize `Info` from request's body, max payload size is 4kb
-/// async fn index(info: web::Json<Info>) -> String {
+/// async fn index(info: web::types::Json<Info>) -> String {
 ///     format!("Welcome {}!", info.username)
 /// }
 ///
@@ -228,7 +230,7 @@ where
 ///         web::resource("/index.html")
 ///             .app_data(
 ///                 // change json extractor configuration
-///                 web::Json::<Info>::configure(|cfg| {
+///                 web::types::Json::<Info>::configure(|cfg| {
 ///                     cfg.limit(4096)
 ///                        .content_type(|mime| {  // <- accept text/plain content type
 ///                            mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
@@ -297,7 +299,7 @@ pub struct JsonBody<U> {
     limit: usize,
     length: Option<usize>,
     #[cfg(feature = "compress")]
-    stream: Option<Decompress<Payload>>,
+    stream: Option<Decoder<Payload>>,
     #[cfg(not(feature = "compress"))]
     stream: Option<Payload>,
     err: Option<JsonPayloadError>,
@@ -340,7 +342,7 @@ where
             .and_then(|s| s.parse::<usize>().ok());
 
         #[cfg(feature = "compress")]
-        let payload = Decompress::from_headers(payload.take(), req.headers());
+        let payload = Decoder::from_headers(payload.take(), req.headers());
         #[cfg(not(feature = "compress"))]
         let payload = payload.take();
 
@@ -410,10 +412,10 @@ mod tests {
     use serde_derive::{Deserialize, Serialize};
 
     use super::*;
-    use crate::error::InternalError;
+    use crate::http::error::InternalError;
     use crate::http::header;
-    use crate::test::{load_stream, TestRequest};
-    use crate::HttpResponse;
+    use crate::web::test::{load_stream, TestRequest};
+    use crate::web::HttpResponse;
 
     #[derive(Serialize, Deserialize, PartialEq, Debug)]
     struct MyObject {
@@ -448,7 +450,6 @@ mod tests {
             header::HeaderValue::from_static("application/json")
         );
 
-        use crate::responder::tests::BodyTest;
         assert_eq!(resp.body().bin_ref(), b"{\"name\":\"test\"}");
     }
 
@@ -464,7 +465,7 @@ mod tests {
                 header::HeaderValue::from_static("16"),
             )
             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-            .app_data(JsonConfig::default().limit(10).error_handler(|err, _| {
+            .data(JsonConfig::default().limit(10).error_handler(|err, _| {
                 let msg = MyObject {
                     name: "invalid request".to_string(),
                 };
@@ -516,7 +517,7 @@ mod tests {
                 header::HeaderValue::from_static("16"),
             )
             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-            .app_data(JsonConfig::default().limit(10))
+            .data(JsonConfig::default().limit(10))
             .to_http_parts();
 
         let s = Json::<MyObject>::from_request(&req, &mut pl).await;
@@ -533,7 +534,7 @@ mod tests {
                 header::HeaderValue::from_static("16"),
             )
             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-            .app_data(
+            .data(
                 JsonConfig::default()
                     .limit(10)
                     .error_handler(|_, _| JsonPayloadError::ContentType.into()),
@@ -606,7 +607,7 @@ mod tests {
             header::HeaderValue::from_static("16"),
         )
         .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-        .app_data(JsonConfig::default().limit(4096))
+        .data(JsonConfig::default().limit(4096))
         .to_http_parts();
 
         let s = Json::<MyObject>::from_request(&req, &mut pl).await;
@@ -624,7 +625,7 @@ mod tests {
             header::HeaderValue::from_static("16"),
         )
         .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-        .app_data(JsonConfig::default().content_type(|mime: mime::Mime| {
+        .data(JsonConfig::default().content_type(|mime: mime::Mime| {
             mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
         }))
         .to_http_parts();
@@ -644,7 +645,7 @@ mod tests {
             header::HeaderValue::from_static("16"),
         )
         .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-        .app_data(JsonConfig::default().content_type(|mime: mime::Mime| {
+        .data(JsonConfig::default().content_type(|mime: mime::Mime| {
             mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
         }))
         .to_http_parts();

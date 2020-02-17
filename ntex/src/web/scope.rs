@@ -40,7 +40,7 @@ type BoxedResponse = LocalBoxFuture<'static, Result<ServiceResponse, Error>>;
 /// `Path` extractor also is able to extract scope level variable segments.
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpResponse};
+/// use ntex::web::{self, App, HttpResponse};
 ///
 /// fn main() {
 ///     let app = App::new().service(
@@ -98,9 +98,9 @@ where
     /// Add match guard to a scope.
     ///
     /// ```rust
-    /// use actix_web::{web, guard, App, HttpRequest, HttpResponse};
+    /// use ntex::web::{self, guard, App, HttpRequest, HttpResponse};
     ///
-    /// async fn index(data: web::Path<(String, String)>) -> &'static str {
+    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
     ///     "Welcome!"
     /// }
     ///
@@ -125,7 +125,7 @@ where
     ///
     /// ```rust
     /// use std::cell::Cell;
-    /// use actix_web::{web, App, HttpResponse, Responder};
+    /// use ntex::web::{self, App, HttpResponse, Responder};
     ///
     /// struct MyData {
     ///     counter: Cell<usize>,
@@ -169,8 +169,7 @@ where
     /// some of the resource's configuration could be moved to different module.
     ///
     /// ```rust
-    /// # extern crate actix_web;
-    /// use actix_web::{web, middleware, App, HttpResponse};
+    /// use ntex::web::{self, middleware, App, HttpResponse};
     ///
     /// // this function could be located in different module
     /// fn config(cfg: &mut web::ServiceConfig) {
@@ -222,7 +221,7 @@ where
     /// * "StaticFiles" is a service for static files support
     ///
     /// ```rust
-    /// use actix_web::{web, App, HttpRequest};
+    /// use ntex::web::{self, App, HttpRequest};
     ///
     /// struct AppState;
     ///
@@ -254,9 +253,9 @@ where
     /// multiple resources with one route would be registered for same resource path.
     ///
     /// ```rust
-    /// use actix_web::{web, App, HttpResponse};
+    /// use ntex::web::{self, App, HttpResponse};
     ///
-    /// async fn index(data: web::Path<(String, String)>) -> &'static str {
+    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
     ///     "Welcome!"
     /// }
     ///
@@ -350,16 +349,16 @@ where
     /// can not modify ServiceResponse.
     ///
     /// ```rust
-    /// use actix_service::Service;
-    /// use actix_web::{web, App};
-    /// use actix_web::http::{header::CONTENT_TYPE, HeaderValue};
+    /// use ntex::service::Service;
+    /// use ntex::web;
+    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
     ///
     /// async fn index() -> &'static str {
     ///     "Welcome!"
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new().service(
+    ///     let app = web::App::new().service(
     ///         web::scope("/app")
     ///             .wrap_fn(|req, srv| {
     ///                 let fut = srv.call(req);
@@ -664,12 +663,13 @@ mod tests {
     use bytes::Bytes;
     use futures::future::ok;
 
-    use crate::dev::{Body, ResponseBody};
-    use crate::http::{header, HeaderValue, Method, StatusCode};
-    use crate::middleware::DefaultHeaders;
-    use crate::service::ServiceRequest;
-    use crate::test::{call_service, init_service, read_body, TestRequest};
-    use crate::{guard, web, App, HttpRequest, HttpResponse};
+    use crate::http::body::{Body, ResponseBody};
+    use crate::http::header::{HeaderValue, CONTENT_TYPE};
+    use crate::http::{Method, StatusCode};
+    use crate::web::middleware::DefaultHeaders;
+    use crate::web::service::ServiceRequest;
+    use crate::web::test::{call_service, init_service, read_body, TestRequest};
+    use crate::web::{self, guard, App, HttpRequest, HttpResponse};
 
     #[actix_rt::test]
     async fn test_scope() {
@@ -1038,27 +1038,26 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_middleware() {
-        let mut srv =
-            init_service(
-                App::new().service(
-                    web::scope("app")
-                        .wrap(DefaultHeaders::new().header(
-                            header::CONTENT_TYPE,
-                            HeaderValue::from_static("0001"),
-                        ))
-                        .service(
-                            web::resource("/test")
-                                .route(web::get().to(|| HttpResponse::Ok())),
-                        ),
-                ),
-            )
-            .await;
+        let mut srv = init_service(
+            App::new().service(
+                web::scope("app")
+                    .wrap(
+                        DefaultHeaders::new()
+                            .header(CONTENT_TYPE, HeaderValue::from_static("0001")),
+                    )
+                    .service(
+                        web::resource("/test")
+                            .route(web::get().to(|| HttpResponse::Ok())),
+                    ),
+            ),
+        )
+        .await;
 
         let req = TestRequest::with_uri("/app/test").to_request();
         let resp = call_service(&mut srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            resp.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("0001")
         );
     }
@@ -1072,10 +1071,8 @@ mod tests {
                         let fut = srv.call(req);
                         async move {
                             let mut res = fut.await?;
-                            res.headers_mut().insert(
-                                header::CONTENT_TYPE,
-                                HeaderValue::from_static("0001"),
-                            );
+                            res.headers_mut()
+                                .insert(CONTENT_TYPE, HeaderValue::from_static("0001"));
                             Ok(res)
                         }
                     })
@@ -1088,7 +1085,7 @@ mod tests {
         let resp = call_service(&mut srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            resp.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("0001")
         );
     }

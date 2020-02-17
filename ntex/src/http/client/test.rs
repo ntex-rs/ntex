@@ -117,18 +117,29 @@ impl TestResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
-
     use super::*;
-    use crate::{cookie, http::header};
+    use crate::http::header;
 
     #[test]
     fn test_basics() {
-        let res = TestResponse::default()
-            .version(Version::HTTP_2)
-            .set(header::Date(SystemTime::now().into()))
-            .cookie(cookie::Cookie::build("name", "value").finish())
-            .finish();
+        let res = {
+            #[cfg(feature = "cookie")]
+            {
+                TestResponse::default()
+                    .version(Version::HTTP_2)
+                    .header(header::DATE, "data")
+                    .cookie(coo_kie::Cookie::build("name", "value").finish())
+                    .finish()
+            }
+            #[cfg(not(feature = "cookie"))]
+            {
+                TestResponse::default()
+                    .version(Version::HTTP_2)
+                    .header(header::DATE, "data")
+                    .finish()
+            }
+        };
+        #[cfg(feature = "cookie")]
         assert!(res.headers().contains_key(header::SET_COOKIE));
         assert!(res.headers().contains_key(header::DATE));
         assert_eq!(res.version(), Version::HTTP_2);

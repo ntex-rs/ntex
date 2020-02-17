@@ -94,7 +94,10 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
         }
     }
 
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
+    fn poll_next_chunk(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
         loop {
             if self.eof {
                 return Poll::Ready(None);
@@ -121,8 +124,8 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                         Poll::Ready(Some(Ok(std::mem::replace(b, Bytes::new()))))
                     }
                 }
-                EncoderBody::Stream(ref mut b) => b.poll_next(cx),
-                EncoderBody::BoxedStream(ref mut b) => b.poll_next(cx),
+                EncoderBody::Stream(ref mut b) => b.poll_next_chunk(cx),
+                EncoderBody::BoxedStream(ref mut b) => b.poll_next_chunk(cx),
             };
             match result {
                 Poll::Ready(Some(Ok(chunk))) => {

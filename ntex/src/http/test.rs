@@ -3,28 +3,34 @@ use std::convert::TryFrom;
 use std::io::{self, Read, Write};
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::mpsc;
 use std::task::{Context, Poll};
+use std::{net, thread, time};
 
-use actix_codec::{AsyncRead, AsyncWrite};
+use actix_codec::{AsyncRead, AsyncWrite, Framed};
+use actix_rt::{net::TcpStream, System};
 use bytes::{Bytes, BytesMut};
-use http::header::HeaderName;
-use http::{Error as HttpError, Method, Uri, Version};
+use futures::Stream;
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
-use super::header::{HeaderMap, IntoHeaderValue};
+use crate::server::{Server, ServiceFactory};
+
+use super::client::error::WsClientError;
+use super::client::{Client, ClientRequest, ClientResponse, Connector};
+use super::error::{HttpError, PayloadError};
+use super::header::{HeaderMap, HeaderName, IntoHeaderValue};
 use super::payload::Payload;
-use super::Request;
+use super::{Method, Request, Uri, Version};
 
 /// Test `Request` builder
 ///
-/// ```rust,ignore
-/// # use http::{header, StatusCode};
-/// # use actix_web::*;
-/// use actix_web::test::TestRequest;
+/// ```rust,no_run
+/// use ntex::http::test::TestRequest;
+/// use ntex::http::{header, Request, Response, StatusCode, HttpMessage};
 ///
-/// fn index(req: HttpRequest) -> Response {
+/// fn index(req: Request) -> Response {
 ///     if let Some(hdr) = req.headers().get(header::CONTENT_TYPE) {
 ///         Response::Ok().into()
 ///     } else {
@@ -32,12 +38,12 @@ use super::Request;
 ///     }
 /// }
 ///
-/// let resp = TestRequest::with_header("content-type", "text/plain")
-///     .run(&index)
-///     .unwrap();
+/// let resp = index(
+///     TestRequest::with_header("content-type", "text/plain").finish());
 /// assert_eq!(resp.status(), StatusCode::OK);
 ///
-/// let resp = TestRequest::default().run(&index).unwrap();
+/// let resp = index(
+///     TestRequest::default().finish());
 /// assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 /// ```
 pub struct TestRequest(Option<Inner>);
@@ -264,5 +270,239 @@ impl AsyncWrite for TestBuffer {
 
     fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
+    }
+}
+
+/// Start test server
+///
+/// `TestServer` is very simple test server that simplify process of writing
+/// integration tests cases for actix web applications.
+///
+/// # Examples
+///
+/// ```rust
+/// use ntex::http;
+/// use ntex::web::{self, App, HttpResponse};
+///
+/// async fn my_handler() -> Result<HttpResponse, http::Error> {
+///     Ok(HttpResponse::Ok().into())
+/// }
+///
+/// #[ntex::test]
+/// async fn test_example() {
+///     let mut srv = http::test::server(
+///         || http::HttpService::new(
+///             App::new().service(
+///                 web::resource("/").to(my_handler))
+///         )
+///     );
+///
+///     let req = srv.get("/");
+///     let response = req.send().await.unwrap();
+///     assert!(response.status().is_success());
+/// }
+/// ```
+pub fn server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
+    let (tx, rx) = mpsc::channel();
+
+    // run server in separate thread
+    thread::spawn(move || {
+        let sys = System::new("actix-test-server");
+        let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let local_addr = tcp.local_addr().unwrap();
+
+        Server::build()
+            .listen("test", tcp, factory)?
+            .workers(1)
+            .disable_signals()
+            .start();
+
+        tx.send((System::current(), local_addr)).unwrap();
+        sys.run()
+    });
+
+    let (system, addr) = rx.recv().unwrap();
+
+    let client = {
+        let connector = {
+            #[cfg(feature = "openssl")]
+            {
+                use open_ssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+
+                let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+                builder.set_verify(SslVerifyMode::NONE);
+                let _ = builder
+                    .set_alpn_protos(b"\x02h2\x08http/1.1")
+                    .map_err(|e| log::error!("Can not set alpn protocol: {:?}", e));
+                Connector::new()
+                    .conn_lifetime(time::Duration::from_secs(0))
+                    .timeout(time::Duration::from_millis(30000))
+                    .ssl(builder.build())
+                    .finish()
+            }
+            #[cfg(not(feature = "openssl"))]
+            {
+                Connector::new()
+                    .conn_lifetime(time::Duration::from_secs(0))
+                    .timeout(time::Duration::from_millis(30000))
+                    .finish()
+            }
+        };
+
+        Client::build().connector(connector).finish()
+    };
+    actix_connect::start_default_resolver();
+
+    TestServer {
+        addr,
+        client,
+        system,
+    }
+}
+
+/// Test server controller
+pub struct TestServer {
+    addr: net::SocketAddr,
+    client: Client,
+    system: System,
+}
+
+impl TestServer {
+    /// Construct test server url
+    pub fn addr(&self) -> net::SocketAddr {
+        self.addr
+    }
+
+    /// Construct test server url
+    pub fn url(&self, uri: &str) -> String {
+        if uri.starts_with('/') {
+            format!("http://localhost:{}{}", self.addr.port(), uri)
+        } else {
+            format!("http://localhost:{}/{}", self.addr.port(), uri)
+        }
+    }
+
+    /// Construct test https server url
+    pub fn surl(&self, uri: &str) -> String {
+        if uri.starts_with('/') {
+            format!("https://localhost:{}{}", self.addr.port(), uri)
+        } else {
+            format!("https://localhost:{}/{}", self.addr.port(), uri)
+        }
+    }
+
+    /// Create `GET` request
+    pub fn get<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.get(self.url(path.as_ref()).as_str())
+    }
+
+    /// Create https `GET` request
+    pub fn sget<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.get(self.surl(path.as_ref()).as_str())
+    }
+
+    /// Create `POST` request
+    pub fn post<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.post(self.url(path.as_ref()).as_str())
+    }
+
+    /// Create https `POST` request
+    pub fn spost<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.post(self.surl(path.as_ref()).as_str())
+    }
+
+    /// Create `HEAD` request
+    pub fn head<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.head(self.url(path.as_ref()).as_str())
+    }
+
+    /// Create https `HEAD` request
+    pub fn shead<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.head(self.surl(path.as_ref()).as_str())
+    }
+
+    /// Create `PUT` request
+    pub fn put<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.put(self.url(path.as_ref()).as_str())
+    }
+
+    /// Create https `PUT` request
+    pub fn sput<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.put(self.surl(path.as_ref()).as_str())
+    }
+
+    /// Create `PATCH` request
+    pub fn patch<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.patch(self.url(path.as_ref()).as_str())
+    }
+
+    /// Create https `PATCH` request
+    pub fn spatch<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.patch(self.surl(path.as_ref()).as_str())
+    }
+
+    /// Create `DELETE` request
+    pub fn delete<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.delete(self.url(path.as_ref()).as_str())
+    }
+
+    /// Create https `DELETE` request
+    pub fn sdelete<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.delete(self.surl(path.as_ref()).as_str())
+    }
+
+    /// Create `OPTIONS` request
+    pub fn options<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.options(self.url(path.as_ref()).as_str())
+    }
+
+    /// Create https `OPTIONS` request
+    pub fn soptions<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.options(self.surl(path.as_ref()).as_str())
+    }
+
+    /// Connect to test http server
+    pub fn request<S: AsRef<str>>(&self, method: Method, path: S) -> ClientRequest {
+        self.client.request(method, path.as_ref())
+    }
+
+    pub async fn load_body<S>(
+        &mut self,
+        mut response: ClientResponse<S>,
+    ) -> Result<Bytes, PayloadError>
+    where
+        S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
+    {
+        response.body().limit(10_485_760).await
+    }
+
+    /// Connect to websocket server at a given path
+    pub async fn ws_at(
+        &mut self,
+        path: &str,
+    ) -> Result<Framed<impl AsyncRead + AsyncWrite, crate::ws::Codec>, WsClientError>
+    {
+        let url = self.url(path);
+        let connect = self.client.ws(url).connect();
+        connect.await.map(|(_, framed)| framed)
+    }
+
+    /// Connect to a websocket server
+    pub async fn ws(
+        &mut self,
+    ) -> Result<Framed<impl AsyncRead + AsyncWrite, crate::ws::Codec>, WsClientError>
+    {
+        self.ws_at("/").await
+    }
+
+    /// Stop http server
+    fn stop(&mut self) {
+        self.system.stop();
+    }
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        self.stop()
     }
 }

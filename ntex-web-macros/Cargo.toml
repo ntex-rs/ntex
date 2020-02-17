@@ -1,0 +1,21 @@
+[package]
+name = "ntex-web-macros"
+version = "0.1.0"
+description = "ntex web proc macros"
+readme = "README.md"
+authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+license = "MIT/Apache-2.0"
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "^1"
+syn = { version = "^1", features = ["full", "parsing"] }
+proc-macro2 = "^1"
+
+[dev-dependencies]
+actix-rt = "1.0.0"
+ntex = { path = "../ntex/" }
+futures = { version = "0.3.1" }

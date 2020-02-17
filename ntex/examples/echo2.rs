@@ -1,11 +1,11 @@
 use std::{env, io};
 
-use actix_http::http::HeaderValue;
-use actix_http::{Error, HttpService, Request, Response};
-use actix_server::Server;
 use bytes::BytesMut;
 use futures::StreamExt;
 use log::info;
+use ntex::http::header::HeaderValue;
+use ntex::http::{Error, HttpService, Request, Response};
+use ntex::server::Server;
 
 async fn handle_request(mut req: Request) -> Result<Response, Error> {
     let mut body = BytesMut::new();

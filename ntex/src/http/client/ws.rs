@@ -409,7 +409,7 @@ impl fmt::Debug for WebsocketsRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Client;
+    use crate::http::client::Client;
 
     #[actix_rt::test]
     async fn test_debug() {

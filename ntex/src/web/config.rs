@@ -246,8 +246,8 @@ mod tests {
 
     use super::*;
     use crate::http::{Method, StatusCode};
-    use crate::test::{call_service, init_service, read_body, TestRequest};
-    use crate::{web, App, HttpRequest, HttpResponse};
+    use crate::web::test::{call_service, init_service, read_body, TestRequest};
+    use crate::web::{self, App, HttpRequest, HttpResponse};
 
     #[actix_rt::test]
     async fn test_data() {

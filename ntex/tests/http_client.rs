@@ -2,8 +2,8 @@ use actix_service::ServiceFactory;
 use bytes::Bytes;
 use futures::future::{self, ok};
 
-use actix_http::{http, HttpService, Request, Response};
-use actix_http_test::test_server;
+use ntex::http::test::server as test_server;
+use ntex::http::{HttpService, Method, Request, Response};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -27,7 +27,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World";
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_v2() {
     let srv = test_server(move || {
         HttpService::build()
@@ -54,7 +54,7 @@ async fn test_h1_v2() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_connection_close() {
     let srv = test_server(move || {
         HttpService::build()
@@ -67,7 +67,7 @@ async fn test_connection_close() {
     assert!(response.status().is_success());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_with_query_parameter() {
     let srv = test_server(move || {
         HttpService::build()
@@ -82,7 +82,7 @@ async fn test_with_query_parameter() {
             .map(|_| ())
     });
 
-    let request = srv.request(http::Method::GET, srv.url("/?qp=5"));
+    let request = srv.request(Method::GET, srv.url("/?qp=5"));
     let response = request.send().await.unwrap();
     assert!(response.status().is_success());
 }

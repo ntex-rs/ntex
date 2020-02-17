@@ -140,8 +140,7 @@ impl HttpRequest {
     /// Generate url for named resource
     ///
     /// ```rust
-    /// # extern crate actix_web;
-    /// # use actix_web::{web, App, HttpRequest, HttpResponse};
+    /// # use ntex::web::{self, App, HttpRequest, HttpResponse};
     /// #
     /// fn index(req: HttpRequest) -> HttpResponse {
     ///     let url = req.url_for("foo", &["1", "2", "3"]); // <- generate url for "foo" resource
@@ -270,7 +269,7 @@ impl Drop for HttpRequest {
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{web, App, HttpRequest};
+/// use ntex::web::{self, App, HttpRequest};
 /// use serde_derive::Deserialize;
 ///
 /// /// extract `Thing` from request
@@ -346,10 +345,10 @@ impl HttpRequestPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dev::{ResourceDef, ResourceMap};
     use crate::http::{header, StatusCode};
-    use crate::test::{call_service, init_service, TestRequest};
-    use crate::{web, App, HttpResponse};
+    use crate::web::dev::{ResourceDef, ResourceMap};
+    use crate::web::test::{call_service, init_service, TestRequest};
+    use crate::web::{self, App, HttpResponse};
 
     #[test]
     fn test_debug() {
@@ -359,12 +358,14 @@ mod tests {
         assert!(dbg.contains("HttpRequest"));
     }
 
+    #[cfg(feature = "cookie")]
     #[test]
     fn test_no_request_cookies() {
         let req = TestRequest::default().to_http_request();
         assert!(req.cookies().unwrap().is_empty());
     }
 
+    #[cfg(feature = "cookie")]
     #[test]
     fn test_request_cookies() {
         let req = TestRequest::default()

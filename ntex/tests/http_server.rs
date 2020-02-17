@@ -2,7 +2,6 @@ use std::io::{Read, Write};
 use std::time::Duration;
 use std::{net, thread};
 
-use actix_http_test::test_server;
 use actix_rt::time::delay_for;
 use actix_service::fn_service;
 use bytes::Bytes;
@@ -10,12 +9,12 @@ use futures::future::{self, err, ok, ready, FutureExt};
 use futures::stream::{once, StreamExt};
 use regex::Regex;
 
-use actix_http::httpmessage::HttpMessage;
-use actix_http::{
-    body, error, http, http::header, Error, HttpService, KeepAlive, Request, Response,
+use ntex::http::test::server as test_server;
+use ntex::http::{
+    body, error, header, Error, HttpMessage, HttpService, KeepAlive, Request, Response,
 };
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1() {
     let srv = test_server(|| {
         HttpService::build()
@@ -33,7 +32,7 @@ async fn test_h1() {
     assert!(response.status().is_success());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_2() {
     let srv = test_server(|| {
         HttpService::build()
@@ -52,7 +51,7 @@ async fn test_h1_2() {
     assert!(response.status().is_success());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_expect_continue() {
     let srv = test_server(|| {
         HttpService::build()
@@ -80,7 +79,7 @@ async fn test_expect_continue() {
     assert!(data.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\n"));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_expect_continue_h1() {
     let srv = test_server(|| {
         HttpService::build()
@@ -110,7 +109,7 @@ async fn test_expect_continue_h1() {
     assert!(data.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\n"));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_chunked_payload() {
     let chunk_sizes = vec![32768, 32, 32768];
     let total_size: usize = chunk_sizes.iter().sum();
@@ -165,7 +164,7 @@ async fn test_chunked_payload() {
     assert_eq!(returned_size, total_size);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_slow_request() {
     let srv = test_server(|| {
         HttpService::build()
@@ -181,7 +180,7 @@ async fn test_slow_request() {
     assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_http1_malformed_request() {
     let srv = test_server(|| {
         HttpService::build()
@@ -196,7 +195,7 @@ async fn test_http1_malformed_request() {
     assert!(data.starts_with("HTTP/1.1 400 Bad Request"));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_http1_keepalive() {
     let srv = test_server(|| {
         HttpService::build()
@@ -216,7 +215,7 @@ async fn test_http1_keepalive() {
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_http1_keepalive_timeout() {
     let srv = test_server(|| {
         HttpService::build()
@@ -237,7 +236,7 @@ async fn test_http1_keepalive_timeout() {
     assert_eq!(res, 0);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_http1_keepalive_close() {
     let srv = test_server(|| {
         HttpService::build()
@@ -257,7 +256,7 @@ async fn test_http1_keepalive_close() {
     assert_eq!(res, 0);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_http10_keepalive_default_close() {
     let srv = test_server(|| {
         HttpService::build()
@@ -276,7 +275,7 @@ async fn test_http10_keepalive_default_close() {
     assert_eq!(res, 0);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_http10_keepalive() {
     let srv = test_server(|| {
         HttpService::build()
@@ -302,7 +301,7 @@ async fn test_http10_keepalive() {
     assert_eq!(res, 0);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_http1_keepalive_disabled() {
     let srv = test_server(|| {
         HttpService::build()
@@ -322,9 +321,9 @@ async fn test_http1_keepalive_disabled() {
     assert_eq!(res, 0);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_content_length() {
-    use actix_http::http::{
+    use ntex::http::{
         header::{HeaderName, HeaderValue},
         StatusCode,
     };
@@ -368,7 +367,7 @@ async fn test_content_length() {
     }
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_headers() {
     let data = STR.repeat(10);
     let data2 = data.clone();
@@ -429,7 +428,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World";
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_body() {
     let mut srv = test_server(|| {
         HttpService::build()
@@ -445,7 +444,7 @@ async fn test_h1_body() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_head_empty() {
     let mut srv = test_server(|| {
         HttpService::build()
@@ -469,7 +468,7 @@ async fn test_h1_head_empty() {
     assert!(bytes.is_empty());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_head_binary() {
     let mut srv = test_server(|| {
         HttpService::build()
@@ -495,7 +494,7 @@ async fn test_h1_head_binary() {
     assert!(bytes.is_empty());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_head_binary2() {
     let srv = test_server(|| {
         HttpService::build()
@@ -515,7 +514,7 @@ async fn test_h1_head_binary2() {
     }
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_body_length() {
     let mut srv = test_server(|| {
         HttpService::build()
@@ -536,7 +535,7 @@ async fn test_h1_body_length() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_body_chunked_explicit() {
     let mut srv = test_server(|| {
         HttpService::build()
@@ -570,7 +569,7 @@ async fn test_h1_body_chunked_explicit() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_body_chunked_implicit() {
     let mut srv = test_server(|| {
         HttpService::build()
@@ -598,7 +597,7 @@ async fn test_h1_body_chunked_implicit() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_response_http_error_handling() {
     let mut srv = test_server(|| {
         HttpService::build()
@@ -621,7 +620,7 @@ async fn test_h1_response_http_error_handling() {
     assert_eq!(bytes, Bytes::from_static(b"failed to parse header value"));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_service_error() {
     let mut srv = test_server(|| {
         HttpService::build()
@@ -637,7 +636,7 @@ async fn test_h1_service_error() {
     assert_eq!(bytes, Bytes::from_static(b"error"));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_h1_on_connect() {
     let srv = test_server(|| {
         HttpService::build()

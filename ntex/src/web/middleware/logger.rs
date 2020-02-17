@@ -9,18 +9,19 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use actix_service::{Service, Transform};
 use bytes::Bytes;
 use futures::future::{ok, Ready};
 use log::debug;
 use regex::Regex;
 use time::OffsetDateTime;
 
-use crate::dev::{BodySize, MessageBody, ResponseBody};
-use crate::error::{Error, Result};
-use crate::http::{HeaderName, StatusCode};
-use crate::service::{ServiceRequest, ServiceResponse};
-use crate::HttpResponse;
+use crate::http::body::{BodySize, MessageBody, ResponseBody};
+use crate::http::error::Error;
+use crate::http::header::HeaderName;
+use crate::http::StatusCode;
+use crate::service::{Service, Transform};
+use crate::web::service::{ServiceRequest, ServiceResponse};
+use crate::web::HttpResponse;
 
 /// `Middleware` for logging request and response info to the terminal.
 ///
@@ -38,8 +39,8 @@ use crate::HttpResponse;
 ///  %a "%r" %s %b "%{Referer}i" "%{User-Agent}i" %T
 /// ```
 /// ```rust
-/// use actix_web::middleware::Logger;
-/// use actix_web::App;
+/// use ntex::web::App;
+/// use ntex::web::middleware::Logger;
 ///
 /// fn main() {
 ///     std::env::set_var("RUST_LOG", "actix_web=info");
@@ -264,8 +265,11 @@ impl<B: MessageBody> MessageBody for StreamLog<B> {
         self.body.size()
     }
 
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, Error>>> {
-        match self.body.poll_next(cx) {
+    fn poll_next_chunk(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Error>>> {
+        match self.body.poll_next_chunk(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
                 self.size += chunk.len();
                 Poll::Ready(Some(Ok(chunk)))
@@ -475,12 +479,12 @@ impl<'a> fmt::Display for FormatDisplay<'a> {
 
 #[cfg(test)]
 mod tests {
-    use actix_service::{IntoService, Service, Transform};
     use futures::future::ok;
 
     use super::*;
     use crate::http::{header, StatusCode};
-    use crate::test::TestRequest;
+    use crate::service::{IntoService, Service, Transform};
+    use crate::web::test::TestRequest;
 
     #[actix_rt::test]
     async fn test_logger() {

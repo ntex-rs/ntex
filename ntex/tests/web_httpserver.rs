@@ -5,7 +5,7 @@ use std::{net, thread, time::Duration};
 #[cfg(feature = "openssl")]
 use open_ssl::ssl::SslAcceptorBuilder;
 
-use actix_web::{web, App, HttpResponse, HttpServer};
+use ntex::web::{self, App, HttpResponse, HttpServer};
 
 fn unused_addr() -> net::SocketAddr {
     let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -17,7 +17,7 @@ fn unused_addr() -> net::SocketAddr {
 }
 
 #[cfg(unix)]
-#[actix_rt::test]
+#[ntex::test]
 async fn test_start() {
     let addr = unused_addr();
     let (tx, rx) = mpsc::channel();
@@ -87,10 +87,10 @@ fn ssl_acceptor() -> std::io::Result<SslAcceptorBuilder> {
     Ok(builder)
 }
 
-#[actix_rt::test]
+#[ntex::test]
 #[cfg(feature = "openssl")]
 async fn test_start_ssl() {
-    use actix_web::HttpRequest;
+    use ntex::web::HttpRequest;
 
     let addr = unused_addr();
     let (tx, rx) = mpsc::channel();
@@ -125,9 +125,9 @@ async fn test_start_ssl() {
         .set_alpn_protos(b"\x02h2\x08http/1.1")
         .map_err(|e| log::error!("Can not set alpn protocol: {:?}", e));
 
-    let client = awc::Client::build()
+    let client = ntex::http::client::Client::build()
         .connector(
-            awc::Connector::new()
+            ntex::http::client::Connector::new()
                 .ssl(builder.build())
                 .timeout(Duration::from_millis(100))
                 .finish(),

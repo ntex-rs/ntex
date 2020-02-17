@@ -84,7 +84,7 @@ where
     ///
     /// ```rust
     /// use std::cell::Cell;
-    /// use actix_web::{web, App, HttpResponse, Responder};
+    /// use ntex::web::{self, App, HttpResponse, Responder};
     ///
     /// struct MyData {
     ///     counter: Cell<usize>,
@@ -98,8 +98,8 @@ where
     /// let app = App::new()
     ///     .data(MyData{ counter: Cell::new(0) })
     ///     .service(
-    ///         web::resource("/index.html").route(
-    ///             web::get().to(index)));
+    ///         web::resource("/index.html").route(web::get().to(index))
+    ///     );
     /// ```
     pub fn data<U: 'static>(mut self, data: U) -> Self {
         self.data.push(Box::new(Data::new(data)));
@@ -157,8 +157,7 @@ where
     /// some of the resource's configuration could be moved to different module.
     ///
     /// ```rust
-    /// # extern crate actix_web;
-    /// use actix_web::{web, middleware, App, HttpResponse};
+    /// use ntex::web::{self, middleware, App, HttpResponse};
     ///
     /// // this function could be located in different module
     /// fn config(cfg: &mut web::ServiceConfig) {
@@ -194,9 +193,9 @@ where
     /// multiple resources with one route would be registered for same resource path.
     ///
     /// ```rust
-    /// use actix_web::{web, App, HttpResponse};
+    /// use ntex::web::{self, App, HttpResponse};
     ///
-    /// async fn index(data: web::Path<(String, String)>) -> &'static str {
+    /// async fn index(data: web::types::Path<(String, String)>) -> &'static str {
     ///     "Welcome!"
     /// }
     ///
@@ -237,7 +236,7 @@ where
     /// It is possible to use services like `Resource`, `Route`.
     ///
     /// ```rust
-    /// use actix_web::{web, App, HttpResponse};
+    /// use ntex::web::{self, App, HttpResponse};
     ///
     /// async fn index() -> &'static str {
     ///     "Welcome!"
@@ -255,7 +254,7 @@ where
     /// It is also possible to use static files as default service.
     ///
     /// ```rust
-    /// use actix_web::{web, App, HttpResponse};
+    /// use ntex::web::{self, App, HttpResponse};
     ///
     /// fn main() {
     ///     let app = App::new()
@@ -292,9 +291,10 @@ where
     /// `HttpRequest::url_for()` will work as expected.
     ///
     /// ```rust
-    /// use actix_web::{web, App, HttpRequest, HttpResponse, Result};
+    /// use ntex::http::Error;
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
     ///
-    /// async fn index(req: HttpRequest) -> Result<HttpResponse> {
+    /// async fn index(req: HttpRequest) -> Result<HttpResponse, Error> {
     ///     let url = req.url_for("youtube", &["asdlkjqme"])?;
     ///     assert_eq!(url.as_str(), "https://youtube.com/watch/asdlkjqme");
     ///     Ok(HttpResponse::Ok().into())
@@ -334,9 +334,8 @@ where
     /// in the builder chain is the *last* to execute during request processing.
     ///
     /// ```rust
-    /// use actix_service::Service;
-    /// use actix_web::{middleware, web, App};
-    /// use actix_web::http::{header::CONTENT_TYPE, HeaderValue};
+    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
+    /// use ntex::web::{self, middleware, App};
     ///
     /// async fn index() -> &'static str {
     ///     "Welcome!"
@@ -392,16 +391,16 @@ where
     /// Use middleware when you need to read or modify *every* request or response in some way.
     ///
     /// ```rust
-    /// use actix_service::Service;
-    /// use actix_web::{web, App};
-    /// use actix_web::http::{header::CONTENT_TYPE, HeaderValue};
+    /// use ntex::service::Service;
+    /// use ntex::web;
+    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
     ///
     /// async fn index() -> &'static str {
     ///     "Welcome!"
     /// }
     ///
     /// fn main() {
-    ///     let app = App::new()
+    ///     let app = web::App::new()
     ///         .wrap_fn(|req, srv| {
     ///             let fut = srv.call(req);
     ///             async {
@@ -479,11 +478,12 @@ mod tests {
     use futures::future::ok;
 
     use super::*;
-    use crate::http::{header, HeaderValue, Method, StatusCode};
-    use crate::middleware::DefaultHeaders;
-    use crate::service::ServiceRequest;
-    use crate::test::{call_service, init_service, read_body, TestRequest};
-    use crate::{web, HttpRequest, HttpResponse};
+    use crate::http::header::{self, HeaderValue};
+    use crate::http::{Method, StatusCode};
+    use crate::web::middleware::DefaultHeaders;
+    use crate::web::service::ServiceRequest;
+    use crate::web::test::{call_service, init_service, read_body, TestRequest};
+    use crate::web::{self, HttpRequest, HttpResponse};
 
     #[actix_rt::test]
     async fn test_default_resource() {

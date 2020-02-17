@@ -354,12 +354,12 @@ impl ResponseBuilder {
     /// Append a header to existing headers.
     ///
     /// ```rust
-    /// use actix_http::{http, Request, Response};
+    /// use ntex::http::{header, Request, Response};
     ///
     /// fn index(req: Request) -> Response {
     ///     Response::Ok()
     ///         .header("X-TEST", "value")
-    ///         .header(http::header::CONTENT_TYPE, "application/json")
+    ///         .header(header::CONTENT_TYPE, "application/json")
     ///         .finish()
     /// }
     /// ```
@@ -386,12 +386,12 @@ impl ResponseBuilder {
     /// Set a header.
     ///
     /// ```rust
-    /// use actix_http::{http, Request, Response};
+    /// use ntex::http::{header, Request, Response};
     ///
     /// fn index(req: Request) -> Response {
     ///     Response::Ok()
     ///         .set_header("X-TEST", "value")
-    ///         .set_header(http::header::CONTENT_TYPE, "application/json")
+    ///         .set_header(header::CONTENT_TYPE, "application/json")
     ///         .finish()
     /// }
     /// ```
@@ -491,12 +491,13 @@ impl ResponseBuilder {
     /// Set a cookie
     ///
     /// ```rust
-    /// use actix_http::{http, Request, Response};
+    /// use coo_kie as cookie;
+    /// use ntex::http::{Request, Response};
     ///
     /// fn index(req: Request) -> Response {
     ///     Response::Ok()
     ///         .cookie(
-    ///             http::Cookie::build("name", "value")
+    ///             cookie::Cookie::build("name", "value")
     ///                 .domain("www.rust-lang.org")
     ///                 .path("/")
     ///                 .secure(true)
@@ -521,7 +522,7 @@ impl ResponseBuilder {
     /// Remove cookie
     ///
     /// ```rust
-    /// use actix_http::{http, Request, Response, HttpMessage};
+    /// use ntex::http::{Request, Response, HttpMessage};
     ///
     /// fn index(req: Request) -> Response {
     ///     let mut builder = Response::Ok();
@@ -863,8 +864,8 @@ impl From<BytesMut> for Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::body::Body;
-    use crate::http::header::{HeaderValue, CONTENT_TYPE, COOKIE, SET_COOKIE};
+    use crate::http::body::Body;
+    use crate::http::header::{HeaderValue, CONTENT_TYPE, COOKIE};
 
     #[test]
     fn test_debug() {
@@ -876,11 +877,13 @@ mod tests {
         assert!(dbg.contains("Response"));
     }
 
+    #[cfg(feature = "cookie")]
     #[test]
     fn test_response_cookies() {
-        use crate::httpmessage::HttpMessage;
+        use crate::http::header::{COOKIE, SET_COOKIE};
+        use crate::http::httpmessage::HttpMessage;
 
-        let req = crate::test::TestRequest::default()
+        let req = crate::http::test::TestRequest::default()
             .header(COOKIE, "cookie1=value1")
             .header(COOKIE, "cookie2=value2")
             .finish();
@@ -888,11 +891,11 @@ mod tests {
 
         let resp = Response::Ok()
             .cookie(
-                crate::http::Cookie::build("name", "value")
+                coo_kie::Cookie::build("name", "value")
                     .domain("www.rust-lang.org")
                     .path("/test")
                     .http_only(true)
-                    .max_age_time(time::Duration::days(1))
+                    .max_age(time::Duration::days(1))
                     .finish(),
             )
             .del_cookie(&cookies[1])
@@ -911,17 +914,18 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "cookie")]
     #[test]
     fn test_update_response_cookies() {
         let mut r = Response::Ok()
-            .cookie(crate::http::Cookie::new("original", "val100"))
+            .cookie(coo_kie::Cookie::new("original", "val100"))
             .finish();
 
-        r.add_cookie(&crate::http::Cookie::new("cookie2", "val200"))
+        r.add_cookie(&coo_kie::Cookie::new("cookie2", "val200"))
             .unwrap();
-        r.add_cookie(&crate::http::Cookie::new("cookie2", "val250"))
+        r.add_cookie(&coo_kie::Cookie::new("cookie2", "val250"))
             .unwrap();
-        r.add_cookie(&crate::http::Cookie::new("cookie3", "val300"))
+        r.add_cookie(&coo_kie::Cookie::new("cookie3", "val300"))
             .unwrap();
 
         assert_eq!(r.cookies().count(), 4);
@@ -1082,17 +1086,22 @@ mod tests {
 
     #[test]
     fn test_into_builder() {
+        #[allow(unused_mut)]
         let mut resp: Response = "test".into();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        resp.add_cookie(&crate::http::Cookie::new("cookie1", "val100"))
+        #[cfg(feature = "cookie")]
+        resp.add_cookie(&coo_kie::Cookie::new("cookie1", "val100"))
             .unwrap();
 
         let mut builder: ResponseBuilder = resp.into();
         let resp = builder.status(StatusCode::BAD_REQUEST).finish();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-        let cookie = resp.cookies().next().unwrap();
-        assert_eq!((cookie.name(), cookie.value()), ("cookie1", "val100"));
+        #[cfg(feature = "cookie")]
+        {
+            let cookie = resp.cookies().next().unwrap();
+            assert_eq!((cookie.name(), cookie.value()), ("cookie1", "val100"));
+        }
     }
 }

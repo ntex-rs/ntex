@@ -1,8 +1,8 @@
 [package]
 name = "ntex"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
-description = ""
+description = "Framework for composable network services"
 readme = "README.md"
 keywords = ["ntex", "networking", "framework", "async", "futures"]
 repository = "https://github.com/fafhrd91/ntex.git"
@@ -24,10 +24,10 @@ path = "src/lib.rs"
 default = []
 
 # openssl
-openssl = ["actix-tls/openssl", "actix-connect/openssl"]
+openssl = ["actix-tls/openssl", "actix-connect/openssl", "open-ssl"]
 
 # rustls support
-rustls = ["actix-tls/rustls", "actix-connect/rustls"]
+rustls = ["actix-tls/rustls", "actix-connect/rustls", "rust-tls"]
 
 # enable compressison support
 compress = ["flate2", "brotli2"]
@@ -36,6 +36,8 @@ compress = ["flate2", "brotli2"]
 cookie = ["coo-kie", "coo-kie/percent-encode"]
 
 [dependencies]
+ntex-web-macros = { path = "../ntex-web-macros" }
+
 actix-service = "1.0.1"
 actix-codec = "0.2.0"
 actix-connect = "1.0.1"
@@ -75,6 +77,8 @@ serde_urlencoded = "0.6.1"
 url = "2.1"
 time = { version = "0.2.5", default-features = false, features = ["std"] }
 coo-kie = { version = "0.13.3", package = "cookie", optional = true }
+open-ssl = { version="0.10", package = "openssl", optional = true }
+rust-tls = { version = "0.16.0", package = "rustls", optional = true }
 
 # compression
 brotli2 = { version="0.3.2", optional = true }
@@ -90,4 +94,5 @@ futures = "0.3.1"
 env_logger = "0.7"
 serde_derive = "1.0"
 open-ssl = { version="0.10", package = "openssl" }
-rust-tls = { version="0.16", package = "rustls" }
+rust-tls = { version = "0.16.0", package="rustls", features = ["dangerous_configuration"]  }
+webpki = "0.21"

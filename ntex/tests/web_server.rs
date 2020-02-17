@@ -2,10 +2,6 @@ use std::io::{Read, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_http::http::header::{
-    ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH,
-    TRANSFER_ENCODING,
-};
 use brotli2::write::{BrotliDecoder, BrotliEncoder};
 use bytes::Bytes;
 use flate2::read::GzDecoder;
@@ -14,9 +10,17 @@ use flate2::Compression;
 use futures::{ready, Future};
 use rand::{distributions::Alphanumeric, Rng};
 
-use actix_web::dev::BodyEncoding;
-use actix_web::middleware::Compress;
-use actix_web::{dev, test, web, App, Error, HttpResponse};
+use ntex::http::body::Body;
+use ntex::http::error::Error;
+use ntex::http::header::{
+    ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH,
+    TRANSFER_ENCODING,
+};
+use ntex::http::{Method, StatusCode};
+
+use ntex::web::dev::BodyEncoding;
+use ntex::web::middleware::Compress;
+use ntex::web::{self, test, App, HttpResponse};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -76,7 +80,7 @@ impl futures::Stream for TestBody {
     }
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_body() {
     let srv = test::start(|| {
         App::new()
@@ -91,7 +95,7 @@ async fn test_body() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_body_gzip() {
     let srv = test::start_with(test::config().h1(), || {
         App::new()
@@ -118,14 +122,15 @@ async fn test_body_gzip() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_body_gzip2() {
     let srv = test::start_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
-            .service(web::resource("/").route(web::to(|| {
-                HttpResponse::Ok().body(STR).into_body::<dev::Body>()
-            })))
+            .service(
+                web::resource("/")
+                    .route(web::to(|| HttpResponse::Ok().body(STR).into_body::<Body>())),
+            )
     });
 
     let mut response = srv
@@ -147,7 +152,7 @@ async fn test_body_gzip2() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_body_encoding_override() {
     let srv = test::start_with(test::config().h1(), || {
         App::new()
@@ -158,9 +163,8 @@ async fn test_body_encoding_override() {
                     .body(STR)
             })))
             .service(web::resource("/raw").route(web::to(|| {
-                let body = actix_web::dev::Body::Bytes(STR.into());
-                let mut response =
-                    HttpResponse::with_body(actix_web::http::StatusCode::OK, body);
+                let body = Body::Bytes(STR.into());
+                let mut response = HttpResponse::with_body(StatusCode::OK, body);
 
                 response.encoding(ContentEncoding::Deflate);
 
@@ -189,7 +193,7 @@ async fn test_body_encoding_override() {
 
     // Raw Response
     let mut response = srv
-        .request(actix_web::http::Method::GET, srv.url("/raw"))
+        .request(Method::GET, srv.url("/raw"))
         .no_decompress()
         .header(ACCEPT_ENCODING, "deflate")
         .send()
@@ -207,7 +211,7 @@ async fn test_body_encoding_override() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_body_gzip_large() {
     let data = STR.repeat(10);
     let srv_data = data.clone();
@@ -241,7 +245,7 @@ async fn test_body_gzip_large() {
     assert_eq!(Bytes::from(dec), Bytes::from(data));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_body_gzip_large_random() {
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -279,7 +283,7 @@ async fn test_body_gzip_large_random() {
     assert_eq!(Bytes::from(dec), Bytes::from(data));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_body_chunked_implicit() {
     let srv = test::start_with(test::config().h1(), || {
         App::new()
@@ -313,7 +317,7 @@ async fn test_body_chunked_implicit() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_body_br_streaming() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().wrap(Compress::new(ContentEncoding::Br)).service(
@@ -345,7 +349,7 @@ async fn test_body_br_streaming() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_head_binary() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(
@@ -366,7 +370,7 @@ async fn test_head_binary() {
     assert!(bytes.is_empty());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_no_chunking() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move || {
@@ -386,7 +390,7 @@ async fn test_no_chunking() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_body_deflate() {
     let srv = test::start_with(test::config().h1(), || {
         App::new()
@@ -415,7 +419,7 @@ async fn test_body_deflate() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_body_brotli() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().wrap(Compress::new(ContentEncoding::Br)).service(
@@ -443,7 +447,7 @@ async fn test_body_brotli() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_encoding() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().wrap(Compress::default()).service(
@@ -469,7 +473,7 @@ async fn test_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_gzip_encoding() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().service(
@@ -495,7 +499,7 @@ async fn test_gzip_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_gzip_encoding_large() {
     let data = STR.repeat(10);
     let srv = test::start_with(test::config().h1(), || {
@@ -522,7 +526,7 @@ async fn test_gzip_encoding_large() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_reading_gzip_encoding_large_random() {
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -554,7 +558,7 @@ async fn test_reading_gzip_encoding_large_random() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_reading_deflate_encoding() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().service(
@@ -580,7 +584,7 @@ async fn test_reading_deflate_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_reading_deflate_encoding_large() {
     let data = STR.repeat(10);
     let srv = test::start_with(test::config().h1(), || {
@@ -607,7 +611,7 @@ async fn test_reading_deflate_encoding_large() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_reading_deflate_encoding_large_random() {
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -639,7 +643,7 @@ async fn test_reading_deflate_encoding_large_random() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_brotli_encoding() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().service(
@@ -665,7 +669,7 @@ async fn test_brotli_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_brotli_encoding_large() {
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -675,7 +679,7 @@ async fn test_brotli_encoding_large() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().service(
             web::resource("/")
-                .app_data(web::PayloadConfig::new(320_000))
+                .app_data(web::types::PayloadConfig::new(320_000))
                 .route(web::to(move |body: Bytes| {
                     HttpResponse::Ok().streaming(TestBody::new(body, 10240))
                 })),
@@ -700,7 +704,7 @@ async fn test_brotli_encoding_large() {
 }
 
 #[cfg(feature = "openssl")]
-#[actix_rt::test]
+#[ntex::test]
 async fn test_brotli_encoding_large_openssl() {
     // load ssl keys
     use open_ssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
@@ -716,7 +720,7 @@ async fn test_brotli_encoding_large_openssl() {
     let srv = test::start_with(test::config().openssl(builder.build()), move || {
         App::new().service(web::resource("/").route(web::to(|bytes: Bytes| {
             HttpResponse::Ok()
-                .encoding(actix_web::http::ContentEncoding::Identity)
+                .encoding(ContentEncoding::Identity)
                 .body(bytes)
         })))
     });
@@ -729,7 +733,7 @@ async fn test_brotli_encoding_large_openssl() {
     // client request
     let mut response = srv
         .post("/")
-        .header(actix_web::http::header::CONTENT_ENCODING, "br")
+        .header(CONTENT_ENCODING, "br")
         .send_body(enc)
         .await
         .unwrap();
@@ -741,7 +745,7 @@ async fn test_brotli_encoding_large_openssl() {
 }
 
 #[cfg(all(feature = "rustls", feature = "openssl"))]
-#[actix_rt::test]
+#[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls() {
     use rust_tls::internal::pemfile::{certs, pkcs8_private_keys};
     use rust_tls::{NoClientAuth, ServerConfig};
@@ -764,7 +768,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     let srv = test::start_with(test::config().rustls(config), || {
         App::new().service(web::resource("/").route(web::to(|bytes: Bytes| {
             HttpResponse::Ok()
-                .encoding(actix_web::http::ContentEncoding::Identity)
+                .encoding(ContentEncoding::Identity)
                 .body(bytes)
         })))
     });
@@ -777,7 +781,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     // client request
     let req = srv
         .post("/")
-        .header(actix_web::http::header::CONTENT_ENCODING, "deflate")
+        .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
     let mut response = req.await.unwrap();
@@ -845,7 +849,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
 //     }
 // }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_slow_request() {
     use std::net;
 
@@ -866,7 +870,7 @@ async fn test_slow_request() {
 }
 
 // #[cfg(feature = "openssl")]
-// #[actix_rt::test]
+// #[ntex::test]
 // async fn test_ssl_handshake_timeout() {
 //     use open_ssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 //     use std::net;

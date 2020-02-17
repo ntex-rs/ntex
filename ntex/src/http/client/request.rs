@@ -31,11 +31,11 @@ const HTTPS_ENCODING: &str = "br";
 /// builder-like pattern.
 ///
 /// ```rust
-/// use actix_rt::System;
+/// use ntex::http::client::Client;
 ///
-/// #[actix_rt::main]
+/// #[ntex::main]
 /// async fn main() {
-///    let response = awc::Client::new()
+///    let response = Client::new()
 ///         .get("http://www.rust-lang.org") // <- Create request builder
 ///         .header("User-Agent", "Actix-web")
 ///         .send()                          // <- Send http request
@@ -157,16 +157,15 @@ impl ClientRequest {
     /// To override header use `set_header()` method.
     ///
     /// ```rust
-    /// use awc::{http, Client};
+    /// use ntex::http;
+    /// use ntex::http::client::Client;
     ///
-    /// fn main() {
-    /// # actix_rt::System::new("test").block_on(async {
+    /// #[ntex::main]
+    /// async fn main() {
     ///     let req = Client::new()
     ///         .get("http://www.rust-lang.org")
     ///         .header("X-TEST", "value")
     ///         .header(http::header::CONTENT_TYPE, "application/json");
-    /// #   Ok::<_, ()>(())
-    /// # });
     /// }
     /// ```
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
@@ -285,11 +284,14 @@ impl ClientRequest {
     /// Set a cookie
     ///
     /// ```rust
-    /// #[actix_rt::main]
+    /// use coo_kie as cookie;
+    /// use ntex::http::client::Client;
+    ///
+    /// #[ntex::main]
     /// async fn main() {
-    ///     let resp = awc::Client::new().get("https://www.rust-lang.org")
+    ///     let resp = Client::new().get("https://www.rust-lang.org")
     ///         .cookie(
-    ///             awc::http::Cookie::build("name", "value")
+    ///             cookie::Cookie::build("name", "value")
     ///                 .domain("www.rust-lang.org")
     ///                 .path("/")
     ///                 .secure(true)
@@ -571,10 +573,8 @@ impl fmt::Debug for ClientRequest {
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
-
     use super::*;
-    use crate::Client;
+    use crate::http::client::Client;
 
     #[test]
     fn test_debug() {
@@ -589,7 +589,7 @@ mod tests {
         let mut req = Client::new()
             .put("/")
             .version(Version::HTTP_2)
-            .set(header::Date(SystemTime::now().into()))
+            .header(header::DATE, "data")
             .content_type("plain/text")
             .if_true(true, |req| req.header(header::SERVER, "awc"))
             .if_true(false, |req| req.header(header::EXPECT, "awc"))

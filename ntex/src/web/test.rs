@@ -61,10 +61,11 @@ pub fn default_service(
 /// service.
 ///
 /// ```rust
-/// use actix_service::Service;
-/// use actix_web::{test, web, App, HttpResponse, http::StatusCode};
+/// use ntex::service::Service;
+/// use ntex::http::StatusCode;
+/// use ntex::web::{self, test, App, HttpResponse};
 ///
-/// #[actix_rt::test]
+/// #[ntex::test]
 /// async fn test_init_service() {
 ///     let mut app = test::init_service(
 ///         App::new()
@@ -99,9 +100,10 @@ where
 /// Calls service and waits for response future completion.
 ///
 /// ```rust
-/// use actix_web::{test, web, App, HttpResponse, http::StatusCode};
+/// use ntex::http::StatusCode;
+/// use ntex::web::{self, test, App, HttpResponse};
 ///
-/// #[actix_rt::test]
+/// #[ntex::test]
 /// async fn test_response() {
 ///     let mut app = test::init_service(
 ///         App::new()
@@ -129,10 +131,11 @@ where
 /// Helper function that returns a response body of a TestRequest
 ///
 /// ```rust
-/// use actix_web::{test, web, App, HttpResponse, http::header};
 /// use bytes::Bytes;
+/// use ntex::http::header;
+/// use ntex::web::{self, test, App, HttpResponse};
 ///
-/// #[actix_rt::test]
+/// #[ntex::test]
 /// async fn test_index() {
 ///     let mut app = test::init_service(
 ///         App::new().service(
@@ -172,10 +175,11 @@ where
 /// Helper function that returns a response body of a ServiceResponse.
 ///
 /// ```rust
-/// use actix_web::{test, web, App, HttpResponse, http::header};
 /// use bytes::Bytes;
+/// use ntex::http::header;
+/// use ntex::web::{self, test, App, HttpResponse};
 ///
-/// #[actix_rt::test]
+/// #[ntex::test]
 /// async fn test_index() {
 ///     let mut app = test::init_service(
 ///         App::new().service(
@@ -221,7 +225,8 @@ where
 /// Helper function that returns a deserialized response body of a TestRequest
 ///
 /// ```rust
-/// use actix_web::{App, test, web, HttpResponse, http::header};
+/// use ntex::http::header;
+/// use ntex::web::{self, test, App, HttpResponse};
 /// use serde::{Serialize, Deserialize};
 ///
 /// #[derive(Serialize, Deserialize)]
@@ -230,7 +235,7 @@ where
 ///     name: String
 /// }
 ///
-/// #[actix_rt::test]
+/// #[ntex::test]
 /// async fn test_add_person() {
 ///     let mut app = test::init_service(
 ///         App::new().service(
@@ -274,8 +279,8 @@ where
 ///  * `TestRequest::to_http_request` creates `HttpRequest` instance, which is used for testing handlers.
 ///
 /// ```rust
-/// use actix_web::{test, HttpRequest, HttpResponse, HttpMessage};
-/// use actix_web::http::{header, StatusCode};
+/// use ntex::http::{header, StatusCode, HttpMessage};
+/// use ntex::web::{self, test, HttpRequest, HttpResponse};
 ///
 /// async fn index(req: HttpRequest) -> HttpResponse {
 ///     if let Some(hdr) = req.headers().get(header::CONTENT_TYPE) {
@@ -525,13 +530,14 @@ impl TestRequest {
 /// # Examples
 ///
 /// ```rust
-/// use actix_web::{web, test, App, HttpResponse, Error};
+/// use ntex::http::Error;
+/// use ntex::web::{self, test, App, HttpResponse};
 ///
 /// async fn my_handler() -> Result<HttpResponse, Error> {
 ///     Ok(HttpResponse::Ok().into())
 /// }
 ///
-/// #[actix_rt::test]
+/// #[ntex::test]
 /// async fn test_example() {
 ///     let mut srv = test::start(
 ///         || App::new().service(
@@ -565,13 +571,14 @@ where
 /// # Examples
 ///
 /// ```rust
-/// use actix_web::{web, test, App, HttpResponse, Error};
+/// use ntex::http::Error;
+/// use ntex::web::{self, test, App, HttpResponse};
 ///
 /// async fn my_handler() -> Result<HttpResponse, Error> {
 ///     Ok(HttpResponse::Ok().into())
 /// }
 ///
-/// #[actix_rt::test]
+/// #[ntex::test]
 /// async fn test_example() {
 ///     let mut srv = test::start_with(test::config().h1(), ||
 ///         App::new().service(web::resource("/").to(my_handler))
@@ -940,22 +947,20 @@ impl Drop for TestServer {
 
 #[cfg(test)]
 mod tests {
-    use actix_http::httpmessage::HttpMessage;
-    use futures::FutureExt;
     use serde::{Deserialize, Serialize};
-    use std::time::SystemTime;
 
     use super::*;
-    use crate::{http::header, web, App, HttpResponse, Responder};
+    use crate::http::header;
+    use crate::http::HttpMessage;
+    use crate::web::{self, App, Data, HttpResponse, Responder};
 
     #[actix_rt::test]
     async fn test_basics() {
-        let req = TestRequest::with_hdr(header::ContentType::json())
+        let req = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
             .version(Version::HTTP_2)
-            .set(header::Date(SystemTime::now().into()))
+            .header(header::DATE, "some date")
             .param("test", "123")
-            .data(10u32)
-            .app_data(20u64)
+            .data(Data::new(20u64))
             .peer_addr("127.0.0.1:8081".parse().unwrap())
             .to_http_request();
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
@@ -966,13 +971,8 @@ mod tests {
         );
         assert_eq!(&req.match_info()["test"], "123");
         assert_eq!(req.version(), Version::HTTP_2);
-        let data = req.app_data::<Data<u32>>().unwrap();
-        assert!(req.app_data::<Data<u64>>().is_none());
-        assert_eq!(*data.get_ref(), 10);
-
-        assert!(req.app_data::<u32>().is_none());
-        let data = req.app_data::<u64>().unwrap();
-        assert_eq!(*data, 20);
+        let data = req.app_data::<Data<u64>>().unwrap();
+        assert_eq!(*data.get_ref(), 20);
     }
 
     #[actix_rt::test]
@@ -1039,7 +1039,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_response_json() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
-            web::post().to(|person: web::Json<Person>| async {
+            web::post().to(|person: web::types::Json<Person>| async {
                 HttpResponse::Ok().json(person.into_inner())
             }),
         )))
@@ -1060,7 +1060,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_request_response_form() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
-            web::post().to(|person: web::Form<Person>| async {
+            web::post().to(|person: web::types::Form<Person>| async {
                 HttpResponse::Ok().json(person.into_inner())
             }),
         )))
@@ -1086,7 +1086,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_request_response_json() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
-            web::post().to(|person: web::Json<Person>| async {
+            web::post().to(|person: web::types::Json<Person>| async {
                 HttpResponse::Ok().json(person.into_inner())
             }),
         )))
@@ -1144,49 +1144,6 @@ mod tests {
                 .data(10usize)
                 .service(web::resource("/index.html").to(handler)),
         )
-        .await;
-
-        let req = TestRequest::post().uri("/index.html").to_request();
-        let res = app.call(req).await.unwrap();
-        assert!(res.status().is_success());
-    }
-
-    #[actix_rt::test]
-    async fn test_actor() {
-        use actix::Actor;
-
-        struct MyActor;
-
-        struct Num(usize);
-        impl actix::Message for Num {
-            type Result = usize;
-        }
-        impl actix::Actor for MyActor {
-            type Context = actix::Context<Self>;
-        }
-        impl actix::Handler<Num> for MyActor {
-            type Result = usize;
-            fn handle(&mut self, msg: Num, _: &mut Self::Context) -> Self::Result {
-                msg.0
-            }
-        }
-
-        let addr = MyActor.start();
-
-        let mut app = init_service(App::new().service(web::resource("/index.html").to(
-            move || {
-                addr.send(Num(1)).map(|res| match res {
-                    Ok(res) => {
-                        if res == 1 {
-                            Ok(HttpResponse::Ok())
-                        } else {
-                            Ok(HttpResponse::BadRequest())
-                        }
-                    }
-                    Err(err) => Err(err),
-                })
-            },
-        )))
         .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();

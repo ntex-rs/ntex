@@ -1,16 +1,15 @@
-//! Actix web is a small, pragmatic, and extremely fast web framework
-//! for Rust.
+//! Web framework for Rust.
 //!
 //! ```rust,no_run
-//! use actix_web::{web, App, Responder, HttpServer};
+//! use ntex::web;
 //!
-//! async fn index(info: web::Path<(String, u32)>) -> impl Responder {
+//! async fn index(info: web::types::Path<(String, u32)>) -> impl web::Responder {
 //!     format!("Hello {}! id:{}", info.0, info.1)
 //! }
 //!
-//! #[actix_rt::main]
+//! #[ntex::main]
 //! async fn main() -> std::io::Result<()> {
-//!     HttpServer::new(|| App::new().service(
+//!     web::server(|| web::App::new().service(
 //!         web::resource("/{name}/{id}/index.html").to(index))
 //!     )
 //!         .bind("127.0.0.1:8080")?
@@ -24,10 +23,9 @@
 //! Besides the API documentation (which you are currently looking
 //! at!), several other resources are available:
 //!
-//! * [User Guide](https://actix.rs/docs/)
-//! * [Chat on gitter](https://gitter.im/actix/actix)
-//! * [GitHub repository](https://github.com/actix/actix-web)
-//! * [Cargo package](https://crates.io/crates/actix-web)
+//! * [User Guide](https://docs.rs/ntex/)
+//! * [GitHub repository](https://github.com/fafhrd91/ntex)
+//! * [Cargo package](https://crates.io/crates/ntex)
 //!
 //! To get started navigating the API documentation you may want to
 //! consider looking at the following pages:
@@ -40,9 +38,6 @@
 //!   represents an HTTP server instance and is used to instantiate and
 //!   configure servers.
 //!
-//! * [web](web/index.html): This module
-//!   provides essential helper functions and types for application registration.
-//!
 //! * [HttpRequest](struct.HttpRequest.html) and
 //!   [HttpResponse](struct.HttpResponse.html): These structs
 //!   represent HTTP requests and responses and expose various methods
@@ -53,23 +48,20 @@
 //! * Supported *HTTP/1.x* and *HTTP/2.0* protocols
 //! * Streaming and pipelining
 //! * Keep-alive and slow requests handling
-//! * `WebSockets` server/client
+//! * *WebSockets* server/client
 //! * Transparent content compression/decompression (br, gzip, deflate)
 //! * Configurable request routing
 //! * Multipart streams
-//! * SSL support with OpenSSL or `native-tls`
-//! * Middlewares (`Logger`, `Session`, `CORS`, `DefaultHeaders`)
-//! * Supports [Actix actor framework](https://github.com/actix/actix)
+//! * SSL support with OpenSSL or `rustls`
+//! * Middlewares
 //! * Supported Rust version: 1.39 or later
 //!
 //! ## Package feature
 //!
-//! * `client` - enables http client (default enabled)
-//! * `compress` - enables content encoding compression support (default enabled)
+//! * `cookie` - enables http cookie support
+//! * `compress` - enables content encoding compression support
 //! * `openssl` - enables ssl support via `openssl` crate, supports `http/2`
 //! * `rustls` - enables ssl support via `rustls` crate, supports `http/2`
-//! * `secure-cookies` - enables secure cookies support, includes `ring` crate as
-//!   dependency
 #![allow(clippy::type_complexity, clippy::new_without_default)]
 
 mod app;
@@ -81,7 +73,7 @@ mod extract;
 pub mod guard;
 mod handler;
 mod info;
-// pub mod middleware;
+pub mod middleware;
 mod request;
 mod resource;
 mod responder;
@@ -92,14 +84,14 @@ mod server;
 mod service;
 pub mod test;
 pub mod types;
-mod web;
+mod util;
 
-// #[doc(hidden)]
-// pub use actix_web_codegen::*;
+pub use ntex_web_macros::*;
 
 pub use crate::http::Response as HttpResponse;
 
 pub use self::app::App;
+pub use self::config::ServiceConfig;
 pub use self::data::Data;
 pub use self::extract::FromRequest;
 pub use self::request::HttpRequest;
@@ -109,20 +101,15 @@ pub use self::route::Route;
 pub use self::scope::Scope;
 pub use self::server::HttpServer;
 pub use self::service::WebService;
-pub use self::web::*;
+pub use self::util::*;
 
 pub mod dev {
     //! The `actix-web` prelude for library developers
     //!
     //! The purpose of this module is to alleviate imports of many common actix
     //! traits by adding a glob import to the top of actix heavy modules:
-    //!
-    //! ```
-    //! # #![allow(unused_imports)]
-    //! use actix_web::dev::*;
-    //! ```
 
-    pub use crate::web::config::{AppConfig, AppService, ServiceConfig};
+    pub use crate::web::config::{AppConfig, AppService};
     #[doc(hidden)]
     pub use crate::web::handler::Factory;
     pub use crate::web::info::ConnectionInfo;

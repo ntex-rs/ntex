@@ -47,8 +47,8 @@ pub trait FromRequest: Sized {
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{web, dev, App, Error, HttpRequest, FromRequest};
-/// use actix_web::error::ErrorBadRequest;
+/// use ntex::http;
+/// use ntex::web::{self, dev, App, HttpRequest, FromRequest};
 /// use futures::future::{ok, err, Ready};
 /// use serde_derive::Deserialize;
 /// use rand;
@@ -59,15 +59,15 @@ pub trait FromRequest: Sized {
 /// }
 ///
 /// impl FromRequest for Thing {
-///     type Error = Error;
+///     type Error = http::Error;
 ///     type Future = Ready<Result<Self, Self::Error>>;
 ///     type Config = ();
 ///
-///     fn from_request(req: &HttpRequest, payload: &mut dev::Payload) -> Self::Future {
+///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
 ///         if rand::random() {
 ///             ok(Thing { name: "thingy".into() })
 ///         } else {
-///             err(ErrorBadRequest("no luck"))
+///             err(http::error::ErrorBadRequest("no luck"))
 ///         }
 ///
 ///     }
@@ -119,8 +119,8 @@ where
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{web, dev, App, Result, Error, HttpRequest, FromRequest};
-/// use actix_web::error::ErrorBadRequest;
+/// use ntex::http;
+/// use ntex::web::{self, App, HttpRequest, FromRequest};
 /// use futures::future::{ok, err, Ready};
 /// use serde_derive::Deserialize;
 /// use rand;
@@ -131,21 +131,21 @@ where
 /// }
 ///
 /// impl FromRequest for Thing {
-///     type Error = Error;
-///     type Future = Ready<Result<Thing, Error>>;
+///     type Error = http::Error;
+///     type Future = Ready<Result<Thing, http::Error>>;
 ///     type Config = ();
 ///
-///     fn from_request(req: &HttpRequest, payload: &mut dev::Payload) -> Self::Future {
+///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
 ///         if rand::random() {
 ///             ok(Thing { name: "thingy".into() })
 ///         } else {
-///             err(ErrorBadRequest("no luck"))
+///             err(http::error::ErrorBadRequest("no luck"))
 ///         }
 ///     }
 /// }
 ///
 /// /// extract `Thing` from request
-/// async fn index(supplied_thing: Result<Thing>) -> String {
+/// async fn index(supplied_thing: Result<Thing, http::Error>) -> String {
 ///     match supplied_thing {
 ///         Ok(thing) => format!("Got thing: {:?}", thing),
 ///         Err(e) => format!("Error extracting thing: {}", e)
@@ -265,13 +265,13 @@ tuple_from_req!(TupleFromRequest10, (0, A), (1, B), (2, C), (3, D), (4, E), (5, 
 
 #[cfg(test)]
 mod tests {
-    use actix_http::http::header;
     use bytes::Bytes;
     use serde_derive::Deserialize;
 
     use super::*;
-    use crate::test::TestRequest;
-    use crate::types::{Form, FormConfig};
+    use crate::http::header;
+    use crate::web::test::TestRequest;
+    use crate::web::types::{Form, FormConfig};
 
     #[derive(Deserialize, Debug, PartialEq)]
     struct Info {

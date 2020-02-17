@@ -21,17 +21,17 @@ use crate::web::FromRequest;
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{web, App};
+/// use ntex::web;
 ///
 /// /// extract path info from "/{username}/{count}/index.html" url
 /// /// {username} - deserializes to a String
 /// /// {count} -  - deserializes to a u32
-/// async fn index(info: web::Path<(String, u32)>) -> String {
+/// async fn index(info: web::types::Path<(String, u32)>) -> String {
 ///     format!("Welcome {}! {}", info.0, info.1)
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/{count}/index.html") // <- define path parameters
 ///              .route(web::get().to(index))               // <- register handler with `Path` extractor
 ///     );
@@ -42,7 +42,7 @@ use crate::web::FromRequest;
 /// implements `Deserialize` trait from *serde*.
 ///
 /// ```rust
-/// use actix_web::{web, App, Error};
+/// use ntex::{http, web};
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize)]
@@ -51,12 +51,12 @@ use crate::web::FromRequest;
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::Path<Info>) -> Result<String, Error> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, http::Error> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/index.html") // <- define path parameters
 ///              .route(web::get().to(index)) // <- use handler with Path` extractor
 ///     );
@@ -116,17 +116,17 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// ## Example
 ///
 /// ```rust
-/// use actix_web::{web, App};
+/// use ntex::web;
 ///
 /// /// extract path info from "/{username}/{count}/index.html" url
 /// /// {username} - deserializes to a String
 /// /// {count} -  - deserializes to a u32
-/// async fn index(info: web::Path<(String, u32)>) -> String {
+/// async fn index(info: web::types::Path<(String, u32)>) -> String {
 ///     format!("Welcome {}! {}", info.0, info.1)
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/{count}/index.html") // <- define path parameters
 ///              .route(web::get().to(index)) // <- register handler with `Path` extractor
 ///     );
@@ -137,7 +137,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// implements `Deserialize` trait from *serde*.
 ///
 /// ```rust
-/// use actix_web::{web, App, Error};
+/// use ntex::{web, http};
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize)]
@@ -146,12 +146,12 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::Path<Info>) -> Result<String, Error> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, http::Error> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///
 /// fn main() {
-///     let app = App::new().service(
+///     let app = web::App::new().service(
 ///         web::resource("/{username}/index.html") // <- define path parameters
 ///              .route(web::get().to(index)) // <- use handler with Path` extractor
 ///     );
@@ -195,8 +195,8 @@ where
 /// Path extractor configuration
 ///
 /// ```rust
-/// use actix_web::web::PathConfig;
-/// use actix_web::{error, web, App, FromRequest, HttpResponse};
+/// use ntex::http::error;
+/// use ntex::web::{self, App, FromRequest, HttpResponse};
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize, Debug)]
@@ -208,14 +208,14 @@ where
 /// }
 ///
 /// // deserialize `Info` from request's path
-/// async fn index(folder: web::Path<Folder>) -> String {
+/// async fn index(folder: web::types::Path<Folder>) -> String {
 ///     format!("Selected folder: {:?}!", folder)
 /// }
 ///
 /// fn main() {
 ///     let app = App::new().service(
 ///         web::resource("/messages/{folder}")
-///             .app_data(PathConfig::default().error_handler(|err, req| {
+///             .app_data(web::types::PathConfig::default().error_handler(|err, req| {
 ///                 error::InternalError::from_response(
 ///                     err,
 ///                     HttpResponse::Conflict().finish(),
@@ -255,8 +255,9 @@ mod tests {
     use serde_derive::Deserialize;
 
     use super::*;
-    use crate::test::TestRequest;
-    use crate::{error, http, HttpResponse};
+    use crate::http::{error, StatusCode};
+    use crate::web::test::TestRequest;
+    use crate::web::HttpResponse;
 
     #[derive(Deserialize, Debug, Display)]
     #[display(fmt = "MyStruct({}, {})", key, value)]
@@ -361,7 +362,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_custom_err_handler() {
         let (req, mut pl) = TestRequest::with_uri("/name/user1/")
-            .app_data(PathConfig::default().error_handler(|err, _| {
+            .data(PathConfig::default().error_handler(|err, _| {
                 error::InternalError::from_response(
                     err,
                     HttpResponse::Conflict().finish(),
@@ -375,6 +376,6 @@ mod tests {
             .unwrap_err();
         let res: HttpResponse = s.into();
 
-        assert_eq!(res.status(), http::StatusCode::CONFLICT);
+        assert_eq!(res.status(), StatusCode::CONFLICT);
     }
 }

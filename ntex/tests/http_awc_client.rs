@@ -6,22 +6,20 @@ use std::time::Duration;
 
 use brotli2::write::BrotliEncoder;
 use bytes::Bytes;
+use coo_kie::Cookie;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use futures::future::ok;
 use rand::Rng;
 
-use actix_http::HttpService;
-use actix_http_test::test_server;
-use actix_service::{map_config, pipeline_factory};
-use actix_web::dev::{AppConfig, BodyEncoding};
-use actix_web::http::Cookie;
-use actix_web::middleware::Compress;
-use actix_web::{
-    http::header, test, web, App, Error, HttpMessage, HttpRequest, HttpResponse,
-};
-use awc::error::SendRequestError;
+use ntex::http::client::{error::SendRequestError, Client, Connector};
+use ntex::http::test::server as test_server;
+use ntex::http::{header, Error, HttpMessage, HttpService};
+use ntex::service::{map_config, pipeline_factory};
+use ntex::web::dev::{AppConfig, BodyEncoding};
+use ntex::web::middleware::Compress;
+use ntex::web::{self, test, App, HttpRequest, HttpResponse};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -45,7 +43,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World";
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_simple() {
     let srv = test::start(|| {
         App::new()
@@ -72,11 +70,12 @@ async fn test_simple() {
     assert!(response.status().is_success());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_json() {
     let srv = test::start(|| {
         App::new().service(
-            web::resource("/").route(web::to(|_: web::Json<String>| HttpResponse::Ok())),
+            web::resource("/")
+                .route(web::to(|_: web::types::Json<String>| HttpResponse::Ok())),
         )
     });
 
@@ -88,11 +87,11 @@ async fn test_json() {
     assert!(response.status().is_success());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_form() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").route(web::to(
-            |_: web::Form<HashMap<String, String>>| HttpResponse::Ok(),
+            |_: web::types::Form<HashMap<String, String>>| HttpResponse::Ok(),
         )))
     });
 
@@ -104,7 +103,7 @@ async fn test_form() {
     assert!(response.status().is_success());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_timeout() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
@@ -113,14 +112,14 @@ async fn test_timeout() {
         })))
     });
 
-    let connector = awc::Connector::new()
+    let connector = Connector::new()
         .connector(actix_connect::new_connector(
             actix_connect::start_default_resolver(),
         ))
         .timeout(Duration::from_secs(15))
         .finish();
 
-    let client = awc::Client::build()
+    let client = Client::build()
         .connector(connector)
         .timeout(Duration::from_millis(50))
         .finish();
@@ -132,7 +131,7 @@ async fn test_timeout() {
     }
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_timeout_override() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
@@ -141,7 +140,7 @@ async fn test_timeout_override() {
         })))
     });
 
-    let client = awc::Client::build()
+    let client = Client::build()
         .timeout(Duration::from_millis(50000))
         .finish();
     let request = client
@@ -154,7 +153,7 @@ async fn test_timeout_override() {
     }
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_connection_reuse() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
@@ -175,7 +174,7 @@ async fn test_connection_reuse() {
         )
     });
 
-    let client = awc::Client::default();
+    let client = Client::default();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -191,7 +190,7 @@ async fn test_connection_reuse() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_connection_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
@@ -212,7 +211,7 @@ async fn test_connection_force_close() {
         )
     });
 
-    let client = awc::Client::default();
+    let client = Client::default();
 
     // req 1
     let request = client.get(srv.url("/")).force_close().send();
@@ -228,7 +227,7 @@ async fn test_connection_force_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_connection_server_close() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
@@ -251,7 +250,7 @@ async fn test_connection_server_close() {
         )
     });
 
-    let client = awc::Client::default();
+    let client = Client::default();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -267,7 +266,7 @@ async fn test_connection_server_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_connection_wait_queue() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
@@ -289,8 +288,8 @@ async fn test_connection_wait_queue() {
         )
     });
 
-    let client = awc::Client::build()
-        .connector(awc::Connector::new().limit(1).finish())
+    let client = Client::build()
+        .connector(Connector::new().limit(1).finish())
         .finish();
 
     // req 1
@@ -314,7 +313,7 @@ async fn test_connection_wait_queue() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_connection_wait_queue_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
@@ -337,8 +336,8 @@ async fn test_connection_wait_queue_force_close() {
         )
     });
 
-    let client = awc::Client::build()
-        .connector(awc::Connector::new().limit(1).finish())
+    let client = Client::build()
+        .connector(Connector::new().limit(1).finish())
         .finish();
 
     // req 1
@@ -362,7 +361,7 @@ async fn test_connection_wait_queue_force_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_with_query_parameter() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").to(|req: HttpRequest| {
@@ -374,15 +373,11 @@ async fn test_with_query_parameter() {
         }))
     });
 
-    let res = awc::Client::new()
-        .get(srv.url("/?qp=5"))
-        .send()
-        .await
-        .unwrap();
+    let res = Client::new().get(srv.url("/?qp=5")).send().await.unwrap();
     assert!(res.status().is_success());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_no_decompress() {
     let srv = test::start(|| {
         App::new()
@@ -394,7 +389,7 @@ async fn test_no_decompress() {
             })))
     });
 
-    let mut res = awc::Client::new()
+    let mut res = Client::new()
         .get(srv.url("/"))
         .no_decompress()
         .send()
@@ -411,7 +406,7 @@ async fn test_no_decompress() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 
     // POST
-    let mut res = awc::Client::new()
+    let mut res = Client::new()
         .post(srv.url("/"))
         .no_decompress()
         .send()
@@ -426,7 +421,7 @@ async fn test_no_decompress() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_client_gzip_encoding() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").route(web::to(|| {
@@ -449,7 +444,7 @@ async fn test_client_gzip_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_client_gzip_encoding_large() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").route(web::to(|| {
@@ -472,7 +467,7 @@ async fn test_client_gzip_encoding_large() {
     assert_eq!(bytes, Bytes::from(STR.repeat(10)));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_client_gzip_encoding_large_random() {
     let data = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
@@ -499,7 +494,7 @@ async fn test_client_gzip_encoding_large_random() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_client_brotli_encoding() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").route(web::to(|data: Bytes| {
@@ -521,7 +516,7 @@ async fn test_client_brotli_encoding() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_client_brotli_encoding_large_random() {
     let data = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
@@ -549,7 +544,7 @@ async fn test_client_brotli_encoding_large_random() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
-// #[actix_rt::test]
+// #[ntex::test]
 // async fn test_client_deflate_encoding() {
 //     let srv = test::TestServer::start(|app| {
 //         app.handler(|req: &HttpRequest| {
@@ -577,7 +572,7 @@ async fn test_client_brotli_encoding_large_random() {
 //     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 // }
 
-// #[actix_rt::test]
+// #[ntex::test]
 // async fn test_client_deflate_encoding_large_random() {
 //     let data = rand::thread_rng()
 //         .sample_iter(&rand::distributions::Alphanumeric)
@@ -610,7 +605,7 @@ async fn test_client_brotli_encoding_large_random() {
 //     assert_eq!(bytes, Bytes::from(data));
 // }
 
-// #[actix_rt::test]
+// #[ntex::test]
 // async fn test_client_streaming_explicit() {
 //     let srv = test::TestServer::start(|app| {
 //         app.handler(|req: &HttpRequest| {
@@ -637,7 +632,7 @@ async fn test_client_brotli_encoding_large_random() {
 //     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 // }
 
-// #[actix_rt::test]
+// #[ntex::test]
 // async fn test_body_streaming_implicit() {
 //     let srv = test::TestServer::start(|app| {
 //         app.handler(|_| {
@@ -657,7 +652,7 @@ async fn test_client_brotli_encoding_large_random() {
 //     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 // }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_client_cookie_handling() {
     use std::io::{Error as IoError, ErrorKind};
 
@@ -726,7 +721,7 @@ async fn test_client_cookie_handling() {
     assert_eq!(c2, cookie2);
 }
 
-// #[actix_rt::test]
+// #[ntex::test]
 // fn client_read_until_eof() {
 //     let addr = test::TestServer::unused_addr();
 
@@ -756,7 +751,7 @@ async fn test_client_cookie_handling() {
 //     assert_eq!(bytes, Bytes::from_static(b"welcome!"));
 // }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn client_basic_auth() {
     let srv = test::start(|| {
         App::new().route(
@@ -784,7 +779,7 @@ async fn client_basic_auth() {
     assert!(response.status().is_success());
 }
 
-#[actix_rt::test]
+#[ntex::test]
 async fn client_bearer_auth() {
     let srv = test::start(|| {
         App::new().route(

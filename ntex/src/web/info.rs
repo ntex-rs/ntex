@@ -184,7 +184,7 @@ impl ConnectionInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::TestRequest;
+    use crate::web::test::TestRequest;
 
     #[test]
     fn test_forwarded() {

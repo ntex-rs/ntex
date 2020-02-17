@@ -30,7 +30,8 @@ pub trait Responder {
     /// Override a status code for a Responder.
     ///
     /// ```rust
-    /// use actix_web::{HttpRequest, Responder, http::StatusCode};
+    /// use ntex::http::StatusCode;
+    /// use ntex::web::{HttpRequest, Responder};
     ///
     /// fn index(req: HttpRequest) -> impl Responder {
     ///     "Welcome!".with_status(StatusCode::OK)
@@ -47,7 +48,7 @@ pub trait Responder {
     /// Add header to the Responder's response.
     ///
     /// ```rust
-    /// use actix_web::{web, HttpRequest, Responder};
+    /// use ntex::web::{self, HttpRequest, Responder};
     /// use serde::Serialize;
     ///
     /// #[derive(Serialize)]
@@ -56,7 +57,7 @@ pub trait Responder {
     /// }
     ///
     /// fn index(req: HttpRequest) -> impl Responder {
-    ///     web::Json(
+    ///     web::types::Json(
     ///         MyObj{name: "Name".to_string()}
     ///     )
     ///     .with_header("x-version", "1.2.3")
@@ -233,7 +234,8 @@ impl<T: Responder> CustomResponder<T> {
     /// Override a status code for the Responder's response.
     ///
     /// ```rust
-    /// use actix_web::{HttpRequest, Responder, http::StatusCode};
+    /// use ntex::http::StatusCode;
+    /// use ntex::web::{HttpRequest, Responder};
     ///
     /// fn index(req: HttpRequest) -> impl Responder {
     ///     "Welcome!".with_status(StatusCode::OK)
@@ -248,7 +250,7 @@ impl<T: Responder> CustomResponder<T> {
     /// Add header to the Responder's response.
     ///
     /// ```rust
-    /// use actix_web::{web, HttpRequest, Responder};
+    /// use ntex::web::{self, HttpRequest, Responder};
     /// use serde::Serialize;
     ///
     /// #[derive(Serialize)]
@@ -257,7 +259,7 @@ impl<T: Responder> CustomResponder<T> {
     /// }
     ///
     /// fn index(req: HttpRequest) -> impl Responder {
-    ///     web::Json(
+    ///     web::types::Json(
     ///         MyObj{name: "Name".to_string()}
     ///     )
     ///     .with_header("x-version", "1.2.3")
@@ -333,7 +335,8 @@ impl<T: Responder> Future for CustomResponderFut<T> {
 /// Combines two different responder types into a single type
 ///
 /// ```rust
-/// use actix_web::{Either, Error, HttpResponse};
+/// use ntex::http::Error;
+/// use ntex::web::{Either, HttpResponse};
 ///
 /// type RegisterResult = Either<HttpResponse, Result<HttpResponse, Error>>;
 ///
@@ -455,15 +458,16 @@ pub(crate) mod tests {
     use bytes::{Bytes, BytesMut};
 
     use super::*;
-    use crate::dev::{Body, ResponseBody};
-    use crate::http::{header::CONTENT_TYPE, HeaderValue, StatusCode};
-    use crate::test::{init_service, TestRequest};
-    use crate::{error, web, App, HttpResponse};
+    use crate::http::body::{Body, ResponseBody};
+    use crate::http::header::{HeaderValue, CONTENT_TYPE};
+    use crate::http::{error, Response as HttpResponse, StatusCode};
+    use crate::web;
+    use crate::web::test::{init_service, TestRequest};
 
     #[actix_rt::test]
     async fn test_option_responder() {
         let mut srv = init_service(
-            App::new()
+            web::App::new()
                 .service(
                     web::resource("/none").to(|| async { Option::<&'static str>::None }),
                 )
@@ -484,32 +488,6 @@ pub(crate) mod tests {
                 assert_eq!(bytes, Bytes::from_static(b"some"));
             }
             _ => panic!(),
-        }
-    }
-
-    pub(crate) trait BodyTest {
-        fn bin_ref(&self) -> &[u8];
-        fn body(&self) -> &Body;
-    }
-
-    impl BodyTest for ResponseBody<Body> {
-        fn bin_ref(&self) -> &[u8] {
-            match self {
-                ResponseBody::Body(ref b) => match b {
-                    Body::Bytes(ref bin) => &bin,
-                    _ => panic!(),
-                },
-                ResponseBody::Other(ref b) => match b {
-                    Body::Bytes(ref bin) => &bin,
-                    _ => panic!(),
-                },
-            }
-        }
-        fn body(&self) -> &Body {
-            match self {
-                ResponseBody::Body(ref b) => b,
-                ResponseBody::Other(ref b) => b,
-            }
         }
     }
 

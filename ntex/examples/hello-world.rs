@@ -1,10 +1,10 @@
 use std::{env, io};
 
-use actix_http::{HttpService, Response};
-use actix_server::Server;
 use futures::future;
-use http::header::HeaderValue;
 use log::info;
+use ntex::http::header::HeaderValue;
+use ntex::http::{HttpService, Response};
+use ntex::server::Server;
 
 #[actix_rt::main]
 async fn main() -> io::Result<()> {
