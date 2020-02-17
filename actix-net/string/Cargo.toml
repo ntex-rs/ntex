@@ -1,0 +1,18 @@
+[package]
+name = "bytestring"
+version = "0.1.4"
+authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+description = "A UTF-8 encoded string with Bytes as a storage"
+keywords = ["actix"]
+homepage = "https://actix.rs"
+repository = "https://github.com/actix/actix-net.git"
+documentation = "https://docs.rs/bytestring/"
+license = "MIT/Apache-2.0"
+edition = "2018"
+
+[lib]
+name = "bytestring"
+path = "src/lib.rs"
+
+[dependencies]
+bytes = "0.5.3"
