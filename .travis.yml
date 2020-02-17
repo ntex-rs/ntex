@@ -35,12 +35,11 @@ before_script:
 
 script:
   - cargo update
-  - cargo check --all --no-default-features
+  - cargo check --all
   - |
     if [[ "$TRAVIS_RUST_VERSION" == "stable" || "$TRAVIS_RUST_VERSION" == "beta" ]]; then
       cargo test --all-features --all -- --nocapture
-      cd actix-http; cargo test --no-default-features --features="rustls" -- --nocapture; cd ..
-      cd awc; cargo test --no-default-features --features="rustls" -- --nocapture; cd ..
+      cd ntex; cargo test --no-default-features --features="rustls" -- --nocapture; cd ..
     fi
 
 # Upload docs
