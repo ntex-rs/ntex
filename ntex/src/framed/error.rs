@@ -26,9 +26,15 @@ where
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            ServiceError::Service(ref e) => write!(fmt, "ServiceError::Service({:?})", e),
-            ServiceError::Encoder(ref e) => write!(fmt, "ServiceError::Encoder({:?})", e),
-            ServiceError::Decoder(ref e) => write!(fmt, "ServiceError::Encoder({:?})", e),
+            ServiceError::Service(ref e) => {
+                write!(fmt, "ServiceError::Service({:?})", e)
+            }
+            ServiceError::Encoder(ref e) => {
+                write!(fmt, "ServiceError::Encoder({:?})", e)
+            }
+            ServiceError::Decoder(ref e) => {
+                write!(fmt, "ServiceError::Encoder({:?})", e)
+            }
         }
     }
 }

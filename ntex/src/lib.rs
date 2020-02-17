@@ -15,6 +15,7 @@ extern crate log;
 #[cfg(not(test))] // Work around for rust-lang/rust#62127
 pub use actix_macros::{main, test};
 
+pub mod framed;
 pub mod http;
 pub mod server;
 pub mod web;

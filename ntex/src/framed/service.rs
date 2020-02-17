@@ -10,9 +10,9 @@ use either::Either;
 use futures::{ready, Stream};
 use pin_project::project;
 
-use crate::connect::{Connect, ConnectResult};
-use crate::dispatcher::Dispatcher;
-use crate::error::ServiceError;
+use super::connect::{Connect, ConnectResult};
+use super::dispatcher::Dispatcher;
+use super::error::ServiceError;
 
 type RequestItem<U> = <U as Decoder>::Item;
 type ResponseItem<U> = Option<<U as Encoder>::Item>;
@@ -26,7 +26,10 @@ pub struct Builder<St, C, Io, Codec, Out> {
 
 impl<St, C, Io, Codec, Out> Builder<St, C, Io, Codec, Out>
 where
-    C: Service<Request = Connect<Io, Codec>, Response = ConnectResult<Io, St, Codec, Out>>,
+    C: Service<
+        Request = Connect<Io, Codec>,
+        Response = ConnectResult<Io, St, Codec, Out>,
+    >,
     Io: AsyncRead + AsyncWrite,
     Codec: Decoder + Encoder,
     <Codec as Encoder>::Item: 'static,
@@ -38,7 +41,10 @@ where
     where
         F: IntoService<C>,
         Io: AsyncRead + AsyncWrite,
-        C: Service<Request = Connect<Io, Codec>, Response = ConnectResult<Io, St, Codec, Out>>,
+        C: Service<
+            Request = Connect<Io, Codec>,
+            Response = ConnectResult<Io, St, Codec, Out>,
+        >,
         Codec: Decoder + Encoder,
         Out: Stream<Item = <Codec as Encoder>::Item>,
     {
@@ -106,7 +112,10 @@ where
         }
     }
 
-    pub fn build<F, T, Cfg>(self, service: F) -> FramedService<St, C, T, Io, Codec, Out, Cfg>
+    pub fn build<F, T, Cfg>(
+        self,
+        service: F,
+    ) -> FramedService<St, C, T, Io, Codec, Out, Cfg>
     where
         F: IntoServiceFactory<T>,
         T: ServiceFactory<
@@ -221,7 +230,8 @@ where
     <Codec as Encoder>::Error: std::fmt::Debug,
     Out: Stream<Item = <Codec as Encoder>::Item> + Unpin,
 {
-    type Output = Result<FramedServiceImpl<St, C::Service, T, Io, Codec, Out>, C::InitError>;
+    type Output =
+        Result<FramedServiceImpl<St, C::Service, T, Io, Codec, Out>, C::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -244,7 +254,10 @@ pub struct FramedServiceImpl<St, C, T, Io, Codec, Out> {
 impl<St, C, T, Io, Codec, Out> Service for FramedServiceImpl<St, C, T, Io, Codec, Out>
 where
     Io: AsyncRead + AsyncWrite,
-    C: Service<Request = Connect<Io, Codec>, Response = ConnectResult<Io, St, Codec, Out>>,
+    C: Service<
+        Request = Connect<Io, Codec>,
+        Response = ConnectResult<Io, St, Codec, Out>,
+    >,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -281,7 +294,10 @@ where
 #[pin_project::pin_project]
 pub struct FramedServiceImplResponse<St, Io, Codec, Out, C, T>
 where
-    C: Service<Request = Connect<Io, Codec>, Response = ConnectResult<Io, St, Codec, Out>>,
+    C: Service<
+        Request = Connect<Io, Codec>,
+        Response = ConnectResult<Io, St, Codec, Out>,
+    >,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -301,9 +317,13 @@ where
     inner: FramedServiceImplResponseInner<St, Io, Codec, Out, C, T>,
 }
 
-impl<St, Io, Codec, Out, C, T> Future for FramedServiceImplResponse<St, Io, Codec, Out, C, T>
+impl<St, Io, Codec, Out, C, T> Future
+    for FramedServiceImplResponse<St, Io, Codec, Out, C, T>
 where
-    C: Service<Request = Connect<Io, Codec>, Response = ConnectResult<Io, St, Codec, Out>>,
+    C: Service<
+        Request = Connect<Io, Codec>,
+        Response = ConnectResult<Io, St, Codec, Out>,
+    >,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -339,7 +359,10 @@ where
 #[pin_project::pin_project]
 enum FramedServiceImplResponseInner<St, Io, Codec, Out, C, T>
 where
-    C: Service<Request = Connect<Io, Codec>, Response = ConnectResult<Io, St, Codec, Out>>,
+    C: Service<
+        Request = Connect<Io, Codec>,
+        Response = ConnectResult<Io, St, Codec, Out>,
+    >,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -362,7 +385,10 @@ where
 
 impl<St, Io, Codec, Out, C, T> FramedServiceImplResponseInner<St, Io, Codec, Out, C, T>
 where
-    C: Service<Request = Connect<Io, Codec>, Response = ConnectResult<Io, St, Codec, Out>>,
+    C: Service<
+        Request = Connect<Io, Codec>,
+        Response = ConnectResult<Io, St, Codec, Out>,
+    >,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -388,15 +414,19 @@ where
     > {
         #[project]
         match self.project() {
-            FramedServiceImplResponseInner::Connect(fut, handler) => match fut.poll(cx) {
-                Poll::Ready(Ok(res)) => Either::Left(FramedServiceImplResponseInner::Handler(
-                    handler.new_service(res.state),
-                    Some(res.framed),
-                    res.out,
-                )),
-                Poll::Pending => Either::Right(Poll::Pending),
-                Poll::Ready(Err(e)) => Either::Right(Poll::Ready(Err(e.into()))),
-            },
+            FramedServiceImplResponseInner::Connect(fut, handler) => {
+                match fut.poll(cx) {
+                    Poll::Ready(Ok(res)) => {
+                        Either::Left(FramedServiceImplResponseInner::Handler(
+                            handler.new_service(res.state),
+                            Some(res.framed),
+                            res.out,
+                        ))
+                    }
+                    Poll::Pending => Either::Right(Poll::Pending),
+                    Poll::Ready(Err(e)) => Either::Right(Poll::Ready(Err(e.into()))),
+                }
+            }
             FramedServiceImplResponseInner::Handler(fut, framed, out) => {
                 match fut.poll(cx) {
                     Poll::Ready(Ok(handler)) => {

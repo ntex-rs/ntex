@@ -1,7 +1,7 @@
-use ntex::http::{Error, StatusCode, Method};
+use futures::{future, Future};
+use ntex::http::{Error, Method, StatusCode};
 use ntex::web::{test, types::Path, App, HttpResponse, Responder};
 use ntex_web_macros::{connect, delete, get, head, options, patch, post, put, trace};
-use futures::{future, Future};
 
 // Make sure that we can name function as 'config'
 #[get("/config")]

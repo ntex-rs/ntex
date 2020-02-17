@@ -8,7 +8,7 @@ use actix_utils::mpsc;
 use futures::Stream;
 use log::debug;
 
-use crate::error::ServiceError;
+use super::error::ServiceError;
 
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;
@@ -97,7 +97,8 @@ where
                     let item = match self.framed.next_item(cx) {
                         Poll::Ready(Some(Ok(el))) => el,
                         Poll::Ready(Some(Err(err))) => {
-                            self.state = FramedState::FramedError(ServiceError::Decoder(err));
+                            self.state =
+                                FramedState::FramedError(ServiceError::Decoder(err));
                             return true;
                         }
                         Poll::Pending => return false,
@@ -136,7 +137,8 @@ where
                 match Pin::new(&mut self.rx).poll_next(cx) {
                     Poll::Ready(Some(Ok(msg))) => {
                         if let Err(err) = self.framed.write(msg) {
-                            self.state = FramedState::FramedError(ServiceError::Encoder(err));
+                            self.state =
+                                FramedState::FramedError(ServiceError::Encoder(err));
                             return true;
                         }
                         continue;
@@ -175,7 +177,8 @@ where
                     Poll::Ready(Ok(_)) => (),
                     Poll::Ready(Err(err)) => {
                         debug!("Error sending data: {:?}", err);
-                        self.state = FramedState::FramedError(ServiceError::Encoder(err));
+                        self.state =
+                            FramedState::FramedError(ServiceError::Encoder(err));
                         return true;
                     }
                 }
@@ -235,7 +238,9 @@ where
                 };
                 Poll::Ready(Ok(()))
             }
-            FramedState::FramedError(_) => Poll::Ready(Err(self.state.take_framed_error())),
+            FramedState::FramedError(_) => {
+                Poll::Ready(Err(self.state.take_framed_error()))
+            }
             FramedState::Stopping => Poll::Ready(Ok(())),
         }
     }
