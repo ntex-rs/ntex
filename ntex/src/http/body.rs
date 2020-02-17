@@ -94,14 +94,6 @@ impl ResponseBody<Body> {
             },
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn body(&self) -> &Body {
-        match self {
-            ResponseBody::Body(ref b) => b,
-            ResponseBody::Other(ref b) => b,
-        }
-    }
 }
 
 impl<B> ResponseBody<B> {
