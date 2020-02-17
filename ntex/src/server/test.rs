@@ -59,10 +59,7 @@ pub fn test_server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
 
     let (system, addr) = rx.recv().unwrap();
 
-    TestServer {
-        addr,
-        system,
-    }
+    TestServer { addr, system }
 }
 
 /// Test server controller

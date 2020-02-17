@@ -97,6 +97,16 @@ pub trait Service {
     /// 2. In case of chained services, `.poll_ready()` get called for all services at once.
     fn poll_ready(&mut self, ctx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>>;
 
+    #[inline]
+    #[allow(unused_variables)]
+    /// Shutdown service.
+    ///
+    /// Returns `Ready` when the service is properly shutdowned. This method might be called
+    /// after it returns `Ready`.
+    fn poll_shutdown(&mut self, ctx: &mut task::Context<'_>, is_error: bool) -> Poll<()> {
+        Poll::Ready(())
+    }
+
     /// Process the request and return the response asynchronously.
     ///
     /// This function is expected to be callable off task. As such,
@@ -108,6 +118,7 @@ pub trait Service {
     /// implementation must be resilient to this fact.
     fn call(&mut self, req: Self::Request) -> Self::Future;
 
+    #[inline]
     /// Map this service's output to a different type, returning a new service
     /// of the resulting type.
     ///
@@ -125,6 +136,7 @@ pub trait Service {
         crate::dev::Map::new(self, f)
     }
 
+    #[inline]
     /// Map this service's error to a different error, returning a new service.
     ///
     /// This function is similar to the `Result::map_err` where it will change

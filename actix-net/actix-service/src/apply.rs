@@ -82,10 +82,17 @@ where
     type Error = Err;
     type Future = R;
 
+    #[inline]
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(futures_util::ready!(self.service.poll_ready(cx)))
     }
 
+    #[inline]
+    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
+    }
+
+    #[inline]
     fn call(&mut self, req: In) -> Self::Future {
         (self.f)(req, &mut self.service)
     }

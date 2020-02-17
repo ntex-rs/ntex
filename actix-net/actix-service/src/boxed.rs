@@ -135,10 +135,17 @@ where
     type Error = Err;
     type Future = BoxFuture<Res, Err>;
 
+    #[inline]
     fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.0.poll_ready(ctx)
     }
 
+    #[inline]
+    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.0.poll_shutdown(cx, is_error)
+    }
+
+    #[inline]
     fn call(&mut self, req: Self::Request) -> Self::Future {
         Box::pin(self.0.call(req))
     }

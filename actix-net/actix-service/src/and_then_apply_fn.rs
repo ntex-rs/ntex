@@ -76,6 +76,18 @@ where
         }
     }
 
+    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        let srv = self.srv.get_mut();
+
+        if srv.0.poll_shutdown(cx, is_error).is_ready()
+            && srv.1.poll_shutdown(cx, is_error).is_ready()
+        {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+
     fn call(&mut self, req: A::Request) -> Self::Future {
         let fut = self.srv.get_mut().0.call(req);
         AndThenApplyFnFuture {

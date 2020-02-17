@@ -161,8 +161,13 @@ impl<T: Service> Service for Pipeline<T> {
     type Future = T::Future;
 
     #[inline]
-    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), T::Error>> {
-        self.service.poll_ready(ctx)
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), T::Error>> {
+        self.service.poll_ready(cx)
+    }
+
+    #[inline]
+    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
     }
 
     #[inline]

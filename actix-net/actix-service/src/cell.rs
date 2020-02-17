@@ -51,6 +51,10 @@ impl<T: crate::Service> crate::Service for Cell<T> {
         self.get_mut().poll_ready(cx)
     }
 
+    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.get_mut().poll_shutdown(cx, is_error)
+    }
+
     fn call(&mut self, req: Self::Request) -> Self::Future {
         self.get_mut().call(req)
     }

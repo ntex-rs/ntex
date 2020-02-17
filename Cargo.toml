@@ -3,3 +3,7 @@ members = [
   "ntex",
   "ntex-web-macros",
 ]
+
+[patch.crates-io]
+actix-server = { path = "actix-net/actix-server" }
+actix-service = { path = "actix-net/actix-service" }
