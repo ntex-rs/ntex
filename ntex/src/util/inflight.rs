@@ -84,6 +84,10 @@ where
         }
     }
 
+    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
+    }
+
     fn call(&mut self, req: T::Request) -> Self::Future {
         InFlightServiceResponse {
             fut: self.service.call(req),

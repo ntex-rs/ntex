@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use actix_service::{fn_factory, Service};
-use actix_utils::framed::Dispatcher;
 use bytes::Bytes;
 use futures::future;
 use futures::task::{Context, Poll};
 use futures::{Future, SinkExt, StreamExt};
 
+use ntex::framed::Dispatcher;
 use ntex::http::ws::handshake;
 use ntex::http::{body, h1, test, Error, HttpService, Request, Response};
 use ntex::ws;

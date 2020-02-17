@@ -4,11 +4,11 @@ use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use actix_service::Service;
-use actix_utils::mpsc;
 use futures::Stream;
 use log::debug;
 
 use super::error::ServiceError;
+use crate::channel::mpsc;
 
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;
@@ -61,6 +61,7 @@ enum FramedState<S: Service, U: Encoder + Decoder> {
     FramedError(ServiceError<S::Error, U>),
     FlushAndStop,
     Stopping,
+    Shutdown(Option<ServiceError<S::Error, U>>),
 }
 
 impl<S: Service, U: Encoder + Decoder> FramedState<S, U> {
@@ -210,17 +211,23 @@ where
                         return Poll::Pending;
                     }
                 }
-                Poll::Ready(Err(self.state.take_error()))
+                self.state = FramedState::Shutdown(Some(self.state.take_error()));
+                self.poll(cx)
             }
             FramedState::FlushAndStop => {
                 // drain service responses
                 match Pin::new(&mut self.rx).poll_next(cx) {
                     Poll::Ready(Some(Ok(msg))) => {
-                        if let Err(_) = self.framed.write(msg) {
-                            return Poll::Ready(Ok(()));
+                        if let Err(err) = self.framed.write(msg) {
+                            self.state =
+                                FramedState::Shutdown(Some(ServiceError::Encoder(err)));
+                            return self.poll(cx);
                         }
                     }
-                    Poll::Ready(Some(Err(_))) => return Poll::Ready(Ok(())),
+                    Poll::Ready(Some(Err(err))) => {
+                        self.state = FramedState::Shutdown(Some(err.into()));
+                        return self.poll(cx);
+                    }
                     Poll::Ready(None) | Poll::Pending => (),
                 }
 
@@ -236,12 +243,28 @@ where
                         Poll::Ready(_) => (),
                     }
                 };
-                Poll::Ready(Ok(()))
+                self.state = FramedState::Shutdown(None);
+                return self.poll(cx);
             }
             FramedState::FramedError(_) => {
-                Poll::Ready(Err(self.state.take_framed_error()))
+                self.state = FramedState::Shutdown(Some(self.state.take_framed_error()));
+                return self.poll(cx);
             }
-            FramedState::Stopping => Poll::Ready(Ok(())),
+            FramedState::Stopping => {
+                self.state = FramedState::Shutdown(None);
+                return self.poll(cx);
+            }
+            FramedState::Shutdown(ref mut err) => {
+                if self.service.poll_shutdown(cx, err.is_some()).is_ready() {
+                    if let Some(err) = err.take() {
+                        Poll::Ready(Err(err))
+                    } else {
+                        Poll::Ready(Ok(()))
+                    }
+                } else {
+                    Poll::Pending
+                }
+            }
         }
     }
 }

@@ -135,6 +135,10 @@ where
         self.service.poll_ready(cx).map_err(TimeoutError::Service)
     }
 
+    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
+    }
+
     fn call(&mut self, request: S::Request) -> Self::Future {
         TimeoutServiceResponse {
             fut: self.service.call(request),

@@ -7,8 +7,6 @@ use std::string::FromUtf8Error;
 use std::{fmt, io};
 
 use actix_codec::{Decoder, Encoder};
-use actix_utils::framed::DispatcherError as FramedDispatcherError;
-use actix_utils::timeout::TimeoutError;
 use bytes::BytesMut;
 use derive_more::{Display, From};
 use http::uri::InvalidUri;
@@ -25,6 +23,9 @@ pub use coo_kie::ParseError as CookieParseError;
 pub use actix_threadpool::BlockingError;
 pub use futures::channel::oneshot::Canceled;
 pub use http::Error as HttpError;
+
+use crate::framed::ServiceError as FramedDispatcherError;
+use crate::util::timeout::TimeoutError;
 
 use super::body::Body;
 use super::helpers::Writer;

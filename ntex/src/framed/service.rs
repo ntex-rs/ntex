@@ -281,6 +281,10 @@ where
         self.connect.poll_ready(cx).map_err(|e| e.into())
     }
 
+    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.connect.poll_shutdown(cx, is_error)
+    }
+
     fn call(&mut self, req: Io) -> Self::Future {
         FramedServiceImplResponse {
             inner: FramedServiceImplResponseInner::Connect(

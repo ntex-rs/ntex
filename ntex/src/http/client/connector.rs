@@ -8,9 +8,9 @@ use actix_connect::{
 };
 use actix_rt::net::TcpStream;
 use actix_service::{apply_fn, Service};
-use actix_utils::timeout::{TimeoutError, TimeoutService};
 
 use crate::http::{Protocol, Uri};
+use crate::util::timeout::{TimeoutError, TimeoutService};
 
 use super::connection::Connection;
 use super::error::ConnectError;

@@ -8,8 +8,8 @@ use std::task::{Context, Poll};
 
 use futures::{Sink, Stream};
 
-use crate::cell::Cell;
 use crate::task::LocalWaker;
+use crate::util::Cell;
 
 /// Creates a unbounded in-memory channel with buffered storage.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -74,7 +74,10 @@ impl<T> Clone for Sender<T> {
 impl<T> Sink<T> for Sender<T> {
     type Error = SendError<T>;
 
-    fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -82,11 +85,17 @@ impl<T> Sink<T> for Sender<T> {
         self.send(item)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), SendError<T>>> {
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Result<(), SendError<T>>> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_close(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 }
@@ -126,7 +135,10 @@ impl<T> Unpin for Receiver<T> {}
 impl<T> Stream for Receiver<T> {
     type Item = T;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
         if self.shared.strong_count() == 1 {
             // All senders have been dropped, so drain the buffer and end the
             // stream.

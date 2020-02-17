@@ -45,6 +45,16 @@ where
         }
     }
 
+    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        if self.left.poll_shutdown(cx, is_error).is_ready()
+            && self.right.poll_shutdown(cx, is_error).is_ready()
+        {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+
     fn call(&mut self, req: either::Either<A::Request, B::Request>) -> Self::Future {
         match req {
             either::Either::Left(req) => future::Either::Left(self.left.call(req)),
@@ -127,7 +137,11 @@ pub struct EitherNewService<A: ServiceFactory, B: ServiceFactory> {
 impl<A, B> Future for EitherNewService<A, B>
 where
     A: ServiceFactory,
-    B: ServiceFactory<Response = A::Response, Error = A::Error, InitError = A::InitError>,
+    B: ServiceFactory<
+        Response = A::Response,
+        Error = A::Error,
+        InitError = A::InitError,
+    >,
 {
     type Output = Result<EitherService<A::Service, B::Service>, A::InitError>;
 

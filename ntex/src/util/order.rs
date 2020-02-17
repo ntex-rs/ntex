@@ -10,7 +10,7 @@ use std::task::{Context, Poll};
 use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, Ready};
 
-use crate::oneshot;
+use crate::channel::oneshot;
 use crate::task::LocalWaker;
 
 struct Record<I, E> {
@@ -160,11 +160,17 @@ where
         }
 
         // check nested service
-        if let Poll::Pending = self.service.poll_ready(cx).map_err(InOrderError::Service)? {
+        if let Poll::Pending =
+            self.service.poll_ready(cx).map_err(InOrderError::Service)?
+        {
             Poll::Pending
         } else {
             Poll::Ready(Ok(()))
         }
+    }
+
+    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
     }
 
     fn call(&mut self, request: S::Request) -> Self::Future {

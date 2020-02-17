@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 use actix_service::{IntoService, Service};
 use futures::{FutureExt, Stream};
 
-use crate::mpsc;
+use crate::channel::mpsc;
 
 #[pin_project::pin_project]
 pub struct Dispatcher<S, T>

@@ -4,7 +4,8 @@ use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use actix_service::{IntoService, Service};
-use actix_utils::framed;
+
+use crate::framed;
 
 use super::{Codec, Frame, Message};
 
@@ -44,7 +45,7 @@ where
     S::Future: 'static,
     S::Error: 'static,
 {
-    type Output = Result<(), framed::DispatcherError<S::Error, Codec>>;
+    type Output = Result<(), framed::ServiceError<S::Error, Codec>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.inner).poll(cx)

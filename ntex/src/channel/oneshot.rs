@@ -6,8 +6,8 @@ use std::task::{Context, Poll};
 pub use futures::channel::oneshot::Canceled;
 use slab::Slab;
 
-use crate::cell::Cell;
 use crate::task::LocalWaker;
+use crate::util::Cell;
 
 /// Creates a new futures-aware, one-shot channel.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {

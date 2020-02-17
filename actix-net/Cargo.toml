@@ -10,7 +10,6 @@ members = [
   "actix-threadpool",
   "actix-tls",
   "actix-tracing",
-  "actix-utils",
   "router",
   "string",
 ]

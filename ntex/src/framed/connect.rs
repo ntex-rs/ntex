@@ -3,8 +3,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
-use actix_utils::mpsc::Receiver;
 use futures::Stream;
+
+use crate::channel::mpsc::Receiver;
 
 pub struct Connect<Io, Codec>
 where

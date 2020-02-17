@@ -1,61 +1,19 @@
 //! Framed dispatcher service and related utilities
 #![allow(type_alias_bounds)]
+use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::{fmt, mem};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use actix_service::{IntoService, Service};
 use futures::{Future, FutureExt, Stream};
 use log::debug;
 
-use crate::mpsc;
+use super::error::ServiceError;
+use crate::channel::mpsc;
 
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;
-
-/// Framed transport errors
-pub enum DispatcherError<E, U: Encoder + Decoder> {
-    Service(E),
-    Encoder(<U as Encoder>::Error),
-    Decoder(<U as Decoder>::Error),
-}
-
-impl<E, U: Encoder + Decoder> From<E> for DispatcherError<E, U> {
-    fn from(err: E) -> Self {
-        DispatcherError::Service(err)
-    }
-}
-
-impl<E, U: Encoder + Decoder> fmt::Debug for DispatcherError<E, U>
-where
-    E: fmt::Debug,
-    <U as Encoder>::Error: fmt::Debug,
-    <U as Decoder>::Error: fmt::Debug,
-{
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            DispatcherError::Service(ref e) => write!(fmt, "DispatcherError::Service({:?})", e),
-            DispatcherError::Encoder(ref e) => write!(fmt, "DispatcherError::Encoder({:?})", e),
-            DispatcherError::Decoder(ref e) => write!(fmt, "DispatcherError::Decoder({:?})", e),
-        }
-    }
-}
-
-impl<E, U: Encoder + Decoder> fmt::Display for DispatcherError<E, U>
-where
-    E: fmt::Display,
-    <U as Encoder>::Error: fmt::Debug,
-    <U as Decoder>::Error: fmt::Debug,
-{
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            DispatcherError::Service(ref e) => write!(fmt, "{}", e),
-            DispatcherError::Encoder(ref e) => write!(fmt, "{:?}", e),
-            DispatcherError::Decoder(ref e) => write!(fmt, "{:?}", e),
-        }
-    }
-}
 
 pub enum Message<T> {
     Item(T),
@@ -84,21 +42,21 @@ where
 
 enum State<S: Service, U: Encoder + Decoder> {
     Processing,
-    Error(DispatcherError<S::Error, U>),
-    FramedError(DispatcherError<S::Error, U>),
+    Error(ServiceError<S::Error, U>),
+    FramedError(ServiceError<S::Error, U>),
     FlushAndStop,
     Stopping,
 }
 
 impl<S: Service, U: Encoder + Decoder> State<S, U> {
-    fn take_error(&mut self) -> DispatcherError<S::Error, U> {
+    fn take_error(&mut self) -> ServiceError<S::Error, U> {
         match mem::replace(self, State::Processing) {
             State::Error(err) => err,
             _ => panic!(),
         }
     }
 
-    fn take_framed_error(&mut self) -> DispatcherError<S::Error, U> {
+    fn take_framed_error(&mut self) -> ServiceError<S::Error, U> {
         match mem::replace(self, State::Processing) {
             State::FramedError(err) => err,
             _ => panic!(),
@@ -144,7 +102,9 @@ where
     }
 
     /// Get sink
-    pub fn get_sink(&self) -> mpsc::Sender<Result<Message<<U as Encoder>::Item>, S::Error>> {
+    pub fn get_sink(
+        &self,
+    ) -> mpsc::Sender<Result<Message<<U as Encoder>::Item>, S::Error>> {
         self.tx.clone()
     }
 
@@ -185,7 +145,7 @@ where
                     let item = match self.framed.next_item(cx) {
                         Poll::Ready(Some(Ok(el))) => el,
                         Poll::Ready(Some(Err(err))) => {
-                            self.state = State::FramedError(DispatcherError::Decoder(err));
+                            self.state = State::FramedError(ServiceError::Decoder(err));
                             return true;
                         }
                         Poll::Pending => return false,
@@ -202,7 +162,7 @@ where
                 }
                 Poll::Pending => return false,
                 Poll::Ready(Err(err)) => {
-                    self.state = State::Error(DispatcherError::Service(err));
+                    self.state = State::Error(ServiceError::Service(err));
                     return true;
                 }
             }
@@ -225,7 +185,7 @@ where
                 match Pin::new(&mut self.rx).poll_next(cx) {
                     Poll::Ready(Some(Ok(Message::Item(msg)))) => {
                         if let Err(err) = self.framed.write(msg) {
-                            self.state = State::FramedError(DispatcherError::Encoder(err));
+                            self.state = State::FramedError(ServiceError::Encoder(err));
                             return true;
                         }
                     }
@@ -234,7 +194,7 @@ where
                         return true;
                     }
                     Poll::Ready(Some(Err(err))) => {
-                        self.state = State::Error(DispatcherError::Service(err));
+                        self.state = State::Error(ServiceError::Service(err));
                         return true;
                     }
                     Poll::Ready(None) | Poll::Pending => break,
@@ -247,7 +207,7 @@ where
                     Poll::Ready(Ok(_)) => (),
                     Poll::Ready(Err(err)) => {
                         debug!("Error sending data: {:?}", err);
-                        self.state = State::FramedError(DispatcherError::Encoder(err));
+                        self.state = State::FramedError(ServiceError::Encoder(err));
                         return true;
                     }
                 }
@@ -271,7 +231,7 @@ where
     <U as Encoder>::Error: std::fmt::Debug,
     <U as Decoder>::Error: std::fmt::Debug,
 {
-    type Output = Result<(), DispatcherError<S::Error, U>>;
+    type Output = Result<(), ServiceError<S::Error, U>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
@@ -308,7 +268,9 @@ where
                         Poll::Ready(Ok(()))
                     }
                 }
-                State::FramedError(_) => Poll::Ready(Err(this.state.take_framed_error())),
+                State::FramedError(_) => {
+                    Poll::Ready(Err(this.state.take_framed_error()))
+                }
                 State::Stopping => Poll::Ready(Ok(())),
             };
         }

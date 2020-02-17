@@ -3,7 +3,7 @@ sudo: required
 dist: trusty
 
 cache:
-  # cargo: true
+  cargo: true
   apt: true
 
 matrix:
@@ -54,7 +54,7 @@ after_success:
     fi
   - |
     if [[ "$TRAVIS_RUST_VERSION" == "nightly-2020-02-16" ]]; then
-        taskset -c 0 cargo tarpaulin --out Xml --all --all-features
+        cargo tarpaulin --out Xml --all --all-features
         bash <(curl -s https://codecov.io/bash)
         echo "Uploaded code coverage"
     fi

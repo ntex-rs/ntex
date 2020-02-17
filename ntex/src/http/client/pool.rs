@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_rt::time::{delay_for, Delay};
 use actix_service::Service;
-use actix_utils::{oneshot, task::LocalWaker};
 use bytes::Bytes;
 use futures::future::{poll_fn, FutureExt, LocalBoxFuture};
 use fxhash::FxHashMap;
@@ -18,10 +17,13 @@ use http::uri::Authority;
 use indexmap::IndexSet;
 use slab::Slab;
 
+use crate::channel::oneshot;
+use crate::http::Protocol;
+use crate::task::LocalWaker;
+
 use super::connection::{ConnectionType, IoConnection};
 use super::error::ConnectError;
 use super::Connect;
-use crate::http::Protocol;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub(crate) struct Key {
