@@ -237,7 +237,7 @@ where
 /// use ntex::http::Error;
 /// use ntex::web::{self, dev, guard, App, HttpResponse};
 ///
-/// async fn my_service(req: dev::ServiceRequest) -> Result<dev::ServiceResponse, Error> {
+/// async fn my_service(req: dev::WebRequest) -> Result<dev::WebResponse, Error> {
 ///     Ok(req.into_response(HttpResponse::Ok().finish()))
 /// }
 ///

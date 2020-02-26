@@ -46,7 +46,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use actix_service::{Service, Transform};
-use actix_web::dev::{RequestHead, ServiceRequest, ServiceResponse};
+use actix_web::dev::{RequestHead, WebRequest, WebResponse};
 use actix_web::error::{Error, ResponseError, Result};
 use actix_web::http::header::{self, HeaderName, HeaderValue};
 use actix_web::http::{self, Error as HttpError, Method, StatusCode, Uri};
@@ -535,12 +535,12 @@ pub struct CorsFactory {
 
 impl<S, B> Transform<S> for CorsFactory
 where
-    S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
     S::Future: 'static,
     B: 'static,
 {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse<B>;
+    type Request = WebRequest;
+    type Response = WebResponse<B>;
     type Error = Error;
     type InitError = ();
     type Transform = CorsMiddleware<S>;
@@ -678,12 +678,12 @@ impl Inner {
 
 impl<S, B> Service for CorsMiddleware<S>
 where
-    S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
     S::Future: 'static,
     B: 'static,
 {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse<B>;
+    type Request = WebRequest;
+    type Response = WebResponse<B>;
     type Error = Error;
     type Future = Either<
         Ready<Result<Self::Response, Error>>,
@@ -694,7 +694,7 @@ where
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: ServiceRequest) -> Self::Future {
+    fn call(&mut self, req: WebRequest) -> Self::Future {
         if self.inner.preflight && Method::OPTIONS == *req.method() {
             if let Err(e) = self
                 .inner
@@ -1083,7 +1083,7 @@ mod tests {
             .expose_headers(exposed_headers.clone())
             .allowed_header(header::CONTENT_TYPE)
             .finish()
-            .new_transform(fn_service(|req: ServiceRequest| {
+            .new_transform(fn_service(|req: WebRequest| {
                 ok(req.into_response(
                     HttpResponse::Ok().header(header::VARY, "Accept").finish(),
                 ))

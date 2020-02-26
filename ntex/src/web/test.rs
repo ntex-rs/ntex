@@ -34,22 +34,20 @@ use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory
 use crate::web::config::AppConfig;
 use crate::web::request::HttpRequestPool;
 use crate::web::rmap::ResourceMap;
-use crate::web::service::{ServiceRequest, ServiceResponse};
+use crate::web::service::{WebRequest, WebResponse};
 use crate::web::{HttpRequest, HttpResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service(
-) -> impl Service<Request = ServiceRequest, Response = ServiceResponse<Body>, Error = Error>
-{
+) -> impl Service<Request = WebRequest, Response = WebResponse<Body>, Error = Error> {
     default_service(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
 pub fn default_service(
     status_code: StatusCode,
-) -> impl Service<Request = ServiceRequest, Response = ServiceResponse<Body>, Error = Error>
-{
-    (move |req: ServiceRequest| {
+) -> impl Service<Request = WebRequest, Response = WebResponse<Body>, Error = Error> {
+    (move |req: WebRequest| {
         ok(req.into_response(HttpResponse::build(status_code).finish()))
     })
     .into_service()
@@ -80,13 +78,13 @@ pub fn default_service(
 /// ```
 pub async fn init_service<R, S, B, E>(
     app: R,
-) -> impl Service<Request = Request, Response = ServiceResponse<B>, Error = E>
+) -> impl Service<Request = Request, Response = WebResponse<B>, Error = E>
 where
     R: IntoServiceFactory<S>,
     S: ServiceFactory<
         Config = AppConfig,
         Request = Request,
-        Response = ServiceResponse<B>,
+        Response = WebResponse<B>,
         Error = E,
     >,
     S::InitError: std::fmt::Debug,
@@ -120,7 +118,7 @@ where
 /// ```
 pub async fn call_service<S, R, B, E>(app: &mut S, req: R) -> S::Response
 where
-    S: Service<Request = R, Response = ServiceResponse<B>, Error = E>,
+    S: Service<Request = R, Response = WebResponse<B>, Error = E>,
     E: std::fmt::Debug,
 {
     app.call(req).await.unwrap()
@@ -154,7 +152,7 @@ where
 /// ```
 pub async fn read_response<S, B>(app: &mut S, req: Request) -> Bytes
 where
-    S: Service<Request = Request, Response = ServiceResponse<B>, Error = Error>,
+    S: Service<Request = Request, Response = WebResponse<B>, Error = Error>,
     B: MessageBody,
 {
     let mut resp = app
@@ -170,7 +168,7 @@ where
     bytes.freeze()
 }
 
-/// Helper function that returns a response body of a ServiceResponse.
+/// Helper function that returns a response body of a WebResponse.
 ///
 /// ```rust
 /// use bytes::Bytes;
@@ -197,7 +195,7 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_body<B>(mut res: ServiceResponse<B>) -> Bytes
+pub async fn read_body<B>(mut res: WebResponse<B>) -> Bytes
 where
     B: MessageBody,
 {
@@ -257,7 +255,7 @@ where
 /// ```
 pub async fn read_response_json<S, B, T>(app: &mut S, req: Request) -> T
 where
-    S: Service<Request = Request, Response = ServiceResponse<B>, Error = Error>,
+    S: Service<Request = Request, Response = WebResponse<B>, Error = Error>,
     B: MessageBody,
     T: DeserializeOwned,
 {
@@ -272,8 +270,8 @@ where
 /// For unit testing, actix provides a request builder type and a simple handler runner. TestRequest implements a builder-like pattern.
 /// You can generate various types of request via TestRequest's methods:
 ///  * `TestRequest::to_request` creates `actix_http::Request` instance.
-///  * `TestRequest::to_srv_request` creates `ServiceRequest` instance, which is used for testing middlewares and chain adapters.
-///  * `TestRequest::to_srv_response` creates `ServiceResponse` instance.
+///  * `TestRequest::to_srv_request` creates `WebRequest` instance, which is used for testing middlewares and chain adapters.
+///  * `TestRequest::to_srv_response` creates `WebResponse` instance.
 ///  * `TestRequest::to_http_request` creates `HttpRequest` instance, which is used for testing handlers.
 ///
 /// ```rust
@@ -461,13 +459,13 @@ impl TestRequest {
         req
     }
 
-    /// Complete request creation and generate `ServiceRequest` instance
-    pub fn to_srv_request(mut self) -> ServiceRequest {
+    /// Complete request creation and generate `WebRequest` instance
+    pub fn to_srv_request(mut self) -> WebRequest {
         let (mut head, payload) = self.req.finish().into_parts();
         head.peer_addr = self.peer_addr;
         self.path.get_mut().update(&head.uri);
 
-        ServiceRequest::new(HttpRequest::new(
+        WebRequest::new(HttpRequest::new(
             self.path,
             head,
             payload,
@@ -478,8 +476,8 @@ impl TestRequest {
         ))
     }
 
-    /// Complete request creation and generate `ServiceResponse` instance
-    pub fn to_srv_response<B>(self, res: HttpResponse<B>) -> ServiceResponse<B> {
+    /// Complete request creation and generate `WebResponse` instance
+    pub fn to_srv_response<B>(self, res: HttpResponse<B>) -> WebResponse<B> {
         self.to_srv_request().into_response(res)
     }
 

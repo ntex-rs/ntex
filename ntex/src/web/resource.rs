@@ -20,10 +20,10 @@ use crate::web::guard::Guard;
 use crate::web::handler::Factory;
 use crate::web::responder::Responder;
 use crate::web::route::{CreateRouteService, Route, RouteService};
-use crate::web::service::{ServiceRequest, ServiceResponse};
+use crate::web::service::{WebRequest, WebResponse};
 
-type HttpService = BoxService<ServiceRequest, ServiceResponse, Error>;
-type HttpNewService = BoxServiceFactory<(), ServiceRequest, ServiceResponse, Error, ()>;
+type HttpService = BoxService<WebRequest, WebResponse, Error>;
+type HttpNewService = BoxServiceFactory<(), WebRequest, WebResponse, Error, ()>;
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
 ///
@@ -79,8 +79,8 @@ impl<T> Resource<T>
 where
     T: ServiceFactory<
         Config = (),
-        Request = ServiceRequest,
-        Response = ServiceResponse,
+        Request = WebRequest,
+        Response = WebResponse,
         Error = Error,
         InitError = (),
     >,
@@ -250,8 +250,8 @@ where
     ) -> Resource<
         impl ServiceFactory<
             Config = (),
-            Request = ServiceRequest,
-            Response = ServiceResponse,
+            Request = WebRequest,
+            Response = WebResponse,
             Error = Error,
             InitError = (),
         >,
@@ -259,8 +259,8 @@ where
     where
         M: Transform<
             T::Service,
-            Request = ServiceRequest,
-            Response = ServiceResponse,
+            Request = WebRequest,
+            Response = WebResponse,
             Error = Error,
             InitError = (),
         >,
@@ -279,7 +279,7 @@ where
 
     /// Register a resource middleware function.
     ///
-    /// This function accepts instance of `ServiceRequest` type and
+    /// This function accepts instance of `WebRequest` type and
     /// mutable reference to the next middleware in chain.
     ///
     /// This is similar to `App's` middlewares, but middleware get invoked on resource level.
@@ -317,15 +317,15 @@ where
     ) -> Resource<
         impl ServiceFactory<
             Config = (),
-            Request = ServiceRequest,
-            Response = ServiceResponse,
+            Request = WebRequest,
+            Response = WebResponse,
             Error = Error,
             InitError = (),
         >,
     >
     where
-        F: FnMut(ServiceRequest, &mut T::Service) -> R + Clone,
-        R: Future<Output = Result<ServiceResponse, Error>>,
+        F: FnMut(WebRequest, &mut T::Service) -> R + Clone,
+        R: Future<Output = Result<WebResponse, Error>>,
     {
         Resource {
             endpoint: apply_fn_factory(self.endpoint, mw),
@@ -347,8 +347,8 @@ where
         F: IntoServiceFactory<U>,
         U: ServiceFactory<
                 Config = (),
-                Request = ServiceRequest,
-                Response = ServiceResponse,
+                Request = WebRequest,
+                Response = WebResponse,
                 Error = Error,
             > + 'static,
         U::InitError: fmt::Debug,
@@ -368,8 +368,8 @@ impl<T> HttpServiceFactory for Resource<T>
 where
     T: ServiceFactory<
             Config = (),
-            Request = ServiceRequest,
-            Response = ServiceResponse,
+            Request = WebRequest,
+            Response = WebResponse,
             Error = Error,
             InitError = (),
         > + 'static,
@@ -400,8 +400,8 @@ impl<T> IntoServiceFactory<T> for Resource<T>
 where
     T: ServiceFactory<
         Config = (),
-        Request = ServiceRequest,
-        Response = ServiceResponse,
+        Request = WebRequest,
+        Response = WebResponse,
         Error = Error,
         InitError = (),
     >,
@@ -425,8 +425,8 @@ pub struct ResourceFactory {
 
 impl ServiceFactory for ResourceFactory {
     type Config = ();
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type InitError = ();
     type Service = ResourceService;
@@ -519,19 +519,19 @@ pub struct ResourceService {
 }
 
 impl Service for ResourceService {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type Future = Either<
-        Ready<Result<ServiceResponse, Error>>,
-        LocalBoxFuture<'static, Result<ServiceResponse, Error>>,
+        Ready<Result<WebResponse, Error>>,
+        LocalBoxFuture<'static, Result<WebResponse, Error>>,
     >;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, mut req: ServiceRequest) -> Self::Future {
+    fn call(&mut self, mut req: WebRequest) -> Self::Future {
         for route in self.routes.iter_mut() {
             if route.check(&mut req) {
                 if let Some(ref data) = self.data {
@@ -544,7 +544,7 @@ impl Service for ResourceService {
             Either::Right(default.call(req))
         } else {
             let req = req.into_parts().0;
-            Either::Left(ok(ServiceResponse::new(
+            Either::Left(ok(WebResponse::new(
                 req,
                 Response::MethodNotAllowed().finish(),
             )))
@@ -565,8 +565,8 @@ impl ResourceEndpoint {
 
 impl ServiceFactory for ResourceEndpoint {
     type Config = ();
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type InitError = ();
     type Service = ResourceService;
@@ -587,7 +587,7 @@ mod tests {
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Error, Method, StatusCode};
     use crate::web::middleware::DefaultHeaders;
-    use crate::web::service::ServiceRequest;
+    use crate::web::service::WebRequest;
     use crate::web::test::{call_service, init_service, TestRequest};
     use crate::web::{self, guard, App, HttpResponse};
     use crate::Service;
@@ -683,7 +683,7 @@ mod tests {
                 .service(
                     web::resource("/test").route(web::get().to(|| HttpResponse::Ok())),
                 )
-                .default_service(|r: ServiceRequest| {
+                .default_service(|r: WebRequest| {
                     ok(r.into_response(HttpResponse::BadRequest()))
                 }),
         )
@@ -702,7 +702,7 @@ mod tests {
             App::new().service(
                 web::resource("/test")
                     .route(web::get().to(|| HttpResponse::Ok()))
-                    .default_service(|r: ServiceRequest| {
+                    .default_service(|r: WebRequest| {
                         ok(r.into_response(HttpResponse::BadRequest()))
                     }),
             ),

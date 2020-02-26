@@ -20,7 +20,7 @@ use crate::http::error::Error;
 use crate::http::header::HeaderName;
 use crate::http::StatusCode;
 use crate::service::{Service, Transform};
-use crate::web::service::{ServiceRequest, ServiceResponse};
+use crate::web::service::{WebRequest, WebResponse};
 use crate::web::HttpResponse;
 
 /// `Middleware` for logging request and response info to the terminal.
@@ -121,11 +121,11 @@ impl Default for Logger {
 
 impl<S, B> Transform<S> for Logger
 where
-    S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
     B: MessageBody,
 {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse<StreamLog<B>>;
+    type Request = WebRequest;
+    type Response = WebResponse<StreamLog<B>>;
     type Error = Error;
     type InitError = ();
     type Transform = LoggerMiddleware<S>;
@@ -147,11 +147,11 @@ pub struct LoggerMiddleware<S> {
 
 impl<S, B> Service for LoggerMiddleware<S>
 where
-    S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
     B: MessageBody,
 {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse<StreamLog<B>>;
+    type Request = WebRequest;
+    type Response = WebResponse<StreamLog<B>>;
     type Error = Error;
     type Future = LoggerResponse<S, B>;
 
@@ -159,7 +159,7 @@ where
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: ServiceRequest) -> Self::Future {
+    fn call(&mut self, req: WebRequest) -> Self::Future {
         if self.inner.exclude.contains(req.path()) {
             LoggerResponse {
                 fut: self.service.call(req),
@@ -201,9 +201,9 @@ where
 impl<S, B> Future for LoggerResponse<S, B>
 where
     B: MessageBody,
-    S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
 {
-    type Output = Result<ServiceResponse<StreamLog<B>>, Error>;
+    type Output = Result<WebResponse<StreamLog<B>>, Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -418,7 +418,7 @@ impl FormatText {
         }
     }
 
-    fn render_request(&mut self, now: OffsetDateTime, req: &ServiceRequest) {
+    fn render_request(&mut self, now: OffsetDateTime, req: &WebRequest) {
         match *self {
             FormatText::RequestLine => {
                 *self = if req.query_string().is_empty() {
@@ -488,7 +488,7 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_logger() {
-        let srv = |req: ServiceRequest| {
+        let srv = |req: WebRequest| {
             ok(req.into_response(
                 HttpResponse::build(StatusCode::OK)
                     .header("X-Test", "ttt")

@@ -12,7 +12,7 @@ use crate::web::extract::FromRequest;
 use crate::web::guard::{self, Guard};
 use crate::web::handler::{Extract, Factory, Handler};
 use crate::web::responder::Responder;
-use crate::web::service::{ServiceRequest, ServiceResponse};
+use crate::web::service::{WebRequest, WebResponse};
 use crate::web::HttpResponse;
 
 type BoxedRouteService<Req, Res> = Box<
@@ -41,7 +41,7 @@ type BoxedRouteNewService<Req, Res> = Box<
 /// Route uses builder-like pattern for configuration.
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
 pub struct Route {
-    service: BoxedRouteNewService<ServiceRequest, ServiceResponse>,
+    service: BoxedRouteNewService<WebRequest, WebResponse>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
 
@@ -63,8 +63,8 @@ impl Route {
 
 impl ServiceFactory for Route {
     type Config = ();
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type InitError = ();
     type Service = RouteService;
@@ -78,10 +78,8 @@ impl ServiceFactory for Route {
     }
 }
 
-type RouteFuture = LocalBoxFuture<
-    'static,
-    Result<BoxedRouteService<ServiceRequest, ServiceResponse>, ()>,
->;
+type RouteFuture =
+    LocalBoxFuture<'static, Result<BoxedRouteService<WebRequest, WebResponse>, ()>>;
 
 #[pin_project::pin_project]
 pub struct CreateRouteService {
@@ -107,12 +105,12 @@ impl Future for CreateRouteService {
 }
 
 pub struct RouteService {
-    service: BoxedRouteService<ServiceRequest, ServiceResponse>,
+    service: BoxedRouteService<WebRequest, WebResponse>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
 
 impl RouteService {
-    pub fn check(&self, req: &mut ServiceRequest) -> bool {
+    pub fn check(&self, req: &mut WebRequest) -> bool {
         for f in self.guards.iter() {
             if !f.check(req.head()) {
                 return false;
@@ -123,8 +121,8 @@ impl RouteService {
 }
 
 impl Service for RouteService {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -132,7 +130,7 @@ impl Service for RouteService {
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: ServiceRequest) -> Self::Future {
+    fn call(&mut self, req: WebRequest) -> Self::Future {
         self.service.call(req).boxed_local()
     }
 }
@@ -239,7 +237,7 @@ impl Route {
 
 struct RouteNewService<T>
 where
-    T: ServiceFactory<Request = ServiceRequest, Error = (Error, ServiceRequest)>,
+    T: ServiceFactory<Request = WebRequest, Error = (Error, WebRequest)>,
 {
     service: T,
 }
@@ -248,9 +246,9 @@ impl<T> RouteNewService<T>
 where
     T: ServiceFactory<
         Config = (),
-        Request = ServiceRequest,
-        Response = ServiceResponse,
-        Error = (Error, ServiceRequest),
+        Request = WebRequest,
+        Response = WebResponse,
+        Error = (Error, WebRequest),
     >,
     T::Future: 'static,
     T::Service: 'static,
@@ -265,20 +263,20 @@ impl<T> ServiceFactory for RouteNewService<T>
 where
     T: ServiceFactory<
         Config = (),
-        Request = ServiceRequest,
-        Response = ServiceResponse,
-        Error = (Error, ServiceRequest),
+        Request = WebRequest,
+        Response = WebResponse,
+        Error = (Error, WebRequest),
     >,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
 {
     type Config = ();
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type InitError = ();
-    type Service = BoxedRouteService<ServiceRequest, Self::Response>;
+    type Service = BoxedRouteService<WebRequest, Self::Response>;
     type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
@@ -304,13 +302,13 @@ impl<T> Service for RouteServiceWrapper<T>
 where
     T::Future: 'static,
     T: Service<
-        Request = ServiceRequest,
-        Response = ServiceResponse,
-        Error = (Error, ServiceRequest),
+        Request = WebRequest,
+        Response = WebResponse,
+        Error = (Error, WebRequest),
     >,
 {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -318,7 +316,7 @@ where
         self.service.poll_ready(cx).map_err(|(e, _)| e)
     }
 
-    fn call(&mut self, req: ServiceRequest) -> Self::Future {
+    fn call(&mut self, req: WebRequest) -> Self::Future {
         self.service
             .call(req)
             .map(|res| match res {

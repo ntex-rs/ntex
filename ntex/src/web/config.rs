@@ -12,13 +12,12 @@ use super::resource::Resource;
 use super::rmap::ResourceMap;
 use super::route::Route;
 use super::service::{
-    AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, ServiceRequest,
-    ServiceResponse,
+    AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, WebRequest,
+    WebResponse,
 };
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpNewService =
-    boxed::BoxServiceFactory<(), ServiceRequest, ServiceResponse, Error, ()>;
+type HttpNewService = boxed::BoxServiceFactory<(), WebRequest, WebResponse, Error, ()>;
 
 /// Application configuration
 pub struct AppService {
@@ -108,8 +107,8 @@ impl AppService {
         F: IntoServiceFactory<S>,
         S: ServiceFactory<
                 Config = (),
-                Request = ServiceRequest,
-                Response = ServiceResponse,
+                Request = WebRequest,
+                Response = WebResponse,
                 Error = Error,
                 InitError = (),
             > + 'static,
@@ -174,9 +173,9 @@ impl Default for AppConfig {
 /// to set of external methods. This could help with
 /// modularization of big application configuration.
 pub struct ServiceConfig {
-    pub(crate) services: Vec<Box<dyn AppServiceFactory>>,
-    pub(crate) data: Vec<Box<dyn DataFactory>>,
-    pub(crate) external: Vec<ResourceDef>,
+    pub(super) services: Vec<Box<dyn AppServiceFactory>>,
+    pub(super) data: Vec<Box<dyn DataFactory>>,
+    pub(super) external: Vec<ResourceDef>,
 }
 
 impl ServiceConfig {

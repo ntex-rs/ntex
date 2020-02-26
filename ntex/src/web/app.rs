@@ -20,11 +20,11 @@ use super::dev::ResourceDef;
 use super::resource::Resource;
 use super::route::Route;
 use super::service::{
-    AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, ServiceRequest,
-    ServiceResponse,
+    AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, WebRequest,
+    WebResponse,
 };
 
-type HttpNewService = BoxServiceFactory<(), ServiceRequest, ServiceResponse, Error, ()>;
+type HttpNewService = BoxServiceFactory<(), WebRequest, WebResponse, Error, ()>;
 type FnDataFactory =
     Box<dyn Fn() -> LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>;
 
@@ -65,8 +65,8 @@ where
     B: MessageBody,
     T: ServiceFactory<
         Config = (),
-        Request = ServiceRequest,
-        Response = ServiceResponse<B>,
+        Request = WebRequest,
+        Response = WebResponse<B>,
         Error = Error,
         InitError = (),
     >,
@@ -270,8 +270,8 @@ where
         F: IntoServiceFactory<U>,
         U: ServiceFactory<
                 Config = (),
-                Request = ServiceRequest,
-                Response = ServiceResponse,
+                Request = WebRequest,
+                Response = WebResponse,
                 Error = Error,
             > + 'static,
         U::InitError: fmt::Debug,
@@ -353,8 +353,8 @@ where
     ) -> App<
         impl ServiceFactory<
             Config = (),
-            Request = ServiceRequest,
-            Response = ServiceResponse<B1>,
+            Request = WebRequest,
+            Response = WebResponse<B1>,
             Error = Error,
             InitError = (),
         >,
@@ -363,8 +363,8 @@ where
     where
         M: Transform<
             T::Service,
-            Request = ServiceRequest,
-            Response = ServiceResponse<B1>,
+            Request = WebRequest,
+            Response = WebResponse<B1>,
             Error = Error,
             InitError = (),
         >,
@@ -420,8 +420,8 @@ where
     ) -> App<
         impl ServiceFactory<
             Config = (),
-            Request = ServiceRequest,
-            Response = ServiceResponse<B1>,
+            Request = WebRequest,
+            Response = WebResponse<B1>,
             Error = Error,
             InitError = (),
         >,
@@ -429,8 +429,8 @@ where
     >
     where
         B1: MessageBody,
-        F: FnMut(ServiceRequest, &mut T::Service) -> R + Clone,
-        R: Future<Output = Result<ServiceResponse<B1>, Error>>,
+        F: FnMut(WebRequest, &mut T::Service) -> R + Clone,
+        R: Future<Output = Result<WebResponse<B1>, Error>>,
     {
         App {
             endpoint: apply_fn_factory(self.endpoint, mw),
@@ -451,8 +451,8 @@ where
     B: MessageBody,
     T: ServiceFactory<
         Config = (),
-        Request = ServiceRequest,
-        Response = ServiceResponse<B>,
+        Request = WebRequest,
+        Response = WebResponse<B>,
         Error = Error,
         InitError = (),
     >,
@@ -480,7 +480,7 @@ mod tests {
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
     use crate::web::middleware::DefaultHeaders;
-    use crate::web::service::ServiceRequest;
+    use crate::web::service::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, HttpRequest, HttpResponse};
     use crate::Service;
@@ -504,12 +504,12 @@ mod tests {
                 .service(web::resource("/test").to(|| HttpResponse::Ok()))
                 .service(
                     web::resource("/test2")
-                        .default_service(|r: ServiceRequest| {
+                        .default_service(|r: WebRequest| {
                             ok(r.into_response(HttpResponse::Created()))
                         })
                         .route(web::get().to(|| HttpResponse::Ok())),
                 )
-                .default_service(|r: ServiceRequest| {
+                .default_service(|r: WebRequest| {
                     ok(r.into_response(HttpResponse::MethodNotAllowed()))
                 }),
         )

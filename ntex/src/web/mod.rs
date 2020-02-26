@@ -115,7 +115,7 @@ pub mod dev {
     pub use crate::web::info::ConnectionInfo;
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::service::{
-        HttpServiceFactory, ServiceRequest, ServiceResponse, WebService,
+        HttpServiceFactory, WebRequest, WebResponse, WebService,
     };
 
     pub use crate::web::types::form::UrlEncoded;

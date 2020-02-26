@@ -17,50 +17,50 @@ use super::data::DataFactory;
 use super::guard::Guard;
 use super::request::{HttpRequest, HttpRequestPool};
 use super::rmap::ResourceMap;
-use super::service::{AppServiceFactory, ServiceRequest, ServiceResponse};
+use super::service::{AppServiceFactory, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpService = BoxService<ServiceRequest, ServiceResponse, Error>;
-type HttpNewService = BoxServiceFactory<(), ServiceRequest, ServiceResponse, Error, ()>;
-type BoxResponse = LocalBoxFuture<'static, Result<ServiceResponse, Error>>;
+type HttpService = BoxService<WebRequest, WebResponse, Error>;
+type HttpNewService = BoxServiceFactory<(), WebRequest, WebResponse, Error, ()>;
+type BoxResponse = LocalBoxFuture<'static, Result<WebResponse, Error>>;
 type FnDataFactory =
     Box<dyn Fn() -> LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>;
 
-/// Service factory to convert `Request` to a `ServiceRequest<S>`.
+/// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes data factories.
 pub struct AppInit<T, B>
 where
     T: ServiceFactory<
         Config = (),
-        Request = ServiceRequest,
-        Response = ServiceResponse<B>,
+        Request = WebRequest,
+        Response = WebResponse<B>,
         Error = Error,
         InitError = (),
     >,
 {
-    pub(crate) endpoint: T,
-    pub(crate) extensions: RefCell<Option<Extensions>>,
-    pub(crate) data: Rc<Vec<Box<dyn DataFactory>>>,
-    pub(crate) data_factories: Rc<Vec<FnDataFactory>>,
-    pub(crate) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory>>>>,
-    pub(crate) default: Option<Rc<HttpNewService>>,
-    pub(crate) factory_ref: Rc<RefCell<Option<AppRoutingFactory>>>,
-    pub(crate) external: RefCell<Vec<ResourceDef>>,
+    pub(super) endpoint: T,
+    pub(super) extensions: RefCell<Option<Extensions>>,
+    pub(super) data: Rc<Vec<Box<dyn DataFactory>>>,
+    pub(super) data_factories: Rc<Vec<FnDataFactory>>,
+    pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory>>>>,
+    pub(super) default: Option<Rc<HttpNewService>>,
+    pub(super) factory_ref: Rc<RefCell<Option<AppRoutingFactory>>>,
+    pub(super) external: RefCell<Vec<ResourceDef>>,
 }
 
 impl<T, B> ServiceFactory for AppInit<T, B>
 where
     T: ServiceFactory<
         Config = (),
-        Request = ServiceRequest,
-        Response = ServiceResponse<B>,
+        Request = WebRequest,
+        Response = WebResponse<B>,
         Error = Error,
         InitError = (),
     >,
 {
     type Config = AppConfig;
     type Request = Request;
-    type Response = ServiceResponse<B>;
+    type Response = WebResponse<B>;
     type Error = T::Error;
     type InitError = T::InitError;
     type Service = AppInitService<T::Service, B>;
@@ -69,7 +69,7 @@ where
     fn new_service(&self, config: AppConfig) -> Self::Future {
         // update resource default service
         let default = self.default.clone().unwrap_or_else(|| {
-            Rc::new(boxed::factory(fn_service(|req: ServiceRequest| {
+            Rc::new(boxed::factory(fn_service(|req: WebRequest| {
                 ok(req.into_response(Response::NotFound().finish()))
             })))
         });
@@ -149,8 +149,8 @@ impl<T, B> Future for AppInitResult<T, B>
 where
     T: ServiceFactory<
         Config = (),
-        Request = ServiceRequest,
-        Response = ServiceResponse<B>,
+        Request = WebRequest,
+        Response = WebResponse<B>,
         Error = Error,
         InitError = (),
     >,
@@ -202,10 +202,10 @@ where
     }
 }
 
-/// Service to convert `Request` to a `ServiceRequest<S>`
+/// Service to convert `Request` to a `WebRequest<S>`
 pub struct AppInitService<T, B>
 where
-    T: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    T: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
 {
     service: T,
     rmap: Rc<ResourceMap>,
@@ -216,10 +216,10 @@ where
 
 impl<T, B> Service for AppInitService<T, B>
 where
-    T: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    T: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
 {
     type Request = Request;
-    type Response = ServiceResponse<B>;
+    type Response = WebResponse<B>;
     type Error = T::Error;
     type Future = T::Future;
 
@@ -249,13 +249,13 @@ where
                 self.pool,
             )
         };
-        self.service.call(ServiceRequest::new(req))
+        self.service.call(WebRequest::new(req))
     }
 }
 
 impl<T, B> Drop for AppInitService<T, B>
 where
-    T: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    T: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
 {
     fn drop(&mut self) {
         self.pool.clear();
@@ -269,8 +269,8 @@ pub struct AppRoutingFactory {
 
 impl ServiceFactory for AppRoutingFactory {
     type Config = ();
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type InitError = ();
     type Service = AppRouting;
@@ -374,13 +374,13 @@ impl Future for AppRoutingFactoryResponse {
 
 pub struct AppRouting {
     router: Router<HttpService, Guards>,
-    ready: Option<(ServiceRequest, ResourceInfo)>,
+    ready: Option<(WebRequest, ResourceInfo)>,
     default: Option<HttpService>,
 }
 
 impl Service for AppRouting {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type Future = BoxResponse;
 
@@ -392,7 +392,7 @@ impl Service for AppRouting {
         }
     }
 
-    fn call(&mut self, mut req: ServiceRequest) -> Self::Future {
+    fn call(&mut self, mut req: WebRequest) -> Self::Future {
         let res = self.router.recognize_mut_checked(&mut req, |req, guards| {
             if let Some(ref guards) = guards {
                 for f in guards {
@@ -410,7 +410,7 @@ impl Service for AppRouting {
             default.call(req)
         } else {
             let req = req.into_parts().0;
-            ok(ServiceResponse::new(req, Response::NotFound().finish())).boxed_local()
+            ok(WebResponse::new(req, Response::NotFound().finish())).boxed_local()
         }
     }
 }
@@ -428,8 +428,8 @@ impl AppEntry {
 
 impl ServiceFactory for AppEntry {
     type Config = ();
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type InitError = ();
     type Service = AppRouting;

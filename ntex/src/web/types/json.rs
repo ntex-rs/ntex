@@ -288,7 +288,6 @@ impl Default for JsonConfig {
 }
 
 /// Request's payload json parser, it resolves to a deserialized `T` value.
-/// This future could be used with `ServiceRequest` and `ServiceFromRequest`.
 ///
 /// Returns error:
 ///

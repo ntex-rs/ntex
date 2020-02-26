@@ -16,7 +16,7 @@ use crate::http::Error;
 use crate::service::{Service, Transform};
 
 use crate::web::dev::BodyEncoding;
-use crate::web::service::{ServiceRequest, ServiceResponse};
+use crate::web::service::{WebRequest, WebResponse};
 
 #[derive(Debug, Clone)]
 /// `Middleware` for compressing response body.
@@ -55,10 +55,10 @@ impl Default for Compress {
 impl<S, B> Transform<S> for Compress
 where
     B: MessageBody,
-    S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
 {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse<Encoder<B>>;
+    type Request = WebRequest;
+    type Response = WebResponse<Encoder<B>>;
     type Error = Error;
     type InitError = ();
     type Transform = CompressMiddleware<S>;
@@ -80,10 +80,10 @@ pub struct CompressMiddleware<S> {
 impl<S, B> Service for CompressMiddleware<S>
 where
     B: MessageBody,
-    S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
 {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse<Encoder<B>>;
+    type Request = WebRequest;
+    type Response = WebResponse<Encoder<B>>;
     type Error = Error;
     type Future = CompressResponse<S, B>;
 
@@ -91,7 +91,7 @@ where
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: ServiceRequest) -> Self::Future {
+    fn call(&mut self, req: WebRequest) -> Self::Future {
         // negotiate content-encoding
         let encoding = if let Some(val) = req.headers().get(&ACCEPT_ENCODING) {
             if let Ok(enc) = val.to_str() {
@@ -127,9 +127,9 @@ where
 impl<S, B> Future for CompressResponse<S, B>
 where
     B: MessageBody,
-    S: Service<Request = ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
 {
-    type Output = Result<ServiceResponse<Encoder<B>>, Error>;
+    type Output = Result<WebResponse<Encoder<B>>, Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();

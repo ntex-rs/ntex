@@ -20,13 +20,13 @@ use crate::web::resource::Resource;
 use crate::web::rmap::ResourceMap;
 use crate::web::route::Route;
 use crate::web::service::{
-    AppServiceFactory, ServiceFactoryWrapper, ServiceRequest, ServiceResponse,
+    AppServiceFactory, ServiceFactoryWrapper, WebRequest, WebResponse,
 };
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpService = BoxService<ServiceRequest, ServiceResponse, Error>;
-type HttpNewService = BoxServiceFactory<(), ServiceRequest, ServiceResponse, Error, ()>;
-type BoxedResponse = LocalBoxFuture<'static, Result<ServiceResponse, Error>>;
+type HttpService = BoxService<WebRequest, WebResponse, Error>;
+type HttpNewService = BoxServiceFactory<(), WebRequest, WebResponse, Error, ()>;
+type BoxedResponse = LocalBoxFuture<'static, Result<WebResponse, Error>>;
 
 /// Resources scope.
 ///
@@ -89,8 +89,8 @@ impl<T> Scope<T>
 where
     T: ServiceFactory<
         Config = (),
-        Request = ServiceRequest,
-        Response = ServiceResponse,
+        Request = WebRequest,
+        Response = WebResponse,
         Error = Error,
         InitError = (),
     >,
@@ -283,8 +283,8 @@ where
         F: IntoServiceFactory<U>,
         U: ServiceFactory<
                 Config = (),
-                Request = ServiceRequest,
-                Response = ServiceResponse,
+                Request = WebRequest,
+                Response = WebResponse,
                 Error = Error,
             > + 'static,
         U::InitError: fmt::Debug,
@@ -305,7 +305,7 @@ where
     /// necessary, across all requests managed by the *Scope*.  Scope-level
     /// middleware is more limited in what it can modify, relative to Route or
     /// Application level middleware, in that Scope-level middleware can not modify
-    /// ServiceResponse.
+    /// WebResponse.
     ///
     /// Use middleware when you need to read or modify *every* request in some way.
     pub fn wrap<M>(
@@ -314,8 +314,8 @@ where
     ) -> Scope<
         impl ServiceFactory<
             Config = (),
-            Request = ServiceRequest,
-            Response = ServiceResponse,
+            Request = WebRequest,
+            Response = WebResponse,
             Error = Error,
             InitError = (),
         >,
@@ -323,8 +323,8 @@ where
     where
         M: Transform<
             T::Service,
-            Request = ServiceRequest,
-            Response = ServiceResponse,
+            Request = WebRequest,
+            Response = WebResponse,
             Error = Error,
             InitError = (),
         >,
@@ -346,7 +346,7 @@ where
     /// request as necessary, across all requests managed by the *Scope*.
     /// Scope-level middleware is more limited in what it can modify, relative
     /// to Route or Application level middleware, in that Scope-level middleware
-    /// can not modify ServiceResponse.
+    /// can not modify WebResponse.
     ///
     /// ```rust
     /// use ntex::service::Service;
@@ -379,15 +379,15 @@ where
     ) -> Scope<
         impl ServiceFactory<
             Config = (),
-            Request = ServiceRequest,
-            Response = ServiceResponse,
+            Request = WebRequest,
+            Response = WebResponse,
             Error = Error,
             InitError = (),
         >,
     >
     where
-        F: FnMut(ServiceRequest, &mut T::Service) -> R + Clone,
-        R: Future<Output = Result<ServiceResponse, Error>>,
+        F: FnMut(WebRequest, &mut T::Service) -> R + Clone,
+        R: Future<Output = Result<WebResponse, Error>>,
     {
         Scope {
             endpoint: apply_fn_factory(self.endpoint, mw),
@@ -406,8 +406,8 @@ impl<T> HttpServiceFactory for Scope<T>
 where
     T: ServiceFactory<
             Config = (),
-            Request = ServiceRequest,
-            Response = ServiceResponse,
+            Request = WebRequest,
+            Response = WebResponse,
             Error = Error,
             InitError = (),
         > + 'static,
@@ -477,8 +477,8 @@ pub struct ScopeFactory {
 
 impl ServiceFactory for ScopeFactory {
     type Config = ();
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type InitError = ();
     type Service = ScopeService;
@@ -593,12 +593,12 @@ pub struct ScopeService {
     data: Option<Rc<Extensions>>,
     router: Router<HttpService, Vec<Box<dyn Guard>>>,
     default: Option<HttpService>,
-    _ready: Option<(ServiceRequest, ResourceInfo)>,
+    _ready: Option<(WebRequest, ResourceInfo)>,
 }
 
 impl Service for ScopeService {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type Future = Either<BoxedResponse, Ready<Result<Self::Response, Self::Error>>>;
 
@@ -606,7 +606,7 @@ impl Service for ScopeService {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, mut req: ServiceRequest) -> Self::Future {
+    fn call(&mut self, mut req: WebRequest) -> Self::Future {
         let res = self.router.recognize_mut_checked(&mut req, |req, guards| {
             if let Some(ref guards) = guards {
                 for f in guards {
@@ -627,7 +627,7 @@ impl Service for ScopeService {
             Either::Left(default.call(req))
         } else {
             let req = req.into_parts().0;
-            Either::Right(ok(ServiceResponse::new(req, Response::NotFound().finish())))
+            Either::Right(ok(WebResponse::new(req, Response::NotFound().finish())))
         }
     }
 }
@@ -645,8 +645,8 @@ impl ScopeEndpoint {
 
 impl ServiceFactory for ScopeEndpoint {
     type Config = ();
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
+    type Request = WebRequest;
+    type Response = WebResponse;
     type Error = Error;
     type InitError = ();
     type Service = ScopeService;
@@ -667,7 +667,7 @@ mod tests {
     use crate::http::{Method, StatusCode};
     use crate::service::Service;
     use crate::web::middleware::DefaultHeaders;
-    use crate::web::service::ServiceRequest;
+    use crate::web::service::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, guard, App, HttpRequest, HttpResponse};
 
@@ -993,7 +993,7 @@ mod tests {
             App::new().service(
                 web::scope("/app")
                     .service(web::resource("/path1").to(|| HttpResponse::Ok()))
-                    .default_service(|r: ServiceRequest| {
+                    .default_service(|r: WebRequest| {
                         ok(r.into_response(HttpResponse::BadRequest()))
                     }),
             ),
@@ -1017,7 +1017,7 @@ mod tests {
                     web::resource("").to(|| HttpResponse::BadRequest()),
                 ))
                 .service(web::scope("/app2"))
-                .default_service(|r: ServiceRequest| {
+                .default_service(|r: WebRequest| {
                     ok(r.into_response(HttpResponse::MethodNotAllowed()))
                 }),
         )

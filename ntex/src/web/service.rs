@@ -23,11 +23,11 @@ pub trait HttpServiceFactory {
     fn register(self, config: &mut AppService);
 }
 
-pub(crate) trait AppServiceFactory {
+pub(super) trait AppServiceFactory {
     fn register(&mut self, config: &mut AppService);
 }
 
-pub(crate) struct ServiceFactoryWrapper<T> {
+pub(super) struct ServiceFactoryWrapper<T> {
     factory: Option<T>,
 }
 
@@ -52,13 +52,13 @@ where
 
 /// An service http request
 ///
-/// ServiceRequest allows mutable access to request's internal structures
-pub struct ServiceRequest(HttpRequest);
+/// WebRequest allows mutable access to request's internal structures
+pub struct WebRequest(HttpRequest);
 
-impl ServiceRequest {
-    /// Construct service request
+impl WebRequest {
+    /// Construct web request
     pub(crate) fn new(req: HttpRequest) -> Self {
-        ServiceRequest(req)
+        WebRequest(req)
     }
 
     /// Deconstruct request into parts
@@ -69,14 +69,14 @@ impl ServiceRequest {
 
     /// Construct request from parts.
     ///
-    /// `ServiceRequest` can be re-constructed only if `req` hasnt been cloned.
+    /// `WebRequest` can be re-constructed only if `req` hasnt been cloned.
     pub fn from_parts(
         mut req: HttpRequest,
         pl: Payload,
     ) -> Result<Self, (HttpRequest, Payload)> {
         if Rc::strong_count(&req.0) == 1 && Rc::weak_count(&req.0) == 0 {
             Rc::get_mut(&mut req.0).unwrap().payload = pl;
-            Ok(ServiceRequest(req))
+            Ok(WebRequest(req))
         } else {
             Err((req, pl))
         }
@@ -84,28 +84,28 @@ impl ServiceRequest {
 
     /// Construct request from request.
     ///
-    /// `HttpRequest` implements `Clone` trait via `Rc` type. `ServiceRequest`
+    /// `HttpRequest` implements `Clone` trait via `Rc` type. `WebRequest`
     /// can be re-constructed only if rc's strong pointers count eq 1 and
     /// weak pointers count is 0.
     pub fn from_request(req: HttpRequest) -> Result<Self, HttpRequest> {
         if Rc::strong_count(&req.0) == 1 && Rc::weak_count(&req.0) == 0 {
-            Ok(ServiceRequest(req))
+            Ok(WebRequest(req))
         } else {
             Err(req)
         }
     }
 
-    /// Create service response
+    /// Create web response
     #[inline]
-    pub fn into_response<B, R: Into<Response<B>>>(self, res: R) -> ServiceResponse<B> {
-        ServiceResponse::new(self.0, res.into())
+    pub fn into_response<B, R: Into<Response<B>>>(self, res: R) -> WebResponse<B> {
+        WebResponse::new(self.0, res.into())
     }
 
-    /// Create service response for error
+    /// Create web response for error
     #[inline]
-    pub fn error_response<B, E: Into<Error>>(self, err: E) -> ServiceResponse<B> {
+    pub fn error_response<B, E: Into<Error>>(self, err: E) -> WebResponse<B> {
         let res: Response = err.into().into();
-        ServiceResponse::new(self.0, res.into_body())
+        WebResponse::new(self.0, res.into_body())
     }
 
     /// This method returns reference to the request head
@@ -236,13 +236,13 @@ impl ServiceRequest {
     }
 }
 
-impl Resource<Url> for ServiceRequest {
+impl Resource<Url> for WebRequest {
     fn resource_path(&mut self) -> &mut Path<Url> {
         self.match_info_mut()
     }
 }
 
-impl HttpMessage for ServiceRequest {
+impl HttpMessage for WebRequest {
     type Stream = PayloadStream;
 
     #[inline]
@@ -269,11 +269,11 @@ impl HttpMessage for ServiceRequest {
     }
 }
 
-impl fmt::Debug for ServiceRequest {
+impl fmt::Debug for WebRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "\nServiceRequest {:?} {}:{}",
+            "\nWebRequest {:?} {}:{}",
             self.head().version,
             self.head().method,
             self.path()
@@ -292,37 +292,37 @@ impl fmt::Debug for ServiceRequest {
     }
 }
 
-pub struct ServiceResponse<B = Body> {
+pub struct WebResponse<B = Body> {
     request: HttpRequest,
     response: Response<B>,
 }
 
-impl<B> ServiceResponse<B> {
-    /// Create service response instance
+impl<B> WebResponse<B> {
+    /// Create web response instance
     pub fn new(request: HttpRequest, response: Response<B>) -> Self {
-        ServiceResponse { request, response }
+        WebResponse { request, response }
     }
 
-    /// Create service response from the error
+    /// Create web response from the error
     pub fn from_err<E: Into<Error>>(err: E, request: HttpRequest) -> Self {
         let e: Error = err.into();
         let res: Response = e.into();
-        ServiceResponse {
+        WebResponse {
             request,
             response: res.into_body(),
         }
     }
 
-    /// Create service response for error
+    /// Create web response for error
     #[inline]
     pub fn error_response<E: Into<Error>>(self, err: E) -> Self {
         Self::from_err(err, self.request)
     }
 
-    /// Create service response
+    /// Create web response
     #[inline]
-    pub fn into_response<B1>(self, response: Response<B1>) -> ServiceResponse<B1> {
-        ServiceResponse::new(self.request, response)
+    pub fn into_response<B1>(self, response: Response<B1>) -> WebResponse<B1> {
+        WebResponse::new(self.request, response)
     }
 
     /// Get reference to original request
@@ -371,7 +371,7 @@ impl<B> ServiceResponse<B> {
             Ok(_) => self,
             Err(err) => {
                 let res: Response = err.into().into();
-                ServiceResponse::new(self.request, res.into_body())
+                WebResponse::new(self.request, res.into_body())
             }
         }
     }
@@ -382,32 +382,32 @@ impl<B> ServiceResponse<B> {
     }
 }
 
-impl<B> ServiceResponse<B> {
+impl<B> WebResponse<B> {
     /// Set a new body
-    pub fn map_body<F, B2>(self, f: F) -> ServiceResponse<B2>
+    pub fn map_body<F, B2>(self, f: F) -> WebResponse<B2>
     where
         F: FnOnce(&mut ResponseHead, ResponseBody<B>) -> ResponseBody<B2>,
     {
         let response = self.response.map_body(f);
 
-        ServiceResponse {
+        WebResponse {
             response,
             request: self.request,
         }
     }
 }
 
-impl<B> Into<Response<B>> for ServiceResponse<B> {
+impl<B> Into<Response<B>> for WebResponse<B> {
     fn into(self) -> Response<B> {
         self.response
     }
 }
 
-impl<B: MessageBody> fmt::Debug for ServiceResponse<B> {
+impl<B: MessageBody> fmt::Debug for WebResponse<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let res = writeln!(
             f,
-            "\nServiceResponse {:?} {}{}",
+            "\nWebResponse {:?} {}{}",
             self.response.head().version,
             self.response.head().status,
             self.response.head().reason.unwrap_or(""),
@@ -451,7 +451,7 @@ impl WebService {
     /// use ntex::http;
     /// use ntex::web::{self, guard, dev, App, HttpResponse};
     ///
-    /// async fn index(req: dev::ServiceRequest) -> Result<dev::ServiceResponse, http::Error> {
+    /// async fn index(req: dev::WebRequest) -> Result<dev::WebResponse, http::Error> {
     ///     Ok(req.into_response(HttpResponse::Ok().finish()))
     /// }
     ///
@@ -475,8 +475,8 @@ impl WebService {
         F: IntoServiceFactory<T>,
         T: ServiceFactory<
                 Config = (),
-                Request = ServiceRequest,
-                Response = ServiceResponse,
+                Request = WebRequest,
+                Response = WebResponse,
                 Error = Error,
                 InitError = (),
             > + 'static,
@@ -501,8 +501,8 @@ impl<T> HttpServiceFactory for WebServiceImpl<T>
 where
     T: ServiceFactory<
             Config = (),
-            Request = ServiceRequest,
-            Response = ServiceResponse,
+            Request = WebRequest,
+            Response = WebResponse,
             Error = Error,
             InitError = (),
         > + 'static,
@@ -540,28 +540,28 @@ mod tests {
     fn test_service_request() {
         let req = TestRequest::default().to_srv_request();
         let (r, pl) = req.into_parts();
-        assert!(ServiceRequest::from_parts(r, pl).is_ok());
+        assert!(WebRequest::from_parts(r, pl).is_ok());
 
         let req = TestRequest::default().to_srv_request();
         let (r, pl) = req.into_parts();
         let _r2 = r.clone();
-        assert!(ServiceRequest::from_parts(r, pl).is_err());
+        assert!(WebRequest::from_parts(r, pl).is_err());
 
         let req = TestRequest::default().to_srv_request();
         let (r, _pl) = req.into_parts();
-        assert!(ServiceRequest::from_request(r).is_ok());
+        assert!(WebRequest::from_request(r).is_ok());
 
         let req = TestRequest::default().to_srv_request();
         let (r, _pl) = req.into_parts();
         let _r2 = r.clone();
-        assert!(ServiceRequest::from_request(r).is_err());
+        assert!(WebRequest::from_request(r).is_err());
     }
 
     #[actix_rt::test]
     async fn test_service() {
         let mut srv = init_service(
             App::new().service(web::service("/test").name("test").finish(
-                |req: ServiceRequest| ok(req.into_response(HttpResponse::Ok().finish())),
+                |req: WebRequest| ok(req.into_response(HttpResponse::Ok().finish())),
             )),
         )
         .await;
@@ -571,7 +571,7 @@ mod tests {
 
         let mut srv = init_service(
             App::new().service(web::service("/test").guard(guard::Get()).finish(
-                |req: ServiceRequest| ok(req.into_response(HttpResponse::Ok().finish())),
+                |req: WebRequest| ok(req.into_response(HttpResponse::Ok().finish())),
             )),
         )
         .await;
@@ -589,7 +589,7 @@ mod tests {
             .header("x-test", "111")
             .to_srv_request();
         let s = format!("{:?}", req);
-        assert!(s.contains("ServiceRequest"));
+        assert!(s.contains("WebRequest"));
         assert!(s.contains("test=1"));
         assert!(s.contains("x-test"));
 
@@ -599,7 +599,7 @@ mod tests {
             .to_srv_response(res);
 
         let s = format!("{:?}", res);
-        assert!(s.contains("ServiceResponse"));
+        assert!(s.contains("WebResponse"));
         assert!(s.contains("x-test"));
     }
 }
