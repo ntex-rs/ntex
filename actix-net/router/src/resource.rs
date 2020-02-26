@@ -31,7 +31,11 @@ enum PatternElement {
 enum PatternType {
     Static(String),
     Prefix(String),
-    Dynamic(Regex, Vec<&'static str>, usize),
+    Dynamic {
+        pattern: Regex,
+        names: Vec<&'static str>,
+        len: usize,
+    },
     DynamicSet(RegexSet, Vec<(Regex, Vec<&'static str>, usize)>),
 }
 
@@ -49,8 +53,7 @@ impl ResourceDef {
             let mut re_set = Vec::new();
 
             for path in set {
-                let (pattern, _, _, len) = ResourceDef::parse(&path, false);
-
+                let (pattern, _, _, len) = ResourceDef::parse(&path, false, true);
                 let re = match Regex::new(&pattern) {
                     Ok(re) => re,
                     Err(err) => panic!("Wrong path pattern: \"{}\" {}", path, err),
@@ -109,7 +112,7 @@ impl ResourceDef {
     /// Parse path pattern and create new `Pattern` instance with custom prefix
     fn with_prefix(path: &str, for_prefix: bool) -> Self {
         let path = path.to_owned();
-        let (pattern, elements, is_dynamic, len) = ResourceDef::parse(&path, for_prefix);
+        let (pattern, elements, is_dynamic, len) = ResourceDef::parse(&path, for_prefix, false);
 
         let tp = if is_dynamic {
             let re = match Regex::new(&pattern) {
@@ -123,7 +126,11 @@ impl ResourceDef {
                     name.map(|name| Box::leak(Box::new(name.to_owned())).as_str())
                 })
                 .collect();
-            PatternType::Dynamic(re, names, len)
+            PatternType::Dynamic {
+                pattern: re,
+                names,
+                len,
+            }
         } else if for_prefix {
             PatternType::Prefix(pattern)
         } else {
@@ -160,7 +167,7 @@ impl ResourceDef {
         match self.tp {
             PatternType::Static(ref s) => s == path,
             PatternType::Prefix(ref s) => path.starts_with(s),
-            PatternType::Dynamic(ref re, _, _) => re.is_match(path),
+            PatternType::Dynamic { ref pattern, .. } => pattern.is_match(path),
             PatternType::DynamicSet(ref re, _) => re.is_match(path),
         }
     }
@@ -178,8 +185,10 @@ impl ResourceDef {
                     None
                 }
             }
-            PatternType::Dynamic(ref re, _, len) => {
-                if let Some(captures) = re.captures(path) {
+            PatternType::Dynamic {
+                ref pattern, len, ..
+            } => {
+                if let Some(captures) = pattern.captures(path) {
                     let mut pos = 0;
                     let mut passed = false;
                     for capture in captures.iter() {
@@ -270,13 +279,17 @@ impl ResourceDef {
                 path.skip(min(rpath_len, len) as u16);
                 true
             }
-            PatternType::Dynamic(ref re, ref names, len) => {
+            PatternType::Dynamic {
+                ref pattern,
+                ref names,
+                len,
+            } => {
                 let mut idx = 0;
                 let mut pos = 0;
                 let mut segments: [PathItem; MAX_DYNAMIC_SEGMENTS] =
                     [PathItem::Static(""); MAX_DYNAMIC_SEGMENTS];
 
-                if let Some(captures) = re.captures(path.path()) {
+                if let Some(captures) = pattern.captures(path.path()) {
                     for (no, name) in names.iter().enumerate() {
                         if let Some(m) = captures.name(&name) {
                             idx += 1;
@@ -294,7 +307,7 @@ impl ResourceDef {
                     return false;
                 }
                 for idx in 0..idx {
-                    path.add(names[idx].clone(), segments[idx]);
+                    path.add(names[idx], segments[idx]);
                 }
                 path.skip((pos + len) as u16);
                 true
@@ -326,7 +339,7 @@ impl ResourceDef {
                         return false;
                     }
                     for idx in 0..idx {
-                        path.add(names[idx].clone(), segments[idx]);
+                        path.add(names[idx], segments[idx]);
                     }
                     path.skip((pos + len) as u16);
                     true
@@ -383,13 +396,17 @@ impl ResourceDef {
                 path.skip(min(path.path().len(), len) as u16);
                 true
             }
-            PatternType::Dynamic(ref re, ref names, len) => {
+            PatternType::Dynamic {
+                ref pattern,
+                ref names,
+                len,
+            } => {
                 let mut idx = 0;
                 let mut pos = 0;
                 let mut segments: [PathItem; MAX_DYNAMIC_SEGMENTS] =
                     [PathItem::Static(""); MAX_DYNAMIC_SEGMENTS];
 
-                if let Some(captures) = re.captures(res.resource_path().path()) {
+                if let Some(captures) = pattern.captures(res.resource_path().path()) {
                     for (no, name) in names.iter().enumerate() {
                         if let Some(m) = captures.name(&name) {
                             idx += 1;
@@ -413,7 +430,7 @@ impl ResourceDef {
 
                 let path = res.resource_path();
                 for idx in 0..idx {
-                    path.add(names[idx].clone(), segments[idx]);
+                    path.add(names[idx], segments[idx]);
                 }
                 path.skip((pos + len) as u16);
                 true
@@ -452,7 +469,7 @@ impl ResourceDef {
 
                     let path = res.resource_path();
                     for idx in 0..idx {
-                        path.add(names[idx].clone(), segments[idx]);
+                        path.add(names[idx], segments[idx]);
                     }
                     path.skip((pos + len) as u16);
                     true
@@ -472,7 +489,7 @@ impl ResourceDef {
         match self.tp {
             PatternType::Prefix(ref p) => path.push_str(p),
             PatternType::Static(ref p) => path.push_str(p),
-            PatternType::Dynamic(..) => {
+            PatternType::Dynamic { .. } => {
                 for el in &self.elements {
                     match *el {
                         PatternElement::Str(ref s) => path.push_str(s),
@@ -507,7 +524,7 @@ impl ResourceDef {
         match self.tp {
             PatternType::Prefix(ref p) => path.push_str(p),
             PatternType::Static(ref p) => path.push_str(p),
-            PatternType::Dynamic(..) => {
+            PatternType::Dynamic { .. } => {
                 for el in &self.elements {
                     match *el {
                         PatternElement::Str(ref s) => path.push_str(s),
@@ -578,12 +595,24 @@ impl ResourceDef {
     fn parse(
         mut pattern: &str,
         mut for_prefix: bool,
+        for_set: bool,
     ) -> (String, Vec<PatternElement>, bool, usize) {
         if pattern.find('{').is_none() {
             return if pattern.ends_with('*') {
                 let path = &pattern[..pattern.len() - 1];
                 let re = String::from("^") + path + "(.*)";
                 (re, vec![PatternElement::Str(String::from(path))], true, 0)
+            } else if for_set {
+                let mut re = format!("^{}", pattern);
+                if !for_prefix {
+                    re.push_str("$");
+                }
+                (
+                    re,
+                    vec![PatternElement::Str(String::from(pattern))],
+                    true,
+                    pattern.chars().count(),
+                )
             } else {
                 (
                     String::from(pattern),
@@ -734,6 +763,7 @@ mod tests {
         assert_eq!(path.get("id").unwrap(), "012345");
     }
 
+    #[allow(clippy::cognitive_complexity)]
     #[test]
     fn test_dynamic_set() {
         let re = ResourceDef::new(vec![
@@ -899,31 +929,31 @@ mod tests {
     fn test_resource_path() {
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/test");
-        assert!(resource.resource_path(&mut s, &mut (&["user1"]).into_iter()));
+        assert!(resource.resource_path(&mut s, &mut (&["user1"]).iter()));
         assert_eq!(s, "/user/user1/test");
 
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/{item2}/test");
-        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).into_iter()));
+        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).iter()));
         assert_eq!(s, "/user/item/item2/test");
 
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/{item2}");
-        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).into_iter()));
+        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).iter()));
         assert_eq!(s, "/user/item/item2");
 
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/{item2}/");
-        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).into_iter()));
+        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).iter()));
         assert_eq!(s, "/user/item/item2/");
 
         let mut s = String::new();
-        assert!(!resource.resource_path(&mut s, &mut (&["item"]).into_iter()));
+        assert!(!resource.resource_path(&mut s, &mut (&["item"]).iter()));
 
         let mut s = String::new();
-        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).into_iter()));
+        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).iter()));
         assert_eq!(s, "/user/item/item2/");
-        assert!(!resource.resource_path(&mut s, &mut (&["item"]).into_iter()));
+        assert!(!resource.resource_path(&mut s, &mut (&["item"]).iter()));
 
         let mut s = String::new();
         assert!(resource.resource_path(&mut s, &mut vec!["item", "item2"].into_iter()));
