@@ -2,3 +2,4 @@ ignore: # ignore codecoverage on following paths
   - "**/tests"
   - "**/benches"
   - "**/examples"
+  - "**/actix-net"

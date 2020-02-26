@@ -2,8 +2,22 @@
 members = [
   "ntex",
   "ntex-web-macros",
+
+  "actix-net/actix-server",
+  "actix-net/actix-service",
+  "actix-net/router",
 ]
 
 [patch.crates-io]
 actix-server = { path = "actix-net/actix-server" }
 actix-service = { path = "actix-net/actix-service" }
+actix-router = { path = "actix-net/router" }
+
+actix-codec = { path = "actix-net/actix-codec" }
+actix-connect = { path = "actix-net/actix-connect" }
+actix-rt = { path = "actix-net/actix-rt" }
+actix-macros = { path = "actix-net/actix-macros" }
+actix-testing = { path = "actix-net/actix-testing" }
+actix-threadpool = { path = "actix-net/actix-threadpool" }
+actix-tls = { path = "actix-net/actix-tls" }
+bytestring = { path = "actix-net/string" }

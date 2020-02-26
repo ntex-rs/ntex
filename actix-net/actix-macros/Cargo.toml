@@ -8,7 +8,6 @@ documentation = "https://docs.rs/actix-macros/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT/Apache-2.0"
 edition = "2018"
-workspace = ".."
 
 [lib]
 proc-macro = true
