@@ -19,11 +19,10 @@ pub mod channel;
 pub mod framed;
 pub mod http;
 pub mod server;
+pub mod service;
 pub mod task;
 pub mod util;
 pub mod web;
 pub mod ws;
 
-pub mod service {
-    pub use actix_service::*;
-}
+pub use self::service::*;

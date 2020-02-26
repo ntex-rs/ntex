@@ -6,10 +6,10 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use actix_rt::time::{delay_until, Delay, Instant};
-use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, Ready};
 
 use super::time::{LowResTime, LowResTimeService};
+use crate::{Service, ServiceFactory};
 
 pub struct KeepAlive<R, E, F> {
     f: F,

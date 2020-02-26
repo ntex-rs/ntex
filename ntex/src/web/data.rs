@@ -135,13 +135,13 @@ impl<T: 'static> DataFactory for Data<T> {
 
 #[cfg(test)]
 mod tests {
-    use actix_service::Service;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::http::StatusCode;
     use crate::web::test::{self, init_service, TestRequest};
     use crate::web::{self, App, HttpResponse};
+    use crate::Service;
 
     #[actix_rt::test]
     async fn test_data_extractor() {

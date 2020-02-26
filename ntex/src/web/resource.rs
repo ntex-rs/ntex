@@ -6,13 +6,13 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use actix_router::IntoPattern;
-use actix_service::boxed::{self, BoxService, BoxServiceFactory};
-use actix_service::{
-    apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
-};
 use futures::future::{ok, Either, LocalBoxFuture, Ready};
 
 use crate::http::{Error, Extensions, Response};
+use crate::service::boxed::{self, BoxService, BoxServiceFactory};
+use crate::service::{
+    apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
+};
 use crate::web::data::Data;
 use crate::web::dev::{insert_slash, AppService, HttpServiceFactory, ResourceDef};
 use crate::web::extract::FromRequest;
@@ -582,7 +582,6 @@ mod tests {
     use std::time::Duration;
 
     use actix_rt::time::delay_for;
-    use actix_service::Service;
     use futures::future::ok;
 
     use crate::http::header::{self, HeaderValue};
@@ -591,6 +590,7 @@ mod tests {
     use crate::web::service::ServiceRequest;
     use crate::web::test::{call_service, init_service, TestRequest};
     use crate::web::{self, guard, App, HttpResponse};
+    use crate::Service;
 
     #[actix_rt::test]
     async fn test_middleware() {

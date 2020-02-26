@@ -6,11 +6,11 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use actix_router::{Path, ResourceDef, ResourceInfo, Router, Url};
-use actix_service::boxed::{self, BoxService, BoxServiceFactory};
-use actix_service::{fn_service, Service, ServiceFactory};
 use futures::future::{ok, FutureExt, LocalBoxFuture};
 
 use crate::http::{Error, Extensions, Request, Response};
+use crate::service::boxed::{self, BoxService, BoxServiceFactory};
+use crate::{fn_service, Service, ServiceFactory};
 
 use super::config::{AppConfig, AppService};
 use super::data::DataFactory;

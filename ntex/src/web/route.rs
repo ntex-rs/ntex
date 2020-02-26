@@ -3,10 +3,10 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use actix_service::{Service, ServiceFactory};
 use futures::future::{ready, FutureExt, LocalBoxFuture};
 
 use crate::http::{Error, Method};
+use crate::{Service, ServiceFactory};
 
 use crate::web::extract::FromRequest;
 use crate::web::guard::{self, Guard};

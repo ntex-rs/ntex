@@ -3,7 +3,6 @@ use std::time::Duration;
 use std::{net, thread};
 
 use actix_rt::time::delay_for;
-use actix_service::fn_service;
 use bytes::Bytes;
 use futures::future::{self, err, ok, ready, FutureExt};
 use futures::stream::{once, StreamExt};
@@ -13,6 +12,7 @@ use ntex::http::test::server as test_server;
 use ntex::http::{
     body, error, header, Error, HttpMessage, HttpService, KeepAlive, Request, Response,
 };
+use ntex::service::fn_service;
 
 #[ntex::test]
 async fn test_h1() {

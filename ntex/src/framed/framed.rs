@@ -5,12 +5,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
-use actix_service::{IntoService, Service};
 use futures::{Future, FutureExt, Stream};
 use log::debug;
 
 use super::error::ServiceError;
 use crate::channel::mpsc;
+use crate::service::{IntoService, Service};
 
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;

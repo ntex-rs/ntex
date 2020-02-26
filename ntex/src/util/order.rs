@@ -7,10 +7,10 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, Ready};
 
 use crate::channel::oneshot;
+use crate::service::{IntoService, Service, Transform};
 use crate::task::LocalWaker;
 
 struct Record<I, E> {
@@ -210,14 +210,14 @@ impl<S: Service> Future for InOrderServiceResponse<S> {
 
 #[cfg(test)]
 mod tests {
-
     use std::task::{Context, Poll};
     use std::time::Duration;
 
-    use super::*;
-    use actix_service::Service;
     use futures::channel::oneshot;
     use futures::future::{lazy, poll_fn, FutureExt, LocalBoxFuture};
+
+    use super::*;
+    use crate::service::Service;
 
     struct Srv;
 

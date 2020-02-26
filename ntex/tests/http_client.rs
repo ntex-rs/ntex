@@ -1,9 +1,9 @@
-use actix_service::ServiceFactory;
 use bytes::Bytes;
 use futures::future::{self, ok};
 
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Method, Request, Response};
+use ntex::service::ServiceFactory;
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \

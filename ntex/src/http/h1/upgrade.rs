@@ -2,12 +2,12 @@ use std::marker::PhantomData;
 use std::task::{Context, Poll};
 
 use actix_codec::Framed;
-use actix_service::{Service, ServiceFactory};
 use futures::future::Ready;
 
 use crate::http::error::Error;
 use crate::http::h1::Codec;
 use crate::http::request::Request;
+use crate::{Service, ServiceFactory};
 
 pub struct UpgradeHandler<T>(PhantomData<T>);
 

@@ -4,10 +4,9 @@ use std::fmt;
 use std::rc::Rc;
 use std::time::Duration;
 
-use actix_service::Service;
-
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName};
+use crate::Service;
 
 use super::connect::ConnectorWrapper;
 use super::error::ConnectError;

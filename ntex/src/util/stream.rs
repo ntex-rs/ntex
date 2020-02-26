@@ -2,10 +2,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_service::{IntoService, Service};
 use futures::{FutureExt, Stream};
 
 use crate::channel::mpsc;
+use crate::service::{IntoService, Service};
 
 #[pin_project::pin_project]
 pub struct Dispatcher<S, T>

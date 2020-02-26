@@ -5,13 +5,13 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use actix_router::{ResourceDef, ResourceInfo, Router};
-use actix_service::boxed::{self, BoxService, BoxServiceFactory};
-use actix_service::{
-    apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
-};
 use futures::future::{ok, Either, Future, LocalBoxFuture, Ready};
 
 use crate::http::{Error, Extensions, Response};
+use crate::service::boxed::{self, BoxService, BoxServiceFactory};
+use crate::service::{
+    apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
+};
 use crate::web::config::ServiceConfig;
 use crate::web::data::Data;
 use crate::web::dev::{AppService, HttpServiceFactory};
@@ -659,13 +659,13 @@ impl ServiceFactory for ScopeEndpoint {
 
 #[cfg(test)]
 mod tests {
-    use actix_service::Service;
     use bytes::Bytes;
     use futures::future::ok;
 
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::http::{Method, StatusCode};
+    use crate::service::Service;
     use crate::web::middleware::DefaultHeaders;
     use crate::web::service::ServiceRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};

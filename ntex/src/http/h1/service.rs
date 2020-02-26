@@ -7,7 +7,6 @@ use std::{fmt, net};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use actix_rt::net::TcpStream;
-use actix_service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 use futures::future::{ok, Ready};
 use futures::ready;
 
@@ -18,6 +17,7 @@ use crate::http::error::{DispatchError, Error, ParseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
+use crate::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;

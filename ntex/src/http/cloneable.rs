@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use actix_service::Service;
+use crate::service::Service;
 
 #[doc(hidden)]
 /// Service that allows to turn non-clone service to a service with `Clone` impl

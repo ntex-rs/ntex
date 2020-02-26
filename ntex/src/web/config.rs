@@ -2,9 +2,9 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 
 use actix_router::ResourceDef;
-use actix_service::{boxed, IntoServiceFactory, ServiceFactory};
 
 use crate::http::{Error, Extensions};
+use crate::service::{boxed, IntoServiceFactory, ServiceFactory};
 
 use super::data::{Data, DataFactory};
 use super::guard::Guard;
@@ -241,13 +241,13 @@ impl ServiceConfig {
 
 #[cfg(test)]
 mod tests {
-    use actix_service::Service;
     use bytes::Bytes;
 
     use super::*;
     use crate::http::{Method, StatusCode};
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, App, HttpRequest, HttpResponse};
+    use crate::Service;
 
     #[actix_rt::test]
     async fn test_data() {

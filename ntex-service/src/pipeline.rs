@@ -231,7 +231,8 @@ impl<T: ServiceFactory> PipelineFactory<T> {
                 Error = Err,
                 Config = T::Config,
                 InitError = T::InitError,
-                Service = impl Service<Request = T::Request, Response = Res, Error = Err> + Clone,
+                Service = impl Service<Request = T::Request, Response = Res, Error = Err>
+                              + Clone,
             > + Clone,
     >
     where

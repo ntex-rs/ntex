@@ -53,7 +53,9 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn fn_factory<F, Cfg, Srv, Fut, Err>(f: F) -> FnServiceNoConfig<F, Cfg, Srv, Fut, Err>
+pub fn fn_factory<F, Cfg, Srv, Fut, Err>(
+    f: F,
+) -> FnServiceNoConfig<F, Cfg, Srv, Fut, Err>
 where
     Srv: Service,
     F: Fn() -> Fut,
@@ -209,7 +211,8 @@ where
     }
 }
 
-impl<F, Fut, Req, Res, Err, Cfg> ServiceFactory for FnServiceFactory<F, Fut, Req, Res, Err, Cfg>
+impl<F, Fut, Req, Res, Err, Cfg> ServiceFactory
+    for FnServiceFactory<F, Fut, Req, Res, Err, Cfg>
 where
     F: FnMut(Req) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,

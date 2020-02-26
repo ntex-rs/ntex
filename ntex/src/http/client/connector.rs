@@ -7,10 +7,10 @@ use actix_connect::{
     default_connector, Connect as TcpConnect, Connection as TcpConnection,
 };
 use actix_rt::net::TcpStream;
-use actix_service::{apply_fn, Service};
 
 use crate::http::{Protocol, Uri};
 use crate::util::timeout::{TimeoutError, TimeoutService};
+use crate::{apply_fn, Service};
 
 use super::connection::Connection;
 use super::error::ConnectError;
@@ -243,11 +243,11 @@ where
         #[cfg(any(feature = "openssl", feature = "rustls"))]
         {
             const H2: &[u8] = b"h2";
+            use crate::{boxed::service, pipeline};
             #[cfg(feature = "openssl")]
             use actix_connect::ssl::openssl::OpensslConnector;
             #[cfg(feature = "rustls")]
             use actix_connect::ssl::rustls::{RustlsConnector, Session};
-            use actix_service::{boxed::service, pipeline};
 
             let ssl_service = TimeoutService::new(
                 self.timeout,

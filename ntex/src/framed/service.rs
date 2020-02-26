@@ -5,10 +5,11 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
-use actix_service::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 use either::Either;
 use futures::{ready, Stream};
 use pin_project::project;
+
+use crate::service::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use super::connect::{Connect, ConnectResult};
 use super::dispatcher::Dispatcher;

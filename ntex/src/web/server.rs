@@ -3,10 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::{fmt, io, net};
 
 use actix_server::{Server, ServerBuilder};
-use actix_service::{map_config, IntoServiceFactory, Service, ServiceFactory};
 
-#[cfg(unix)]
-use actix_service::pipeline_factory;
 #[cfg(feature = "openssl")]
 use actix_tls::openssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
@@ -19,6 +16,9 @@ use net2::TcpBuilder;
 #[cfg(unix)]
 use crate::http::Protocol;
 use crate::http::{body::MessageBody, Error, HttpService, KeepAlive, Request, Response};
+#[cfg(unix)]
+use crate::pipeline_factory;
+use crate::{map_config, IntoServiceFactory, Service, ServiceFactory};
 
 use crate::web::config::AppConfig;
 

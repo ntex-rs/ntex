@@ -3,11 +3,11 @@ use std::fmt;
 use std::future::Future;
 
 use actix_router::IntoPattern;
-use actix_service::{IntoServiceFactory, Service, ServiceFactory};
 
 use crate::http::body::MessageBody;
 use crate::http::error::{BlockingError, Error};
 use crate::http::{Method, Request, Response};
+use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 use super::config::AppConfig;
 use super::extract::FromRequest;

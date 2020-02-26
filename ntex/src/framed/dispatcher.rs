@@ -3,12 +3,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
-use actix_service::Service;
 use futures::Stream;
 use log::debug;
 
-use super::error::ServiceError;
 use crate::channel::mpsc;
+use crate::service::Service;
+
+use super::error::ServiceError;
 
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;

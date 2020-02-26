@@ -4,14 +4,14 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use actix_service::boxed::{self, BoxServiceFactory};
-use actix_service::{
-    apply, apply_fn_factory, IntoServiceFactory, ServiceFactory, Transform,
-};
 use futures::future::{FutureExt, LocalBoxFuture};
 
 use crate::http::body::{Body, MessageBody};
 use crate::http::{Error, Extensions};
+use crate::service::boxed::{self, BoxServiceFactory};
+use crate::service::{
+    apply, apply_fn_factory, IntoServiceFactory, ServiceFactory, Transform,
+};
 
 use super::app_service::{AppEntry, AppInit, AppRoutingFactory};
 use super::config::ServiceConfig;
@@ -473,7 +473,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use actix_service::Service;
     use bytes::Bytes;
     use futures::future::ok;
 
@@ -484,6 +483,7 @@ mod tests {
     use crate::web::service::ServiceRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, HttpRequest, HttpResponse};
+    use crate::Service;
 
     #[actix_rt::test]
     async fn test_default_resource() {

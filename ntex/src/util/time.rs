@@ -3,10 +3,10 @@ use std::task::{Context, Poll};
 use std::time::{self, Duration, Instant};
 
 use actix_rt::time::delay_for;
-use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, ready, FutureExt, Ready};
 
 use super::cell::Cell;
+use crate::service::{Service, ServiceFactory};
 
 #[derive(Clone, Debug)]
 pub struct LowResTime(Cell<Inner>);

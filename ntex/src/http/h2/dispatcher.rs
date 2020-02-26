@@ -7,7 +7,6 @@ use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_rt::time::{Delay, Instant};
-use actix_service::Service;
 use bytes::{Bytes, BytesMut};
 use h2::server::{Connection, SendResponse};
 use h2::SendStream;
@@ -24,6 +23,7 @@ use crate::http::message::ResponseHead;
 use crate::http::payload::Payload;
 use crate::http::request::Request;
 use crate::http::response::Response;
+use crate::Service;
 
 const CHUNK_SIZE: usize = 16_384;
 

@@ -3,9 +3,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_service::{IntoService, Service};
 
 use crate::framed;
+use crate::service::{IntoService, Service};
 
 use super::{Codec, Frame, Message};
 

@@ -82,12 +82,10 @@ fn test_start() {
             .backlog(100)
             .disable_signals()
             .bind("test", addr, move || {
-                fn_service(|io: TcpStream| {
-                    async move {
-                        let mut f = Framed::new(io, BytesCodec);
-                        f.send(Bytes::from_static(b"test")).await.unwrap();
-                        Ok::<_, ()>(())
-                    }
+                fn_service(|io: TcpStream| async move {
+                    let mut f = Framed::new(io, BytesCodec);
+                    f.send(Bytes::from_static(b"test")).await.unwrap();
+                    Ok::<_, ()>(())
                 })
             })
             .unwrap()

@@ -3,13 +3,13 @@ use std::rc::Rc;
 use std::{fmt, net};
 
 use actix_router::{IntoPattern, Path, Resource, ResourceDef, Url};
-use actix_service::{IntoServiceFactory, ServiceFactory};
 
 use crate::http::body::{Body, MessageBody, ResponseBody};
 use crate::http::{
     Error, Extensions, HeaderMap, HttpMessage, Method, Payload, PayloadStream,
     RequestHead, Response, ResponseHead, StatusCode, Uri, Version,
 };
+use crate::{IntoServiceFactory, ServiceFactory};
 
 use super::config::{AppConfig, AppService};
 use super::data::Data;

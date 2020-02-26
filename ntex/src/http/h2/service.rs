@@ -6,10 +6,6 @@ use std::{net, rc};
 
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_rt::net::TcpStream;
-use actix_service::{
-    fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
-    ServiceFactory,
-};
 use bytes::Bytes;
 use futures::future::ok;
 use futures::ready;
@@ -23,6 +19,10 @@ use crate::http::error::{DispatchError, Error};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
+use crate::{
+    fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
+    ServiceFactory,
+};
 
 use super::dispatcher::Dispatcher;
 
@@ -95,11 +95,11 @@ where
 
 #[cfg(feature = "openssl")]
 mod openssl {
-    use actix_service::{fn_factory, fn_service};
     use actix_tls::openssl::{Acceptor, SslAcceptor, SslStream};
     use actix_tls::{openssl::HandshakeError, SslError};
 
     use super::*;
+    use crate::{fn_factory, fn_service};
 
     impl<S, B> H2Service<SslStream<TcpStream>, S, B>
     where

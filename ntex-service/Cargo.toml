@@ -1,5 +1,5 @@
 [package]
-name = "actix-service"
+name = "ntex-service"
 version = "1.0.5"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix service"
@@ -8,16 +8,16 @@ homepage = "https://actix.rs"
 repository = "https://github.com/actix/actix-net.git"
 documentation = "https://docs.rs/actix-service/"
 categories = ["network-programming", "asynchronous"]
-license = "MIT/Apache-2.0"
+license = "MIT"
 edition = "2018"
 
-[badges]
-travis-ci = { repository = "actix/actix-service", branch = "master" }
-codecov = { repository = "actix/actix-service", branch = "master", service = "github" }
-
 [lib]
-name = "actix_service"
+name = "ntex_service"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-service = "1.0.5"
+futures-util = "0.3.1"
+pin-project = "0.4.6"
+
+[dev-dependencies]
+actix-rt = "1.0.0"

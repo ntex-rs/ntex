@@ -454,7 +454,6 @@ where
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use actix_service::Service;
     use bytes::{Bytes, BytesMut};
 
     use super::*;
@@ -463,6 +462,7 @@ pub(crate) mod tests {
     use crate::http::{error, Response as HttpResponse, StatusCode};
     use crate::web;
     use crate::web::test::{init_service, TestRequest};
+    use crate::Service;
 
     #[actix_rt::test]
     async fn test_option_responder() {

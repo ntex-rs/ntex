@@ -6,7 +6,10 @@ use std::task::{Context, Poll};
 use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply tranform function to a service.
-pub fn apply_fn<T, F, R, In, Out, Err, U>(service: U, f: F) -> Apply<T, F, R, In, Out, Err>
+pub fn apply_fn<T, F, R, In, Out, Err, U>(
+    service: U,
+    f: F,
+) -> Apply<T, F, R, In, Out, Err>
 where
     T: Service<Error = Err>,
     F: FnMut(In, &mut T) -> R,

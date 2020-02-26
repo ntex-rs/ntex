@@ -6,7 +6,6 @@ use std::{fmt, io, net};
 
 use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use actix_rt::time::{delay_until, Delay, Instant};
-use actix_service::Service;
 use bitflags::bitflags;
 use bytes::{Buf, BytesMut};
 use log::{error, trace};
@@ -20,6 +19,7 @@ use crate::http::helpers::DataFactory;
 use crate::http::httpmessage::HttpMessage;
 use crate::http::request::Request;
 use crate::http::response::Response;
+use crate::Service;
 
 use super::codec::Codec;
 use super::payload::{Payload, PayloadSender, PayloadStatus};
@@ -889,13 +889,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use actix_service::IntoService;
     use futures::future::{lazy, ok};
 
     use super::*;
     use crate::http::error::Error;
     use crate::http::h1::{ExpectHandler, UpgradeHandler};
     use crate::http::test::TestBuffer;
+    use crate::IntoService;
 
     #[actix_rt::test]
     async fn test_req_parse_err() {

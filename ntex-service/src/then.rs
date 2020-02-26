@@ -116,7 +116,9 @@ where
                 this.state.set(State::Empty);
                 r
             }),
-            State::Empty => panic!("future must not be polled after it returned `Poll::Ready`"),
+            State::Empty => {
+                panic!("future must not be polled after it returned `Poll::Ready`")
+            }
         }
     }
 }
@@ -163,7 +165,10 @@ where
 
     fn new_service(&self, cfg: A::Config) -> Self::Future {
         let srv = &*self.0;
-        ThenServiceFactoryResponse::new(srv.0.new_service(cfg.clone()), srv.1.new_service(cfg))
+        ThenServiceFactoryResponse::new(
+            srv.0.new_service(cfg.clone()),
+            srv.1.new_service(cfg),
+        )
     }
 }
 

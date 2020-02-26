@@ -3,7 +3,6 @@ use std::rc::Rc;
 use std::{fmt, net};
 
 use actix_codec::Framed;
-use actix_service::{IntoServiceFactory, Service, ServiceFactory};
 
 use crate::http::body::MessageBody;
 use crate::http::config::{KeepAlive, ServiceConfig};
@@ -14,6 +13,7 @@ use crate::http::helpers::{Data, DataFactory};
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::service::HttpService;
+use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 
 /// A http service builder
 ///

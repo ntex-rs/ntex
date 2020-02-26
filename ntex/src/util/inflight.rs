@@ -3,10 +3,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, Ready};
 
 use super::counter::{Counter, CounterGuard};
+use crate::service::{IntoService, Service, Transform};
 
 /// InFlight - new service for service that can limit number of in-flight
 /// async requests.
@@ -114,12 +114,11 @@ impl<T: Service> Future for InFlightServiceResponse<T> {
 
 #[cfg(test)]
 mod tests {
-
     use std::task::{Context, Poll};
     use std::time::Duration;
 
     use super::*;
-    use actix_service::{apply, fn_factory, Service, ServiceFactory};
+    use crate::service::{apply, fn_factory, Service, ServiceFactory};
     use futures::future::{lazy, ok, FutureExt, LocalBoxFuture};
 
     struct SleepService(Duration);

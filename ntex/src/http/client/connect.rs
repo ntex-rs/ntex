@@ -5,11 +5,11 @@ use std::task::{Context, Poll};
 use std::{fmt, io, mem, net};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_service::Service;
 
 use crate::http::body::Body;
 use crate::http::h1::ClientCodec;
 use crate::http::{HeaderMap, RequestHead, RequestHeadType, ResponseHead};
+use crate::Service;
 
 use super::error::{ConnectError, SendRequestError};
 use super::response::ClientResponse;

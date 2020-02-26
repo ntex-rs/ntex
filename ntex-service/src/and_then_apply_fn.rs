@@ -156,7 +156,9 @@ where
                 this.state.set(State::Empty);
                 r
             }),
-            State::Empty => panic!("future must not be polled after it returned `Poll::Ready`"),
+            State::Empty => {
+                panic!("future must not be polled after it returned `Poll::Ready`")
+            }
         }
     }
 }
@@ -193,7 +195,8 @@ impl<A, B, F, Fut, Res, Err> Clone for AndThenApplyFnFactory<A, B, F, Fut, Res, 
     }
 }
 
-impl<A, B, F, Fut, Res, Err> ServiceFactory for AndThenApplyFnFactory<A, B, F, Fut, Res, Err>
+impl<A, B, F, Fut, Res, Err> ServiceFactory
+    for AndThenApplyFnFactory<A, B, F, Fut, Res, Err>
 where
     A: ServiceFactory,
     A::Config: Clone,
@@ -241,7 +244,8 @@ where
     b: Option<B::Service>,
 }
 
-impl<A, B, F, Fut, Res, Err> Future for AndThenApplyFnFactoryResponse<A, B, F, Fut, Res, Err>
+impl<A, B, F, Fut, Res, Err> Future
+    for AndThenApplyFnFactoryResponse<A, B, F, Fut, Res, Err>
 where
     A: ServiceFactory,
     B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
@@ -323,11 +327,12 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_service_factory() {
-        let new_srv = pipeline_factory(|| ok::<_, ()>(fn_service(|r: &'static str| ok(r))))
-            .and_then_apply_fn(
-                || ok(Srv),
-                |req: &'static str, s| s.call(()).map_ok(move |res| (req, res)),
-            );
+        let new_srv =
+            pipeline_factory(|| ok::<_, ()>(fn_service(|r: &'static str| ok(r))))
+                .and_then_apply_fn(
+                    || ok(Srv),
+                    |req: &'static str, s| s.call(()).map_ok(move |res| (req, res)),
+                );
         let mut srv = new_srv.new_service(()).await.unwrap();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));

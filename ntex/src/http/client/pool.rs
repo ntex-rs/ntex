@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use actix_codec::{AsyncRead, AsyncWrite};
 use actix_rt::time::{delay_for, Delay};
-use actix_service::Service;
 use bytes::Bytes;
 use futures::future::{poll_fn, FutureExt, LocalBoxFuture};
 use fxhash::FxHashMap;
@@ -19,6 +18,7 @@ use slab::Slab;
 
 use crate::channel::oneshot;
 use crate::http::Protocol;
+use crate::service::Service;
 use crate::task::LocalWaker;
 
 use super::connection::{ConnectionType, IoConnection};

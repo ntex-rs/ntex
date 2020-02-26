@@ -8,10 +8,18 @@ use crate::{Service, ServiceFactory};
 
 pub type BoxFuture<I, E> = Pin<Box<dyn Future<Output = Result<I, E>>>>;
 
-pub type BoxService<Req, Res, Err> =
-    Box<dyn Service<Request = Req, Response = Res, Error = Err, Future = BoxFuture<Res, Err>>>;
+pub type BoxService<Req, Res, Err> = Box<
+    dyn Service<
+        Request = Req,
+        Response = Res,
+        Error = Err,
+        Future = BoxFuture<Res, Err>,
+    >,
+>;
 
-pub struct BoxServiceFactory<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
+pub struct BoxServiceFactory<C, Req, Res, Err, InitErr>(
+    Inner<C, Req, Res, Err, InitErr>,
+);
 
 /// Create boxed service factory
 pub fn factory<T>(
@@ -53,7 +61,8 @@ type Inner<C, Req, Res, Err, InitErr> = Box<
     >,
 >;
 
-impl<C, Req, Res, Err, InitErr> ServiceFactory for BoxServiceFactory<C, Req, Res, Err, InitErr>
+impl<C, Req, Res, Err, InitErr> ServiceFactory
+    for BoxServiceFactory<C, Req, Res, Err, InitErr>
 where
     Req: 'static,
     Res: 'static,

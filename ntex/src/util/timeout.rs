@@ -9,8 +9,9 @@ use std::task::{Context, Poll};
 use std::{fmt, time};
 
 use actix_rt::time::{delay_for, Delay};
-use actix_service::{IntoService, Service, Transform};
 use futures::future::{ok, Ready};
+
+use crate::service::{IntoService, Service, Transform};
 
 /// Applies a timeout to requests.
 #[derive(Debug)]
@@ -182,12 +183,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use futures::future::{ok, FutureExt, LocalBoxFuture};
     use std::task::{Context, Poll};
     use std::time::Duration;
 
     use super::*;
-    use actix_service::{apply, fn_factory, Service, ServiceFactory};
-    use futures::future::{ok, FutureExt, LocalBoxFuture};
+    use crate::service::{apply, fn_factory, Service, ServiceFactory};
 
     struct SleepService(Duration);
 
