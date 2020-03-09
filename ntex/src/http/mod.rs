@@ -7,7 +7,7 @@ mod config;
 #[cfg(feature = "compress")]
 pub mod encoding;
 mod extensions;
-mod helpers;
+pub(crate) mod helpers;
 mod httpcodes;
 mod httpmessage;
 mod message;

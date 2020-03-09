@@ -7,26 +7,29 @@ use std::task::{Context, Poll};
 use actix_router::{ResourceDef, ResourceInfo, Router};
 use futures::future::{ok, Either, Future, LocalBoxFuture, Ready};
 
-use crate::http::{Error, Extensions, Response};
+use crate::http::{Extensions, Response};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
 };
-use crate::web::config::ServiceConfig;
-use crate::web::data::Data;
-use crate::web::dev::{AppService, HttpServiceFactory};
-use crate::web::guard::Guard;
-use crate::web::resource::Resource;
-use crate::web::rmap::ResourceMap;
-use crate::web::route::Route;
-use crate::web::service::{
+
+use super::config::ServiceConfig;
+use super::data::Data;
+use super::dev::{AppService, HttpServiceFactory};
+use super::error::WebError;
+use super::guard::Guard;
+use super::resource::Resource;
+use super::rmap::ResourceMap;
+use super::route::Route;
+use super::service::{
     AppServiceFactory, ServiceFactoryWrapper, WebRequest, WebResponse,
 };
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpService = BoxService<WebRequest, WebResponse, Error>;
-type HttpNewService = BoxServiceFactory<(), WebRequest, WebResponse, Error, ()>;
-type BoxedResponse = LocalBoxFuture<'static, Result<WebResponse, Error>>;
+type HttpService<Err> = BoxService<WebRequest, WebResponse, WebError<Err>>;
+type HttpNewService<Err> =
+    BoxServiceFactory<(), WebRequest, WebResponse, WebError<Err>, ()>;
+type BoxedResponse<Err> = LocalBoxFuture<'static, Result<WebResponse, WebError<Err>>>;
 
 /// Resources scope.
 ///
@@ -46,8 +49,8 @@ type BoxedResponse = LocalBoxFuture<'static, Result<WebResponse, Error>>;
 ///     let app = App::new().service(
 ///         web::scope("/{project_id}/")
 ///             .service(web::resource("/path1").to(|| async { HttpResponse::Ok() }))
-///             .service(web::resource("/path2").route(web::get().to(|| HttpResponse::Ok())))
-///             .service(web::resource("/path3").route(web::head().to(|| HttpResponse::MethodNotAllowed())))
+///             .service(web::resource("/path2").route(web::get().to(|| async { HttpResponse::Ok() })))
+///             .service(web::resource("/path3").route(web::head().to(|| async { HttpResponse::MethodNotAllowed() })))
 ///     );
 /// }
 /// ```
@@ -57,20 +60,20 @@ type BoxedResponse = LocalBoxFuture<'static, Result<WebResponse, Error>>;
 ///  * /{project_id}/path2 - `GET` requests
 ///  * /{project_id}/path3 - `HEAD` requests
 ///
-pub struct Scope<T = ScopeEndpoint> {
+pub struct Scope<Err, T = ScopeEndpoint<Err>> {
     endpoint: T,
     rdef: String,
     data: Option<Extensions>,
-    services: Vec<Box<dyn AppServiceFactory>>,
+    services: Vec<Box<dyn AppServiceFactory<Err>>>,
     guards: Vec<Box<dyn Guard>>,
-    default: Rc<RefCell<Option<Rc<HttpNewService>>>>,
+    default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
     external: Vec<ResourceDef>,
-    factory_ref: Rc<RefCell<Option<ScopeFactory>>>,
+    factory_ref: Rc<RefCell<Option<ScopeFactory<Err>>>>,
 }
 
-impl Scope {
+impl<Err: 'static> Scope<Err> {
     /// Create a new scope
-    pub fn new(path: &str) -> Scope {
+    pub fn new(path: &str) -> Scope<Err> {
         let fref = Rc::new(RefCell::new(None));
         Scope {
             endpoint: ScopeEndpoint::new(fref.clone()),
@@ -85,15 +88,16 @@ impl Scope {
     }
 }
 
-impl<T> Scope<T>
+impl<Err, T> Scope<Err, T>
 where
     T: ServiceFactory<
         Config = (),
         Request = WebRequest,
         Response = WebResponse,
-        Error = Error,
+        Error = WebError<Err>,
         InitError = (),
     >,
+    Err: 'static,
 {
     /// Add match guard to a scope.
     ///
@@ -109,7 +113,7 @@ where
     ///         web::scope("/app")
     ///             .guard(guard::Header("content-type", "text/plain"))
     ///             .route("/test1", web::get().to(index))
-    ///             .route("/test2", web::post().to(|r: HttpRequest| {
+    ///             .route("/test2", web::post().to(|r: HttpRequest| async {
     ///                 HttpResponse::MethodNotAllowed()
     ///             }))
     ///     );
@@ -174,8 +178,8 @@ where
     /// // this function could be located in different module
     /// fn config(cfg: &mut web::ServiceConfig) {
     ///     cfg.service(web::resource("/test")
-    ///         .route(web::get().to(|| HttpResponse::Ok()))
-    ///         .route(web::head().to(|| HttpResponse::MethodNotAllowed()))
+    ///         .route(web::get().to(|| async { HttpResponse::Ok() }))
+    ///         .route(web::head().to(|| async { HttpResponse::MethodNotAllowed() }))
     ///     );
     /// }
     ///
@@ -186,12 +190,12 @@ where
     ///             web::scope("/api")
     ///                 .configure(config)
     ///         )
-    ///         .route("/index.html", web::get().to(|| HttpResponse::Ok()));
+    ///         .route("/index.html", web::get().to(|| async { HttpResponse::Ok() }));
     /// }
     /// ```
     pub fn configure<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut ServiceConfig),
+        F: FnOnce(&mut ServiceConfig<Err>),
     {
         let mut cfg = ServiceConfig::new();
         f(&mut cfg);
@@ -239,7 +243,7 @@ where
     /// ```
     pub fn service<F>(mut self, factory: F) -> Self
     where
-        F: HttpServiceFactory + 'static,
+        F: HttpServiceFactory<Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -263,11 +267,11 @@ where
     ///     let app = App::new().service(
     ///         web::scope("/app")
     ///             .route("/test1", web::get().to(index))
-    ///             .route("/test2", web::post().to(|| HttpResponse::MethodNotAllowed()))
+    ///             .route("/test2", web::post().to(|| async { HttpResponse::MethodNotAllowed() }))
     ///     );
     /// }
     /// ```
-    pub fn route(self, path: &str, mut route: Route) -> Self {
+    pub fn route(self, path: &str, mut route: Route<Err>) -> Self {
         self.service(
             Resource::new(path)
                 .add_guards(route.take_guards())
@@ -285,7 +289,7 @@ where
                 Config = (),
                 Request = WebRequest,
                 Response = WebResponse,
-                Error = Error,
+                Error = WebError<Err>,
             > + 'static,
         U::InitError: fmt::Debug,
     {
@@ -312,11 +316,12 @@ where
         self,
         mw: M,
     ) -> Scope<
+        Err,
         impl ServiceFactory<
             Config = (),
             Request = WebRequest,
             Response = WebResponse,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         >,
     >
@@ -325,7 +330,7 @@ where
             T::Service,
             Request = WebRequest,
             Response = WebResponse,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         >,
     {
@@ -377,17 +382,18 @@ where
         self,
         mw: F,
     ) -> Scope<
+        Err,
         impl ServiceFactory<
             Config = (),
             Request = WebRequest,
             Response = WebResponse,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         >,
     >
     where
         F: FnMut(WebRequest, &mut T::Service) -> R + Clone,
-        R: Future<Output = Result<WebResponse, Error>>,
+        R: Future<Output = Result<WebResponse, WebError<Err>>>,
     {
         Scope {
             endpoint: apply_fn_factory(self.endpoint, mw),
@@ -402,17 +408,18 @@ where
     }
 }
 
-impl<T> HttpServiceFactory for Scope<T>
+impl<Err, T> HttpServiceFactory<Err> for Scope<Err, T>
 where
     T: ServiceFactory<
             Config = (),
             Request = WebRequest,
             Response = WebResponse,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         > + 'static,
+    Err: 'static,
 {
-    fn register(mut self, config: &mut AppService) {
+    fn register(mut self, config: &mut AppService<Err>) {
         // update default resource if needed
         if self.default.borrow().is_none() {
             *self.default.borrow_mut() = Some(config.default_service());
@@ -469,20 +476,20 @@ where
     }
 }
 
-pub struct ScopeFactory {
+pub struct ScopeFactory<Err> {
     data: Option<Rc<Extensions>>,
-    services: Rc<Vec<(ResourceDef, HttpNewService, RefCell<Option<Guards>>)>>,
-    default: Rc<RefCell<Option<Rc<HttpNewService>>>>,
+    services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
+    default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
 }
 
-impl ServiceFactory for ScopeFactory {
+impl<Err: 'static> ServiceFactory for ScopeFactory<Err> {
     type Config = ();
     type Request = WebRequest;
     type Response = WebResponse;
-    type Error = Error;
+    type Error = WebError<Err>;
     type InitError = ();
-    type Service = ScopeService;
-    type Future = ScopeFactoryResponse;
+    type Service = ScopeService<Err>;
+    type Future = ScopeFactoryResponse<Err>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         let default_fut = if let Some(ref default) = *self.default.borrow() {
@@ -513,22 +520,22 @@ impl ServiceFactory for ScopeFactory {
 /// Create scope service
 #[doc(hidden)]
 #[pin_project::pin_project]
-pub struct ScopeFactoryResponse {
-    fut: Vec<CreateScopeServiceItem>,
+pub struct ScopeFactoryResponse<Err> {
+    fut: Vec<CreateScopeServiceItem<Err>>,
     data: Option<Rc<Extensions>>,
-    default: Option<HttpService>,
-    default_fut: Option<LocalBoxFuture<'static, Result<HttpService, ()>>>,
+    default: Option<HttpService<Err>>,
+    default_fut: Option<LocalBoxFuture<'static, Result<HttpService<Err>, ()>>>,
 }
 
-type HttpServiceFut = LocalBoxFuture<'static, Result<HttpService, ()>>;
+type HttpServiceFut<Err> = LocalBoxFuture<'static, Result<HttpService<Err>, ()>>;
 
-enum CreateScopeServiceItem {
-    Future(Option<ResourceDef>, Option<Guards>, HttpServiceFut),
-    Service(ResourceDef, Option<Guards>, HttpService),
+enum CreateScopeServiceItem<Err> {
+    Future(Option<ResourceDef>, Option<Guards>, HttpServiceFut<Err>),
+    Service(ResourceDef, Option<Guards>, HttpService<Err>),
 }
 
-impl Future for ScopeFactoryResponse {
-    type Output = Result<ScopeService, ()>;
+impl<Err> Future for ScopeFactoryResponse<Err> {
+    type Output = Result<ScopeService<Err>, ()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut done = true;
@@ -589,18 +596,18 @@ impl Future for ScopeFactoryResponse {
     }
 }
 
-pub struct ScopeService {
+pub struct ScopeService<Err> {
     data: Option<Rc<Extensions>>,
-    router: Router<HttpService, Vec<Box<dyn Guard>>>,
-    default: Option<HttpService>,
+    router: Router<HttpService<Err>, Vec<Box<dyn Guard>>>,
+    default: Option<HttpService<Err>>,
     _ready: Option<(WebRequest, ResourceInfo)>,
 }
 
-impl Service for ScopeService {
+impl<Err> Service for ScopeService<Err> {
     type Request = WebRequest;
     type Response = WebResponse;
-    type Error = Error;
-    type Future = Either<BoxedResponse, Ready<Result<Self::Response, Self::Error>>>;
+    type Error = WebError<Err>;
+    type Future = Either<BoxedResponse<Err>, Ready<Result<Self::Response, Self::Error>>>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -633,24 +640,24 @@ impl Service for ScopeService {
 }
 
 #[doc(hidden)]
-pub struct ScopeEndpoint {
-    factory: Rc<RefCell<Option<ScopeFactory>>>,
+pub struct ScopeEndpoint<Err> {
+    factory: Rc<RefCell<Option<ScopeFactory<Err>>>>,
 }
 
-impl ScopeEndpoint {
-    fn new(factory: Rc<RefCell<Option<ScopeFactory>>>) -> Self {
+impl<Err: 'static> ScopeEndpoint<Err> {
+    fn new(factory: Rc<RefCell<Option<ScopeFactory<Err>>>>) -> Self {
         ScopeEndpoint { factory }
     }
 }
 
-impl ServiceFactory for ScopeEndpoint {
+impl<Err: 'static> ServiceFactory for ScopeEndpoint<Err> {
     type Config = ();
     type Request = WebRequest;
     type Response = WebResponse;
-    type Error = Error;
+    type Error = WebError<Err>;
     type InitError = ();
-    type Service = ScopeService;
-    type Future = ScopeFactoryResponse;
+    type Service = ScopeService<Err>;
+    type Future = ScopeFactoryResponse<Err>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         self.factory.borrow_mut().as_mut().unwrap().new_service(())
@@ -660,7 +667,7 @@ impl ServiceFactory for ScopeEndpoint {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use futures::future::ok;
+    use futures::future::{ok, ready};
 
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
@@ -673,13 +680,13 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_scope() {
-        let mut srv = init_service(
-            App::new().service(
-                web::scope("/app")
-                    .service(web::resource("/path1").to(|| HttpResponse::Ok())),
-            ),
-        )
-        .await;
+        let mut srv =
+            init_service(App::new().service(
+                web::scope("/app").service(
+                    web::resource("/path1").to(|| async { HttpResponse::Ok() }),
+                ),
+            ))
+            .await;
 
         let req = TestRequest::with_uri("/app/path1").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -691,8 +698,10 @@ mod tests {
         let mut srv = init_service(
             App::new().service(
                 web::scope("/app")
-                    .service(web::resource("").to(|| HttpResponse::Ok()))
-                    .service(web::resource("/").to(|| HttpResponse::Created())),
+                    .service(web::resource("").to(|| async { HttpResponse::Ok() }))
+                    .service(
+                        web::resource("/").to(|| async { HttpResponse::Created() }),
+                    ),
             ),
         )
         .await;
@@ -708,9 +717,12 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_scope_root2() {
-        let mut srv = init_service(App::new().service(
-            web::scope("/app/").service(web::resource("").to(|| HttpResponse::Ok())),
-        ))
+        let mut srv = init_service(
+            App::new().service(
+                web::scope("/app/")
+                    .service(web::resource("").to(|| async { HttpResponse::Ok() })),
+            ),
+        )
         .await;
 
         let req = TestRequest::with_uri("/app").to_request();
@@ -724,9 +736,12 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_scope_root3() {
-        let mut srv = init_service(App::new().service(
-            web::scope("/app/").service(web::resource("/").to(|| HttpResponse::Ok())),
-        ))
+        let mut srv = init_service(
+            App::new().service(
+                web::scope("/app/")
+                    .service(web::resource("/").to(|| async { HttpResponse::Ok() })),
+            ),
+        )
         .await;
 
         let req = TestRequest::with_uri("/app").to_request();
@@ -743,8 +758,8 @@ mod tests {
         let mut srv = init_service(
             App::new().service(
                 web::scope("app")
-                    .route("/path1", web::get().to(|| HttpResponse::Ok()))
-                    .route("/path1", web::delete().to(|| HttpResponse::Ok())),
+                    .route("/path1", web::get().to(|| async { HttpResponse::Ok() }))
+                    .route("/path1", web::delete().to(|| async { HttpResponse::Ok() })),
             ),
         )
         .await;
@@ -772,8 +787,8 @@ mod tests {
             App::new().service(
                 web::scope("app").service(
                     web::resource("path1")
-                        .route(web::get().to(|| HttpResponse::Ok()))
-                        .route(web::delete().to(|| HttpResponse::Ok())),
+                        .route(web::get().to(|| async { HttpResponse::Ok() }))
+                        .route(web::delete().to(|| async { HttpResponse::Ok() })),
                 ),
             ),
         )
@@ -798,14 +813,13 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_scope_guard() {
-        let mut srv = init_service(
-            App::new().service(
-                web::scope("/app")
-                    .guard(guard::Get())
-                    .service(web::resource("/path1").to(|| HttpResponse::Ok())),
-            ),
-        )
-        .await;
+        let mut srv =
+            init_service(App::new().service(
+                web::scope("/app").guard(guard::Get()).service(
+                    web::resource("/path1").to(|| async { HttpResponse::Ok() }),
+                ),
+            ))
+            .await;
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::POST)
@@ -850,14 +864,11 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_nested_scope() {
-        let mut srv = init_service(
-            App::new().service(
-                web::scope("/app")
-                    .service(web::scope("/t1").service(
-                        web::resource("/path1").to(|| HttpResponse::Created()),
-                    )),
+        let mut srv = init_service(App::new().service(web::scope("/app").service(
+            web::scope("/t1").service(
+                web::resource("/path1").to(|| async { HttpResponse::Created() }),
             ),
-        )
+        )))
         .await;
 
         let req = TestRequest::with_uri("/app/t1/path1").to_request();
@@ -867,14 +878,11 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_nested_scope_no_slash() {
-        let mut srv = init_service(
-            App::new().service(
-                web::scope("/app")
-                    .service(web::scope("t1").service(
-                        web::resource("/path1").to(|| HttpResponse::Created()),
-                    )),
+        let mut srv = init_service(App::new().service(web::scope("/app").service(
+            web::scope("t1").service(
+                web::resource("/path1").to(|| async { HttpResponse::Created() }),
             ),
-        )
+        )))
         .await;
 
         let req = TestRequest::with_uri("/app/t1/path1").to_request();
@@ -888,8 +896,10 @@ mod tests {
             App::new().service(
                 web::scope("/app").service(
                     web::scope("/t1")
-                        .service(web::resource("").to(|| HttpResponse::Ok()))
-                        .service(web::resource("/").to(|| HttpResponse::Created())),
+                        .service(web::resource("").to(|| async { HttpResponse::Ok() }))
+                        .service(
+                            web::resource("/").to(|| async { HttpResponse::Created() }),
+                        ),
                 ),
             ),
         )
@@ -906,16 +916,13 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_nested_scope_filter() {
-        let mut srv = init_service(
-            App::new().service(
-                web::scope("/app").service(
-                    web::scope("/t1")
-                        .guard(guard::Get())
-                        .service(web::resource("/path1").to(|| HttpResponse::Ok())),
+        let mut srv =
+            init_service(App::new().service(web::scope("/app").service(
+                web::scope("/t1").guard(guard::Get()).service(
+                    web::resource("/path1").to(|| async { HttpResponse::Ok() }),
                 ),
-            ),
-        )
-        .await;
+            )))
+            .await;
 
         let req = TestRequest::with_uri("/app/t1/path1")
             .method(Method::POST)
@@ -992,7 +999,7 @@ mod tests {
         let mut srv = init_service(
             App::new().service(
                 web::scope("/app")
-                    .service(web::resource("/path1").to(|| HttpResponse::Ok()))
+                    .service(web::resource("/path1").to(|| async { HttpResponse::Ok() }))
                     .default_service(|r: WebRequest| {
                         ok(r.into_response(HttpResponse::BadRequest()))
                     }),
@@ -1014,7 +1021,7 @@ mod tests {
         let mut srv = init_service(
             App::new()
                 .service(web::scope("/app1").default_service(
-                    web::resource("").to(|| HttpResponse::BadRequest()),
+                    web::resource("").to(|| async { HttpResponse::BadRequest() }),
                 ))
                 .service(web::scope("/app2"))
                 .default_service(|r: WebRequest| {
@@ -1047,7 +1054,7 @@ mod tests {
                     )
                     .service(
                         web::resource("/test")
-                            .route(web::get().to(|| HttpResponse::Ok())),
+                            .route(web::get().to(|| async { HttpResponse::Ok() })),
                     ),
             ),
         )
@@ -1076,7 +1083,7 @@ mod tests {
                             Ok(res)
                         }
                     })
-                    .route("/test", web::get().to(|| HttpResponse::Ok())),
+                    .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
             ),
         )
         .await;
@@ -1098,7 +1105,7 @@ mod tests {
                 web::get().to(|data: web::Data<usize>| {
                     assert_eq!(**data, 10);
                     let _ = data.clone();
-                    HttpResponse::Ok()
+                    ready(HttpResponse::Ok())
                 }),
             ),
         ))
@@ -1117,7 +1124,7 @@ mod tests {
                 web::get().to(|data: web::Data<usize>| {
                     assert_eq!(**data, 10);
                     let _ = data.clone();
-                    HttpResponse::Ok()
+                    ready(HttpResponse::Ok())
                 }),
             ),
         ))
@@ -1132,7 +1139,7 @@ mod tests {
     async fn test_scope_config() {
         let mut srv =
             init_service(App::new().service(web::scope("/app").configure(|s| {
-                s.route("/path1", web::get().to(|| HttpResponse::Ok()));
+                s.route("/path1", web::get().to(|| async { HttpResponse::Ok() }));
             })))
             .await;
 
@@ -1146,7 +1153,7 @@ mod tests {
         let mut srv =
             init_service(App::new().service(web::scope("/app").configure(|s| {
                 s.service(web::scope("/v1").configure(|s| {
-                    s.route("/", web::get().to(|| HttpResponse::Ok()));
+                    s.route("/", web::get().to(|| async { HttpResponse::Ok() }));
                 }));
             })))
             .await;

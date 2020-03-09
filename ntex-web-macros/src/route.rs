@@ -194,8 +194,8 @@ impl Route {
             #[allow(non_camel_case_types)]
             pub struct #name;
 
-            impl ntex::web::dev::HttpServiceFactory for #name {
-                fn register(self, __config: &mut ntex::web::dev::AppService) {
+            impl<__E: 'static> ntex::web::dev::HttpServiceFactory<__E> for #name {
+                fn register(self, __config: &mut ntex::web::dev::AppService<__E>) {
                     #ast
                     let __resource = ntex::web::Resource::new(#path)
                         .name(#resource_name)

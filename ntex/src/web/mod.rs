@@ -93,6 +93,7 @@ pub use crate::http::Response as HttpResponse;
 pub use self::app::App;
 pub use self::config::ServiceConfig;
 pub use self::data::Data;
+pub use self::error::{DefaultError, Error, WebError, WebResponseError};
 pub use self::extract::FromRequest;
 pub use self::request::HttpRequest;
 pub use self::resource::Resource;
@@ -118,8 +119,8 @@ pub mod dev {
         HttpServiceFactory, WebRequest, WebResponse, WebService,
     };
 
-    pub use crate::web::types::form::UrlEncoded;
-    pub use crate::web::types::json::JsonBody;
+    //pub use crate::web::types::form::UrlEncoded;
+    //pub use crate::web::types::json::JsonBody;
 
     pub use actix_router::{Path, ResourceDef, ResourcePath, Url};
 

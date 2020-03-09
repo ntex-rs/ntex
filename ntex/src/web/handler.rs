@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -8,28 +7,28 @@ use futures::future::{ok, Ready};
 use futures::ready;
 use pin_project::pin_project;
 
-use crate::http::{Error, Response};
 use crate::{Service, ServiceFactory};
 
+use super::error::{IntoWebError, WebError};
 use super::extract::FromRequest;
 use super::request::HttpRequest;
 use super::responder::Responder;
 use super::service::{WebRequest, WebResponse};
 
 /// Async handler converter factory
-pub trait Factory<T, R, O>: Clone + 'static
+pub trait Factory<T, R, O, Err>: Clone + 'static
 where
     R: Future<Output = O>,
-    O: Responder,
+    O: Responder<Err>,
 {
     fn call(&self, param: T) -> R;
 }
 
-impl<F, R, O> Factory<(), R, O> for F
+impl<F, R, O, Err> Factory<(), R, O, Err> for F
 where
     F: Fn() -> R + Clone + 'static,
     R: Future<Output = O>,
-    O: Responder,
+    O: Responder<Err>,
 {
     fn call(&self, _: ()) -> R {
         (self)()
@@ -37,21 +36,21 @@ where
 }
 
 #[doc(hidden)]
-pub struct Handler<F, T, R, O>
+pub struct Handler<F, T, R, O, Err>
 where
-    F: Factory<T, R, O>,
+    F: Factory<T, R, O, Err>,
     R: Future<Output = O>,
-    O: Responder,
+    O: Responder<Err>,
 {
     hnd: F,
-    _t: PhantomData<(T, R, O)>,
+    _t: PhantomData<(T, R, O, Err)>,
 }
 
-impl<F, T, R, O> Handler<F, T, R, O>
+impl<F, T, R, O, Err> Handler<F, T, R, O, Err>
 where
-    F: Factory<T, R, O>,
+    F: Factory<T, R, O, Err>,
     R: Future<Output = O>,
-    O: Responder,
+    O: Responder<Err>,
 {
     pub fn new(hnd: F) -> Self {
         Handler {
@@ -61,11 +60,11 @@ where
     }
 }
 
-impl<F, T, R, O> Clone for Handler<F, T, R, O>
+impl<F, T, R, O, Err> Clone for Handler<F, T, R, O, Err>
 where
-    F: Factory<T, R, O>,
+    F: Factory<T, R, O, Err>,
     R: Future<Output = O>,
-    O: Responder,
+    O: Responder<Err>,
 {
     fn clone(&self) -> Self {
         Handler {
@@ -75,16 +74,16 @@ where
     }
 }
 
-impl<F, T, R, O> Service for Handler<F, T, R, O>
+impl<F, T, R, O, Err> Service for Handler<F, T, R, O, Err>
 where
-    F: Factory<T, R, O>,
+    F: Factory<T, R, O, Err>,
     R: Future<Output = O>,
-    O: Responder,
+    O: Responder<Err>,
 {
     type Request = (T, HttpRequest);
     type Response = WebResponse;
-    type Error = Infallible;
-    type Future = HandlerWebResponse<R, O>;
+    type Error = (WebError<Err>, HttpRequest);
+    type Future = HandlerWebResponse<R, O, Err>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -101,10 +100,10 @@ where
 
 #[doc(hidden)]
 #[pin_project]
-pub struct HandlerWebResponse<T, R>
+pub struct HandlerWebResponse<T, R, Err>
 where
     T: Future<Output = R>,
-    R: Responder,
+    R: Responder<Err>,
 {
     #[pin]
     fut: T,
@@ -113,25 +112,24 @@ where
     req: Option<HttpRequest>,
 }
 
-impl<T, R> Future for HandlerWebResponse<T, R>
+impl<T, R, Err> Future for HandlerWebResponse<T, R, Err>
 where
     T: Future<Output = R>,
-    R: Responder,
+    R: Responder<Err>,
 {
-    type Output = Result<WebResponse, Infallible>;
+    type Output = Result<WebResponse, (WebError<Err>, HttpRequest)>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
 
         if let Some(fut) = this.fut2.as_pin_mut() {
             return match fut.poll(cx) {
+                Poll::Pending => Poll::Pending,
                 Poll::Ready(Ok(res)) => {
                     Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
                 }
-                Poll::Pending => Poll::Pending,
                 Poll::Ready(Err(e)) => {
-                    let res: Response = e.into().into();
-                    Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
+                    Poll::Ready(Err((e.into_error(), this.req.take().unwrap())))
                 }
             };
         }
@@ -148,12 +146,12 @@ where
 }
 
 /// Extract arguments from request
-pub struct Extract<T: FromRequest, S> {
+pub struct Extract<T: FromRequest<E>, S, E> {
     service: S,
-    _t: PhantomData<T>,
+    _t: PhantomData<(T, E)>,
 }
 
-impl<T: FromRequest, S> Extract<T, S> {
+impl<T: FromRequest<E>, S, E> Extract<T, S, E> {
     pub fn new(service: S) -> Self {
         Extract {
             service,
@@ -162,17 +160,20 @@ impl<T: FromRequest, S> Extract<T, S> {
     }
 }
 
-impl<T: FromRequest, S> ServiceFactory for Extract<T, S>
+impl<T: FromRequest<E>, S, E> ServiceFactory for Extract<T, S, E>
 where
-    S: Service<Request = (T, HttpRequest), Response = WebResponse, Error = Infallible>
-        + Clone,
+    S: Service<
+            Request = (T, HttpRequest),
+            Response = WebResponse,
+            Error = (WebError<E>, HttpRequest),
+        > + Clone,
 {
     type Config = ();
     type Request = WebRequest;
     type Response = WebResponse;
-    type Error = (Error, WebRequest);
+    type Error = (WebError<E>, HttpRequest);
     type InitError = ();
-    type Service = ExtractService<T, S>;
+    type Service = ExtractService<T, S, E>;
     type Future = Ready<Result<Self::Service, ()>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
@@ -183,20 +184,23 @@ where
     }
 }
 
-pub struct ExtractService<T: FromRequest, S> {
+pub struct ExtractService<T: FromRequest<E>, S, E> {
     service: S,
-    _t: PhantomData<T>,
+    _t: PhantomData<(T, E)>,
 }
 
-impl<T: FromRequest, S> Service for ExtractService<T, S>
+impl<T: FromRequest<E>, S, E> Service for ExtractService<T, S, E>
 where
-    S: Service<Request = (T, HttpRequest), Response = WebResponse, Error = Infallible>
-        + Clone,
+    S: Service<
+            Request = (T, HttpRequest),
+            Response = WebResponse,
+            Error = (WebError<E>, HttpRequest),
+        > + Clone,
 {
     type Request = WebRequest;
     type Response = WebResponse;
-    type Error = (Error, WebRequest);
-    type Future = ExtractResponse<T, S>;
+    type Error = (WebError<E>, HttpRequest);
+    type Future = ExtractResponse<T, S, E>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -216,7 +220,7 @@ where
 }
 
 #[pin_project]
-pub struct ExtractResponse<T: FromRequest, S: Service> {
+pub struct ExtractResponse<T: FromRequest<E>, S: Service, E> {
     req: HttpRequest,
     service: S,
     #[pin]
@@ -225,39 +229,41 @@ pub struct ExtractResponse<T: FromRequest, S: Service> {
     fut_s: Option<S::Future>,
 }
 
-impl<T: FromRequest, S> Future for ExtractResponse<T, S>
+impl<T: FromRequest<E>, S, E> Future for ExtractResponse<T, S, E>
 where
-    S: Service<Request = (T, HttpRequest), Response = WebResponse, Error = Infallible>,
+    S: Service<
+        Request = (T, HttpRequest),
+        Response = WebResponse,
+        Error = (WebError<E>, HttpRequest),
+    >,
 {
-    type Output = Result<WebResponse, (Error, WebRequest)>;
+    type Output = Result<WebResponse, (WebError<E>, HttpRequest)>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
 
         if let Some(fut) = this.fut_s.as_pin_mut() {
-            return fut.poll(cx).map_err(|_| panic!());
+            return fut.poll(cx);
         }
 
         match ready!(this.fut.poll(cx)) {
-            Err(e) => {
-                let req = WebRequest::new(this.req.clone());
-                Poll::Ready(Err((e.into(), req)))
-            }
             Ok(item) => {
                 let fut = Some(this.service.call((item, this.req.clone())));
                 self.as_mut().project().fut_s.set(fut);
                 self.poll(cx)
             }
+            Err(e) => Poll::Ready(Err((e.into_error(), this.req.clone()))),
         }
     }
 }
 
 /// FromRequest trait impl for tuples
 macro_rules! factory_tuple ({ $(($n:tt, $T:ident)),+} => {
-    impl<Func, $($T,)+ Res, O> Factory<($($T,)+), Res, O> for Func
+    impl<Func, $($T,)+ Res, O, Err> Factory<($($T,)+), Res, O, Err> for Func
     where Func: Fn($($T,)+) -> Res + Clone + 'static,
           Res: Future<Output = O>,
-          O: Responder,
+          O: Responder<Err>,
+          Err: 'static,
     {
         fn call(&self, param: ($($T,)+)) -> Res {
             (self)($(param.$n,)+)

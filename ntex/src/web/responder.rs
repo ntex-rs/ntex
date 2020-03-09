@@ -11,15 +11,17 @@ use pin_project::{pin_project, project};
 
 use crate::http::error::{HttpError, InternalError};
 use crate::http::header::{HeaderMap, HeaderName, IntoHeaderValue};
-use crate::http::{Error, Response, ResponseBuilder, StatusCode};
-use crate::web::request::HttpRequest;
+use crate::http::{Response, ResponseBuilder, StatusCode};
+
+use super::error::{DefaultError, IntoWebError, WebError};
+use super::request::HttpRequest;
 
 /// Trait implemented by types that can be converted to a http response.
 ///
 /// Types that implement this trait can be used as the return type of a handler.
-pub trait Responder {
+pub trait Responder<Err = DefaultError> {
     /// The associated error which can be returned.
-    type Error: Into<Error>;
+    type Error: IntoWebError<Err>;
 
     /// The future response value.
     type Future: Future<Output = Result<Response, Self::Error>>;
@@ -38,7 +40,7 @@ pub trait Responder {
     /// }
     /// # fn main() {}
     /// ```
-    fn with_status(self, status: StatusCode) -> CustomResponder<Self>
+    fn with_status(self, status: StatusCode) -> CustomResponder<Self, Err>
     where
         Self: Sized,
     {
@@ -56,7 +58,7 @@ pub trait Responder {
     ///     name: String,
     /// }
     ///
-    /// fn index(req: HttpRequest) -> impl Responder {
+    /// async fn index(req: HttpRequest) -> impl Responder {
     ///     web::types::Json(
     ///         MyObj{name: "Name".to_string()}
     ///     )
@@ -64,7 +66,7 @@ pub trait Responder {
     /// }
     /// # fn main() {}
     /// ```
-    fn with_header<K, V>(self, key: K, value: V) -> CustomResponder<Self>
+    fn with_header<K, V>(self, key: K, value: V) -> CustomResponder<Self, Err>
     where
         Self: Sized,
         HeaderName: TryFrom<K>,
@@ -75,9 +77,9 @@ pub trait Responder {
     }
 }
 
-impl Responder for Response {
-    type Error = Error;
-    type Future = Ready<Result<Response, Error>>;
+impl<Err: 'static> Responder<Err> for Response {
+    type Error = WebError<Err>;
+    type Future = Ready<Result<Response, WebError<Err>>>;
 
     #[inline]
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
@@ -85,9 +87,9 @@ impl Responder for Response {
     }
 }
 
-impl<T> Responder for Option<T>
+impl<T, Err> Responder<Err> for Option<T>
 where
-    T: Responder,
+    T: Responder<Err>,
 {
     type Error = T::Error;
     type Future = EitherFuture<T::Future, Ready<Result<Response, T::Error>>>;
@@ -102,28 +104,29 @@ where
     }
 }
 
-impl<T, E> Responder for Result<T, E>
+impl<T, E, Err> Responder<Err> for Result<T, E>
 where
-    T: Responder,
-    E: Into<Error>,
+    T: Responder<Err>,
+    E: IntoWebError<Err>,
+    Err: 'static,
 {
-    type Error = Error;
+    type Error = WebError<Err>;
     type Future = EitherFuture<
-        ResponseFuture<T::Future, T::Error>,
-        Ready<Result<Response, Error>>,
+        ResponseFuture<T::Future, T::Error, Err>,
+        Ready<Result<Response, WebError<Err>>>,
     >;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
         match self {
             Ok(val) => EitherFuture::Left(ResponseFuture::new(val.respond_to(req))),
-            Err(e) => EitherFuture::Right(err(e.into())),
+            Err(e) => EitherFuture::Right(err(e.into_error())),
         }
     }
 }
 
-impl Responder for ResponseBuilder {
-    type Error = Error;
-    type Future = Ready<Result<Response, Error>>;
+impl<Err: 'static> Responder<Err> for ResponseBuilder {
+    type Error = WebError<Err>;
+    type Future = Ready<Result<Response, WebError<Err>>>;
 
     #[inline]
     fn respond_to(mut self, _: &HttpRequest) -> Self::Future {
@@ -131,12 +134,12 @@ impl Responder for ResponseBuilder {
     }
 }
 
-impl<T> Responder for (T, StatusCode)
+impl<T, Err> Responder<Err> for (T, StatusCode)
 where
-    T: Responder,
+    T: Responder<Err>,
 {
     type Error = T::Error;
-    type Future = CustomResponderFut<T>;
+    type Future = CustomResponderFut<T, Err>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
         CustomResponderFut {
@@ -147,9 +150,9 @@ where
     }
 }
 
-impl Responder for &'static str {
-    type Error = Error;
-    type Future = Ready<Result<Response, Error>>;
+impl<Err: 'static> Responder<Err> for &'static str {
+    type Error = WebError<Err>;
+    type Future = Ready<Result<Response, Self::Error>>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
@@ -158,9 +161,9 @@ impl Responder for &'static str {
     }
 }
 
-impl Responder for &'static [u8] {
-    type Error = Error;
-    type Future = Ready<Result<Response, Error>>;
+impl<Err: 'static> Responder<Err> for &'static [u8] {
+    type Error = WebError<Err>;
+    type Future = Ready<Result<Response, Self::Error>>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
@@ -169,9 +172,9 @@ impl Responder for &'static [u8] {
     }
 }
 
-impl Responder for String {
-    type Error = Error;
-    type Future = Ready<Result<Response, Error>>;
+impl<Err: 'static> Responder<Err> for String {
+    type Error = WebError<Err>;
+    type Future = Ready<Result<Response, Self::Error>>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
@@ -180,9 +183,9 @@ impl Responder for String {
     }
 }
 
-impl<'a> Responder for &'a String {
-    type Error = Error;
-    type Future = Ready<Result<Response, Error>>;
+impl<'a, Err: 'static> Responder<Err> for &'a String {
+    type Error = WebError<Err>;
+    type Future = Ready<Result<Response, Self::Error>>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
@@ -191,9 +194,9 @@ impl<'a> Responder for &'a String {
     }
 }
 
-impl Responder for Bytes {
-    type Error = Error;
-    type Future = Ready<Result<Response, Error>>;
+impl<Err: 'static> Responder<Err> for Bytes {
+    type Error = WebError<Err>;
+    type Future = Ready<Result<Response, Self::Error>>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
@@ -202,9 +205,9 @@ impl Responder for Bytes {
     }
 }
 
-impl Responder for BytesMut {
-    type Error = Error;
-    type Future = Ready<Result<Response, Error>>;
+impl<Err: 'static> Responder<Err> for BytesMut {
+    type Error = WebError<Err>;
+    type Future = Ready<Result<Response, Self::Error>>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
@@ -214,20 +217,22 @@ impl Responder for BytesMut {
 }
 
 /// Allows to override status code and headers for a responder.
-pub struct CustomResponder<T> {
+pub struct CustomResponder<T: Responder<Err>, Err> {
     responder: T,
     status: Option<StatusCode>,
     headers: Option<HeaderMap>,
     error: Option<HttpError>,
+    _t: PhantomData<Err>,
 }
 
-impl<T: Responder> CustomResponder<T> {
+impl<T: Responder<Err>, Err> CustomResponder<T, Err> {
     fn new(responder: T) -> Self {
         CustomResponder {
             responder,
             status: None,
             headers: None,
             error: None,
+            _t: PhantomData,
         }
     }
 
@@ -289,9 +294,9 @@ impl<T: Responder> CustomResponder<T> {
     }
 }
 
-impl<T: Responder> Responder for CustomResponder<T> {
+impl<T: Responder<Err>, Err> Responder<Err> for CustomResponder<T, Err> {
     type Error = T::Error;
-    type Future = CustomResponderFut<T>;
+    type Future = CustomResponderFut<T, Err>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
         CustomResponderFut {
@@ -303,14 +308,14 @@ impl<T: Responder> Responder for CustomResponder<T> {
 }
 
 #[pin_project]
-pub struct CustomResponderFut<T: Responder> {
+pub struct CustomResponderFut<T: Responder<Err>, Err> {
     #[pin]
     fut: T::Future,
     status: Option<StatusCode>,
     headers: Option<HeaderMap>,
 }
 
-impl<T: Responder> Future for CustomResponderFut<T> {
+impl<T: Responder<Err>, Err> Future for CustomResponderFut<T, Err> {
     type Output = Result<Response, T::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -364,13 +369,14 @@ pub enum Either<A, B> {
     B(B),
 }
 
-impl<A, B> Responder for Either<A, B>
+impl<A, B, Err> Responder<Err> for Either<A, B>
 where
-    A: Responder,
-    B: Responder,
+    A: Responder<Err>,
+    B: Responder<Err>,
+    Err: 'static,
 {
-    type Error = Error;
-    type Future = EitherResponder<A, B>;
+    type Error = WebError<Err>;
+    type Future = EitherResponder<A, B, Err>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
         match self {
@@ -381,57 +387,59 @@ where
 }
 
 #[pin_project]
-pub enum EitherResponder<A, B>
+pub enum EitherResponder<A, B, Err>
 where
-    A: Responder,
-    B: Responder,
+    A: Responder<Err>,
+    B: Responder<Err>,
 {
     A(#[pin] A::Future),
     B(#[pin] B::Future),
 }
 
-impl<A, B> Future for EitherResponder<A, B>
+impl<A, B, Err> Future for EitherResponder<A, B, Err>
 where
-    A: Responder,
-    B: Responder,
+    A: Responder<Err>,
+    B: Responder<Err>,
+    Err: 'static,
 {
-    type Output = Result<Response, Error>;
+    type Output = Result<Response, WebError<Err>>;
 
     #[project]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         #[project]
         match self.project() {
             EitherResponder::A(fut) => {
-                Poll::Ready(ready!(fut.poll(cx)).map_err(|e| e.into()))
+                Poll::Ready(ready!(fut.poll(cx)).map_err(|e| e.into_error()))
             }
             EitherResponder::B(fut) => {
-                Poll::Ready(ready!(fut.poll(cx).map_err(|e| e.into())))
+                Poll::Ready(ready!(fut.poll(cx).map_err(|e| e.into_error())))
             }
         }
     }
 }
 
-impl<T> Responder for InternalError<T>
+impl<T, Err> Responder<Err> for InternalError<T>
 where
     T: std::fmt::Debug + std::fmt::Display + 'static,
+    Err: 'static,
 {
-    type Error = Error;
-    type Future = Ready<Result<Response, Error>>;
+    type Error = WebError<Err>;
+    type Future = Ready<Result<Response, Self::Error>>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
-        let err: Error = self.into();
+        let err: crate::http::Error = self.into();
         ok(err.into())
     }
 }
 
 #[pin_project]
-pub struct ResponseFuture<T, E> {
+pub struct ResponseFuture<T, E, Err> {
     #[pin]
     fut: T,
-    _t: PhantomData<E>,
+    _t: PhantomData<(E, Err)>,
 }
 
-impl<T, E> ResponseFuture<T, E> {
+impl<T, E, Err> ResponseFuture<T, E, Err> {
     pub fn new(fut: T) -> Self {
         ResponseFuture {
             fut,
@@ -440,15 +448,16 @@ impl<T, E> ResponseFuture<T, E> {
     }
 }
 
-impl<T, E> Future for ResponseFuture<T, E>
+impl<T, E, Err> Future for ResponseFuture<T, E, Err>
 where
     T: Future<Output = Result<Response, E>>,
-    E: Into<Error>,
+    E: IntoWebError<Err>,
+    Err: 'static,
 {
-    type Output = Result<Response, Error>;
+    type Output = Result<Response, WebError<Err>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(ready!(self.project().fut.poll(cx)).map_err(|e| e.into()))
+        Poll::Ready(ready!(self.project().fut.poll(cx)).map_err(|e| e.into_error()))
     }
 }
 
@@ -463,6 +472,12 @@ pub(crate) mod tests {
     use crate::web;
     use crate::web::test::{init_service, TestRequest};
     use crate::Service;
+
+    fn responder<T: Responder<DefaultError>>(
+        responder: T,
+    ) -> impl Responder<DefaultError, Error = T::Error> {
+        responder
+    }
 
     #[actix_rt::test]
     async fn test_option_responder() {
@@ -495,7 +510,7 @@ pub(crate) mod tests {
     async fn test_responder() {
         let req = TestRequest::default().to_http_request();
 
-        let resp: HttpResponse = "test".respond_to(&req).await.unwrap();
+        let resp: HttpResponse = responder("test").respond_to(&req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body().bin_ref(), b"test");
         assert_eq!(
@@ -503,7 +518,7 @@ pub(crate) mod tests {
             HeaderValue::from_static("text/plain; charset=utf-8")
         );
 
-        let resp: HttpResponse = b"test".respond_to(&req).await.unwrap();
+        let resp: HttpResponse = responder(&b"test"[..]).respond_to(&req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body().bin_ref(), b"test");
         assert_eq!(
@@ -511,7 +526,10 @@ pub(crate) mod tests {
             HeaderValue::from_static("application/octet-stream")
         );
 
-        let resp: HttpResponse = "test".to_string().respond_to(&req).await.unwrap();
+        let resp: HttpResponse = responder("test".to_string())
+            .respond_to(&req)
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body().bin_ref(), b"test");
         assert_eq!(
@@ -519,7 +537,10 @@ pub(crate) mod tests {
             HeaderValue::from_static("text/plain; charset=utf-8")
         );
 
-        let resp: HttpResponse = (&"test".to_string()).respond_to(&req).await.unwrap();
+        let resp: HttpResponse = responder(&"test".to_string())
+            .respond_to(&req)
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body().bin_ref(), b"test");
         assert_eq!(
@@ -527,8 +548,10 @@ pub(crate) mod tests {
             HeaderValue::from_static("text/plain; charset=utf-8")
         );
 
-        let resp: HttpResponse =
-            Bytes::from_static(b"test").respond_to(&req).await.unwrap();
+        let resp: HttpResponse = responder(Bytes::from_static(b"test"))
+            .respond_to(&req)
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body().bin_ref(), b"test");
         assert_eq!(
@@ -536,7 +559,7 @@ pub(crate) mod tests {
             HeaderValue::from_static("application/octet-stream")
         );
 
-        let resp: HttpResponse = BytesMut::from(b"test".as_ref())
+        let resp: HttpResponse = responder(BytesMut::from(b"test".as_ref()))
             .respond_to(&req)
             .await
             .unwrap();
@@ -549,7 +572,7 @@ pub(crate) mod tests {
 
         // InternalError
         let resp: HttpResponse =
-            error::InternalError::new("err", StatusCode::BAD_REQUEST)
+            responder(error::InternalError::new("err", StatusCode::BAD_REQUEST))
                 .respond_to(&req)
                 .await
                 .unwrap();
@@ -561,7 +584,7 @@ pub(crate) mod tests {
         let req = TestRequest::default().to_http_request();
 
         // Result<I, E>
-        let resp: HttpResponse = Ok::<_, Error>("test".to_string())
+        let resp: HttpResponse = Ok::<_, web::Error>("test".to_string())
             .respond_to(&req)
             .await
             .unwrap();
@@ -572,18 +595,19 @@ pub(crate) mod tests {
             HeaderValue::from_static("text/plain; charset=utf-8")
         );
 
-        let res =
-            Err::<String, _>(error::InternalError::new("err", StatusCode::BAD_REQUEST))
-                .respond_to(&req)
-                .await;
+        let res = responder(Err::<String, _>(error::InternalError::new(
+            "err",
+            StatusCode::BAD_REQUEST,
+        )))
+        .respond_to(&req)
+        .await;
         assert!(res.is_err());
     }
 
     #[actix_rt::test]
     async fn test_custom_responder() {
         let req = TestRequest::default().to_http_request();
-        let res = "test"
-            .to_string()
+        let res = responder("test".to_string())
             .with_status(StatusCode::BAD_REQUEST)
             .respond_to(&req)
             .await
@@ -591,8 +615,7 @@ pub(crate) mod tests {
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
         assert_eq!(res.body().bin_ref(), b"test");
 
-        let res = "test"
-            .to_string()
+        let res = responder("test".to_string())
             .with_header("content-type", "json")
             .respond_to(&req)
             .await
@@ -609,19 +632,24 @@ pub(crate) mod tests {
     #[actix_rt::test]
     async fn test_tuple_responder_with_status_code() {
         let req = TestRequest::default().to_http_request();
-        let res = ("test".to_string(), StatusCode::BAD_REQUEST)
-            .respond_to(&req)
-            .await
-            .unwrap();
+        let res = Responder::<DefaultError>::respond_to(
+            ("test".to_string(), StatusCode::BAD_REQUEST),
+            &req,
+        )
+        .await
+        .unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
         assert_eq!(res.body().bin_ref(), b"test");
 
         let req = TestRequest::default().to_http_request();
-        let res = ("test".to_string(), StatusCode::OK)
-            .with_header("content-type", "json")
-            .respond_to(&req)
-            .await
-            .unwrap();
+        let res = CustomResponder::<_, DefaultError>::new((
+            "test".to_string(),
+            StatusCode::OK,
+        ))
+        .with_header("content-type", "json")
+        .respond_to(&req)
+        .await
+        .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(res.body().bin_ref(), b"test");
         assert_eq!(

@@ -44,11 +44,11 @@ use super::service::WebService;
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/users/{userid}/{friend}")
-///         .route(web::get().to(|| web::HttpResponse::Ok()))
-///         .route(web::head().to(|| web::HttpResponse::MethodNotAllowed()))
+///         .route(web::get().to(|| async { web::HttpResponse::Ok() }))
+///         .route(web::head().to(|| async { web::HttpResponse::MethodNotAllowed() }))
 /// );
 /// ```
-pub fn resource<T: IntoPattern>(path: T) -> Resource {
+pub fn resource<T: IntoPattern, Err: 'static>(path: T) -> Resource<Err> {
     Resource::new(path)
 }
 
@@ -62,9 +62,9 @@ pub fn resource<T: IntoPattern>(path: T) -> Resource {
 ///
 /// let app = web::App::new().service(
 ///     web::scope("/{project_id}")
-///         .service(web::resource("/path1").to(|| web::HttpResponse::Ok()))
-///         .service(web::resource("/path2").to(|| web::HttpResponse::Ok()))
-///         .service(web::resource("/path3").to(|| web::HttpResponse::MethodNotAllowed()))
+///         .service(web::resource("/path1").to(|| async { web::HttpResponse::Ok() }))
+///         .service(web::resource("/path2").to(|| async { web::HttpResponse::Ok() }))
+///         .service(web::resource("/path3").to(|| async { web::HttpResponse::MethodNotAllowed() }))
 /// );
 /// ```
 ///
@@ -73,12 +73,12 @@ pub fn resource<T: IntoPattern>(path: T) -> Resource {
 ///  * /{project_id}/path2
 ///  * /{project_id}/path3
 ///
-pub fn scope(path: &str) -> Scope {
+pub fn scope<Err: 'static>(path: &str) -> Scope<Err> {
     Scope::new(path)
 }
 
 /// Create *route* without configuration.
-pub fn route() -> Route {
+pub fn route<Err: 'static>() -> Route<Err> {
     Route::new()
 }
 
@@ -89,14 +89,14 @@ pub fn route() -> Route {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///        .route(web::get().to(|| web::HttpResponse::Ok()))
+///        .route(web::get().to(|| async { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
 /// In the above example, one `GET` route gets added:
 ///  * /{project_id}
 ///
-pub fn get() -> Route {
+pub fn get<Err: 'static>() -> Route<Err> {
     method(Method::GET)
 }
 
@@ -107,14 +107,14 @@ pub fn get() -> Route {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::post().to(|| web::HttpResponse::Ok()))
+///         .route(web::post().to(|| async { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
 /// In the above example, one `POST` route gets added:
 ///  * /{project_id}
 ///
-pub fn post() -> Route {
+pub fn post<Err: 'static>() -> Route<Err> {
     method(Method::POST)
 }
 
@@ -125,14 +125,14 @@ pub fn post() -> Route {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::put().to(|| web::HttpResponse::Ok()))
+///         .route(web::put().to(|| async { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
 /// In the above example, one `PUT` route gets added:
 ///  * /{project_id}
 ///
-pub fn put() -> Route {
+pub fn put<Err: 'static>() -> Route<Err> {
     method(Method::PUT)
 }
 
@@ -143,14 +143,14 @@ pub fn put() -> Route {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::patch().to(|| web::HttpResponse::Ok()))
+///         .route(web::patch().to(|| async { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
 /// In the above example, one `PATCH` route gets added:
 ///  * /{project_id}
 ///
-pub fn patch() -> Route {
+pub fn patch<Err: 'static>() -> Route<Err> {
     method(Method::PATCH)
 }
 
@@ -161,14 +161,14 @@ pub fn patch() -> Route {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::delete().to(|| web::HttpResponse::Ok()))
+///         .route(web::delete().to(|| async { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
 /// In the above example, one `DELETE` route gets added:
 ///  * /{project_id}
 ///
-pub fn delete() -> Route {
+pub fn delete<Err: 'static>() -> Route<Err> {
     method(Method::DELETE)
 }
 
@@ -179,14 +179,14 @@ pub fn delete() -> Route {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::head().to(|| web::HttpResponse::Ok()))
+///         .route(web::head().to(|| async { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
 /// In the above example, one `HEAD` route gets added:
 ///  * /{project_id}
 ///
-pub fn head() -> Route {
+pub fn head<Err: 'static>() -> Route<Err> {
     method(Method::HEAD)
 }
 
@@ -197,14 +197,14 @@ pub fn head() -> Route {
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
-///         .route(web::method(http::Method::GET).to(|| web::HttpResponse::Ok()))
+///         .route(web::method(http::Method::GET).to(|| async { web::HttpResponse::Ok() }))
 /// );
 /// ```
 ///
 /// In the above example, one `GET` route gets added:
 ///  * /{project_id}
 ///
-pub fn method(method: Method) -> Route {
+pub fn method<Err: 'static>(method: Method) -> Route<Err> {
     Route::new().method(method)
 }
 
@@ -221,12 +221,13 @@ pub fn method(method: Method) -> Route {
 ///     web::resource("/").route(web::to(index))
 /// );
 /// ```
-pub fn to<F, I, R, U>(handler: F) -> Route
+pub fn to<F, I, R, U, Err>(handler: F) -> Route<Err>
 where
-    F: Factory<I, R, U>,
-    I: FromRequest + 'static,
+    F: Factory<I, R, U, Err>,
+    I: FromRequest<Err> + 'static,
     R: Future<Output = U> + 'static,
-    U: Responder + 'static,
+    U: Responder<Err> + 'static,
+    Err: 'static,
 {
     Route::new().to(handler)
 }
@@ -234,10 +235,9 @@ where
 /// Create raw service for a specific path.
 ///
 /// ```rust
-/// use ntex::http::Error;
-/// use ntex::web::{self, dev, guard, App, HttpResponse};
+/// use ntex::web::{self, dev, guard, App, HttpResponse, DefaultError, WebError};
 ///
-/// async fn my_service(req: dev::WebRequest) -> Result<dev::WebResponse, Error> {
+/// async fn my_service(req: dev::WebRequest) -> Result<dev::WebResponse, WebError<DefaultError>> {
 ///     Ok(req.into_response(HttpResponse::Ok().finish()))
 /// }
 ///
@@ -271,7 +271,7 @@ where
 /// async fn main() -> std::io::Result<()> {
 ///     web::server(
 ///         || web::App::new()
-///             .service(web::resource("/").to(|| web::HttpResponse::Ok())))
+///             .service(web::resource("/").to(|| async { web::HttpResponse::Ok() })))
 ///         .bind("127.0.0.1:59090")?
 ///         .run()
 ///         .await

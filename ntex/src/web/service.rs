@@ -6,25 +6,26 @@ use actix_router::{IntoPattern, Path, Resource, ResourceDef, Url};
 
 use crate::http::body::{Body, MessageBody, ResponseBody};
 use crate::http::{
-    Error, Extensions, HeaderMap, HttpMessage, Method, Payload, PayloadStream,
-    RequestHead, Response, ResponseHead, StatusCode, Uri, Version,
+    Extensions, HeaderMap, HttpMessage, Method, Payload, PayloadStream, RequestHead,
+    Response, ResponseHead, StatusCode, Uri, Version,
 };
 use crate::{IntoServiceFactory, ServiceFactory};
 
 use super::config::{AppConfig, AppService};
 use super::data::Data;
 use super::dev::insert_slash;
+use super::error::{IntoWebError, WebError};
 use super::guard::Guard;
 use super::info::ConnectionInfo;
 use super::request::HttpRequest;
 use super::rmap::ResourceMap;
 
-pub trait HttpServiceFactory {
-    fn register(self, config: &mut AppService);
+pub trait HttpServiceFactory<Err> {
+    fn register(self, config: &mut AppService<Err>);
 }
 
-pub(super) trait AppServiceFactory {
-    fn register(&mut self, config: &mut AppService);
+pub(super) trait AppServiceFactory<Err> {
+    fn register(&mut self, config: &mut AppService<Err>);
 }
 
 pub(super) struct ServiceFactoryWrapper<T> {
@@ -39,11 +40,11 @@ impl<T> ServiceFactoryWrapper<T> {
     }
 }
 
-impl<T> AppServiceFactory for ServiceFactoryWrapper<T>
+impl<T, Err> AppServiceFactory<Err> for ServiceFactoryWrapper<T>
 where
-    T: HttpServiceFactory,
+    T: HttpServiceFactory<Err>,
 {
-    fn register(&mut self, config: &mut AppService) {
+    fn register(&mut self, config: &mut AppService<Err>) {
         if let Some(item) = self.factory.take() {
             item.register(config)
         }
@@ -103,9 +104,10 @@ impl WebRequest {
 
     /// Create web response for error
     #[inline]
-    pub fn error_response<B, E: Into<Error>>(self, err: E) -> WebResponse<B> {
-        let res: Response = err.into().into();
-        WebResponse::new(self.0, res.into_body())
+    pub fn error_response<B, Err, E: IntoWebError<Err>>(self, _err: E) -> WebResponse<B> {
+        //let res: Response = err.into().into();
+        //WebResponse::new(self.0, res.into_body())
+        todo!()
     }
 
     /// This method returns reference to the request head
@@ -304,8 +306,8 @@ impl<B> WebResponse<B> {
     }
 
     /// Create web response from the error
-    pub fn from_err<E: Into<Error>>(err: E, request: HttpRequest) -> Self {
-        let e: Error = err.into();
+    pub fn from_err<Err, E: Into<WebError<Err>>>(err: E, request: HttpRequest) -> Self {
+        let e: WebError<Err> = err.into();
         let res: Response = e.into();
         WebResponse {
             request,
@@ -315,7 +317,7 @@ impl<B> WebResponse<B> {
 
     /// Create web response for error
     #[inline]
-    pub fn error_response<E: Into<Error>>(self, err: E) -> Self {
+    pub fn error_response<Err, E: Into<WebError<Err>>>(self, err: E) -> Self {
         Self::from_err(err, self.request)
     }
 
@@ -362,10 +364,10 @@ impl<B> WebResponse<B> {
     }
 
     /// Execute closure and in case of error convert it to response.
-    pub fn checked_expr<F, E>(mut self, f: F) -> Self
+    pub fn checked_expr<F, E, Err>(mut self, f: F) -> Self
     where
         F: FnOnce(&mut Self) -> Result<(), E>,
-        E: Into<Error>,
+        E: Into<WebError<Err>>,
     {
         match f(&mut self) {
             Ok(_) => self,
@@ -448,10 +450,9 @@ impl WebService {
     /// Add match guard to a web service.
     ///
     /// ```rust
-    /// use ntex::http;
-    /// use ntex::web::{self, guard, dev, App, HttpResponse};
+    /// use ntex::web::{self, guard, dev, App, DefaultError, HttpResponse, WebError};
     ///
-    /// async fn index(req: dev::WebRequest) -> Result<dev::WebResponse, http::Error> {
+    /// async fn index(req: dev::WebRequest) -> Result<dev::WebResponse, WebError<DefaultError>> {
     ///     Ok(req.into_response(HttpResponse::Ok().finish()))
     /// }
     ///
@@ -470,16 +471,17 @@ impl WebService {
     }
 
     /// Set a service factory implementation and generate web service.
-    pub fn finish<T, F>(self, service: F) -> impl HttpServiceFactory
+    pub fn finish<T, F, Err>(self, service: F) -> impl HttpServiceFactory<Err>
     where
         F: IntoServiceFactory<T>,
         T: ServiceFactory<
                 Config = (),
                 Request = WebRequest,
                 Response = WebResponse,
-                Error = Error,
+                Error = WebError<Err>,
                 InitError = (),
             > + 'static,
+        Err: 'static,
     {
         WebServiceImpl {
             srv: service.into_factory(),
@@ -497,17 +499,18 @@ struct WebServiceImpl<T> {
     guards: Vec<Box<dyn Guard>>,
 }
 
-impl<T> HttpServiceFactory for WebServiceImpl<T>
+impl<T, Err> HttpServiceFactory<Err> for WebServiceImpl<T>
 where
     T: ServiceFactory<
             Config = (),
             Request = WebRequest,
             Response = WebResponse,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         > + 'static,
+    Err: 'static,
 {
-    fn register(mut self, config: &mut AppService) {
+    fn register(mut self, config: &mut AppService<Err>) {
         let guards = if self.guards.is_empty() {
             None
         } else {

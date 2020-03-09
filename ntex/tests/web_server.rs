@@ -4,23 +4,24 @@ use std::task::{Context, Poll};
 
 use brotli2::write::{BrotliDecoder, BrotliEncoder};
 use bytes::Bytes;
+use derive_more::Display;
 use flate2::read::GzDecoder;
 use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
-use futures::{ready, Future};
+use futures::{future::ready, ready, Future};
 use rand::{distributions::Alphanumeric, Rng};
 
 use ntex::http::body::Body;
 use ntex::http::error::Error;
 use ntex::http::header::{
-    ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH,
+    ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
     TRANSFER_ENCODING,
 };
 use ntex::http::{Method, StatusCode};
 
 use ntex::web::dev::BodyEncoding;
 use ntex::web::middleware::Compress;
-use ntex::web::{self, test, App, HttpResponse};
+use ntex::web::{self, test, App, HttpResponse, WebResponseError};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -83,8 +84,9 @@ impl futures::Stream for TestBody {
 #[ntex::test]
 async fn test_body() {
     let srv = test::start(|| {
-        App::new()
-            .service(web::resource("/").route(web::to(|| HttpResponse::Ok().body(STR))))
+        App::new().service(
+            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+        )
     });
 
     let mut response = srv.get("/").send().await.unwrap();
@@ -100,7 +102,10 @@ async fn test_body_gzip() {
     let srv = test::start_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
-            .service(web::resource("/").route(web::to(|| HttpResponse::Ok().body(STR))))
+            .service(
+                web::resource("/")
+                    .route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+            )
     });
 
     let mut response = srv
@@ -127,10 +132,9 @@ async fn test_body_gzip2() {
     let srv = test::start_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
-            .service(
-                web::resource("/")
-                    .route(web::to(|| HttpResponse::Ok().body(STR).into_body::<Body>())),
-            )
+            .service(web::resource("/").route(web::to(|| async {
+                HttpResponse::Ok().body(STR).into_body::<Body>()
+            })))
     });
 
     let mut response = srv
@@ -157,12 +161,12 @@ async fn test_body_encoding_override() {
     let srv = test::start_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
-            .service(web::resource("/").route(web::to(|| {
+            .service(web::resource("/").route(web::to(|| async {
                 HttpResponse::Ok()
                     .encoding(ContentEncoding::Deflate)
                     .body(STR)
             })))
-            .service(web::resource("/raw").route(web::to(|| {
+            .service(web::resource("/raw").route(web::to(|| async {
                 let body = Body::Bytes(STR.into());
                 let mut response = HttpResponse::with_body(StatusCode::OK, body);
 
@@ -220,10 +224,9 @@ async fn test_body_gzip_large() {
         let data = srv_data.clone();
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
-            .service(
-                web::resource("/")
-                    .route(web::to(move || HttpResponse::Ok().body(data.clone()))),
-            )
+            .service(web::resource("/").route(web::to(move || {
+                ready(HttpResponse::Ok().body(data.clone()))
+            })))
     });
 
     let mut response = srv
@@ -257,10 +260,9 @@ async fn test_body_gzip_large_random() {
         let data = srv_data.clone();
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
-            .service(
-                web::resource("/")
-                    .route(web::to(move || HttpResponse::Ok().body(data.clone()))),
-            )
+            .service(web::resource("/").route(web::to(move || {
+                ready(HttpResponse::Ok().body(data.clone()))
+            })))
     });
 
     let mut response = srv
@@ -288,7 +290,7 @@ async fn test_body_chunked_implicit() {
     let srv = test::start_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
-            .service(web::resource("/").route(web::get().to(move || {
+            .service(web::resource("/").route(web::get().to(move || async {
                 HttpResponse::Ok()
                     .streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
             })))
@@ -321,7 +323,7 @@ async fn test_body_chunked_implicit() {
 async fn test_body_br_streaming() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().wrap(Compress::new(ContentEncoding::Br)).service(
-            web::resource("/").route(web::to(move || {
+            web::resource("/").route(web::to(move || async {
                 HttpResponse::Ok()
                     .streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
             })),
@@ -339,23 +341,24 @@ async fn test_body_br_streaming() {
 
     // read response
     let bytes = response.body().await.unwrap();
-    println!("TEST: {:?}", bytes.len());
 
     // decode br
     let mut e = BrotliDecoder::new(Vec::with_capacity(2048));
     e.write_all(bytes.as_ref()).unwrap();
     let dec = e.finish().unwrap();
-    println!("T: {:?}", Bytes::copy_from_slice(&dec));
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 }
 
 #[ntex::test]
 async fn test_head_binary() {
-    let srv = test::start_with(test::config().h1(), || {
-        App::new().service(web::resource("/").route(
-            web::head().to(move || HttpResponse::Ok().content_length(100).body(STR)),
-        ))
-    });
+    let srv =
+        test::start_with(test::config().h1(), || {
+            App::new().service(web::resource("/").route(
+                web::head().to(move || async {
+                    HttpResponse::Ok().content_length(100).body(STR)
+                }),
+            ))
+        });
 
     let mut response = srv.head("/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -373,7 +376,7 @@ async fn test_head_binary() {
 #[ntex::test]
 async fn test_no_chunking() {
     let srv = test::start_with(test::config().h1(), || {
-        App::new().service(web::resource("/").route(web::to(move || {
+        App::new().service(web::resource("/").route(web::to(move || async {
             HttpResponse::Ok()
                 .no_chunking()
                 .content_length(STR.len() as u64)
@@ -396,7 +399,8 @@ async fn test_body_deflate() {
         App::new()
             .wrap(Compress::new(ContentEncoding::Deflate))
             .service(
-                web::resource("/").route(web::to(move || HttpResponse::Ok().body(STR))),
+                web::resource("/")
+                    .route(web::to(move || async { HttpResponse::Ok().body(STR) })),
             )
     });
 
@@ -423,7 +427,8 @@ async fn test_body_deflate() {
 async fn test_body_brotli() {
     let srv = test::start_with(test::config().h1(), || {
         App::new().wrap(Compress::new(ContentEncoding::Br)).service(
-            web::resource("/").route(web::to(move || HttpResponse::Ok().body(STR))),
+            web::resource("/")
+                .route(web::to(move || async { HttpResponse::Ok().body(STR) })),
         )
     });
 
@@ -450,10 +455,11 @@ async fn test_body_brotli() {
 #[ntex::test]
 async fn test_encoding() {
     let srv = test::start_with(test::config().h1(), || {
-        App::new().wrap(Compress::default()).service(
-            web::resource("/")
-                .route(web::to(move |body: Bytes| HttpResponse::Ok().body(body))),
-        )
+        App::new()
+            .wrap(Compress::default())
+            .service(web::resource("/").route(web::to(move |body: Bytes| async {
+                HttpResponse::Ok().body(body)
+            })))
     });
 
     // client request
@@ -476,10 +482,9 @@ async fn test_encoding() {
 #[ntex::test]
 async fn test_gzip_encoding() {
     let srv = test::start_with(test::config().h1(), || {
-        App::new().service(
-            web::resource("/")
-                .route(web::to(move |body: Bytes| HttpResponse::Ok().body(body))),
-        )
+        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+            HttpResponse::Ok().body(body)
+        })))
     });
 
     // client request
@@ -503,10 +508,9 @@ async fn test_gzip_encoding() {
 async fn test_gzip_encoding_large() {
     let data = STR.repeat(10);
     let srv = test::start_with(test::config().h1(), || {
-        App::new().service(
-            web::resource("/")
-                .route(web::to(move |body: Bytes| HttpResponse::Ok().body(body))),
-        )
+        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+            HttpResponse::Ok().body(body)
+        })))
     });
 
     // client request
@@ -534,10 +538,9 @@ async fn test_reading_gzip_encoding_large_random() {
         .collect::<String>();
 
     let srv = test::start_with(test::config().h1(), || {
-        App::new().service(
-            web::resource("/")
-                .route(web::to(move |body: Bytes| HttpResponse::Ok().body(body))),
-        )
+        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+            HttpResponse::Ok().body(body)
+        })))
     });
 
     // client request
@@ -561,10 +564,9 @@ async fn test_reading_gzip_encoding_large_random() {
 #[ntex::test]
 async fn test_reading_deflate_encoding() {
     let srv = test::start_with(test::config().h1(), || {
-        App::new().service(
-            web::resource("/")
-                .route(web::to(move |body: Bytes| HttpResponse::Ok().body(body))),
-        )
+        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+            HttpResponse::Ok().body(body)
+        })))
     });
 
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -588,10 +590,9 @@ async fn test_reading_deflate_encoding() {
 async fn test_reading_deflate_encoding_large() {
     let data = STR.repeat(10);
     let srv = test::start_with(test::config().h1(), || {
-        App::new().service(
-            web::resource("/")
-                .route(web::to(move |body: Bytes| HttpResponse::Ok().body(body))),
-        )
+        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+            HttpResponse::Ok().body(body)
+        })))
     });
 
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -619,10 +620,9 @@ async fn test_reading_deflate_encoding_large_random() {
         .collect::<String>();
 
     let srv = test::start_with(test::config().h1(), || {
-        App::new().service(
-            web::resource("/")
-                .route(web::to(move |body: Bytes| HttpResponse::Ok().body(body))),
-        )
+        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+            HttpResponse::Ok().body(body)
+        })))
     });
 
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -646,10 +646,9 @@ async fn test_reading_deflate_encoding_large_random() {
 #[ntex::test]
 async fn test_brotli_encoding() {
     let srv = test::start_with(test::config().h1(), || {
-        App::new().service(
-            web::resource("/")
-                .route(web::to(move |body: Bytes| HttpResponse::Ok().body(body))),
-        )
+        App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
+            HttpResponse::Ok().body(body)
+        })))
     });
 
     let mut e = BrotliEncoder::new(Vec::new(), 5);
@@ -680,7 +679,7 @@ async fn test_brotli_encoding_large() {
         App::new().service(
             web::resource("/")
                 .app_data(web::types::PayloadConfig::new(320_000))
-                .route(web::to(move |body: Bytes| {
+                .route(web::to(move |body: Bytes| async {
                     HttpResponse::Ok().streaming(TestBody::new(body, 10240))
                 })),
         )
@@ -718,7 +717,7 @@ async fn test_brotli_encoding_large_openssl() {
 
     let data = STR.repeat(10);
     let srv = test::start_with(test::config().openssl(builder.build()), move || {
-        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| {
+        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
             HttpResponse::Ok()
                 .encoding(ContentEncoding::Identity)
                 .body(bytes)
@@ -766,7 +765,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
 
     let srv = test::start_with(test::config().rustls(config), || {
-        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| {
+        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
             HttpResponse::Ok()
                 .encoding(ContentEncoding::Identity)
                 .body(bytes)
@@ -854,7 +853,8 @@ async fn test_slow_request() {
     use std::net;
 
     let srv = test::start_with(test::config().client_timeout(200), || {
-        App::new().service(web::resource("/").route(web::to(|| HttpResponse::Ok())))
+        App::new()
+            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -893,3 +893,50 @@ async fn test_slow_request() {
 //     let _ = stream.read_to_string(&mut data);
 //     assert!(data.is_empty());
 // }
+
+#[ntex::test]
+async fn test_custom_error() {
+    #[derive(Debug, Display)]
+    struct TestError;
+
+    struct JsonRenderer;
+
+    impl WebResponseError<JsonRenderer> for TestError {
+        fn error_response(&self) -> HttpResponse {
+            HttpResponse::BadRequest()
+                .header(CONTENT_TYPE, "application/json")
+                .body("Error")
+        }
+    }
+
+    async fn test() -> Result<HttpResponse, TestError> {
+        Ok(HttpResponse::Ok().body(STR))
+    }
+
+    async fn test_err() -> Result<HttpResponse, TestError> {
+        Err(TestError)
+    }
+
+    let srv = test::start_with(test::config().h1(), || {
+        App::with(JsonRenderer)
+            .service(web::resource("/").route(web::get().to(test)))
+            .service(web::resource("/err").route(web::get().to(test_err)))
+    });
+
+    let mut response = srv.get("/").send().await.unwrap();
+    assert!(response.status().is_success());
+
+    let len = response.headers().get(CONTENT_LENGTH).unwrap();
+    assert_eq!(format!("{}", STR.len()), len.to_str().unwrap());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    // err
+    let response = srv.get("/err").send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let tp = response.headers().get(CONTENT_TYPE).unwrap();
+    assert_eq!("application/json", tp.to_str().unwrap());
+}

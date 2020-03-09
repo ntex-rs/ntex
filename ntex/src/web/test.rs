@@ -32,21 +32,29 @@ use crate::http::{
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use crate::web::config::AppConfig;
+use crate::web::error::{DefaultError, WebError};
 use crate::web::request::HttpRequestPool;
 use crate::web::rmap::ResourceMap;
 use crate::web::service::{WebRequest, WebResponse};
 use crate::web::{HttpRequest, HttpResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service(
-) -> impl Service<Request = WebRequest, Response = WebResponse<Body>, Error = Error> {
+pub fn ok_service() -> impl Service<
+    Request = WebRequest,
+    Response = WebResponse<Body>,
+    Error = WebError<DefaultError>,
+> {
     default_service(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
 pub fn default_service(
     status_code: StatusCode,
-) -> impl Service<Request = WebRequest, Response = WebResponse<Body>, Error = Error> {
+) -> impl Service<
+    Request = WebRequest,
+    Response = WebResponse<Body>,
+    Error = WebError<DefaultError>,
+> {
     (move |req: WebRequest| {
         ok(req.into_response(HttpResponse::build(status_code).finish()))
     })
@@ -150,9 +158,9 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_response<S, B>(app: &mut S, req: Request) -> Bytes
+pub async fn read_response<S, B, E>(app: &mut S, req: Request) -> Bytes
 where
-    S: Service<Request = Request, Response = WebResponse<B>, Error = Error>,
+    S: Service<Request = Request, Response = WebResponse<B>, Error = WebError<E>>,
     B: MessageBody,
 {
     let mut resp = app
@@ -253,9 +261,9 @@ where
 ///     let result: Person = test::read_response_json(&mut app, req).await;
 /// }
 /// ```
-pub async fn read_response_json<S, B, T>(app: &mut S, req: Request) -> T
+pub async fn read_response_json<S, B, T, E>(app: &mut S, req: Request) -> T
 where
-    S: Service<Request = Request, Response = WebResponse<B>, Error = Error>,
+    S: Service<Request = Request, Response = WebResponse<B>, Error = WebError<E>>,
     B: MessageBody,
     T: DeserializeOwned,
 {
@@ -948,7 +956,7 @@ mod tests {
     use super::*;
     use crate::http::header;
     use crate::http::HttpMessage;
-    use crate::web::{self, App, Data, HttpResponse, Responder};
+    use crate::web::{self, App, Data, Error, HttpResponse, Responder};
 
     #[actix_rt::test]
     async fn test_basics() {

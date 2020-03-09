@@ -1,14 +1,11 @@
 //! Path extractor
-use std::sync::Arc;
 use std::{fmt, ops};
 
 use actix_router::PathDeserializer;
 use futures::future::{ready, Ready};
 use serde::de;
 
-use crate::http::error::{Error, ErrorNotFound};
 use crate::http::Payload;
-
 use crate::web::error::PathError;
 use crate::web::request::HttpRequest;
 use crate::web::FromRequest;
@@ -42,7 +39,7 @@ use crate::web::FromRequest;
 /// implements `Deserialize` trait from *serde*.
 ///
 /// ```rust
-/// use ntex::{http, web};
+/// use ntex::web;
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize)]
@@ -51,7 +48,7 @@ use crate::web::FromRequest;
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::types::Path<Info>) -> Result<String, http::Error> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, web::Error> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///
@@ -137,7 +134,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// implements `Deserialize` trait from *serde*.
 ///
 /// ```rust
-/// use ntex::{web, http};
+/// use ntex::web;
 /// use serde_derive::Deserialize;
 ///
 /// #[derive(Deserialize)]
@@ -146,7 +143,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::types::Path<Info>) -> Result<String, http::Error> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, web::error::Error> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///
@@ -157,21 +154,16 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 ///     );
 /// }
 /// ```
-impl<T> FromRequest for Path<T>
+impl<T, Err: 'static> FromRequest<Err> for Path<T>
 where
     T: de::DeserializeOwned,
 {
-    type Error = Error;
-    type Future = Ready<Result<Self, Error>>;
-    type Config = PathConfig;
+    type Error = PathError;
+    type Future = Ready<Result<Self, Self::Error>>;
+    type Config = ();
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        let error_handler = req
-            .app_data::<Self::Config>()
-            .map(|c| c.ehandler.clone())
-            .unwrap_or(None);
-
         ready(
             de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
                 .map(|inner| Path { inner })
@@ -181,201 +173,140 @@ where
                          Request path: {:?}",
                         req.path()
                     );
-                    if let Some(error_handler) = error_handler {
-                        let e = PathError::Deserialize(e);
-                        (error_handler)(e, req)
-                    } else {
-                        ErrorNotFound(e)
-                    }
+                    PathError::from(e).into()
                 }),
         )
     }
 }
 
-/// Path extractor configuration
-///
-/// ```rust
-/// use ntex::http::error;
-/// use ntex::web::{self, App, FromRequest, HttpResponse};
-/// use serde_derive::Deserialize;
-///
-/// #[derive(Deserialize, Debug)]
-/// enum Folder {
-///     #[serde(rename = "inbox")]
-///     Inbox,
-///     #[serde(rename = "outbox")]
-///     Outbox,
-/// }
-///
-/// // deserialize `Info` from request's path
-/// async fn index(folder: web::types::Path<Folder>) -> String {
-///     format!("Selected folder: {:?}!", folder)
-/// }
-///
-/// fn main() {
-///     let app = App::new().service(
-///         web::resource("/messages/{folder}")
-///             .app_data(web::types::PathConfig::default().error_handler(|err, req| {
-///                 error::InternalError::from_response(
-///                     err,
-///                     HttpResponse::Conflict().finish(),
-///                 )
-///                 .into()
-///             }))
-///             .route(web::post().to(index)),
-///     );
-/// }
-/// ```
-#[derive(Clone)]
-pub struct PathConfig {
-    ehandler: Option<Arc<dyn Fn(PathError, &HttpRequest) -> Error + Send + Sync>>,
-}
+// #[cfg(test)]
+// mod tests {
+//     use actix_router::ResourceDef;
+//     use derive_more::Display;
+//     use serde_derive::Deserialize;
 
-impl PathConfig {
-    /// Set custom error handler
-    pub fn error_handler<F>(mut self, f: F) -> Self
-    where
-        F: Fn(PathError, &HttpRequest) -> Error + Send + Sync + 'static,
-    {
-        self.ehandler = Some(Arc::new(f));
-        self
-    }
-}
+//     use super::*;
+//     use crate::http::{error, StatusCode};
+//     use crate::web::test::TestRequest;
+//     use crate::web::HttpResponse;
 
-impl Default for PathConfig {
-    fn default() -> Self {
-        PathConfig { ehandler: None }
-    }
-}
+//     #[derive(Deserialize, Debug, Display)]
+//     #[display(fmt = "MyStruct({}, {})", key, value)]
+//     struct MyStruct {
+//         key: String,
+//         value: String,
+//     }
 
-#[cfg(test)]
-mod tests {
-    use actix_router::ResourceDef;
-    use derive_more::Display;
-    use serde_derive::Deserialize;
+//     #[derive(Deserialize)]
+//     struct Test2 {
+//         key: String,
+//         value: u32,
+//     }
 
-    use super::*;
-    use crate::http::{error, StatusCode};
-    use crate::web::test::TestRequest;
-    use crate::web::HttpResponse;
+//     #[actix_rt::test]
+//     async fn test_extract_path_single() {
+//         let resource = ResourceDef::new("/{value}/");
 
-    #[derive(Deserialize, Debug, Display)]
-    #[display(fmt = "MyStruct({}, {})", key, value)]
-    struct MyStruct {
-        key: String,
-        value: String,
-    }
+//         let mut req = TestRequest::with_uri("/32/").to_srv_request();
+//         resource.match_path(req.match_info_mut());
 
-    #[derive(Deserialize)]
-    struct Test2 {
-        key: String,
-        value: u32,
-    }
+//         let (req, mut pl) = req.into_parts();
+//         assert_eq!(*Path::<i8>::from_request(&req, &mut pl).await.unwrap(), 32);
+//         assert!(Path::<MyStruct>::from_request(&req, &mut pl).await.is_err());
+//     }
 
-    #[actix_rt::test]
-    async fn test_extract_path_single() {
-        let resource = ResourceDef::new("/{value}/");
+//     #[actix_rt::test]
+//     async fn test_tuple_extract() {
+//         let resource = ResourceDef::new("/{key}/{value}/");
 
-        let mut req = TestRequest::with_uri("/32/").to_srv_request();
-        resource.match_path(req.match_info_mut());
+//         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
+//         resource.match_path(req.match_info_mut());
 
-        let (req, mut pl) = req.into_parts();
-        assert_eq!(*Path::<i8>::from_request(&req, &mut pl).await.unwrap(), 32);
-        assert!(Path::<MyStruct>::from_request(&req, &mut pl).await.is_err());
-    }
+//         let (req, mut pl) = req.into_parts();
+//         let res = <(Path<(String, String)>,)>::from_request(&req, &mut pl)
+//             .await
+//             .unwrap();
+//         assert_eq!((res.0).0, "name");
+//         assert_eq!((res.0).1, "user1");
 
-    #[actix_rt::test]
-    async fn test_tuple_extract() {
-        let resource = ResourceDef::new("/{key}/{value}/");
+//         let res = <(Path<(String, String)>, Path<(String, String)>)>::from_request(
+//             &req, &mut pl,
+//         )
+//         .await
+//         .unwrap();
+//         assert_eq!((res.0).0, "name");
+//         assert_eq!((res.0).1, "user1");
+//         assert_eq!((res.1).0, "name");
+//         assert_eq!((res.1).1, "user1");
 
-        let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
-        resource.match_path(req.match_info_mut());
+//         let () = <()>::from_request(&req, &mut pl).await.unwrap();
+//     }
 
-        let (req, mut pl) = req.into_parts();
-        let res = <(Path<(String, String)>,)>::from_request(&req, &mut pl)
-            .await
-            .unwrap();
-        assert_eq!((res.0).0, "name");
-        assert_eq!((res.0).1, "user1");
+//     #[actix_rt::test]
+//     async fn test_request_extract() {
+//         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
 
-        let res = <(Path<(String, String)>, Path<(String, String)>)>::from_request(
-            &req, &mut pl,
-        )
-        .await
-        .unwrap();
-        assert_eq!((res.0).0, "name");
-        assert_eq!((res.0).1, "user1");
-        assert_eq!((res.1).0, "name");
-        assert_eq!((res.1).1, "user1");
+//         let resource = ResourceDef::new("/{key}/{value}/");
+//         resource.match_path(req.match_info_mut());
 
-        let () = <()>::from_request(&req, &mut pl).await.unwrap();
-    }
+//         let (req, mut pl) = req.into_parts();
+//         let mut s = Path::<MyStruct>::from_request(&req, &mut pl).await.unwrap();
+//         assert_eq!(s.key, "name");
+//         assert_eq!(s.value, "user1");
+//         s.value = "user2".to_string();
+//         assert_eq!(s.value, "user2");
+//         assert_eq!(
+//             format!("{}, {:?}", s, s),
+//             "MyStruct(name, user2), MyStruct { key: \"name\", value: \"user2\" }"
+//         );
+//         let s = s.into_inner();
+//         assert_eq!(s.value, "user2");
 
-    #[actix_rt::test]
-    async fn test_request_extract() {
-        let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
+//         let s = Path::<(String, String)>::from_request(&req, &mut pl)
+//             .await
+//             .unwrap();
+//         assert_eq!(s.0, "name");
+//         assert_eq!(s.1, "user1");
 
-        let resource = ResourceDef::new("/{key}/{value}/");
-        resource.match_path(req.match_info_mut());
+//         let mut req = TestRequest::with_uri("/name/32/").to_srv_request();
+//         let resource = ResourceDef::new("/{key}/{value}/");
+//         resource.match_path(req.match_info_mut());
 
-        let (req, mut pl) = req.into_parts();
-        let mut s = Path::<MyStruct>::from_request(&req, &mut pl).await.unwrap();
-        assert_eq!(s.key, "name");
-        assert_eq!(s.value, "user1");
-        s.value = "user2".to_string();
-        assert_eq!(s.value, "user2");
-        assert_eq!(
-            format!("{}, {:?}", s, s),
-            "MyStruct(name, user2), MyStruct { key: \"name\", value: \"user2\" }"
-        );
-        let s = s.into_inner();
-        assert_eq!(s.value, "user2");
+//         let (req, mut pl) = req.into_parts();
+//         let s = Path::<Test2>::from_request(&req, &mut pl).await.unwrap();
+//         assert_eq!(s.as_ref().key, "name");
+//         assert_eq!(s.value, 32);
 
-        let s = Path::<(String, String)>::from_request(&req, &mut pl)
-            .await
-            .unwrap();
-        assert_eq!(s.0, "name");
-        assert_eq!(s.1, "user1");
+//         let s = Path::<(String, u8)>::from_request(&req, &mut pl)
+//             .await
+//             .unwrap();
+//         assert_eq!(s.0, "name");
+//         assert_eq!(s.1, 32);
 
-        let mut req = TestRequest::with_uri("/name/32/").to_srv_request();
-        let resource = ResourceDef::new("/{key}/{value}/");
-        resource.match_path(req.match_info_mut());
+//         let res = Path::<Vec<String>>::from_request(&req, &mut pl)
+//             .await
+//             .unwrap();
+//         assert_eq!(res[0], "name".to_owned());
+//         assert_eq!(res[1], "32".to_owned());
+//     }
 
-        let (req, mut pl) = req.into_parts();
-        let s = Path::<Test2>::from_request(&req, &mut pl).await.unwrap();
-        assert_eq!(s.as_ref().key, "name");
-        assert_eq!(s.value, 32);
+//     #[actix_rt::test]
+//     async fn test_custom_err_handler() {
+//         let (req, mut pl) = TestRequest::with_uri("/name/user1/")
+//             .data(PathConfig::default().error_handler(|err, _| {
+//                 error::InternalError::from_response(
+//                     err,
+//                     HttpResponse::Conflict().finish(),
+//                 )
+//                 .into()
+//             }))
+//             .to_http_parts();
 
-        let s = Path::<(String, u8)>::from_request(&req, &mut pl)
-            .await
-            .unwrap();
-        assert_eq!(s.0, "name");
-        assert_eq!(s.1, 32);
+//         let s = Path::<(usize,)>::from_request(&req, &mut pl)
+//             .await
+//             .unwrap_err();
+//         let res: HttpResponse = s.into();
 
-        let res = Path::<Vec<String>>::from_request(&req, &mut pl)
-            .await
-            .unwrap();
-        assert_eq!(res[0], "name".to_owned());
-        assert_eq!(res[1], "32".to_owned());
-    }
-
-    #[actix_rt::test]
-    async fn test_custom_err_handler() {
-        let (req, mut pl) = TestRequest::with_uri("/name/user1/")
-            .data(PathConfig::default().error_handler(|err, _| {
-                error::InternalError::from_response(
-                    err,
-                    HttpResponse::Conflict().finish(),
-                )
-                .into()
-            }))
-            .to_http_parts();
-
-        let s = Path::<(usize,)>::from_request(&req, &mut pl)
-            .await
-            .unwrap_err();
-        let res: HttpResponse = s.into();
-
-        assert_eq!(res.status(), StatusCode::CONFLICT);
-    }
-}
+//         assert_eq!(res.status(), StatusCode::CONFLICT);
+//     }
+// }

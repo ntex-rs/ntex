@@ -6,15 +6,15 @@ use actix_router::{Path, Url};
 use futures::future::{ok, Ready};
 
 use crate::http::{
-    Error, Extensions, HeaderMap, HttpMessage, Message, Method, Payload, RequestHead,
-    Uri, Version,
+    Extensions, HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri,
+    Version,
 };
 
-use crate::web::config::AppConfig;
-use crate::web::error::UrlGenerationError;
-use crate::web::extract::FromRequest;
-use crate::web::info::ConnectionInfo;
-use crate::web::rmap::ResourceMap;
+use super::config::AppConfig;
+use super::error::{UrlGenerationError, WebError};
+use super::extract::FromRequest;
+use super::info::ConnectionInfo;
+use super::rmap::ResourceMap;
 
 #[derive(Clone)]
 /// An HTTP Request
@@ -142,7 +142,7 @@ impl HttpRequest {
     /// ```rust
     /// # use ntex::web::{self, App, HttpRequest, HttpResponse};
     /// #
-    /// fn index(req: HttpRequest) -> HttpResponse {
+    /// async fn index(req: HttpRequest) -> HttpResponse {
     ///     let url = req.url_for("foo", &["1", "2", "3"]); // <- generate url for "foo" resource
     ///     HttpResponse::Ok().into()
     /// }
@@ -151,7 +151,7 @@ impl HttpRequest {
     ///     let app = App::new()
     ///         .service(web::resource("/test/{one}/{two}/{three}")
     ///              .name("foo")  // <- set resource name, then it could be used in `url_for`
-    ///              .route(web::get().to(|| HttpResponse::Ok()))
+    ///              .route(web::get().to(index))
     ///         );
     /// }
     /// ```
@@ -284,10 +284,10 @@ impl Drop for HttpRequest {
 ///     );
 /// }
 /// ```
-impl FromRequest for HttpRequest {
+impl<E: 'static> FromRequest<E> for HttpRequest {
     type Config = ();
-    type Error = Error;
-    type Future = Ready<Result<Self, Error>>;
+    type Error = WebError<E>;
+    type Future = Ready<Result<Self, Self::Error>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
@@ -344,6 +344,8 @@ impl HttpRequestPool {
 
 #[cfg(test)]
 mod tests {
+    use futures::future::ready;
+
     use super::*;
     use crate::http::{header, StatusCode};
     use crate::web::dev::{ResourceDef, ResourceMap};
@@ -469,11 +471,11 @@ mod tests {
     async fn test_data() {
         let mut srv = init_service(App::new().app_data(10usize).service(
             web::resource("/").to(|req: HttpRequest| {
-                if req.app_data::<usize>().is_some() {
+                ready(if req.app_data::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {
                     HttpResponse::BadRequest()
-                }
+                })
             }),
         ))
         .await;
@@ -483,7 +485,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let mut srv = init_service(App::new().app_data(10u32).service(
-            web::resource("/").to(|req: HttpRequest| {
+            web::resource("/").to(|req: HttpRequest| async move {
                 if req.app_data::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {
@@ -520,7 +522,7 @@ mod tests {
                     req.extensions_mut().insert(Foo {
                         tracker: Rc::clone(&tracker2),
                     });
-                    HttpResponse::Ok()
+                    ready(HttpResponse::Ok())
                 }),
             ))
             .await;

@@ -1,5 +1,6 @@
-use ntex::http::Error;
-use ntex::web::{self, get, middleware, App, HttpRequest, HttpResponse, HttpServer};
+use ntex::web::{
+    self, get, middleware, App, Error, HttpRequest, HttpResponse, HttpServer,
+};
 
 #[get("/resource1/{name}/index.html")]
 async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {
@@ -36,7 +37,7 @@ async fn main() -> std::io::Result<()> {
                         middleware::DefaultHeaders::new().header("X-Version-R2", "0.3"),
                     )
                     .default_service(
-                        web::route().to(|| HttpResponse::MethodNotAllowed()),
+                        web::route().to(|| async { HttpResponse::MethodNotAllowed() }),
                     )
                     .route(web::get().to(index_async)),
             )

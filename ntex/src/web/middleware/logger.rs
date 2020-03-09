@@ -16,10 +16,10 @@ use regex::Regex;
 use time::OffsetDateTime;
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
-use crate::http::error::Error;
 use crate::http::header::HeaderName;
-use crate::http::StatusCode;
+use crate::http::{Error, StatusCode};
 use crate::service::{Service, Transform};
+use crate::web::error::WebError;
 use crate::web::service::{WebRequest, WebResponse};
 use crate::web::HttpResponse;
 
@@ -111,7 +111,7 @@ impl Default for Logger {
     /// ```ignore
     /// %a "%r" %s %b "%{Referer}i" "%{User-Agent}i" %T
     /// ```
-    fn default() -> Logger {
+    fn default() -> Self {
         Logger(Rc::new(Inner {
             format: Format::default(),
             exclude: HashSet::new(),
@@ -119,14 +119,14 @@ impl Default for Logger {
     }
 }
 
-impl<S, B> Transform<S> for Logger
+impl<S, B, Err> Transform<S> for Logger
 where
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<Err>>,
     B: MessageBody,
 {
     type Request = WebRequest;
     type Response = WebResponse<StreamLog<B>>;
-    type Error = Error;
+    type Error = WebError<Err>;
     type InitError = ();
     type Transform = LoggerMiddleware<S>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
@@ -145,14 +145,14 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<S, B> Service for LoggerMiddleware<S>
+impl<S, B, E> Service for LoggerMiddleware<S>
 where
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
     B: MessageBody,
 {
     type Request = WebRequest;
     type Response = WebResponse<StreamLog<B>>;
-    type Error = Error;
+    type Error = WebError<E>;
     type Future = LoggerResponse<S, B>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -198,12 +198,12 @@ where
     _t: PhantomData<(B,)>,
 }
 
-impl<S, B> Future for LoggerResponse<S, B>
+impl<S, B, E> Future for LoggerResponse<S, B>
 where
     B: MessageBody,
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
 {
-    type Output = Result<WebResponse<StreamLog<B>>, Error>;
+    type Output = Result<WebResponse<StreamLog<B>>, WebError<E>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -485,19 +485,21 @@ mod tests {
     use crate::http::{header, StatusCode};
     use crate::service::{IntoService, Service, Transform};
     use crate::web::test::TestRequest;
+    use crate::web::DefaultError;
 
     #[actix_rt::test]
     async fn test_logger() {
         let srv = |req: WebRequest| {
-            ok(req.into_response(
+            ok::<_, WebError<DefaultError>>(req.into_response(
                 HttpResponse::build(StatusCode::OK)
                     .header("X-Test", "ttt")
                     .finish(),
             ))
         };
-        let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D test");
+        let logger =
+            Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D test");
 
-        let mut srv = logger.new_transform(srv.into_service()).await.unwrap();
+        let mut srv = Transform::new_transform(&logger, srv.into_service()).await.unwrap();
 
         let req = TestRequest::with_header(
             header::USER_AGENT,

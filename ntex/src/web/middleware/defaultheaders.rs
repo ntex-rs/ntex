@@ -1,13 +1,16 @@
 //! Middleware for setting default response headers
 use std::convert::TryFrom;
+use std::marker::PhantomData;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
-use crate::http::error::{Error, HttpError};
+use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::service::{Service, Transform};
+
+use crate::web::error::{DefaultError, WebError};
 use crate::web::service::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
@@ -23,14 +26,15 @@ use crate::web::service::{WebRequest, WebResponse};
 ///         .wrap(middleware::DefaultHeaders::new().header("X-Version", "0.2"))
 ///         .service(
 ///             web::resource("/test")
-///                 .route(web::get().to(|| HttpResponse::Ok()))
-///                 .route(web::method(http::Method::HEAD).to(|| HttpResponse::MethodNotAllowed()))
+///                 .route(web::get().to(|| async { HttpResponse::Ok() }))
+///                 .route(web::method(http::Method::HEAD).to(|| async { HttpResponse::MethodNotAllowed() }))
 ///         );
 /// }
 /// ```
 #[derive(Clone)]
-pub struct DefaultHeaders {
+pub struct DefaultHeaders<E = DefaultError> {
     inner: Rc<Inner>,
+    _t: PhantomData<E>,
 }
 
 struct Inner {
@@ -38,20 +42,21 @@ struct Inner {
     headers: HeaderMap,
 }
 
-impl Default for DefaultHeaders {
+impl<E> Default for DefaultHeaders<E> {
     fn default() -> Self {
         DefaultHeaders {
             inner: Rc::new(Inner {
                 ct: false,
                 headers: HeaderMap::new(),
             }),
+            _t: PhantomData,
         }
     }
 }
 
-impl DefaultHeaders {
+impl<E> DefaultHeaders<E> {
     /// Construct `DefaultHeaders` middleware.
-    pub fn new() -> DefaultHeaders {
+    pub fn new() -> DefaultHeaders<E> {
         DefaultHeaders::default()
     }
 
@@ -89,39 +94,41 @@ impl DefaultHeaders {
     }
 }
 
-impl<S, B> Transform<S> for DefaultHeaders
+impl<S, B, E> Transform<S> for DefaultHeaders<E>
 where
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
     S::Future: 'static,
 {
     type Request = WebRequest;
     type Response = WebResponse<B>;
-    type Error = Error;
+    type Error = WebError<E>;
     type InitError = ();
-    type Transform = DefaultHeadersMiddleware<S>;
+    type Transform = DefaultHeadersMiddleware<S, E>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
         ok(DefaultHeadersMiddleware {
             service,
             inner: self.inner.clone(),
+            _t: PhantomData,
         })
     }
 }
 
-pub struct DefaultHeadersMiddleware<S> {
+pub struct DefaultHeadersMiddleware<S, E> {
     service: S,
     inner: Rc<Inner>,
+    _t: PhantomData<E>,
 }
 
-impl<S, B> Service for DefaultHeadersMiddleware<S>
+impl<S, B, E> Service for DefaultHeadersMiddleware<S, E>
 where
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
     S::Future: 'static,
 {
     type Request = WebRequest;
     type Response = WebResponse<B>;
-    type Error = Error;
+    type Error = WebError<E>;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -182,7 +189,7 @@ mod tests {
             ok(req
                 .into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()))
         };
-        let mut mw = DefaultHeaders::new()
+        let mut mw = DefaultHeaders::<DefaultError>::new()
             .header(CONTENT_TYPE, "0001")
             .new_transform(srv.into_service())
             .await
@@ -194,7 +201,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_content_type() {
         let srv = |req: WebRequest| ok(req.into_response(HttpResponse::Ok().finish()));
-        let mut mw = DefaultHeaders::new()
+        let mut mw = DefaultHeaders::<DefaultError>::new()
             .content_type()
             .new_transform(srv.into_service())
             .await

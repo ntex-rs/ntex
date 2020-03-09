@@ -454,6 +454,12 @@ pub enum ContentTypeError {
     /// Unknown content encoding
     #[display(fmt = "Unknown content encoding")]
     UnknownEncoding,
+    /// Unexpected Content-Type
+    #[display(fmt = "Unexpected Content-Type")]
+    Unexpected,
+    /// Content-Type is expected
+    #[display(fmt = "Content-Type is expected")]
+    Expected,
 }
 
 /// Return `BadRequest` for `ContentTypeError`

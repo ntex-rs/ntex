@@ -3,10 +3,11 @@ use std::rc::Rc;
 
 use actix_router::ResourceDef;
 
-use crate::http::{Error, Extensions};
+use crate::http::Extensions;
 use crate::service::{boxed, IntoServiceFactory, ServiceFactory};
 
 use super::data::{Data, DataFactory};
+use super::error::{DefaultError, WebError};
 use super::guard::Guard;
 use super::resource::Resource;
 use super::rmap::ResourceMap;
@@ -17,27 +18,28 @@ use super::service::{
 };
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpNewService = boxed::BoxServiceFactory<(), WebRequest, WebResponse, Error, ()>;
+type HttpNewService<Err> =
+    boxed::BoxServiceFactory<(), WebRequest, WebResponse, WebError<Err>, ()>;
 
 /// Application configuration
-pub struct AppService {
+pub struct AppService<Err> {
     config: AppConfig,
     root: bool,
-    default: Rc<HttpNewService>,
+    default: Rc<HttpNewService<Err>>,
     services: Vec<(
         ResourceDef,
-        HttpNewService,
+        HttpNewService<Err>,
         Option<Guards>,
         Option<Rc<ResourceMap>>,
     )>,
     service_data: Rc<Vec<Box<dyn DataFactory>>>,
 }
 
-impl AppService {
+impl<Err: 'static> AppService<Err> {
     /// Crate server settings instance
     pub(crate) fn new(
         config: AppConfig,
-        default: Rc<HttpNewService>,
+        default: Rc<HttpNewService<Err>>,
         service_data: Rc<Vec<Box<dyn DataFactory>>>,
     ) -> Self {
         AppService {
@@ -60,7 +62,7 @@ impl AppService {
         AppConfig,
         Vec<(
             ResourceDef,
-            HttpNewService,
+            HttpNewService<Err>,
             Option<Guards>,
             Option<Rc<ResourceMap>>,
         )>,
@@ -84,7 +86,7 @@ impl AppService {
     }
 
     /// Default resource
-    pub fn default_service(&self) -> Rc<HttpNewService> {
+    pub fn default_service(&self) -> Rc<HttpNewService<Err>> {
         self.default.clone()
     }
 
@@ -109,7 +111,7 @@ impl AppService {
                 Config = (),
                 Request = WebRequest,
                 Response = WebResponse,
-                Error = Error,
+                Error = WebError<Err>,
                 InitError = (),
             > + 'static,
     {
@@ -172,13 +174,13 @@ impl Default for AppConfig {
 /// Part of application configuration could be offloaded
 /// to set of external methods. This could help with
 /// modularization of big application configuration.
-pub struct ServiceConfig {
-    pub(super) services: Vec<Box<dyn AppServiceFactory>>,
+pub struct ServiceConfig<Err = DefaultError> {
+    pub(super) services: Vec<Box<dyn AppServiceFactory<Err>>>,
     pub(super) data: Vec<Box<dyn DataFactory>>,
     pub(super) external: Vec<ResourceDef>,
 }
 
-impl ServiceConfig {
+impl<Err: 'static> ServiceConfig<Err> {
     pub(crate) fn new() -> Self {
         Self {
             services: Vec::new(),
@@ -199,7 +201,7 @@ impl ServiceConfig {
     /// Configure route for a specific path.
     ///
     /// This is same as `App::route()` method.
-    pub fn route(&mut self, path: &str, mut route: Route) -> &mut Self {
+    pub fn route(&mut self, path: &str, mut route: Route<Err>) -> &mut Self {
         self.service(
             Resource::new(path)
                 .add_guards(route.take_guards())
@@ -212,7 +214,7 @@ impl ServiceConfig {
     /// This is same as `App::service()` method.
     pub fn service<F>(&mut self, factory: F) -> &mut Self
     where
-        F: HttpServiceFactory + 'static,
+        F: HttpServiceFactory<Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -250,15 +252,14 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_data() {
-        let cfg = |cfg: &mut ServiceConfig| {
+        let cfg = |cfg: &mut ServiceConfig<_>| {
             cfg.data(10usize);
         };
 
-        let mut srv =
-            init_service(App::new().configure(cfg).service(
-                web::resource("/").to(|_: web::Data<usize>| HttpResponse::Ok()),
-            ))
-            .await;
+        let mut srv = init_service(App::new().configure(cfg).service(
+            web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
+        ))
+        .await;
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -308,7 +309,7 @@ mod tests {
                 })
                 .route(
                     "/test",
-                    web::get().to(|req: HttpRequest| {
+                    web::get().to(|req: HttpRequest| async move {
                         HttpResponse::Ok().body(format!(
                             "{}",
                             req.url_for("youtube", &["12345"]).unwrap()
@@ -328,9 +329,13 @@ mod tests {
     async fn test_service() {
         let mut srv = init_service(App::new().configure(|cfg| {
             cfg.service(
-                web::resource("/test").route(web::get().to(|| HttpResponse::Created())),
+                web::resource("/test")
+                    .route(web::get().to(|| async { HttpResponse::Created() })),
             )
-            .route("/index.html", web::get().to(|| HttpResponse::Ok()));
+            .route(
+                "/index.html",
+                web::get().to(|| async { HttpResponse::Ok() }),
+            );
         }))
         .await;
 

@@ -8,22 +8,25 @@ use std::task::{Context, Poll};
 use actix_router::IntoPattern;
 use futures::future::{ok, Either, LocalBoxFuture, Ready};
 
-use crate::http::{Error, Extensions, Response};
+use crate::http::{Extensions, Response};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
 };
-use crate::web::data::Data;
-use crate::web::dev::{insert_slash, AppService, HttpServiceFactory, ResourceDef};
-use crate::web::extract::FromRequest;
-use crate::web::guard::Guard;
-use crate::web::handler::Factory;
-use crate::web::responder::Responder;
-use crate::web::route::{CreateRouteService, Route, RouteService};
-use crate::web::service::{WebRequest, WebResponse};
 
-type HttpService = BoxService<WebRequest, WebResponse, Error>;
-type HttpNewService = BoxServiceFactory<(), WebRequest, WebResponse, Error, ()>;
+use super::data::Data;
+use super::dev::{insert_slash, AppService, HttpServiceFactory, ResourceDef};
+use super::error::WebError;
+use super::extract::FromRequest;
+use super::guard::Guard;
+use super::handler::Factory;
+use super::responder::Responder;
+use super::route::{CreateRouteService, Route, RouteService};
+use super::service::{WebRequest, WebResponse};
+
+type HttpService<Err> = BoxService<WebRequest, WebResponse, WebError<Err>>;
+type HttpNewService<Err> =
+    BoxServiceFactory<(), WebRequest, WebResponse, WebError<Err>, ()>;
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
 ///
@@ -41,25 +44,25 @@ type HttpNewService = BoxServiceFactory<(), WebRequest, WebResponse, Error, ()>;
 /// fn main() {
 ///     let app = App::new().service(
 ///         web::resource("/")
-///             .route(web::get().to(|| HttpResponse::Ok())));
+///             .route(web::get().to(|| async { HttpResponse::Ok() })));
 /// }
 /// ```
 ///
 /// If no matching route could be found, *405* response code get returned.
 /// Default behavior could be overriden with `default_resource()` method.
-pub struct Resource<T = ResourceEndpoint> {
+pub struct Resource<Err, T = ResourceEndpoint<Err>> {
     endpoint: T,
     rdef: Vec<String>,
     name: Option<String>,
-    routes: Vec<Route>,
+    routes: Vec<Route<Err>>,
     data: Option<Extensions>,
     guards: Vec<Box<dyn Guard>>,
-    default: Rc<RefCell<Option<Rc<HttpNewService>>>>,
-    factory_ref: Rc<RefCell<Option<ResourceFactory>>>,
+    default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
+    factory_ref: Rc<RefCell<Option<ResourceFactory<Err>>>>,
 }
 
-impl Resource {
-    pub fn new<T: IntoPattern>(path: T) -> Resource {
+impl<Err> Resource<Err> {
+    pub fn new<T: IntoPattern>(path: T) -> Resource<Err> {
         let fref = Rc::new(RefCell::new(None));
 
         Resource {
@@ -75,15 +78,16 @@ impl Resource {
     }
 }
 
-impl<T> Resource<T>
+impl<Err, T> Resource<Err, T>
 where
     T: ServiceFactory<
         Config = (),
         Request = WebRequest,
         Response = WebResponse,
-        Error = Error,
+        Error = WebError<Err>,
         InitError = (),
     >,
+    Err: 'static,
 {
     /// Set resource name.
     ///
@@ -112,7 +116,7 @@ where
     ///         .service(
     ///             web::resource("/app")
     ///                 .guard(guard::Header("content-type", "text/json"))
-    ///                 .route(web::get().to(|| HttpResponse::MethodNotAllowed()))
+    ///                 .route(web::get().to(|| async { HttpResponse::MethodNotAllowed() }))
     ///         );
     /// }
     /// ```
@@ -137,7 +141,7 @@ where
     ///             web::route()
     ///                 .guard(guard::Any(guard::Get()).or(guard::Put()))
     ///                 .guard(guard::Header("Content-Type", "text/plain"))
-    ///                 .to(|| HttpResponse::Ok()))
+    ///                 .to(|| async { HttpResponse::Ok() }))
     ///     );
     /// }
     /// ```
@@ -160,7 +164,7 @@ where
     /// # async fn post_handler() -> impl web::Responder { web::HttpResponse::Ok() }
     /// # async fn delete_handler() -> impl web::Responder { web::HttpResponse::Ok() }
     /// ```
-    pub fn route(mut self, route: Route) -> Self {
+    pub fn route(mut self, route: Route<Err>) -> Self {
         self.routes.push(route);
         self
     }
@@ -182,9 +186,7 @@ where
     ///     let app = App::new().service(
     ///         web::resource("/index.html")
     ///           // limit size of the payload
-    ///           .data(String::configure(|cfg| {
-    ///                cfg.limit(4096)
-    ///           }))
+    ///           .app_data(web::types::PayloadConfig::new(4096))
     ///           .route(
     ///               web::get()
     ///                  // register handler
@@ -212,7 +214,7 @@ where
     /// ```rust
     /// use ntex::web::{self, App, HttpRequest, HttpResponse};
     ///
-    /// fn index(req: HttpRequest) -> HttpResponse {
+    /// async fn index(req: HttpRequest) -> HttpResponse {
     ///     unimplemented!()
     /// }
     ///
@@ -223,15 +225,15 @@ where
     ///
     /// ```rust
     /// # use ntex::web::{self, *};
-    /// # fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
+    /// # async fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
     /// App::new().service(web::resource("/").route(web::route().to(index)));
     /// ```
     pub fn to<F, I, R, U>(mut self, handler: F) -> Self
     where
-        F: Factory<I, R, U>,
-        I: FromRequest + 'static,
+        F: Factory<I, R, U, Err>,
+        I: FromRequest<Err> + 'static,
         R: Future<Output = U> + 'static,
-        U: Responder + 'static,
+        U: Responder<Err> + 'static,
     {
         self.routes.push(Route::new().to(handler));
         self
@@ -248,11 +250,12 @@ where
         self,
         mw: M,
     ) -> Resource<
+        Err,
         impl ServiceFactory<
             Config = (),
             Request = WebRequest,
             Response = WebResponse,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         >,
     >
@@ -261,7 +264,7 @@ where
             T::Service,
             Request = WebRequest,
             Response = WebResponse,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         >,
     {
@@ -315,17 +318,18 @@ where
         self,
         mw: F,
     ) -> Resource<
+        Err,
         impl ServiceFactory<
             Config = (),
             Request = WebRequest,
             Response = WebResponse,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         >,
     >
     where
         F: FnMut(WebRequest, &mut T::Service) -> R + Clone,
-        R: Future<Output = Result<WebResponse, Error>>,
+        R: Future<Output = Result<WebResponse, WebError<Err>>>,
     {
         Resource {
             endpoint: apply_fn_factory(self.endpoint, mw),
@@ -349,7 +353,7 @@ where
                 Config = (),
                 Request = WebRequest,
                 Response = WebResponse,
-                Error = Error,
+                Error = WebError<Err>,
             > + 'static,
         U::InitError: fmt::Debug,
     {
@@ -364,17 +368,18 @@ where
     }
 }
 
-impl<T> HttpServiceFactory for Resource<T>
+impl<Err, T> HttpServiceFactory<Err> for Resource<Err, T>
 where
     T: ServiceFactory<
             Config = (),
             Request = WebRequest,
             Response = WebResponse,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         > + 'static,
+    Err: 'static,
 {
-    fn register(mut self, config: &mut AppService) {
+    fn register(mut self, config: &mut AppService<Err>) {
         let guards = if self.guards.is_empty() {
             None
         } else {
@@ -396,13 +401,13 @@ where
     }
 }
 
-impl<T> IntoServiceFactory<T> for Resource<T>
+impl<Err, T> IntoServiceFactory<T> for Resource<Err, T>
 where
     T: ServiceFactory<
         Config = (),
         Request = WebRequest,
         Response = WebResponse,
-        Error = Error,
+        Error = WebError<Err>,
         InitError = (),
     >,
 {
@@ -417,20 +422,20 @@ where
     }
 }
 
-pub struct ResourceFactory {
-    routes: Vec<Route>,
+pub struct ResourceFactory<Err> {
+    routes: Vec<Route<Err>>,
     data: Option<Rc<Extensions>>,
-    default: Rc<RefCell<Option<Rc<HttpNewService>>>>,
+    default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
 }
 
-impl ServiceFactory for ResourceFactory {
+impl<Err: 'static> ServiceFactory for ResourceFactory<Err> {
     type Config = ();
     type Request = WebRequest;
     type Response = WebResponse;
-    type Error = Error;
+    type Error = WebError<Err>;
     type InitError = ();
-    type Service = ResourceService;
-    type Future = CreateResourceService;
+    type Service = ResourceService<Err>;
+    type Future = CreateResourceService<Err>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         let default_fut = if let Some(ref default) = *self.default.borrow() {
@@ -452,20 +457,20 @@ impl ServiceFactory for ResourceFactory {
     }
 }
 
-enum CreateRouteServiceItem {
-    Future(CreateRouteService),
-    Service(RouteService),
+enum CreateRouteServiceItem<Err> {
+    Future(CreateRouteService<Err>),
+    Service(RouteService<Err>),
 }
 
-pub struct CreateResourceService {
-    fut: Vec<CreateRouteServiceItem>,
+pub struct CreateResourceService<Err> {
+    fut: Vec<CreateRouteServiceItem<Err>>,
     data: Option<Rc<Extensions>>,
-    default: Option<HttpService>,
-    default_fut: Option<LocalBoxFuture<'static, Result<HttpService, ()>>>,
+    default: Option<HttpService<Err>>,
+    default_fut: Option<LocalBoxFuture<'static, Result<HttpService<Err>, ()>>>,
 }
 
-impl Future for CreateResourceService {
-    type Output = Result<ResourceService, ()>;
+impl<Err> Future for CreateResourceService<Err> {
+    type Output = Result<ResourceService<Err>, ()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut done = true;
@@ -512,19 +517,19 @@ impl Future for CreateResourceService {
     }
 }
 
-pub struct ResourceService {
-    routes: Vec<RouteService>,
+pub struct ResourceService<Err> {
+    routes: Vec<RouteService<Err>>,
     data: Option<Rc<Extensions>>,
-    default: Option<HttpService>,
+    default: Option<HttpService<Err>>,
 }
 
-impl Service for ResourceService {
+impl<Err: 'static> Service for ResourceService<Err> {
     type Request = WebRequest;
     type Response = WebResponse;
-    type Error = Error;
+    type Error = WebError<Err>;
     type Future = Either<
-        Ready<Result<WebResponse, Error>>,
-        LocalBoxFuture<'static, Result<WebResponse, Error>>,
+        Ready<Result<WebResponse, WebError<Err>>>,
+        LocalBoxFuture<'static, Result<WebResponse, WebError<Err>>>,
     >;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -553,24 +558,24 @@ impl Service for ResourceService {
 }
 
 #[doc(hidden)]
-pub struct ResourceEndpoint {
-    factory: Rc<RefCell<Option<ResourceFactory>>>,
+pub struct ResourceEndpoint<Err> {
+    factory: Rc<RefCell<Option<ResourceFactory<Err>>>>,
 }
 
-impl ResourceEndpoint {
-    fn new(factory: Rc<RefCell<Option<ResourceFactory>>>) -> Self {
+impl<Err> ResourceEndpoint<Err> {
+    fn new(factory: Rc<RefCell<Option<ResourceFactory<Err>>>>) -> Self {
         ResourceEndpoint { factory }
     }
 }
 
-impl ServiceFactory for ResourceEndpoint {
+impl<Err: 'static> ServiceFactory for ResourceEndpoint<Err> {
     type Config = ();
     type Request = WebRequest;
     type Response = WebResponse;
-    type Error = Error;
+    type Error = WebError<Err>;
     type InitError = ();
-    type Service = ResourceService;
-    type Future = CreateResourceService;
+    type Service = ResourceService<Err>;
+    type Future = CreateResourceService<Err>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         self.factory.borrow_mut().as_mut().unwrap().new_service(())
@@ -582,14 +587,14 @@ mod tests {
     use std::time::Duration;
 
     use actix_rt::time::delay_for;
-    use futures::future::ok;
+    use futures::future::{ok, ready};
 
     use crate::http::header::{self, HeaderValue};
-    use crate::http::{Error, Method, StatusCode};
+    use crate::http::{Method, StatusCode};
     use crate::web::middleware::DefaultHeaders;
     use crate::web::service::WebRequest;
     use crate::web::test::{call_service, init_service, TestRequest};
-    use crate::web::{self, guard, App, HttpResponse};
+    use crate::web::{self, guard, App, Error, HttpResponse};
     use crate::Service;
 
     #[actix_rt::test]
@@ -603,7 +608,7 @@ mod tests {
                             header::CONTENT_TYPE,
                             HeaderValue::from_static("0001"),
                         ))
-                        .route(web::get().to(|| HttpResponse::Ok())),
+                        .route(web::get().to(|| async { HttpResponse::Ok() })),
                 ),
             )
             .await;
@@ -633,7 +638,7 @@ mod tests {
                             })
                         }
                     })
-                    .route(web::get().to(|| HttpResponse::Ok())),
+                    .route(web::get().to(|| async { HttpResponse::Ok() })),
             ),
         )
         .await;
@@ -661,12 +666,9 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_pattern() {
-        let mut srv = init_service(
-            App::new().service(
-                web::resource(["/test", "/test2"])
-                    .to(|| async { Ok::<_, Error>(HttpResponse::Ok()) }),
-            ),
-        )
+        let mut srv = init_service(App::new().service(
+            web::resource(["/test", "/test2"]).to(|| async { HttpResponse::Ok() }),
+        ))
         .await;
         let req = TestRequest::with_uri("/test").to_request();
         let resp = call_service(&mut srv, req).await;
@@ -681,7 +683,8 @@ mod tests {
         let mut srv = init_service(
             App::new()
                 .service(
-                    web::resource("/test").route(web::get().to(|| HttpResponse::Ok())),
+                    web::resource("/test")
+                        .route(web::get().to(|| async { HttpResponse::Ok() })),
                 )
                 .default_service(|r: WebRequest| {
                     ok(r.into_response(HttpResponse::BadRequest()))
@@ -701,7 +704,7 @@ mod tests {
         let mut srv = init_service(
             App::new().service(
                 web::resource("/test")
-                    .route(web::get().to(|| HttpResponse::Ok()))
+                    .route(web::get().to(|| async { HttpResponse::Ok() }))
                     .default_service(|r: WebRequest| {
                         ok(r.into_response(HttpResponse::BadRequest()))
                     }),
@@ -727,17 +730,17 @@ mod tests {
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Get())
-                        .to(|| HttpResponse::Ok()),
+                        .to(|| async { HttpResponse::Ok() }),
                 )
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Put())
-                        .to(|| HttpResponse::Created()),
+                        .to(|| async { HttpResponse::Created() }),
                 )
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Delete())
-                        .to(|| HttpResponse::NoContent()),
+                        .to(|| async { HttpResponse::NoContent() }),
                 ),
         )
         .await;
@@ -780,7 +783,7 @@ mod tests {
                                 assert_eq!(**data1, 10);
                                 assert_eq!(**data2, '*');
                                 assert_eq!(**data3, 1.0);
-                                HttpResponse::Ok()
+                                ready(HttpResponse::Ok())
                             },
                         ),
                 ),

@@ -1,13 +1,12 @@
 //! Query extractor
 
-use std::sync::Arc;
 use std::{fmt, ops};
 
 use futures::future::{err, ok, Ready};
 use serde::de;
 use serde_urlencoded;
 
-use crate::http::{Error, Payload};
+use crate::http::Payload;
 use crate::web::error::QueryPayloadError;
 use crate::web::extract::FromRequest;
 use crate::web::request::HttpRequest;
@@ -129,21 +128,17 @@ impl<T: fmt::Display> fmt::Display for Query<T> {
 ///            .route(web::get().to(index))); // <- use `Query` extractor
 /// }
 /// ```
-impl<T> FromRequest for Query<T>
+impl<T, Err> FromRequest<Err> for Query<T>
 where
     T: de::DeserializeOwned,
+    Err: 'static,
 {
-    type Error = Error;
-    type Future = Ready<Result<Self, Error>>;
-    type Config = QueryConfig;
+    type Error = QueryPayloadError;
+    type Future = Ready<Result<Self, Self::Error>>;
+    type Config = ();
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        let error_handler = req
-            .app_data::<Self::Config>()
-            .map(|c| c.ehandler.clone())
-            .unwrap_or(None);
-
         serde_urlencoded::from_str::<T>(req.query_string())
             .map(|val| ok(Query(val)))
             .unwrap_or_else(move |e| {
@@ -154,144 +149,60 @@ where
                      Request path: {:?}",
                     req.path()
                 );
-
-                let e = if let Some(error_handler) = error_handler {
-                    (error_handler)(e, req)
-                } else {
-                    e.into()
-                };
-
                 err(e)
             })
     }
 }
 
-/// Query extractor configuration
-///
-/// ## Example
-///
-/// ```rust
-/// use ntex::http::error;
-/// use ntex::web::{self, App, FromRequest, HttpResponse};
-/// use serde_derive::Deserialize;
-///
-/// #[derive(Deserialize)]
-/// struct Info {
-///     username: String,
-/// }
-///
-/// /// deserialize `Info` from request's querystring
-/// async fn index(info: web::types::Query<Info>) -> String {
-///     format!("Welcome {}!", info.username)
-/// }
-///
-/// fn main() {
-///     let app = App::new().service(
-///         web::resource("/index.html").app_data(
-///             // change query extractor configuration
-///             web::types::Query::<Info>::configure(|cfg| {
-///                 cfg.error_handler(|err, req| {  // <- create custom error response
-///                     error::InternalError::from_response(
-///                         err, HttpResponse::Conflict().finish()).into()
-///                 })
-///             }))
-///             .route(web::post().to(index))
-///     );
-/// }
-/// ```
-#[derive(Clone)]
-pub struct QueryConfig {
-    ehandler:
-        Option<Arc<dyn Fn(QueryPayloadError, &HttpRequest) -> Error + Send + Sync>>,
-}
+// #[cfg(test)]
+// mod tests {
+//     use derive_more::Display;
+//     use serde_derive::Deserialize;
 
-impl QueryConfig {
-    /// Set custom error handler
-    pub fn error_handler<F>(mut self, f: F) -> Self
-    where
-        F: Fn(QueryPayloadError, &HttpRequest) -> Error + Send + Sync + 'static,
-    {
-        self.ehandler = Some(Arc::new(f));
-        self
-    }
-}
+//     use super::*;
+//     use crate::http::error::InternalError;
+//     use crate::http::StatusCode;
+//     use crate::web::test::TestRequest;
+//     use crate::web::HttpResponse;
 
-impl Default for QueryConfig {
-    fn default() -> Self {
-        QueryConfig { ehandler: None }
-    }
-}
+//     #[derive(Deserialize, Debug, Display)]
+//     struct Id {
+//         id: String,
+//     }
 
-#[cfg(test)]
-mod tests {
-    use derive_more::Display;
-    use serde_derive::Deserialize;
+//     #[actix_rt::test]
+//     async fn test_service_request_extract() {
+//         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
+//         assert!(Query::<Id>::from_query(&req.query_string()).is_err());
 
-    use super::*;
-    use crate::http::error::InternalError;
-    use crate::http::StatusCode;
-    use crate::web::test::TestRequest;
-    use crate::web::HttpResponse;
+//         let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
+//         let mut s = Query::<Id>::from_query(&req.query_string()).unwrap();
 
-    #[derive(Deserialize, Debug, Display)]
-    struct Id {
-        id: String,
-    }
+//         assert_eq!(s.id, "test");
+//         assert_eq!(format!("{}, {:?}", s, s), "test, Id { id: \"test\" }");
 
-    #[actix_rt::test]
-    async fn test_service_request_extract() {
-        let req = TestRequest::with_uri("/name/user1/").to_srv_request();
-        assert!(Query::<Id>::from_query(&req.query_string()).is_err());
+//         s.id = "test1".to_string();
+//         let s = s.into_inner();
+//         assert_eq!(s.id, "test1");
+//     }
 
-        let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
-        let mut s = Query::<Id>::from_query(&req.query_string()).unwrap();
+//     #[actix_rt::test]
+//     async fn test_request_extract() {
+//         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
+//         let (req, mut pl) = req.into_parts();
+//         let res: Result<Query<Id>, QueryPayloadError> = FromRequest::from_request(&req, &mut pl).await;
+//         assert!(res.is_err());
 
-        assert_eq!(s.id, "test");
-        assert_eq!(format!("{}, {:?}", s, s), "test, Id { id: \"test\" }");
+//         let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
+//         let (req, mut pl) = req.into_parts();
 
-        s.id = "test1".to_string();
-        let s = s.into_inner();
-        assert_eq!(s.id, "test1");
-    }
+//         let mut s: Result<Query<Id>, QueryPayloadError> = FromRequest::<DefaultError>::from_request(&req, &mut pl).await;
+//         let s = s.unwrap();
+//         assert_eq!(s.id, "test");
+//         assert_eq!(format!("{}, {:?}", s, s), "test, Id { id: \"test\" }");
 
-    #[actix_rt::test]
-    async fn test_request_extract() {
-        let req = TestRequest::with_uri("/name/user1/").to_srv_request();
-        let (req, mut pl) = req.into_parts();
-        assert!(Query::<Id>::from_request(&req, &mut pl).await.is_err());
-
-        let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
-        let (req, mut pl) = req.into_parts();
-
-        let mut s = Query::<Id>::from_request(&req, &mut pl).await.unwrap();
-        assert_eq!(s.id, "test");
-        assert_eq!(format!("{}, {:?}", s, s), "test, Id { id: \"test\" }");
-
-        s.id = "test1".to_string();
-        let s = s.into_inner();
-        assert_eq!(s.id, "test1");
-    }
-
-    #[actix_rt::test]
-    async fn test_custom_error_responder() {
-        let req = TestRequest::with_uri("/name/user1/")
-            .data(QueryConfig::default().error_handler(|e, _| {
-                let resp = HttpResponse::UnprocessableEntity().finish();
-                InternalError::from_response(e, resp).into()
-            }))
-            .to_srv_request();
-
-        let (req, mut pl) = req.into_parts();
-        let query = Query::<Id>::from_request(&req, &mut pl).await;
-
-        assert!(query.is_err());
-        assert_eq!(
-            query
-                .unwrap_err()
-                .as_response_error()
-                .error_response()
-                .status(),
-            StatusCode::UNPROCESSABLE_ENTITY
-        );
-    }
-}
+//         s.id = "test1".to_string();
+//         let s = s.into_inner();
+//         assert_eq!(s.id, "test1");
+//     }
+// }

@@ -12,11 +12,11 @@ use pin_project::pin_project;
 use crate::http::body::MessageBody;
 use crate::http::encoding::Encoder;
 use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
-use crate::http::Error;
 use crate::service::{Service, Transform};
 
 use crate::web::dev::BodyEncoding;
 use crate::web::service::{WebRequest, WebResponse};
+use crate::web::WebError;
 
 #[derive(Debug, Clone)]
 /// `Middleware` for compressing response body.
@@ -32,8 +32,8 @@ use crate::web::service::{WebRequest, WebResponse};
 ///         .wrap(middleware::Compress::default())
 ///         .service(
 ///             web::resource("/test")
-///                 .route(web::get().to(|| HttpResponse::Ok()))
-///                 .route(web::head().to(|| HttpResponse::MethodNotAllowed()))
+///                 .route(web::get().to(|| async { HttpResponse::Ok() }))
+///                 .route(web::head().to(|| async { HttpResponse::MethodNotAllowed() }))
 ///         );
 /// }
 /// ```
@@ -52,14 +52,14 @@ impl Default for Compress {
     }
 }
 
-impl<S, B> Transform<S> for Compress
+impl<S, B, E> Transform<S> for Compress
 where
     B: MessageBody,
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
 {
     type Request = WebRequest;
     type Response = WebResponse<Encoder<B>>;
-    type Error = Error;
+    type Error = WebError<E>;
     type InitError = ();
     type Transform = CompressMiddleware<S>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
@@ -77,14 +77,14 @@ pub struct CompressMiddleware<S> {
     encoding: ContentEncoding,
 }
 
-impl<S, B> Service for CompressMiddleware<S>
+impl<S, B, E> Service for CompressMiddleware<S>
 where
     B: MessageBody,
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
 {
     type Request = WebRequest;
     type Response = WebResponse<Encoder<B>>;
-    type Error = Error;
+    type Error = WebError<E>;
     type Future = CompressResponse<S, B>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -124,12 +124,12 @@ where
     _t: PhantomData<B>,
 }
 
-impl<S, B> Future for CompressResponse<S, B>
+impl<S, B, E> Future for CompressResponse<S, B>
 where
     B: MessageBody,
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = Error>,
+    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
 {
-    type Output = Result<WebResponse<Encoder<B>>, Error>;
+    type Output = Result<WebResponse<Encoder<B>>, WebError<E>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();

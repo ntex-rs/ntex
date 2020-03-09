@@ -7,7 +7,7 @@ use std::rc::Rc;
 use futures::future::{FutureExt, LocalBoxFuture};
 
 use crate::http::body::{Body, MessageBody};
-use crate::http::{Error, Extensions};
+use crate::http::Extensions;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, ServiceFactory, Transform,
@@ -17,6 +17,7 @@ use super::app_service::{AppEntry, AppInit, AppRoutingFactory};
 use super::config::ServiceConfig;
 use super::data::{Data, DataFactory};
 use super::dev::ResourceDef;
+use super::error::{DefaultError, WebError};
 use super::resource::Resource;
 use super::route::Route;
 use super::service::{
@@ -24,25 +25,27 @@ use super::service::{
     WebResponse,
 };
 
-type HttpNewService = BoxServiceFactory<(), WebRequest, WebResponse, Error, ()>;
+type HttpNewService<Err> =
+    BoxServiceFactory<(), WebRequest, WebResponse, WebError<Err>, ()>;
 type FnDataFactory =
     Box<dyn Fn() -> LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>;
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
-pub struct App<T, B> {
+pub struct App<T, B, Err = DefaultError> {
     endpoint: T,
-    services: Vec<Box<dyn AppServiceFactory>>,
-    default: Option<Rc<HttpNewService>>,
-    factory_ref: Rc<RefCell<Option<AppRoutingFactory>>>,
+    services: Vec<Box<dyn AppServiceFactory<Err>>>,
+    default: Option<Rc<HttpNewService<Err>>>,
+    factory_ref: Rc<RefCell<Option<AppRoutingFactory<Err>>>>,
     data: Vec<Box<dyn DataFactory>>,
     data_factories: Vec<FnDataFactory>,
     external: Vec<ResourceDef>,
     extensions: Extensions,
+    error_renderer: Err,
     _t: PhantomData<B>,
 }
 
-impl App<AppEntry, Body> {
+impl App<AppEntry<DefaultError>, Body, DefaultError> {
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
         let fref = Rc::new(RefCell::new(None));
@@ -55,21 +58,42 @@ impl App<AppEntry, Body> {
             factory_ref: fref,
             external: Vec::new(),
             extensions: Extensions::new(),
+            error_renderer: DefaultError,
             _t: PhantomData,
         }
     }
 }
 
-impl<T, B> App<T, B>
+impl<Err> App<AppEntry<Err>, Body, Err> {
+    /// Create application builder with custom error renderer.
+    pub fn with(err: Err) -> Self {
+        let fref = Rc::new(RefCell::new(None));
+        App {
+            endpoint: AppEntry::new(fref.clone()),
+            data: Vec::new(),
+            data_factories: Vec::new(),
+            services: Vec::new(),
+            default: None,
+            factory_ref: fref,
+            external: Vec::new(),
+            extensions: Extensions::new(),
+            error_renderer: err,
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<T, B, Err> App<T, B, Err>
 where
     B: MessageBody,
     T: ServiceFactory<
         Config = (),
         Request = WebRequest,
         Response = WebResponse<B>,
-        Error = Error,
+        Error = WebError<Err>,
         InitError = (),
     >,
+    Err: 'static,
 {
     /// Set application data. Application data could be accessed
     /// by using `Data<T>` extractor where `T` is data type.
@@ -162,8 +186,8 @@ where
     /// // this function could be located in different module
     /// fn config(cfg: &mut web::ServiceConfig) {
     ///     cfg.service(web::resource("/test")
-    ///         .route(web::get().to(|| HttpResponse::Ok()))
-    ///         .route(web::head().to(|| HttpResponse::MethodNotAllowed()))
+    ///         .route(web::get().to(|| async { HttpResponse::Ok() }))
+    ///         .route(web::head().to(|| async { HttpResponse::MethodNotAllowed() }))
     ///     );
     /// }
     ///
@@ -171,12 +195,12 @@ where
     ///     let app = App::new()
     ///         .wrap(middleware::Logger::default())
     ///         .configure(config)  // <- register resources
-    ///         .route("/index.html", web::get().to(|| HttpResponse::Ok()));
+    ///         .route("/index.html", web::get().to(|| async { HttpResponse::Ok() }));
     /// }
     /// ```
     pub fn configure<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut ServiceConfig),
+        F: FnOnce(&mut ServiceConfig<Err>),
     {
         let mut cfg = ServiceConfig::new();
         f(&mut cfg);
@@ -202,10 +226,10 @@ where
     /// fn main() {
     ///     let app = App::new()
     ///         .route("/test1", web::get().to(index))
-    ///         .route("/test2", web::post().to(|| HttpResponse::MethodNotAllowed()));
+    ///         .route("/test2", web::post().to(|| async { HttpResponse::MethodNotAllowed() }));
     /// }
     /// ```
-    pub fn route(self, path: &str, mut route: Route) -> Self {
+    pub fn route(self, path: &str, mut route: Route<Err>) -> Self {
         self.service(
             Resource::new(path)
                 .add_guards(route.take_guards())
@@ -224,7 +248,7 @@ where
     /// * "StaticFiles" is a service for static files support
     pub fn service<F>(mut self, factory: F) -> Self
     where
-        F: HttpServiceFactory + 'static,
+        F: HttpServiceFactory<Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -247,7 +271,7 @@ where
     ///         .service(
     ///             web::resource("/index.html").route(web::get().to(index)))
     ///         .default_service(
-    ///             web::route().to(|| HttpResponse::NotFound()));
+    ///             web::route().to(|| async { HttpResponse::NotFound() }));
     /// }
     /// ```
     ///
@@ -259,9 +283,9 @@ where
     /// fn main() {
     ///     let app = App::new()
     ///         .service(
-    ///             web::resource("/index.html").to(|| HttpResponse::Ok()))
+    ///             web::resource("/index.html").to(|| async { HttpResponse::Ok() }))
     ///         .default_service(
-    ///             web::to(|| HttpResponse::NotFound())
+    ///             web::to(|| async { HttpResponse::NotFound() })
     ///         );
     /// }
     /// ```
@@ -272,7 +296,7 @@ where
                 Config = (),
                 Request = WebRequest,
                 Response = WebResponse,
-                Error = Error,
+                Error = WebError<Err>,
             > + 'static,
         U::InitError: fmt::Debug,
     {
@@ -291,8 +315,7 @@ where
     /// `HttpRequest::url_for()` will work as expected.
     ///
     /// ```rust
-    /// use ntex::http::Error;
-    /// use ntex::web::{self, App, HttpRequest, HttpResponse};
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse, Error, WebError};
     ///
     /// async fn index(req: HttpRequest) -> Result<HttpResponse, Error> {
     ///     let url = req.url_for("youtube", &["asdlkjqme"])?;
@@ -355,17 +378,18 @@ where
             Config = (),
             Request = WebRequest,
             Response = WebResponse<B1>,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         >,
         B1,
+        Err,
     >
     where
         M: Transform<
             T::Service,
             Request = WebRequest,
             Response = WebResponse<B1>,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         >,
         B1: MessageBody,
@@ -379,6 +403,7 @@ where
             factory_ref: self.factory_ref,
             external: self.external,
             extensions: self.extensions,
+            error_renderer: self.error_renderer,
             _t: PhantomData,
         }
     }
@@ -422,15 +447,16 @@ where
             Config = (),
             Request = WebRequest,
             Response = WebResponse<B1>,
-            Error = Error,
+            Error = WebError<Err>,
             InitError = (),
         >,
         B1,
+        Err,
     >
     where
         B1: MessageBody,
         F: FnMut(WebRequest, &mut T::Service) -> R + Clone,
-        R: Future<Output = Result<WebResponse<B1>, Error>>,
+        R: Future<Output = Result<WebResponse<B1>, WebError<Err>>>,
     {
         App {
             endpoint: apply_fn_factory(self.endpoint, mw),
@@ -441,23 +467,25 @@ where
             factory_ref: self.factory_ref,
             external: self.external,
             extensions: self.extensions,
+            error_renderer: self.error_renderer,
             _t: PhantomData,
         }
     }
 }
 
-impl<T, B> IntoServiceFactory<AppInit<T, B>> for App<T, B>
+impl<T, B, Err> IntoServiceFactory<AppInit<T, B, Err>> for App<T, B, Err>
 where
     B: MessageBody,
     T: ServiceFactory<
         Config = (),
         Request = WebRequest,
         Response = WebResponse<B>,
-        Error = Error,
+        Error = WebError<Err>,
         InitError = (),
     >,
+    Err: 'static,
 {
-    fn into_factory(self) -> AppInit<T, B> {
+    fn into_factory(self) -> AppInit<T, B, Err> {
         AppInit {
             data: Rc::new(self.data),
             data_factories: Rc::new(self.data_factories),
@@ -488,7 +516,8 @@ mod tests {
     #[actix_rt::test]
     async fn test_default_resource() {
         let mut srv = init_service(
-            App::new().service(web::resource("/test").to(|| HttpResponse::Ok())),
+            App::new()
+                .service(web::resource("/test").to(|| async { HttpResponse::Ok() })),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
@@ -501,13 +530,13 @@ mod tests {
 
         let mut srv = init_service(
             App::new()
-                .service(web::resource("/test").to(|| HttpResponse::Ok()))
+                .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
                 .service(
                     web::resource("/test2")
                         .default_service(|r: WebRequest| {
                             ok(r.into_response(HttpResponse::Created()))
                         })
-                        .route(web::get().to(|| HttpResponse::Ok())),
+                        .route(web::get().to(|| async { HttpResponse::Ok() })),
                 )
                 .default_service(|r: WebRequest| {
                     ok(r.into_response(HttpResponse::MethodNotAllowed()))
@@ -532,29 +561,33 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_data_factory() {
-        let mut srv =
-            init_service(App::new().data_factory(|| ok::<_, ()>(10usize)).service(
-                web::resource("/").to(|_: web::Data<usize>| HttpResponse::Ok()),
-            ))
-            .await;
+        let mut srv = init_service(
+            App::new().data_factory(|| ok::<_, ()>(10usize)).service(
+                web::resource("/")
+                    .to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
+            ),
+        )
+        .await;
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let mut srv =
-            init_service(App::new().data_factory(|| ok::<_, ()>(10u32)).service(
-                web::resource("/").to(|_: web::Data<usize>| HttpResponse::Ok()),
-            ))
-            .await;
+        let mut srv = init_service(
+            App::new().data_factory(|| ok::<_, ()>(10u32)).service(
+                web::resource("/")
+                    .to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
+            ),
+        )
+        .await;
         let req = TestRequest::default().to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let res = srv.call(req).await;
+        assert!(res.is_err());
     }
 
     #[actix_rt::test]
     async fn test_extension() {
         let mut srv = init_service(App::new().app_data(10usize).service(
-            web::resource("/").to(|req: HttpRequest| {
+            web::resource("/").to(|req: HttpRequest| async move {
                 assert_eq!(*req.app_data::<usize>().unwrap(), 10);
                 HttpResponse::Ok()
             }),
@@ -573,7 +606,7 @@ mod tests {
                     DefaultHeaders::new()
                         .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
                 )
-                .route("/test", web::get().to(|| HttpResponse::Ok())),
+                .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
@@ -589,7 +622,7 @@ mod tests {
     async fn test_router_wrap() {
         let mut srv = init_service(
             App::new()
-                .route("/test", web::get().to(|| HttpResponse::Ok()))
+                .route("/test", web::get().to(|| async { HttpResponse::Ok() }))
                 .wrap(
                     DefaultHeaders::new()
                         .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
@@ -620,7 +653,7 @@ mod tests {
                         Ok(res)
                     }
                 })
-                .service(web::resource("/test").to(|| HttpResponse::Ok())),
+                .service(web::resource("/test").to(|| async { HttpResponse::Ok() })),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
@@ -636,7 +669,7 @@ mod tests {
     async fn test_router_wrap_fn() {
         let mut srv = init_service(
             App::new()
-                .route("/test", web::get().to(|| HttpResponse::Ok()))
+                .route("/test", web::get().to(|| async { HttpResponse::Ok() }))
                 .wrap_fn(|req, srv| {
                     let fut = srv.call(req);
                     async {
@@ -666,7 +699,7 @@ mod tests {
                 .external_resource("youtube", "https://youtube.com/watch/{video_id}")
                 .route(
                     "/test",
-                    web::get().to(|req: HttpRequest| {
+                    web::get().to(|req: HttpRequest| async move {
                         HttpResponse::Ok().body(format!(
                             "{}",
                             req.url_for("youtube", &["12345"]).unwrap()
