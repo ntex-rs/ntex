@@ -93,7 +93,7 @@ pub use crate::http::Response as HttpResponse;
 pub use self::app::App;
 pub use self::config::ServiceConfig;
 pub use self::data::Data;
-pub use self::error::{DefaultError, Error, WebError, WebResponseError};
+pub use self::error::{DefaultError, Error, IntoWebError, WebError, WebResponseError};
 pub use self::extract::FromRequest;
 pub use self::request::HttpRequest;
 pub use self::resource::Resource;
