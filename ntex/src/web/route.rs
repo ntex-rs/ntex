@@ -8,7 +8,7 @@ use futures::future::{ready, FutureExt, LocalBoxFuture};
 use crate::http::Method;
 use crate::{Service, ServiceFactory};
 
-use super::error::WebError;
+use super::error::{DefaultError, WebError};
 use super::extract::FromRequest;
 use super::guard::{self, Guard};
 use super::handler::{Extract, Factory, Handler};
@@ -42,7 +42,7 @@ type BoxedRouteNewService<Err> = Box<
 ///
 /// Route uses builder-like pattern for configuration.
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
-pub struct Route<Err> {
+pub struct Route<Err = DefaultError> {
     service: BoxedRouteNewService<Err>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }

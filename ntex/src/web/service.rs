@@ -104,7 +104,10 @@ impl WebRequest {
 
     /// Create web response for error
     #[inline]
-    pub fn error_response<B, Err, E: IntoWebError<Err>>(self, _err: E) -> WebResponse<B> {
+    pub fn error_response<B, Err, E: IntoWebError<Err>>(
+        self,
+        _err: E,
+    ) -> WebResponse<B> {
         //let res: Response = err.into().into();
         //WebResponse::new(self.0, res.into_body())
         todo!()

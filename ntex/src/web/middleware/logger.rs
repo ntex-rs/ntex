@@ -490,16 +490,19 @@ mod tests {
     #[actix_rt::test]
     async fn test_logger() {
         let srv = |req: WebRequest| {
-            ok::<_, WebError<DefaultError>>(req.into_response(
-                HttpResponse::build(StatusCode::OK)
-                    .header("X-Test", "ttt")
-                    .finish(),
-            ))
+            ok::<_, WebError<DefaultError>>(
+                req.into_response(
+                    HttpResponse::build(StatusCode::OK)
+                        .header("X-Test", "ttt")
+                        .finish(),
+                ),
+            )
         };
-        let logger =
-            Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D test");
+        let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D test");
 
-        let mut srv = Transform::new_transform(&logger, srv.into_service()).await.unwrap();
+        let mut srv = Transform::new_transform(&logger, srv.into_service())
+            .await
+            .unwrap();
 
         let req = TestRequest::with_header(
             header::USER_AGENT,
