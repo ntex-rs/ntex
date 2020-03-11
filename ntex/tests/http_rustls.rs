@@ -10,7 +10,7 @@ use rust_tls::{
     NoClientAuth, ServerConfig as RustlsServerConfig,
 };
 
-use ntex::http::error::{self, Error, PayloadError};
+use ntex::http::error::{self, PayloadError};
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
 use ntex::http::{body, HttpService, Method, Request, Response, StatusCode, Version};
@@ -42,7 +42,7 @@ fn ssl_acceptor() -> RustlsServerConfig {
 async fn test_h1() -> io::Result<()> {
     let srv = test_server(move || {
         HttpService::build()
-            .h1(|_| future::ok::<_, Error>(Response::Ok().finish()))
+            .h1(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
             .rustls(ssl_acceptor())
     });
 
@@ -55,7 +55,7 @@ async fn test_h1() -> io::Result<()> {
 async fn test_h2() -> io::Result<()> {
     let srv = test_server(move || {
         HttpService::build()
-            .h2(|_| future::ok::<_, Error>(Response::Ok().finish()))
+            .h2(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
             .rustls(ssl_acceptor())
     });
 
@@ -71,7 +71,7 @@ async fn test_h1_1() -> io::Result<()> {
             .h1(|req: Request| {
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_11);
-                future::ok::<_, Error>(Response::Ok().finish())
+                future::ok::<_, io::Error>(Response::Ok().finish())
             })
             .rustls(ssl_acceptor())
     });
@@ -88,7 +88,7 @@ async fn test_h2_1() -> io::Result<()> {
             .finish(|req: Request| {
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_2);
-                future::ok::<_, Error>(Response::Ok().finish())
+                future::ok::<_, io::Error>(Response::Ok().finish())
             })
             .rustls(ssl_acceptor())
     });
@@ -105,7 +105,7 @@ async fn test_h2_body1() -> io::Result<()> {
         HttpService::build()
             .h2(|mut req: Request<_>| async move {
                 let body = load_body(req.take_payload()).await?;
-                Ok::<_, Error>(Response::Ok().body(body))
+                Ok::<_, PayloadError>(Response::Ok().body(body))
             })
             .rustls(ssl_acceptor())
     });
@@ -132,7 +132,7 @@ async fn test_h2_content_length() {
                     StatusCode::OK,
                     StatusCode::NOT_FOUND,
                 ];
-                future::ok::<_, ()>(Response::new(statuses[indx]))
+                future::ok::<_, io::Error>(Response::new(statuses[indx]))
             })
             .rustls(ssl_acceptor())
     });
@@ -191,7 +191,7 @@ async fn test_h2_headers() {
                         TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST ",
                 );
             }
-            future::ok::<_, ()>(config.body(data.clone()))
+            future::ok::<_, io::Error>(config.body(data.clone()))
         })
             .rustls(ssl_acceptor())
     });
@@ -230,7 +230,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 async fn test_h2_body2() {
     let mut srv = test_server(move || {
         HttpService::build()
-            .h2(|_| future::ok::<_, ()>(Response::Ok().body(STR)))
+            .h2(|_| future::ok::<_, io::Error>(Response::Ok().body(STR)))
             .rustls(ssl_acceptor())
     });
 
@@ -246,7 +246,7 @@ async fn test_h2_body2() {
 async fn test_h2_head_empty() {
     let mut srv = test_server(move || {
         HttpService::build()
-            .finish(|_| ok::<_, ()>(Response::Ok().body(STR)))
+            .finish(|_| ok::<_, io::Error>(Response::Ok().body(STR)))
             .rustls(ssl_acceptor())
     });
 
@@ -272,7 +272,9 @@ async fn test_h2_head_binary() {
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|_| {
-                ok::<_, ()>(Response::Ok().content_length(STR.len() as u64).body(STR))
+                ok::<_, io::Error>(
+                    Response::Ok().content_length(STR.len() as u64).body(STR),
+                )
             })
             .rustls(ssl_acceptor())
     });
@@ -297,7 +299,7 @@ async fn test_h2_head_binary() {
 async fn test_h2_head_binary2() {
     let srv = test_server(move || {
         HttpService::build()
-            .h2(|_| ok::<_, ()>(Response::Ok().body(STR)))
+            .h2(|_| ok::<_, io::Error>(Response::Ok().body(STR)))
             .rustls(ssl_acceptor())
     });
 
@@ -319,7 +321,7 @@ async fn test_h2_body_length() {
         HttpService::build()
             .h2(|_| {
                 let body = once(ok(Bytes::from_static(STR.as_ref())));
-                ok::<_, ()>(
+                ok::<_, io::Error>(
                     Response::Ok().body(body::SizedStream::new(STR.len() as u64, body)),
                 )
             })
@@ -339,8 +341,8 @@ async fn test_h2_body_chunked_explicit() {
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|_| {
-                let body = once(ok::<_, Error>(Bytes::from_static(STR.as_ref())));
-                ok::<_, ()>(
+                let body = once(ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
+                ok::<_, io::Error>(
                     Response::Ok()
                         .header(header::TRANSFER_ENCODING, "chunked")
                         .streaming(body),
@@ -365,9 +367,9 @@ async fn test_h2_response_http_error_handling() {
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(fn_factory_with_config(|_: ()| {
-                ok::<_, ()>(fn_service(|_| {
+                ok::<_, io::Error>(fn_service(|_| {
                     let broken_header = Bytes::from_static(b"\0\0\0");
-                    ok::<_, ()>(
+                    ok::<_, io::Error>(
                         Response::Ok()
                             .header(http::header::CONTENT_TYPE, broken_header)
                             .body(STR),
@@ -389,7 +391,12 @@ async fn test_h2_response_http_error_handling() {
 async fn test_h2_service_error() {
     let mut srv = test_server(move || {
         HttpService::build()
-            .h2(|_| err::<Response, Error>(error::ErrorBadRequest("error")))
+            .h2(|_| {
+                err::<Response, _>(error::InternalError::new(
+                    "error",
+                    StatusCode::BAD_REQUEST,
+                ))
+            })
             .rustls(ssl_acceptor())
     });
 
@@ -405,7 +412,12 @@ async fn test_h2_service_error() {
 async fn test_h1_service_error() {
     let mut srv = test_server(move || {
         HttpService::build()
-            .h1(|_| err::<Response, Error>(error::ErrorBadRequest("error")))
+            .h1(|_| {
+                err::<Response, _>(error::InternalError::new(
+                    "error",
+                    StatusCode::BAD_REQUEST,
+                ))
+            })
             .rustls(ssl_acceptor())
     });
 

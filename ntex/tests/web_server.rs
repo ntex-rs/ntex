@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -12,7 +12,6 @@ use futures::{future::ready, ready, Future};
 use rand::{distributions::Alphanumeric, Rng};
 
 use ntex::http::body::Body;
-use ntex::http::error::Error;
 use ntex::http::header::{
     ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
     TRANSFER_ENCODING,
@@ -62,7 +61,7 @@ impl TestBody {
 }
 
 impl futures::Stream for TestBody {
-    type Item = Result<Bytes, Error>;
+    type Item = Result<Bytes, io::Error>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,

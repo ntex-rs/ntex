@@ -1,3 +1,5 @@
+use std::io;
+
 use bytes::Bytes;
 use futures::future::{self, ok};
 
@@ -31,7 +33,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 async fn test_h1_v2() {
     let srv = test_server(move || {
         HttpService::build()
-            .finish(|_| future::ok::<_, ()>(Response::Ok().body(STR)))
+            .finish(|_| future::ok::<_, io::Error>(Response::Ok().body(STR)))
             .tcp()
     });
 
@@ -58,7 +60,7 @@ async fn test_h1_v2() {
 async fn test_connection_close() {
     let srv = test_server(move || {
         HttpService::build()
-            .finish(|_| ok::<_, ()>(Response::Ok().body(STR)))
+            .finish(|_| ok::<_, io::Error>(Response::Ok().body(STR)))
             .tcp()
             .map(|_| ())
     });
@@ -73,9 +75,9 @@ async fn test_with_query_parameter() {
         HttpService::build()
             .finish(|req: Request| {
                 if req.uri().query().unwrap().contains("qp=") {
-                    ok::<_, ()>(Response::Ok().finish())
+                    ok::<_, io::Error>(Response::Ok().finish())
                 } else {
-                    ok::<_, ()>(Response::BadRequest().finish())
+                    ok::<_, io::Error>(Response::BadRequest().finish())
                 }
             })
             .tcp()

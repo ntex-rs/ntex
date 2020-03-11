@@ -9,11 +9,12 @@ use pin_project::pin_project;
 
 use crate::{Service, ServiceFactory};
 
-use super::error::{IntoWebError, WebError, WebResponseError};
+use super::error::{IntoWebError, WebError};
 use super::extract::FromRequest;
 use super::request::HttpRequest;
 use super::responder::Responder;
 use super::service::{WebRequest, WebResponse};
+use super::HttpResponse;
 
 /// Async handler converter factory
 pub trait Factory<T, R, O, Err>: Clone + 'static
@@ -79,6 +80,7 @@ where
     F: Factory<T, R, O, Err>,
     R: Future<Output = O>,
     O: Responder<Err>,
+    Err: 'static,
 {
     type Request = (T, HttpRequest);
     type Response = WebResponse;
@@ -116,6 +118,7 @@ impl<T, R, Err> Future for HandlerWebResponse<T, R, Err>
 where
     T: Future<Output = R>,
     R: Responder<Err>,
+    Err: 'static,
 {
     type Output = Result<WebResponse, (WebError<Err>, HttpRequest)>;
 
@@ -129,7 +132,7 @@ where
                     Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
                 }
                 Poll::Ready(Err(e)) => {
-                    let res = e.into_error().error_response();
+                    let res: HttpResponse = e.into_error().into();
                     Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
                 }
             };

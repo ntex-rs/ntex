@@ -16,7 +16,7 @@ use log::{error, trace};
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
-use crate::http::error::{DispatchError, Error};
+use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::httpmessage::HttpMessage;
 use crate::http::message::ResponseHead;
@@ -47,7 +47,7 @@ impl<T, S, B> Dispatcher<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: Into<Error>,
+    S::Error: ResponseError,
     // S::Future: 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
@@ -93,7 +93,7 @@ impl<T, S, B> Future for Dispatcher<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
@@ -172,7 +172,7 @@ enum ServiceResponseState<F, B> {
 impl<F, I, E, B> ServiceResponse<F, I, E, B>
 where
     F: Future<Output = Result<I, E>>,
-    E: Into<Error>,
+    E: ResponseError,
     I: Into<Response<B>>,
     B: MessageBody,
 {
@@ -241,7 +241,7 @@ where
 impl<F, I, E, B> Future for ServiceResponse<F, I, E, B>
 where
     F: Future<Output = Result<I, E>>,
-    E: Into<Error>,
+    E: ResponseError,
     I: Into<Response<B>>,
     B: MessageBody,
 {
@@ -280,7 +280,7 @@ where
                     }
                     Poll::Pending => Poll::Pending,
                     Poll::Ready(Err(e)) => {
-                        let res: Response = e.into().into();
+                        let res: Response = e.into();
                         let (res, body) = res.replace_body(());
 
                         let mut send = send.take().unwrap();

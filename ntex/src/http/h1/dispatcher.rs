@@ -13,7 +13,7 @@ use log::{error, trace};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
-use crate::http::error::{DispatchError, Error};
+use crate::http::error::{DispatchError, ResponseError};
 use crate::http::error::{ParseError, PayloadError};
 use crate::http::helpers::DataFactory;
 use crate::http::httpmessage::HttpMessage;
@@ -45,10 +45,10 @@ bitflags! {
 pub struct Dispatcher<T, S, B, X, U>
 where
     S: Service<Request = Request>,
-    S::Error: Into<Error>,
+    S::Error: ResponseError,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
-    X::Error: Into<Error>,
+    X::Error: ResponseError,
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
@@ -58,10 +58,10 @@ where
 enum DispatcherState<T, S, B, X, U>
 where
     S: Service<Request = Request>,
-    S::Error: Into<Error>,
+    S::Error: ResponseError,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
-    X::Error: Into<Error>,
+    X::Error: ResponseError,
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
@@ -73,10 +73,10 @@ where
 struct InnerDispatcher<T, S, B, X, U>
 where
     S: Service<Request = Request>,
-    S::Error: Into<Error>,
+    S::Error: ResponseError,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
-    X::Error: Into<Error>,
+    X::Error: ResponseError,
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
@@ -168,11 +168,11 @@ impl<T, S, B, X, U> Dispatcher<T, S, B, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: Into<Error>,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
-    X::Error: Into<Error>,
+    X::Error: ResponseError,
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
@@ -256,11 +256,11 @@ impl<T, S, B, X, U> InnerDispatcher<T, S, B, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: Into<Error>,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
-    X::Error: Into<Error>,
+    X::Error: ResponseError,
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
@@ -379,7 +379,7 @@ where
                             continue;
                         }
                         Poll::Ready(Err(e)) => {
-                            let res: Response = e.into().into();
+                            let res: Response = e.into();
                             let (res, body) = res.replace_body(());
                             Some(self.send_response(res, body.into_body())?)
                         }
@@ -394,7 +394,7 @@ where
                             continue;
                         }
                         Poll::Ready(Err(e)) => {
-                            let res: Response = e.into().into();
+                            let res: Response = e.into();
                             let (res, body) = res.replace_body(());
                             Some(self.send_response(res, body.into_body())?)
                         }
@@ -471,7 +471,6 @@ where
                 }
                 Poll::Pending => return Ok(State::ExpectCall(task)),
                 Poll::Ready(Err(e)) => {
-                    let e = e.into();
                     let res: Response = e.into();
                     let (res, body) = res.replace_body(());
                     return self.send_response(res, body.into_body());
@@ -490,7 +489,7 @@ where
             }
             Poll::Pending => Ok(State::ServiceCall(task)),
             Poll::Ready(Err(e)) => {
-                let res: Response = e.into().into();
+                let res: Response = e.into();
                 let (res, body) = res.replace_body(());
                 self.send_response(res, body.into_body())
             }
@@ -685,11 +684,11 @@ impl<T, S, B, X, U> Unpin for Dispatcher<T, S, B, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: Into<Error>,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
-    X::Error: Into<Error>,
+    X::Error: ResponseError,
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
@@ -699,11 +698,11 @@ impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: Into<Error>,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
-    X::Error: Into<Error>,
+    X::Error: ResponseError,
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
@@ -892,7 +891,6 @@ mod tests {
     use futures::future::{lazy, ok};
 
     use super::*;
-    use crate::http::error::Error;
     use crate::http::h1::{ExpectHandler, UpgradeHandler};
     use crate::http::test::TestBuffer;
     use crate::IntoService;
@@ -906,7 +904,7 @@ mod tests {
                 buf,
                 ServiceConfig::default(),
                 CloneableService::new(
-                    (|_| ok::<_, Error>(Response::Ok().finish())).into_service(),
+                    (|_| ok::<_, io::Error>(Response::Ok().finish())).into_service(),
                 ),
                 CloneableService::new(ExpectHandler),
                 None,

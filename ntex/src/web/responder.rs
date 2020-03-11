@@ -9,7 +9,7 @@ use futures::future::{err, ok, Either as EitherFuture, Ready};
 use futures::ready;
 use pin_project::{pin_project, project};
 
-use crate::http::error::{HttpError, InternalError};
+use crate::http::error::{HttpError, InternalError, ResponseError};
 use crate::http::header::{HeaderMap, HeaderName, IntoHeaderValue};
 use crate::http::{Response, ResponseBuilder, StatusCode};
 
@@ -340,10 +340,9 @@ impl<T: Responder<Err>, Err> Future for CustomResponderFut<T, Err> {
 /// Combines two different responder types into a single type
 ///
 /// ```rust
-/// use ntex::http::Error;
 /// use ntex::web::{Either, HttpResponse};
 ///
-/// type RegisterResult = Either<HttpResponse, Result<HttpResponse, Error>>;
+/// type RegisterResult = Either<HttpResponse, Result<HttpResponse, std::io::Error>>;
 ///
 /// fn index() -> RegisterResult {
 ///     if is_a_variant() {
@@ -427,8 +426,7 @@ where
     type Future = Ready<Result<Response, Self::Error>>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
-        let err: crate::http::Error = self.into();
-        ok(err.into())
+        ok(ResponseError::error_response(&self))
     }
 }
 

@@ -2,6 +2,7 @@
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::env;
+use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
@@ -11,13 +12,11 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::future::{ok, Ready};
-use log::debug;
 use regex::Regex;
 use time::OffsetDateTime;
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
-use crate::http::{Error, StatusCode};
 use crate::service::{Service, Transform};
 use crate::web::error::WebError;
 use crate::web::service::{WebRequest, WebResponse};
@@ -213,12 +212,6 @@ where
             Err(e) => return Poll::Ready(Err(e)),
         };
 
-        if let Some(error) = res.response().error() {
-            if res.response().head().status != StatusCode::INTERNAL_SERVER_ERROR {
-                debug!("Error in response: {:?}", error);
-            }
-        }
-
         if let Some(ref mut format) = this.format {
             for unit in &mut format.0 {
                 unit.render_response(res.response());
@@ -268,7 +261,7 @@ impl<B: MessageBody> MessageBody for StreamLog<B> {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         match self.body.poll_next_chunk(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
                 self.size += chunk.len();

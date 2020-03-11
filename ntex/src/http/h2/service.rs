@@ -15,7 +15,7 @@ use log::error;
 use crate::http::body::MessageBody;
 use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
-use crate::http::error::{DispatchError, Error};
+use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
@@ -37,7 +37,7 @@ pub struct H2Service<T, S, B> {
 impl<T, S, B> H2Service<T, S, B>
 where
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>> + 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
@@ -68,7 +68,7 @@ where
 impl<S, B> H2Service<TcpStream, S, B>
 where
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>> + 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
@@ -104,7 +104,7 @@ mod openssl {
     impl<S, B> H2Service<SslStream<TcpStream>, S, B>
     where
         S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: Into<Error> + 'static,
+        S::Error: ResponseError,
         S::Response: Into<Response<B>> + 'static,
         <S::Service as Service>::Future: 'static,
         B: MessageBody + 'static,
@@ -146,7 +146,7 @@ mod rustls {
     impl<S, B> H2Service<TlsStream<TcpStream>, S, B>
     where
         S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: Into<Error> + 'static,
+        S::Error: ResponseError,
         S::Response: Into<Response<B>> + 'static,
         <S::Service as Service>::Future: 'static,
         B: MessageBody + 'static,
@@ -185,7 +185,7 @@ impl<T, S, B> ServiceFactory for H2Service<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>> + 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
@@ -222,7 +222,7 @@ impl<T, S, B> Future for H2ServiceResponse<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>> + 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
@@ -254,7 +254,7 @@ pub struct H2ServiceHandler<T, S: Service, B> {
 impl<T, S, B> H2ServiceHandler<T, S, B>
 where
     S: Service<Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
@@ -277,7 +277,7 @@ impl<T, S, B> Service for H2ServiceHandler<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
@@ -289,9 +289,8 @@ where
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.srv.poll_ready(cx).map_err(|e| {
-            let e = e.into();
             error!("Service readiness error: {:?}", e);
-            DispatchError::Service(e)
+            DispatchError::Service(Box::new(e))
         })
     }
 
@@ -333,7 +332,7 @@ pub struct H2ServiceHandlerResponse<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
@@ -345,7 +344,7 @@ impl<T, S, B> Future for H2ServiceHandlerResponse<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody,

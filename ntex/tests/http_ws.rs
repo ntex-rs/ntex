@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::io;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -11,7 +12,7 @@ use futures::{Future, SinkExt, StreamExt};
 
 use ntex::framed::Dispatcher;
 use ntex::http::ws::handshake;
-use ntex::http::{body, h1, test, Error, HttpService, Request, Response};
+use ntex::http::{body, h1, test, HttpService, Request, Response};
 use ntex::service::{fn_factory, Service};
 use ntex::ws;
 
@@ -43,8 +44,8 @@ where
 {
     type Request = (Request, Framed<T, h1::Codec>);
     type Response = ();
-    type Error = Error;
-    type Future = Pin<Box<dyn Future<Output = Result<(), Error>>>>;
+    type Error = io::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<(), io::Error>>>>;
 
     fn poll_ready(&mut self, _ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.set_polled();
@@ -69,7 +70,7 @@ where
     }
 }
 
-async fn service(msg: ws::Frame) -> Result<ws::Message, Error> {
+async fn service(msg: ws::Frame) -> Result<ws::Message, io::Error> {
     let msg = match msg {
         ws::Frame::Ping(msg) => ws::Message::Pong(msg),
         ws::Frame::Text(text) => {
@@ -91,8 +92,10 @@ async fn test_simple() {
         move || {
             let ws_service = ws_service.clone();
             HttpService::build()
-                .upgrade(fn_factory(move || future::ok::<_, ()>(ws_service.clone())))
-                .finish(|_| future::ok::<_, ()>(Response::NotFound()))
+                .upgrade(fn_factory(move || {
+                    future::ok::<_, io::Error>(ws_service.clone())
+                }))
+                .finish(|_| future::ok::<_, io::Error>(Response::NotFound()))
                 .tcp()
         }
     });

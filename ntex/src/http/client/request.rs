@@ -1,4 +1,5 @@
 use std::convert::TryFrom;
+use std::error::Error;
 use std::rc::Rc;
 use std::time::Duration;
 use std::{fmt, net};
@@ -11,7 +12,7 @@ use serde::Serialize;
 use coo_kie::{Cookie, CookieJar};
 
 use crate::http::body::Body;
-use crate::http::error::{Error, HttpError};
+use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, IntoHeaderValue};
 use crate::http::{uri, ConnectionType, Method, RequestHead, Uri, Version};
 
@@ -453,7 +454,7 @@ impl ClientRequest {
     pub fn send_stream<S, E>(self, stream: S) -> SendClientRequest
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
-        E: Into<Error> + 'static,
+        E: Error + 'static,
     {
         let slf = match self.prep_for_sending() {
             Ok(slf) => slf,

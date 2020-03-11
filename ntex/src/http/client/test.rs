@@ -6,9 +6,9 @@ use bytes::Bytes;
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
+use crate::http::error::HttpError;
 use crate::http::header::{HeaderName, IntoHeaderValue};
-use crate::http::{h1, Payload, ResponseHead};
-use crate::http::{Error as HttpError, StatusCode, Version};
+use crate::http::{h1, Payload, ResponseHead, StatusCode, Version};
 
 use super::ClientResponse;
 

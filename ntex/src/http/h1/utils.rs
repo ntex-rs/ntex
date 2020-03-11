@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -5,7 +6,6 @@ use std::task::{Context, Poll};
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
-use crate::http::error::Error;
 use crate::http::h1::{Codec, Message};
 use crate::http::response::Response;
 
@@ -37,7 +37,7 @@ where
     T: AsyncRead + AsyncWrite,
     B: MessageBody,
 {
-    type Output = Result<Framed<T, Codec>, Error>;
+    type Output = Result<Framed<T, Codec>, Box<dyn Error>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();

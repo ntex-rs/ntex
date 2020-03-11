@@ -93,12 +93,15 @@ impl<Err> WebError<Err> {
     }
 }
 
-/// Convert `Error` to a `Response` instance
-impl<Err> From<WebError<Err>> for HttpResponse {
-    fn from(err: WebError<Err>) -> Self {
-        err.cause.error_response()
-    }
-}
+// /// Convert `Error` to a `Response` instance
+// impl<T, Err> Into<HttpResponse> for T
+// where
+//     T: WebResponseError<Err>,
+// {
+//     fn into(self) -> HttpResponse {
+//         self.error_response()
+//     }
+// }
 
 /// `WebError` for any error that implements `WebResponseError`
 impl<T: WebResponseError<Err> + 'static, Err: 'static> IntoWebError<Err> for T {
@@ -135,7 +138,7 @@ impl<Err> WebResponseError<Err> for WebError<Err> {
     }
 }
 
-impl<Err> error::ResponseError for WebError<Err> {
+impl<Err: 'static> error::ResponseError for WebError<Err> {
     fn error_response(&self) -> HttpResponse {
         self.cause.error_response()
     }

@@ -1,5 +1,6 @@
 //! Various helpers for Actix applications to use during testing.
 use std::convert::TryFrom;
+use std::error::Error;
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -23,7 +24,7 @@ use coo_kie::Cookie;
 use crate::http::body::{Body, MessageBody};
 use crate::http::client::error::WsClientError;
 use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
-use crate::http::error::{Error, HttpError, PayloadError};
+use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{HeaderName, IntoHeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{
@@ -215,9 +216,9 @@ where
     bytes.freeze()
 }
 
-pub async fn load_stream<S>(mut stream: S) -> Result<Bytes, Error>
+pub async fn load_stream<S>(mut stream: S) -> Result<Bytes, Box<dyn Error>>
 where
-    S: Stream<Item = Result<Bytes, Error>> + Unpin,
+    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
 {
     let mut data = BytesMut::new();
     while let Some(item) = stream.next().await {
@@ -534,10 +535,9 @@ impl TestRequest {
 /// # Examples
 ///
 /// ```rust
-/// use ntex::http::Error;
 /// use ntex::web::{self, test, App, HttpResponse};
 ///
-/// async fn my_handler() -> Result<HttpResponse, Error> {
+/// async fn my_handler() -> Result<HttpResponse, std::io::Error> {
 ///     Ok(HttpResponse::Ok().into())
 /// }
 ///
@@ -558,7 +558,7 @@ where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S>,
     S: ServiceFactory<Config = AppConfig, Request = Request> + 'static,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>> + 'static,
     <S::Service as Service>::Future: 'static,
@@ -575,11 +575,10 @@ where
 /// # Examples
 ///
 /// ```rust
-/// use ntex::http::Error;
 /// use ntex::web::{self, test, App, HttpResponse};
 ///
-/// async fn my_handler() -> Result<HttpResponse, Error> {
-///     Ok(HttpResponse::Ok().into())
+/// async fn my_handler() -> HttpResponse {
+///     HttpResponse::Ok().into()
 /// }
 ///
 /// #[ntex::test]
@@ -598,7 +597,7 @@ where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S>,
     S: ServiceFactory<Config = AppConfig, Request = Request> + 'static,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>> + 'static,
     <S::Service as Service>::Future: 'static,

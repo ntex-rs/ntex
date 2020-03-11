@@ -4,13 +4,13 @@ use bytes::BytesMut;
 use futures::StreamExt;
 use log::info;
 use ntex::http::header::HeaderValue;
-use ntex::http::{Error, HttpService, Request, Response};
+use ntex::http::{HttpService, Request, Response};
 use ntex::server::Server;
 
-async fn handle_request(mut req: Request) -> Result<Response, Error> {
+async fn handle_request(mut req: Request) -> Result<Response, io::Error> {
     let mut body = BytesMut::new();
     while let Some(item) = req.payload().next().await {
-        body.extend_from_slice(&item?)
+        body.extend_from_slice(&item.unwrap())
     }
 
     info!("request body: {:?}", body);

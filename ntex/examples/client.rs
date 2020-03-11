@@ -1,8 +1,7 @@
-use ntex::http::client::Client;
-use ntex::http::Error;
+use ntex::http::client::{error::SendRequestError, Client};
 
 #[ntex::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> Result<(), SendRequestError> {
     std::env::set_var("RUST_LOG", "actix_http=trace");
     env_logger::init();
 
@@ -19,7 +18,7 @@ async fn main() -> Result<(), Error> {
     println!("Response: {:?}", response);
 
     // read response body
-    let body = response.body().await?;
+    let body = response.body().await.unwrap();
     println!("Downloaded: {:?} bytes", body.len());
 
     Ok(())

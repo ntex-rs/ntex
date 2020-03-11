@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -6,8 +7,6 @@ use std::{fmt, mem};
 use bytes::{Bytes, BytesMut};
 use futures::{ready, Stream};
 use pin_project::{pin_project, project};
-
-use super::error::Error;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 /// Body size hint
@@ -38,7 +37,7 @@ pub trait MessageBody {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>>;
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>>;
 }
 
 impl MessageBody for () {
@@ -49,7 +48,7 @@ impl MessageBody for () {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         Poll::Ready(None)
     }
 }
@@ -62,7 +61,7 @@ impl<T: MessageBody> MessageBody for Box<T> {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         self.as_mut().poll_next_chunk(cx)
     }
 }
@@ -123,7 +122,7 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         match self {
             ResponseBody::Body(ref mut body) => body.poll_next_chunk(cx),
             ResponseBody::Other(ref mut body) => body.poll_next_chunk(cx),
@@ -132,7 +131,7 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
 }
 
 impl<B: MessageBody> Stream for ResponseBody<B> {
-    type Item = Result<Bytes, Error>;
+    type Item = Result<Bytes, Box<dyn Error>>;
 
     #[project]
     fn poll_next(
@@ -184,7 +183,7 @@ impl MessageBody for Body {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         match self {
             Body::None => Poll::Ready(None),
             Body::Empty => Poll::Ready(None),
@@ -282,7 +281,7 @@ impl From<serde_json::Value> for Body {
 
 impl<S> From<SizedStream<S>> for Body
 where
-    S: Stream<Item = Result<Bytes, Error>> + Unpin + 'static,
+    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin + 'static,
 {
     fn from(s: SizedStream<S>) -> Body {
         Body::from_message(s)
@@ -292,7 +291,7 @@ where
 impl<S, E> From<BodyStream<S, E>> for Body
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
-    E: Into<Error> + 'static,
+    E: Error + 'static,
 {
     fn from(s: BodyStream<S, E>) -> Body {
         Body::from_message(s)
@@ -307,7 +306,7 @@ impl MessageBody for Bytes {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -324,7 +323,7 @@ impl MessageBody for BytesMut {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -341,7 +340,7 @@ impl MessageBody for &'static str {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -360,7 +359,7 @@ impl MessageBody for &'static [u8] {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -377,7 +376,7 @@ impl MessageBody for Vec<u8> {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -394,7 +393,7 @@ impl MessageBody for String {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -417,7 +416,7 @@ pub struct BodyStream<S, E> {
 impl<S, E> BodyStream<S, E>
 where
     S: Stream<Item = Result<Bytes, E>>,
-    E: Into<Error>,
+    E: Error,
 {
     pub fn new(stream: S) -> Self {
         BodyStream {
@@ -430,7 +429,7 @@ where
 impl<S, E> MessageBody for BodyStream<S, E>
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin,
-    E: Into<Error>,
+    E: Error + 'static,
 {
     fn size(&self) -> BodySize {
         BodySize::Stream
@@ -444,7 +443,7 @@ where
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         let mut stream = unsafe { Pin::new_unchecked(self) }.project().stream;
         loop {
             return Poll::Ready(match ready!(stream.as_mut().poll_next(cx)) {
@@ -466,7 +465,7 @@ pub struct SizedStream<S> {
 
 impl<S> SizedStream<S>
 where
-    S: Stream<Item = Result<Bytes, Error>> + Unpin,
+    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
 {
     pub fn new(size: u64, stream: S) -> Self {
         SizedStream { size, stream }
@@ -475,7 +474,7 @@ where
 
 impl<S> MessageBody for SizedStream<S>
 where
-    S: Stream<Item = Result<Bytes, Error>> + Unpin,
+    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
 {
     fn size(&self) -> BodySize {
         BodySize::Sized64(self.size)
@@ -489,7 +488,7 @@ where
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         let mut stream = unsafe { Pin::new_unchecked(self) }.project().stream;
         loop {
             return Poll::Ready(match ready!(stream.as_mut().poll_next(cx)) {
@@ -502,6 +501,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::*;
     use futures::future::poll_fn;
     use futures::stream;
@@ -667,7 +668,7 @@ mod tests {
             let mut body = BodyStream::new(stream::iter(
                 ["1", "", "2"]
                     .iter()
-                    .map(|&v| Ok(Bytes::from(v)) as Result<Bytes, ()>),
+                    .map(|&v| Ok(Bytes::from(v)) as Result<Bytes, io::Error>),
             ));
             assert_eq!(
                 poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),

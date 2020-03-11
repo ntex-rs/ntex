@@ -309,7 +309,10 @@ impl<B> WebResponse<B> {
     }
 
     /// Create web response from the error
-    pub fn from_err<Err, E: Into<WebError<Err>>>(err: E, request: HttpRequest) -> Self {
+    pub fn from_err<Err: 'static, E: Into<WebError<Err>>>(
+        err: E,
+        request: HttpRequest,
+    ) -> Self {
         let e: WebError<Err> = err.into();
         let res: Response = e.into();
         WebResponse {
@@ -320,7 +323,7 @@ impl<B> WebResponse<B> {
 
     /// Create web response for error
     #[inline]
-    pub fn error_response<Err, E: Into<WebError<Err>>>(self, err: E) -> Self {
+    pub fn error_response<Err: 'static, E: Into<WebError<Err>>>(self, err: E) -> Self {
         Self::from_err(err, self.request)
     }
 
@@ -371,6 +374,7 @@ impl<B> WebResponse<B> {
     where
         F: FnOnce(&mut Self) -> Result<(), E>,
         E: Into<WebError<Err>>,
+        Err: 'static,
     {
         match f(&mut self) {
             Ok(_) => self,

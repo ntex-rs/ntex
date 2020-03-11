@@ -1,9 +1,7 @@
 //! Http response
 use std::cell::{Ref, RefMut};
 use std::convert::TryFrom;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::error::Error;
 use std::{fmt, str};
 
 use bytes::{Bytes, BytesMut};
@@ -15,7 +13,7 @@ use serde_json;
 use coo_kie::{Cookie, CookieJar};
 
 use crate::http::body::{Body, BodyStream, MessageBody, ResponseBody};
-use crate::http::error::{Error, HttpError};
+use crate::http::error::{HttpError, ResponseError};
 use crate::http::extensions::Extensions;
 use crate::http::header::{self};
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, IntoHeaderValue};
@@ -26,7 +24,6 @@ use crate::http::StatusCode;
 pub struct Response<B = Body> {
     head: BoxedResponseHead,
     body: ResponseBody<B>,
-    error: Option<Error>,
 }
 
 impl Response<Body> {
@@ -48,19 +45,7 @@ impl Response<Body> {
         Response {
             head: BoxedResponseHead::new(status),
             body: ResponseBody::Body(Body::Empty),
-            error: None,
         }
-    }
-
-    /// Constructs an error response
-    #[inline]
-    pub fn from_error(error: Error) -> Response {
-        let mut resp = error.as_response_error().error_response();
-        if resp.head.status == StatusCode::INTERNAL_SERVER_ERROR {
-            error!("Internal Server Error: {:?}", error);
-        }
-        resp.error = Some(error);
-        resp
     }
 
     /// Convert response to response with body
@@ -71,7 +56,6 @@ impl Response<Body> {
         };
         Response {
             head: self.head,
-            error: self.error,
             body: ResponseBody::Other(b),
         }
     }
@@ -84,7 +68,6 @@ impl<B> Response<B> {
         Response {
             head: BoxedResponseHead::new(status),
             body: ResponseBody::Body(body),
-            error: None,
         }
     }
 
@@ -100,11 +83,11 @@ impl<B> Response<B> {
         &mut *self.head
     }
 
-    /// The source `error` for this response
-    #[inline]
-    pub fn error(&self) -> Option<&Error> {
-        self.error.as_ref()
-    }
+    // /// The source `error` for this response
+    // #[inline]
+    // pub fn error(&self) -> Option<&Error> {
+    //     self.error.as_ref()
+    // }
 
     /// Get the response status code
     #[inline]
@@ -212,7 +195,6 @@ impl<B> Response<B> {
         Response {
             head: self.head,
             body: ResponseBody::Body(body),
-            error: None,
         }
     }
 
@@ -222,7 +204,6 @@ impl<B> Response<B> {
             Response {
                 head: self.head,
                 body: ResponseBody::Body(()),
-                error: self.error,
             },
             self.body,
         )
@@ -233,7 +214,6 @@ impl<B> Response<B> {
         Response {
             head: self.head,
             body: ResponseBody::Body(()),
-            error: None,
         }
     }
 
@@ -243,7 +223,6 @@ impl<B> Response<B> {
             Response {
                 head: self.head,
                 body: ResponseBody::Body(body),
-                error: self.error,
             },
             self.body,
         )
@@ -259,7 +238,6 @@ impl<B> Response<B> {
         Response {
             body,
             head: self.head,
-            error: self.error,
         }
     }
 
@@ -284,18 +262,6 @@ impl<B: MessageBody> fmt::Debug for Response<B> {
         }
         let _ = writeln!(f, "  body: {:?}", self.body.size());
         res
-    }
-}
-
-impl Future for Response {
-    type Output = Result<Response, Error>;
-
-    fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(Ok(Response {
-            head: self.head.take(),
-            body: self.body.take_body(),
-            error: self.error.take(),
-        }))
     }
 }
 
@@ -596,7 +562,7 @@ impl ResponseBuilder {
     /// `ResponseBuilder` can not be used after this call.
     pub fn message_body<B>(&mut self, body: B) -> Response<B> {
         if let Some(e) = self.err.take() {
-            return Response::from(Error::from(e)).into_body();
+            return Response::from(e).into_body();
         }
 
         #[allow(unused_mut)]
@@ -608,7 +574,7 @@ impl ResponseBuilder {
                 for cookie in jar.delta() {
                     match HeaderValue::from_str(&cookie.to_string()) {
                         Ok(val) => response.headers.append(header::SET_COOKIE, val),
-                        Err(e) => return Response::from(Error::from(e)).into_body(),
+                        Err(e) => return Response::from(e).into_body(),
                     };
                 }
             }
@@ -617,7 +583,6 @@ impl ResponseBuilder {
         Response {
             head: response,
             body: ResponseBody::Body(body),
-            error: None,
         }
     }
 
@@ -628,7 +593,7 @@ impl ResponseBuilder {
     pub fn streaming<S, E>(&mut self, stream: S) -> Response
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
-        E: Into<Error> + 'static,
+        E: Error + 'static,
     {
         self.body(Body::from_message(BodyStream::new(stream)))
     }
@@ -658,7 +623,7 @@ impl ResponseBuilder {
 
                 self.body(Body::from(body))
             }
-            Err(e) => Error::from(e).into(),
+            Err(e) => e.into(),
         }
     }
 
@@ -770,14 +735,6 @@ impl<'a> From<&'a ResponseHead> for ResponseBuilder {
     }
 }
 
-impl Future for ResponseBuilder {
-    type Output = Result<Response, Error>;
-
-    fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(Ok(self.finish()))
-    }
-}
-
 impl fmt::Debug for ResponseBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let head = self.head.as_ref().unwrap();
@@ -798,11 +755,11 @@ impl fmt::Debug for ResponseBuilder {
 }
 
 /// Helper converters
-impl<I: Into<Response>, E: Into<Error>> From<Result<I, E>> for Response {
+impl<I: Into<Response>, E: ResponseError> From<Result<I, E>> for Response {
     fn from(res: Result<I, E>) -> Self {
         match res {
             Ok(val) => val.into(),
-            Err(err) => err.into().into(),
+            Err(err) => err.into(),
         }
     }
 }

@@ -67,7 +67,6 @@ use crate::web::responder::Responder;
 ///
 /// ```rust
 /// use ntex::web;
-/// use ntex::http::Error;
 /// use serde_derive::Serialize;
 ///
 /// #[derive(Serialize)]
@@ -75,7 +74,7 @@ use crate::web::responder::Responder;
 ///     name: String,
 /// }
 ///
-/// fn index(req: web::HttpRequest) -> Result<web::types::Json<MyObj>, Error> {
+/// fn index(req: web::HttpRequest) -> Result<web::types::Json<MyObj>, std::io::Error> {
 ///     Ok(web::types::Json(MyObj {
 ///         name: req.match_info().get("name").unwrap().to_string(),
 ///     }))

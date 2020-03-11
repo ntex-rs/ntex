@@ -15,7 +15,9 @@ use net2::TcpBuilder;
 
 #[cfg(unix)]
 use crate::http::Protocol;
-use crate::http::{body::MessageBody, Error, HttpService, KeepAlive, Request, Response};
+use crate::http::{
+    body::MessageBody, HttpService, KeepAlive, Request, Response, ResponseError,
+};
 #[cfg(unix)]
 use crate::pipeline_factory;
 use crate::{map_config, IntoServiceFactory, Service, ServiceFactory};
@@ -56,7 +58,7 @@ where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S>,
     S: ServiceFactory<Config = AppConfig, Request = Request>,
-    S::Error: Into<Error>,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
@@ -74,7 +76,7 @@ where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S>,
     S: ServiceFactory<Config = AppConfig, Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
     <S::Service as Service>::Future: 'static,
@@ -530,7 +532,7 @@ where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S>,
     S: ServiceFactory<Config = AppConfig, Request = Request>,
-    S::Error: Into<Error>,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     S::Service: 'static,

@@ -20,7 +20,7 @@ use super::{Server, ServiceFactory};
 /// use ntex::server;
 /// use ntex::web::{self, App, HttpResponse};
 ///
-/// async fn my_handler() -> Result<HttpResponse, http::Error> {
+/// async fn my_handler() -> Result<HttpResponse, std::io::Error> {
 ///     Ok(HttpResponse::Ok().into())
 /// }
 ///

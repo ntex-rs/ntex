@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::net;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -12,7 +13,7 @@ use serde::Serialize;
 use serde_json;
 
 use crate::http::body::{Body, BodyStream};
-use crate::http::error::{Error, HttpError};
+use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, IntoHeaderValue};
 use crate::http::RequestHead;
 
@@ -146,11 +147,11 @@ impl From<SendRequestError> for SendClientRequest {
     }
 }
 
-impl From<Error> for SendClientRequest {
-    fn from(e: Error) -> Self {
-        SendClientRequest::Err(Some(e.into()))
-    }
-}
+// impl From<Error> for SendClientRequest {
+//     fn from(e: Error) -> Self {
+//         SendClientRequest::Err(Some(e.into()))
+//     }
+// }
 
 impl From<HttpError> for SendClientRequest {
     fn from(e: HttpError) -> Self {
@@ -210,7 +211,7 @@ impl RequestSender {
     ) -> SendClientRequest {
         let body = match serde_json::to_string(value) {
             Ok(body) => body,
-            Err(e) => return Error::from(e).into(),
+            Err(e) => return SendRequestError::Body(Box::new(e)).into(),
         };
 
         if let Err(e) = self.set_header_if_none(header::CONTENT_TYPE, "application/json")
@@ -237,7 +238,7 @@ impl RequestSender {
     ) -> SendClientRequest {
         let body = match serde_urlencoded::to_string(value) {
             Ok(body) => body,
-            Err(e) => return Error::from(e).into(),
+            Err(e) => return SendRequestError::Body(Box::new(e)).into(),
         };
 
         // set content-type
@@ -267,7 +268,7 @@ impl RequestSender {
     ) -> SendClientRequest
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
-        E: Into<Error> + 'static,
+        E: Error + 'static,
     {
         self.send_body(
             addr,

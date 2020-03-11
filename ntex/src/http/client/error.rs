@@ -1,4 +1,5 @@
 //! Http client errors
+use std::error::Error;
 use std::io;
 
 use actix_connect::resolver::ResolveError;
@@ -8,7 +9,7 @@ use serde_json::error::Error as JsonError;
 #[cfg(feature = "openssl")]
 use actix_connect::ssl::openssl::{HandshakeError, SslError};
 
-use crate::http::error::{Error, HttpError, ParseError, PayloadError, ResponseError};
+use crate::http::error::{HttpError, ParseError, PayloadError, ResponseError};
 use crate::http::header::HeaderValue;
 use crate::http::StatusCode;
 use crate::ws::ProtocolError;
@@ -174,7 +175,7 @@ pub enum SendRequestError {
     #[display(fmt = "Tunnels are not supported for http2 connection")]
     TunnelNotSupported,
     /// Error sending request body
-    Body(Error),
+    Body(Box<dyn Error>),
 }
 
 /// Convert `SendRequestError` to a server `Response`

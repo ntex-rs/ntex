@@ -1,8 +1,8 @@
+use std::io;
 use std::task::{Context, Poll};
 
 use futures::future::{ok, Ready};
 
-use crate::http::error::Error;
 use crate::http::request::Request;
 use crate::{Service, ServiceFactory};
 
@@ -12,9 +12,9 @@ impl ServiceFactory for ExpectHandler {
     type Config = ();
     type Request = Request;
     type Response = Request;
-    type Error = Error;
+    type Error = io::Error;
     type Service = ExpectHandler;
-    type InitError = Error;
+    type InitError = io::Error;
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
@@ -25,7 +25,7 @@ impl ServiceFactory for ExpectHandler {
 impl Service for ExpectHandler {
     type Request = Request;
     type Response = Request;
-    type Error = Error;
+    type Error = io::Error;
     type Future = Ready<Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

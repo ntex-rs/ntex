@@ -1,10 +1,11 @@
 //! Stream encoder
+use std::error::Error;
 use std::future::Future;
 use std::io::{self, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_threadpool::{run, CpuFuture};
+use actix_threadpool::{run, BlockingError, CpuFuture};
 use brotli2::write::BrotliEncoder;
 use bytes::Bytes;
 use flate2::write::{GzEncoder, ZlibEncoder};
@@ -12,7 +13,7 @@ use futures::ready;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::{ContentEncoding, HeaderValue, CONTENT_ENCODING};
-use crate::http::{Error, ResponseHead, StatusCode};
+use crate::http::{ResponseHead, StatusCode};
 
 use super::Writer;
 
@@ -97,7 +98,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Error>>> {
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         loop {
             if self.eof {
                 return Poll::Ready(None);
@@ -106,7 +107,15 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
             if let Some(ref mut fut) = self.fut {
                 let mut encoder = match ready!(Pin::new(fut).poll(cx)) {
                     Ok(item) => item,
-                    Err(e) => return Poll::Ready(Some(Err(e.into()))),
+                    Err(e) => {
+                        let e = match e {
+                            BlockingError::Error(e) => e,
+                            BlockingError::Canceled => {
+                                io::Error::new(io::ErrorKind::Other, "Canceled")
+                            }
+                        };
+                        return Poll::Ready(Some(Err(Box::new(e))));
+                    }
                 };
                 let chunk = encoder.take();
                 self.encoder = Some(encoder);

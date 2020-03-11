@@ -1,4 +1,5 @@
 use std::convert::TryFrom;
+use std::error::Error;
 use std::net;
 use std::rc::Rc;
 use std::time::Duration;
@@ -8,7 +9,7 @@ use futures::Stream;
 use serde::Serialize;
 
 use crate::http::body::Body;
-use crate::http::error::{Error, HttpError};
+use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, IntoHeaderValue};
 use crate::http::{Method, RequestHead, Uri};
 
@@ -82,7 +83,7 @@ impl FrozenClientRequest {
     pub fn send_stream<S, E>(&self, stream: S) -> SendClientRequest
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
-        E: Into<Error> + 'static,
+        E: Error + 'static,
     {
         RequestSender::Rc(self.head.clone(), None).send_stream(
             self.addr,
@@ -205,7 +206,7 @@ impl FrozenSendBuilder {
     pub fn send_stream<S, E>(self, stream: S) -> SendClientRequest
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
-        E: Into<Error> + 'static,
+        E: Error + 'static,
     {
         if let Some(e) = self.err {
             return e.into();

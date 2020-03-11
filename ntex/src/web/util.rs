@@ -5,7 +5,7 @@ use std::future::Future;
 use actix_router::IntoPattern;
 
 use crate::http::body::MessageBody;
-use crate::http::error::{BlockingError, Error};
+use crate::http::error::{BlockingError, ResponseError};
 use crate::http::{Method, Request, Response};
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
@@ -282,7 +282,7 @@ where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S>,
     S: ServiceFactory<Config = AppConfig, Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
     <S::Service as Service>::Future: 'static,

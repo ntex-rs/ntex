@@ -6,7 +6,7 @@ use actix_codec::Framed;
 
 use crate::http::body::MessageBody;
 use crate::http::config::{KeepAlive, ServiceConfig};
-use crate::http::error::Error;
+use crate::http::error::ResponseError;
 use crate::http::h1::{Codec, ExpectHandler, H1Service, UpgradeHandler};
 use crate::http::h2::H2Service;
 use crate::http::helpers::{Data, DataFactory};
@@ -34,7 +34,7 @@ pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
 impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>>
 where
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     <S::Service as Service>::Future: 'static,
 {
@@ -57,11 +57,11 @@ where
 impl<T, S, X, U> HttpServiceBuilder<T, S, X, U>
 where
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: Into<Error> + 'static,
+    S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     <S::Service as Service>::Future: 'static,
     X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-    X::Error: Into<Error>,
+    X::Error: ResponseError,
     X::InitError: fmt::Debug,
     <X::Service as Service>::Future: 'static,
     U: ServiceFactory<Config = (), Request = (Request, Framed<T, Codec>), Response = ()>,
@@ -125,7 +125,7 @@ where
     where
         F: IntoServiceFactory<X1>,
         X1: ServiceFactory<Config = (), Request = Request, Response = Request>,
-        X1::Error: Into<Error>,
+        X1::Error: ResponseError,
         X1::InitError: fmt::Debug,
         <X1::Service as Service>::Future: 'static,
     {
@@ -189,7 +189,7 @@ where
     where
         B: MessageBody,
         F: IntoServiceFactory<S>,
-        S::Error: Into<Error>,
+        S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
     {
@@ -211,7 +211,7 @@ where
     where
         B: MessageBody + 'static,
         F: IntoServiceFactory<S>,
-        S::Error: Into<Error> + 'static,
+        S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
         <S::Service as Service>::Future: 'static,
@@ -231,7 +231,7 @@ where
     where
         B: MessageBody + 'static,
         F: IntoServiceFactory<S>,
-        S::Error: Into<Error> + 'static,
+        S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
         <S::Service as Service>::Future: 'static,

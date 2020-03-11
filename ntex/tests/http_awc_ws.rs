@@ -7,7 +7,7 @@ use futures::{SinkExt, StreamExt};
 
 use ntex::http::test::server as test_server;
 use ntex::http::ws::handshake_response;
-use ntex::http::{body::BodySize, h1, Error, HttpService, Request, Response};
+use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
 use ntex::ws;
 
 async fn ws_service(req: ws::Frame) -> Result<ws::Message, io::Error> {
@@ -39,7 +39,7 @@ async fn test_simple() {
                     ws::Dispatcher::with(framed, ws_service).await
                 }
             })
-            .finish(|_| ok::<_, Error>(Response::NotFound()))
+            .finish(|_| ok::<_, io::Error>(Response::NotFound()))
             .tcp()
     });
 

@@ -284,7 +284,7 @@ impl AsyncWrite for TestBuffer {
 /// use ntex::http;
 /// use ntex::web::{self, App, HttpResponse};
 ///
-/// async fn my_handler() -> Result<HttpResponse, http::Error> {
+/// async fn my_handler() -> Result<HttpResponse, std::io::Error> {
 ///     Ok(HttpResponse::Ok().into())
 /// }
 ///

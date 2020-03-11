@@ -4,7 +4,7 @@ use bytes::BytesMut;
 use futures::StreamExt;
 use log::info;
 use ntex::http::header::HeaderValue;
-use ntex::http::{Error, HttpService, Request, Response};
+use ntex::http::{HttpService, Request, Response};
 use ntex::server::Server;
 
 #[actix_rt::main]
@@ -20,11 +20,11 @@ async fn main() -> io::Result<()> {
                 .finish(|mut req: Request| async move {
                     let mut body = BytesMut::new();
                     while let Some(item) = req.payload().next().await {
-                        body.extend_from_slice(&item?);
+                        body.extend_from_slice(&item.unwrap());
                     }
 
                     info!("request body: {:?}", body);
-                    Ok::<_, Error>(
+                    Ok::<_, io::Error>(
                         Response::Ok()
                             .header("x-head", HeaderValue::from_static("dummy value!"))
                             .body(body),
