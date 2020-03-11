@@ -49,6 +49,14 @@ pub struct Error {
     cause: Box<dyn WebResponseError<DefaultError>>,
 }
 
+impl Error {
+    pub fn new<T: WebResponseError<DefaultError> + 'static>(err: T) -> Error {
+        Error {
+            cause: Box::new(err),
+        }
+    }
+}
+
 /// `Error` for any error that implements `WebResponseError<DefaultError>`
 impl<T: WebResponseError<DefaultError> + 'static> From<T> for Error {
     fn from(err: T) -> Self {

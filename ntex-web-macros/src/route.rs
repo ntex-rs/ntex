@@ -1,25 +1,7 @@
-extern crate proc_macro;
-
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens, TokenStreamExt};
 use syn::{AttributeArgs, Ident, NestedMeta};
-
-enum ResourceType {
-    Async,
-    Sync,
-}
-
-impl ToTokens for ResourceType {
-    fn to_tokens(&self, stream: &mut TokenStream2) {
-        let ident = match self {
-            ResourceType::Async => "to",
-            ResourceType::Sync => "to",
-        };
-        let ident = Ident::new(ident, Span::call_site());
-        stream.append(ident);
-    }
-}
 
 #[derive(PartialEq)]
 pub enum GuardType {
@@ -113,30 +95,7 @@ pub struct Route {
     name: syn::Ident,
     args: Args,
     ast: syn::ItemFn,
-    resource_type: ResourceType,
     guard: GuardType,
-}
-
-fn guess_resource_type(typ: &syn::Type) -> ResourceType {
-    let mut guess = ResourceType::Sync;
-
-    if let syn::Type::ImplTrait(typ) = typ {
-        for bound in typ.bounds.iter() {
-            if let syn::TypeParamBound::Trait(bound) = bound {
-                for bound in bound.path.segments.iter() {
-                    if bound.ident == "Future" {
-                        guess = ResourceType::Async;
-                        break;
-                    } else if bound.ident == "Responder" {
-                        guess = ResourceType::Sync;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    guess
 }
 
 impl Route {
@@ -156,28 +115,12 @@ impl Route {
         }
         let ast: syn::ItemFn = syn::parse(input)?;
         let name = ast.sig.ident.clone();
-
         let args = Args::new(args)?;
-
-        let resource_type = if ast.sig.asyncness.is_some() {
-            ResourceType::Async
-        } else {
-            match ast.sig.output {
-                syn::ReturnType::Default => {
-                    return Err(syn::Error::new_spanned(
-                        ast,
-                        "Function has no return type. Cannot be used as handler",
-                    ));
-                }
-                syn::ReturnType::Type(_, ref typ) => guess_resource_type(typ.as_ref()),
-            }
-        };
 
         Ok(Self {
             name,
             args,
             ast,
-            resource_type,
             guard,
         })
     }
@@ -189,19 +132,49 @@ impl Route {
         let ast = &self.ast;
         let path = &self.args.path;
         let extra_guards = &self.args.guards;
-        let resource_type = &self.resource_type;
+
+        let args: Vec<_> = ast
+            .sig
+            .inputs
+            .iter()
+            .filter(|item| match item {
+                syn::FnArg::Receiver(_) => false,
+                syn::FnArg::Typed(_) => true,
+            })
+            .map(|item| match item {
+                syn::FnArg::Receiver(_) => panic!(),
+                syn::FnArg::Typed(ref pt) => pt.ty.clone(),
+            })
+            .collect();
+
+        let assert_responder: syn::Path = syn::parse_str(
+            format!(
+                "ntex::web::dev::__assert_handler{}",
+                if args.is_empty() {
+                    "".to_string()
+                } else {
+                    format!("{}", args.len())
+                }
+            )
+            .as_str(),
+        )
+        .unwrap();
+
         let stream = quote! {
             #[allow(non_camel_case_types)]
             pub struct #name;
 
             impl<__E: 'static> ntex::web::dev::HttpServiceFactory<__E> for #name {
                 fn register(self, __config: &mut ntex::web::dev::AppService<__E>) {
+                    #(ntex::web::dev::__assert_extractor::<__E, #args>();)*
+
                     #ast
+
                     let __resource = ntex::web::Resource::new(#path)
                         .name(#resource_name)
                         .guard(ntex::web::guard::#guard())
                         #(.guard(ntex::web::guard::fn_guard(#extra_guards)))*
-                        .#resource_type(#name);
+                        .to(#assert_responder(#name));
 
                     ntex::web::dev::HttpServiceFactory::register(__resource, __config)
                 }

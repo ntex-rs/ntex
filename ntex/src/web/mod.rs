@@ -119,9 +119,6 @@ pub mod dev {
         HttpServiceFactory, WebRequest, WebResponse, WebService,
     };
 
-    //pub use crate::web::types::form::UrlEncoded;
-    //pub use crate::web::types::json::JsonBody;
-
     pub use actix_router::{Path, ResourceDef, ResourcePath, Url};
 
     pub(crate) fn insert_slash(mut patterns: Vec<String>) -> Vec<String> {
@@ -176,4 +173,54 @@ pub mod dev {
             self
         }
     }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn __assert_extractor<Err, T>()
+    where
+        T: super::FromRequest<T>,
+    {
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn __assert_handler<Err, Fun, Fut, Res>(
+        f: Fun,
+    ) -> impl Factory<(), Fut, Res, Err>
+    where
+        Err: 'static,
+        Fun: Fn() -> Fut + Clone + 'static,
+        Fut: std::future::Future<Output = Res>,
+        Res: super::Responder<Err>,
+    {
+        f
+    }
+
+    macro_rules! assert_handler ({ $name:ident, $($T:ident),+} => {
+        #[doc(hidden)]
+        #[inline(always)]
+        pub fn $name<Err, Fun, Fut, Res, $($T,)+>(
+            f: Fun,
+        ) -> impl Factory<($($T,)+), Fut, Res, Err>
+        where
+            Err: 'static,
+            Fun: Fn($($T,)+) -> Fut + Clone + 'static,
+            Fut: std::future::Future<Output = Res>,
+            Res: $crate::web::Responder<Err>,
+            $($T: $crate::web::FromRequest<Err>),+
+        {
+            f
+        }
+    });
+
+    assert_handler!(__assert_handler1, A);
+    assert_handler!(__assert_handler2, A, B);
+    assert_handler!(__assert_handler3, A, B, C);
+    assert_handler!(__assert_handler4, A, B, C, D);
+    assert_handler!(__assert_handler5, A, B, C, D, E);
+    assert_handler!(__assert_handler6, A, B, C, D, E, F);
+    assert_handler!(__assert_handler7, A, B, C, D, E, F, G);
+    assert_handler!(__assert_handler8, A, B, C, D, E, F, G, H);
+    assert_handler!(__assert_handler9, A, B, C, D, E, F, G, H, I);
+    assert_handler!(__assert_handler10, A, B, C, D, E, F, G, H, I, J);
 }

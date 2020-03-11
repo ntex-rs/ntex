@@ -19,7 +19,7 @@ use ntex::http::{header, HttpMessage, HttpService};
 use ntex::service::{map_config, pipeline_factory};
 use ntex::web::dev::{AppConfig, BodyEncoding};
 use ntex::web::middleware::Compress;
-use ntex::web::{self, test, App, HttpRequest, HttpResponse};
+use ntex::web::{self, test, App, Error, HttpRequest, HttpResponse};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -653,76 +653,74 @@ async fn test_client_brotli_encoding_large_random() {
 //     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 // }
 
-// TODO!
+#[ntex::test]
+async fn test_client_cookie_handling() {
+    use std::io::{Error as IoError, ErrorKind};
 
-// #[ntex::test]
-// async fn test_client_cookie_handling() {
-//     use std::io::{Error as IoError, ErrorKind};
+    let cookie1 = Cookie::build("cookie1", "value1").finish();
+    let cookie2 = Cookie::build("cookie2", "value2")
+        .domain("www.example.org")
+        .path("/")
+        .secure(true)
+        .http_only(true)
+        .finish();
+    // Q: are all these clones really necessary? A: Yes, possibly
+    let cookie1b = cookie1.clone();
+    let cookie2b = cookie2.clone();
 
-//     let cookie1 = Cookie::build("cookie1", "value1").finish();
-//     let cookie2 = Cookie::build("cookie2", "value2")
-//         .domain("www.example.org")
-//         .path("/")
-//         .secure(true)
-//         .http_only(true)
-//         .finish();
-//     // Q: are all these clones really necessary? A: Yes, possibly
-//     let cookie1b = cookie1.clone();
-//     let cookie2b = cookie2.clone();
+    let srv = test::start(move || {
+        let cookie1 = cookie1b.clone();
+        let cookie2 = cookie2b.clone();
 
-//     let srv = test::start(move || {
-//         let cookie1 = cookie1b.clone();
-//         let cookie2 = cookie2b.clone();
+        App::new().route(
+            "/",
+            web::to(web::dev::__assert_handler1(move |req: HttpRequest| {
+                let cookie1 = cookie1.clone();
+                let cookie2 = cookie2.clone();
 
-//         App::new().route(
-//             "/",
-//             web::to(move |req: HttpRequest| async {
-//                 let cookie1 = cookie1.clone();
-//                 let cookie2 = cookie2.clone();
+                async move {
+                    // Check cookies were sent correctly
+                    let res: Result<(), Error> = req
+                        .cookie("cookie1")
+                        .ok_or(())
+                        .and_then(|c1| {
+                            if c1.value() == "value1" {
+                                Ok(())
+                            } else {
+                                Err(())
+                            }
+                        })
+                        .and_then(|()| req.cookie("cookie2").ok_or(()))
+                        .and_then(|c2| {
+                            if c2.value() == "value2" {
+                                Ok(())
+                            } else {
+                                Err(())
+                            }
+                        })
+                        .map_err(|_| Error::new(IoError::from(ErrorKind::NotFound)));
 
-//                 async move {
-//                     // Check cookies were sent correctly
-//                     let res: Result<(), WebError> = req
-//                         .cookie("cookie1")
-//                         .ok_or(())
-//                         .and_then(|c1| {
-//                             if c1.value() == "value1" {
-//                                 Ok(())
-//                             } else {
-//                                 Err(())
-//                             }
-//                         })
-//                         .and_then(|()| req.cookie("cookie2").ok_or(()))
-//                         .and_then(|c2| {
-//                             if c2.value() == "value2" {
-//                                 Ok(())
-//                             } else {
-//                                 Err(())
-//                             }
-//                         })
-//                         .map_err(|_| WebError::new(IoError::from(ErrorKind::NotFound)));
+                    if let Err(e) = res {
+                        Err(e)
+                    } else {
+                        // Send some cookies back
+                        Ok::<_, Error>(
+                            HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish(),
+                        )
+                    }
+                }
+            })),
+        )
+    });
 
-//                     if let Err(e) = res {
-//                         Err(e)
-//                     } else {
-//                         // Send some cookies back
-//                         Ok::<_, WebError>(
-//                             HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish(),
-//                         )
-//                     }
-//                 }
-//             }),
-//         )
-//     });
-
-//     let request = srv.get("/").cookie(cookie1.clone()).cookie(cookie2.clone());
-//     let response = request.send().await.unwrap();
-//     assert!(response.status().is_success());
-//     let c1 = response.cookie("cookie1").expect("Missing cookie1");
-//     assert_eq!(c1, cookie1);
-//     let c2 = response.cookie("cookie2").expect("Missing cookie2");
-//     assert_eq!(c2, cookie2);
-// }
+    let request = srv.get("/").cookie(cookie1.clone()).cookie(cookie2.clone());
+    let response = request.send().await.unwrap();
+    assert!(response.status().is_success());
+    let c1 = response.cookie("cookie1").expect("Missing cookie1");
+    assert_eq!(c1, cookie1);
+    let c2 = response.cookie("cookie2").expect("Missing cookie2");
+    assert_eq!(c2, cookie2);
+}
 
 // #[ntex::test]
 // fn client_read_until_eof() {

@@ -9,7 +9,7 @@ use pin_project::pin_project;
 
 use crate::{Service, ServiceFactory};
 
-use super::error::{IntoWebError, WebError};
+use super::error::{IntoWebError, WebError, WebResponseError};
 use super::extract::FromRequest;
 use super::request::HttpRequest;
 use super::responder::Responder;
@@ -129,7 +129,8 @@ where
                     Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
                 }
                 Poll::Ready(Err(e)) => {
-                    Poll::Ready(Err((e.into_error(), this.req.take().unwrap())))
+                    let res = e.into_error().error_response();
+                    Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
                 }
             };
         }
