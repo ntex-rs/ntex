@@ -83,7 +83,7 @@ rust-tls = { version = "0.16.0", package = "rustls", optional = true }
 brotli2 = { version="0.3.2", optional = true }
 flate2 = { version = "1.0.13", optional = true }
 
-tokio = "=0.2.6"
+tokio = "0.2.4"
 
 [dev-dependencies]
 actix-server = "1.0.0"
