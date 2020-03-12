@@ -7,7 +7,7 @@ use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
 use crate::http::Payload;
 
-use super::error::{DefaultError, IntoWebError, WebError};
+use super::error::{DefaultError, IntoWebError, WebError, WebResponseError};
 use super::request::HttpRequest;
 
 /// Trait implemented by types that can be extracted from request.
@@ -15,7 +15,7 @@ use super::request::HttpRequest;
 /// Types that implement this trait can be used with `Route` handlers.
 pub trait FromRequest<Err = DefaultError>: Sized {
     /// The associated error which can be returned.
-    type Error: IntoWebError<Err>;
+    type Error: WebResponseError<Err>;
 
     /// Future that resolves to a Self
     type Future: Future<Output = Result<Self, Self::Error>>;
@@ -206,7 +206,7 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
 
     #[doc(hidden)]
     #[pin_project::pin_project]
-    pub struct $fut_type<Err, $($T: FromRequest<Err>),+> {
+    pub struct $fut_type<Err: 'static, $($T: FromRequest<Err>),+> {
         items: ($(Option<$T>,)+),
         futs: ($($T::Future,)+),
     }

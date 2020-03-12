@@ -104,13 +104,11 @@ impl WebRequest {
 
     /// Create web response for error
     #[inline]
-    pub fn error_response<B, Err, E: IntoWebError<Err>>(
+    pub fn error_response<B, Err: 'static, E: IntoWebError<Err> + fmt::Debug>(
         self,
-        _err: E,
+        err: E,
     ) -> WebResponse<B> {
-        //let res: Response = err.into().into();
-        //WebResponse::new(self.0, res.into_body())
-        todo!()
+        WebResponse::from_err(err, self.0)
     }
 
     /// This method returns reference to the request head
@@ -309,12 +307,18 @@ impl<B> WebResponse<B> {
     }
 
     /// Create web response from the error
-    pub fn from_err<Err: 'static, E: Into<WebError<Err>>>(
+    pub fn from_err<Err: 'static, E: IntoWebError<Err> + fmt::Debug>(
         err: E,
         request: HttpRequest,
     ) -> Self {
-        let e: WebError<Err> = err.into();
-        let res: Response = e.into();
+        let res: Response = err.error_response();
+
+        if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
+            log::error!("Internal Server Error: {:?}", err);
+        } else {
+            log::debug!("Error in response: {:?}", err);
+        }
+
         WebResponse {
             request,
             response: res.into_body(),
@@ -323,7 +327,10 @@ impl<B> WebResponse<B> {
 
     /// Create web response for error
     #[inline]
-    pub fn error_response<Err: 'static, E: Into<WebError<Err>>>(self, err: E) -> Self {
+    pub fn error_response<Err: 'static, E: IntoWebError<Err> + fmt::Debug>(
+        self,
+        err: E,
+    ) -> Self {
         Self::from_err(err, self.request)
     }
 

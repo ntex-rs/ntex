@@ -1126,7 +1126,10 @@ mod tests {
         }
 
         let mut app = init_service(
-            App::new().service(web::resource("/index.html").to(async_with_block)),
+            App::new().service(
+                web::resource("/index.html")
+                    .to(crate::web::dev::__assert_handler(async_with_block)),
+            ),
         )
         .await;
 

@@ -162,8 +162,8 @@ mod tests {
         ))
         .await;
         let req = TestRequest::default().to_request();
-        let res = srv.call(req).await;
-        assert!(res.is_err())
+        let res = srv.call(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[actix_rt::test]
@@ -182,8 +182,8 @@ mod tests {
         ))
         .await;
         let req = TestRequest::default().to_request();
-        let res = srv.call(req).await;
-        assert!(res.is_err())
+        let res = srv.call(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[actix_rt::test]
@@ -208,8 +208,8 @@ mod tests {
             )))
             .await;
         let req = TestRequest::default().to_request();
-        let res = srv.call(req).await;
-        assert!(res.is_err())
+        let res = srv.call(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[actix_rt::test]

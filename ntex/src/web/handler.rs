@@ -9,12 +9,11 @@ use pin_project::pin_project;
 
 use crate::{Service, ServiceFactory};
 
-use super::error::{IntoWebError, WebError};
+use super::error::WebError;
 use super::extract::FromRequest;
 use super::request::HttpRequest;
 use super::responder::Responder;
 use super::service::{WebRequest, WebResponse};
-use super::HttpResponse;
 
 /// Async handler converter factory
 pub trait Factory<T, R, O, Err>: Clone + 'static
@@ -132,8 +131,7 @@ where
                     Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
                 }
                 Poll::Ready(Err(e)) => {
-                    let res: HttpResponse = e.into_error().into();
-                    Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
+                    Poll::Ready(Ok(WebResponse::from_err(e, this.req.take().unwrap())))
                 }
             };
         }
@@ -171,6 +169,7 @@ where
             Response = WebResponse,
             Error = (WebError<E>, HttpRequest),
         > + Clone,
+    E: 'static,
 {
     type Config = ();
     type Request = WebRequest;
@@ -200,6 +199,7 @@ where
             Response = WebResponse,
             Error = (WebError<E>, HttpRequest),
         > + Clone,
+    E: 'static,
 {
     type Request = WebRequest;
     type Response = WebResponse;
@@ -240,6 +240,7 @@ where
         Response = WebResponse,
         Error = (WebError<E>, HttpRequest),
     >,
+    E: 'static,
 {
     type Output = Result<WebResponse, (WebError<E>, HttpRequest)>;
 
@@ -256,7 +257,7 @@ where
                 self.as_mut().project().fut_s.set(fut);
                 self.poll(cx)
             }
-            Err(e) => Poll::Ready(Err((e.into_error(), this.req.clone()))),
+            Err(e) => Poll::Ready(Ok(WebResponse::from_err(e, this.req.clone()))),
         }
     }
 }
