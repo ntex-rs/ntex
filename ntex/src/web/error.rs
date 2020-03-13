@@ -84,6 +84,12 @@ impl IntoWebError<DefaultError> for Error {
     }
 }
 
+impl error::ResponseError for Error {
+    fn error_response(&self) -> HttpResponse {
+        self.cause.error_response()
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.cause, f)
