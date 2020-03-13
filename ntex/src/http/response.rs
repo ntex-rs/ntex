@@ -341,9 +341,9 @@ impl ResponseBuilder {
                     Ok(value) => {
                         parts.headers.append(key, value);
                     }
-                    Err(e) => self.err = Some(e.into()),
+                    Err(e) => self.err = log_error(e),
                 },
-                Err(e) => self.err = Some(e.into()),
+                Err(e) => self.err = log_error(e),
             };
         }
         self
@@ -373,9 +373,9 @@ impl ResponseBuilder {
                     Ok(value) => {
                         parts.headers.insert(key, value);
                     }
-                    Err(e) => self.err = Some(e.into()),
+                    Err(e) => self.err = log_error(e),
                 },
-                Err(e) => self.err = Some(e.into()),
+                Err(e) => self.err = log_error(e),
             };
         }
         self
@@ -441,7 +441,7 @@ impl ResponseBuilder {
                 Ok(value) => {
                     parts.headers.insert(header::CONTENT_TYPE, value);
                 }
-                Err(e) => self.err = Some(e.into()),
+                Err(e) => self.err = log_error(e),
             };
         }
         self
@@ -574,7 +574,7 @@ impl ResponseBuilder {
                 for cookie in jar.delta() {
                     match HeaderValue::from_str(&cookie.to_string()) {
                         Ok(val) => response.headers.append(header::SET_COOKIE, val),
-                        Err(e) => return Response::from(e).into_body(),
+                        Err(e) => return Response::from(HttpError::from(e)).into_body(),
                     };
                 }
             }
@@ -754,8 +754,17 @@ impl fmt::Debug for ResponseBuilder {
     }
 }
 
+fn log_error<T: Into<HttpError>>(err: T) -> Option<HttpError> {
+    let e = err.into();
+    error!("Error in ResponseBuilder {}", e);
+    Some(e)
+}
+
 /// Helper converters
-impl<I: Into<Response>, E: ResponseError> From<Result<I, E>> for Response {
+impl<I: Into<Response>, E> From<Result<I, E>> for Response
+where
+    E: ResponseError + fmt::Debug,
+{
     fn from(res: Result<I, E>) -> Self {
         match res {
             Ok(val) => val.into(),

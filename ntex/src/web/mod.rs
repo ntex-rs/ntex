@@ -89,6 +89,7 @@ mod util;
 pub use ntex_web_macros::*;
 
 pub use crate::http::Response as HttpResponse;
+pub use crate::http::ResponseBuilder as HttpResponseBuilder;
 
 pub use self::app::App;
 pub use self::config::ServiceConfig;

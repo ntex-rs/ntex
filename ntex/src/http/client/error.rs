@@ -9,7 +9,7 @@ use serde_json::error::Error as JsonError;
 #[cfg(feature = "openssl")]
 use actix_connect::ssl::openssl::{HandshakeError, SslError};
 
-use crate::http::error::{HttpError, ParseError, PayloadError, ResponseError};
+use crate::http::error::{HttpError, ParseError, PayloadError};
 use crate::http::header::HeaderValue;
 use crate::http::StatusCode;
 use crate::ws::ProtocolError;
@@ -43,6 +43,8 @@ pub enum WsClientError {
     SendRequest(SendRequestError),
 }
 
+impl std::error::Error for WsClientError {}
+
 impl From<InvalidUrl> for WsClientError {
     fn from(err: InvalidUrl) -> Self {
         WsClientError::SendRequest(err.into())
@@ -69,8 +71,7 @@ pub enum JsonPayloadError {
     Payload(PayloadError),
 }
 
-/// Return `InternalServerError` for `JsonPayloadError`
-impl ResponseError for JsonPayloadError {}
+impl std::error::Error for JsonPayloadError {}
 
 /// A set of errors that can occur while connecting to an HTTP host
 #[derive(Debug, Display, From)]
@@ -118,6 +119,8 @@ pub enum ConnectError {
     Io(io::Error),
 }
 
+impl std::error::Error for ConnectError {}
+
 impl From<actix_connect::ConnectError> for ConnectError {
     fn from(err: actix_connect::ConnectError) -> ConnectError {
         match err {
@@ -149,6 +152,8 @@ pub enum InvalidUrl {
     Http(HttpError),
 }
 
+impl std::error::Error for InvalidUrl {}
+
 /// A set of errors that can occur during request sending and response reading
 #[derive(Debug, Display, From)]
 pub enum SendRequestError {
@@ -178,18 +183,7 @@ pub enum SendRequestError {
     Body(Box<dyn Error>),
 }
 
-/// Convert `SendRequestError` to a server `Response`
-impl ResponseError for SendRequestError {
-    fn status_code(&self) -> StatusCode {
-        match *self {
-            SendRequestError::Connect(ConnectError::Timeout) => {
-                StatusCode::GATEWAY_TIMEOUT
-            }
-            SendRequestError::Connect(_) => StatusCode::BAD_REQUEST,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
+impl std::error::Error for SendRequestError {}
 
 /// A set of errors that can occur during freezing a request
 #[derive(Debug, Display, From)]
@@ -201,6 +195,8 @@ pub enum FreezeRequestError {
     #[display(fmt = "{}", _0)]
     Http(HttpError),
 }
+
+impl std::error::Error for FreezeRequestError {}
 
 impl From<FreezeRequestError> for SendRequestError {
     fn from(e: FreezeRequestError) -> Self {

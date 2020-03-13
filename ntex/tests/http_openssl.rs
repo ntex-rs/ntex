@@ -97,8 +97,10 @@ async fn test_h2_body() -> io::Result<()> {
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|mut req: Request<_>| async move {
-                let body = load_body(req.take_payload()).await?;
-                Ok::<_, PayloadError>(Response::Ok().body(body))
+                let body = load_body(req.take_payload())
+                    .await
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                Ok::<_, io::Error>(Response::Ok().body(body))
             })
             .openssl(ssl_acceptor())
             .map_err(|_| ())
