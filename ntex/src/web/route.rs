@@ -8,7 +8,8 @@ use futures::future::{ready, FutureExt, LocalBoxFuture};
 use crate::http::Method;
 use crate::{Service, ServiceFactory};
 
-use super::error::{DefaultError, WebError};
+use super::error::WebError;
+use super::error_default::DefaultError;
 use super::extract::FromRequest;
 use super::guard::{self, Guard};
 use super::handler::{Extract, Factory, Handler};

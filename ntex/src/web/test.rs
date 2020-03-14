@@ -33,7 +33,8 @@ use crate::http::{
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use crate::web::config::AppConfig;
-use crate::web::error::{DefaultError, WebError};
+use crate::web::error::WebError;
+use crate::web::error_default::DefaultError;
 use crate::web::request::HttpRequestPool;
 use crate::web::rmap::ResourceMap;
 use crate::web::service::{WebRequest, WebResponse};

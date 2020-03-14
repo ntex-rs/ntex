@@ -7,7 +7,8 @@ use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
 use crate::http::Payload;
 
-use super::error::{DefaultError, IntoWebError, WebError, WebResponseError};
+use super::error::{IntoWebError, WebError, WebResponseError};
+use super::error_default::DefaultError;
 use super::request::HttpRequest;
 
 /// Trait implemented by types that can be extracted from request.

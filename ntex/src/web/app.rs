@@ -17,13 +17,13 @@ use super::app_service::{AppEntry, AppInit, AppRoutingFactory};
 use super::config::ServiceConfig;
 use super::data::{Data, DataFactory};
 use super::dev::ResourceDef;
-use super::error::{DefaultError, WebError};
 use super::resource::Resource;
 use super::route::Route;
 use super::service::{
     AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, WebRequest,
     WebResponse,
 };
+use super::{DefaultError, WebError};
 
 type HttpNewService<Err> =
     BoxServiceFactory<(), WebRequest, WebResponse, WebError<Err>, ()>;

@@ -143,7 +143,7 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 /// }
 ///
 /// /// extract `Info` from a path using serde
-/// async fn index(info: web::types::Path<Info>) -> Result<String, web::error::Error> {
+/// async fn index(info: web::types::Path<Info>) -> Result<String, web::Error> {
 ///     Ok(format!("Welcome {}!", info.username))
 /// }
 ///

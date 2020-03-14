@@ -13,7 +13,8 @@ use crate::http::error::{HttpError, InternalError, ResponseError};
 use crate::http::header::{HeaderMap, HeaderName, IntoHeaderValue};
 use crate::http::{Response, ResponseBuilder, StatusCode};
 
-use super::error::{DefaultError, IntoWebError, WebError};
+use super::error::{IntoWebError, WebError};
+use super::error_default::DefaultError;
 use super::request::HttpRequest;
 
 /// Trait implemented by types that can be converted to a http response.

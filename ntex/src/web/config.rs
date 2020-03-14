@@ -7,7 +7,6 @@ use crate::http::Extensions;
 use crate::service::{boxed, IntoServiceFactory, ServiceFactory};
 
 use super::data::{Data, DataFactory};
-use super::error::{DefaultError, WebError};
 use super::guard::Guard;
 use super::resource::Resource;
 use super::rmap::ResourceMap;
@@ -16,6 +15,7 @@ use super::service::{
     AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, WebRequest,
     WebResponse,
 };
+use super::{DefaultError, WebError};
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpNewService<Err> =

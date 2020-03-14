@@ -10,7 +10,8 @@ use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::service::{Service, Transform};
 
-use crate::web::error::{DefaultError, WebError};
+use crate::web::error::WebError;
+use crate::web::error_default::DefaultError;
 use crate::web::service::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
