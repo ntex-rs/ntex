@@ -35,8 +35,7 @@ where
     }
 }
 
-#[doc(hidden)]
-pub struct Handler<F, T, R, O, Err>
+pub(super) struct Handler<F, T, R, O, Err>
 where
     F: Factory<T, R, O, Err>,
     R: Future<Output = O>,
@@ -52,7 +51,7 @@ where
     R: Future<Output = O>,
     O: Responder<Err>,
 {
-    pub fn new(hnd: F) -> Self {
+    pub(super) fn new(hnd: F) -> Self {
         Handler {
             hnd,
             _t: PhantomData,
@@ -99,9 +98,8 @@ where
     }
 }
 
-#[doc(hidden)]
 #[pin_project]
-pub struct HandlerWebResponse<T, R, Err>
+pub(super) struct HandlerWebResponse<T, R, Err>
 where
     T: Future<Output = R>,
     R: Responder<Err>,
@@ -148,13 +146,13 @@ where
 }
 
 /// Extract arguments from request
-pub struct Extract<T: FromRequest<E>, S, E> {
+pub(super) struct Extract<T: FromRequest<E>, S, E> {
     service: S,
     _t: PhantomData<(T, E)>,
 }
 
 impl<T: FromRequest<E>, S, E> Extract<T, S, E> {
-    pub fn new(service: S) -> Self {
+    pub(super) fn new(service: S) -> Self {
         Extract {
             service,
             _t: PhantomData,
@@ -187,7 +185,7 @@ where
     }
 }
 
-pub struct ExtractService<T: FromRequest<E>, S, E> {
+pub(super) struct ExtractService<T: FromRequest<E>, S, E> {
     service: S,
     _t: PhantomData<(T, E)>,
 }
@@ -224,7 +222,7 @@ where
 }
 
 #[pin_project]
-pub struct ExtractResponse<T: FromRequest<E>, S: Service, E> {
+pub(super) struct ExtractResponse<T: FromRequest<E>, S: Service, E> {
     req: HttpRequest,
     service: S,
     #[pin]

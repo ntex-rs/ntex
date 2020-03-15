@@ -31,7 +31,7 @@ bitflags! {
 }
 
 #[doc(hidden)]
-pub trait Head: Default + 'static {
+pub(crate) trait Head: Default + 'static {
     fn clear(&mut self);
 
     fn pool() -> &'static MessagePool<Self>;
@@ -343,7 +343,7 @@ pub(crate) struct Message<T: Head> {
 
 impl<T: Head> Message<T> {
     /// Get new message from the pool of objects
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         T::pool().get_message()
     }
 }
@@ -384,7 +384,7 @@ pub(crate) struct BoxedResponseHead {
 
 impl BoxedResponseHead {
     /// Get new message from the pool of objects
-    pub fn new(status: StatusCode) -> Self {
+    pub(crate) fn new(status: StatusCode) -> Self {
         RESPONSE_POOL.with(|p| p.get_message(status))
     }
 }
@@ -413,12 +413,12 @@ impl Drop for BoxedResponseHead {
 
 #[doc(hidden)]
 /// Request's objects pool
-pub struct MessagePool<T: Head>(RefCell<Vec<Rc<T>>>);
+pub(crate) struct MessagePool<T: Head>(RefCell<Vec<Rc<T>>>);
 
 #[doc(hidden)]
 #[allow(clippy::vec_box)]
 /// Request's objects pool
-pub struct BoxedResponsePool(RefCell<Vec<Box<ResponseHead>>>);
+pub(super) struct BoxedResponsePool(RefCell<Vec<Box<ResponseHead>>>);
 
 thread_local!(static REQUEST_POOL: &'static MessagePool<RequestHead> = MessagePool::<RequestHead>::create());
 thread_local!(static RESPONSE_POOL: &'static BoxedResponsePool = BoxedResponsePool::create());

@@ -422,7 +422,7 @@ where
     }
 }
 
-pub struct ResourceFactory<Err> {
+struct ResourceFactory<Err> {
     routes: Vec<Route<Err>>,
     data: Option<Rc<Extensions>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,

@@ -277,7 +277,7 @@ impl Default for JsonConfig {
 /// * content type is not `application/json`
 ///   (unless specified in [`JsonConfig`](struct.JsonConfig.html))
 /// * content length is greater than 256k
-pub struct JsonBody<U> {
+struct JsonBody<U> {
     limit: usize,
     length: Option<usize>,
     #[cfg(feature = "compress")]
@@ -293,7 +293,7 @@ where
     U: DeserializeOwned + 'static,
 {
     /// Create `JsonBody` for request.
-    pub fn new(
+    fn new(
         req: &HttpRequest,
         payload: &mut Payload,
         ctype: Option<Arc<dyn Fn(mime::Mime) -> bool + Send + Sync>>,
@@ -338,7 +338,7 @@ where
     }
 
     /// Change max size of payload. By default max size is 256Kb
-    pub fn limit(mut self, limit: usize) -> Self {
+    fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }

@@ -309,7 +309,7 @@ impl Default for PayloadConfig {
 /// By default only 256Kb payload reads to a memory, then
 /// `PayloadError::Overflow` get returned. Use `MessageBody::limit()`
 /// method to change upper limit.
-pub struct HttpMessageBody {
+struct HttpMessageBody {
     limit: usize,
     length: Option<usize>,
     #[cfg(feature = "compress")]
@@ -322,10 +322,7 @@ pub struct HttpMessageBody {
 
 impl HttpMessageBody {
     /// Create `MessageBody` for request.
-    pub fn new(
-        req: &HttpRequest,
-        payload: &mut crate::http::Payload,
-    ) -> HttpMessageBody {
+    fn new(req: &HttpRequest, payload: &mut crate::http::Payload) -> HttpMessageBody {
         let mut len = None;
         if let Some(l) = req.headers().get(&header::CONTENT_LENGTH) {
             if let Ok(s) = l.to_str() {
@@ -361,7 +358,7 @@ impl HttpMessageBody {
     }
 
     /// Change max size of payload. By default max size is 256Kb
-    pub fn limit(mut self, limit: usize) -> Self {
+    fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }

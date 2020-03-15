@@ -256,7 +256,7 @@ where
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
 {
-    pub fn new(service: T) -> Self {
+    fn new(service: T) -> Self {
         RouteNewService { service }
     }
 }

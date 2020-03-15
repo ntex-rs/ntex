@@ -220,7 +220,7 @@ impl Default for FormConfig {
 /// * content type is not `application/x-www-form-urlencoded`
 /// * content-length is greater than 32k
 ///
-pub struct UrlEncoded<U> {
+struct UrlEncoded<U> {
     #[cfg(feature = "compress")]
     stream: Option<Decoder<Payload>>,
     #[cfg(not(feature = "compress"))]
@@ -234,7 +234,7 @@ pub struct UrlEncoded<U> {
 
 impl<U> UrlEncoded<U> {
     /// Create a new future to URL encode a request
-    pub fn new(req: &HttpRequest, payload: &mut Payload) -> UrlEncoded<U> {
+    fn new(req: &HttpRequest, payload: &mut Payload) -> UrlEncoded<U> {
         // check content type
         if req.content_type().to_lowercase() != "application/x-www-form-urlencoded" {
             return Self::err(UrlencodedError::ContentType);
@@ -284,7 +284,7 @@ impl<U> UrlEncoded<U> {
     }
 
     /// Change max size of payload. By default max size is 256Kb
-    pub fn limit(mut self, limit: usize) -> Self {
+    fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }

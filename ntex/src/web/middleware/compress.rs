@@ -201,7 +201,7 @@ impl AcceptEncoding {
     }
 
     /// Parse a raw Accept-Encoding header value into an ordered list.
-    pub fn parse(raw: &str, encoding: ContentEncoding) -> ContentEncoding {
+    fn parse(raw: &str, encoding: ContentEncoding) -> ContentEncoding {
         let mut encodings: Vec<_> = raw
             .replace(' ', "")
             .split(',')

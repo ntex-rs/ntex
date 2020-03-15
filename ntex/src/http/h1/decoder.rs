@@ -20,11 +20,11 @@ const MAX_BUFFER_SIZE: usize = 131_072;
 const MAX_HEADERS: usize = 96;
 
 /// Incoming messagd decoder
-pub(crate) struct MessageDecoder<T: MessageType>(PhantomData<T>);
+pub(super) struct MessageDecoder<T: MessageType>(PhantomData<T>);
 
 #[derive(Debug)]
 /// Incoming request type
-pub(crate) enum PayloadType {
+pub(super) enum PayloadType {
     None,
     Payload(PayloadDecoder),
     Stream(PayloadDecoder),
@@ -45,13 +45,13 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
     }
 }
 
-pub(crate) enum PayloadLength {
+pub(super) enum PayloadLength {
     Payload(PayloadType),
     Upgrade,
     None,
 }
 
-pub(crate) trait MessageType: Sized {
+pub(super) trait MessageType: Sized {
     fn set_connection_type(&mut self, ctype: Option<ConnectionType>);
 
     fn set_expect(&mut self);
@@ -320,13 +320,13 @@ impl MessageType for ResponseHead {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct HeaderIndex {
-    pub(crate) name: (usize, usize),
-    pub(crate) value: (usize, usize),
+pub(super) struct HeaderIndex {
+    pub(super) name: (usize, usize),
+    pub(super) value: (usize, usize),
 }
 
 impl HeaderIndex {
-    pub(crate) fn record(
+    pub(super) fn record(
         bytes: &[u8],
         headers: &[httparse::Header<'_>],
         indices: &mut [HeaderIndex],
@@ -345,7 +345,7 @@ impl HeaderIndex {
 
 #[derive(Debug, Clone, PartialEq)]
 /// Http payload item
-pub enum PayloadItem {
+pub(super) enum PayloadItem {
     Chunk(Bytes),
     Eof,
 }
@@ -355,24 +355,24 @@ pub enum PayloadItem {
 /// If a message body does not include a Transfer-Encoding, it *should*
 /// include a Content-Length header.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PayloadDecoder {
+pub(super) struct PayloadDecoder {
     kind: Kind,
 }
 
 impl PayloadDecoder {
-    pub fn length(x: u64) -> PayloadDecoder {
+    pub(super) fn length(x: u64) -> PayloadDecoder {
         PayloadDecoder {
             kind: Kind::Length(x),
         }
     }
 
-    pub fn chunked() -> PayloadDecoder {
+    pub(super) fn chunked() -> PayloadDecoder {
         PayloadDecoder {
             kind: Kind::Chunked(ChunkedState::Size, 0),
         }
     }
 
-    pub fn eof() -> PayloadDecoder {
+    pub(super) fn eof() -> PayloadDecoder {
         PayloadDecoder { kind: Kind::Eof }
     }
 }

@@ -289,7 +289,7 @@ impl Format {
     /// Create a `Format` from a format string.
     ///
     /// Returns `None` if the format string syntax is incorrect.
-    pub fn new(s: &str) -> Format {
+    fn new(s: &str) -> Format {
         log::trace!("Access log format: {}", s);
         let fmt = Regex::new(r"%(\{([A-Za-z0-9\-_]+)\}([ioe])|[atPrUsbTD]?)").unwrap();
 
@@ -342,7 +342,7 @@ impl Format {
 /// fields supported by the `Logger`, or a custom `String`.
 #[doc(hidden)]
 #[derive(Debug, Clone)]
-pub enum FormatText {
+enum FormatText {
     Str(String),
     Percent,
     RequestLine,

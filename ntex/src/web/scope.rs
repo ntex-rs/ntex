@@ -476,7 +476,7 @@ where
     }
 }
 
-pub struct ScopeFactory<Err> {
+struct ScopeFactory<Err> {
     data: Option<Rc<Extensions>>,
     services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,

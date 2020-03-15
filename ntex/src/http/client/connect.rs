@@ -15,7 +15,7 @@ use super::error::{ConnectError, SendRequestError};
 use super::response::ClientResponse;
 use super::{Connect as ClientConnect, Connection};
 
-pub(crate) struct ConnectorWrapper<T>(pub T);
+pub(crate) struct ConnectorWrapper<T>(pub(crate) T);
 
 pub(crate) trait Connect {
     fn send_request(

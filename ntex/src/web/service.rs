@@ -33,7 +33,7 @@ pub(super) struct ServiceFactoryWrapper<T> {
 }
 
 impl<T> ServiceFactoryWrapper<T> {
-    pub fn new(factory: T) -> Self {
+    pub(super) fn new(factory: T) -> Self {
         Self {
             factory: Some(factory),
         }

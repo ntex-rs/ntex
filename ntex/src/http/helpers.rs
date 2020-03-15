@@ -66,7 +66,7 @@ pub(crate) fn write_status_line(version: Version, mut n: u16, bytes: &mut BytesM
 }
 
 /// NOTE: bytes object has to contain enough space
-pub fn write_content_length(mut n: usize, bytes: &mut BytesMut) {
+pub(super) fn write_content_length(mut n: usize, bytes: &mut BytesMut) {
     if n < 10 {
         let mut buf: [u8; 21] = [
             b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e',
@@ -171,7 +171,7 @@ pub(crate) fn convert_usize(mut n: usize, bytes: &mut BytesMut) {
     }
 }
 
-pub(crate) struct Writer<'a>(pub &'a mut BytesMut);
+pub(crate) struct Writer<'a>(pub(crate) &'a mut BytesMut);
 
 impl<'a> io::Write for Writer<'a> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {

@@ -18,7 +18,7 @@ use super::error::SendRequestError;
 use super::pool::Acquired;
 use super::{h1proto, h2proto};
 
-pub(crate) enum ConnectionType<Io> {
+pub(super) enum ConnectionType<Io> {
     H1(Io),
     H2(SendRequest<Bytes>),
 }
@@ -44,7 +44,7 @@ pub trait Connection {
     fn open_tunnel<H: Into<RequestHeadType>>(self, head: H) -> Self::TunnelFuture;
 }
 
-pub(crate) trait ConnectionLifetime: AsyncRead + AsyncWrite + 'static {
+pub(super) trait ConnectionLifetime: AsyncRead + AsyncWrite + 'static {
     /// Close connection
     fn close(&mut self);
 
@@ -54,7 +54,7 @@ pub(crate) trait ConnectionLifetime: AsyncRead + AsyncWrite + 'static {
 
 #[doc(hidden)]
 /// HTTP client connection
-pub struct IoConnection<T> {
+pub(crate) struct IoConnection<T> {
     io: Option<ConnectionType<T>>,
     created: time::Instant,
     pool: Option<Acquired<T>>,
@@ -74,7 +74,7 @@ where
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> IoConnection<T> {
-    pub(crate) fn new(
+    pub(super) fn new(
         io: ConnectionType<T>,
         created: time::Instant,
         pool: Option<Acquired<T>>,
@@ -86,7 +86,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> IoConnection<T> {
         }
     }
 
-    pub(crate) fn into_inner(self) -> (ConnectionType<T>, time::Instant) {
+    pub(super) fn into_inner(self) -> (ConnectionType<T>, time::Instant) {
         (self.io.unwrap(), self.created)
     }
 }
@@ -206,7 +206,7 @@ where
 }
 
 #[pin_project]
-pub enum EitherIo<A, B> {
+pub(crate) enum EitherIo<A, B> {
     A(#[pin] A),
     B(#[pin] B),
 }
@@ -216,6 +216,7 @@ where
     A: AsyncRead,
     B: AsyncRead,
 {
+    #[inline]
     #[project]
     fn poll_read(
         self: Pin<&mut Self>,
@@ -229,6 +230,7 @@ where
         }
     }
 
+    #[inline]
     unsafe fn prepare_uninitialized_buffer(
         &self,
         buf: &mut [mem::MaybeUninit<u8>],

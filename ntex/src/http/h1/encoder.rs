@@ -18,9 +18,9 @@ use crate::http::{HeaderMap, StatusCode, Version};
 const AVERAGE_HEADER_SIZE: usize = 30;
 
 #[derive(Debug)]
-pub(crate) struct MessageEncoder<T: MessageType> {
-    pub length: BodySize,
-    pub te: TransferEncoding,
+pub(super) struct MessageEncoder<T: MessageType> {
+    pub(super) length: BodySize,
+    pub(super) te: TransferEncoding,
     _t: PhantomData<T>,
 }
 
@@ -291,7 +291,7 @@ impl MessageType for RequestHeadType {
         let head = self.as_ref();
         dst.reserve(256 + head.headers.len() * AVERAGE_HEADER_SIZE);
         write!(
-            Writer(dst),
+            helpers::Writer(dst),
             "{} {} {}",
             head.method,
             head.uri.path_and_query().map(|u| u.as_str()).unwrap_or("/"),
@@ -314,16 +314,20 @@ impl MessageType for RequestHeadType {
 
 impl<T: MessageType> MessageEncoder<T> {
     /// Encode message
-    pub fn encode_chunk(&mut self, msg: &[u8], buf: &mut BytesMut) -> io::Result<bool> {
+    pub(super) fn encode_chunk(
+        &mut self,
+        msg: &[u8],
+        buf: &mut BytesMut,
+    ) -> io::Result<bool> {
         self.te.encode(msg, buf)
     }
 
     /// Encode eof
-    pub fn encode_eof(&mut self, buf: &mut BytesMut) -> io::Result<()> {
+    pub(super) fn encode_eof(&mut self, buf: &mut BytesMut) -> io::Result<()> {
         self.te.encode_eof(buf)
     }
 
-    pub fn encode(
+    pub(super) fn encode(
         &mut self,
         dst: &mut BytesMut,
         message: &mut T,
@@ -360,7 +364,7 @@ impl<T: MessageType> MessageEncoder<T> {
 
 /// Encoders to handle different Transfer-Encodings.
 #[derive(Debug)]
-pub(crate) struct TransferEncoding {
+pub(super) struct TransferEncoding {
     kind: TransferEncodingKind,
 }
 
@@ -380,28 +384,28 @@ enum TransferEncodingKind {
 
 impl TransferEncoding {
     #[inline]
-    pub fn empty() -> TransferEncoding {
+    pub(super) fn empty() -> TransferEncoding {
         TransferEncoding {
             kind: TransferEncodingKind::Length(0),
         }
     }
 
     #[inline]
-    pub fn eof() -> TransferEncoding {
+    pub(super) fn eof() -> TransferEncoding {
         TransferEncoding {
             kind: TransferEncodingKind::Eof,
         }
     }
 
     #[inline]
-    pub fn chunked() -> TransferEncoding {
+    pub(super) fn chunked() -> TransferEncoding {
         TransferEncoding {
             kind: TransferEncodingKind::Chunked(false),
         }
     }
 
     #[inline]
-    pub fn length(len: u64) -> TransferEncoding {
+    pub(super) fn length(len: u64) -> TransferEncoding {
         TransferEncoding {
             kind: TransferEncodingKind::Length(len),
         }
@@ -409,7 +413,7 @@ impl TransferEncoding {
 
     /// Encode message. Return `EOF` state of encoder
     #[inline]
-    pub fn encode(&mut self, msg: &[u8], buf: &mut BytesMut) -> io::Result<bool> {
+    pub(super) fn encode(&mut self, msg: &[u8], buf: &mut BytesMut) -> io::Result<bool> {
         match self.kind {
             TransferEncodingKind::Eof => {
                 let eof = msg.is_empty();
@@ -425,7 +429,7 @@ impl TransferEncoding {
                     *eof = true;
                     buf.extend_from_slice(b"0\r\n\r\n");
                 } else {
-                    writeln!(Writer(buf), "{:X}\r", msg.len())
+                    writeln!(helpers::Writer(buf), "{:X}\r", msg.len())
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
                     buf.reserve(msg.len() + 2);
@@ -454,7 +458,7 @@ impl TransferEncoding {
 
     /// Encode eof. Return `EOF` state of encoder
     #[inline]
-    pub fn encode_eof(&mut self, buf: &mut BytesMut) -> io::Result<()> {
+    pub(super) fn encode_eof(&mut self, buf: &mut BytesMut) -> io::Result<()> {
         match self.kind {
             TransferEncodingKind::Eof => Ok(()),
             TransferEncodingKind::Length(rem) => {
@@ -472,18 +476,6 @@ impl TransferEncoding {
                 Ok(())
             }
         }
-    }
-}
-
-struct Writer<'a>(pub &'a mut BytesMut);
-
-impl<'a> io::Write for Writer<'a> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
     }
 }
 

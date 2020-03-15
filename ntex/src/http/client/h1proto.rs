@@ -20,7 +20,7 @@ use super::connection::{ConnectionLifetime, ConnectionType, IoConnection};
 use super::error::{ConnectError, SendRequestError};
 use super::pool::Acquired;
 
-pub(crate) async fn send_request<T, B>(
+pub(super) async fn send_request<T, B>(
     io: T,
     mut head: RequestHeadType,
     body: B,
@@ -96,7 +96,7 @@ where
     }
 }
 
-pub(crate) async fn open_tunnel<T>(
+pub(super) async fn open_tunnel<T>(
     io: T,
     head: RequestHeadType,
 ) -> Result<(ResponseHead, Framed<T, h1::ClientCodec>), SendRequestError>
@@ -117,7 +117,7 @@ where
 }
 
 /// send request body to the peer
-pub(crate) async fn send_body<I, B>(
+pub(super) async fn send_body<I, B>(
     mut body: B,
     framed: &mut Framed<I, h1::ClientCodec>,
 ) -> Result<(), SendRequestError>
@@ -161,7 +161,7 @@ where
 
 #[doc(hidden)]
 /// HTTP client connection
-pub struct H1Connection<T> {
+pub(super) struct H1Connection<T> {
     io: Option<T>,
     created: time::Instant,
     pool: Option<Acquired<T>>,
@@ -239,7 +239,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + 'static> AsyncWrite for H1Connection<T>
     }
 }
 
-pub(crate) struct PlStream<Io> {
+pub(super) struct PlStream<Io> {
     framed: Option<Framed<Io, h1::ClientPayloadCodec>>,
 }
 
