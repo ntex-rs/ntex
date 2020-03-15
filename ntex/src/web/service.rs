@@ -217,6 +217,7 @@ impl WebRequest {
         self.0.app_config()
     }
 
+    #[inline]
     /// Get an application data stored with `App::data()` method during
     /// application configuration.
     pub fn app_data<T: 'static>(&self) -> Option<Data<T>> {
@@ -227,6 +228,13 @@ impl WebRequest {
         }
     }
 
+    #[inline]
+    /// Get request's payload
+    pub fn take_payload(&mut self) -> Payload<PayloadStream> {
+        Rc::get_mut(&mut (self.0).0).unwrap().payload.take()
+    }
+
+    #[inline]
     /// Set request payload.
     pub fn set_payload(&mut self, payload: Payload) {
         Rc::get_mut(&mut (self.0).0).unwrap().payload = payload;
@@ -237,6 +245,18 @@ impl WebRequest {
     pub fn set_data_container(&mut self, extensions: Rc<Extensions>) {
         Rc::get_mut(&mut (self.0).0).unwrap().app_data = extensions;
     }
+
+    /// Request extensions
+    #[inline]
+    pub fn extensions(&self) -> Ref<'_, Extensions> {
+        self.0.extensions()
+    }
+
+    /// Mutable reference to a the request's extensions
+    #[inline]
+    pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
+        self.0.extensions_mut()
+    }
 }
 
 impl Resource<Url> for WebRequest {
@@ -246,29 +266,22 @@ impl Resource<Url> for WebRequest {
 }
 
 impl HttpMessage for WebRequest {
-    type Stream = PayloadStream;
-
     #[inline]
     /// Returns Request's headers.
-    fn headers(&self) -> &HeaderMap {
+    fn message_headers(&self) -> &HeaderMap {
         &self.head().headers
     }
 
     /// Request extensions
     #[inline]
-    fn extensions(&self) -> Ref<'_, Extensions> {
+    fn message_extensions(&self) -> Ref<'_, Extensions> {
         self.0.extensions()
     }
 
     /// Mutable reference to a the request's extensions
     #[inline]
-    fn extensions_mut(&self) -> RefMut<'_, Extensions> {
+    fn message_extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.0.extensions_mut()
-    }
-
-    #[inline]
-    fn take_payload(&mut self) -> Payload<Self::Stream> {
-        Rc::get_mut(&mut (self.0).0).unwrap().payload.take()
     }
 }
 

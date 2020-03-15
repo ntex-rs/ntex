@@ -16,7 +16,6 @@ use crate::http::config::ServiceConfig;
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::error::{ParseError, PayloadError};
 use crate::http::helpers::DataFactory;
-use crate::http::httpmessage::HttpMessage;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::Service;

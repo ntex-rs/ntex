@@ -173,7 +173,7 @@ where
                          Request path: {:?}",
                         req.path()
                     );
-                    PathError::from(e).into()
+                    PathError::from(e)
                 }),
         )
     }

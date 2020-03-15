@@ -163,7 +163,7 @@ where
 //     use crate::http::error::InternalError;
 //     use crate::http::StatusCode;
 //     use crate::web::test::TestRequest;
-//     use crate::web::HttpResponse;
+//     use crate::web::{DefaultError, HttpResponse};
 
 //     #[derive(Deserialize, Debug, Display)]
 //     struct Id {

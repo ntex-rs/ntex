@@ -25,22 +25,16 @@ pub struct ClientResponse<S = PayloadStream> {
 }
 
 impl<S> HttpMessage for ClientResponse<S> {
-    type Stream = S;
-
-    fn headers(&self) -> &HeaderMap {
+    fn message_headers(&self) -> &HeaderMap {
         &self.head.headers
     }
 
-    fn extensions(&self) -> Ref<'_, Extensions> {
+    fn message_extensions(&self) -> Ref<'_, Extensions> {
         self.head.extensions()
     }
 
-    fn extensions_mut(&self) -> RefMut<'_, Extensions> {
+    fn message_extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.head.extensions_mut()
-    }
-
-    fn take_payload(&mut self) -> Payload<S> {
-        std::mem::replace(&mut self.payload, Payload::None)
     }
 
     #[cfg(feature = "cookie")]
@@ -50,16 +44,16 @@ impl<S> HttpMessage for ClientResponse<S> {
 
         struct Cookies(Vec<Cookie<'static>>);
 
-        if self.extensions().get::<Cookies>().is_none() {
+        if self.message_extensions().get::<Cookies>().is_none() {
             let mut cookies = Vec::new();
-            for hdr in self.headers().get_all(&SET_COOKIE) {
+            for hdr in self.message_headers().get_all(&SET_COOKIE) {
                 let s = std::str::from_utf8(hdr.as_bytes())
                     .map_err(CookieParseError::from)?;
                 cookies.push(Cookie::parse_encoded(s)?.into_owned());
             }
-            self.extensions_mut().insert(Cookies(cookies));
+            self.message_extensions_mut().insert(Cookies(cookies));
         }
-        Ok(Ref::map(self.extensions(), |ext| {
+        Ok(Ref::map(self.message_extensions(), |ext| {
             &ext.get::<Cookies>().unwrap().0
         }))
     }
@@ -105,6 +99,23 @@ impl<S> ClientResponse<S> {
             payload,
             head: self.head,
         }
+    }
+
+    /// Get response's payload
+    pub fn take_payload(&mut self) -> Payload<S> {
+        std::mem::replace(&mut self.payload, Payload::None)
+    }
+
+    /// Request extensions
+    #[inline]
+    pub fn extensions(&self) -> Ref<'_, Extensions> {
+        self.head().extensions()
+    }
+
+    /// Mutable reference to a the request's extensions
+    #[inline]
+    pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
+        self.head().extensions_mut()
     }
 }
 

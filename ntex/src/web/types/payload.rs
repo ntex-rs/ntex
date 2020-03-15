@@ -153,7 +153,7 @@ impl<Err: 'static> FromRequest<Err> for Bytes {
         };
 
         if let Err(e) = cfg.check_mimetype(req) {
-            return Either::Right(err(PayloadError::from(e).into()));
+            return Either::Right(err(e));
         }
 
         let limit = cfg.limit;
@@ -212,13 +212,13 @@ impl<Err: 'static> FromRequest<Err> for String {
 
         // check content-type
         if let Err(e) = cfg.check_mimetype(req) {
-            return Either::Right(err(e.into()));
+            return Either::Right(err(e));
         }
 
         // check charset
         let encoding = match req.encoding() {
             Ok(enc) => enc,
-            Err(e) => return Either::Right(err(PayloadError::from(e).into())),
+            Err(e) => return Either::Right(err(PayloadError::from(e))),
         };
         let limit = cfg.limit;
         let fut = HttpMessageBody::new(req, payload).limit(limit);

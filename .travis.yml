@@ -16,7 +16,6 @@ matrix:
 
 env:
   global:
-    # - RUSTFLAGS="-C link-dead-code"
     - OPENSSL_VERSION=openssl-1.0.2
 
 before_install:
@@ -35,7 +34,7 @@ before_script:
 
 script:
   - cargo update
-  - cargo check --all
+  # - cargo check --all
   - |
     if [[ "$TRAVIS_RUST_VERSION" == "stable" || "$TRAVIS_RUST_VERSION" == "beta" ]]; then
       cargo test --all-features --all -- --nocapture

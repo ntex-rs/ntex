@@ -16,27 +16,21 @@ pub struct Request<P = PayloadStream> {
 }
 
 impl<P> HttpMessage for Request<P> {
-    type Stream = P;
-
     #[inline]
-    fn headers(&self) -> &HeaderMap {
+    fn message_headers(&self) -> &HeaderMap {
         &self.head().headers
     }
 
     /// Request extensions
     #[inline]
-    fn extensions(&self) -> Ref<'_, Extensions> {
+    fn message_extensions(&self) -> Ref<'_, Extensions> {
         self.head.extensions()
     }
 
     /// Mutable reference to a the request's extensions
     #[inline]
-    fn extensions_mut(&self) -> RefMut<'_, Extensions> {
+    fn message_extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.head.extensions_mut()
-    }
-
-    fn take_payload(&mut self) -> Payload<P> {
-        std::mem::replace(&mut self.payload, Payload::None)
     }
 }
 
@@ -68,34 +62,6 @@ impl<P> Request<P> {
         }
     }
 
-    /// Create new Request instance
-    pub fn replace_payload<P1>(self, payload: Payload<P1>) -> (Request<P1>, Payload<P>) {
-        let pl = self.payload;
-        (
-            Request {
-                payload,
-                head: self.head,
-            },
-            pl,
-        )
-    }
-
-    /// Get request's payload
-    pub fn payload(&mut self) -> &mut Payload<P> {
-        &mut self.payload
-    }
-
-    /// Get request's payload
-    pub fn take_payload(&mut self) -> Payload<P> {
-        std::mem::replace(&mut self.payload, Payload::None)
-    }
-
-    #[allow(dead_code)]
-    /// Split request into request head and payload
-    pub(crate) fn into_parts(self) -> (Message<RequestHead>, Payload<P>) {
-        (self.head, self.payload)
-    }
-
     #[inline]
     /// Http message part of the request
     pub fn head(&self) -> &RequestHead {
@@ -107,11 +73,6 @@ impl<P> Request<P> {
     /// Mutable reference to a http message part of the request
     pub fn head_mut(&mut self) -> &mut RequestHead {
         &mut *self.head
-    }
-
-    /// Mutable reference to the message's headers.
-    pub fn headers_mut(&mut self) -> &mut HeaderMap {
-        &mut self.head_mut().headers
     }
 
     /// Request's uri.
@@ -144,6 +105,17 @@ impl<P> Request<P> {
         self.head().uri.path()
     }
 
+    #[inline]
+    /// Request's headers.
+    pub fn headers(&self) -> &HeaderMap {
+        &self.head().headers
+    }
+
+    /// Mutable reference to the message's headers.
+    pub fn headers_mut(&mut self) -> &mut HeaderMap {
+        &mut self.head_mut().headers
+    }
+
     /// Check if request requires connection upgrade
     #[inline]
     pub fn upgrade(&self) -> bool {
@@ -162,6 +134,46 @@ impl<P> Request<P> {
     #[inline]
     pub fn peer_addr(&self) -> Option<net::SocketAddr> {
         self.head().peer_addr
+    }
+
+    /// Get request's payload
+    pub fn payload(&mut self) -> &mut Payload<P> {
+        &mut self.payload
+    }
+
+    /// Get request's payload
+    pub fn take_payload(&mut self) -> Payload<P> {
+        std::mem::replace(&mut self.payload, Payload::None)
+    }
+
+    /// Create new Request instance
+    pub fn replace_payload<P1>(self, payload: Payload<P1>) -> (Request<P1>, Payload<P>) {
+        let pl = self.payload;
+        (
+            Request {
+                payload,
+                head: self.head,
+            },
+            pl,
+        )
+    }
+
+    /// Request extensions
+    #[inline]
+    pub fn extensions(&self) -> Ref<'_, Extensions> {
+        self.head.extensions()
+    }
+
+    /// Mutable reference to a the request's extensions
+    #[inline]
+    pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
+        self.head.extensions_mut()
+    }
+
+    #[allow(dead_code)]
+    /// Split request into request head and payload
+    pub(crate) fn into_parts(self) -> (Message<RequestHead>, Payload<P>) {
+        (self.head, self.payload)
     }
 }
 

@@ -10,8 +10,7 @@ use regex::Regex;
 
 use ntex::http::test::server as test_server;
 use ntex::http::{
-    body, error, header, HttpMessage, HttpService, KeepAlive, Request, Response,
-    StatusCode,
+    body, error, header, HttpService, KeepAlive, Request, Response, StatusCode,
 };
 use ntex::service::fn_service;
 

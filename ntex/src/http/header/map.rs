@@ -50,6 +50,12 @@ impl Value {
     }
 }
 
+impl Default for HeaderMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HeaderMap {
     /// Create an empty `HeaderMap`.
     ///

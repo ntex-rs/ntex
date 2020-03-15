@@ -18,7 +18,6 @@ use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
-use crate::http::httpmessage::HttpMessage;
 use crate::http::message::ResponseHead;
 use crate::http::payload::Payload;
 use crate::http::request::Request;

@@ -245,15 +245,15 @@ where
                     }
                 };
                 self.state = FramedState::Shutdown(None);
-                return self.poll(cx);
+                self.poll(cx)
             }
             FramedState::FramedError(_) => {
                 self.state = FramedState::Shutdown(Some(self.state.take_framed_error()));
-                return self.poll(cx);
+                self.poll(cx)
             }
             FramedState::Stopping => {
                 self.state = FramedState::Shutdown(None);
-                return self.poll(cx);
+                self.poll(cx)
             }
             FramedState::Shutdown(ref mut err) => {
                 if self.service.poll_shutdown(cx, err.is_some()).is_ready() {

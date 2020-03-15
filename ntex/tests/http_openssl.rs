@@ -9,9 +9,7 @@ use open_ssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 use ntex::http::error::{InternalError, PayloadError};
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
-use ntex::http::{
-    body, HttpMessage, HttpService, Method, Request, Response, StatusCode, Version,
-};
+use ntex::http::{body, HttpService, Method, Request, Response, StatusCode, Version};
 use ntex::service::{fn_service, ServiceFactory};
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>

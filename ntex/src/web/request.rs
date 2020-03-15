@@ -226,29 +226,22 @@ impl HttpRequest {
 }
 
 impl HttpMessage for HttpRequest {
-    type Stream = ();
-
     #[inline]
     /// Returns Request's headers.
-    fn headers(&self) -> &HeaderMap {
+    fn message_headers(&self) -> &HeaderMap {
         &self.head().headers
     }
 
     /// Request extensions
     #[inline]
-    fn extensions(&self) -> Ref<'_, Extensions> {
+    fn message_extensions(&self) -> Ref<'_, Extensions> {
         self.0.head.extensions()
     }
 
     /// Mutable reference to a the request's extensions
     #[inline]
-    fn extensions_mut(&self) -> RefMut<'_, Extensions> {
+    fn message_extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.0.head.extensions_mut()
-    }
-
-    #[inline]
-    fn take_payload(&mut self) -> Payload<Self::Stream> {
-        Payload::None
     }
 }
 

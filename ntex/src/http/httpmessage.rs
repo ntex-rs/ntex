@@ -11,32 +11,25 @@ use coo_kie::Cookie;
 use super::error::{ContentTypeError, ParseError};
 use super::extensions::Extensions;
 use super::header::HeaderMap;
-use super::payload::Payload;
 
 #[cfg(feature = "cookie")]
 struct Cookies(Vec<Cookie<'static>>);
 
 /// Trait that implements general purpose operations on http messages
 pub trait HttpMessage: Sized {
-    /// Type of message payload stream
-    type Stream;
-
     /// Read the message headers.
-    fn headers(&self) -> &HeaderMap;
-
-    /// Message payload stream
-    fn take_payload(&mut self) -> Payload<Self::Stream>;
+    fn message_headers(&self) -> &HeaderMap;
 
     /// Request's extensions container
-    fn extensions(&self) -> Ref<'_, Extensions>;
+    fn message_extensions(&self) -> Ref<'_, Extensions>;
 
     /// Mutable reference to a the request's extensions container
-    fn extensions_mut(&self) -> RefMut<'_, Extensions>;
+    fn message_extensions_mut(&self) -> RefMut<'_, Extensions>;
 
     /// Read the request content type. If request does not contain
     /// *Content-Type* header, empty str get returned.
     fn content_type(&self) -> &str {
-        if let Some(content_type) = self.headers().get(header::CONTENT_TYPE) {
+        if let Some(content_type) = self.message_headers().get(header::CONTENT_TYPE) {
             if let Ok(content_type) = content_type.to_str() {
                 return content_type.split(';').next().unwrap().trim();
             }
@@ -67,7 +60,7 @@ pub trait HttpMessage: Sized {
 
     /// Convert the request content type to a known mime type.
     fn mime_type(&self) -> Result<Option<Mime>, ContentTypeError> {
-        if let Some(content_type) = self.headers().get(header::CONTENT_TYPE) {
+        if let Some(content_type) = self.message_headers().get(header::CONTENT_TYPE) {
             if let Ok(content_type) = content_type.to_str() {
                 return match content_type.parse() {
                     Ok(mt) => Ok(Some(mt)),
@@ -82,7 +75,7 @@ pub trait HttpMessage: Sized {
 
     /// Check if request has chunked transfer encoding
     fn chunked(&self) -> Result<bool, ParseError> {
-        if let Some(encodings) = self.headers().get(header::TRANSFER_ENCODING) {
+        if let Some(encodings) = self.message_headers().get(header::TRANSFER_ENCODING) {
             if let Ok(s) = encodings.to_str() {
                 Ok(s.to_lowercase().contains("chunked"))
             } else {
@@ -97,9 +90,9 @@ pub trait HttpMessage: Sized {
     /// Load request cookies.
     #[inline]
     fn cookies(&self) -> Result<Ref<'_, Vec<Cookie<'static>>>, coo_kie::ParseError> {
-        if self.extensions().get::<Cookies>().is_none() {
+        if self.message_extensions().get::<Cookies>().is_none() {
             let mut cookies = Vec::new();
-            for hdr in self.headers().get_all(header::COOKIE) {
+            for hdr in self.message_headers().get_all(header::COOKIE) {
                 let s =
                     str::from_utf8(hdr.as_bytes()).map_err(coo_kie::ParseError::from)?;
                 for cookie_str in s.split(';').map(|s| s.trim()) {
@@ -108,9 +101,9 @@ pub trait HttpMessage: Sized {
                     }
                 }
             }
-            self.extensions_mut().insert(Cookies(cookies));
+            self.message_extensions_mut().insert(Cookies(cookies));
         }
-        Ok(Ref::map(self.extensions(), |ext| {
+        Ok(Ref::map(self.message_extensions(), |ext| {
             &ext.get::<Cookies>().unwrap().0
         }))
     }
@@ -133,25 +126,18 @@ impl<'a, T> HttpMessage for &'a mut T
 where
     T: HttpMessage,
 {
-    type Stream = T::Stream;
-
-    fn headers(&self) -> &HeaderMap {
-        (**self).headers()
-    }
-
-    /// Message payload stream
-    fn take_payload(&mut self) -> Payload<Self::Stream> {
-        (**self).take_payload()
+    fn message_headers(&self) -> &HeaderMap {
+        (**self).message_headers()
     }
 
     /// Request's extensions container
-    fn extensions(&self) -> Ref<'_, Extensions> {
-        (**self).extensions()
+    fn message_extensions(&self) -> Ref<'_, Extensions> {
+        (**self).message_extensions()
     }
 
     /// Mutable reference to a the request's extensions container
-    fn extensions_mut(&self) -> RefMut<'_, Extensions> {
-        (**self).extensions_mut()
+    fn message_extensions_mut(&self) -> RefMut<'_, Extensions> {
+        (**self).message_extensions_mut()
     }
 }
 
