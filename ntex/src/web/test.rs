@@ -1035,7 +1035,7 @@ mod tests {
     }
 
     #[derive(Serialize, Deserialize)]
-    pub struct Person {
+    struct Person {
         id: String,
         name: String,
     }

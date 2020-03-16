@@ -496,7 +496,7 @@ mod tests {
     #[actix_rt::test]
     async fn test_extensions_dropped() {
         struct Tracker {
-            pub dropped: bool,
+            dropped: bool,
         }
         struct Foo {
             tracker: Rc<RefCell<Tracker>>,

@@ -128,18 +128,18 @@ fn test_integers() {
 
 #[test]
 fn test_composition() {
-    struct Magi<T>(pub T);
+    struct Magi<T>(T);
 
     struct Madoka {
-        pub god: bool,
+        god: bool,
     }
 
     struct Homura {
-        pub attempts: usize,
+        attempts: usize,
     }
 
     struct Mami {
-        pub guns: usize,
+        guns: usize,
     }
 
     let mut map = Extensions::new();

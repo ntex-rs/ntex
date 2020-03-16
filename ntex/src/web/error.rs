@@ -1,6 +1,7 @@
 //! Web error
-use std::fmt;
+use std::any::TypeId;
 use std::io::Write;
+use std::{fmt, mem, ptr};
 
 use bytes::BytesMut;
 use derive_more::{Display, From};
@@ -34,6 +35,25 @@ pub trait WebResponseError<Err>: fmt::Debug + fmt::Display + 'static {
         );
         resp.set_body(Body::from(buf))
     }
+
+    #[doc(hidden)]
+    fn __private_get_type_id__(&self) -> TypeId
+    where
+        Self: 'static,
+    {
+        TypeId::of::<Self>()
+    }
+}
+
+impl<Err: 'static> dyn WebResponseError<Err> + 'static {
+    /// Downcasts a response error to a specific type.
+    pub fn downcast_ref<T: WebResponseError<Err> + 'static>(&self) -> Option<&T> {
+        if self.__private_get_type_id__() == TypeId::of::<T>() {
+            unsafe { Some(&*(self as *const dyn WebResponseError<Err> as *const T)) }
+        } else {
+            None
+        }
+    }
 }
 
 pub trait IntoWebError<Err>: Sized + fmt::Debug {
@@ -59,22 +79,32 @@ impl<Err> WebError<Err> {
     pub fn as_response_error(&self) -> &dyn WebResponseError<Err> {
         self.cause.as_ref()
     }
+
+    /// Similar to `as_response_error` but downcasts.
+    pub fn as_error<T: WebResponseError<Err> + 'static>(&self) -> Option<&T>
+    where
+        Err: 'static,
+    {
+        WebResponseError::downcast_ref(self.cause.as_ref())
+    }
 }
 
 /// `WebError` for any error that implements `WebResponseError`
 impl<T: WebResponseError<Err> + 'static, Err: 'static> IntoWebError<Err> for T {
     fn into_error(self) -> WebError<Err> {
-        // use std::any::TypeId;
-        // if TypeId::of::<T>() == TypeId::of::<Box<dyn WebResponseError<Err>>>() {
-        //     unsafe {
-        //         let t1: Box<dyn WebResponseError<Err>> = std::mem::transmute(&self);
-        //         WebError { cause: t1 }
-        //     }
-        // } else {
-        WebError {
-            cause: Box::new(self),
+        if TypeId::of::<T>() == TypeId::of::<WebError<Err>>() {
+            // replace with safe impl when specialization stabilizes
+            unsafe {
+                let t: &WebError<Err> = mem::transmute(&self);
+                let err: WebError<Err> = ptr::read(t as *const _);
+                mem::forget(self);
+                err
+            }
+        } else {
+            WebError {
+                cause: Box::new(self),
+            }
         }
-        // }
     }
 
     fn error_response(&self) -> HttpResponse {
@@ -603,6 +633,13 @@ mod tests {
     use super::*;
 
     use crate::web::DefaultError;
+
+    #[test]
+    fn test_into_error() {
+        let err: WebError<DefaultError> = UrlencodedError::UnknownLength.into_error();
+        let err2: WebError<DefaultError> = err.into_error();
+        assert!(err2.as_error::<UrlencodedError>().is_some());
+    }
 
     #[test]
     fn test_urlencoded_error() {
