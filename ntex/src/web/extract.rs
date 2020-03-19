@@ -8,13 +8,12 @@ use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 use crate::http::Payload;
 
 use super::error::{IntoWebError, WebError, WebResponseError};
-use super::error_default::DefaultError;
 use super::request::HttpRequest;
 
 /// Trait implemented by types that can be extracted from request.
 ///
 /// Types that implement this trait can be used with `Route` handlers.
-pub trait FromRequest<Err = DefaultError>: Sized {
+pub trait FromRequest<Err>: Sized {
     /// The associated error which can be returned.
     type Error: WebResponseError<Err>;
 
