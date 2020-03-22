@@ -96,28 +96,25 @@ impl ResourceDef {
     ///
     /// Panics if path pattern is malformed.
     pub fn new<T: IntoPattern>(path: T) -> Self {
-        if path.is_single() {
-            let patterns = path.patterns();
-            ResourceDef::with_prefix(&patterns[0], false)
-        } else {
-            let set = path.patterns();
-            let mut tp = Vec::new();
-            let mut elements = Vec::new();
+        let set = path.patterns();
+        let mut p = String::new();
+        let mut tp = Vec::new();
+        let mut elements = Vec::new();
 
-            for path in set {
-                let (pelems, elems) = ResourceDef::parse(&path);
-                tp.push(pelems);
-                elements = elems;
-            }
+        for path in set {
+            p = path.clone();
+            let (pelems, elems) = ResourceDef::parse(&path);
+            tp.push(pelems);
+            elements = elems;
+        }
 
-            ResourceDef {
-                tp,
-                elements,
-                id: 0,
-                name: String::new(),
-                pattern: "".to_owned(),
-                prefix: false,
-            }
+        ResourceDef {
+            tp,
+            elements,
+            id: 0,
+            name: String::new(),
+            pattern: p,
+            prefix: false,
         }
     }
 
@@ -322,6 +319,16 @@ impl ResourceDef {
         let mut elems = Vec::new();
         let mut pelems = Vec::new();
 
+        if pattern.is_empty() {
+            return (
+                Segments {
+                    tp: Vec::new(),
+                    slesh: false,
+                },
+                Vec::new(),
+            );
+        }
+
         while let Some(idx) = pattern[1..].find(|c| c == '{' || c == '/') {
             let idx = idx + 1;
 
@@ -402,9 +409,6 @@ impl ResourceDef {
             }
             idx += 1;
         }
-
-        //println!("P: {:#?}", pelems);
-        //println!("T: {:#?}", elems);
 
         (Segments { tp: pelems, slesh }, elems)
     }

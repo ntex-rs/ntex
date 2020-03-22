@@ -1,11 +1,11 @@
 //! Path extractor
 use std::{fmt, ops};
 
-use actix_router::PathDeserializer;
 use futures::future::{ready, Ready};
 use serde::de;
 
 use crate::http::Payload;
+use crate::router::PathDeserializer;
 use crate::web::error::PathError;
 use crate::web::request::HttpRequest;
 use crate::web::FromRequest;

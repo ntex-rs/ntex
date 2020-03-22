@@ -8,6 +8,7 @@ use futures::future::{FutureExt, LocalBoxFuture};
 
 use crate::http::body::{Body, MessageBody};
 use crate::http::Extensions;
+use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, ServiceFactory, Transform,
@@ -16,7 +17,6 @@ use crate::service::{
 use super::app_service::{AppEntry, AppInit, AppRoutingFactory};
 use super::config::ServiceConfig;
 use super::data::{Data, DataFactory};
-use super::dev::ResourceDef;
 use super::resource::Resource;
 use super::route::Route;
 use super::service::{

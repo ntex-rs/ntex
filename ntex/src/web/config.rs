@@ -1,9 +1,8 @@
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use actix_router::ResourceDef;
-
 use crate::http::Extensions;
+use crate::router::ResourceDef;
 use crate::service::{boxed, IntoServiceFactory, ServiceFactory};
 
 use super::data::{Data, DataFactory};

@@ -95,9 +95,9 @@ impl<T: ResourcePath> Path<T> {
         self.skip += n;
     }
 
-    pub(crate) fn add(&mut self, name: &'static str, value: String) {
-        self.segments.push((name, PathItem::Segment(value)))
-    }
+    // pub(crate) fn add(&mut self, name: &'static str, value: String) {
+    //     self.segments.push((name, PathItem::Segment(value)))
+    // }
 
     #[doc(hidden)]
     pub fn add_static(&mut self, name: &'static str, value: &'static str) {

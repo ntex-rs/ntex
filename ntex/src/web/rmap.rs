@@ -1,10 +1,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use actix_router::ResourceDef;
 use fxhash::FxHashMap;
 use url::Url;
 
+use crate::router::ResourceDef;
 use crate::web::error::UrlGenerationError;
 use crate::web::request::HttpRequest;
 
@@ -81,17 +81,17 @@ impl ResourceMap {
     }
 
     pub fn has_resource(&self, path: &str) -> bool {
-        let path = if path.is_empty() { "/" } else { path };
+        let _path = if path.is_empty() { "/" } else { path };
 
-        for (pattern, rmap) in &self.patterns {
-            if let Some(ref rmap) = rmap {
-                if let Some(plen) = pattern.is_prefix_match(path) {
-                    return rmap.has_resource(&path[plen..]);
-                }
-            } else if pattern.is_match(path) {
-                return true;
-            }
-        }
+        // for (pattern, rmap) in &self.patterns {
+        //     if let Some(ref rmap) = rmap {
+        //         if let Some(plen) = pattern.is_prefix_match(path) {
+        //             return rmap.has_resource(&path[plen..]);
+        //         }
+        //     } else if pattern.is_match(path) {
+        //         return true;
+        //     }
+        // }
         false
     }
 

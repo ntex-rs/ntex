@@ -2,18 +2,17 @@ use std::cell::{Ref, RefMut};
 use std::rc::Rc;
 use std::{fmt, net};
 
-use actix_router::{IntoPattern, Path, Resource, ResourceDef, Url};
-
 use crate::http::body::{Body, MessageBody, ResponseBody};
 use crate::http::{
     Extensions, HeaderMap, HttpMessage, Method, Payload, PayloadStream, RequestHead,
     Response, ResponseHead, StatusCode, Uri, Version,
 };
+use crate::router::{IntoPattern, Path, Resource, ResourceDef};
 use crate::{IntoServiceFactory, ServiceFactory};
 
 use super::config::{AppConfig, AppService};
 use super::data::Data;
-use super::dev::insert_slash;
+use super::dev::insert_slesh;
 use super::error::{IntoWebError, WebError};
 use super::guard::Guard;
 use super::info::ConnectionInfo;
@@ -195,13 +194,13 @@ impl WebRequest {
     /// where the identifier can be used later in a request handler to
     /// access the matched value for that segment.
     #[inline]
-    pub fn match_info(&self) -> &Path<Url> {
+    pub fn match_info(&self) -> &Path<Uri> {
         self.0.match_info()
     }
 
     #[inline]
     /// Get a mutable reference to the Path parameters.
-    pub fn match_info_mut(&mut self) -> &mut Path<Url> {
+    pub fn match_info_mut(&mut self) -> &mut Path<Uri> {
         self.0.match_info_mut()
     }
 
@@ -259,8 +258,12 @@ impl WebRequest {
     }
 }
 
-impl Resource<Url> for WebRequest {
-    fn resource_path(&mut self) -> &mut Path<Url> {
+impl Resource<Uri> for WebRequest {
+    fn path(&self) -> &str {
+        self.match_info().path()
+    }
+
+    fn resource_path(&mut self) -> &mut Path<Uri> {
         self.match_info_mut()
     }
 }
@@ -545,7 +548,7 @@ where
         };
 
         let mut rdef = if config.is_root() || !self.rdef.is_empty() {
-            ResourceDef::new(insert_slash(self.rdef))
+            ResourceDef::new(insert_slesh(self.rdef))
         } else {
             ResourceDef::new(self.rdef)
         };

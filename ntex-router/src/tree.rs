@@ -145,21 +145,6 @@ impl Tree {
         }
     }
 
-    fn get_value<T, R, F>(&self, resource: &R, check: &F) -> Option<usize>
-    where
-        T: ResourcePath,
-        R: Resource<T>,
-        F: Fn(usize, &R) -> bool,
-    {
-        for val in &self.value {
-            let v = val.value();
-            if check(v, resource) {
-                return Some(v);
-            }
-        }
-        None
-    }
-
     pub(crate) fn find<T, R>(&self, resource: &mut R) -> Option<usize>
     where
         T: ResourcePath,
@@ -182,12 +167,26 @@ impl Tree {
         let mut segments = mem::take(&mut path.segments);
         let path = resource.path();
 
-        println!("\n\n\n=========== {:?}", path);
-
         if self.key.is_empty() {
             if path == "/" {
-                if let Some(val) = self.get_value(resource, check) {
-                    return Some(val);
+                for val in &self.value {
+                    let v = match val {
+                        Value::Slesh(v) | Value::Prefix(v) => *v,
+                        _ => continue,
+                    };
+                    if check(v, resource) {
+                        return Some(v);
+                    }
+                }
+            } else if path.is_empty() {
+                for val in &self.value {
+                    let v = match val {
+                        Value::Val(v) | Value::Prefix(v) => *v,
+                        _ => continue,
+                    };
+                    if check(v, resource) {
+                        return Some(v);
+                    }
                 }
             }
             let res = self
@@ -236,9 +235,6 @@ impl Tree {
         R: Resource<T>,
         F: Fn(usize, &R) -> bool,
     {
-        // println!("K: {:?} {:?}", self.value, self.key);
-        // println!("P: {:?} {:?}", path, skip);
-
         let mut key: &[_] = &self.key;
         let mut path = &path[1..];
 
@@ -249,7 +245,6 @@ impl Tree {
                 path.len()
             };
             let segment = T::unquote(&path[..idx]);
-            //println!("ITEM: {:?} {:?}", segment, key[0]);
 
             // check segment match
             let is_match = match key[0] {
@@ -260,14 +255,6 @@ impl Tree {
                     tail,
                     ..
                 } => {
-                    // println!(
-                    //     "MATCH: {:?} {:?} {:?} {:?}",
-                    //     pattern.as_str(),
-                    //     segment,
-                    //     pattern.is_match(&segment),
-                    //     tail,
-                    // );
-
                     // special treatment for tail, it matches regardless of sleshes
                     let seg = if tail { path } else { segment.as_ref() };
 
@@ -292,8 +279,11 @@ impl Tree {
                         // we have to process checker for tail matches separately
                         if tail && is_match {
                             // checker
-                            if let Some(val) = self.get_value(resource, check) {
-                                return Some((val, skip + idx));
+                            for val in &self.value {
+                                let v = val.value();
+                                if check(v, resource) {
+                                    return Some((v, skip + idx));
+                                }
                             }
                         }
 
@@ -372,7 +362,6 @@ impl Tree {
                         }
                     }
 
-                    // println!("TREE: {:#?}", self);
                     return self
                         .children
                         .iter()

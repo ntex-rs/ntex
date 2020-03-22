@@ -36,6 +36,7 @@ compress = ["flate2", "brotli2"]
 cookie = ["coo-kie", "coo-kie/percent-encode"]
 
 [dependencies]
+ntex-router = { path = "../ntex-router" }
 ntex-service = { path = "../ntex-service" }
 ntex-web-macros = { path = "../ntex-web-macros" }
 
@@ -43,7 +44,6 @@ actix-codec = "0.2.0"
 actix-connect = "1.0.1"
 actix-macros = "0.1.0"
 actix-rt = "1.0.0"
-actix-router = "0.2.4"
 actix-server = "1.0.0"
 actix-threadpool = "0.3.1"
 actix-tls = { version = "1.0.0" }

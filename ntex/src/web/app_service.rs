@@ -5,10 +5,10 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use actix_router::{Path, ResourceDef, ResourceInfo, Router, Url};
 use futures::future::{ok, FutureExt, LocalBoxFuture};
 
 use crate::http::{Extensions, Request, Response};
+use crate::router::{Path, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::{fn_service, Service, ServiceFactory};
 
@@ -235,15 +235,14 @@ where
 
         let req = if let Some(mut req) = self.pool.get_request() {
             let inner = Rc::get_mut(&mut req.0).unwrap();
-            inner.path.get_mut().update(&head.uri);
-            inner.path.reset();
+            inner.path.set(head.uri.clone());
             inner.head = head;
             inner.payload = payload;
             inner.app_data = self.data.clone();
             req
         } else {
             HttpRequest::new(
-                Path::new(Url::new(head.uri.clone())),
+                Path::new(head.uri.clone()),
                 head,
                 payload,
                 self.rmap.clone(),
@@ -397,7 +396,7 @@ impl<Err: 'static> Service for AppRouting<Err> {
 
     fn call(&mut self, mut req: WebRequest) -> Self::Future {
         let res = self.router.recognize_mut_checked(&mut req, |req, guards| {
-            if let Some(ref guards) = guards {
+            if let Some(guards) = guards {
                 for f in guards {
                     if !f.check(req.head()) {
                         return false;

@@ -2,7 +2,7 @@
 use std::fmt;
 use std::future::Future;
 
-use actix_router::IntoPattern;
+use ntex_router::IntoPattern;
 
 use crate::http::body::MessageBody;
 use crate::http::error::{BlockingError, ResponseError};

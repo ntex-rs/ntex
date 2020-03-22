@@ -7,7 +7,6 @@ use std::sync::mpsc;
 use std::{fmt, net, thread, time};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_router::{Path, ResourceDef, Url};
 use actix_rt::{time::delay_for, System};
 use actix_server::Server;
 use bytes::{Bytes, BytesMut};
@@ -30,6 +29,7 @@ use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{
     Extensions, HttpService, Method, Payload, Request, StatusCode, Uri, Version,
 };
+use crate::router::{Path, ResourceDef};
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use crate::web::config::AppConfig;
@@ -313,7 +313,7 @@ pub struct TestRequest {
     req: HttpTestRequest,
     rmap: ResourceMap,
     config: AppConfig,
-    path: Path<Url>,
+    path: Path<Uri>,
     peer_addr: Option<SocketAddr>,
     app_data: Extensions,
 }
@@ -324,7 +324,7 @@ impl Default for TestRequest {
             req: HttpTestRequest::default(),
             rmap: ResourceMap::new(ResourceDef::new("")),
             config: AppConfig::default(),
-            path: Path::new(Url::new(Uri::default())),
+            path: Path::new(Uri::default()),
             peer_addr: None,
             app_data: Extensions::new(),
         }
@@ -473,7 +473,7 @@ impl TestRequest {
     pub fn to_srv_request(mut self) -> WebRequest {
         let (mut head, payload) = self.req.finish().into_parts();
         head.peer_addr = self.peer_addr;
-        self.path.get_mut().update(&head.uri);
+        *self.path.get_mut() = head.uri.clone();
 
         WebRequest::new(HttpRequest::new(
             self.path,
@@ -495,7 +495,7 @@ impl TestRequest {
     pub fn to_http_request(mut self) -> HttpRequest {
         let (mut head, payload) = self.req.finish().into_parts();
         head.peer_addr = self.peer_addr;
-        self.path.get_mut().update(&head.uri);
+        *self.path.get_mut() = head.uri.clone();
 
         HttpRequest::new(
             self.path,
@@ -512,7 +512,7 @@ impl TestRequest {
     pub fn to_http_parts(mut self) -> (HttpRequest, Payload) {
         let (mut head, payload) = self.req.finish().into_parts();
         head.peer_addr = self.peer_addr;
-        self.path.get_mut().update(&head.uri);
+        *self.path.get_mut() = head.uri.clone();
 
         let req = HttpRequest::new(
             self.path,

@@ -46,47 +46,28 @@ impl ResourcePath for bytestring::ByteString {
 
 /// Helper trait for type that could be converted to path pattern
 pub trait IntoPattern {
-    /// Signle patter
-    fn is_single(&self) -> bool;
-
     fn patterns(&self) -> Vec<String>;
 }
 
 impl IntoPattern for String {
-    fn is_single(&self) -> bool {
-        true
-    }
-
     fn patterns(&self) -> Vec<String> {
         vec![self.clone()]
     }
 }
 
 impl<'a> IntoPattern for &'a String {
-    fn is_single(&self) -> bool {
-        true
-    }
-
     fn patterns(&self) -> Vec<String> {
         vec![self.as_str().to_string()]
     }
 }
 
 impl<'a> IntoPattern for &'a str {
-    fn is_single(&self) -> bool {
-        true
-    }
-
     fn patterns(&self) -> Vec<String> {
         vec![(*self).to_string()]
     }
 }
 
 impl<T: AsRef<str>> IntoPattern for Vec<T> {
-    fn is_single(&self) -> bool {
-        self.len() == 1
-    }
-
     fn patterns(&self) -> Vec<String> {
         self.into_iter().map(|v| v.as_ref().to_string()).collect()
     }
@@ -94,10 +75,6 @@ impl<T: AsRef<str>> IntoPattern for Vec<T> {
 
 macro_rules! array_patterns (($tp:ty, $num:tt) => {
     impl IntoPattern for [$tp; $num] {
-        fn is_single(&self) -> bool {
-            $num == 1
-        }
-
         fn patterns(&self) -> Vec<String> {
             self.iter().map(|v| v.to_string()).collect()
         }

@@ -251,7 +251,6 @@ mod tests {
         let (h, _) = router.recognize_mut(&mut path).unwrap();
         assert_eq!(*h, 10);
 
-        println!("\n=======================");
         let mut path = Path::new("/test/name/value");
         path.skip(5);
         let (h, id) = router.recognize_mut(&mut path).unwrap();
