@@ -22,10 +22,6 @@
 
 * Multipart handling now parses requests which do not end in CRLF #1038
 
-## [0.1.3] - 2019-08-18
-
-* Fix ring dependency from actix-web default features for #741.
-
 ## [0.1.2] - 2019-06-02
 
 * Fix boundary parsing #876
@@ -42,7 +38,6 @@
 
 * Handle cancellation of uploads #736
 
-* Upgrade to actix-web 1.0.0-beta.4
 
 ## [0.1.0-beta.1] - 2019-04-21
 

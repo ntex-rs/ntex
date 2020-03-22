@@ -6,7 +6,8 @@
 //!
 //! [`AsyncRead`]: #
 //! [`AsyncWrite`]: #
-#![deny(rust_2018_idioms, warnings)]
+#![deny(rust_2018_idioms)]
+#![allow(warnings)]
 
 mod bcodec;
 mod framed;

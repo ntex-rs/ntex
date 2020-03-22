@@ -4,6 +4,7 @@ members = [
   "ntex-router",
   "ntex-service",
   "ntex-web-macros",
+  "ntex-multipart",
 
   "actix-net/actix-server",
   "actix-net/actix-service",
