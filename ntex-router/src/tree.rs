@@ -150,12 +150,47 @@ impl Tree {
         T: ResourcePath,
         R: Resource<T>,
     {
-        self.find_checked(resource, &|_, _| true)
+        self.find_checked_inner(resource, false, &|_, _| true)
+    }
+
+    pub(crate) fn find_insensitive<T, R>(&self, resource: &mut R) -> Option<usize>
+    where
+        T: ResourcePath,
+        R: Resource<T>,
+    {
+        self.find_checked_inner(resource, true, &|_, _| true)
     }
 
     pub(crate) fn find_checked<T, R, F>(
         &self,
         resource: &mut R,
+        check: &F,
+    ) -> Option<usize>
+    where
+        T: ResourcePath,
+        R: Resource<T>,
+        F: Fn(usize, &R) -> bool,
+    {
+        self.find_checked_inner(resource, false, check)
+    }
+
+    pub(crate) fn find_checked_insensitive<T, R, F>(
+        &self,
+        resource: &mut R,
+        check: &F,
+    ) -> Option<usize>
+    where
+        T: ResourcePath,
+        R: Resource<T>,
+        F: Fn(usize, &R) -> bool,
+    {
+        self.find_checked_inner(resource, true, check)
+    }
+
+    pub(crate) fn find_checked_inner<T, R, F>(
+        &self,
+        resource: &mut R,
+        insensitive: bool,
         check: &F,
     ) -> Option<usize>
     where
@@ -192,7 +227,9 @@ impl Tree {
             let res = self
                 .children
                 .iter()
-                .map(|x| x.find_inner2(path, resource, check, 1, &mut segments))
+                .map(|x| {
+                    x.find_inner2(path, resource, check, 1, &mut segments, insensitive)
+                })
                 .filter_map(|x| x)
                 .next();
 
@@ -211,7 +248,7 @@ impl Tree {
         }
 
         if let Some((val, skip)) =
-            self.find_inner2(path, resource, check, 1, &mut segments)
+            self.find_inner2(path, resource, check, 1, &mut segments, insensitive)
         {
             let path = resource.resource_path();
             path.segments = segments;
@@ -229,6 +266,7 @@ impl Tree {
         check: &F,
         mut skip: usize,
         segments: &mut Vec<(&'static str, PathItem)>,
+        insensitive: bool,
     ) -> Option<(usize, usize)>
     where
         T: ResourcePath,
@@ -248,7 +286,13 @@ impl Tree {
 
             // check segment match
             let is_match = match key[0] {
-                Segment::Static(ref pattern) => pattern == segment.as_ref(),
+                Segment::Static(ref pattern) => {
+                    if insensitive {
+                        pattern.eq_ignore_ascii_case(segment.as_ref())
+                    } else {
+                        pattern == segment.as_ref()
+                    }
+                }
                 Segment::Dynamic {
                     ref pattern,
                     ref names,
@@ -365,7 +409,16 @@ impl Tree {
                     return self
                         .children
                         .iter()
-                        .map(|x| x.find_inner2(path, resource, check, skip, segments))
+                        .map(|x| {
+                            x.find_inner2(
+                                path,
+                                resource,
+                                check,
+                                skip,
+                                segments,
+                                insensitive,
+                            )
+                        })
                         .filter_map(|x| x)
                         .next();
                 } else {

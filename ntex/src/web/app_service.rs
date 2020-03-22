@@ -48,6 +48,7 @@ where
     pub(super) default: Option<Rc<HttpNewService<Err>>>,
     pub(super) factory_ref: Rc<RefCell<Option<AppRoutingFactory<Err>>>>,
     pub(super) external: RefCell<Vec<ResourceDef>>,
+    pub(super) case_insensitive: bool,
 }
 
 impl<T, B, Err> ServiceFactory for AppInit<T, B, Err>
@@ -101,6 +102,7 @@ where
                     })
                     .collect(),
             ),
+            case_insensitive: self.case_insensitive,
         });
 
         // external resources
@@ -118,6 +120,7 @@ where
             data: self.data.clone(),
             data_factories: Vec::new(),
             data_factories_fut: self.data_factories.iter().map(|f| f()).collect(),
+            case_insensitive: self.case_insensitive,
             extensions: Some(
                 self.extensions
                     .borrow_mut()
@@ -144,6 +147,7 @@ where
     data: Rc<Vec<Box<dyn DataFactory>>>,
     data_factories: Vec<Box<dyn DataFactory>>,
     data_factories_fut: Vec<LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>,
+    case_insensitive: bool,
     extensions: Option<Extensions>,
     _t: PhantomData<(B, Err)>,
 }
@@ -267,6 +271,7 @@ where
 pub struct AppRoutingFactory<Err> {
     services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
     default: Rc<HttpNewService<Err>>,
+    case_insensitive: bool,
 }
 
 impl<Err: 'static> ServiceFactory for AppRoutingFactory<Err> {
@@ -293,6 +298,7 @@ impl<Err: 'static> ServiceFactory for AppRoutingFactory<Err> {
                 .collect(),
             default: None,
             default_fut: Some(self.default.new_service(())),
+            case_insensitive: self.case_insensitive,
         }
     }
 }
@@ -305,6 +311,7 @@ pub struct AppRoutingFactoryResponse<Err> {
     fut: Vec<CreateAppRoutingItem<Err>>,
     default: Option<HttpService<Err>>,
     default_fut: Option<LocalBoxFuture<'static, Result<HttpService<Err>, ()>>>,
+    case_insensitive: bool,
 }
 
 enum CreateAppRoutingItem<Err> {
@@ -351,18 +358,23 @@ impl<Err> Future for AppRoutingFactoryResponse<Err> {
         }
 
         if done {
-            let router = self
-                .fut
-                .drain(..)
-                .fold(Router::build(), |mut router, item| {
-                    match item {
-                        CreateAppRoutingItem::Service(path, guards, service) => {
-                            router.rdef(path, service).2 = guards;
+            let mut router =
+                self.fut
+                    .drain(..)
+                    .fold(Router::build(), |mut router, item| {
+                        match item {
+                            CreateAppRoutingItem::Service(path, guards, service) => {
+                                router.rdef(path, service).2 = guards;
+                            }
+                            CreateAppRoutingItem::Future(_, _, _) => unreachable!(),
                         }
-                        CreateAppRoutingItem::Future(_, _, _) => unreachable!(),
-                    }
-                    router
-                });
+                        router
+                    });
+
+            if self.case_insensitive {
+                router.case_insensitive();
+            }
+
             Poll::Ready(Ok(AppRouting {
                 ready: None,
                 router: router.finish(),

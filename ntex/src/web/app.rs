@@ -42,6 +42,7 @@ pub struct App<T, B, Err = DefaultError> {
     external: Vec<ResourceDef>,
     extensions: Extensions,
     error_renderer: Err,
+    case_insensitive: bool,
     _t: PhantomData<B>,
 }
 
@@ -59,6 +60,7 @@ impl App<AppEntry<DefaultError>, Body, DefaultError> {
             external: Vec::new(),
             extensions: Extensions::new(),
             error_renderer: DefaultError,
+            case_insensitive: false,
             _t: PhantomData,
         }
     }
@@ -78,6 +80,7 @@ impl<Err> App<AppEntry<Err>, Body, Err> {
             external: Vec::new(),
             extensions: Extensions::new(),
             error_renderer: err,
+            case_insensitive: false,
             _t: PhantomData,
         }
     }
@@ -404,6 +407,7 @@ where
             external: self.external,
             extensions: self.extensions,
             error_renderer: self.error_renderer,
+            case_insensitive: self.case_insensitive,
             _t: PhantomData,
         }
     }
@@ -468,8 +472,17 @@ where
             external: self.external,
             extensions: self.extensions,
             error_renderer: self.error_renderer,
+            case_insensitive: self.case_insensitive,
             _t: PhantomData,
         }
+    }
+
+    /// Use ascii case-insensitive routing.
+    ///
+    /// Only static segments could be case-insensitive.
+    pub fn case_insensitive_routing(mut self) -> Self {
+        self.case_insensitive = true;
+        self
     }
 }
 
@@ -495,6 +508,7 @@ where
             default: self.default,
             factory_ref: self.factory_ref,
             extensions: RefCell::new(Some(self.extensions)),
+            case_insensitive: self.case_insensitive,
         }
     }
 }
@@ -690,6 +704,23 @@ mod tests {
             resp.headers().get(header::CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("0001")
         );
+    }
+
+    #[actix_rt::test]
+    async fn test_case_insensitive_router() {
+        let mut srv = init_service(
+            App::new()
+                .case_insensitive_routing()
+                .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
+        )
+        .await;
+        let req = TestRequest::with_uri("/test").to_request();
+        let resp = call_service(&mut srv, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let req = TestRequest::with_uri("/Test").to_request();
+        let resp = call_service(&mut srv, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[actix_rt::test]

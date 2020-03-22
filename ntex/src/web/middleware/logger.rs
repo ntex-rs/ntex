@@ -532,7 +532,6 @@ mod tests {
             Ok(())
         };
         let s = format!("{}", FormatDisplay(&render));
-        println!("{}", s);
         assert!(s.contains("/test/route/yeah"));
     }
 
