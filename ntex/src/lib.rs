@@ -21,6 +21,7 @@ pub use actix_macros::{main, test};
 pub mod channel;
 pub mod framed;
 pub mod http;
+pub mod router;
 pub mod server;
 pub mod service;
 pub mod task;

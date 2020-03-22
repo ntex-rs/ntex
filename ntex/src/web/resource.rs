@@ -5,17 +5,17 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use actix_router::IntoPattern;
 use futures::future::{ok, Either, LocalBoxFuture, Ready};
 
 use crate::http::{Extensions, Response};
+use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
 };
 
 use super::data::Data;
-use super::dev::{insert_slash, AppService, HttpServiceFactory, ResourceDef};
+use super::dev::{insert_slesh, AppService, HttpServiceFactory};
 use super::error::WebError;
 use super::extract::FromRequest;
 use super::guard::Guard;
@@ -386,7 +386,7 @@ where
             Some(std::mem::replace(&mut self.guards, Vec::new()))
         };
         let mut rdef = if config.is_root() || !self.rdef.is_empty() {
-            ResourceDef::new(insert_slash(self.rdef.clone()))
+            ResourceDef::new(insert_slesh(self.rdef.clone()))
         } else {
             ResourceDef::new(self.rdef.clone())
         };

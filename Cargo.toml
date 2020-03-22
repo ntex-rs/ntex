@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "ntex",
+  "ntex-router",
   "ntex-service",
   "ntex-web-macros",
 
@@ -11,6 +12,7 @@ members = [
 
 [patch.crates-io]
 ntex = { path = "ntex" }
+ntex-router = { path = "ntex-router" }
 ntex-service = { path = "ntex-service" }
 
 actix-server = { path = "actix-net/actix-server" }

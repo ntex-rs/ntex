@@ -4,10 +4,10 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use actix_router::{ResourceDef, ResourceInfo, Router};
 use futures::future::{ok, Either, Future, LocalBoxFuture, Ready};
 
 use crate::http::{Extensions, Response};
+use crate::router::{ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
@@ -615,7 +615,7 @@ impl<Err> Service for ScopeService<Err> {
 
     fn call(&mut self, mut req: WebRequest) -> Self::Future {
         let res = self.router.recognize_mut_checked(&mut req, |req, guards| {
-            if let Some(ref guards) = guards {
+            if let Some(guards) = guards {
                 for f in guards {
                     if !f.check(req.head()) {
                         return false;
@@ -750,7 +750,7 @@ mod tests {
 
         let req = TestRequest::with_uri("/app/").to_request();
         let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[actix_rt::test]
