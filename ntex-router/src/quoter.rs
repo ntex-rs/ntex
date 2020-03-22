@@ -1,4 +1,4 @@
-pub fn requote(val: &[u8]) -> Option<String> {
+pub(super) fn requote(val: &[u8]) -> Option<String> {
     let mut has_pct = 0;
     let mut pct = [b'%', 0, 0];
     let mut idx = 0;
