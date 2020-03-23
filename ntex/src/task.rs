@@ -1,3 +1,4 @@
+//! A synchronization primitive for task wakeup.
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::task::Waker;

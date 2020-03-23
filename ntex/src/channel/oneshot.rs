@@ -112,7 +112,7 @@ impl<T> Future for Receiver<T> {
 pub struct Pool<T>(Cell<Slab<PoolInner<T>>>);
 
 bitflags::bitflags! {
-    pub struct Flags: u8 {
+    struct Flags: u8 {
         const SENDER = 0b0000_0001;
         const RECEIVER = 0b0000_0010;
     }
