@@ -7,11 +7,12 @@ pub use open_ssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 pub use tokio_openssl::{HandshakeError, SslStream};
 
 use actix_codec::{AsyncRead, AsyncWrite};
-use actix_service::{Service, ServiceFactory};
-use actix_utils::counter::{Counter, CounterGuard};
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
-use crate::MAX_CONN_COUNTER;
+use crate::service::{Service, ServiceFactory};
+use crate::util::counter::{Counter, CounterGuard};
+
+use super::MAX_CONN_COUNTER;
 
 /// Support `TLS` server connections via openssl package
 ///

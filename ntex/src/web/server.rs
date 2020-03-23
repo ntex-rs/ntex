@@ -3,9 +3,9 @@ use std::sync::{Arc, Mutex};
 use std::{fmt, io, net};
 
 #[cfg(feature = "openssl")]
-use actix_tls::openssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
+use crate::server::openssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
-use actix_tls::rustls::ServerConfig as RustlsServerConfig;
+use crate::server::rustls::ServerConfig as RustlsServerConfig;
 #[cfg(unix)]
 use futures::future::ok;
 
@@ -141,7 +141,7 @@ where
     ///
     /// By default max connections is set to a 256.
     pub fn maxconnrate(self, num: usize) -> Self {
-        actix_tls::max_concurrent_ssl_connect(num);
+        crate::server::max_concurrent_ssl_accept(num);
         self
     }
 

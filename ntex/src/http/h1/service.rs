@@ -97,8 +97,8 @@ where
 mod openssl {
     use super::*;
 
-    use actix_tls::openssl::{Acceptor, SslAcceptor, SslStream};
-    use actix_tls::{openssl::HandshakeError, SslError};
+    use crate::server::openssl::{Acceptor, SslAcceptor, SslStream};
+    use crate::server::{openssl::HandshakeError, SslError};
 
     impl<S, B, X, U> H1Service<SslStream<TcpStream>, S, B, X, U>
     where
@@ -146,8 +146,8 @@ mod openssl {
 #[cfg(feature = "rustls")]
 mod rustls {
     use super::*;
-    use actix_tls::rustls::{Acceptor, ServerConfig, TlsStream};
-    use actix_tls::SslError;
+    use crate::server::rustls::{Acceptor, ServerConfig, TlsStream};
+    use crate::server::SslError;
     use std::{fmt, io};
 
     impl<S, B, X, U> H1Service<TlsStream<TcpStream>, S, B, X, U>

@@ -98,7 +98,7 @@ impl WebResponseError<DefaultError> for actix_connect::ssl::openssl::SslError {}
 #[cfg(feature = "openssl")]
 /// `InternalServerError` for `openssl::ssl::HandshakeError`
 impl<T: std::fmt::Debug + 'static> WebResponseError<DefaultError>
-    for actix_tls::openssl::HandshakeError<T>
+    for crate::server::openssl::HandshakeError<T>
 {
 }
 

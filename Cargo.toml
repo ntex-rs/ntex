@@ -21,5 +21,4 @@ actix-codec = { path = "actix-net/actix-codec" }
 actix-connect = { path = "actix-net/actix-connect" }
 actix-rt = { path = "actix-net/actix-rt" }
 actix-macros = { path = "actix-net/actix-macros" }
-actix-tls = { path = "actix-net/actix-tls" }
 bytestring = { path = "actix-net/string" }
