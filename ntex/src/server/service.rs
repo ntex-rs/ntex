@@ -4,14 +4,15 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use actix_rt::spawn;
-use actix_service::{self as actix, Service, ServiceFactory as ActixServiceFactory};
-use actix_utils::counter::CounterGuard;
 use futures::future::{err, ok, LocalBoxFuture, Ready};
 use futures::{FutureExt, TryFutureExt};
 use log::error;
 
+use crate::service::{Service, ServiceFactory as ActixServiceFactory};
+use crate::util::counter::CounterGuard;
+
+use super::socket::{FromStream, StdStream};
 use super::Token;
-use crate::socket::{FromStream, StdStream};
 
 /// Server message
 pub(crate) enum ServerMessage {
@@ -24,7 +25,7 @@ pub(crate) enum ServerMessage {
 }
 
 pub trait ServiceFactory<Stream: FromStream>: Send + Clone + 'static {
-    type Factory: actix::ServiceFactory<Config = (), Request = Stream>;
+    type Factory: ActixServiceFactory<Config = (), Request = Stream>;
 
     fn create(&self) -> Self::Factory;
 }
@@ -34,7 +35,9 @@ pub(crate) trait InternalServiceFactory: Send {
 
     fn clone_factory(&self) -> Box<dyn InternalServiceFactory>;
 
-    fn create(&self) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>;
+    fn create(
+        &self,
+    ) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>;
 }
 
 pub(crate) type BoxedServerService = Box<
@@ -72,7 +75,10 @@ where
         self.service.poll_ready(ctx).map_err(|_| ())
     }
 
-    fn call(&mut self, (guard, req): (Option<CounterGuard>, ServerMessage)) -> Self::Future {
+    fn call(
+        &mut self,
+        (guard, req): (Option<CounterGuard>, ServerMessage),
+    ) -> Self::Future {
         match req {
             ServerMessage::Connect(stream) => {
                 let stream = FromStream::from_stdstream(stream).map_err(|e| {
@@ -143,7 +149,9 @@ where
         })
     }
 
-    fn create(&self) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
+    fn create(
+        &self,
+    ) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         let token = self.token;
         self.inner
             .create()
@@ -166,7 +174,9 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
         self.as_ref().clone_factory()
     }
 
-    fn create(&self) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
+    fn create(
+        &self,
+    ) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         self.as_ref().create()
     }
 }
@@ -174,7 +184,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 impl<F, T, I> ServiceFactory<I> for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: actix::ServiceFactory<Config = (), Request = I>,
+    T: ActixServiceFactory<Config = (), Request = I>,
     I: FromStream,
 {
     type Factory = T;

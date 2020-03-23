@@ -40,7 +40,9 @@ impl fmt::Display for StdListener {
         match *self {
             StdListener::Tcp(ref lst) => write!(f, "{}", lst.local_addr().ok().unwrap()),
             #[cfg(all(unix))]
-            StdListener::Uds(ref lst) => write!(f, "{:?}", lst.local_addr().ok().unwrap()),
+            StdListener::Uds(ref lst) => {
+                write!(f, "{:?}", lst.local_addr().ok().unwrap())
+            }
         }
     }
 }
@@ -85,9 +87,9 @@ pub(crate) enum SocketListener {
 impl SocketListener {
     pub(crate) fn accept(&self) -> io::Result<Option<(StdStream, SocketAddr)>> {
         match *self {
-            SocketListener::Tcp(ref lst) => lst
-                .accept_std()
-                .map(|(stream, addr)| Some((StdStream::Tcp(stream), SocketAddr::Tcp(addr)))),
+            SocketListener::Tcp(ref lst) => lst.accept_std().map(|(stream, addr)| {
+                Some((StdStream::Tcp(stream), SocketAddr::Tcp(addr)))
+            }),
             #[cfg(all(unix))]
             SocketListener::Uds(ref lst) => lst.accept_std().map(|res| {
                 res.map(|(stream, addr)| (StdStream::Uds(stream), SocketAddr::Uds(addr)))

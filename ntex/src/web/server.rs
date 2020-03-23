@@ -2,8 +2,6 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::{fmt, io, net};
 
-use actix_server::{Server, ServerBuilder};
-
 #[cfg(feature = "openssl")]
 use actix_tls::openssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
@@ -20,9 +18,10 @@ use crate::http::{
 };
 #[cfg(unix)]
 use crate::pipeline_factory;
+use crate::server::{Server, ServerBuilder};
 use crate::{map_config, IntoServiceFactory, Service, ServiceFactory};
 
-use crate::web::config::AppConfig;
+use super::config::AppConfig;
 
 struct Socket {
     scheme: &'static str,

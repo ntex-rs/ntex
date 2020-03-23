@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::{fmt, io, net};
 
 use actix_rt::net::TcpStream;
-use actix_service as actix;
-use actix_utils::counter::CounterGuard;
 use futures::future::{ok, Future, FutureExt, LocalBoxFuture};
 use log::error;
+
+use crate::service;
+use crate::util::counter::CounterGuard;
 
 use super::builder::bind_addr;
 use super::service::{
@@ -14,10 +15,10 @@ use super::service::{
 use super::Token;
 
 pub struct ServiceConfig {
-    pub(crate) services: Vec<(String, net::TcpListener)>,
-    pub(crate) apply: Option<Box<dyn ServiceRuntimeConfiguration>>,
-    pub(crate) threads: usize,
-    pub(crate) backlog: i32,
+    pub(super) services: Vec<(String, net::TcpListener)>,
+    pub(super) apply: Option<Box<dyn ServiceRuntimeConfiguration>>,
+    pub(super) threads: usize,
+    pub(super) backlog: i32,
 }
 
 impl ServiceConfig {
@@ -53,7 +54,11 @@ impl ServiceConfig {
     }
 
     /// Add new service to server
-    pub fn listen<N: AsRef<str>>(&mut self, name: N, lst: net::TcpListener) -> &mut Self {
+    pub fn listen<N: AsRef<str>>(
+        &mut self,
+        name: N,
+        lst: net::TcpListener,
+    ) -> &mut Self {
         if self.apply.is_none() {
             self.apply = Some(Box::new(not_configured));
         }
@@ -110,7 +115,9 @@ impl InternalServiceFactory for ConfiguredService {
         })
     }
 
-    fn create(&self) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
+    fn create(
+        &self,
+    ) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         // configure services
         let mut rt = ServiceRuntime::new(self.topics.clone());
         self.rt.configure(&mut rt);
@@ -142,7 +149,7 @@ impl InternalServiceFactory for ConfiguredService {
                     let name = names.remove(&token).unwrap().0;
                     res.push((
                         token,
-                        Box::new(StreamService::new(actix::fn_service(
+                        Box::new(StreamService::new(service::fn_service(
                             move |_: TcpStream| {
                                 error!("Service {:?} is not configured", name);
                                 ok::<_, ()>(())
@@ -209,8 +216,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service<T, F>(&mut self, name: &str, service: F)
     where
-        F: actix::IntoServiceFactory<T>,
-        T: actix::ServiceFactory<Config = (), Request = TcpStream> + 'static,
+        F: service::IntoServiceFactory<T>,
+        T: service::ServiceFactory<Config = (), Request = TcpStream> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -238,7 +245,7 @@ impl ServiceRuntime {
 }
 
 type BoxedNewService = Box<
-    dyn actix::ServiceFactory<
+    dyn service::ServiceFactory<
         Request = (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
@@ -253,9 +260,9 @@ struct ServiceFactory<T> {
     inner: T,
 }
 
-impl<T> actix::ServiceFactory for ServiceFactory<T>
+impl<T> service::ServiceFactory for ServiceFactory<T>
 where
-    T: actix::ServiceFactory<Config = (), Request = TcpStream>,
+    T: service::ServiceFactory<Config = (), Request = TcpStream>,
     T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,

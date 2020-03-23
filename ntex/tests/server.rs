@@ -5,12 +5,13 @@ use std::{net, thread, time};
 
 use actix_codec::{BytesCodec, Framed};
 use actix_rt::net::TcpStream;
-use actix_server::Server;
-use actix_service::fn_service;
 use bytes::Bytes;
 use futures::future::{lazy, ok};
 use futures::SinkExt;
 use net2::TcpBuilder;
+
+use ntex::server::Server;
+use ntex::service::fn_service;
 
 fn unused_addr() -> net::SocketAddr {
     let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();

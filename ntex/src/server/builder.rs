@@ -15,14 +15,14 @@ use log::{error, info};
 use net2::TcpBuilder;
 use num_cpus;
 
-use crate::accept::{AcceptLoop, AcceptNotify, Command};
-use crate::config::{ConfiguredService, ServiceConfig};
-use crate::server::{Server, ServerCommand};
-use crate::service::{InternalServiceFactory, ServiceFactory, StreamNewService};
-use crate::signals::{Signal, Signals};
-use crate::socket::StdListener;
-use crate::worker::{self, Worker, WorkerAvailability, WorkerClient};
-use crate::Token;
+use super::accept::{AcceptLoop, AcceptNotify, Command};
+use super::config::{ConfiguredService, ServiceConfig};
+use super::server::{Server, ServerCommand};
+use super::service::{InternalServiceFactory, ServiceFactory, StreamNewService};
+use super::signals::{Signal, Signals};
+use super::socket::StdListener;
+use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
+use super::Token;
 
 /// Server builder
 pub struct ServerBuilder {
@@ -157,7 +157,12 @@ impl ServerBuilder {
     }
 
     /// Add new service to the server.
-    pub fn bind<F, U, N: AsRef<str>>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
+    pub fn bind<F, U, N: AsRef<str>>(
+        mut self,
+        name: N,
+        addr: U,
+        factory: F,
+    ) -> io::Result<Self>
     where
         F: ServiceFactory<TcpStream>,
         U: net::ToSocketAddrs,
@@ -375,7 +380,8 @@ impl ServerBuilder {
                                     spawn(
                                         async {
                                             delay_until(
-                                                Instant::now() + Duration::from_millis(300),
+                                                Instant::now()
+                                                    + Duration::from_millis(300),
                                             )
                                             .await;
                                             System::current().stop();
@@ -390,12 +396,11 @@ impl ServerBuilder {
                     // we need to stop system if server was spawned
                     if self.exit {
                         spawn(
-                            delay_until(Instant::now() + Duration::from_millis(300)).then(
-                                |_| {
+                            delay_until(Instant::now() + Duration::from_millis(300))
+                                .then(|_| {
                                     System::current().stop();
                                     ready(())
-                                },
-                            ),
+                                }),
                         );
                     }
                     if let Some(tx) = completion {
@@ -485,7 +490,10 @@ pub(super) fn bind_addr<S: net::ToSocketAddrs>(
     }
 }
 
-fn create_tcp_listener(addr: net::SocketAddr, backlog: i32) -> io::Result<net::TcpListener> {
+fn create_tcp_listener(
+    addr: net::SocketAddr,
+    backlog: i32,
+) -> io::Result<net::TcpListener> {
     let builder = match addr {
         net::SocketAddr::V4(_) => TcpBuilder::new_v4()?,
         net::SocketAddr::V6(_) => TcpBuilder::new_v6()?,

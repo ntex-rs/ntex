@@ -7,12 +7,12 @@ use actix_rt::System;
 use log::{error, info};
 use slab::Slab;
 
-use crate::server::Server;
-use crate::socket::{SocketAddr, SocketListener, StdListener};
-use crate::worker::{Conn, WorkerClient};
-use crate::Token;
+use super::server::Server;
+use super::socket::{SocketAddr, SocketListener, StdListener};
+use super::worker::{Conn, WorkerClient};
+use super::Token;
 
-pub(crate) enum Command {
+pub(super) enum Command {
     Pause,
     Resume,
     Stop,
@@ -27,14 +27,14 @@ struct ServerSocketInfo {
 }
 
 #[derive(Clone)]
-pub(crate) struct AcceptNotify(mio::SetReadiness);
+pub(super) struct AcceptNotify(mio::SetReadiness);
 
 impl AcceptNotify {
-    pub(crate) fn new(ready: mio::SetReadiness) -> Self {
+    pub(super) fn new(ready: mio::SetReadiness) -> Self {
         AcceptNotify(ready)
     }
 
-    pub(crate) fn notify(&self) {
+    pub(super) fn notify(&self) {
         let _ = self.0.set_readiness(mio::Ready::readable());
     }
 }
@@ -45,7 +45,7 @@ impl Default for AcceptNotify {
     }
 }
 
-pub(crate) struct AcceptLoop {
+pub(super) struct AcceptLoop {
     cmd_reg: Option<mio::Registration>,
     cmd_ready: mio::SetReadiness,
     notify_reg: Option<mio::Registration>,
@@ -56,7 +56,7 @@ pub(crate) struct AcceptLoop {
 }
 
 impl AcceptLoop {
-    pub fn new(srv: Server) -> AcceptLoop {
+    pub(super) fn new(srv: Server) -> AcceptLoop {
         let (tx, rx) = sync_mpsc::channel();
         let (cmd_reg, cmd_ready) = mio::Registration::new2();
         let (notify_reg, notify_ready) = mio::Registration::new2();
@@ -72,16 +72,16 @@ impl AcceptLoop {
         }
     }
 
-    pub fn send(&self, msg: Command) {
+    pub(super) fn send(&self, msg: Command) {
         let _ = self.tx.send(msg);
         let _ = self.cmd_ready.set_readiness(mio::Ready::readable());
     }
 
-    pub fn get_notify(&self) -> AcceptNotify {
+    pub(super) fn get_notify(&self) -> AcceptNotify {
         AcceptNotify::new(self.notify_ready.clone())
     }
 
-    pub(crate) fn start(
+    pub(super) fn start(
         &mut self,
         socks: Vec<(Token, StdListener)>,
         workers: Vec<WorkerClient>,
@@ -130,7 +130,7 @@ fn connection_error(e: &io::Error) -> bool {
 
 impl Accept {
     #![allow(clippy::too_many_arguments)]
-    pub(crate) fn start(
+    fn start(
         rx: sync_mpsc::Receiver<Command>,
         cmd_reg: mio::Registration,
         notify_reg: mio::Registration,
@@ -440,7 +440,8 @@ impl Accept {
 
                         let r = self.timer.1.clone();
                         System::current().arbiter().send(Box::pin(async move {
-                            delay_until(Instant::now() + Duration::from_millis(510)).await;
+                            delay_until(Instant::now() + Duration::from_millis(510))
+                                .await;
                             let _ = r.set_readiness(mio::Ready::readable());
                         }));
                         return;

@@ -6,32 +6,33 @@ use std::time;
 
 use actix_rt::time::{delay_until, Delay, Instant};
 use actix_rt::{spawn, Arbiter};
-use actix_utils::counter::Counter;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot;
 use futures::future::{join_all, LocalBoxFuture, MapOk};
 use futures::{Future, FutureExt, Stream, TryFutureExt};
 use log::{error, info, trace};
 
-use crate::accept::AcceptNotify;
-use crate::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
-use crate::socket::{SocketAddr, StdStream};
-use crate::Token;
+use crate::util::counter::Counter;
 
-pub(crate) struct WorkerCommand(Conn);
+use super::accept::AcceptNotify;
+use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
+use super::socket::{SocketAddr, StdStream};
+use super::Token;
+
+pub(super) struct WorkerCommand(Conn);
 
 /// Stop worker message. Returns `true` on successful shutdown
 /// and `false` if some connections still alive.
-pub(crate) struct StopCommand {
+pub(super) struct StopCommand {
     graceful: bool,
     result: oneshot::Sender<bool>,
 }
 
 #[derive(Debug)]
-pub(crate) struct Conn {
-    pub io: StdStream,
-    pub token: Token,
-    pub peer: Option<SocketAddr>,
+pub(super) struct Conn {
+    pub(super) io: StdStream,
+    pub(super) token: Token,
+    pub(super) peer: Option<SocketAddr>,
 }
 
 static MAX_CONNS: AtomicUsize = AtomicUsize::new(25600);
@@ -42,11 +43,11 @@ static MAX_CONNS: AtomicUsize = AtomicUsize::new(25600);
 /// reached for each worker.
 ///
 /// By default max connections is set to a 25k per worker.
-pub fn max_concurrent_connections(num: usize) {
+pub(super) fn max_concurrent_connections(num: usize) {
     MAX_CONNS.store(num, Ordering::Relaxed);
 }
 
-pub(crate) fn num_connections() -> usize {
+pub(super) fn num_connections() -> usize {
     MAX_CONNS_COUNTER.with(|conns| conns.total())
 }
 
@@ -56,15 +57,15 @@ thread_local! {
 }
 
 #[derive(Clone)]
-pub(crate) struct WorkerClient {
-    pub idx: usize,
+pub(super) struct WorkerClient {
+    pub(super) idx: usize,
     tx1: UnboundedSender<WorkerCommand>,
     tx2: UnboundedSender<StopCommand>,
     avail: WorkerAvailability,
 }
 
 impl WorkerClient {
-    pub fn new(
+    pub(super) fn new(
         idx: usize,
         tx1: UnboundedSender<WorkerCommand>,
         tx2: UnboundedSender<StopCommand>,
@@ -78,17 +79,17 @@ impl WorkerClient {
         }
     }
 
-    pub fn send(&self, msg: Conn) -> Result<(), Conn> {
+    pub(super) fn send(&self, msg: Conn) -> Result<(), Conn> {
         self.tx1
             .unbounded_send(WorkerCommand(msg))
             .map_err(|msg| msg.into_inner().0)
     }
 
-    pub fn available(&self) -> bool {
+    pub(super) fn available(&self) -> bool {
         self.avail.available()
     }
 
-    pub fn stop(&self, graceful: bool) -> oneshot::Receiver<bool> {
+    pub(super) fn stop(&self, graceful: bool) -> oneshot::Receiver<bool> {
         let (result, rx) = oneshot::channel();
         let _ = self.tx2.unbounded_send(StopCommand { graceful, result });
         rx
@@ -96,24 +97,24 @@ impl WorkerClient {
 }
 
 #[derive(Clone)]
-pub(crate) struct WorkerAvailability {
+pub(super) struct WorkerAvailability {
     notify: AcceptNotify,
     available: Arc<AtomicBool>,
 }
 
 impl WorkerAvailability {
-    pub fn new(notify: AcceptNotify) -> Self {
+    pub(super) fn new(notify: AcceptNotify) -> Self {
         WorkerAvailability {
             notify,
             available: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub fn available(&self) -> bool {
+    pub(super) fn available(&self) -> bool {
         self.available.load(Ordering::Acquire)
     }
 
-    pub fn set(&self, val: bool) {
+    pub(super) fn set(&self, val: bool) {
         let old = self.available.swap(val, Ordering::Release);
         if !old && val {
             self.notify.notify()
@@ -125,7 +126,7 @@ impl WorkerAvailability {
 ///
 /// Worker accepts Socket objects via unbounded channel and starts stream
 /// processing.
-pub(crate) struct Worker {
+pub(super) struct Worker {
     rx: UnboundedReceiver<WorkerCommand>,
     rx2: UnboundedReceiver<StopCommand>,
     services: Vec<WorkerService>,
@@ -160,7 +161,7 @@ enum WorkerServiceStatus {
 }
 
 impl Worker {
-    pub(crate) fn start(
+    pub(super) fn start(
         idx: usize,
         factories: Vec<Box<dyn InternalServiceFactory>>,
         availability: WorkerAvailability,
@@ -332,7 +333,9 @@ impl Future for Worker {
                 if num != 0 {
                     info!("Graceful worker shutdown, {} connections", num);
                     self.state = WorkerState::Shutdown(
-                        Box::pin(delay_until(Instant::now() + time::Duration::from_secs(1))),
+                        Box::pin(delay_until(
+                            Instant::now() + time::Duration::from_secs(1),
+                        )),
                         Box::pin(delay_until(Instant::now() + self.shutdown_timeout)),
                         Some(result),
                     );
@@ -383,8 +386,11 @@ impl Future for Worker {
                             self.factories[idx].name(token)
                         );
                         self.services[token.0].status = WorkerServiceStatus::Restarting;
-                        self.state =
-                            WorkerState::Restarting(idx, token, self.factories[idx].create());
+                        self.state = WorkerState::Restarting(
+                            idx,
+                            token,
+                            self.factories[idx].create(),
+                        );
                         self.poll(cx)
                     }
                 }
@@ -453,9 +459,10 @@ impl Future for Worker {
                             match self.check_readiness(cx) {
                                 Ok(true) => {
                                     let guard = self.conns.get();
-                                    let _ = self.services[msg.token.0]
-                                        .service
-                                        .call((Some(guard), ServerMessage::Connect(msg.io)));
+                                    let _ = self.services[msg.token.0].service.call((
+                                        Some(guard),
+                                        ServerMessage::Connect(msg.io),
+                                    ));
                                     continue;
                                 }
                                 Ok(false) => {

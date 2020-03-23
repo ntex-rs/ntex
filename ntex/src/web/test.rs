@@ -8,7 +8,6 @@ use std::{fmt, net, thread, time};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use actix_rt::{time::delay_for, System};
-use actix_server::Server;
 use bytes::{Bytes, BytesMut};
 use futures::future::ok;
 use futures::stream::{Stream, StreamExt};
@@ -30,6 +29,7 @@ use crate::http::{
     Extensions, HttpService, Method, Payload, Request, StatusCode, Uri, Version,
 };
 use crate::router::{Path, ResourceDef};
+use crate::server::Server;
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use crate::web::config::AppConfig;
