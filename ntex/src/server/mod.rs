@@ -24,7 +24,7 @@ pub use self::builder::ServerBuilder;
 pub use self::config::{ServiceConfig, ServiceRuntime};
 pub use self::server::Server;
 pub use self::service::ServiceFactory;
-pub use self::test::{test_server, TestServer};
+pub use self::test::{build_test_server, test_server, TestServer};
 
 #[doc(hidden)]
 pub use self::socket::FromStream;

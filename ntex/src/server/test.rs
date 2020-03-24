@@ -5,7 +5,7 @@ use std::{net, thread};
 use actix_rt::{net::TcpStream, System};
 use net2::TcpBuilder;
 
-use super::{Server, ServiceFactory};
+use super::{Server, ServerBuilder, ServiceFactory};
 
 /// Start test server
 ///
@@ -60,6 +60,32 @@ pub fn test_server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
     let (system, addr) = rx.recv().unwrap();
 
     TestServer { addr, system }
+}
+
+/// Start new server with server builder
+pub fn build_test_server<F>(mut factory: F) -> TestServer
+where
+    F: FnMut(ServerBuilder) -> ServerBuilder + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+
+    // run server in separate thread
+    thread::spawn(move || {
+        let sys = System::new("actix-test-server");
+        factory(Server::build())
+            .workers(1)
+            .disable_signals()
+            .start();
+
+        tx.send(System::current()).unwrap();
+        sys.run()
+    });
+    let system = rx.recv().unwrap();
+
+    TestServer {
+        system,
+        addr: "127.0.0.1:0".parse().unwrap(),
+    }
 }
 
 /// Test server controller
