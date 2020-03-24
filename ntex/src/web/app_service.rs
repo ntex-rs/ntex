@@ -14,31 +14,34 @@ use crate::{fn_service, Service, ServiceFactory};
 
 use super::config::{AppConfig, AppService};
 use super::data::DataFactory;
-use super::error::WebError;
+use super::error::ErrorRenderer;
 use super::guard::Guard;
 use super::request::{HttpRequest, HttpRequestPool};
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpService<Err> = BoxService<WebRequest, WebResponse, WebError<Err>>;
-type HttpNewService<Err> =
-    BoxServiceFactory<(), WebRequest, WebResponse, WebError<Err>, ()>;
-type BoxResponse<Err> = LocalBoxFuture<'static, Result<WebResponse, WebError<Err>>>;
+type HttpService<Err: ErrorRenderer> =
+    BoxService<WebRequest<Err>, WebResponse, Err::Container>;
+type HttpNewService<Err: ErrorRenderer> =
+    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
+type BoxResponse<Err: ErrorRenderer> =
+    LocalBoxFuture<'static, Result<WebResponse, Err::Container>>;
 type FnDataFactory =
     Box<dyn Fn() -> LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>;
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes data factories.
-pub struct AppInit<T, B, Err>
+pub struct AppInit<T, B, Err: ErrorRenderer>
 where
     T: ServiceFactory<
         Config = (),
-        Request = WebRequest,
+        Request = WebRequest<Err>,
         Response = WebResponse<B>,
-        Error = WebError<Err>,
+        Error = Err::Container,
         InitError = (),
     >,
+    Err: ErrorRenderer,
 {
     pub(super) endpoint: T,
     pub(super) extensions: RefCell<Option<Extensions>>,
@@ -55,12 +58,12 @@ impl<T, B, Err> ServiceFactory for AppInit<T, B, Err>
 where
     T: ServiceFactory<
         Config = (),
-        Request = WebRequest,
+        Request = WebRequest<Err>,
         Response = WebResponse<B>,
-        Error = WebError<Err>,
+        Error = Err::Container,
         InitError = (),
     >,
-    Err: 'static,
+    Err: ErrorRenderer,
 {
     type Config = AppConfig;
     type Request = Request;
@@ -73,7 +76,7 @@ where
     fn new_service(&self, config: AppConfig) -> Self::Future {
         // update resource default service
         let default = self.default.clone().unwrap_or_else(|| {
-            Rc::new(boxed::factory(fn_service(|req: WebRequest| {
+            Rc::new(boxed::factory(fn_service(|req: WebRequest<Err>| {
                 ok(req.into_response(Response::NotFound().finish()))
             })))
         });
@@ -156,11 +159,12 @@ impl<T, B, Err> Future for AppInitResult<T, B, Err>
 where
     T: ServiceFactory<
         Config = (),
-        Request = WebRequest,
+        Request = WebRequest<Err>,
         Response = WebResponse<B>,
-        Error = WebError<Err>,
+        Error = Err::Container,
         InitError = (),
     >,
+    Err: ErrorRenderer,
 {
     type Output = Result<AppInitService<T::Service, B, Err>, ()>;
 
@@ -202,6 +206,7 @@ where
                 config: this.config.clone(),
                 data: Rc::new(data),
                 pool: HttpRequestPool::create(),
+                _t: PhantomData,
             }))
         } else {
             Poll::Pending
@@ -209,21 +214,32 @@ where
     }
 }
 
-/// Service to convert `Request` to a `WebRequest<S>`
+/// Service to convert `Request` to a `WebRequest<Err>`
 pub struct AppInitService<T, B, Err>
 where
-    T: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<Err>>,
+    T: Service<
+        Request = WebRequest<Err>,
+        Response = WebResponse<B>,
+        Error = Err::Container,
+    >,
+    Err: ErrorRenderer,
 {
     service: T,
     rmap: Rc<ResourceMap>,
     config: AppConfig,
     data: Rc<Extensions>,
     pool: &'static HttpRequestPool,
+    _t: PhantomData<Err>,
 }
 
 impl<T, B, Err> Service for AppInitService<T, B, Err>
 where
-    T: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<Err>>,
+    T: Service<
+        Request = WebRequest<Err>,
+        Response = WebResponse<B>,
+        Error = Err::Container,
+    >,
+    Err: ErrorRenderer,
 {
     type Request = Request;
     type Response = WebResponse<B>;
@@ -261,24 +277,29 @@ where
 
 impl<T, B, Err> Drop for AppInitService<T, B, Err>
 where
-    T: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<Err>>,
+    T: Service<
+        Request = WebRequest<Err>,
+        Response = WebResponse<B>,
+        Error = Err::Container,
+    >,
+    Err: ErrorRenderer,
 {
     fn drop(&mut self) {
         self.pool.clear();
     }
 }
 
-pub struct AppRoutingFactory<Err> {
+pub struct AppRoutingFactory<Err: ErrorRenderer> {
     services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
     default: Rc<HttpNewService<Err>>,
     case_insensitive: bool,
 }
 
-impl<Err: 'static> ServiceFactory for AppRoutingFactory<Err> {
+impl<Err: ErrorRenderer> ServiceFactory for AppRoutingFactory<Err> {
     type Config = ();
-    type Request = WebRequest;
+    type Request = WebRequest<Err>;
     type Response = WebResponse;
-    type Error = WebError<Err>;
+    type Error = Err::Container;
     type InitError = ();
     type Service = AppRouting<Err>;
     type Future = AppRoutingFactoryResponse<Err>;
@@ -307,19 +328,19 @@ type HttpServiceFut<Err> = LocalBoxFuture<'static, Result<HttpService<Err>, ()>>
 
 /// Create app service
 #[doc(hidden)]
-pub struct AppRoutingFactoryResponse<Err> {
+pub struct AppRoutingFactoryResponse<Err: ErrorRenderer> {
     fut: Vec<CreateAppRoutingItem<Err>>,
     default: Option<HttpService<Err>>,
     default_fut: Option<LocalBoxFuture<'static, Result<HttpService<Err>, ()>>>,
     case_insensitive: bool,
 }
 
-enum CreateAppRoutingItem<Err> {
+enum CreateAppRoutingItem<Err: ErrorRenderer> {
     Future(Option<ResourceDef>, Option<Guards>, HttpServiceFut<Err>),
     Service(ResourceDef, Option<Guards>, HttpService<Err>),
 }
 
-impl<Err> Future for AppRoutingFactoryResponse<Err> {
+impl<Err: ErrorRenderer> Future for AppRoutingFactoryResponse<Err> {
     type Output = Result<AppRouting<Err>, ()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -386,16 +407,16 @@ impl<Err> Future for AppRoutingFactoryResponse<Err> {
     }
 }
 
-pub struct AppRouting<Err> {
+pub struct AppRouting<Err: ErrorRenderer> {
     router: Router<HttpService<Err>, Guards>,
-    ready: Option<(WebRequest, ResourceInfo)>,
+    ready: Option<(WebRequest<Err>, ResourceInfo)>,
     default: Option<HttpService<Err>>,
 }
 
-impl<Err: 'static> Service for AppRouting<Err> {
-    type Request = WebRequest;
+impl<Err: ErrorRenderer> Service for AppRouting<Err> {
+    type Request = WebRequest<Err>;
     type Response = WebResponse;
-    type Error = WebError<Err>;
+    type Error = Err::Container;
     type Future = BoxResponse<Err>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -406,7 +427,7 @@ impl<Err: 'static> Service for AppRouting<Err> {
         }
     }
 
-    fn call(&mut self, mut req: WebRequest) -> Self::Future {
+    fn call(&mut self, mut req: WebRequest<Err>) -> Self::Future {
         let res = self.router.recognize_mut_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
                 for f in guards {
@@ -430,21 +451,21 @@ impl<Err: 'static> Service for AppRouting<Err> {
 }
 
 /// Wrapper service for routing
-pub struct AppEntry<Err> {
+pub struct AppEntry<Err: ErrorRenderer> {
     factory: Rc<RefCell<Option<AppRoutingFactory<Err>>>>,
 }
 
-impl<Err> AppEntry<Err> {
+impl<Err: ErrorRenderer> AppEntry<Err> {
     pub fn new(factory: Rc<RefCell<Option<AppRoutingFactory<Err>>>>) -> Self {
         AppEntry { factory }
     }
 }
 
-impl<Err: 'static> ServiceFactory for AppEntry<Err> {
+impl<Err: ErrorRenderer> ServiceFactory for AppEntry<Err> {
     type Config = ();
-    type Request = WebRequest;
+    type Request = WebRequest<Err>;
     type Response = WebResponse;
-    type Error = WebError<Err>;
+    type Error = Err::Container;
     type InitError = ();
     type Service = AppRouting<Err>;
     type Future = AppRoutingFactoryResponse<Err>;

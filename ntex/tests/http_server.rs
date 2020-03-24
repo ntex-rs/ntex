@@ -9,10 +9,9 @@ use futures::stream::{once, StreamExt};
 use regex::Regex;
 
 use ntex::http::test::server as test_server;
-use ntex::http::{
-    body, error, header, HttpService, KeepAlive, Request, Response, StatusCode,
-};
+use ntex::http::{body, header, HttpService, KeepAlive, Request, Response, StatusCode};
 use ntex::service::fn_service;
+use ntex::web::error;
 
 #[ntex::test]
 async fn test_h1() {
@@ -59,7 +58,7 @@ async fn test_expect_continue() {
                 if req.head().uri.query() == Some("yes=") {
                     ok(req)
                 } else {
-                    err(error::InternalError::new(
+                    err(error::InternalError::default(
                         "error",
                         StatusCode::PRECONDITION_FAILED,
                     ))
@@ -91,7 +90,7 @@ async fn test_expect_continue_h1() {
                     if req.head().uri.query() == Some("yes=") {
                         ok(req)
                     } else {
-                        err(error::InternalError::new(
+                        err(error::InternalError::default(
                             "error",
                             StatusCode::PRECONDITION_FAILED,
                         ))
@@ -637,7 +636,7 @@ async fn test_h1_service_error() {
     let mut srv = test_server(|| {
         HttpService::build()
             .h1(|_| {
-                future::err::<Response, _>(error::InternalError::new(
+                future::err::<Response, _>(error::InternalError::default(
                     "error",
                     StatusCode::BAD_REQUEST,
                 ))

@@ -19,7 +19,7 @@ use crate::http::{HttpMessage, Payload, Response, StatusCode};
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
 
-use crate::web::error::{JsonError, JsonPayloadError, WebResponseError};
+use crate::web::error::{ErrorRenderer, JsonError, JsonPayloadError};
 use crate::web::extract::FromRequest;
 use crate::web::request::HttpRequest;
 use crate::web::responder::Responder;
@@ -122,10 +122,7 @@ where
     }
 }
 
-impl<T: Serialize, Err: 'static> Responder<Err> for Json<T>
-where
-    JsonError: WebResponseError<Err>,
-{
+impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Json<T> {
     type Error = JsonError;
     type Future = Ready<Result<Response, Self::Error>>;
 
@@ -173,19 +170,18 @@ where
 ///     );
 /// }
 /// ```
-impl<T, Err: 'static> FromRequest<Err> for Json<T>
+impl<T, Err: ErrorRenderer> FromRequest<Err> for Json<T>
 where
     T: DeserializeOwned + 'static,
 {
     type Error = JsonPayloadError;
     type Future = LocalBoxFuture<'static, Result<Self, Self::Error>>;
-    type Config = JsonConfig;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         let req2 = req.clone();
         let (limit, ctype) = req
-            .app_data::<Self::Config>()
+            .app_data::<JsonConfig>()
             .map(|c| (c.limit, c.content_type.clone()))
             .unwrap_or((32768, None));
 

@@ -161,10 +161,12 @@ impl Route {
         .unwrap();
 
         let stream = quote! {
-            #[allow(non_camel_case_types)]
+            // #[allow(non_camel_case_types)]
             pub struct #name;
 
-            impl<__E: 'static> ntex::web::dev::HttpServiceFactory<__E> for #name {
+            impl<__E: 'static> ntex::web::dev::HttpServiceFactory<__E> for #name
+            where __E: ntex::web::error::ErrorRenderer
+            {
                 fn register(self, __config: &mut ntex::web::dev::AppService<__E>) {
                     #(ntex::web::dev::__assert_extractor::<__E, #args>();)*
 

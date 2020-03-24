@@ -16,7 +16,7 @@ use crate::service::{Service, Transform};
 
 use crate::web::dev::BodyEncoding;
 use crate::web::service::{WebRequest, WebResponse};
-use crate::web::WebError;
+use crate::web::ErrorRenderer;
 
 #[derive(Debug, Clone)]
 /// `Middleware` for compressing response body.
@@ -37,61 +37,71 @@ use crate::web::WebError;
 ///         );
 /// }
 /// ```
-pub struct Compress(ContentEncoding);
+pub struct Compress<Err> {
+    enc: ContentEncoding,
+    _t: PhantomData<Err>,
+}
 
-impl Compress {
+impl<Err> Compress<Err> {
     /// Create new `Compress` middleware with default encoding.
     pub fn new(encoding: ContentEncoding) -> Self {
-        Compress(encoding)
+        Compress {
+            enc: encoding,
+            _t: PhantomData,
+        }
     }
 }
 
-impl Default for Compress {
+impl<Err> Default for Compress<Err> {
     fn default() -> Self {
         Compress::new(ContentEncoding::Auto)
     }
 }
 
-impl<S, B, E> Transform<S> for Compress
+impl<S, B, E> Transform<S> for Compress<E>
 where
     B: MessageBody,
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
+    E: ErrorRenderer,
 {
-    type Request = WebRequest;
+    type Request = WebRequest<E>;
     type Response = WebResponse<Encoder<B>>;
-    type Error = WebError<E>;
+    type Error = S::Error;
     type InitError = ();
-    type Transform = CompressMiddleware<S>;
+    type Transform = CompressMiddleware<S, E>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
         ok(CompressMiddleware {
             service,
-            encoding: self.0,
+            encoding: self.enc,
+            _t: PhantomData,
         })
     }
 }
 
-pub struct CompressMiddleware<S> {
+pub struct CompressMiddleware<S, E> {
     service: S,
     encoding: ContentEncoding,
+    _t: PhantomData<E>,
 }
 
-impl<S, B, E> Service for CompressMiddleware<S>
+impl<S, B, E> Service for CompressMiddleware<S, E>
 where
     B: MessageBody,
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
+    E: ErrorRenderer,
 {
-    type Request = WebRequest;
+    type Request = WebRequest<E>;
     type Response = WebResponse<Encoder<B>>;
-    type Error = WebError<E>;
-    type Future = CompressResponse<S, B>;
+    type Error = S::Error;
+    type Future = CompressResponse<S, B, E>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: WebRequest) -> Self::Future {
+    fn call(&mut self, req: WebRequest<E>) -> Self::Future {
         // negotiate content-encoding
         let encoding = if let Some(val) = req.headers().get(&ACCEPT_ENCODING) {
             if let Ok(enc) = val.to_str() {
@@ -113,7 +123,7 @@ where
 
 #[doc(hidden)]
 #[pin_project]
-pub struct CompressResponse<S, B>
+pub struct CompressResponse<S, B, E>
 where
     S: Service,
     B: MessageBody,
@@ -121,15 +131,16 @@ where
     #[pin]
     fut: S::Future,
     encoding: ContentEncoding,
-    _t: PhantomData<B>,
+    _t: PhantomData<(B, E)>,
 }
 
-impl<S, B, E> Future for CompressResponse<S, B>
+impl<S, B, E> Future for CompressResponse<S, B, E>
 where
     B: MessageBody,
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
+    E: ErrorRenderer,
 {
-    type Output = Result<WebResponse<Encoder<B>>, WebError<E>>;
+    type Output = Result<WebResponse<Encoder<B>>, S::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();

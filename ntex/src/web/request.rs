@@ -11,7 +11,7 @@ use crate::http::{
 use crate::router::Path;
 
 use super::config::AppConfig;
-use super::error::{UrlGenerationError, WebError};
+use super::error::{ErrorRenderer, UrlGenerationError};
 use super::extract::FromRequest;
 use super::info::ConnectionInfo;
 use super::rmap::ResourceMap;
@@ -277,9 +277,8 @@ impl Drop for HttpRequest {
 ///     );
 /// }
 /// ```
-impl<E: 'static> FromRequest<E> for HttpRequest {
-    type Config = ();
-    type Error = WebError<E>;
+impl<Err: ErrorRenderer> FromRequest<Err> for HttpRequest {
+    type Error = Err::Container;
     type Future = Ready<Result<Self, Self::Error>>;
 
     #[inline]

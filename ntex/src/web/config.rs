@@ -14,14 +14,14 @@ use super::service::{
     AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, WebRequest,
     WebResponse,
 };
-use super::{DefaultError, WebError};
+use super::{DefaultError, ErrorRenderer};
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpNewService<Err> =
-    boxed::BoxServiceFactory<(), WebRequest, WebResponse, WebError<Err>, ()>;
+type HttpNewService<Err: ErrorRenderer> =
+    boxed::BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 
 /// Application configuration
-pub struct AppService<Err> {
+pub struct AppService<Err: ErrorRenderer> {
     config: AppConfig,
     root: bool,
     default: Rc<HttpNewService<Err>>,
@@ -34,7 +34,7 @@ pub struct AppService<Err> {
     service_data: Rc<Vec<Box<dyn DataFactory>>>,
 }
 
-impl<Err: 'static> AppService<Err> {
+impl<Err: ErrorRenderer> AppService<Err> {
     /// Crate server settings instance
     pub(crate) fn new(
         config: AppConfig,
@@ -108,9 +108,9 @@ impl<Err: 'static> AppService<Err> {
         F: IntoServiceFactory<S>,
         S: ServiceFactory<
                 Config = (),
-                Request = WebRequest,
+                Request = WebRequest<Err>,
                 Response = WebResponse,
-                Error = WebError<Err>,
+                Error = Err::Container,
                 InitError = (),
             > + 'static,
     {
@@ -179,7 +179,7 @@ pub struct ServiceConfig<Err = DefaultError> {
     pub(super) external: Vec<ResourceDef>,
 }
 
-impl<Err: 'static> ServiceConfig<Err> {
+impl<Err: ErrorRenderer> ServiceConfig<Err> {
     pub(crate) fn new() -> Self {
         Self {
             services: Vec::new(),

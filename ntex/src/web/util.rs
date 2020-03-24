@@ -10,6 +10,7 @@ use crate::http::{Method, Request, Response};
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 use super::config::AppConfig;
+use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::handler::Factory;
 use super::resource::Resource;
@@ -48,7 +49,7 @@ use super::service::WebService;
 ///         .route(web::head().to(|| async { web::HttpResponse::MethodNotAllowed() }))
 /// );
 /// ```
-pub fn resource<T: IntoPattern, Err: 'static>(path: T) -> Resource<Err> {
+pub fn resource<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<Err> {
     Resource::new(path)
 }
 
@@ -73,12 +74,12 @@ pub fn resource<T: IntoPattern, Err: 'static>(path: T) -> Resource<Err> {
 ///  * /{project_id}/path2
 ///  * /{project_id}/path3
 ///
-pub fn scope<Err: 'static>(path: &str) -> Scope<Err> {
+pub fn scope<Err: ErrorRenderer>(path: &str) -> Scope<Err> {
     Scope::new(path)
 }
 
 /// Create *route* without configuration.
-pub fn route<Err: 'static>() -> Route<Err> {
+pub fn route<Err: ErrorRenderer>() -> Route<Err> {
     Route::new()
 }
 
@@ -96,7 +97,7 @@ pub fn route<Err: 'static>() -> Route<Err> {
 /// In the above example, one `GET` route gets added:
 ///  * /{project_id}
 ///
-pub fn get<Err: 'static>() -> Route<Err> {
+pub fn get<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::GET)
 }
 
@@ -114,7 +115,7 @@ pub fn get<Err: 'static>() -> Route<Err> {
 /// In the above example, one `POST` route gets added:
 ///  * /{project_id}
 ///
-pub fn post<Err: 'static>() -> Route<Err> {
+pub fn post<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::POST)
 }
 
@@ -132,7 +133,7 @@ pub fn post<Err: 'static>() -> Route<Err> {
 /// In the above example, one `PUT` route gets added:
 ///  * /{project_id}
 ///
-pub fn put<Err: 'static>() -> Route<Err> {
+pub fn put<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::PUT)
 }
 
@@ -150,7 +151,7 @@ pub fn put<Err: 'static>() -> Route<Err> {
 /// In the above example, one `PATCH` route gets added:
 ///  * /{project_id}
 ///
-pub fn patch<Err: 'static>() -> Route<Err> {
+pub fn patch<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::PATCH)
 }
 
@@ -168,7 +169,7 @@ pub fn patch<Err: 'static>() -> Route<Err> {
 /// In the above example, one `DELETE` route gets added:
 ///  * /{project_id}
 ///
-pub fn delete<Err: 'static>() -> Route<Err> {
+pub fn delete<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::DELETE)
 }
 
@@ -186,7 +187,7 @@ pub fn delete<Err: 'static>() -> Route<Err> {
 /// In the above example, one `HEAD` route gets added:
 ///  * /{project_id}
 ///
-pub fn head<Err: 'static>() -> Route<Err> {
+pub fn head<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::HEAD)
 }
 
@@ -204,7 +205,7 @@ pub fn head<Err: 'static>() -> Route<Err> {
 /// In the above example, one `GET` route gets added:
 ///  * /{project_id}
 ///
-pub fn method<Err: 'static>(method: Method) -> Route<Err> {
+pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
     Route::new().method(method)
 }
 
@@ -225,9 +226,11 @@ pub fn to<F, I, R, U, Err>(handler: F) -> Route<Err>
 where
     F: Factory<I, R, U, Err>,
     I: FromRequest<Err> + 'static,
+    <I as FromRequest<Err>>::Error: Into<Err::Container>,
     R: Future<Output = U> + 'static,
     U: Responder<Err> + 'static,
-    Err: 'static,
+    <U as Responder<Err>>::Error: Into<Err::Container>,
+    Err: ErrorRenderer,
 {
     Route::new().to(handler)
 }

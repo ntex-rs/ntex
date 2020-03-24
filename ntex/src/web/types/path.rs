@@ -6,7 +6,7 @@ use serde::de;
 
 use crate::http::Payload;
 use crate::router::PathDeserializer;
-use crate::web::error::PathError;
+use crate::web::error::{ErrorRenderer, PathError};
 use crate::web::request::HttpRequest;
 use crate::web::FromRequest;
 
@@ -154,13 +154,12 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 ///     );
 /// }
 /// ```
-impl<T, Err: 'static> FromRequest<Err> for Path<T>
+impl<T, Err: ErrorRenderer> FromRequest<Err> for Path<T>
 where
     T: de::DeserializeOwned,
 {
     type Error = PathError;
     type Future = Ready<Result<Self, Self::Error>>;
-    type Config = ();
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {

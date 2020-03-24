@@ -33,31 +33,30 @@ use crate::server::Server;
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use crate::web::config::AppConfig;
-use crate::web::error::WebError;
-use crate::web::error_default::DefaultError;
+use crate::web::error::ErrorRenderer;
 use crate::web::request::HttpRequestPool;
 use crate::web::rmap::ResourceMap;
 use crate::web::service::{WebRequest, WebResponse};
-use crate::web::{HttpRequest, HttpResponse};
+use crate::web::{DefaultError, HttpRequest, HttpResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service() -> impl Service<
-    Request = WebRequest,
+pub fn ok_service<Err: ErrorRenderer>() -> impl Service<
+    Request = WebRequest<Err>,
     Response = WebResponse<Body>,
-    Error = WebError<DefaultError>,
+    Error = Err::Container,
 > {
-    default_service(StatusCode::OK)
+    default_service::<Err>(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
-pub fn default_service(
+pub fn default_service<Err: ErrorRenderer>(
     status_code: StatusCode,
 ) -> impl Service<
-    Request = WebRequest,
+    Request = WebRequest<Err>,
     Response = WebResponse<Body>,
-    Error = WebError<DefaultError>,
+    Error = Err::Container,
 > {
-    (move |req: WebRequest| {
+    (move |req: WebRequest<Err>| {
         ok(req.into_response(HttpResponse::build(status_code).finish()))
     })
     .into_service()
@@ -160,9 +159,9 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_response<S, B, E>(app: &mut S, req: Request) -> Bytes
+pub async fn read_response<S, B>(app: &mut S, req: Request) -> Bytes
 where
-    S: Service<Request = Request, Response = WebResponse<B>, Error = WebError<E>>,
+    S: Service<Request = Request, Response = WebResponse<B>>,
     B: MessageBody,
 {
     let mut resp = app
@@ -263,13 +262,13 @@ where
 ///     let result: Person = test::read_response_json(&mut app, req).await;
 /// }
 /// ```
-pub async fn read_response_json<S, B, T, E>(app: &mut S, req: Request) -> T
+pub async fn read_response_json<S, B, T>(app: &mut S, req: Request) -> T
 where
-    S: Service<Request = Request, Response = WebResponse<B>, Error = WebError<E>>,
+    S: Service<Request = Request, Response = WebResponse<B>>,
     B: MessageBody,
     T: DeserializeOwned,
 {
-    let body = read_response(app, req).await;
+    let body = read_response::<S, B>(app, req).await;
 
     serde_json::from_slice(&body)
         .unwrap_or_else(|_| panic!("read_response_json failed during deserialization"))
@@ -470,7 +469,7 @@ impl TestRequest {
     }
 
     /// Complete request creation and generate `WebRequest` instance
-    pub fn to_srv_request(mut self) -> WebRequest {
+    pub fn to_srv_request(mut self) -> WebRequest<DefaultError> {
         let (mut head, payload) = self.req.finish().into_parts();
         head.peer_addr = self.peer_addr;
         *self.path.get_mut() = head.uri.clone();
@@ -956,7 +955,7 @@ mod tests {
     use super::*;
     use crate::http::header;
     use crate::http::HttpMessage;
-    use crate::web::{self, App, Data, Error, HttpResponse, Responder};
+    use crate::web::{self, App, Data, Error, HttpResponse};
 
     #[actix_rt::test]
     async fn test_basics() {
@@ -1141,16 +1140,14 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_server_data() {
-        async fn handler(data: web::Data<usize>) -> impl Responder {
+        async fn handler(data: web::Data<usize>) -> crate::http::ResponseBuilder {
             assert_eq!(**data, 10);
             HttpResponse::Ok()
         }
 
-        let mut app = init_service(
-            App::new()
-                .data(10usize)
-                .service(web::resource("/index.html").to(handler)),
-        )
+        let mut app = init_service(App::new().data(10usize).service(
+            web::resource("/index.html").to(crate::web::dev::__assert_handler1(handler)),
+        ))
         .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();

@@ -9,7 +9,7 @@ use pin_project::pin_project;
 
 use crate::{Service, ServiceFactory};
 
-use super::error::WebError;
+use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::request::HttpRequest;
 use super::responder::Responder;
@@ -20,6 +20,8 @@ pub trait Factory<T, R, O, Err>: Clone + 'static
 where
     R: Future<Output = O>,
     O: Responder<Err>,
+    // <O as Responder<Err>>::Error: Into<Err::Container>,
+    Err: ErrorRenderer,
 {
     fn call(&self, param: T) -> R;
 }
@@ -29,6 +31,8 @@ where
     F: Fn() -> R + Clone + 'static,
     R: Future<Output = O>,
     O: Responder<Err>,
+    // <O as Responder<Err>>::Error: Into<Err::Container>,
+    Err: ErrorRenderer,
 {
     fn call(&self, _: ()) -> R {
         (self)()
@@ -40,6 +44,8 @@ where
     F: Factory<T, R, O, Err>,
     R: Future<Output = O>,
     O: Responder<Err>,
+    <O as Responder<Err>>::Error: Into<Err::Container>,
+    Err: ErrorRenderer,
 {
     hnd: F,
     _t: PhantomData<(T, R, O, Err)>,
@@ -50,6 +56,8 @@ where
     F: Factory<T, R, O, Err>,
     R: Future<Output = O>,
     O: Responder<Err>,
+    <O as Responder<Err>>::Error: Into<Err::Container>,
+    Err: ErrorRenderer,
 {
     pub(super) fn new(hnd: F) -> Self {
         Handler {
@@ -64,6 +72,8 @@ where
     F: Factory<T, R, O, Err>,
     R: Future<Output = O>,
     O: Responder<Err>,
+    <O as Responder<Err>>::Error: Into<Err::Container>,
+    Err: ErrorRenderer,
 {
     fn clone(&self) -> Self {
         Handler {
@@ -78,11 +88,12 @@ where
     F: Factory<T, R, O, Err>,
     R: Future<Output = O>,
     O: Responder<Err>,
-    Err: 'static,
+    <O as Responder<Err>>::Error: Into<Err::Container>,
+    Err: ErrorRenderer,
 {
     type Request = (T, HttpRequest);
     type Response = WebResponse;
-    type Error = (WebError<Err>, HttpRequest);
+    type Error = (Err::Container, HttpRequest);
     type Future = HandlerWebResponse<R, O, Err>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -103,6 +114,8 @@ pub(super) struct HandlerWebResponse<T, R, Err>
 where
     T: Future<Output = R>,
     R: Responder<Err>,
+    <R as Responder<Err>>::Error: Into<Err::Container>,
+    Err: ErrorRenderer,
 {
     #[pin]
     fut: T,
@@ -115,9 +128,10 @@ impl<T, R, Err> Future for HandlerWebResponse<T, R, Err>
 where
     T: Future<Output = R>,
     R: Responder<Err>,
-    Err: 'static,
+    <R as Responder<Err>>::Error: Into<Err::Container>,
+    Err: ErrorRenderer,
 {
-    type Output = Result<WebResponse, (WebError<Err>, HttpRequest)>;
+    type Output = Result<WebResponse, (Err::Container, HttpRequest)>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
@@ -128,9 +142,10 @@ where
                 Poll::Ready(Ok(res)) => {
                     Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
                 }
-                Poll::Ready(Err(e)) => {
-                    Poll::Ready(Ok(WebResponse::from_err(e, this.req.take().unwrap())))
-                }
+                Poll::Ready(Err(e)) => Poll::Ready(Ok(WebResponse::from_err::<Err, _>(
+                    e,
+                    this.req.take().unwrap(),
+                ))),
             };
         }
 
@@ -146,12 +161,21 @@ where
 }
 
 /// Extract arguments from request
-pub(super) struct Extract<T: FromRequest<E>, S, E> {
+pub(super) struct Extract<T, S, E> {
     service: S,
     _t: PhantomData<(T, E)>,
 }
 
-impl<T: FromRequest<E>, S, E> Extract<T, S, E> {
+impl<T, S, E> Extract<T, S, E>
+where
+    T: FromRequest<E>,
+    S: Service<
+            Request = (T, HttpRequest),
+            Response = WebResponse,
+            Error = (E::Container, HttpRequest),
+        > + Clone,
+    E: ErrorRenderer,
+{
     pub(super) fn new(service: S) -> Self {
         Extract {
             service,
@@ -162,17 +186,19 @@ impl<T: FromRequest<E>, S, E> Extract<T, S, E> {
 
 impl<T: FromRequest<E>, S, E> ServiceFactory for Extract<T, S, E>
 where
+    T: FromRequest<E>,
+    <T as FromRequest<E>>::Error: Into<E::Container>,
     S: Service<
             Request = (T, HttpRequest),
             Response = WebResponse,
-            Error = (WebError<E>, HttpRequest),
+            Error = (E::Container, HttpRequest),
         > + Clone,
-    E: 'static,
+    E: ErrorRenderer,
 {
     type Config = ();
-    type Request = WebRequest;
+    type Request = WebRequest<E>;
     type Response = WebResponse;
-    type Error = (WebError<E>, HttpRequest);
+    type Error = (E::Container, HttpRequest);
     type InitError = ();
     type Service = ExtractService<T, S, E>;
     type Future = Ready<Result<Self::Service, ()>>;
@@ -185,7 +211,7 @@ where
     }
 }
 
-pub(super) struct ExtractService<T: FromRequest<E>, S, E> {
+pub(super) struct ExtractService<T: FromRequest<E>, S, E: ErrorRenderer> {
     service: S,
     _t: PhantomData<(T, E)>,
 }
@@ -195,20 +221,21 @@ where
     S: Service<
             Request = (T, HttpRequest),
             Response = WebResponse,
-            Error = (WebError<E>, HttpRequest),
+            Error = (E::Container, HttpRequest),
         > + Clone,
-    E: 'static,
+    E: ErrorRenderer,
+    <T as FromRequest<E>>::Error: Into<E::Container>,
 {
-    type Request = WebRequest;
+    type Request = WebRequest<E>;
     type Response = WebResponse;
-    type Error = (WebError<E>, HttpRequest);
+    type Error = (E::Container, HttpRequest);
     type Future = ExtractResponse<T, S, E>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: WebRequest) -> Self::Future {
+    fn call(&mut self, req: WebRequest<E>) -> Self::Future {
         let (req, mut payload) = req.into_parts();
         let fut = T::from_request(&req, &mut payload);
 
@@ -222,7 +249,7 @@ where
 }
 
 #[pin_project]
-pub(super) struct ExtractResponse<T: FromRequest<E>, S: Service, E> {
+pub(super) struct ExtractResponse<T: FromRequest<E>, S: Service, E: ErrorRenderer> {
     req: HttpRequest,
     service: S,
     #[pin]
@@ -231,16 +258,17 @@ pub(super) struct ExtractResponse<T: FromRequest<E>, S: Service, E> {
     fut_s: Option<S::Future>,
 }
 
-impl<T: FromRequest<E>, S, E> Future for ExtractResponse<T, S, E>
+impl<T: FromRequest<Err>, S, Err> Future for ExtractResponse<T, S, Err>
 where
     S: Service<
         Request = (T, HttpRequest),
         Response = WebResponse,
-        Error = (WebError<E>, HttpRequest),
+        Error = (Err::Container, HttpRequest),
     >,
-    E: 'static,
+    Err: ErrorRenderer,
+    <T as FromRequest<Err>>::Error: Into<Err::Container>,
 {
-    type Output = Result<WebResponse, (WebError<E>, HttpRequest)>;
+    type Output = Result<WebResponse, (Err::Container, HttpRequest)>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
@@ -255,7 +283,9 @@ where
                 self.as_mut().project().fut_s.set(fut);
                 self.poll(cx)
             }
-            Err(e) => Poll::Ready(Ok(WebResponse::from_err(e, this.req.clone()))),
+            Err(e) => {
+                Poll::Ready(Ok(WebResponse::from_err::<Err, _>(e, this.req.clone())))
+            }
         }
     }
 }
@@ -266,7 +296,8 @@ macro_rules! factory_tuple ({ $(($n:tt, $T:ident)),+} => {
     where Func: Fn($($T,)+) -> Res + Clone + 'static,
           Res: Future<Output = O>,
           O: Responder<Err>,
-          Err: 'static,
+         // <O as Responder<Err>>::Error: Into<Err::Container>,
+          Err: ErrorRenderer,
     {
         fn call(&self, param: ($($T,)+)) -> Res {
             (self)($(param.$n,)+)

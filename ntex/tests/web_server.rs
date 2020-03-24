@@ -898,7 +898,26 @@ async fn test_custom_error() {
     #[derive(Debug, Display)]
     struct TestError;
 
+    #[derive(Debug, Display)]
+    struct JsonContainer(Box<dyn WebResponseError<JsonRenderer>>);
+
+    impl ntex::http::ResponseError for JsonContainer {
+        fn error_response(&self) -> HttpResponse {
+            self.0.error_response()
+        }
+    }
+
+    impl From<TestError> for JsonContainer {
+        fn from(e: TestError) -> JsonContainer {
+            JsonContainer(Box::new(e))
+        }
+    }
+
     struct JsonRenderer;
+
+    impl ntex::web::error::ErrorRenderer for JsonRenderer {
+        type Container = JsonContainer;
+    }
 
     impl WebResponseError<JsonRenderer> for TestError {
         fn error_response(&self) -> HttpResponse {

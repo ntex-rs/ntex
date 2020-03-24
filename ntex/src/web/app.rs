@@ -23,16 +23,16 @@ use super::service::{
     AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, WebRequest,
     WebResponse,
 };
-use super::{DefaultError, WebError};
+use super::{DefaultError, ErrorRenderer};
 
-type HttpNewService<Err> =
-    BoxServiceFactory<(), WebRequest, WebResponse, WebError<Err>, ()>;
+type HttpNewService<Err: ErrorRenderer> =
+    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type FnDataFactory =
     Box<dyn Fn() -> LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>;
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
-pub struct App<T, B, Err = DefaultError> {
+pub struct App<T, B, Err: ErrorRenderer = DefaultError> {
     endpoint: T,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
@@ -66,7 +66,7 @@ impl App<AppEntry<DefaultError>, Body, DefaultError> {
     }
 }
 
-impl<Err> App<AppEntry<Err>, Body, Err> {
+impl<Err: ErrorRenderer> App<AppEntry<Err>, Body, Err> {
     /// Create application builder with custom error renderer.
     pub fn with(err: Err) -> Self {
         let fref = Rc::new(RefCell::new(None));
@@ -91,12 +91,12 @@ where
     B: MessageBody,
     T: ServiceFactory<
         Config = (),
-        Request = WebRequest,
+        Request = WebRequest<Err>,
         Response = WebResponse<B>,
-        Error = WebError<Err>,
+        Error = Err::Container,
         InitError = (),
     >,
-    Err: 'static,
+    Err: ErrorRenderer,
 {
     /// Set application data. Application data could be accessed
     /// by using `Data<T>` extractor where `T` is data type.
@@ -297,9 +297,9 @@ where
         F: IntoServiceFactory<U>,
         U: ServiceFactory<
                 Config = (),
-                Request = WebRequest,
+                Request = WebRequest<Err>,
                 Response = WebResponse,
-                Error = WebError<Err>,
+                Error = Err::Container,
             > + 'static,
         U::InitError: fmt::Debug,
     {
@@ -379,9 +379,9 @@ where
     ) -> App<
         impl ServiceFactory<
             Config = (),
-            Request = WebRequest,
+            Request = WebRequest<Err>,
             Response = WebResponse<B1>,
-            Error = WebError<Err>,
+            Error = Err::Container,
             InitError = (),
         >,
         B1,
@@ -390,9 +390,9 @@ where
     where
         M: Transform<
             T::Service,
-            Request = WebRequest,
+            Request = WebRequest<Err>,
             Response = WebResponse<B1>,
-            Error = WebError<Err>,
+            Error = Err::Container,
             InitError = (),
         >,
         B1: MessageBody,
@@ -449,9 +449,9 @@ where
     ) -> App<
         impl ServiceFactory<
             Config = (),
-            Request = WebRequest,
+            Request = WebRequest<Err>,
             Response = WebResponse<B1>,
-            Error = WebError<Err>,
+            Error = Err::Container,
             InitError = (),
         >,
         B1,
@@ -459,8 +459,8 @@ where
     >
     where
         B1: MessageBody,
-        F: FnMut(WebRequest, &mut T::Service) -> R + Clone,
-        R: Future<Output = Result<WebResponse<B1>, WebError<Err>>>,
+        F: FnMut(WebRequest<Err>, &mut T::Service) -> R + Clone,
+        R: Future<Output = Result<WebResponse<B1>, Err::Container>>,
     {
         App {
             endpoint: apply_fn_factory(self.endpoint, mw),
@@ -491,12 +491,12 @@ where
     B: MessageBody,
     T: ServiceFactory<
         Config = (),
-        Request = WebRequest,
+        Request = WebRequest<Err>,
         Response = WebResponse<B>,
-        Error = WebError<Err>,
+        Error = Err::Container,
         InitError = (),
     >,
-    Err: 'static,
+    Err: ErrorRenderer,
 {
     fn into_factory(self) -> AppInit<T, B, Err> {
         AppInit {
@@ -524,7 +524,7 @@ mod tests {
     use crate::web::middleware::DefaultHeaders;
     use crate::web::service::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
-    use crate::web::{self, HttpRequest, HttpResponse};
+    use crate::web::{self, DefaultError, HttpRequest, HttpResponse};
     use crate::Service;
 
     #[actix_rt::test]
@@ -547,12 +547,12 @@ mod tests {
                 .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
                 .service(
                     web::resource("/test2")
-                        .default_service(|r: WebRequest| {
+                        .default_service(|r: WebRequest<DefaultError>| {
                             ok(r.into_response(HttpResponse::Created()))
                         })
                         .route(web::get().to(|| async { HttpResponse::Ok() })),
                 )
-                .default_service(|r: WebRequest| {
+                .default_service(|r: WebRequest<DefaultError>| {
                     ok(r.into_response(HttpResponse::MethodNotAllowed()))
                 }),
         )

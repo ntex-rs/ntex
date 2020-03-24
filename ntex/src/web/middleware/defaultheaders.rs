@@ -9,9 +9,6 @@ use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::service::{Service, Transform};
-
-use crate::web::error::WebError;
-use crate::web::error_default::DefaultError;
 use crate::web::service::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
@@ -33,7 +30,7 @@ use crate::web::service::{WebRequest, WebResponse};
 /// }
 /// ```
 #[derive(Clone)]
-pub struct DefaultHeaders<E = DefaultError> {
+pub struct DefaultHeaders<E> {
     inner: Rc<Inner>,
     _t: PhantomData<E>,
 }
@@ -97,12 +94,12 @@ impl<E> DefaultHeaders<E> {
 
 impl<S, B, E> Transform<S> for DefaultHeaders<E>
 where
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
     S::Future: 'static,
 {
-    type Request = WebRequest;
+    type Request = WebRequest<E>;
     type Response = WebResponse<B>;
-    type Error = WebError<E>;
+    type Error = S::Error;
     type InitError = ();
     type Transform = DefaultHeadersMiddleware<S, E>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
@@ -124,19 +121,19 @@ pub struct DefaultHeadersMiddleware<S, E> {
 
 impl<S, B, E> Service for DefaultHeadersMiddleware<S, E>
 where
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
     S::Future: 'static,
 {
-    type Request = WebRequest;
+    type Request = WebRequest<E>;
     type Response = WebResponse<B>;
-    type Error = WebError<E>;
+    type Error = S::Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: WebRequest) -> Self::Future {
+    fn call(&mut self, req: WebRequest<E>) -> Self::Future {
         let inner = self.inner.clone();
         let fut = self.service.call(req);
 
@@ -171,11 +168,11 @@ mod tests {
     use crate::service::IntoService;
     use crate::web::service::WebRequest;
     use crate::web::test::{ok_service, TestRequest};
-    use crate::web::HttpResponse;
+    use crate::web::{DefaultError, Error, HttpResponse};
 
     #[actix_rt::test]
     async fn test_default_headers() {
-        let mut mw = DefaultHeaders::new()
+        let mut mw = DefaultHeaders::<DefaultError>::new()
             .header(CONTENT_TYPE, "0001")
             .new_transform(ok_service())
             .await
@@ -186,10 +183,12 @@ mod tests {
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0001");
 
         let req = TestRequest::default().to_srv_request();
-        let srv = |req: WebRequest| {
-            ok(req
-                .into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()))
-        };
+        let srv =
+            |req: WebRequest<DefaultError>| {
+                ok::<_, Error>(req.into_response(
+                    HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish(),
+                ))
+            };
         let mut mw = DefaultHeaders::<DefaultError>::new()
             .header(CONTENT_TYPE, "0001")
             .new_transform(srv.into_service())
@@ -201,7 +200,9 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_content_type() {
-        let srv = |req: WebRequest| ok(req.into_response(HttpResponse::Ok().finish()));
+        let srv = |req: WebRequest<DefaultError>| {
+            ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))
+        };
         let mut mw = DefaultHeaders::<DefaultError>::new()
             .content_type()
             .new_transform(srv.into_service())

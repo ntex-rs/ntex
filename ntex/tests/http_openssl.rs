@@ -6,11 +6,12 @@ use futures::future::{err, ok, ready};
 use futures::stream::{once, Stream, StreamExt};
 use open_ssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 
-use ntex::http::error::{InternalError, PayloadError};
+use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
 use ntex::http::{body, HttpService, Method, Request, Response, StatusCode, Version};
 use ntex::service::{fn_service, ServiceFactory};
+use ntex::web::error::InternalError;
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>
 where
@@ -385,7 +386,10 @@ async fn test_h2_service_error() {
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|_| {
-                err::<Response, _>(InternalError::new("error", StatusCode::BAD_REQUEST))
+                err::<Response, _>(InternalError::default(
+                    "error",
+                    StatusCode::BAD_REQUEST,
+                ))
             })
             .openssl(ssl_acceptor())
             .map_err(|_| ())

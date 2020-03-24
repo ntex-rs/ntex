@@ -62,7 +62,11 @@
 //! * `compress` - enables content encoding compression support
 //! * `openssl` - enables ssl support via `openssl` crate, supports `http/2`
 //! * `rustls` - enables ssl support via `rustls` crate, supports `http/2`
-#![allow(clippy::type_complexity, clippy::new_without_default)]
+#![allow(
+    type_alias_bounds,
+    clippy::type_complexity,
+    clippy::new_without_default
+)]
 
 mod app;
 mod app_service;
@@ -95,8 +99,7 @@ pub use crate::http::ResponseBuilder as HttpResponseBuilder;
 pub use self::app::App;
 pub use self::config::ServiceConfig;
 pub use self::data::Data;
-pub use self::error::{WebError, WebResponseError};
-pub use self::error_default::{DefaultError, Error};
+pub use self::error::{DefaultError, Error, ErrorRenderer, WebResponseError};
 pub use self::extract::FromRequest;
 pub use self::request::HttpRequest;
 pub use self::resource::Resource;
@@ -179,7 +182,9 @@ pub mod dev {
     #[inline(always)]
     pub fn __assert_extractor<Err, T>()
     where
-        T: super::FromRequest<T>,
+        T: super::FromRequest<Err>,
+        Err: super::ErrorRenderer,
+        <T as super::FromRequest<Err>>::Error: Into<Err::Container>,
     {
     }
 
@@ -189,10 +194,11 @@ pub mod dev {
         f: Fun,
     ) -> impl Factory<(), Fut, Res, Err>
     where
-        Err: 'static,
+        Err: super::ErrorRenderer,
         Fun: Fn() -> Fut + Clone + 'static,
         Fut: std::future::Future<Output = Res>,
         Res: super::Responder<Err>,
+        // <Res as super::Responder<Err>>::Error: Into<Err::Container>,
     {
         f
     }
@@ -204,11 +210,13 @@ pub mod dev {
             f: Fun,
         ) -> impl Factory<($($T,)+), Fut, Res, Err>
         where
-            Err: 'static,
+            Err: $crate::web::ErrorRenderer,
             Fun: Fn($($T,)+) -> Fut + Clone + 'static,
             Fut: std::future::Future<Output = Res>,
             Res: $crate::web::Responder<Err>,
-            $($T: $crate::web::FromRequest<Err>),+
+            // <Res as $crate::web::Responder<Err>>::Error: Into<Err::Container>,
+            $($T: $crate::web::FromRequest<Err>),+,
+            // $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
         {
             f
         }

@@ -5,7 +5,7 @@ use futures::future::{err, ok, Ready};
 
 use crate::http::{Extensions, Payload};
 
-use super::error::{ErrorInternalServerError, WebError};
+use super::error::{DataExtractorError, ErrorRenderer};
 use super::extract::FromRequest;
 use super::request::HttpRequest;
 
@@ -100,9 +100,8 @@ impl<T> Clone for Data<T> {
     }
 }
 
-impl<T: 'static, E: 'static> FromRequest<E> for Data<T> {
-    type Config = ();
-    type Error = WebError<E>;
+impl<T: 'static, E: ErrorRenderer> FromRequest<E> for Data<T> {
+    type Error = DataExtractorError;
     type Future = Ready<Result<Self, Self::Error>>;
 
     #[inline]
@@ -115,9 +114,7 @@ impl<T: 'static, E: 'static> FromRequest<E> for Data<T> {
                  Request path: {:?}",
                 req.path()
             );
-            err(ErrorInternalServerError(
-                "App data is not configured, to configure use App::data()",
-            ))
+            err(DataExtractorError::NotConfigured)
         }
     }
 }

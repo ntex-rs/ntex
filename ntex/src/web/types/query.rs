@@ -7,7 +7,7 @@ use serde::de;
 use serde_urlencoded;
 
 use crate::http::Payload;
-use crate::web::error::QueryPayloadError;
+use crate::web::error::{ErrorRenderer, QueryPayloadError};
 use crate::web::extract::FromRequest;
 use crate::web::request::HttpRequest;
 
@@ -131,11 +131,10 @@ impl<T: fmt::Display> fmt::Display for Query<T> {
 impl<T, Err> FromRequest<Err> for Query<T>
 where
     T: de::DeserializeOwned,
-    Err: 'static,
+    Err: ErrorRenderer,
 {
     type Error = QueryPayloadError;
     type Future = Ready<Result<Self, Self::Error>>;
-    type Config = ();
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {

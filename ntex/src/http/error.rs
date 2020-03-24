@@ -1,12 +1,10 @@
 //! Http related errors
-use std::cell::RefCell;
 use std::io::Write;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{fmt, io};
 
 use actix_codec::{Decoder, Encoder};
-use bytes::BytesMut;
 use derive_more::{Display, From};
 use http::uri::InvalidUri;
 use http::{header, StatusCode};
@@ -20,7 +18,6 @@ pub use http::Error as HttpError;
 use crate::framed::ServiceError as FramedDispatcherError;
 
 use super::body::Body;
-use super::helpers::Writer;
 use super::response::Response;
 
 /// Error that can be converted to `Response`
@@ -205,19 +202,6 @@ impl From<BlockingError<io::Error>> for PayloadError {
     }
 }
 
-// /// `PayloadError` returns two possible results:
-// ///
-// /// - `Overflow` returns `PayloadTooLarge`
-// /// - Other errors returns `BadRequest`
-// impl ResponseError for PayloadError {
-//     fn status_code(&self) -> StatusCode {
-//         match *self {
-//             PayloadError::Overflow => StatusCode::PAYLOAD_TOO_LARGE,
-//             _ => StatusCode::BAD_REQUEST,
-//         }
-//     }
-// }
-
 #[derive(Debug, Display, From)]
 /// A set of errors that can occur during dispatching http requests
 pub enum DispatchError {
@@ -284,92 +268,6 @@ pub enum ContentTypeError {
     Expected,
 }
 
-/// Helper type that can wrap any error and generate custom response.
-///
-/// In following example any `io::Error` will be converted into "BAD REQUEST"
-/// response as opposite to *INTERNAL SERVER ERROR* which is defined by
-/// default.
-///
-/// ```rust
-/// use ntex::http::Request;
-///
-/// fn index(req: Request) -> Result<&'static str, std::io::Error> {
-///     Err(std::io::Error::new(std::io::ErrorKind::Other, "error"))
-/// }
-/// ```
-pub struct InternalError<T> {
-    cause: T,
-    status: InternalErrorType,
-}
-
-enum InternalErrorType {
-    Status(StatusCode),
-    Response(RefCell<Option<Response>>),
-}
-
-impl<T> InternalError<T> {
-    /// Create `InternalError` instance
-    pub fn new(cause: T, status: StatusCode) -> Self {
-        InternalError {
-            cause,
-            status: InternalErrorType::Status(status),
-        }
-    }
-
-    /// Create `InternalError` with predefined `Response`.
-    pub fn from_response(cause: T, response: Response) -> Self {
-        InternalError {
-            cause,
-            status: InternalErrorType::Response(RefCell::new(Some(response))),
-        }
-    }
-}
-
-impl<T> fmt::Debug for InternalError<T>
-where
-    T: fmt::Debug + 'static,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.cause, f)
-    }
-}
-
-impl<T> fmt::Display for InternalError<T>
-where
-    T: fmt::Display + 'static,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.cause, f)
-    }
-}
-
-impl<T> ResponseError for InternalError<T>
-where
-    T: fmt::Debug + fmt::Display + 'static,
-{
-    fn error_response(&self) -> Response {
-        match self.status {
-            InternalErrorType::Status(st) => {
-                let mut res = Response::new(st);
-                let mut buf = BytesMut::new();
-                let _ = write!(Writer(&mut buf), "{}", self);
-                res.headers_mut().insert(
-                    header::CONTENT_TYPE,
-                    header::HeaderValue::from_static("text/plain; charset=utf-8"),
-                );
-                res.set_body(Body::from(buf))
-            }
-            InternalErrorType::Response(ref resp) => {
-                if let Some(resp) = resp.borrow_mut().take() {
-                    resp
-                } else {
-                    Response::new(StatusCode::INTERNAL_SERVER_ERROR)
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,9 +277,6 @@ mod tests {
 
     #[test]
     fn test_into_response() {
-        // let resp: Response = ParseError::Incomplete.error_response();
-        // assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
         let err: HttpError = StatusCode::from_u16(10000).err().unwrap().into();
         let resp: Response = err.error_response();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -441,13 +336,5 @@ mod tests {
         from!(httparse::Error::Token => ParseError::Header);
         from!(httparse::Error::TooManyHeaders => ParseError::TooLarge);
         from!(httparse::Error::Version => ParseError::Version);
-    }
-
-    #[test]
-    fn test_internal_error() {
-        let err =
-            InternalError::from_response(ParseError::Method, Response::Ok().into());
-        let resp: Response = err.error_response();
-        assert_eq!(resp.status(), StatusCode::OK);
     }
 }

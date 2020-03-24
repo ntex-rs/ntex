@@ -9,8 +9,8 @@ use serde_urlencoded::ser::Error as FormError;
 use crate::http::StatusCode;
 use crate::util::timeout::TimeoutError;
 
-use super::error::{self, IntoWebError};
-use super::{HttpResponse, WebError, WebResponseError};
+use super::error::{self, ErrorRenderer, WebResponseError};
+use super::HttpResponse;
 
 /// Default error type
 #[derive(Clone, Copy, Default)]
@@ -27,24 +27,28 @@ impl Error {
             cause: Box::new(err),
         }
     }
+
+    /// Returns the reference to the underlying `WebResponseError`.
+    pub fn as_response_error(&self) -> &dyn WebResponseError<DefaultError> {
+        self.cause.as_ref()
+    }
+
+    /// Similar to `as_response_error` but downcasts.
+    pub fn as_error<T: WebResponseError<DefaultError> + 'static>(&self) -> Option<&T> {
+        WebResponseError::downcast_ref(self.cause.as_ref())
+    }
 }
 
-/// `Error` for any error that implements `WebResponseError<DefaultError>`
-impl<T: WebResponseError<DefaultError> + 'static> From<T> for Error {
+impl ErrorRenderer for DefaultError {
+    type Container = Error;
+}
+
+/// `Error` for any error which implements `WebResponseError<DefaultError>`
+impl<T: WebResponseError<DefaultError>> From<T> for Error {
     fn from(err: T) -> Self {
         Error {
             cause: Box::new(err),
         }
-    }
-}
-
-impl IntoWebError<DefaultError> for Error {
-    fn into_error(self) -> WebError<DefaultError> {
-        self.into()
-    }
-
-    fn error_response(&self) -> HttpResponse {
-        self.cause.error_response()
     }
 }
 
@@ -66,13 +70,6 @@ impl fmt::Debug for Error {
     }
 }
 
-/// Convert `Error` to a `WebError<DefaultError>` instance
-impl From<Error> for WebError<DefaultError> {
-    fn from(err: Error) -> Self {
-        WebError { cause: err.cause }
-    }
-}
-
 /// Return `GATEWAY_TIMEOUT` for `TimeoutError`
 impl<E: WebResponseError<DefaultError>> WebResponseError<DefaultError>
     for TimeoutError<E>
@@ -84,6 +81,12 @@ impl<E: WebResponseError<DefaultError>> WebResponseError<DefaultError>
         }
     }
 }
+
+/// `InternalServerError` for `Infallible`
+impl WebResponseError<DefaultError> for std::convert::Infallible {}
+
+/// `InternalServerError` for `DataExtractorError`
+impl WebResponseError<DefaultError> for error::DataExtractorError {}
 
 /// `InternalServerError` for `JsonError`
 impl WebResponseError<DefaultError> for JsonError {}
@@ -144,7 +147,7 @@ impl WebResponseError<DefaultError> for io::Error {
 impl WebResponseError<DefaultError> for error::UrlGenerationError {}
 
 /// Response renderer for `UrlencodedError`
-impl<DefaultError> WebResponseError<DefaultError> for error::UrlencodedError {
+impl WebResponseError<DefaultError> for error::UrlencodedError {
     fn status_code(&self) -> StatusCode {
         match *self {
             error::UrlencodedError::Overflow { .. } => StatusCode::PAYLOAD_TOO_LARGE,
@@ -155,7 +158,7 @@ impl<DefaultError> WebResponseError<DefaultError> for error::UrlencodedError {
 }
 
 /// Return `BadRequest` for `JsonPayloadError`
-impl<DefaultError> WebResponseError<DefaultError> for error::JsonPayloadError {
+impl WebResponseError<DefaultError> for error::JsonPayloadError {
     fn status_code(&self) -> StatusCode {
         match *self {
             error::JsonPayloadError::Overflow => StatusCode::PAYLOAD_TOO_LARGE,
@@ -165,20 +168,20 @@ impl<DefaultError> WebResponseError<DefaultError> for error::JsonPayloadError {
 }
 
 /// Error renderer for `PathError`
-impl<DefaultError> WebResponseError<DefaultError> for error::PathError {
+impl WebResponseError<DefaultError> for error::PathError {
     fn status_code(&self) -> StatusCode {
         StatusCode::NOT_FOUND
     }
 }
 
 /// Error renderer `QueryPayloadError`
-impl<DefaultError> WebResponseError<DefaultError> for error::QueryPayloadError {
+impl WebResponseError<DefaultError> for error::QueryPayloadError {
     fn status_code(&self) -> StatusCode {
         StatusCode::BAD_REQUEST
     }
 }
 
-impl<DefaultError> WebResponseError<DefaultError> for error::PayloadError {
+impl WebResponseError<DefaultError> for error::PayloadError {
     fn status_code(&self) -> StatusCode {
         StatusCode::BAD_REQUEST
     }

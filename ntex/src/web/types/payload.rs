@@ -11,7 +11,7 @@ use futures::{Stream, StreamExt};
 use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
-use crate::web::error::{PayloadError, WebError};
+use crate::web::error::{ErrorRenderer, PayloadError};
 use crate::web::extract::FromRequest;
 use crate::web::request::HttpRequest;
 
@@ -92,9 +92,8 @@ impl Stream for Payload {
 ///     );
 /// }
 /// ```
-impl<Err: 'static> FromRequest<Err> for Payload {
-    type Config = PayloadConfig;
-    type Error = WebError<Err>;
+impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
+    type Error = Err::Container;
     type Future = Ready<Result<Payload, Self::Error>>;
 
     #[inline]
@@ -131,8 +130,7 @@ impl<Err: 'static> FromRequest<Err> for Payload {
 ///     );
 /// }
 /// ```
-impl<Err: 'static> FromRequest<Err> for Bytes {
-    type Config = PayloadConfig;
+impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
     type Error = PayloadError;
     type Future = Either<
         LocalBoxFuture<'static, Result<Bytes, Self::Error>>,
@@ -189,8 +187,7 @@ impl<Err: 'static> FromRequest<Err> for Bytes {
 ///     );
 /// }
 /// ```
-impl<Err: 'static> FromRequest<Err> for String {
-    type Config = PayloadConfig;
+impl<Err: ErrorRenderer> FromRequest<Err> for String {
     type Error = PayloadError;
     type Future = Either<
         LocalBoxFuture<'static, Result<String, Self::Error>>,

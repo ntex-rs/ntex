@@ -1,6 +1,6 @@
 use ntex::web::{self, get, middleware, App, HttpRequest, HttpResponse, HttpServer};
 
-#[get("/resource1/{name}/index.html")]
+// #[get("/resource1/{name}/index.html")]
 async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {
     println!("REQ: {:?}", req);
     format!("Hello: {}!\r\n", name)
@@ -11,7 +11,7 @@ async fn index_async(req: HttpRequest) -> &'static str {
     "Hello world!\r\n"
 }
 
-#[get("/")]
+// #[get("/")]
 async fn no_params() -> &'static str {
     "Hello world!\r\n"
 }
@@ -26,8 +26,10 @@ async fn main() -> std::io::Result<()> {
             .wrap(middleware::DefaultHeaders::new().header("X-Version", "0.2"))
             .wrap(middleware::Compress::default())
             .wrap(middleware::Logger::default())
-            .service(index)
-            .service(no_params)
+            .service(web::resource("/resource1/{name}/index.html").to(index))
+            .service(web::resource("/").route(web::get().to(index)))
+            // .service(index)
+            // .service(no_params)
             .service(
                 web::resource("/resource2/index.html")
                     .wrap(

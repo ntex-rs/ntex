@@ -18,7 +18,6 @@ use time::OffsetDateTime;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
 use crate::service::{Service, Transform};
-use crate::web::error::WebError;
 use crate::web::service::{WebRequest, WebResponse};
 use crate::web::HttpResponse;
 
@@ -78,25 +77,31 @@ use crate::web::HttpResponse;
 ///
 /// `%{FOO}e`  os.environ['FOO']
 ///
-pub struct Logger(Rc<Inner>);
+pub struct Logger<Err> {
+    inner: Rc<Inner>,
+    _t: PhantomData<Err>,
+}
 
 struct Inner {
     format: Format,
     exclude: HashSet<String>,
 }
 
-impl Logger {
+impl<Err> Logger<Err> {
     /// Create `Logger` middleware with the specified `format`.
-    pub fn new(format: &str) -> Logger {
-        Logger(Rc::new(Inner {
-            format: Format::new(format),
-            exclude: HashSet::new(),
-        }))
+    pub fn new(format: &str) -> Logger<Err> {
+        Logger {
+            inner: Rc::new(Inner {
+                format: Format::new(format),
+                exclude: HashSet::new(),
+            }),
+            _t: PhantomData,
+        }
     }
 
     /// Ignore and do not log access info for specified path.
     pub fn exclude<T: Into<String>>(mut self, path: T) -> Self {
-        Rc::get_mut(&mut self.0)
+        Rc::get_mut(&mut self.inner)
             .unwrap()
             .exclude
             .insert(path.into());
@@ -104,61 +109,66 @@ impl Logger {
     }
 }
 
-impl Default for Logger {
+impl<Err> Default for Logger<Err> {
     /// Create `Logger` middleware with format:
     ///
     /// ```ignore
     /// %a "%r" %s %b "%{Referer}i" "%{User-Agent}i" %T
     /// ```
     fn default() -> Self {
-        Logger(Rc::new(Inner {
-            format: Format::default(),
-            exclude: HashSet::new(),
-        }))
+        Logger {
+            inner: Rc::new(Inner {
+                format: Format::default(),
+                exclude: HashSet::new(),
+            }),
+            _t: PhantomData,
+        }
     }
 }
 
-impl<S, B, Err> Transform<S> for Logger
+impl<S, B, Err> Transform<S> for Logger<Err>
 where
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<Err>>,
+    S: Service<Request = WebRequest<Err>, Response = WebResponse<B>>,
     B: MessageBody,
 {
-    type Request = WebRequest;
+    type Request = WebRequest<Err>;
     type Response = WebResponse<StreamLog<B>>;
-    type Error = WebError<Err>;
+    type Error = S::Error;
     type InitError = ();
-    type Transform = LoggerMiddleware<S>;
+    type Transform = LoggerMiddleware<S, Err>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
         ok(LoggerMiddleware {
             service,
-            inner: self.0.clone(),
+            inner: self.inner.clone(),
+            _t: PhantomData,
         })
     }
 }
 
 /// Logger middleware
-pub struct LoggerMiddleware<S> {
+pub struct LoggerMiddleware<S, Err> {
     inner: Rc<Inner>,
     service: S,
+    _t: PhantomData<Err>,
 }
 
-impl<S, B, E> Service for LoggerMiddleware<S>
+impl<S, B, E> Service for LoggerMiddleware<S, E>
 where
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
     B: MessageBody,
 {
-    type Request = WebRequest;
+    type Request = WebRequest<E>;
     type Response = WebResponse<StreamLog<B>>;
-    type Error = WebError<E>;
-    type Future = LoggerResponse<S, B>;
+    type Error = S::Error;
+    type Future = LoggerResponse<S, B, E>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: WebRequest) -> Self::Future {
+    fn call(&mut self, req: WebRequest<E>) -> Self::Future {
         if self.inner.exclude.contains(req.path()) {
             LoggerResponse {
                 fut: self.service.call(req),
@@ -185,7 +195,7 @@ where
 
 #[doc(hidden)]
 #[pin_project::pin_project]
-pub struct LoggerResponse<S, B>
+pub struct LoggerResponse<S, B, E>
 where
     B: MessageBody,
     S: Service,
@@ -194,15 +204,15 @@ where
     fut: S::Future,
     time: OffsetDateTime,
     format: Option<Format>,
-    _t: PhantomData<(B,)>,
+    _t: PhantomData<(B, E)>,
 }
 
-impl<S, B, E> Future for LoggerResponse<S, B>
+impl<S, B, E> Future for LoggerResponse<S, B, E>
 where
     B: MessageBody,
-    S: Service<Request = WebRequest, Response = WebResponse<B>, Error = WebError<E>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
 {
-    type Output = Result<WebResponse<StreamLog<B>>, WebError<E>>;
+    type Output = Result<WebResponse<StreamLog<B>>, S::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -411,7 +421,7 @@ impl FormatText {
         }
     }
 
-    fn render_request(&mut self, now: OffsetDateTime, req: &WebRequest) {
+    fn render_request<E>(&mut self, now: OffsetDateTime, req: &WebRequest<E>) {
         match *self {
             FormatText::RequestLine => {
                 *self = if req.query_string().is_empty() {
@@ -478,12 +488,12 @@ mod tests {
     use crate::http::{header, StatusCode};
     use crate::service::{IntoService, Service, Transform};
     use crate::web::test::TestRequest;
-    use crate::web::DefaultError;
+    use crate::web::{DefaultError, Error};
 
     #[actix_rt::test]
     async fn test_logger() {
-        let srv = |req: WebRequest| {
-            ok::<_, WebError<DefaultError>>(
+        let srv = |req: WebRequest<DefaultError>| {
+            ok::<_, Error>(
                 req.into_response(
                     HttpResponse::build(StatusCode::OK)
                         .header("X-Test", "ttt")
