@@ -14,7 +14,7 @@ use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, ServiceFactory, Transform,
 };
 
-use super::app_service::{AppEntry, AppInit, AppRoutingFactory};
+use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
 use super::config::ServiceConfig;
 use super::data::{Data, DataFactory};
 use super::resource::Resource;
@@ -486,7 +486,7 @@ where
     }
 }
 
-impl<T, B, Err> IntoServiceFactory<AppInit<T, B, Err>> for App<T, B, Err>
+impl<T, B, Err> IntoServiceFactory<AppFactory<T, B, Err>> for App<T, B, Err>
 where
     B: MessageBody,
     T: ServiceFactory<
@@ -498,8 +498,8 @@ where
     >,
     Err: ErrorRenderer,
 {
-    fn into_factory(self) -> AppInit<T, B, Err> {
-        AppInit {
+    fn into_factory(self) -> AppFactory<T, B, Err> {
+        AppFactory {
             data: Rc::new(self.data),
             data_factories: Rc::new(self.data_factories),
             endpoint: self.endpoint,

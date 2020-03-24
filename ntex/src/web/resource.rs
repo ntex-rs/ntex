@@ -1,9 +1,9 @@
 use std::cell::RefCell;
-use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
+use std::{fmt, mem};
 
 use futures::future::{ok, Either, LocalBoxFuture, Ready};
 
@@ -21,7 +21,7 @@ use super::extract::FromRequest;
 use super::guard::Guard;
 use super::handler::Factory;
 use super::responder::Responder;
-use super::route::{CreateRouteService, Route, RouteService};
+use super::route::{Route, RouteService};
 use super::service::{WebRequest, WebResponse};
 
 type HttpService<Err: ErrorRenderer> =
@@ -449,11 +449,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ResourceFactory<Err> {
         };
 
         CreateResourceService {
-            fut: self
-                .routes
-                .iter()
-                .map(|route| CreateRouteServiceItem::Future(route.new_service(())))
-                .collect(),
+            routes: self.routes.iter().map(|route| route.service()).collect(),
             data: self.data.clone(),
             default: None,
             default_fut,
@@ -461,13 +457,8 @@ impl<Err: ErrorRenderer> ServiceFactory for ResourceFactory<Err> {
     }
 }
 
-enum CreateRouteServiceItem<Err: ErrorRenderer> {
-    Future(CreateRouteService<Err>),
-    Service(RouteService<Err>),
-}
-
 pub struct CreateResourceService<Err: ErrorRenderer> {
-    fut: Vec<CreateRouteServiceItem<Err>>,
+    routes: Vec<RouteService<Err>>,
     data: Option<Rc<Extensions>>,
     default: Option<HttpService<Err>>,
     default_fut: Option<LocalBoxFuture<'static, Result<HttpService<Err>, ()>>>,
@@ -486,32 +477,9 @@ impl<Err: ErrorRenderer> Future for CreateResourceService<Err> {
             }
         }
 
-        // poll http services
-        for item in &mut self.fut {
-            match item {
-                CreateRouteServiceItem::Future(ref mut fut) => match Pin::new(fut)
-                    .poll(cx)?
-                {
-                    Poll::Ready(route) => *item = CreateRouteServiceItem::Service(route),
-                    Poll::Pending => {
-                        done = false;
-                    }
-                },
-                CreateRouteServiceItem::Service(_) => continue,
-            };
-        }
-
         if done {
-            let routes = self
-                .fut
-                .drain(..)
-                .map(|item| match item {
-                    CreateRouteServiceItem::Service(service) => service,
-                    CreateRouteServiceItem::Future(_) => unreachable!(),
-                })
-                .collect();
             Poll::Ready(Ok(ResourceService {
-                routes,
+                routes: mem::take(&mut self.routes),
                 data: self.data.clone(),
                 default: self.default.take(),
             }))

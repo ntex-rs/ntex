@@ -32,7 +32,7 @@ type FnDataFactory =
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes data factories.
-pub struct AppInit<T, B, Err: ErrorRenderer>
+pub struct AppFactory<T, B, Err: ErrorRenderer>
 where
     T: ServiceFactory<
         Config = (),
@@ -54,7 +54,7 @@ where
     pub(super) case_insensitive: bool,
 }
 
-impl<T, B, Err> ServiceFactory for AppInit<T, B, Err>
+impl<T, B, Err> ServiceFactory for AppFactory<T, B, Err>
 where
     T: ServiceFactory<
         Config = (),
@@ -70,8 +70,8 @@ where
     type Response = WebResponse<B>;
     type Error = T::Error;
     type InitError = T::InitError;
-    type Service = AppInitService<T::Service, B, Err>;
-    type Future = AppInitResult<T, B, Err>;
+    type Service = AppFactoryService<T::Service, B, Err>;
+    type Future = AppFactoryResult<T, B, Err>;
 
     fn new_service(&self, config: AppConfig) -> Self::Future {
         // update resource default service
@@ -117,7 +117,7 @@ where
         let rmap = Rc::new(rmap);
         rmap.finish(rmap.clone());
 
-        AppInitResult {
+        AppFactoryResult {
             endpoint: None,
             endpoint_fut: self.endpoint.new_service(()),
             data: self.data.clone(),
@@ -138,7 +138,7 @@ where
 }
 
 #[pin_project::pin_project]
-pub struct AppInitResult<T, B, Err>
+pub struct AppFactoryResult<T, B, Err>
 where
     T: ServiceFactory,
 {
@@ -155,7 +155,7 @@ where
     _t: PhantomData<(B, Err)>,
 }
 
-impl<T, B, Err> Future for AppInitResult<T, B, Err>
+impl<T, B, Err> Future for AppFactoryResult<T, B, Err>
 where
     T: ServiceFactory<
         Config = (),
@@ -166,7 +166,7 @@ where
     >,
     Err: ErrorRenderer,
 {
-    type Output = Result<AppInitService<T::Service, B, Err>, ()>;
+    type Output = Result<AppFactoryService<T::Service, B, Err>, ()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -200,7 +200,7 @@ where
                 f.create(&mut data);
             }
 
-            Poll::Ready(Ok(AppInitService {
+            Poll::Ready(Ok(AppFactoryService {
                 service: this.endpoint.take().unwrap(),
                 rmap: this.rmap.clone(),
                 config: this.config.clone(),
@@ -215,7 +215,7 @@ where
 }
 
 /// Service to convert `Request` to a `WebRequest<Err>`
-pub struct AppInitService<T, B, Err>
+pub struct AppFactoryService<T, B, Err>
 where
     T: Service<
         Request = WebRequest<Err>,
@@ -232,7 +232,7 @@ where
     _t: PhantomData<Err>,
 }
 
-impl<T, B, Err> Service for AppInitService<T, B, Err>
+impl<T, B, Err> Service for AppFactoryService<T, B, Err>
 where
     T: Service<
         Request = WebRequest<Err>,
@@ -275,7 +275,7 @@ where
     }
 }
 
-impl<T, B, Err> Drop for AppInitService<T, B, Err>
+impl<T, B, Err> Drop for AppFactoryService<T, B, Err>
 where
     T: Service<
         Request = WebRequest<Err>,
