@@ -13,7 +13,7 @@ use super::request::HttpRequest;
 /// Trait implemented by types that can be extracted from request.
 ///
 /// Types that implement this trait can be used with `Route` handlers.
-pub trait FromRequest<Err: ErrorRenderer>: Sized {
+pub trait FromRequest<Err>: Sized {
     /// The associated error which can be returned.
     type Error;
 
@@ -39,7 +39,7 @@ pub trait FromRequest<Err: ErrorRenderer>: Sized {
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, dev, App, HttpRequest, FromRequest, DefaultError, WebError};
+/// use ntex::web::{self, error, App, HttpRequest, FromRequest, DefaultError};
 /// use futures::future::{ok, err, Ready};
 /// use serde_derive::Deserialize;
 /// use rand;
@@ -49,15 +49,15 @@ pub trait FromRequest<Err: ErrorRenderer>: Sized {
 ///     name: String
 /// }
 ///
-/// impl FromRequest<DefaultError> for Thing {
-///     type Error = WebError<DefaultError>;
+/// impl<Err> FromRequest<Err> for Thing {
+///     type Error = error::Error;
 ///     type Future = Ready<Result<Self, Self::Error>>;
 ///
 ///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
 ///         if rand::random() {
 ///             ok(Thing { name: "thingy".into() })
 ///         } else {
-///             err(error::ErrorBadRequest("no luck"))
+///             err(error::ErrorBadRequest("no luck").into())
 ///         }
 ///
 ///     }
@@ -111,7 +111,7 @@ where
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, HttpRequest, FromRequest, WebError, DefaultError};
+/// use ntex::web::{self, error, App, HttpRequest, FromRequest};
 /// use futures::future::{ok, err, Ready};
 /// use serde_derive::Deserialize;
 /// use rand;
@@ -121,21 +121,21 @@ where
 ///     name: String
 /// }
 ///
-/// impl FromRequest<DefaultError> for Thing {
-///     type Error = WebError<DefaultError>;
+/// impl<Err> FromRequest<Err> for Thing {
+///     type Error = error::Error;
 ///     type Future = Ready<Result<Thing, Self::Error>>;
 ///
 ///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
 ///         if rand::random() {
 ///             ok(Thing { name: "thingy".into() })
 ///         } else {
-///             err(error::ErrorBadRequest("no luck"))
+///             err(error::ErrorBadRequest("no luck").into())
 ///         }
 ///     }
 /// }
 ///
 /// /// extract `Thing` from request
-/// async fn index(supplied_thing: Result<Thing, WebError<DefaultError>>) -> String {
+/// async fn index(supplied_thing: Result<Thing, error::Error>) -> String {
 ///     match supplied_thing {
 ///         Ok(thing) => format!("Got thing: {:?}", thing),
 ///         Err(e) => format!("Error extracting thing: {}", e)

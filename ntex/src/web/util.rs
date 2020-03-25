@@ -214,8 +214,8 @@ pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
 /// ```rust
 /// use ntex::web;
 ///
-/// async fn index() -> impl web::Responder {
-///    web::HttpResponse::Ok()
+/// async fn index() -> web::HttpResponse {
+///    web::HttpResponse::Ok().finish()
 /// }
 ///
 /// web::App::new().service(
@@ -226,11 +226,11 @@ pub fn to<F, I, R, U, Err>(handler: F) -> Route<Err>
 where
     F: Factory<I, R, U, Err>,
     I: FromRequest<Err> + 'static,
-    <I as FromRequest<Err>>::Error: Into<Err::Container>,
     R: Future<Output = U> + 'static,
     U: Responder<Err> + 'static,
-    <U as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
+    Err::Container: From<<I as FromRequest<Err>>::Error>,
+    Err::Container: From<<U as Responder<Err>>::Error>,
 {
     Route::new().to(handler)
 }
@@ -238,9 +238,9 @@ where
 /// Create raw service for a specific path.
 ///
 /// ```rust
-/// use ntex::web::{self, dev, guard, App, HttpResponse, DefaultError, WebError};
+/// use ntex::web::{self, dev, guard, App, HttpResponse, Error, DefaultError};
 ///
-/// async fn my_service(req: dev::WebRequest) -> Result<dev::WebResponse, WebError<DefaultError>> {
+/// async fn my_service(req: dev::WebRequest<DefaultError>) -> Result<dev::WebResponse, Error> {
 ///     Ok(req.into_response(HttpResponse::Ok().finish()))
 /// }
 ///

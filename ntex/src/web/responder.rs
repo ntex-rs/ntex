@@ -13,14 +13,13 @@ use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, IntoHeaderValue};
 use crate::http::{Response, ResponseBuilder, StatusCode};
 
-use super::error::{ErrorRenderer, InternalError, WebResponseError};
-use super::error_default::DefaultError;
+use super::error::{DefaultError, ErrorRenderer, InternalError, WebResponseError};
 use super::request::HttpRequest;
 
 /// Trait implemented by types that can be converted to a http response.
 ///
 /// Types that implement this trait can be used as the return type of a handler.
-pub trait Responder<Err: ErrorRenderer = DefaultError> {
+pub trait Responder<Err = DefaultError> {
     /// The associated error which can be returned.
     type Error;
 
@@ -61,7 +60,7 @@ pub trait Responder<Err: ErrorRenderer = DefaultError> {
     ///
     /// async fn index(req: HttpRequest) -> impl Responder {
     ///     web::types::Json(
-    ///         MyObj{name: "Name".to_string()}
+    ///         MyObj { name: "Name".to_string() }
     ///     )
     ///     .with_header("x-version", "1.2.3")
     /// }
@@ -221,7 +220,7 @@ impl<Err: ErrorRenderer> Responder<Err> for BytesMut {
 }
 
 /// Allows to override status code and headers for a responder.
-pub struct CustomResponder<T: Responder<Err>, Err: ErrorRenderer> {
+pub struct CustomResponder<T: Responder<Err>, Err> {
     responder: T,
     status: Option<StatusCode>,
     headers: Option<HeaderMap>,
@@ -229,7 +228,7 @@ pub struct CustomResponder<T: Responder<Err>, Err: ErrorRenderer> {
     _t: PhantomData<Err>,
 }
 
-impl<T: Responder<Err>, Err: ErrorRenderer> CustomResponder<T, Err> {
+impl<T: Responder<Err>, Err> CustomResponder<T, Err> {
     fn new(responder: T) -> Self {
         CustomResponder {
             responder,

@@ -3,7 +3,7 @@
 //! ```rust,no_run
 //! use ntex::web;
 //!
-//! async fn index(info: web::types::Path<(String, u32)>) -> impl web::Responder {
+//! async fn index(info: web::types::Path<(String, u32)>) -> String {
 //!     format!("Hello {}! id:{}", info.0, info.1)
 //! }
 //!

@@ -161,9 +161,9 @@ where
     ///              .route(web::delete().to(delete_handler))
     ///     );
     /// }
-    /// # async fn get_handler() -> impl web::Responder { web::HttpResponse::Ok() }
-    /// # async fn post_handler() -> impl web::Responder { web::HttpResponse::Ok() }
-    /// # async fn delete_handler() -> impl web::Responder { web::HttpResponse::Ok() }
+    /// # async fn get_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
+    /// # async fn post_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
+    /// # async fn delete_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
     /// ```
     pub fn route(mut self, route: Route<Err>) -> Self {
         self.routes.push(route);

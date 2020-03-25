@@ -490,9 +490,9 @@ impl WebService {
     /// Add match guard to a web service.
     ///
     /// ```rust
-    /// use ntex::web::{self, guard, dev, App, DefaultError, HttpResponse, WebError};
+    /// use ntex::web::{self, guard, dev, App, DefaultError, Error, HttpResponse};
     ///
-    /// async fn index(req: dev::WebRequest) -> Result<dev::WebResponse, WebError<DefaultError>> {
+    /// async fn index(req: dev::WebRequest<DefaultError>) -> Result<dev::WebResponse, Error> {
     ///     Ok(req.into_response(HttpResponse::Ok().finish()))
     /// }
     ///

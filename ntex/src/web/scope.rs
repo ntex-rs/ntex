@@ -131,15 +131,15 @@ where
     ///
     /// ```rust
     /// use std::cell::Cell;
-    /// use ntex::web::{self, App, HttpResponse, Responder};
+    /// use ntex::web::{self, App, HttpResponse};
     ///
     /// struct MyData {
     ///     counter: Cell<usize>,
     /// }
     ///
-    /// async fn index(data: web::Data<MyData>) -> impl Responder {
+    /// async fn index(data: web::Data<MyData>) -> HttpResponse {
     ///     data.counter.set(data.counter.get() + 1);
-    ///     HttpResponse::Ok()
+    ///     HttpResponse::Ok().into()
     /// }
     ///
     /// fn main() {

@@ -111,15 +111,15 @@ where
     ///
     /// ```rust
     /// use std::cell::Cell;
-    /// use ntex::web::{self, App, HttpResponse, Responder};
+    /// use ntex::web::{self, App, HttpResponse};
     ///
     /// struct MyData {
     ///     counter: Cell<usize>,
     /// }
     ///
-    /// async fn index(data: web::Data<MyData>) -> impl Responder {
+    /// async fn index(data: web::Data<MyData>) -> HttpResponse {
     ///     data.counter.set(data.counter.get() + 1);
-    ///     HttpResponse::Ok()
+    ///     HttpResponse::Ok().into()
     /// }
     ///
     /// let app = App::new()
@@ -318,7 +318,7 @@ where
     /// `HttpRequest::url_for()` will work as expected.
     ///
     /// ```rust
-    /// use ntex::web::{self, App, HttpRequest, HttpResponse, Error, WebError};
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse, Error};
     ///
     /// async fn index(req: HttpRequest) -> Result<HttpResponse, Error> {
     ///     let url = req.url_for("youtube", &["asdlkjqme"])?;
