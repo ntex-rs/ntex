@@ -2,16 +2,17 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_rt::net::TcpStream;
-use actix_service::{Service, ServiceFactory};
 use either::Either;
 use futures::future::{ok, Ready};
 use trust_dns_resolver::AsyncResolver;
 
-use crate::connect::{Address, Connect, Connection};
-use crate::connector::{TcpConnector, TcpConnectorFactory};
-use crate::error::ConnectError;
-use crate::resolve::{Resolver, ResolverFactory};
+use crate::rt::net::TcpStream;
+use crate::service::{Service, ServiceFactory};
+
+use super::connect::{Address, Connect, Connection};
+use super::connector::{TcpConnector, TcpConnectorFactory};
+use super::error::ConnectError;
+use super::resolve::{Resolver, ResolverFactory};
 
 pub struct ConnectServiceFactory<T> {
     tcp: TcpConnectorFactory<T>,

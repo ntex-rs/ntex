@@ -15,13 +15,14 @@
 #[macro_use]
 extern crate log;
 
-#[cfg(not(test))] // Work around for rust-lang/rust#62127
 pub use actix_macros::{main, test};
 
 pub mod channel;
+pub mod connect;
 pub mod framed;
 pub mod http;
 pub mod router;
+pub mod rt;
 pub mod server;
 pub mod service;
 pub mod task;

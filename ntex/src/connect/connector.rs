@@ -6,9 +6,10 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_rt::net::TcpStream;
-use actix_service::{Service, ServiceFactory};
 use futures::future::{err, ok, BoxFuture, Either, FutureExt, Ready};
+
+use crate::rt::net::TcpStream;
+use crate::service::{Service, ServiceFactory};
 
 use super::connect::{Address, Connect, Connection};
 use super::error::ConnectError;
@@ -74,7 +75,8 @@ impl<T: Address> Service for TcpConnector<T> {
     type Request = Connect<T>;
     type Response = Connection<T, TcpStream>;
     type Error = ConnectError;
-    type Future = Either<TcpConnectorResponse<T>, Ready<Result<Self::Response, Self::Error>>>;
+    type Future =
+        Either<TcpConnectorResponse<T>, Ready<Result<Self::Response, Self::Error>>>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -156,7 +158,9 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
                             this.req.as_ref().unwrap().host(),
                             this.port,
                         );
-                        if this.addrs.is_none() || this.addrs.as_ref().unwrap().is_empty() {
+                        if this.addrs.is_none()
+                            || this.addrs.as_ref().unwrap().is_empty()
+                        {
                             return Poll::Ready(Err(err.into()));
                         }
                     }

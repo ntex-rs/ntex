@@ -4,14 +4,15 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, Either, Ready};
 use trust_dns_resolver::lookup_ip::LookupIpFuture;
 use trust_dns_resolver::{AsyncResolver, Background};
 
-use crate::connect::{Address, Connect};
-use crate::error::ConnectError;
-use crate::get_default_resolver;
+use crate::service::{Service, ServiceFactory};
+
+use super::connect::{Address, Connect};
+use super::error::ConnectError;
+use super::get_default_resolver;
 
 /// DNS Resolver Service factory
 pub struct ResolverFactory<T> {

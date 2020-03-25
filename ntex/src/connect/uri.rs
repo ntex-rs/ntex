@@ -1,6 +1,6 @@
-use http::Uri;
+use crate::http::Uri;
 
-use crate::Address;
+use super::Address;
 
 impl Address for Uri {
     fn host(&self) -> &str {

@@ -96,7 +96,7 @@ impl WebResponseError<DefaultError> for FormError {}
 
 #[cfg(feature = "openssl")]
 /// `InternalServerError` for `openssl::ssl::Error`
-impl WebResponseError<DefaultError> for actix_connect::ssl::openssl::SslError {}
+impl WebResponseError<DefaultError> for crate::connect::openssl::SslError {}
 
 #[cfg(feature = "openssl")]
 /// `InternalServerError` for `openssl::ssl::HandshakeError`

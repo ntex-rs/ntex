@@ -8,14 +8,14 @@ pub use open_ssl::ssl::{Error as SslError, SslConnector, SslMethod};
 pub use tokio_openssl::{HandshakeError, SslStream};
 
 use actix_codec::{AsyncRead, AsyncWrite};
-use actix_rt::net::TcpStream;
-use actix_service::{Service, ServiceFactory};
 use futures::future::{err, ok, Either, FutureExt, LocalBoxFuture, Ready};
 use trust_dns_resolver::AsyncResolver;
 
-use crate::{
+use crate::connect::{
     Address, Connect, ConnectError, ConnectService, ConnectServiceFactory, Connection,
 };
+use crate::rt::net::TcpStream;
+use crate::service::{Service, ServiceFactory};
 
 /// Openssl connector factory
 pub struct OpensslConnector<T, U> {
@@ -97,7 +97,8 @@ where
     type Request = Connection<T, U>;
     type Response = Connection<T, SslStream<U>>;
     type Error = io::Error;
-    type Future = Either<ConnectAsyncExt<T, U>, Ready<Result<Self::Response, Self::Error>>>;
+    type Future =
+        Either<ConnectAsyncExt<T, U>, Ready<Result<Self::Response, Self::Error>>>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))

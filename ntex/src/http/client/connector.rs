@@ -3,12 +3,12 @@ use std::marker::PhantomData;
 use std::time::Duration;
 
 use actix_codec::{AsyncRead, AsyncWrite};
-use actix_connect::{
+
+use crate::connect::{
     default_connector, Connect as TcpConnect, Connection as TcpConnection,
 };
-use actix_rt::net::TcpStream;
-
 use crate::http::{Protocol, Uri};
+use crate::rt::net::TcpStream;
 use crate::util::timeout::{TimeoutError, TimeoutService};
 use crate::{apply_fn, Service};
 
@@ -18,10 +18,10 @@ use super::pool::ConnectionPool;
 use super::Connect;
 
 #[cfg(feature = "openssl")]
-use actix_connect::ssl::openssl::SslConnector as OpensslConnector;
+use crate::connect::openssl::SslConnector as OpensslConnector;
 
 #[cfg(feature = "rustls")]
-use actix_connect::ssl::rustls::ClientConfig;
+use crate::connect::rustls::ClientConfig;
 #[cfg(feature = "rustls")]
 use std::sync::Arc;
 
@@ -69,14 +69,14 @@ impl Connector<(), ()> {
         impl Service<
                 Request = TcpConnect<Uri>,
                 Response = TcpConnection<Uri, TcpStream>,
-                Error = actix_connect::ConnectError,
+                Error = crate::connect::ConnectError,
             > + Clone,
         TcpStream,
     > {
         let ssl = {
             #[cfg(feature = "openssl")]
             {
-                use actix_connect::ssl::openssl::SslMethod;
+                use crate::connect::openssl::SslMethod;
 
                 let mut ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
                 let _ = ssl
@@ -119,7 +119,7 @@ impl<T, U> Connector<T, U> {
         T1: Service<
                 Request = TcpConnect<Uri>,
                 Response = TcpConnection<Uri, U1>,
-                Error = actix_connect::ConnectError,
+                Error = crate::connect::ConnectError,
             > + Clone,
     {
         Connector {
@@ -141,7 +141,7 @@ where
     T: Service<
             Request = TcpConnect<Uri>,
             Response = TcpConnection<Uri, U>,
-            Error = actix_connect::ConnectError,
+            Error = crate::connect::ConnectError,
         > + Clone
         + 'static,
 {
@@ -243,11 +243,11 @@ where
         #[cfg(any(feature = "openssl", feature = "rustls"))]
         {
             const H2: &[u8] = b"h2";
-            use crate::{boxed::service, pipeline};
             #[cfg(feature = "openssl")]
-            use actix_connect::ssl::openssl::OpensslConnector;
+            use crate::connect::openssl::OpensslConnector;
             #[cfg(feature = "rustls")]
-            use actix_connect::ssl::rustls::{RustlsConnector, Session};
+            use crate::connect::rustls::{RustlsConnector, Session};
+            use crate::{boxed::service, pipeline};
 
             let ssl_service = TimeoutService::new(
                 self.timeout,

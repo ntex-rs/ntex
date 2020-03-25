@@ -8,13 +8,13 @@ use std::task::{Context, Poll};
 use std::{net, thread, time};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_rt::{net::TcpStream, System};
 use bytes::{Bytes, BytesMut};
 use futures::Stream;
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
+use crate::rt::{net::TcpStream, System};
 use crate::server::{Server, ServiceFactory};
 
 use super::client::error::WsClientError;
@@ -351,7 +351,7 @@ pub fn server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
 
         Client::build().connector(connector).finish()
     };
-    actix_connect::start_default_resolver();
+    crate::connect::start_default_resolver();
 
     TestServer {
         addr,

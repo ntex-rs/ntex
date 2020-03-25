@@ -41,7 +41,6 @@ ntex-service = { path = "../ntex-service" }
 ntex-web-macros = { path = "../ntex-web-macros" }
 
 actix-codec = "0.2.0"
-actix-connect = "1.0.1"
 actix-macros = "0.1.0"
 actix-rt = "1.0.0"
 actix-threadpool = "0.3.1"
@@ -77,6 +76,8 @@ serde_urlencoded = "0.6.1"
 url = "2.1"
 time = { version = "0.2.5", default-features = false, features = ["std"] }
 coo-kie = { version = "0.13.3", package = "cookie", optional = true }
+trust-dns-proto = "=0.18.0-alpha.2"
+trust-dns-resolver = "=0.18.0-alpha.2"
 
 # openssl
 open-ssl = { version="0.10", package = "openssl", optional = true }

@@ -4,25 +4,20 @@
 //!
 //! * `openssl` - enables ssl support via `openssl` crate
 //! * `rustls` - enables ssl support via `rustls` crate
-#![deny(rust_2018_idioms, warnings)]
-#![allow(clippy::type_complexity)]
-#![recursion_limit = "128"]
-
-#[macro_use]
-extern crate log;
 
 mod connect;
 mod connector;
 mod error;
 mod resolve;
 mod service;
-pub mod ssl;
-
-#[cfg(feature = "uri")]
 mod uri;
 
-use actix_rt::{net::TcpStream, Arbiter};
-use actix_service::{pipeline, pipeline_factory, Service, ServiceFactory};
+#[cfg(feature = "openssl")]
+pub mod openssl;
+
+#[cfg(feature = "rustls")]
+pub mod rustls;
+
 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 use trust_dns_resolver::system_conf::read_system_conf;
 use trust_dns_resolver::AsyncResolver;
@@ -32,6 +27,9 @@ pub mod resolver {
     pub use trust_dns_resolver::system_conf::read_system_conf;
     pub use trust_dns_resolver::{error::ResolveError, AsyncResolver};
 }
+
+use crate::rt::{net::TcpStream, Arbiter};
+use crate::service::{pipeline, pipeline_factory, Service, ServiceFactory};
 
 pub use self::connect::{Address, Connect, Connection};
 pub use self::connector::{TcpConnector, TcpConnectorFactory};
@@ -74,8 +72,11 @@ pub fn start_default_resolver() -> AsyncResolver {
 /// Create tcp connector service
 pub fn new_connector<T: Address + 'static>(
     resolver: AsyncResolver,
-) -> impl Service<Request = Connect<T>, Response = Connection<T, TcpStream>, Error = ConnectError>
-       + Clone {
+) -> impl Service<
+    Request = Connect<T>,
+    Response = Connection<T, TcpStream>,
+    Error = ConnectError,
+> + Clone {
     pipeline(Resolver::new(resolver)).and_then(TcpConnector::new())
 }
 
@@ -93,9 +94,11 @@ pub fn new_connector_factory<T: Address + 'static>(
 }
 
 /// Create connector service with default parameters
-pub fn default_connector<T: Address + 'static>(
-) -> impl Service<Request = Connect<T>, Response = Connection<T, TcpStream>, Error = ConnectError>
-       + Clone {
+pub fn default_connector<T: Address + 'static>() -> impl Service<
+    Request = Connect<T>,
+    Response = Connection<T, TcpStream>,
+    Error = ConnectError,
+> + Clone {
     pipeline(Resolver::default()).and_then(TcpConnector::new())
 }
 

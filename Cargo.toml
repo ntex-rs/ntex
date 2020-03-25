@@ -18,7 +18,6 @@ actix-service = { path = "actix-net/actix-service" }
 actix-router = { path = "actix-net/router" }
 
 actix-codec = { path = "actix-net/actix-codec" }
-actix-connect = { path = "actix-net/actix-connect" }
 actix-rt = { path = "actix-net/actix-rt" }
 actix-macros = { path = "actix-net/actix-macros" }
 bytestring = { path = "actix-net/string" }

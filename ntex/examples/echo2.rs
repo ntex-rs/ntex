@@ -19,7 +19,7 @@ async fn handle_request(mut req: Request) -> Result<Response, io::Error> {
         .body(body))
 }
 
-#[actix_rt::main]
+#[ntex::main]
 async fn main() -> io::Result<()> {
     env::set_var("RUST_LOG", "echo=info");
     env_logger::init();

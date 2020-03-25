@@ -13,7 +13,7 @@ use ntex::{fn_factory_with_config, fn_service, IntoService, Service};
 #[derive(Clone)]
 struct State(Option<mpsc::Sender<Bytes>>);
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_basic() {
     let client_item = Rc::new(Cell::new(false));
 
@@ -43,8 +43,8 @@ async fn test_basic() {
         .into_service())
     }));
 
-    let conn = actix_connect::default_connector()
-        .call(actix_connect::Connect::with(String::new(), srv.addr()))
+    let conn = ntex::connect::default_connector()
+        .call(ntex::connect::Connect::with(String::new(), srv.addr()))
         .await
         .unwrap();
 

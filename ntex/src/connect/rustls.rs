@@ -9,12 +9,12 @@ pub use rust_tls::Session;
 pub use tokio_rustls::{client::TlsStream, rustls::ClientConfig};
 
 use actix_codec::{AsyncRead, AsyncWrite};
-use actix_service::{Service, ServiceFactory};
 use futures::future::{ok, Ready};
 use tokio_rustls::{Connect, TlsConnector};
 use webpki::DNSNameRef;
 
-use crate::{Address, Connection};
+use crate::connect::{Address, Connection};
+use crate::service::{Service, ServiceFactory};
 
 /// Rustls connector factory
 pub struct RustlsConnector<T, U> {
