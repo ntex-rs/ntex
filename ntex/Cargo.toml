@@ -24,10 +24,10 @@ path = "src/lib.rs"
 default = []
 
 # openssl
-openssl = ["actix-connect/openssl", "open-ssl", "tokio-openssl"]
+openssl = ["open-ssl", "tokio-openssl"]
 
 # rustls support
-rustls = ["actix-connect/rustls", "rust-tls", "webpki", "webpki-roots", "tokio-rustls"]
+rustls = ["rust-tls", "webpki", "webpki-roots", "tokio-rustls"]
 
 # enable compressison support
 compress = ["flate2", "brotli2"]
