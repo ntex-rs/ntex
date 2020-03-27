@@ -49,7 +49,7 @@ impl<T: Address> Resolver<T> {
 }
 
 impl<T> Default for Resolver<T> {
-    fn default() -> Self {
+    fn default() -> Resolver<T> {
         Resolver {
             resolver: get_default_resolver(),
             _t: PhantomData,
