@@ -4,9 +4,7 @@ use std::time::Duration;
 
 use actix_codec::{AsyncRead, AsyncWrite};
 
-use crate::connect::{
-    default_connector, Connect as TcpConnect, Connection as TcpConnection,
-};
+use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::http::{Protocol, Uri};
 use crate::rt::net::TcpStream;
 use crate::util::timeout::{TimeoutError, TimeoutService};
@@ -68,7 +66,7 @@ impl Connector<(), ()> {
     pub fn new() -> Connector<
         impl Service<
                 Request = TcpConnect<Uri>,
-                Response = TcpConnection<Uri, TcpStream>,
+                Response = TcpStream,
                 Error = crate::connect::ConnectError,
             > + Clone,
         TcpStream,
@@ -91,7 +89,7 @@ impl Connector<(), ()> {
                 config.set_protocols(&protos);
                 config
                     .root_store
-                    .add_server_trust_anchors(&actix_tls::rustls::TLS_SERVER_ROOTS);
+                    .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
                 SslConnector::Rustls(Arc::new(config))
             }
             #[cfg(not(any(feature = "openssl", feature = "rustls")))]
@@ -100,7 +98,7 @@ impl Connector<(), ()> {
 
         Connector {
             ssl,
-            connector: default_connector(),
+            connector: TcpConnector::default(),
             timeout: Duration::from_secs(1),
             conn_lifetime: Duration::from_secs(75),
             conn_keep_alive: Duration::from_secs(15),
@@ -118,7 +116,7 @@ impl<T, U> Connector<T, U> {
         U1: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
         T1: Service<
                 Request = TcpConnect<Uri>,
-                Response = TcpConnection<Uri, U1>,
+                Response = U1,
                 Error = crate::connect::ConnectError,
             > + Clone,
     {
@@ -140,7 +138,7 @@ where
     U: AsyncRead + AsyncWrite + Unpin + fmt::Debug + 'static,
     T: Service<
             Request = TcpConnect<Uri>,
-            Response = TcpConnection<Uri, U>,
+            Response = U,
             Error = crate::connect::ConnectError,
         > + Clone
         + 'static,
@@ -223,7 +221,7 @@ where
                     srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr))
                 })
                 .map_err(ConnectError::from)
-                .map(|stream| (stream.into_parts().0, Protocol::Http1)),
+                .map(|stream| (stream, Protocol::Http1)),
             )
             .map_err(|e| match e {
                 TimeoutError::Service(e) => e,
@@ -251,51 +249,48 @@ where
 
             let ssl_service = TimeoutService::new(
                 self.timeout,
-                pipeline(
-                    apply_fn(self.connector.clone(), |msg: Connect, srv| {
+                pipeline(apply_fn(
+                    match self.ssl {
+                        #[cfg(feature = "openssl")]
+                        SslConnector::Openssl(ssl) => service(
+                            OpensslConnector::new(ssl)
+                                .map(|sock| {
+                                    let h2 = sock
+                                        .ssl()
+                                        .selected_alpn_protocol()
+                                        .map(|protos| protos.windows(2).any(|w| w == H2))
+                                        .unwrap_or(false);
+                                    if h2 {
+                                        (Box::new(sock) as Box<dyn Io>, Protocol::Http2)
+                                    } else {
+                                        (Box::new(sock) as Box<dyn Io>, Protocol::Http1)
+                                    }
+                                })
+                                .map_err(ConnectError::from),
+                        ),
+                        #[cfg(feature = "rustls")]
+                        SslConnector::Rustls(ssl) => service(
+                            RustlsConnector::new(ssl).map_err(ConnectError::from).map(
+                                |sock| {
+                                    let h2 = sock
+                                        .get_ref()
+                                        .1
+                                        .get_alpn_protocol()
+                                        .map(|protos| protos.windows(2).any(|w| w == H2))
+                                        .unwrap_or(false);
+                                    if h2 {
+                                        (Box::new(sock) as Box<dyn Io>, Protocol::Http2)
+                                    } else {
+                                        (Box::new(sock) as Box<dyn Io>, Protocol::Http1)
+                                    }
+                                },
+                            ),
+                        ),
+                    },
+                    |msg: Connect, srv| {
                         srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr))
-                    })
-                    .map_err(ConnectError::from),
-                )
-                .and_then(match self.ssl {
-                    #[cfg(feature = "openssl")]
-                    SslConnector::Openssl(ssl) => service(
-                        OpensslConnector::service(ssl)
-                            .map(|stream| {
-                                let sock = stream.into_parts().0;
-                                let h2 = sock
-                                    .ssl()
-                                    .selected_alpn_protocol()
-                                    .map(|protos| protos.windows(2).any(|w| w == H2))
-                                    .unwrap_or(false);
-                                if h2 {
-                                    (Box::new(sock) as Box<dyn Io>, Protocol::Http2)
-                                } else {
-                                    (Box::new(sock) as Box<dyn Io>, Protocol::Http1)
-                                }
-                            })
-                            .map_err(ConnectError::from),
-                    ),
-                    #[cfg(feature = "rustls")]
-                    SslConnector::Rustls(ssl) => service(
-                        RustlsConnector::service(ssl)
-                            .map_err(ConnectError::from)
-                            .map(|stream| {
-                                let sock = stream.into_parts().0;
-                                let h2 = sock
-                                    .get_ref()
-                                    .1
-                                    .get_alpn_protocol()
-                                    .map(|protos| protos.windows(2).any(|w| w == H2))
-                                    .unwrap_or(false);
-                                if h2 {
-                                    (Box::new(sock) as Box<dyn Io>, Protocol::Http2)
-                                } else {
-                                    (Box::new(sock) as Box<dyn Io>, Protocol::Http1)
-                                }
-                            }),
-                    ),
-                }),
+                    },
+                )),
             )
             .map_err(|e| match e {
                 TimeoutError::Service(e) => e,
@@ -308,7 +303,7 @@ where
                     srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr))
                 })
                 .map_err(ConnectError::from)
-                .map(|stream| (stream.into_parts().0, Protocol::Http1)),
+                .map(|stream| (stream, Protocol::Http1)),
             )
             .map_err(|e| match e {
                 TimeoutError::Service(e) => e,

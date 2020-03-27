@@ -113,7 +113,7 @@ async fn test_timeout() {
     });
 
     let connector = Connector::new()
-        .connector(ntex::connect::new_connector(
+        .connector(ntex::connect::Connector::new(
             ntex::connect::start_default_resolver(),
         ))
         .timeout(Duration::from_secs(15))

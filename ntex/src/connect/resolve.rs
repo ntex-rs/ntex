@@ -14,64 +14,9 @@ use super::connect::{Address, Connect};
 use super::error::ConnectError;
 use super::get_default_resolver;
 
-/// DNS Resolver Service factory
-pub struct ResolverFactory<T> {
-    resolver: Option<AsyncResolver>,
-    _t: PhantomData<T>,
-}
-
-impl<T> ResolverFactory<T> {
-    /// Create new resolver instance with custom configuration and options.
-    pub fn new(resolver: AsyncResolver) -> Self {
-        ResolverFactory {
-            resolver: Some(resolver),
-            _t: PhantomData,
-        }
-    }
-
-    pub fn service(&self) -> Resolver<T> {
-        Resolver {
-            resolver: self.resolver.clone(),
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<T> Default for ResolverFactory<T> {
-    fn default() -> Self {
-        ResolverFactory {
-            resolver: None,
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<T> Clone for ResolverFactory<T> {
-    fn clone(&self) -> Self {
-        ResolverFactory {
-            resolver: self.resolver.clone(),
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<T: Address> ServiceFactory for ResolverFactory<T> {
-    type Request = Connect<T>;
-    type Response = Connect<T>;
-    type Error = ConnectError;
-    type Config = ();
-    type Service = Resolver<T>;
-    type InitError = ();
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
-
-    fn new_service(&self, _: ()) -> Self::Future {
-        ok(self.service())
-    }
-}
-
 /// DNS Resolver Service
 pub struct Resolver<T> {
-    resolver: Option<AsyncResolver>,
+    resolver: AsyncResolver,
     _t: PhantomData<T>,
 }
 
@@ -79,8 +24,26 @@ impl<T> Resolver<T> {
     /// Create new resolver instance with custom configuration and options.
     pub fn new(resolver: AsyncResolver) -> Self {
         Resolver {
-            resolver: Some(resolver),
+            resolver,
             _t: PhantomData,
+        }
+    }
+}
+
+impl<T: Address> Resolver<T> {
+    /// Lookup ip addresses for provided host
+    pub fn lookup(
+        &self,
+        mut req: Connect<T>,
+    ) -> Either<ResolverFuture<T>, Ready<Result<Connect<T>, ConnectError>>> {
+        if req.addr.is_some() {
+            Either::Right(ok(req))
+        } else if let Ok(ip) = req.host().parse() {
+            req.addr = Some(either::Either::Left(SocketAddr::new(ip, req.port())));
+            Either::Right(ok(req))
+        } else {
+            trace!("DNS resolver: resolving host {:?}", req.host());
+            Either::Left(ResolverFuture::new(req, &self.resolver))
         }
     }
 }
@@ -88,7 +51,7 @@ impl<T> Resolver<T> {
 impl<T> Default for Resolver<T> {
     fn default() -> Self {
         Resolver {
-            resolver: None,
+            resolver: get_default_resolver(),
             _t: PhantomData,
         }
     }
@@ -103,6 +66,20 @@ impl<T> Clone for Resolver<T> {
     }
 }
 
+impl<T: Address> ServiceFactory for Resolver<T> {
+    type Request = Connect<T>;
+    type Response = Connect<T>;
+    type Error = ConnectError;
+    type Config = ();
+    type Service = Resolver<T>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Service, Self::InitError>>;
+
+    fn new_service(&self, _: ()) -> Self::Future {
+        ok(self.clone())
+    }
+}
+
 impl<T: Address> Service for Resolver<T> {
     type Request = Connect<T>;
     type Response = Connect<T>;
@@ -113,19 +90,8 @@ impl<T: Address> Service for Resolver<T> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, mut req: Connect<T>) -> Self::Future {
-        if req.addr.is_some() {
-            Either::Right(ok(req))
-        } else if let Ok(ip) = req.host().parse() {
-            req.addr = Some(either::Either::Left(SocketAddr::new(ip, req.port())));
-            Either::Right(ok(req))
-        } else {
-            trace!("DNS resolver: resolving host {:?}", req.host());
-            if self.resolver.is_none() {
-                self.resolver = Some(get_default_resolver());
-            }
-            Either::Left(ResolverFuture::new(req, self.resolver.as_ref().unwrap()))
-        }
+    fn call(&mut self, req: Connect<T>) -> Self::Future {
+        self.lookup(req)
     }
 }
 

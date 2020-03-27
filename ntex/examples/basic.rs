@@ -1,3 +1,4 @@
+use ntex::http;
 use ntex::web::{self, get, middleware, App, HttpRequest, HttpResponse, HttpServer};
 
 // #[get("/resource1/{name}/index.html")]
@@ -18,16 +19,14 @@ async fn no_params() -> &'static str {
 
 #[ntex::main]
 async fn main() -> std::io::Result<()> {
-    std::env::set_var("RUST_LOG", "actix_server=info,actix_web=info");
+    std::env::set_var("RUST_LOG", "ntex=trace");
     env_logger::init();
 
     HttpServer::new(|| {
         App::new()
-            .wrap(middleware::DefaultHeaders::new().header("X-Version", "0.2"))
-            .wrap(middleware::Compress::default())
-            .wrap(middleware::Logger::default())
+            // .wrap(middleware::Logger::default())
             .service(web::resource("/resource1/{name}/index.html").to(index))
-            .service(web::resource("/").route(web::get().to(index)))
+            .service(web::resource("/").route(web::get().to(no_params)))
             // .service(index)
             // .service(no_params)
             .service(
@@ -42,8 +41,9 @@ async fn main() -> std::io::Result<()> {
             )
             .service(web::resource("/test1.html").to(|| async { "Test\r\n" }))
     })
-    .bind("127.0.0.1:8080")?
-    .workers(1)
+    .bind("0.0.0.0:8081")?
+    .workers(4)
+    .keep_alive(http::KeepAlive::Disabled)
     .run()
     .await
 }

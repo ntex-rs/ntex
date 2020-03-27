@@ -43,11 +43,11 @@ async fn test_basic() {
         .into_service())
     }));
 
-    let conn = ntex::connect::default_connector()
+    let conn = ntex::connect::Connector::default()
         .call(ntex::connect::Connect::with(String::new(), srv.addr()))
         .await
         .unwrap();
 
-    client.call(conn.into_parts().0).await.unwrap();
+    client.call(conn).await.unwrap();
     assert!(client_item.get());
 }

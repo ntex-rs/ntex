@@ -6,7 +6,6 @@
 //! * `rustls` - enables ssl support via `rustls` crate
 
 mod connect;
-mod connector;
 mod error;
 mod resolve;
 mod service;
@@ -28,14 +27,12 @@ pub mod resolver {
     pub use trust_dns_resolver::{error::ResolveError, AsyncResolver};
 }
 
-use crate::rt::{net::TcpStream, Arbiter};
-use crate::service::{pipeline, pipeline_factory, Service, ServiceFactory};
+use crate::rt::Arbiter;
 
-pub use self::connect::{Address, Connect, Connection};
-pub use self::connector::{TcpConnector, TcpConnectorFactory};
+pub use self::connect::{Address, Connect};
 pub use self::error::ConnectError;
-pub use self::resolve::{Resolver, ResolverFactory};
-pub use self::service::{ConnectService, ConnectServiceFactory, TcpConnectService};
+pub use self::resolve::Resolver;
+pub use self::service::Connector;
 
 pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver {
     let (resolver, bg) = AsyncResolver::new(cfg, opts);
@@ -67,48 +64,4 @@ pub(crate) fn get_default_resolver() -> AsyncResolver {
 
 pub fn start_default_resolver() -> AsyncResolver {
     get_default_resolver()
-}
-
-/// Create tcp connector service
-pub fn new_connector<T: Address + 'static>(
-    resolver: AsyncResolver,
-) -> impl Service<
-    Request = Connect<T>,
-    Response = Connection<T, TcpStream>,
-    Error = ConnectError,
-> + Clone {
-    pipeline(Resolver::new(resolver)).and_then(TcpConnector::new())
-}
-
-/// Create tcp connector service
-pub fn new_connector_factory<T: Address + 'static>(
-    resolver: AsyncResolver,
-) -> impl ServiceFactory<
-    Config = (),
-    Request = Connect<T>,
-    Response = Connection<T, TcpStream>,
-    Error = ConnectError,
-    InitError = (),
-> + Clone {
-    pipeline_factory(ResolverFactory::new(resolver)).and_then(TcpConnectorFactory::new())
-}
-
-/// Create connector service with default parameters
-pub fn default_connector<T: Address + 'static>() -> impl Service<
-    Request = Connect<T>,
-    Response = Connection<T, TcpStream>,
-    Error = ConnectError,
-> + Clone {
-    pipeline(Resolver::default()).and_then(TcpConnector::new())
-}
-
-/// Create connector service factory with default parameters
-pub fn default_connector_factory<T: Address + 'static>() -> impl ServiceFactory<
-    Config = (),
-    Request = Connect<T>,
-    Response = Connection<T, TcpStream>,
-    Error = ConnectError,
-    InitError = (),
-> + Clone {
-    pipeline_factory(ResolverFactory::default()).and_then(TcpConnectorFactory::new())
 }
