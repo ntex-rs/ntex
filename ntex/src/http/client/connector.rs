@@ -196,8 +196,7 @@ impl Connector {
                 Request = TcpConnect<Uri>,
                 Response = (U, Protocol),
                 Error = crate::connect::ConnectError,
-            > + Clone
-            + 'static,
+            > + 'static,
     {
         self.connector = boxed::service(
             connector
@@ -215,8 +214,7 @@ impl Connector {
                 Request = TcpConnect<Uri>,
                 Response = (U, Protocol),
                 Error = crate::connect::ConnectError,
-            > + Clone
-            + 'static,
+            > + 'static,
     {
         self.ssl_connector = Some(boxed::service(
             connector
