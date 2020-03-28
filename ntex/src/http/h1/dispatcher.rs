@@ -4,12 +4,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, io, net};
 
-use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
-use actix_rt::time::{delay_until, Delay, Instant};
 use bitflags::bitflags;
 use bytes::{Buf, BytesMut};
 use log::{error, trace};
 
+use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
@@ -18,6 +17,7 @@ use crate::http::error::{ParseError, PayloadError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
+use crate::rt::time::{delay_until, Delay, Instant};
 use crate::Service;
 
 use super::codec::Codec;
@@ -913,7 +913,7 @@ mod tests {
     use crate::http::test::TestBuffer;
     use crate::IntoService;
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_req_parse_err() {
         lazy(|cx| {
             let buf = TestBuffer::new("GET /test HTTP/1\r\n\r\n");

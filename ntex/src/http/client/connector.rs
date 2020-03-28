@@ -3,9 +3,9 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use actix_codec::{AsyncRead, AsyncWrite};
 use futures::future::{err, Either, Ready};
 
+use crate::codec::{AsyncRead, AsyncWrite};
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::http::{Protocol, Uri};
 use crate::service::{apply_fn, boxed, Service};

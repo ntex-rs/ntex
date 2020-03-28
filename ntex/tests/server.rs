@@ -3,13 +3,13 @@ use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{mpsc, Arc};
 use std::{net, thread, time};
 
-use actix_codec::{BytesCodec, Framed};
-use actix_rt::net::TcpStream;
 use bytes::Bytes;
 use futures::future::{lazy, ok};
 use futures::SinkExt;
 use net2::TcpBuilder;
 
+use ntex::codec::{BytesCodec, Framed};
+use ntex::rt::net::TcpStream;
 use ntex::server::Server;
 use ntex::service::fn_service;
 
@@ -28,14 +28,14 @@ fn test_bind() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let sys = actix_rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
         let srv = Server::build()
             .workers(1)
             .disable_signals()
             .bind("test", addr, move || fn_service(|_| ok::<_, ()>(())))
             .unwrap()
             .start();
-        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
     });
     let (_, sys) = rx.recv().unwrap();
@@ -52,7 +52,7 @@ fn test_listen() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let sys = actix_rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
         let lst = net::TcpListener::bind(addr).unwrap();
         Server::build()
             .disable_signals()
@@ -60,7 +60,7 @@ fn test_listen() {
             .listen("test", lst, move || fn_service(|_| ok::<_, ()>(())))
             .unwrap()
             .start();
-        let _ = tx.send(actix_rt::System::current());
+        let _ = tx.send(ntex::rt::System::current());
         let _ = sys.run();
     });
     let sys = rx.recv().unwrap();
@@ -78,7 +78,7 @@ fn test_start() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let sys = actix_rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
         let srv: Server = Server::build()
             .backlog(100)
             .disable_signals()
@@ -92,7 +92,7 @@ fn test_start() {
             .unwrap()
             .start();
 
-        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
     });
     let (srv, sys) = rx.recv().unwrap();
@@ -144,7 +144,7 @@ fn test_configure() {
 
     let h = thread::spawn(move || {
         let num = num2.clone();
-        let sys = actix_rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
         let srv = Server::build()
             .disable_signals()
             .configure(move |cfg| {
@@ -167,7 +167,7 @@ fn test_configure() {
             .unwrap()
             .workers(1)
             .start();
-        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
     });
     let (_, sys) = rx.recv().unwrap();

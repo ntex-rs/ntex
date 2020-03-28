@@ -2,8 +2,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::{fmt, net};
 
-use actix_codec::Framed;
-
+use crate::codec::Framed;
 use crate::http::body::MessageBody;
 use crate::http::config::{KeepAlive, ServiceConfig};
 use crate::http::error::ResponseError;

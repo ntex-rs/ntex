@@ -2,8 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_codec::{AsyncRead, AsyncWrite, Framed};
-
+use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::framed;
 use crate::service::{IntoService, Service};
 

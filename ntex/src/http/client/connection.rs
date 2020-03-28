@@ -1,10 +1,10 @@
 use std::{fmt, time};
 
-use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use bytes::Bytes;
 use futures::future::{err, Either, Future, FutureExt, LocalBoxFuture, Ready};
 use h2::client::SendRequest;
 
+use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::body::MessageBody;
 use crate::http::h1::ClientCodec;
 use crate::http::message::{RequestHeadType, ResponseHead};

@@ -1,14 +1,14 @@
 use std::io;
 
-use actix_codec::{Decoder, Encoder};
 use bitflags::bitflags;
 use bytes::{Bytes, BytesMut};
-use http::{Method, Version};
 
+use crate::codec::{Decoder, Encoder};
 use crate::http::body::BodySize;
 use crate::http::config::ServiceConfig;
 use crate::http::error::{ParseError, PayloadError};
 use crate::http::message::{ConnectionType, RequestHeadType, ResponseHead};
+use crate::http::{Method, Version};
 
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 use super::{decoder, encoder, reserve_readbuf};

@@ -600,7 +600,7 @@ mod tests {
         assert!(WebRequest::<DefaultError>::from_request(r).is_err());
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_service() {
         let mut srv = init_service(App::new().service(
             web::service("/test").name("test").finish(

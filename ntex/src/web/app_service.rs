@@ -492,7 +492,7 @@ mod tests {
         }
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_drop_data() {
         let data = Arc::new(AtomicBool::new(false));
 

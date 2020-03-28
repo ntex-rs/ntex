@@ -1,10 +1,10 @@
 use std::{fmt, io};
 
-use actix_codec::{Decoder, Encoder};
 use bitflags::bitflags;
 use bytes::BytesMut;
 use http::{Method, Version};
 
+use crate::codec::{Decoder, Encoder};
 use crate::http::body::BodySize;
 use crate::http::config::ServiceConfig;
 use crate::http::error::ParseError;

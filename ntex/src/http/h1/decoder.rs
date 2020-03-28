@@ -4,13 +4,13 @@ use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::task::Poll;
 
-use actix_codec::Decoder;
 use bytes::{Buf, Bytes, BytesMut};
 use http::header::{HeaderName, HeaderValue};
 use http::{header, Method, StatusCode, Uri, Version};
 use httparse;
 use log::{debug, error, trace};
 
+use crate::codec::Decoder;
 use crate::http::error::ParseError;
 use crate::http::header::HeaderMap;
 use crate::http::message::{ConnectionType, ResponseHead};

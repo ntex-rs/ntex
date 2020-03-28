@@ -209,7 +209,7 @@ mod tests {
         }
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_success() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
@@ -218,7 +218,7 @@ mod tests {
         assert_eq!(timeout.call(()).await, Ok(()));
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_timeout() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_timeout_newservice() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);

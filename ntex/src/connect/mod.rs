@@ -36,7 +36,7 @@ pub use self::service::Connector;
 
 pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver {
     let (resolver, bg) = AsyncResolver::new(cfg, opts);
-    actix_rt::spawn(bg);
+    crate::rt::spawn(bg);
     resolver
 }
 
@@ -55,7 +55,7 @@ pub(crate) fn get_default_resolver() -> AsyncResolver {
         };
 
         let (resolver, bg) = AsyncResolver::new(cfg, opts);
-        actix_rt::spawn(bg);
+        crate::rt::spawn(bg);
 
         Arbiter::set_item(DefaultResolver(resolver.clone()));
         resolver

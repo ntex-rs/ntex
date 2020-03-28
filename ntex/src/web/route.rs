@@ -219,7 +219,7 @@ mod tests {
         name: String,
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_route() {
         let mut srv = init_service(
             App::new()

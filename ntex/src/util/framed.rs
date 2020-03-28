@@ -4,11 +4,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, mem};
 
-use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use futures::{Future, FutureExt, Stream};
 use log::debug;
 
 use crate::channel::mpsc;
+use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use crate::service::{IntoService, Service};
 
 type Request<U> = <U as Decoder>::Item;
@@ -205,7 +205,7 @@ where
                     };
 
                     let tx = self.tx.clone();
-                    actix_rt::spawn(self.service.call(item).map(move |item| {
+                    crate::rt::spawn(self.service.call(item).map(move |item| {
                         let _ = tx.send(item.map(Message::Item));
                     }));
                 }

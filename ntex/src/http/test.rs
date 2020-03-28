@@ -7,13 +7,13 @@ use std::sync::mpsc;
 use std::task::{Context, Poll};
 use std::{net, thread, time};
 
-use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use bytes::{Bytes, BytesMut};
 use futures::Stream;
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
+use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::rt::{net::TcpStream, System};
 use crate::server::{Server, ServiceFactory};
 

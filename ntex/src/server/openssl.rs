@@ -6,9 +6,9 @@ use std::task::{Context, Poll};
 pub use open_ssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 pub use tokio_openssl::{HandshakeError, SslStream};
 
-use actix_codec::{AsyncRead, AsyncWrite};
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
+use crate::codec::{AsyncRead, AsyncWrite};
 use crate::service::{Service, ServiceFactory};
 use crate::util::counter::{Counter, CounterGuard};
 

@@ -573,7 +573,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_bytes() {
         let mut b = Bytes::from("test");
         assert_eq!(Body::from(b.clone()).size(), BodySize::Sized(4));
@@ -586,7 +586,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_bytes_mut() {
         let mut b = BytesMut::from("test");
         assert_eq!(Body::from(b.clone()).size(), BodySize::Sized(4));
@@ -599,7 +599,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_string() {
         let mut b = "test".to_owned();
         assert_eq!(Body::from(b.clone()).size(), BodySize::Sized(4));
@@ -614,20 +614,20 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_unit() {
         assert_eq!(().size(), BodySize::Empty);
         assert!(poll_fn(|cx| ().poll_next_chunk(cx)).await.is_none());
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_box() {
         let mut val = Box::new(());
         assert_eq!(val.size(), BodySize::Empty);
         assert!(poll_fn(|cx| val.poll_next_chunk(cx)).await.is_none());
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_body_eq() {
         assert!(Body::None == Body::None);
         assert!(Body::None != Body::Empty);
@@ -640,14 +640,14 @@ mod tests {
         assert!(Body::Bytes(Bytes::from_static(b"1")) != Body::None);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_body_debug() {
         assert!(format!("{:?}", Body::None).contains("Body::None"));
         assert!(format!("{:?}", Body::Empty).contains("Body::Empty"));
         assert!(format!("{:?}", Body::Bytes(Bytes::from_static(b"1"))).contains("1"));
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_serde_json() {
         use serde_json::json;
         assert_eq!(
@@ -663,7 +663,7 @@ mod tests {
     mod body_stream {
         use super::*;
 
-        #[actix_rt::test]
+        #[crate::test]
         async fn skips_empty_chunks() {
             let mut body = BodyStream::new(stream::iter(
                 ["1", "", "2"]
@@ -684,7 +684,7 @@ mod tests {
     mod sized_stream {
         use super::*;
 
-        #[actix_rt::test]
+        #[crate::test]
         async fn skips_empty_chunks() {
             let mut body = SizedStream::new(
                 2,

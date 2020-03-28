@@ -1,5 +1,6 @@
-use actix_codec::{Decoder, Encoder};
 use bytes::{Bytes, BytesMut};
+
+use crate::codec::{Decoder, Encoder};
 
 use super::frame::Parser;
 use super::proto::{CloseReason, OpCode};

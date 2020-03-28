@@ -4,18 +4,17 @@ use std::net::SocketAddr;
 use std::rc::Rc;
 use std::{fmt, str};
 
-use actix_codec::Framed;
-use actix_rt::time::timeout;
-
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
+use crate::codec::Framed;
 use crate::http::error::HttpError;
 use crate::http::header::{
     self, HeaderName, HeaderValue, IntoHeaderValue, AUTHORIZATION,
 };
 use crate::http::{ConnectionType, Method, StatusCode, Uri, Version};
 use crate::http::{Payload, RequestHead};
+use crate::rt::time::timeout;
 use crate::ws;
 
 use super::connect::BoxedSocket;
@@ -411,7 +410,7 @@ mod tests {
     use super::*;
     use crate::http::client::Client;
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_debug() {
         let request = Client::new().ws("/").header("x-test", "111");
         let repr = format!("{:?}", request);
@@ -419,7 +418,7 @@ mod tests {
         assert!(repr.contains("x-test"));
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_header_override() {
         let req = Client::build()
             .header(header::CONTENT_TYPE, "111")
@@ -438,7 +437,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn basic_auth() {
         let req = Client::new()
             .ws("/")
@@ -465,7 +464,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn bearer_auth() {
         let req = Client::new().ws("/").bearer_auth("someS3cr3tAutht0k3n");
         assert_eq!(
@@ -481,7 +480,7 @@ mod tests {
     }
 
     #[cfg(feature = "cookie")]
-    #[actix_rt::test]
+    #[crate::test]
     async fn basics() {
         let req = Client::new()
             .ws("http://localhost/")

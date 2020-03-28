@@ -1,9 +1,9 @@
 use std::io;
 
-use actix_codec::{BytesCodec, Framed};
 use bytes::Bytes;
 use futures::SinkExt;
 
+use ntex::codec::{BytesCodec, Framed};
 use ntex::connect::resolver::{ResolverConfig, ResolverOpts};
 use ntex::connect::Connect;
 use ntex::rt::net::TcpStream;

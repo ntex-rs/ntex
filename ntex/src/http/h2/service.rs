@@ -4,14 +4,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{net, rc};
 
-use actix_codec::{AsyncRead, AsyncWrite};
-use actix_rt::net::TcpStream;
 use bytes::Bytes;
 use futures::future::ok;
 use futures::ready;
 use h2::server::{self, Handshake};
 use log::error;
 
+use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::MessageBody;
 use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
@@ -19,6 +18,7 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
+use crate::rt::net::TcpStream;
 use crate::{
     fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
     ServiceFactory,

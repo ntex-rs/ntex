@@ -5,11 +5,10 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::{fmt, net};
 
-use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_rt::net::TcpStream;
 use futures::future::{ok, Ready};
 use futures::ready;
 
+use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::body::MessageBody;
 use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
@@ -17,6 +16,7 @@ use crate::http::error::{DispatchError, ParseError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
+use crate::rt::net::TcpStream;
 use crate::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 
 use super::codec::Codec;

@@ -249,7 +249,7 @@ mod tests {
     use crate::web::{self, App, HttpRequest, HttpResponse};
     use crate::Service;
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_data() {
         let cfg = |cfg: &mut ServiceConfig<_>| {
             cfg.data(10usize);
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    // #[actix_rt::test]
+    // #[crate::test]
     // async fn test_data_factory() {
     //     let cfg = |cfg: &mut ServiceConfig| {
     //         cfg.data_factory(|| {
@@ -296,7 +296,7 @@ mod tests {
     //     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     // }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_external_resource() {
         let mut srv = init_service(
             App::new()
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(body, Bytes::from_static(b"https://youtube.com/watch/12345"));
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_service() {
         let mut srv = init_service(App::new().configure(|cfg| {
             cfg.service(

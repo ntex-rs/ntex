@@ -134,13 +134,13 @@ mod tests {
         }
 
         fn call(&mut self, _: ()) -> Self::Future {
-            actix_rt::time::delay_for(self.0)
+            crate::rt::time::delay_for(self.0)
                 .then(|_| ok::<_, ()>(()))
                 .boxed_local()
         }
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_transform() {
         let wait_time = Duration::from_millis(50);
 
@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_newtransform() {
         let wait_time = Duration::from_millis(50);
 

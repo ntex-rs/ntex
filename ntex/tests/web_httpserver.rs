@@ -23,7 +23,7 @@ async fn test_start() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let sys = actix_rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
 
         let srv = HttpServer::new(|| {
             App::new().service(
@@ -45,27 +45,24 @@ async fn test_start() {
         .unwrap()
         .run();
 
-        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
     });
     let (srv, sys) = rx.recv().unwrap();
 
-    #[cfg(feature = "client")]
-    {
-        use actix_http::client;
+    use ntex::http::client;
 
-        let client = awc::Client::build()
-            .connector(
-                client::Connector::new()
-                    .timeout(Duration::from_millis(100))
-                    .finish(),
-            )
-            .finish();
+    let client = client::Client::build()
+        .connector(
+            client::Connector::new()
+                .timeout(Duration::from_millis(100))
+                .finish(),
+        )
+        .finish();
 
-        let host = format!("http://{}", addr);
-        let response = client.get(host.clone()).send().await.unwrap();
-        assert!(response.status().is_success());
-    }
+    let host = format!("http://{}", addr);
+    let response = client.get(host.clone()).send().await.unwrap();
+    assert!(response.status().is_success());
 
     // stop
     let _ = srv.stop(false);
@@ -97,7 +94,7 @@ async fn test_start_ssl() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let sys = actix_rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
         let builder = ssl_acceptor().unwrap();
 
         let srv = HttpServer::new(|| {
@@ -116,7 +113,7 @@ async fn test_start_ssl() {
         .unwrap()
         .run();
 
-        let _ = tx.send((srv, actix_rt::System::current()));
+        let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
     });
     let (srv, sys) = rx.recv().unwrap();

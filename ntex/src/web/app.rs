@@ -527,7 +527,7 @@ mod tests {
     use crate::web::{self, DefaultError, HttpRequest, HttpResponse};
     use crate::Service;
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_default_resource() {
         let mut srv = init_service(
             App::new()
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_data_factory() {
         let mut srv = init_service(
             App::new().data_factory(|| ok::<_, ()>(10usize)).service(
@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_extension() {
         let mut srv = init_service(App::new().app_data(10usize).service(
             web::resource("/").to(|req: HttpRequest| async move {
@@ -612,7 +612,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_wrap() {
         let mut srv = init_service(
             App::new()
@@ -632,7 +632,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_router_wrap() {
         let mut srv = init_service(
             App::new()
@@ -652,7 +652,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_wrap_fn() {
         let mut srv = init_service(
             App::new()
@@ -679,7 +679,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_router_wrap_fn() {
         let mut srv = init_service(
             App::new()
@@ -706,7 +706,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_case_insensitive_router() {
         let mut srv = init_service(
             App::new()
@@ -723,7 +723,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_external_resource() {
         let mut srv = init_service(
             App::new()

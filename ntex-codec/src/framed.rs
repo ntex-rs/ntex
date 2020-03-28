@@ -185,7 +185,10 @@ impl<T, U> Framed<T, U> {
 
 impl<T, U> Framed<T, U> {
     /// Serialize item and Write to the inner buffer
-    pub fn write(&mut self, item: <U as Encoder>::Item) -> Result<(), <U as Encoder>::Error>
+    pub fn write(
+        &mut self,
+        item: <U as Encoder>::Item,
+    ) -> Result<(), <U as Encoder>::Error>
     where
         T: AsyncWrite,
         U: Encoder,
@@ -207,7 +210,10 @@ impl<T, U> Framed<T, U> {
     }
 
     /// Try to read underlying I/O stream and decode item.
-    pub fn next_item(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<U::Item, U::Error>>>
+    pub fn next_item(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<U::Item, U::Error>>>
     where
         T: AsyncRead,
         U: Decoder,
@@ -319,7 +325,10 @@ where
 {
     type Item = Result<U::Item, U::Error>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
         self.next_item(cx)
     }
 }
@@ -332,7 +341,10 @@ where
 {
     type Error = U::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
         if self.is_write_ready() {
             Poll::Ready(Ok(()))
         } else {

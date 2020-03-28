@@ -161,7 +161,7 @@ mod tests {
     /// State Under Test: Two calls of `SystemTimeService::now()` return the same value if they are done within resolution interval of `SystemTimeService`.
     ///
     /// Expected Behavior: Two back-to-back calls of `SystemTimeService::now()` return the same value.
-    #[actix_rt::test]
+    #[crate::test]
     async fn system_time_service_time_does_not_immediately_change() {
         let resolution = Duration::from_millis(50);
 
@@ -172,7 +172,7 @@ mod tests {
     /// State Under Test: Two calls of `LowResTimeService::now()` return the same value if they are done within resolution interval of `SystemTimeService`.
     ///
     /// Expected Behavior: Two back-to-back calls of `LowResTimeService::now()` return the same value.
-    #[actix_rt::test]
+    #[crate::test]
     async fn lowres_time_service_time_does_not_immediately_change() {
         let resolution = Duration::from_millis(50);
         let time_service = LowResTimeService::with(resolution);
@@ -183,7 +183,7 @@ mod tests {
     ///
     /// Expected Behavior: Two calls of `LowResTimeService::now()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a resolution interval.
-    #[actix_rt::test]
+    #[crate::test]
     async fn system_time_service_time_updates_after_resolution_interval() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(300);
@@ -209,7 +209,7 @@ mod tests {
     ///
     /// Expected Behavior: Two calls of `LowResTimeService::now()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a resolution interval.
-    #[actix_rt::test]
+    #[crate::test]
     async fn lowres_time_service_time_updates_after_resolution_interval() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(300);

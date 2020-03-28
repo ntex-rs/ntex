@@ -18,6 +18,7 @@ extern crate log;
 pub use actix_macros::{main, test};
 
 pub mod channel;
+pub mod codec;
 pub mod connect;
 pub mod framed;
 pub mod http;

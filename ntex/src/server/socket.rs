@@ -1,7 +1,7 @@
 use std::{fmt, io, net};
 
-use actix_codec::{AsyncRead, AsyncWrite};
-use actix_rt::net::TcpStream;
+use crate::codec::{AsyncRead, AsyncWrite};
+use crate::rt::net::TcpStream;
 
 pub(crate) enum StdListener {
     Tcp(net::TcpListener),

@@ -6,8 +6,6 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use actix_codec::{AsyncRead, AsyncWrite};
-use actix_rt::time::{delay_for, Delay};
 use bytes::Bytes;
 use futures::future::{poll_fn, FutureExt, LocalBoxFuture};
 use fxhash::FxHashMap;
@@ -17,7 +15,9 @@ use indexmap::IndexSet;
 use slab::Slab;
 
 use crate::channel::oneshot;
+use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::Protocol;
+use crate::rt::time::{delay_for, Delay};
 use crate::service::Service;
 use crate::task::LocalWaker;
 

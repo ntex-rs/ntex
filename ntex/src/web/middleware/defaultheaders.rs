@@ -170,7 +170,7 @@ mod tests {
     use crate::web::test::{ok_service, TestRequest};
     use crate::web::{DefaultError, Error, HttpResponse};
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_default_headers() {
         let mut mw = DefaultHeaders::<DefaultError>::new()
             .header(CONTENT_TYPE, "0001")
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_content_type() {
         let srv = |req: WebRequest<DefaultError>| {
             ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))

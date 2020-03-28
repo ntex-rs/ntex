@@ -105,7 +105,7 @@ async fn test_form() {
 async fn test_timeout() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
-            actix_rt::time::delay_for(Duration::from_millis(200)).await;
+            ntex::rt::time::delay_for(Duration::from_millis(200)).await;
             HttpResponse::Ok().body(STR)
         })))
     });
@@ -134,7 +134,7 @@ async fn test_timeout() {
 async fn test_timeout_override() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
-            actix_rt::time::delay_for(Duration::from_millis(200)).await;
+            ntex::rt::time::delay_for(Duration::from_millis(200)).await;
             HttpResponse::Ok().body(STR)
         })))
     });
@@ -737,7 +737,7 @@ async fn test_client_cookie_handling() {
 //         }
 //     });
 
-//     let mut sys = actix::System::new("test");
+//     let mut sys = ntex::rt::System::new("test");
 
 //     // client request
 //     let req = client::ClientRequest::get(format!("http://{}/", addr).as_str())

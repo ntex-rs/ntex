@@ -16,6 +16,5 @@ syn = { version = "^1", features = ["full", "parsing"] }
 proc-macro2 = "^1"
 
 [dev-dependencies]
-actix-rt = "1.0.0"
 ntex = { path = "../ntex/" }
 futures = { version = "0.3.1" }

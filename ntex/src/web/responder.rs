@@ -485,7 +485,7 @@ pub(crate) mod tests {
         responder
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_option_responder() {
         let mut srv = init_service(
             web::App::new()
@@ -512,7 +512,7 @@ pub(crate) mod tests {
         }
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_responder() {
         let req = TestRequest::default().to_http_request();
 
@@ -585,7 +585,7 @@ pub(crate) mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_result_responder() {
         let req = TestRequest::default().to_http_request();
 
@@ -612,7 +612,7 @@ pub(crate) mod tests {
         assert!(res.is_err());
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_custom_responder() {
         let req = TestRequest::default().to_http_request();
         let res = responder("test".to_string())
@@ -637,7 +637,7 @@ pub(crate) mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_tuple_responder_with_status_code() {
         let req = TestRequest::default().to_http_request();
         let res = Responder::<DefaultError>::respond_to(

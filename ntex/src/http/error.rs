@@ -4,7 +4,6 @@ use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{fmt, io};
 
-use actix_codec::{Decoder, Encoder};
 use derive_more::{Display, From};
 use http::uri::InvalidUri;
 use http::{header, StatusCode};
@@ -15,6 +14,7 @@ pub use actix_threadpool::BlockingError;
 pub use futures::channel::oneshot::Canceled;
 pub use http::Error as HttpError;
 
+use crate::codec::{Decoder, Encoder};
 use crate::framed::ServiceError as FramedDispatcherError;
 
 use super::body::Body;

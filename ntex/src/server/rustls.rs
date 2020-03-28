@@ -5,7 +5,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use actix_codec::{AsyncRead, AsyncWrite};
 use futures::future::{ok, Ready};
 use tokio_rustls::{Accept, TlsAcceptor};
 
@@ -13,6 +12,7 @@ pub use rust_tls::{ServerConfig, Session};
 pub use tokio_rustls::server::TlsStream;
 pub use webpki_roots::TLS_SERVER_ROOTS;
 
+use crate::codec::{AsyncRead, AsyncWrite};
 use crate::service::{Service, ServiceFactory};
 use crate::util::counter::{Counter, CounterGuard};
 

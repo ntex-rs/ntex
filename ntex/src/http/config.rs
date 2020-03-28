@@ -4,10 +4,11 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::{fmt, net};
 
-use actix_rt::time::{delay_for, delay_until, Delay, Instant};
 use bytes::BytesMut;
 use futures::{future, FutureExt};
 use time::OffsetDateTime;
+
+use crate::rt::time::{delay_for, delay_until, Delay, Instant};
 
 // "Sun, 06 Nov 1994 08:49:37 GMT".len()
 const DATE_VALUE_LENGTH: usize = 29;
@@ -292,7 +293,7 @@ mod tests {
         assert_eq!(DATE_VALUE_LENGTH, "Sun, 06 Nov 1994 08:49:37 GMT".len());
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_date() {
         let settings = ServiceConfig::new(KeepAlive::Os, 0, 0, false, None);
         let mut buf1 = BytesMut::with_capacity(DATE_VALUE_LENGTH + 10);

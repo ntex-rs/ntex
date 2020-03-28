@@ -4,11 +4,11 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use either::Either;
 use futures::{ready, Stream};
 use pin_project::project;
 
+use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use crate::service::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use super::connect::{Connect, ConnectResult};

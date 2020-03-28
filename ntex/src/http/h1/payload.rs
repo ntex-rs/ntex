@@ -228,7 +228,7 @@ mod tests {
     use super::*;
     use futures::future::poll_fn;
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_unread_data() {
         let (_, mut payload) = Payload::create(false);
 

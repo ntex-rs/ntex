@@ -1,6 +1,6 @@
 use std::fmt;
 
-use actix_codec::{Decoder, Encoder};
+use crate::codec::{Decoder, Encoder};
 
 /// Framed service errors
 pub enum ServiceError<E, U: Encoder + Decoder> {

@@ -1,11 +1,11 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use actix_codec::BytesCodec;
 use bytes::{Bytes, BytesMut};
 use futures::future::ok;
 
 use ntex::channel::mpsc;
+use ntex::codec::BytesCodec;
 use ntex::framed::{Builder, Connect, FactoryBuilder};
 use ntex::server::test_server;
 use ntex::{fn_factory_with_config, fn_service, IntoService, Service};

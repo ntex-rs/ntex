@@ -2,7 +2,6 @@ use std::io::{Read, Write};
 use std::time::Duration;
 use std::{io, net, thread};
 
-use actix_rt::time::delay_for;
 use bytes::Bytes;
 use futures::future::{self, err, ok, ready, FutureExt};
 use futures::stream::{once, StreamExt};
@@ -10,6 +9,7 @@ use regex::Regex;
 
 use ntex::http::test::server as test_server;
 use ntex::http::{body, header, HttpService, KeepAlive, Request, Response, StatusCode};
+use ntex::rt::time::delay_for;
 use ntex::service::fn_service;
 use ntex::web::error;
 

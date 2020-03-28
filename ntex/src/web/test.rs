@@ -6,8 +6,6 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::{fmt, net, thread, time};
 
-use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use actix_rt::{time::delay_for, System};
 use bytes::{Bytes, BytesMut};
 use futures::future::ok;
 use futures::stream::{Stream, StreamExt};
@@ -19,6 +17,7 @@ use serde_json;
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
 
+use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::body::{Body, MessageBody};
 use crate::http::client::error::WsClientError;
 use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
@@ -29,6 +28,7 @@ use crate::http::{
     Extensions, HttpService, Method, Payload, Request, StatusCode, Uri, Version,
 };
 use crate::router::{Path, ResourceDef};
+use crate::rt::{time::delay_for, System};
 use crate::server::Server;
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
@@ -957,7 +957,7 @@ mod tests {
     use crate::http::HttpMessage;
     use crate::web::{self, App, Data, Error, HttpResponse};
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_basics() {
         let req = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
             .version(Version::HTTP_2)
@@ -978,7 +978,7 @@ mod tests {
         assert_eq!(*data.get_ref(), 20);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_request_methods() {
         let mut app = init_service(
             App::new().service(
@@ -1016,7 +1016,7 @@ mod tests {
         assert_eq!(result, Bytes::from_static(b"delete!"));
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_response() {
         let mut app =
             init_service(App::new().service(web::resource("/index.html").route(
@@ -1039,7 +1039,7 @@ mod tests {
         name: String,
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_response_json() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Json<Person>| async {
@@ -1060,7 +1060,7 @@ mod tests {
         assert_eq!(&result.id, "12345");
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_request_response_form() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Form<Person>| async {
@@ -1086,7 +1086,7 @@ mod tests {
         assert_eq!(&result.name, "User name");
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_request_response_json() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Json<Person>| async {
@@ -1112,7 +1112,7 @@ mod tests {
         assert_eq!(&result.name, "User name");
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_async_with_block() {
         async fn async_with_block() -> Result<HttpResponse, Error> {
             let res = web::block(move || Some(4usize).ok_or("wrong")).await;
@@ -1138,7 +1138,7 @@ mod tests {
         assert!(res.status().is_success());
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_server_data() {
         async fn handler(data: web::Data<usize>) -> crate::http::ResponseBuilder {
             assert_eq!(**data, 10);

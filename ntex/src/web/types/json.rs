@@ -414,7 +414,7 @@ where
 //         }
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_responder() {
 //         let req = TestRequest::default().to_http_request();
 
@@ -431,7 +431,7 @@ where
 //         assert_eq!(resp.body().bin_ref(), b"{\"name\":\"test\"}");
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_custom_error_responder() {
 //         let (req, mut pl) = TestRequest::default()
 //             .header(
@@ -462,7 +462,7 @@ where
 //         assert_eq!(msg.name, "invalid request");
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_extract() {
 //         let (req, mut pl) = TestRequest::default()
 //             .header(
@@ -522,7 +522,7 @@ where
 //         assert!(format!("{}", s.err().unwrap()).contains("Content type error"));
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_json_body() {
 //         let (req, mut pl) = TestRequest::default().to_http_parts();
 //         let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
@@ -574,7 +574,7 @@ where
 //         );
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_with_json_and_bad_content_type() {
 //         let (req, mut pl) = TestRequest::with_header(
 //             header::CONTENT_TYPE,
@@ -592,7 +592,7 @@ where
 //         assert!(s.is_err())
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_with_json_and_good_custom_content_type() {
 //         let (req, mut pl) = TestRequest::with_header(
 //             header::CONTENT_TYPE,
@@ -612,7 +612,7 @@ where
 //         assert!(s.is_ok())
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_with_json_and_bad_custom_content_type() {
 //         let (req, mut pl) = TestRequest::with_header(
 //             header::CONTENT_TYPE,
