@@ -26,7 +26,7 @@ use super::error::ConnectError;
 use super::Connect;
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub(crate) struct Key {
+pub(super) struct Key {
     authority: Authority,
 }
 
@@ -37,13 +37,12 @@ impl From<Authority> for Key {
 }
 
 /// Connections pool
-pub(crate) struct ConnectionPool<T, Io: 'static>(Rc<RefCell<T>>, Rc<RefCell<Inner<Io>>>);
+pub(super) struct ConnectionPool<T, Io: 'static>(Rc<RefCell<T>>, Rc<RefCell<Inner<Io>>>);
 
 impl<T, Io> ConnectionPool<T, Io>
 where
     Io: AsyncRead + AsyncWrite + Unpin + 'static,
-    T: Service<Request = Connect, Response = (Io, Protocol), Error = ConnectError>
-        + 'static,
+    T: Service<Request = Connect, Response = (Io, Protocol), Error = ConnectError>,
 {
     pub(crate) fn new(
         connector: T,
@@ -249,7 +248,7 @@ struct AvailableConnection<Io> {
     created: Instant,
 }
 
-pub(crate) struct Inner<Io> {
+pub(super) struct Inner<Io> {
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
     disconnect_timeout: Option<Duration>,
@@ -594,7 +593,7 @@ where
     }
 }
 
-pub(crate) struct Acquired<T>(Key, Option<Rc<RefCell<Inner<T>>>>);
+pub(super) struct Acquired<T>(Key, Option<Rc<RefCell<Inner<T>>>>);
 
 impl<T> Acquired<T>
 where

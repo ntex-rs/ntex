@@ -1,12 +1,9 @@
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{fmt, io, mem, time};
+use std::{fmt, time};
 
 use actix_codec::{AsyncRead, AsyncWrite, Framed};
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use futures::future::{err, Either, Future, FutureExt, LocalBoxFuture, Ready};
 use h2::client::SendRequest;
-use pin_project::{pin_project, project};
 
 use crate::http::body::MessageBody;
 use crate::http::h1::ClientCodec;
@@ -148,152 +145,6 @@ where
                 }
                 Either::Right(err(SendRequestError::TunnelNotSupported))
             }
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) enum EitherConnection<A, B> {
-    A(IoConnection<A>),
-    B(IoConnection<B>),
-}
-
-impl<A, B> Connection for EitherConnection<A, B>
-where
-    A: AsyncRead + AsyncWrite + Unpin + 'static,
-    B: AsyncRead + AsyncWrite + Unpin + 'static,
-{
-    type Io = EitherIo<A, B>;
-    type Future =
-        LocalBoxFuture<'static, Result<(ResponseHead, Payload), SendRequestError>>;
-
-    fn protocol(&self) -> Protocol {
-        match self {
-            EitherConnection::A(con) => con.protocol(),
-            EitherConnection::B(con) => con.protocol(),
-        }
-    }
-
-    fn send_request<RB: MessageBody + 'static, H: Into<RequestHeadType>>(
-        self,
-        head: H,
-        body: RB,
-    ) -> Self::Future {
-        match self {
-            EitherConnection::A(con) => con.send_request(head, body),
-            EitherConnection::B(con) => con.send_request(head, body),
-        }
-    }
-
-    type TunnelFuture = LocalBoxFuture<
-        'static,
-        Result<(ResponseHead, Framed<Self::Io, ClientCodec>), SendRequestError>,
-    >;
-
-    /// Send request, returns Response and Framed
-    fn open_tunnel<H: Into<RequestHeadType>>(self, head: H) -> Self::TunnelFuture {
-        match self {
-            EitherConnection::A(con) => con
-                .open_tunnel(head)
-                .map(|res| res.map(|(head, framed)| (head, framed.map_io(EitherIo::A))))
-                .boxed_local(),
-            EitherConnection::B(con) => con
-                .open_tunnel(head)
-                .map(|res| res.map(|(head, framed)| (head, framed.map_io(EitherIo::B))))
-                .boxed_local(),
-        }
-    }
-}
-
-#[pin_project]
-pub(crate) enum EitherIo<A, B> {
-    A(#[pin] A),
-    B(#[pin] B),
-}
-
-impl<A, B> AsyncRead for EitherIo<A, B>
-where
-    A: AsyncRead,
-    B: AsyncRead,
-{
-    #[inline]
-    #[project]
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        #[project]
-        match self.project() {
-            EitherIo::A(val) => val.poll_read(cx, buf),
-            EitherIo::B(val) => val.poll_read(cx, buf),
-        }
-    }
-
-    #[inline]
-    unsafe fn prepare_uninitialized_buffer(
-        &self,
-        buf: &mut [mem::MaybeUninit<u8>],
-    ) -> bool {
-        match self {
-            EitherIo::A(ref val) => val.prepare_uninitialized_buffer(buf),
-            EitherIo::B(ref val) => val.prepare_uninitialized_buffer(buf),
-        }
-    }
-}
-
-impl<A, B> AsyncWrite for EitherIo<A, B>
-where
-    A: AsyncWrite,
-    B: AsyncWrite,
-{
-    #[project]
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        #[project]
-        match self.project() {
-            EitherIo::A(val) => val.poll_write(cx, buf),
-            EitherIo::B(val) => val.poll_write(cx, buf),
-        }
-    }
-
-    #[project]
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        #[project]
-        match self.project() {
-            EitherIo::A(val) => val.poll_flush(cx),
-            EitherIo::B(val) => val.poll_flush(cx),
-        }
-    }
-
-    #[project]
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<io::Result<()>> {
-        #[project]
-        match self.project() {
-            EitherIo::A(val) => val.poll_shutdown(cx),
-            EitherIo::B(val) => val.poll_shutdown(cx),
-        }
-    }
-
-    #[project]
-    fn poll_write_buf<U: Buf>(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut U,
-    ) -> Poll<Result<usize, io::Error>>
-    where
-        Self: Sized,
-    {
-        #[project]
-        match self.project() {
-            EitherIo::A(val) => val.poll_write_buf(cx, buf),
-            EitherIo::B(val) => val.poll_write_buf(cx, buf),
         }
     }
 }

@@ -17,7 +17,7 @@ use super::connection::{ConnectionType, IoConnection};
 use super::error::SendRequestError;
 use super::pool::Acquired;
 
-pub(crate) async fn send_request<T, B>(
+pub(super) async fn send_request<T, B>(
     mut io: SendRequest<Bytes>,
     head: RequestHeadType,
     body: B,

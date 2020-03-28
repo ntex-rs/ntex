@@ -30,7 +30,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(middleware::Compress::default())
             .wrap(middleware::Logger::default())
             .service(web::resource("/resource1/{name}/index.html").to(index))
-            .service(web::resource("/").route(web::get().to(index)))
+            .service(web::resource("/").route(web::get().to(no_params)))
             // .service(index)
             // .service(no_params)
             .service(
