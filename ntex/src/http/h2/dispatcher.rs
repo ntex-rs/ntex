@@ -134,7 +134,7 @@ where
                         on_connect.set(&mut req.extensions_mut());
                     }
 
-                    actix_rt::spawn(ServiceResponse::<
+                    crate::rt::spawn(ServiceResponse::<
                         S::Future,
                         S::Response,
                         S::Error,

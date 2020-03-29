@@ -2,10 +2,10 @@ use std::convert::Infallible;
 use std::task::{Context, Poll};
 use std::time::{self, Duration, Instant};
 
-use actix_rt::time::delay_for;
 use futures::future::{ok, ready, FutureExt, Ready};
 
 use super::cell::Cell;
+use crate::rt::time::delay_for;
 use crate::service::{Service, ServiceFactory};
 
 #[derive(Clone, Debug)]
@@ -79,7 +79,7 @@ impl LowResTimeService {
                 b.resolution
             };
 
-            actix_rt::spawn(delay_for(interval).then(move |_| {
+            crate::rt::spawn(delay_for(interval).then(move |_| {
                 inner.get_mut().current.take();
                 ready(())
             }));
@@ -144,7 +144,7 @@ impl SystemTimeService {
                 b.resolution
             };
 
-            actix_rt::spawn(delay_for(interval).then(move |_| {
+            crate::rt::spawn(delay_for(interval).then(move |_| {
                 inner.get_mut().current.take();
                 ready(())
             }));
@@ -161,7 +161,7 @@ mod tests {
     /// State Under Test: Two calls of `SystemTimeService::now()` return the same value if they are done within resolution interval of `SystemTimeService`.
     ///
     /// Expected Behavior: Two back-to-back calls of `SystemTimeService::now()` return the same value.
-    #[crate::test]
+    #[ntex_rt::test]
     async fn system_time_service_time_does_not_immediately_change() {
         let resolution = Duration::from_millis(50);
 
@@ -172,7 +172,7 @@ mod tests {
     /// State Under Test: Two calls of `LowResTimeService::now()` return the same value if they are done within resolution interval of `SystemTimeService`.
     ///
     /// Expected Behavior: Two back-to-back calls of `LowResTimeService::now()` return the same value.
-    #[crate::test]
+    #[ntex_rt::test]
     async fn lowres_time_service_time_does_not_immediately_change() {
         let resolution = Duration::from_millis(50);
         let time_service = LowResTimeService::with(resolution);
@@ -183,7 +183,7 @@ mod tests {
     ///
     /// Expected Behavior: Two calls of `LowResTimeService::now()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a resolution interval.
-    #[crate::test]
+    #[ntex_rt::test]
     async fn system_time_service_time_updates_after_resolution_interval() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(300);
@@ -209,7 +209,7 @@ mod tests {
     ///
     /// Expected Behavior: Two calls of `LowResTimeService::now()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a resolution interval.
-    #[crate::test]
+    #[ntex_rt::test]
     async fn lowres_time_service_time_updates_after_resolution_interval() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(300);

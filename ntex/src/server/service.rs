@@ -3,11 +3,11 @@ use std::net::SocketAddr;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use actix_rt::spawn;
 use futures::future::{err, ok, LocalBoxFuture, Ready};
 use futures::{FutureExt, TryFutureExt};
 use log::error;
 
+use crate::rt::spawn;
 use crate::service::{Service, ServiceFactory as ActixServiceFactory};
 use crate::util::counter::CounterGuard;
 

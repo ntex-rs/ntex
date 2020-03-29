@@ -525,7 +525,7 @@ mod tests {
         }
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_static_str() {
         assert_eq!(Body::from("").size(), BodySize::Sized(0));
         assert_eq!(Body::from("test").size(), BodySize::Sized(4));
@@ -538,7 +538,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_static_bytes() {
         assert_eq!(Body::from(b"test".as_ref()).size(), BodySize::Sized(4));
         assert_eq!(Body::from(b"test".as_ref()).get_ref(), b"test");
@@ -558,7 +558,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_vec() {
         assert_eq!(Body::from(Vec::from("test")).size(), BodySize::Sized(4));
         assert_eq!(Body::from(Vec::from("test")).get_ref(), b"test");
@@ -573,7 +573,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_bytes() {
         let mut b = Bytes::from("test");
         assert_eq!(Body::from(b.clone()).size(), BodySize::Sized(4));
@@ -586,7 +586,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_bytes_mut() {
         let mut b = BytesMut::from("test");
         assert_eq!(Body::from(b.clone()).size(), BodySize::Sized(4));
@@ -599,7 +599,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_string() {
         let mut b = "test".to_owned();
         assert_eq!(Body::from(b.clone()).size(), BodySize::Sized(4));
@@ -614,20 +614,20 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_unit() {
         assert_eq!(().size(), BodySize::Empty);
         assert!(poll_fn(|cx| ().poll_next_chunk(cx)).await.is_none());
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_box() {
         let mut val = Box::new(());
         assert_eq!(val.size(), BodySize::Empty);
         assert!(poll_fn(|cx| val.poll_next_chunk(cx)).await.is_none());
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_body_eq() {
         assert!(Body::None == Body::None);
         assert!(Body::None != Body::Empty);
@@ -640,14 +640,14 @@ mod tests {
         assert!(Body::Bytes(Bytes::from_static(b"1")) != Body::None);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_body_debug() {
         assert!(format!("{:?}", Body::None).contains("Body::None"));
         assert!(format!("{:?}", Body::Empty).contains("Body::Empty"));
         assert!(format!("{:?}", Body::Bytes(Bytes::from_static(b"1"))).contains("1"));
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_serde_json() {
         use serde_json::json;
         assert_eq!(
@@ -663,7 +663,7 @@ mod tests {
     mod body_stream {
         use super::*;
 
-        #[crate::test]
+        #[ntex_rt::test]
         async fn skips_empty_chunks() {
             let mut body = BodyStream::new(stream::iter(
                 ["1", "", "2"]
@@ -684,7 +684,7 @@ mod tests {
     mod sized_stream {
         use super::*;
 
-        #[crate::test]
+        #[ntex_rt::test]
         async fn skips_empty_chunks() {
             let mut body = SizedStream::new(
                 2,

@@ -28,13 +28,15 @@ fn test_bind() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
-        let srv = Server::build()
-            .workers(1)
-            .disable_signals()
-            .bind("test", addr, move || fn_service(|_| ok::<_, ()>(())))
-            .unwrap()
-            .start();
+        let mut sys = ntex::rt::System::new("test");
+        let srv = sys.exec(|| {
+            Server::build()
+                .workers(1)
+                .disable_signals()
+                .bind("test", addr, move || fn_service(|_| ok::<_, ()>(())))
+                .unwrap()
+                .start()
+        });
         let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
     });
@@ -52,14 +54,16 @@ fn test_listen() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let mut sys = ntex::rt::System::new("test");
         let lst = net::TcpListener::bind(addr).unwrap();
-        Server::build()
-            .disable_signals()
-            .workers(1)
-            .listen("test", lst, move || fn_service(|_| ok::<_, ()>(())))
-            .unwrap()
-            .start();
+        sys.exec(|| {
+            Server::build()
+                .disable_signals()
+                .workers(1)
+                .listen("test", lst, move || fn_service(|_| ok::<_, ()>(())))
+                .unwrap()
+                .start()
+        });
         let _ = tx.send(ntex::rt::System::current());
         let _ = sys.run();
     });
@@ -78,19 +82,21 @@ fn test_start() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
-        let srv: Server = Server::build()
-            .backlog(100)
-            .disable_signals()
-            .bind("test", addr, move || {
-                fn_service(|io: TcpStream| async move {
-                    let mut f = Framed::new(io, BytesCodec);
-                    f.send(Bytes::from_static(b"test")).await.unwrap();
-                    Ok::<_, ()>(())
+        let mut sys = ntex::rt::System::new("test");
+        let srv = sys.exec(|| {
+            Server::build()
+                .backlog(100)
+                .disable_signals()
+                .bind("test", addr, move || {
+                    fn_service(|io: TcpStream| async move {
+                        let mut f = Framed::new(io, BytesCodec);
+                        f.send(Bytes::from_static(b"test")).await.unwrap();
+                        Ok::<_, ()>(())
+                    })
                 })
-            })
-            .unwrap()
-            .start();
+                .unwrap()
+                .start()
+        });
 
         let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
@@ -144,29 +150,31 @@ fn test_configure() {
 
     let h = thread::spawn(move || {
         let num = num2.clone();
-        let sys = ntex::rt::System::new("test");
-        let srv = Server::build()
-            .disable_signals()
-            .configure(move |cfg| {
-                let num = num.clone();
-                let lst = net::TcpListener::bind(addr3).unwrap();
-                cfg.bind("addr1", addr1)
-                    .unwrap()
-                    .bind("addr2", addr2)
-                    .unwrap()
-                    .listen("addr3", lst)
-                    .apply(move |rt| {
-                        let num = num.clone();
-                        rt.service("addr1", fn_service(|_| ok::<_, ()>(())));
-                        rt.service("addr3", fn_service(|_| ok::<_, ()>(())));
-                        rt.on_start(lazy(move |_| {
-                            let _ = num.fetch_add(1, Relaxed);
-                        }))
-                    })
-            })
-            .unwrap()
-            .workers(1)
-            .start();
+        let mut sys = ntex::rt::System::new("test");
+        let srv = sys.exec(|| {
+            Server::build()
+                .disable_signals()
+                .configure(move |cfg| {
+                    let num = num.clone();
+                    let lst = net::TcpListener::bind(addr3).unwrap();
+                    cfg.bind("addr1", addr1)
+                        .unwrap()
+                        .bind("addr2", addr2)
+                        .unwrap()
+                        .listen("addr3", lst)
+                        .apply(move |rt| {
+                            let num = num.clone();
+                            rt.service("addr1", fn_service(|_| ok::<_, ()>(())));
+                            rt.service("addr3", fn_service(|_| ok::<_, ()>(())));
+                            rt.on_start(lazy(move |_| {
+                                let _ = num.fetch_add(1, Relaxed);
+                            }))
+                        })
+                })
+                .unwrap()
+                .workers(1)
+                .start()
+        });
         let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
     });

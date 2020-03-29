@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use futures::channel::mpsc::UnboundedSender;
 use tokio::task::LocalSet;
 
-use crate::arbiter::{Arbiter, SystemCommand};
-use crate::builder::{Builder, SystemRunner};
+use super::arbiter::{Arbiter, SystemCommand};
+use super::builder::{Builder, SystemRunner};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -26,7 +26,7 @@ thread_local!(
 
 impl System {
     /// Constructs new system and sets it as current
-    pub(crate) fn construct(
+    pub(super) fn construct(
         sys: UnboundedSender<SystemCommand>,
         arbiter: Arbiter,
         stop_on_panic: bool,
@@ -80,7 +80,7 @@ impl System {
     }
 
     /// Set current running system.
-    pub(crate) fn is_set() -> bool {
+    pub(super) fn is_set() -> bool {
         CURRENT.with(|cell| cell.borrow().is_some())
     }
 
@@ -118,7 +118,7 @@ impl System {
         let _ = self.sys.unbounded_send(SystemCommand::Exit(code));
     }
 
-    pub(crate) fn sys(&self) -> &UnboundedSender<SystemCommand> {
+    pub(super) fn sys(&self) -> &UnboundedSender<SystemCommand> {
         &self.sys
     }
 

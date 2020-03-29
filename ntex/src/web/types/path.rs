@@ -202,7 +202,7 @@ where
 //         value: u32,
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_extract_path_single() {
 //         let resource = ResourceDef::new("/{value}/");
 
@@ -214,7 +214,7 @@ where
 //         assert!(Path::<MyStruct>::from_request(&req, &mut pl).await.is_err());
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_tuple_extract() {
 //         let resource = ResourceDef::new("/{key}/{value}/");
 
@@ -241,7 +241,7 @@ where
 //         let () = <()>::from_request(&req, &mut pl).await.unwrap();
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_request_extract() {
 //         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
 
@@ -289,7 +289,7 @@ where
 //         assert_eq!(res[1], "32".to_owned());
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_custom_err_handler() {
 //         let (req, mut pl) = TestRequest::with_uri("/name/user1/")
 //             .data(PathConfig::default().error_handler(|err, _| {

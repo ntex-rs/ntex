@@ -827,13 +827,13 @@ mod tests {
 
     use super::*;
 
-    #[crate::test]
+    #[ntex_rt::test]
     #[should_panic(expected = "Credentials are allowed, but the Origin is set to")]
     async fn cors_validates_illegal_allow_credentials() {
         let _cors = Cors::new().supports_credentials().send_wildcard().finish();
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn validate_origin_allows_all_origins() {
         let mut cors = Cors::new()
             .finish()
@@ -847,7 +847,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn default() {
         let mut cors = Cors::default()
             .new_transform(test::ok_service())
@@ -860,7 +860,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_preflight() {
         let mut cors = Cors::new()
             .send_wildcard()
@@ -950,7 +950,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    // #[crate::test]
+    // #[ntex_rt::test]
     // #[should_panic(expected = "MissingOrigin")]
     // async fn test_validate_missing_origin() {
     //    let cors = Cors::build()
@@ -960,7 +960,7 @@ mod tests {
     //    cors.start(&req).unwrap();
     // }
 
-    #[crate::test]
+    #[ntex_rt::test]
     #[should_panic(expected = "OriginNotAllowed")]
     async fn test_validate_not_allowed_origin() {
         let cors = Cors::new()
@@ -978,7 +978,7 @@ mod tests {
         cors.inner.validate_allowed_headers(req.head()).unwrap();
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_validate_origin() {
         let mut cors = Cors::new()
             .allowed_origin("https://www.example.com")
@@ -995,7 +995,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_no_origin_response() {
         let mut cors = Cors::new()
             .disable_preflight()
@@ -1024,7 +1024,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_response() {
         let exposed_headers = vec![header::AUTHORIZATION, header::ACCEPT];
         let mut cors = Cors::new()
@@ -1124,7 +1124,7 @@ mod tests {
         assert_eq!("https://www.example.com", origins_str);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_multiple_origins() {
         let mut cors = Cors::new()
             .allowed_origin("https://example.com")
@@ -1162,7 +1162,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_multiple_origins_preflight() {
         let mut cors = Cors::new()
             .allowed_origin("https://example.com")

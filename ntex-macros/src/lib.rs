@@ -9,7 +9,7 @@ use quote::quote;
 /// ## Usage
 ///
 /// ```rust
-/// #[actix_rt::main]
+/// #[ntex::main]
 /// async fn main() {
 ///     println!("Hello world");
 /// }
@@ -35,7 +35,7 @@ pub fn main(_: TokenStream, item: TokenStream) -> TokenStream {
     (quote! {
         #(#attrs)*
         #vis #sig {
-            actix_rt::System::new(stringify!(#name))
+            ntex_rt::System::new(stringify!(#name))
                 .block_on(async move { #body })
         }
     })
@@ -47,7 +47,7 @@ pub fn main(_: TokenStream, item: TokenStream) -> TokenStream {
 /// ## Usage
 ///
 /// ```no_run
-/// #[actix_rt::test]
+/// #[ntex::test]
 /// async fn my_test() {
 ///     assert!(true);
 /// }
@@ -81,7 +81,7 @@ pub fn test(_: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             #(#attrs)*
             fn #name() #ret {
-                actix_rt::System::new("test")
+                ntex_rt::System::new("test")
                     .block_on(async { #body })
             }
         }
@@ -90,7 +90,7 @@ pub fn test(_: TokenStream, item: TokenStream) -> TokenStream {
             #[test]
             #(#attrs)*
             fn #name() #ret {
-                actix_rt::System::new("test")
+                ntex_rt::System::new("test")
                     .block_on(async { #body })
             }
         }

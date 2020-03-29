@@ -206,11 +206,11 @@ impl<Err: ErrorRenderer> Route<Err> {
 mod tests {
     use std::time::Duration;
 
-    use actix_rt::time::delay_for;
     use bytes::Bytes;
     use serde_derive::Serialize;
 
     use crate::http::{Method, StatusCode};
+    use crate::rt::time::delay_for;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, error, App, DefaultError, HttpResponse};
 
@@ -219,7 +219,7 @@ mod tests {
         name: String,
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_route() {
         let mut srv = init_service(
             App::new()

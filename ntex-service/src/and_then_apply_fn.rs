@@ -311,7 +311,7 @@ mod tests {
         }
     }
 
-    #[actix_rt::test]
+    #[ntex_rt::test]
     async fn test_service() {
         let mut srv = pipeline(|r: &'static str| ok(r))
             .and_then_apply_fn(Srv, |req: &'static str, s| {
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(res.unwrap(), ("srv", ()));
     }
 
-    #[actix_rt::test]
+    #[ntex_rt::test]
     async fn test_service_factory() {
         let new_srv =
             pipeline_factory(|| ok::<_, ()>(fn_service(|r: &'static str| ok(r))))

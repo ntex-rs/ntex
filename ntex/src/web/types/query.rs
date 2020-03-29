@@ -169,7 +169,7 @@ where
 //         id: String,
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_service_request_extract() {
 //         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
 //         assert!(Query::<Id>::from_query(&req.query_string()).is_err());
@@ -185,7 +185,7 @@ where
 //         assert_eq!(s.id, "test1");
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_request_extract() {
 //         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
 //         let (req, mut pl) = req.into_parts();

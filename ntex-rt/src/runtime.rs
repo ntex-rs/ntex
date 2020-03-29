@@ -30,6 +30,10 @@ impl Runtime {
         })
     }
 
+    pub(super) fn local(&self) -> &LocalSet {
+        &self.local
+    }
+
     /// Spawn a future onto the single-threaded runtime.
     ///
     /// See [module level][mod] documentation for more details.
@@ -84,7 +88,7 @@ impl Runtime {
     /// complete execution by calling `block_on` or `run`.
     pub fn block_on<F>(&mut self, f: F) -> F::Output
     where
-        F: Future + 'static,
+        F: Future,
     {
         let res = self.local.block_on(&mut self.rt, f);
         res

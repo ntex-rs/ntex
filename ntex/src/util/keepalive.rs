@@ -5,11 +5,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use actix_rt::time::{delay_until, Delay, Instant};
 use futures::future::{ok, Ready};
 
-use super::time::{LowResTime, LowResTimeService};
+use crate::rt::time::{delay_until, Delay, Instant};
 use crate::{Service, ServiceFactory};
+
+use super::time::{LowResTime, LowResTimeService};
 
 pub struct KeepAlive<R, E, F> {
     f: F,

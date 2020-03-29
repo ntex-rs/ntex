@@ -278,7 +278,7 @@ where
 ///
 /// For unit testing, actix provides a request builder type and a simple handler runner. TestRequest implements a builder-like pattern.
 /// You can generate various types of request via TestRequest's methods:
-///  * `TestRequest::to_request` creates `actix_http::Request` instance.
+///  * `TestRequest::to_request` creates `ntex::http::Request` instance.
 ///  * `TestRequest::to_srv_request` creates `WebRequest` instance, which is used for testing middlewares and chain adapters.
 ///  * `TestRequest::to_srv_response` creates `WebResponse` instance.
 ///  * `TestRequest::to_http_request` creates `HttpRequest` instance, which is used for testing handlers.
@@ -615,98 +615,102 @@ where
 
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("actix-test-server");
+        let mut sys = System::new("actix-test-server");
+
+        let cfg = cfg.clone();
+        let factory = factory.clone();
+        let ctimeout = cfg.client_timeout;
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
-        let factory = factory.clone();
-        let cfg = cfg.clone();
-        let ctimeout = cfg.client_timeout;
-        let builder = Server::build().workers(1).disable_signals();
 
-        let srv = match cfg.stream {
-            StreamType::Tcp => match cfg.tp {
-                HttpVer::Http1 => builder.listen("test", tcp, move || {
-                    let cfg =
-                        AppConfig::new(false, local_addr, format!("{}", local_addr));
-                    HttpService::build()
-                        .client_timeout(ctimeout)
-                        .h1(map_config(factory(), move |_| cfg.clone()))
-                        .tcp()
-                }),
-                HttpVer::Http2 => builder.listen("test", tcp, move || {
-                    let cfg =
-                        AppConfig::new(false, local_addr, format!("{}", local_addr));
-                    HttpService::build()
-                        .client_timeout(ctimeout)
-                        .h2(map_config(factory(), move |_| cfg.clone()))
-                        .tcp()
-                }),
-                HttpVer::Both => builder.listen("test", tcp, move || {
-                    let cfg =
-                        AppConfig::new(false, local_addr, format!("{}", local_addr));
-                    HttpService::build()
-                        .client_timeout(ctimeout)
-                        .finish(map_config(factory(), move |_| cfg.clone()))
-                        .tcp()
-                }),
-            },
-            #[cfg(feature = "openssl")]
-            StreamType::Openssl(acceptor) => match cfg.tp {
-                HttpVer::Http1 => builder.listen("test", tcp, move || {
-                    let cfg =
-                        AppConfig::new(true, local_addr, format!("{}", local_addr));
-                    HttpService::build()
-                        .client_timeout(ctimeout)
-                        .h1(map_config(factory(), move |_| cfg.clone()))
-                        .openssl(acceptor.clone())
-                }),
-                HttpVer::Http2 => builder.listen("test", tcp, move || {
-                    let cfg =
-                        AppConfig::new(true, local_addr, format!("{}", local_addr));
-                    HttpService::build()
-                        .client_timeout(ctimeout)
-                        .h2(map_config(factory(), move |_| cfg.clone()))
-                        .openssl(acceptor.clone())
-                }),
-                HttpVer::Both => builder.listen("test", tcp, move || {
-                    let cfg =
-                        AppConfig::new(true, local_addr, format!("{}", local_addr));
-                    HttpService::build()
-                        .client_timeout(ctimeout)
-                        .finish(map_config(factory(), move |_| cfg.clone()))
-                        .openssl(acceptor.clone())
-                }),
-            },
-            #[cfg(feature = "rustls")]
-            StreamType::Rustls(config) => match cfg.tp {
-                HttpVer::Http1 => builder.listen("test", tcp, move || {
-                    let cfg =
-                        AppConfig::new(true, local_addr, format!("{}", local_addr));
-                    HttpService::build()
-                        .client_timeout(ctimeout)
-                        .h1(map_config(factory(), move |_| cfg.clone()))
-                        .rustls(config.clone())
-                }),
-                HttpVer::Http2 => builder.listen("test", tcp, move || {
-                    let cfg =
-                        AppConfig::new(true, local_addr, format!("{}", local_addr));
-                    HttpService::build()
-                        .client_timeout(ctimeout)
-                        .h2(map_config(factory(), move |_| cfg.clone()))
-                        .rustls(config.clone())
-                }),
-                HttpVer::Both => builder.listen("test", tcp, move || {
-                    let cfg =
-                        AppConfig::new(true, local_addr, format!("{}", local_addr));
-                    HttpService::build()
-                        .client_timeout(ctimeout)
-                        .finish(map_config(factory(), move |_| cfg.clone()))
-                        .rustls(config.clone())
-                }),
-            },
-        }
-        .unwrap()
-        .start();
+        let srv = sys.exec(|| {
+            let builder = Server::build().workers(1).disable_signals();
+
+            match cfg.stream {
+                StreamType::Tcp => match cfg.tp {
+                    HttpVer::Http1 => builder.listen("test", tcp, move || {
+                        let cfg =
+                            AppConfig::new(false, local_addr, format!("{}", local_addr));
+                        HttpService::build()
+                            .client_timeout(ctimeout)
+                            .h1(map_config(factory(), move |_| cfg.clone()))
+                            .tcp()
+                    }),
+                    HttpVer::Http2 => builder.listen("test", tcp, move || {
+                        let cfg =
+                            AppConfig::new(false, local_addr, format!("{}", local_addr));
+                        HttpService::build()
+                            .client_timeout(ctimeout)
+                            .h2(map_config(factory(), move |_| cfg.clone()))
+                            .tcp()
+                    }),
+                    HttpVer::Both => builder.listen("test", tcp, move || {
+                        let cfg =
+                            AppConfig::new(false, local_addr, format!("{}", local_addr));
+                        HttpService::build()
+                            .client_timeout(ctimeout)
+                            .finish(map_config(factory(), move |_| cfg.clone()))
+                            .tcp()
+                    }),
+                },
+                #[cfg(feature = "openssl")]
+                StreamType::Openssl(acceptor) => match cfg.tp {
+                    HttpVer::Http1 => builder.listen("test", tcp, move || {
+                        let cfg =
+                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        HttpService::build()
+                            .client_timeout(ctimeout)
+                            .h1(map_config(factory(), move |_| cfg.clone()))
+                            .openssl(acceptor.clone())
+                    }),
+                    HttpVer::Http2 => builder.listen("test", tcp, move || {
+                        let cfg =
+                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        HttpService::build()
+                            .client_timeout(ctimeout)
+                            .h2(map_config(factory(), move |_| cfg.clone()))
+                            .openssl(acceptor.clone())
+                    }),
+                    HttpVer::Both => builder.listen("test", tcp, move || {
+                        let cfg =
+                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        HttpService::build()
+                            .client_timeout(ctimeout)
+                            .finish(map_config(factory(), move |_| cfg.clone()))
+                            .openssl(acceptor.clone())
+                    }),
+                },
+                #[cfg(feature = "rustls")]
+                StreamType::Rustls(config) => match cfg.tp {
+                    HttpVer::Http1 => builder.listen("test", tcp, move || {
+                        let cfg =
+                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        HttpService::build()
+                            .client_timeout(ctimeout)
+                            .h1(map_config(factory(), move |_| cfg.clone()))
+                            .rustls(config.clone())
+                    }),
+                    HttpVer::Http2 => builder.listen("test", tcp, move || {
+                        let cfg =
+                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        HttpService::build()
+                            .client_timeout(ctimeout)
+                            .h2(map_config(factory(), move |_| cfg.clone()))
+                            .rustls(config.clone())
+                    }),
+                    HttpVer::Both => builder.listen("test", tcp, move || {
+                        let cfg =
+                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        HttpService::build()
+                            .client_timeout(ctimeout)
+                            .finish(map_config(factory(), move |_| cfg.clone()))
+                            .rustls(config.clone())
+                    }),
+                },
+            }
+            .unwrap()
+            .start()
+        });
 
         tx.send((System::current(), srv, local_addr)).unwrap();
         sys.run()
@@ -843,7 +847,7 @@ pub fn unused_addr() -> net::SocketAddr {
 pub struct TestServer {
     addr: net::SocketAddr,
     client: Client,
-    system: actix_rt::System,
+    system: crate::rt::System,
     ssl: bool,
     server: Server,
 }
@@ -957,7 +961,7 @@ mod tests {
     use crate::http::HttpMessage;
     use crate::web::{self, App, Data, Error, HttpResponse};
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_basics() {
         let req = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
             .version(Version::HTTP_2)
@@ -978,7 +982,7 @@ mod tests {
         assert_eq!(*data.get_ref(), 20);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_request_methods() {
         let mut app = init_service(
             App::new().service(
@@ -1016,7 +1020,7 @@ mod tests {
         assert_eq!(result, Bytes::from_static(b"delete!"));
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_response() {
         let mut app =
             init_service(App::new().service(web::resource("/index.html").route(
@@ -1039,7 +1043,7 @@ mod tests {
         name: String,
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_response_json() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Json<Person>| async {
@@ -1060,7 +1064,7 @@ mod tests {
         assert_eq!(&result.id, "12345");
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_request_response_form() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Form<Person>| async {
@@ -1086,7 +1090,7 @@ mod tests {
         assert_eq!(&result.name, "User name");
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_request_response_json() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Json<Person>| async {
@@ -1112,7 +1116,7 @@ mod tests {
         assert_eq!(&result.name, "User name");
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_async_with_block() {
         async fn async_with_block() -> Result<HttpResponse, Error> {
             let res = web::block(move || Some(4usize).ok_or("wrong")).await;
@@ -1138,7 +1142,7 @@ mod tests {
         assert!(res.status().is_success());
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_server_data() {
         async fn handler(data: web::Data<usize>) -> crate::http::ResponseBuilder {
             assert_eq!(**data, 10);

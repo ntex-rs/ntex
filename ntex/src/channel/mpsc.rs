@@ -195,7 +195,7 @@ mod tests {
     use futures::future::lazy;
     use futures::{Stream, StreamExt};
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_mpsc() {
         let (tx, mut rx) = channel();
         tx.send("test").unwrap();

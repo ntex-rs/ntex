@@ -58,7 +58,7 @@ where
                 Poll::Ready(_) => match this.stream.poll_next(cx) {
                     Poll::Ready(Some(item)) => {
                         let stop = this.err_tx.clone();
-                        actix_rt::spawn(this.service.call(item).map(move |res| {
+                        crate::rt::spawn(this.service.call(item).map(move |res| {
                             if let Err(e) = res {
                                 let _ = stop.send(e);
                             }

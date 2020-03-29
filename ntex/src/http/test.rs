@@ -307,15 +307,18 @@ pub fn server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
 
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("actix-test-server");
+        let mut sys = System::new("actix-test-server");
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
-        Server::build()
-            .listen("test", tcp, factory)?
-            .workers(1)
-            .disable_signals()
-            .start();
+        sys.exec(|| {
+            Server::build()
+                .listen("test", tcp, factory)?
+                .workers(1)
+                .disable_signals()
+                .start();
+            Ok::<_, io::Error>(())
+        })?;
 
         tx.send((System::current(), local_addr)).unwrap();
         sys.run()

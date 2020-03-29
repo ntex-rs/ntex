@@ -1,5 +1,5 @@
 use std::any::{Any, TypeId};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9,22 +9,20 @@ use std::{fmt, thread};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot::{channel, Canceled, Sender};
 use futures::{future, Future, FutureExt, Stream};
+use tokio::task::LocalSet;
 
-use crate::runtime::Runtime;
-use crate::system::System;
-
-use copyless::BoxHelper;
+use super::runtime::Runtime;
+use super::system::System;
 
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = RefCell::new(None);
-    static RUNNING: Cell<bool> = Cell::new(false);
-    static Q: RefCell<Vec<Pin<Box<dyn Future<Output = ()>>>>> = RefCell::new(Vec::new());
-    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::new());
+    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> =
+        RefCell::new(HashMap::new());
 );
 
-pub(crate) static COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(super) static COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) enum ArbiterCommand {
+pub(super) enum ArbiterCommand {
     Stop,
     Execute(Box<dyn Future<Output = ()> + Unpin + Send>),
     ExecuteFn(Box<dyn FnExec>),
@@ -62,14 +60,14 @@ impl Default for Arbiter {
 }
 
 impl Arbiter {
-    pub(crate) fn new_system() -> Self {
+    pub(super) fn new_system(local: &LocalSet) -> Self {
         let (tx, rx) = unbounded();
 
         let arb = Arbiter::with_sender(tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
-        RUNNING.with(|cell| cell.set(false));
         STORAGE.with(|cell| cell.borrow_mut().clear());
-        Arbiter::spawn(ArbiterController { stop: None, rx });
+
+        local.spawn_local(ArbiterController { stop: None, rx });
 
         arb
     }
@@ -104,7 +102,6 @@ impl Arbiter {
                 let arb = Arbiter::with_sender(arb_tx);
 
                 let (stop, stop_rx) = channel();
-                RUNNING.with(|cell| cell.set(true));
                 STORAGE.with(|cell| cell.borrow_mut().clear());
 
                 System::set_current(sys);
@@ -142,44 +139,17 @@ impl Arbiter {
         }
     }
 
-    pub(crate) fn run_system(rt: Option<&Runtime>) {
-        RUNNING.with(|cell| cell.set(true));
-        Q.with(|cell| {
-            let mut v = cell.borrow_mut();
-            for fut in v.drain(..) {
-                if let Some(rt) = rt {
-                    rt.spawn(fut);
-                } else {
-                    tokio::task::spawn_local(fut);
-                }
-            }
-        });
-    }
-
-    pub(crate) fn stop_system() {
-        RUNNING.with(|cell| cell.set(false));
-    }
-
     /// Spawn a future on the current thread. This does not create a new Arbiter
     /// or Arbiter address, it is simply a helper for spawning futures on the current
     /// thread.
+    ///
+    /// Panics if arbiter is not started.
+    #[inline]
     pub fn spawn<F>(future: F)
     where
         F: Future<Output = ()> + 'static,
     {
-        RUNNING.with(move |cell| {
-            if cell.get() {
-                // Spawn the future on running executor
-                tokio::task::spawn_local(future);
-            } else {
-                // Box the future and push it to the queue, this results in double boxing
-                // because the executor boxes the future again, but works for now
-                Q.with(move |cell| {
-                    cell.borrow_mut()
-                        .push(unsafe { Pin::new_unchecked(Box::alloc().init(future)) })
-                });
-            }
-        });
+        tokio::task::spawn_local(future);
     }
 
     /// Executes a future on the current thread. This does not create a new Arbiter
@@ -237,7 +207,9 @@ impl Arbiter {
 
     /// Set item to arbiter storage
     pub fn set_item<T: 'static>(item: T) {
-        STORAGE.with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), Box::new(item)));
+        STORAGE.with(move |cell| {
+            cell.borrow_mut().insert(TypeId::of::<T>(), Box::new(item))
+        });
     }
 
     /// Check if arbiter storage contains item
@@ -273,7 +245,9 @@ impl Arbiter {
             let mut st = cell.borrow_mut();
             let item = st
                 .get_mut(&TypeId::of::<T>())
-                .and_then(|boxed| (&mut **boxed as &mut (dyn Any + 'static)).downcast_mut())
+                .and_then(|boxed| {
+                    (&mut **boxed as &mut (dyn Any + 'static)).downcast_mut()
+                })
                 .unwrap();
             f(item)
         })
@@ -342,21 +316,24 @@ impl Future for ArbiterController {
 }
 
 #[derive(Debug)]
-pub(crate) enum SystemCommand {
+pub(super) enum SystemCommand {
     Exit(i32),
     RegisterArbiter(usize, Arbiter),
     UnregisterArbiter(usize),
 }
 
 #[derive(Debug)]
-pub(crate) struct SystemArbiter {
+pub(super) struct SystemArbiter {
     stop: Option<Sender<i32>>,
     commands: UnboundedReceiver<SystemCommand>,
     arbiters: HashMap<usize, Arbiter>,
 }
 
 impl SystemArbiter {
-    pub(crate) fn new(stop: Sender<i32>, commands: UnboundedReceiver<SystemCommand>) -> Self {
+    pub(super) fn new(
+        stop: Sender<i32>,
+        commands: UnboundedReceiver<SystemCommand>,
+    ) -> Self {
         SystemArbiter {
             commands,
             stop: Some(stop),
@@ -396,7 +373,7 @@ impl Future for SystemArbiter {
     }
 }
 
-pub trait FnExec: Send + 'static {
+pub(super) trait FnExec: Send + 'static {
     fn call_box(self: Box<Self>);
 }
 

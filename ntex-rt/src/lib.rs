@@ -1,10 +1,4 @@
 //! A runtime implementation that runs everything on the current thread.
-#![deny(rust_2018_idioms, warnings)]
-#![allow(clippy::type_complexity)]
-
-#[cfg(not(test))] // Work around for rust-lang/rust#62127
-pub use actix_macros::{main, test};
-
 mod arbiter;
 mod builder;
 mod runtime;
@@ -15,6 +9,9 @@ pub use self::builder::{Builder, SystemRunner};
 pub use self::runtime::Runtime;
 pub use self::system::System;
 
+#[cfg(not(test))] // Work around for rust-lang/rust#62127
+pub use ntex_macros::{main, test};
+
 #[doc(hidden)]
 pub use actix_threadpool as blocking;
 
@@ -23,6 +20,7 @@ pub use actix_threadpool as blocking;
 /// # Panics
 ///
 /// This function panics if actix system is not running.
+#[inline]
 pub fn spawn<F>(f: F)
 where
     F: futures::Future<Output = ()> + 'static,
@@ -49,7 +47,7 @@ pub mod net {
     pub use tokio::net::{TcpListener, TcpStream};
 
     #[cfg(unix)]
-    mod unix {
+    pub mod unix {
         pub use tokio::net::{UnixDatagram, UnixListener, UnixStream};
     }
 

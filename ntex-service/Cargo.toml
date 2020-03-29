@@ -20,4 +20,4 @@ futures-util = "0.3.1"
 pin-project = "0.4.6"
 
 [dev-dependencies]
-actix-rt = "1.0.0"
+ntex-rt = "1.0"

@@ -15,7 +15,7 @@
 #[macro_use]
 extern crate log;
 
-pub use actix_macros::{main, test};
+pub use ntex_macros::{main, test};
 
 pub mod channel;
 pub mod codec;

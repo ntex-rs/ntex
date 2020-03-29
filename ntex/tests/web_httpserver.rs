@@ -23,27 +23,29 @@ async fn test_start() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let mut sys = ntex::rt::System::new("test");
 
-        let srv = HttpServer::new(|| {
-            App::new().service(
-                web::resource("/")
-                    .route(web::to(|| async { HttpResponse::Ok().body("test") })),
-            )
-        })
-        .workers(1)
-        .backlog(1)
-        .maxconn(10)
-        .maxconnrate(10)
-        .keep_alive(10)
-        .client_timeout(5000)
-        .client_shutdown(0)
-        .server_hostname("localhost")
-        .system_exit()
-        .disable_signals()
-        .bind(format!("{}", addr))
-        .unwrap()
-        .run();
+        let srv = sys.exec(|| {
+            HttpServer::new(|| {
+                App::new().service(
+                    web::resource("/")
+                        .route(web::to(|| async { HttpResponse::Ok().body("test") })),
+                )
+            })
+            .workers(1)
+            .backlog(1)
+            .maxconn(10)
+            .maxconnrate(10)
+            .keep_alive(10)
+            .client_timeout(5000)
+            .client_shutdown(0)
+            .server_hostname("localhost")
+            .system_exit()
+            .disable_signals()
+            .bind(format!("{}", addr))
+            .unwrap()
+            .run()
+        });
 
         let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
@@ -94,24 +96,26 @@ async fn test_start_ssl() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let mut sys = ntex::rt::System::new("test");
         let builder = ssl_acceptor().unwrap();
 
-        let srv = HttpServer::new(|| {
-            App::new().service(web::resource("/").route(web::to(
-                |req: HttpRequest| async move {
-                    assert!(req.app_config().secure());
-                    HttpResponse::Ok().body("test")
-                },
-            )))
-        })
-        .workers(1)
-        .shutdown_timeout(1)
-        .system_exit()
-        .disable_signals()
-        .bind_openssl(format!("{}", addr), builder)
-        .unwrap()
-        .run();
+        let srv = sys.exec(|| {
+            HttpServer::new(|| {
+                App::new().service(web::resource("/").route(web::to(
+                    |req: HttpRequest| async move {
+                        assert!(req.app_config().secure());
+                        HttpResponse::Ok().body("test")
+                    },
+                )))
+            })
+            .workers(1)
+            .shutdown_timeout(1)
+            .system_exit()
+            .disable_signals()
+            .bind_openssl(format!("{}", addr), builder)
+            .unwrap()
+            .run()
+        });
 
         let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();

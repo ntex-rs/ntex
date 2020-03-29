@@ -280,7 +280,7 @@ tuple_from_req!(TupleFromRequest10, (0, A), (1, B), (2, C), (3, D), (4, E), (5, 
 //         extract
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_option() {
 //         let (req, mut pl) = TestRequest::with_header(
 //             header::CONTENT_TYPE,
@@ -326,7 +326,7 @@ tuple_from_req!(TupleFromRequest10, (0, A), (1, B), (2, C), (3, D), (4, E), (5, 
 //         assert_eq!(r, None);
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_result() {
 //         let (req, mut pl) = TestRequest::with_header(
 //             header::CONTENT_TYPE,

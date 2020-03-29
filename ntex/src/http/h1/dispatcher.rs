@@ -913,7 +913,7 @@ mod tests {
     use crate::http::test::TestBuffer;
     use crate::IntoService;
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_req_parse_err() {
         lazy(|cx| {
             let buf = TestBuffer::new("GET /test HTTP/1\r\n\r\n");

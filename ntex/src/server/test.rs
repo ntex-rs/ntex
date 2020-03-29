@@ -1,11 +1,11 @@
 //! Test server
 use std::sync::mpsc;
-use std::{net, thread};
+use std::{io, net, thread};
 
-use actix_rt::{net::TcpStream, System};
 use net2::TcpBuilder;
 
-use super::{Server, ServerBuilder, ServiceFactory};
+use crate::rt::{net::TcpStream, System};
+use crate::server::{Server, ServerBuilder, ServiceFactory};
 
 /// Start test server
 ///
@@ -43,15 +43,18 @@ pub fn test_server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
 
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("ntex-test-server");
+        let mut sys = System::new("ntex-test-server");
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
-        Server::build()
-            .listen("test", tcp, factory)?
-            .workers(1)
-            .disable_signals()
-            .start();
+        sys.exec(|| {
+            Server::build()
+                .listen("test", tcp, factory)?
+                .workers(1)
+                .disable_signals()
+                .start();
+            Ok::<_, io::Error>(())
+        })?;
 
         tx.send((System::current(), local_addr)).unwrap();
         sys.run()
@@ -71,11 +74,14 @@ where
 
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("actix-test-server");
-        factory(Server::build())
-            .workers(1)
-            .disable_signals()
-            .start();
+        let mut sys = System::new("actix-test-server");
+
+        sys.exec(|| {
+            factory(Server::build())
+                .workers(1)
+                .disable_signals()
+                .start();
+        });
 
         tx.send(System::current()).unwrap();
         sys.run()

@@ -162,11 +162,11 @@ impl FromStream for TcpStream {
 }
 
 #[cfg(all(unix))]
-impl FromStream for actix_rt::net::UnixStream {
+impl FromStream for crate::rt::net::UnixStream {
     fn from_stdstream(sock: StdStream) -> io::Result<Self> {
         match sock {
             StdStream::Tcp(_) => panic!("Should not happen, bug in server impl"),
-            StdStream::Uds(stream) => actix_rt::net::UnixStream::from_std(stream),
+            StdStream::Uds(stream) => crate::rt::net::UnixStream::from_std(stream),
         }
     }
 }

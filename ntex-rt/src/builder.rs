@@ -6,9 +6,9 @@ use futures::channel::oneshot::{channel, Receiver};
 use futures::future::{lazy, Future, FutureExt};
 use tokio::task::LocalSet;
 
-use crate::arbiter::{Arbiter, SystemArbiter};
-use crate::runtime::Runtime;
-use crate::system::System;
+use super::arbiter::{Arbiter, SystemArbiter};
+use super::runtime::Runtime;
+use super::system::System;
 
 /// Builder struct for a actix runtime.
 ///
@@ -24,7 +24,7 @@ pub struct Builder {
 }
 
 impl Builder {
-    pub(crate) fn new() -> Self {
+    pub(super) fn new() -> Self {
         Builder {
             name: Cow::Borrowed("actix"),
             stop_on_panic: false,
@@ -56,7 +56,7 @@ impl Builder {
     /// Create new System that can run asynchronously.
     ///
     /// This method panics if it cannot start the system arbiter
-    pub(crate) fn build_async(self, local: &LocalSet) -> AsyncSystemRunner {
+    pub(super) fn build_async(self, local: &LocalSet) -> AsyncSystemRunner {
         self.create_async_runtime(local)
     }
 
@@ -74,7 +74,11 @@ impl Builder {
         let (stop_tx, stop) = channel();
         let (sys_sender, sys_receiver) = unbounded();
 
-        let system = System::construct(sys_sender, Arbiter::new_system(), self.stop_on_panic);
+        let system = System::construct(
+            sys_sender,
+            Arbiter::new_system(local),
+            self.stop_on_panic,
+        );
 
         // system arbiter
         let arb = SystemArbiter::new(stop_tx, sys_receiver);
@@ -92,12 +96,15 @@ impl Builder {
         let (stop_tx, stop) = channel();
         let (sys_sender, sys_receiver) = unbounded();
 
-        let system = System::construct(sys_sender, Arbiter::new_system(), self.stop_on_panic);
+        let mut rt = Runtime::new().unwrap();
 
         // system arbiter
+        let system = System::construct(
+            sys_sender,
+            Arbiter::new_system(rt.local()),
+            self.stop_on_panic,
+        );
         let arb = SystemArbiter::new(stop_tx, sys_receiver);
-
-        let mut rt = Runtime::new().unwrap();
         rt.spawn(arb);
 
         // init system arbiter and run configuration method
@@ -108,7 +115,7 @@ impl Builder {
 }
 
 #[derive(Debug)]
-pub(crate) struct AsyncSystemRunner {
+pub(super) struct AsyncSystemRunner {
     stop: Receiver<i32>,
     system: System,
 }
@@ -116,29 +123,27 @@ pub(crate) struct AsyncSystemRunner {
 impl AsyncSystemRunner {
     /// This function will start event loop and returns a future that
     /// resolves once the `System::stop()` function is called.
-    pub(crate) fn run_nonblocking(self) -> impl Future<Output = Result<(), io::Error>> + Send {
+    pub(super) fn run_nonblocking(
+        self,
+    ) -> impl Future<Output = Result<(), io::Error>> + Send {
         let AsyncSystemRunner { stop, .. } = self;
 
         // run loop
-        lazy(|_| {
-            Arbiter::run_system(None);
-            async {
-                let res = match stop.await {
-                    Ok(code) => {
-                        if code != 0 {
-                            Err(io::Error::new(
-                                io::ErrorKind::Other,
-                                format!("Non-zero exit code: {}", code),
-                            ))
-                        } else {
-                            Ok(())
-                        }
+        lazy(|_| async {
+            let res = match stop.await {
+                Ok(code) => {
+                    if code != 0 {
+                        Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("Non-zero exit code: {}", code),
+                        ))
+                    } else {
+                        Ok(())
                     }
-                    Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
-                };
-                Arbiter::stop_system();
-                return res;
-            }
+                }
+                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            };
+            return res;
         })
         .flatten()
     }
@@ -160,7 +165,6 @@ impl SystemRunner {
         let SystemRunner { mut rt, stop, .. } = self;
 
         // run loop
-        Arbiter::run_system(Some(&rt));
         let result = match rt.block_on(stop) {
             Ok(code) => {
                 if code != 0 {
@@ -174,18 +178,24 @@ impl SystemRunner {
             }
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
         };
-        Arbiter::stop_system();
         result
     }
 
     /// Execute a future and wait for result.
+    #[inline]
     pub fn block_on<F, O>(&mut self, fut: F) -> O
     where
-        F: Future<Output = O> + 'static,
+        F: Future<Output = O>,
     {
-        Arbiter::run_system(Some(&self.rt));
-        let res = self.rt.block_on(fut);
-        Arbiter::stop_system();
-        res
+        self.rt.block_on(fut)
+    }
+
+    /// Execute a function with enabled executor.
+    #[inline]
+    pub fn exec<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        self.rt.block_on(lazy(|_| f()))
     }
 }

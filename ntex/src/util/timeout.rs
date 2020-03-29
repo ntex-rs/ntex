@@ -8,9 +8,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, time};
 
-use actix_rt::time::{delay_for, Delay};
 use futures::future::{ok, Ready};
 
+use crate::rt::time::{delay_for, Delay};
 use crate::service::{IntoService, Service, Transform};
 
 /// Applies a timeout to requests.
@@ -203,13 +203,13 @@ mod tests {
         }
 
         fn call(&mut self, _: ()) -> Self::Future {
-            actix_rt::time::delay_for(self.0)
+            crate::rt::time::delay_for(self.0)
                 .then(|_| ok::<_, ()>(()))
                 .boxed_local()
         }
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_success() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
@@ -218,7 +218,7 @@ mod tests {
         assert_eq!(timeout.call(()).await, Ok(()));
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_timeout() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_timeout_newservice() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);

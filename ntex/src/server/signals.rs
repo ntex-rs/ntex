@@ -26,22 +26,22 @@ pub(crate) struct Signals {
     #[cfg(not(unix))]
     stream: Pin<Box<dyn Future<Output = io::Result<()>>>>,
     #[cfg(unix)]
-    streams: Vec<(Signal, actix_rt::signal::unix::Signal)>,
+    streams: Vec<(Signal, crate::rt::signal::unix::Signal)>,
 }
 
 impl Signals {
     pub(crate) fn start(srv: Server) -> io::Result<()> {
-        actix_rt::spawn(lazy(|_| {
+        crate::rt::spawn(lazy(|_| {
             #[cfg(not(unix))]
             {
-                actix_rt::spawn(Signals {
+                crate::rt::spawn(Signals {
                     srv,
-                    stream: Box::pin(actix_rt::signal::ctrl_c()),
+                    stream: Box::pin(crate::rt::signal::ctrl_c()),
                 });
             }
             #[cfg(unix)]
             {
-                use actix_rt::signal::unix;
+                use crate::rt::signal::unix;
 
                 let mut streams = Vec::new();
 
@@ -63,7 +63,7 @@ impl Signals {
                     }
                 }
 
-                actix_rt::spawn(Signals { srv, streams })
+                crate::rt::spawn(Signals { srv, streams })
             }
         }));
 

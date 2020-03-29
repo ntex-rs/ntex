@@ -490,7 +490,7 @@ mod tests {
     use crate::web::test::TestRequest;
     use crate::web::{DefaultError, Error};
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_logger() {
         let srv = |req: WebRequest<DefaultError>| {
             ok::<_, Error>(
@@ -515,7 +515,7 @@ mod tests {
         let _res = srv.call(req).await;
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_url_path() {
         let mut format = Format::new("%T %U");
         let req = TestRequest::with_header(
@@ -545,7 +545,7 @@ mod tests {
         assert!(s.contains("/test/route/yeah"));
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_default_format() {
         let mut format = Format::default();
 
@@ -578,7 +578,7 @@ mod tests {
         assert!(s.contains("ACTIX-WEB"));
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_request_time_format() {
         let mut format = Format::new("%t");
         let req = TestRequest::default().to_srv_request();

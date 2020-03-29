@@ -450,7 +450,7 @@ where
         mut self,
         lst: std::os::unix::net::UnixListener,
     ) -> io::Result<Self> {
-        use actix_rt::net::UnixStream;
+        use crate::rt::net::UnixStream;
 
         let cfg = self.config.clone();
         let factory = self.factory.clone();
@@ -490,7 +490,7 @@ where
     where
         A: AsRef<std::path::Path>,
     {
-        use actix_rt::net::UnixStream;
+        use crate::rt::net::UnixStream;
 
         let cfg = self.config.clone();
         let factory = self.factory.clone();

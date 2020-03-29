@@ -558,18 +558,18 @@ impl<Err: ErrorRenderer> ServiceFactory for ResourceEndpoint<Err> {
 mod tests {
     use std::time::Duration;
 
-    use actix_rt::time::delay_for;
     use futures::future::{ok, ready};
 
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
+    use crate::rt::time::delay_for;
     use crate::web::middleware::DefaultHeaders;
     use crate::web::service::WebRequest;
     use crate::web::test::{call_service, init_service, TestRequest};
     use crate::web::{self, guard, App, DefaultError, Error, HttpResponse};
     use crate::Service;
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_middleware() {
         let mut srv =
             init_service(
@@ -593,7 +593,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_middleware_fn() {
         let mut srv = init_service(
             App::new().service(
@@ -623,7 +623,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_to() {
         let mut srv =
             init_service(App::new().service(web::resource("/test").to(|| async {
@@ -636,7 +636,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_pattern() {
         let mut srv = init_service(App::new().service(
             web::resource(["/test", "/test2"]).to(|| async { HttpResponse::Ok() }),
@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_default_resource() {
         let mut srv = init_service(
             App::new()
@@ -695,7 +695,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_resource_guards() {
         let mut srv = init_service(
             App::new()
@@ -736,7 +736,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_data() {
         let mut srv = init_service(
             App::new()

@@ -3,9 +3,6 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use std::{io, mem, net};
 
-use actix_rt::net::TcpStream;
-use actix_rt::time::{delay_until, Instant};
-use actix_rt::{spawn, System};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use futures::channel::oneshot;
 use futures::future::ready;
@@ -14,6 +11,10 @@ use futures::{ready, Future, FutureExt, Stream, StreamExt};
 use log::{error, info};
 use net2::TcpBuilder;
 use num_cpus;
+
+use crate::rt::net::TcpStream;
+use crate::rt::time::{delay_until, Instant};
+use crate::rt::{spawn, System};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfiguredService, ServiceConfig};
@@ -187,7 +188,7 @@ impl ServerBuilder {
     /// Add new unix domain service to the server.
     pub fn bind_uds<F, U, N>(self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
-        F: ServiceFactory<actix_rt::net::UnixStream>,
+        F: ServiceFactory<crate::rt::net::UnixStream>,
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
     {
@@ -217,7 +218,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: ServiceFactory<actix_rt::net::UnixStream>,
+        F: ServiceFactory<crate::rt::net::UnixStream>,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();

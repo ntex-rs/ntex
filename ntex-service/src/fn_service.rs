@@ -23,7 +23,7 @@ where
 ///
 /// ```rust
 /// use std::io;
-/// use actix_service::{fn_factory, fn_service, Service, ServiceFactory};
+/// use ntex_service::{fn_factory, fn_service, Service, ServiceFactory};
 /// use futures_util::future::ok;
 ///
 /// /// Service that divides two usize values.
@@ -35,7 +35,7 @@ where
 ///     }
 /// }
 ///
-/// #[actix_rt::main]
+/// #[ntex::main]
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory that produces `div` services
 ///     let factory = fn_factory(|| {
@@ -73,10 +73,10 @@ where
 ///
 /// ```rust
 /// use std::io;
-/// use actix_service::{fn_factory_with_config, fn_service, Service, ServiceFactory};
+/// use ntex_service::{fn_factory_with_config, fn_service, Service, ServiceFactory};
 /// use futures_util::future::ok;
 ///
-/// #[actix_rt::main]
+/// #[ntex::main]
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory. factory uses config argument for
 ///     // services it generates.
@@ -370,7 +370,7 @@ mod tests {
     use super::*;
     use crate::{Service, ServiceFactory};
 
-    #[actix_rt::test]
+    #[ntex_rt::test]
     async fn test_fn_service() {
         let new_srv = fn_service(|()| ok::<_, ()>("srv"));
 
@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(res.unwrap(), "srv");
     }
 
-    #[actix_rt::test]
+    #[ntex_rt::test]
     async fn test_fn_service_service() {
         let mut srv = fn_service(|()| ok::<_, ()>("srv"));
 
@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(res.unwrap(), "srv");
     }
 
-    #[actix_rt::test]
+    #[ntex_rt::test]
     async fn test_fn_service_with_config() {
         let new_srv = fn_factory_with_config(|cfg: usize| {
             ok::<_, ()>(fn_service(move |()| ok::<_, ()>(("srv", cfg))))

@@ -410,7 +410,7 @@ mod tests {
     use super::*;
     use crate::http::client::Client;
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_debug() {
         let request = Client::new().ws("/").header("x-test", "111");
         let repr = format!("{:?}", request);
@@ -418,7 +418,7 @@ mod tests {
         assert!(repr.contains("x-test"));
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_header_override() {
         let req = Client::build()
             .header(header::CONTENT_TYPE, "111")
@@ -437,7 +437,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn basic_auth() {
         let req = Client::new()
             .ws("/")
@@ -464,7 +464,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn bearer_auth() {
         let req = Client::new().ws("/").bearer_auth("someS3cr3tAutht0k3n");
         assert_eq!(
@@ -480,7 +480,7 @@ mod tests {
     }
 
     #[cfg(feature = "cookie")]
-    #[crate::test]
+    #[ntex_rt::test]
     async fn basics() {
         let req = Client::new()
             .ws("http://localhost/")

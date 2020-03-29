@@ -362,7 +362,7 @@ where
 //         counter: i64,
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_form() {
 //         let (req, mut pl) =
 //             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -398,7 +398,7 @@ where
 //         }
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_urlencoded_error() {
 //         let (req, mut pl) =
 //             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -424,7 +424,7 @@ where
 //         assert!(eq(info.err().unwrap(), UrlencodedError::ContentType));
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_urlencoded() {
 //         let (req, mut pl) =
 //             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -459,7 +459,7 @@ where
 //         );
 //     }
 
-//     #[crate::test]
+//     #[ntex_rt::test]
 //     async fn test_responder() {
 //         let req = TestRequest::default().to_http_request();
 

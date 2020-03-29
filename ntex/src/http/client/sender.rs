@@ -5,7 +5,6 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use actix_rt::time::{delay_for, Delay};
 use bytes::Bytes;
 use derive_more::From;
 use futures::{Future, Stream};
@@ -16,6 +15,7 @@ use crate::http::body::{Body, BodyStream};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, IntoHeaderValue};
 use crate::http::RequestHead;
+use crate::rt::time::{delay_for, Delay};
 
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;

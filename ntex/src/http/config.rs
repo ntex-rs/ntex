@@ -266,7 +266,7 @@ impl DateService {
 
             // periodic date update
             let s = self.clone();
-            actix_rt::spawn(delay_for(Duration::from_millis(500)).then(move |_| {
+            crate::rt::spawn(delay_for(Duration::from_millis(500)).then(move |_| {
                 s.0.reset();
                 future::ready(())
             }));
@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(DATE_VALUE_LENGTH, "Sun, 06 Nov 1994 08:49:37 GMT".len());
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_date() {
         let settings = ServiceConfig::new(KeepAlive::Os, 0, 0, false, None);
         let mut buf1 = BytesMut::with_capacity(DATE_VALUE_LENGTH + 10);

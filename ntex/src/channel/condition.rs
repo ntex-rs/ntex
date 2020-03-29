@@ -98,7 +98,7 @@ mod tests {
     use super::*;
     use futures::future::lazy;
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_condition() {
         let mut cond = Condition::new();
         let mut waiter = cond.wait();

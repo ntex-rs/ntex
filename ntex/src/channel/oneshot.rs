@@ -255,7 +255,7 @@ mod tests {
     use super::*;
     use futures::future::lazy;
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_oneshot() {
         let (tx, rx) = channel();
         tx.send("test").unwrap();
@@ -282,7 +282,7 @@ mod tests {
         assert!(rx.await.is_err());
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_pool() {
         let (tx, rx) = pool().channel();
         tx.send("test").unwrap();

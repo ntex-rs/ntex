@@ -689,7 +689,7 @@ mod tests {
     use crate::web::DefaultError;
     use crate::web::{self, guard, App, HttpRequest, HttpResponse};
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_scope() {
         let mut srv =
             init_service(App::new().service(
@@ -704,7 +704,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_scope_root() {
         let mut srv = init_service(
             App::new().service(
@@ -726,7 +726,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_scope_root2() {
         let mut srv = init_service(
             App::new().service(
@@ -745,7 +745,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_scope_root3() {
         let mut srv = init_service(
             App::new().service(
@@ -764,7 +764,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_scope_route() {
         let mut srv = init_service(
             App::new().service(
@@ -792,7 +792,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_scope_route_without_leading_slash() {
         let mut srv = init_service(
             App::new().service(
@@ -822,7 +822,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_scope_guard() {
         let mut srv =
             init_service(App::new().service(
@@ -845,7 +845,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_scope_variable_segment() {
         let mut srv =
             init_service(App::new().service(web::scope("/ab-{project}").service(
@@ -873,7 +873,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_nested_scope() {
         let mut srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("/t1").service(
@@ -887,7 +887,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_nested_scope_no_slash() {
         let mut srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("t1").service(
@@ -901,7 +901,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_nested_scope_root() {
         let mut srv = init_service(
             App::new().service(
@@ -925,7 +925,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_nested_scope_filter() {
         let mut srv =
             init_service(App::new().service(web::scope("/app").service(
@@ -948,7 +948,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_nested_scope_with_variable_segment() {
         let mut srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("/{project_id}").service(web::resource("/path1").to(
@@ -973,7 +973,7 @@ mod tests {
         }
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_nested2_scope_with_variable_segment() {
         let mut srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("/{project}").service(web::scope("/{id}").service(
@@ -1005,7 +1005,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_default_resource() {
         let mut srv = init_service(
             App::new().service(
@@ -1027,7 +1027,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_default_resource_propagation() {
         let mut srv = init_service(
             App::new()
@@ -1054,7 +1054,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_middleware() {
         let mut srv = init_service(
             App::new().service(
@@ -1080,7 +1080,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_middleware_fn() {
         let mut srv = init_service(
             App::new().service(
@@ -1108,7 +1108,7 @@ mod tests {
         );
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_override_data() {
         let mut srv = init_service(App::new().data(1usize).service(
             web::scope("app").data(10usize).route(
@@ -1127,7 +1127,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_override_app_data() {
         let mut srv = init_service(App::new().app_data(web::Data::new(1usize)).service(
             web::scope("app").app_data(web::Data::new(10usize)).route(
@@ -1146,7 +1146,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_scope_config() {
         let mut srv =
             init_service(App::new().service(web::scope("/app").configure(|s| {
@@ -1159,7 +1159,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_scope_config_2() {
         let mut srv =
             init_service(App::new().service(web::scope("/app").configure(|s| {
@@ -1174,7 +1174,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_url_for_external() {
         let mut srv =
             init_service(App::new().service(web::scope("/app").configure(|s| {
@@ -1203,7 +1203,7 @@ mod tests {
         assert_eq!(body, &b"https://youtube.com/watch/xxxxxx"[..]);
     }
 
-    #[crate::test]
+    #[ntex_rt::test]
     async fn test_url_for_nested() {
         let mut srv = init_service(App::new().service(web::scope("/a").service(
             web::scope("/b").service(web::resource("/c/{stuff}").name("c").route(
