@@ -2,7 +2,7 @@
 use std::sync::mpsc;
 use std::{net, thread};
 
-use actix_rt::{net::TcpStream, System};
+use ntex_rt::{net::TcpStream, System};
 use net2::TcpBuilder;
 
 use super::{Server, ServerBuilder, ServiceFactory};

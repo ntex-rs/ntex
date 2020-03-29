@@ -3,6 +3,7 @@ use std::convert::TryFrom;
 use std::{borrow, fmt, hash, ops, str};
 
 use bytes::Bytes;
+use crate::router::ResourcePath;
 
 /// A utf-8 encoded string with [`Bytes`] as a storage.
 ///
@@ -34,6 +35,12 @@ impl ByteString {
     /// Creates a new `ByteString` from a Bytes.
     pub const unsafe fn from_bytes_unchecked(src: Bytes) -> ByteString {
         Self(src)
+    }
+}
+
+impl ResourcePath for ByteString {
+    fn path(&self) -> &str {
+        &*self
     }
 }
 

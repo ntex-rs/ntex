@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::{fmt, io, net};
 
-use actix_rt::net::TcpStream;
+use ntex_rt::net::TcpStream;
 use futures::future::{ok, Future, FutureExt, LocalBoxFuture};
 use log::error;
 

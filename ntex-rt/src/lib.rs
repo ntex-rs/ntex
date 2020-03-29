@@ -3,20 +3,18 @@
 #![allow(clippy::type_complexity)]
 
 #[cfg(not(test))] // Work around for rust-lang/rust#62127
-pub use actix_macros::{main, test};
+pub use ntex_macros::{main, test};
 
 mod arbiter;
 mod builder;
 mod runtime;
 mod system;
+pub mod blocking;
 
 pub use self::arbiter::Arbiter;
 pub use self::builder::{Builder, SystemRunner};
 pub use self::runtime::Runtime;
 pub use self::system::System;
-
-#[doc(hidden)]
-pub use actix_threadpool as blocking;
 
 /// Spawns a future on the current arbiter.
 ///

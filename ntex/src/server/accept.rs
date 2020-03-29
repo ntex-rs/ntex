@@ -2,8 +2,8 @@ use std::sync::mpsc as sync_mpsc;
 use std::time::Duration;
 use std::{io, thread};
 
-use actix_rt::time::{delay_until, Instant};
-use actix_rt::System;
+use ntex_rt::time::{delay_until, Instant};
+use ntex_rt::System;
 use log::{error, info};
 use slab::Slab;
 

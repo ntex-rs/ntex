@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use actix_rt::time::{delay_for, Delay};
+use ntex_rt::time::{delay_for, Delay};
 use bytes::Bytes;
 use derive_more::From;
 use futures::{Future, Stream};

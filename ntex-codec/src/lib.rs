@@ -2,10 +2,12 @@
 //!
 //! Contains adapters to go from streams of bytes, [`AsyncRead`] and
 //! [`AsyncWrite`], to framed streams implementing [`Sink`] and [`Stream`].
-//! Framed streams are also known as [transports].
+//! Framed streams are also known as `transports`.
 //!
 //! [`AsyncRead`]: #
 //! [`AsyncWrite`]: #
+//! [`Sink`]: #
+//! [`Stream`]: #
 #![deny(rust_2018_idioms, warnings)]
 
 mod bcodec;

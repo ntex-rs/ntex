@@ -843,7 +843,7 @@ pub fn unused_addr() -> net::SocketAddr {
 pub struct TestServer {
     addr: net::SocketAddr,
     client: Client,
-    system: actix_rt::System,
+    system: ntex_rt::System,
     ssl: bool,
     server: Server,
 }

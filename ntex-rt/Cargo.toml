@@ -1,23 +1,27 @@
 [package]
-name = "actix-rt"
+name = "ntex-rt"
 version = "1.0.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix runtime"
 keywords = ["network", "framework", "async", "futures"]
 homepage = "https://actix.rs"
-repository = "https://github.com/actix/actix-net.git"
-documentation = "https://docs.rs/actix-rt/"
+repository = "https://github.com/ntex-rs/ntex.git"
+documentation = "https://docs.rs/ntex-rt/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT/Apache-2.0"
 edition = "2018"
 
 [lib]
-name = "actix_rt"
+name = "ntex_rt"
 path = "src/lib.rs"
 
 [dependencies]
-actix-macros = "0.1.0"
-actix-threadpool = "0.3"
+ntex-macros =  { path = "../ntex-macros" }
 futures = "0.3.1"
 copyless = "0.1.4"
+derive_more = "0.99"
+parking_lot = "0.10"
+lazy_static = "1"
+log = "0.4"
+num_cpus = "1"
 tokio = { version = "0.2.6", default-features=false, features = ["rt-core", "rt-util", "io-driver", "tcp", "uds", "udp", "time", "signal", "stream"] }

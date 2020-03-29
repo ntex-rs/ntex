@@ -3,7 +3,8 @@
   <p><strong>This is personal project, please, do not use it</strong> </p>
   <p>
 
-[![Build Status](https://travis-ci.org/fafhrd91/ntex.svg?branch=master)](https://travis-ci.org/fafhrd91/ntex) 
+<!-- [![Build Status](https://travis-ci.org/fafhrd91/ntex.svg?branch=master)](https://travis-ci.org/fafhrd91/ntex)  -->
+![linux](https://github.com/ntex-rs/ntex/workflows/linux/badge.svg?branch=master)
 [![codecov](https://codecov.io/gh/fafhrd91/btex/branch/master/graph/badge.svg)](https://codecov.io/gh/fafhrd91/ntex) 
 
   </p>

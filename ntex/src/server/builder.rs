@@ -3,9 +3,9 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use std::{io, mem, net};
 
-use actix_rt::net::TcpStream;
-use actix_rt::time::{delay_until, Instant};
-use actix_rt::{spawn, System};
+use ntex_rt::net::TcpStream;
+use ntex_rt::time::{delay_until, Instant};
+use ntex_rt::{spawn, System};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use futures::channel::oneshot;
 use futures::future::ready;
@@ -187,7 +187,7 @@ impl ServerBuilder {
     /// Add new unix domain service to the server.
     pub fn bind_uds<F, U, N>(self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
-        F: ServiceFactory<actix_rt::net::UnixStream>,
+        F: ServiceFactory<ntex_rt::net::UnixStream>,
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
     {
@@ -217,7 +217,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: ServiceFactory<actix_rt::net::UnixStream>,
+        F: ServiceFactory<ntex_rt::net::UnixStream>,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();

@@ -262,7 +262,7 @@ where
     I: Send + 'static,
     E: Send + std::fmt::Debug + 'static,
 {
-    actix_threadpool::run(f).await
+    crate::rt::blocking::run(f).await
 }
 
 /// Create new http server with application factory.

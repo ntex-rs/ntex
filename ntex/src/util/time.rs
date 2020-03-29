@@ -2,7 +2,7 @@ use std::convert::Infallible;
 use std::task::{Context, Poll};
 use std::time::{self, Duration, Instant};
 
-use actix_rt::time::delay_for;
+use ntex_rt::time::delay_for;
 use futures::future::{ok, ready, FutureExt, Ready};
 
 use super::cell::Cell;
@@ -79,7 +79,7 @@ impl LowResTimeService {
                 b.resolution
             };
 
-            actix_rt::spawn(delay_for(interval).then(move |_| {
+            ntex_rt::spawn(delay_for(interval).then(move |_| {
                 inner.get_mut().current.take();
                 ready(())
             }));
@@ -144,7 +144,7 @@ impl SystemTimeService {
                 b.resolution
             };
 
-            actix_rt::spawn(delay_for(interval).then(move |_| {
+            ntex_rt::spawn(delay_for(interval).then(move |_| {
                 inner.get_mut().current.take();
                 ready(())
             }));

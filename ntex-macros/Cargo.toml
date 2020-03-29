@@ -1,10 +1,10 @@
 [package]
-name = "actix-macros"
+name = "ntex-macros"
 version = "0.1.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Actix runtime macros"
-repository = "https://github.com/actix/actix-net"
-documentation = "https://docs.rs/actix-macros/"
+repository = "https://github.com/ntex-rs/ntex"
+documentation = "https://docs.rs/ntex-macros/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT/Apache-2.0"
 edition = "2018"
@@ -17,4 +17,4 @@ quote = "^1"
 syn = { version = "^1", features = ["full"] }
 
 [dev-dependencies]
-actix-rt = { version = "1.0.0" }
+ntex-rt = { path = "../ntex-rt" }

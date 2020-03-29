@@ -39,12 +39,6 @@ impl<'a> ResourcePath for &'a str {
     }
 }
 
-impl ResourcePath for bytestring::ByteString {
-    fn path(&self) -> &str {
-        &*self
-    }
-}
-
 /// Helper trait for type that could be converted to path pattern
 pub trait IntoPattern {
     fn patterns(&self) -> Vec<String>;

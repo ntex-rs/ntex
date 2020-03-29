@@ -206,7 +206,7 @@ impl<Err: ErrorRenderer> Route<Err> {
 mod tests {
     use std::time::Duration;
 
-    use actix_rt::time::delay_for;
+    use ntex_rt::time::delay_for;
     use bytes::Bytes;
     use serde_derive::Serialize;
 

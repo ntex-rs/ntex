@@ -4,12 +4,12 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use quote::quote;
 
-/// Marks async function to be executed by actix system.
+/// Marks async function to be executed by ntex system.
 ///
 /// ## Usage
 ///
 /// ```rust
-/// #[actix_rt::main]
+/// #[ntex_rt::main]
 /// async fn main() {
 ///     println!("Hello world");
 /// }
@@ -35,19 +35,19 @@ pub fn main(_: TokenStream, item: TokenStream) -> TokenStream {
     (quote! {
         #(#attrs)*
         #vis #sig {
-            actix_rt::System::new(stringify!(#name))
+            ntex_rt::System::new(stringify!(#name))
                 .block_on(async move { #body })
         }
     })
     .into()
 }
 
-/// Marks async test function to be executed by actix runtime.
+/// Marks async test function to be executed by ntex runtime.
 ///
 /// ## Usage
 ///
 /// ```no_run
-/// #[actix_rt::test]
+/// #[ntex_rt::test]
 /// async fn my_test() {
 ///     assert!(true);
 /// }
@@ -81,7 +81,7 @@ pub fn test(_: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             #(#attrs)*
             fn #name() #ret {
-                actix_rt::System::new("test")
+                ntex_rt::System::new("test")
                     .block_on(async { #body })
             }
         }
@@ -90,7 +90,7 @@ pub fn test(_: TokenStream, item: TokenStream) -> TokenStream {
             #[test]
             #(#attrs)*
             fn #name() #ret {
-                actix_rt::System::new("test")
+                ntex_rt::System::new("test")
                     .block_on(async { #body })
             }
         }

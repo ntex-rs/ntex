@@ -15,7 +15,7 @@
 #[macro_use]
 extern crate log;
 
-pub use actix_macros::{main, test};
+pub use ntex_macros::{main, test};
 
 pub mod channel;
 pub mod codec;
@@ -25,7 +25,7 @@ pub mod http;
 pub mod router;
 pub mod rt;
 pub mod server;
-pub mod service;
+mod service;
 pub mod task;
 pub mod util;
 pub mod web;

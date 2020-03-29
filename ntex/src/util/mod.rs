@@ -1,4 +1,5 @@
 mod cell;
+pub mod bytestring;
 pub mod counter;
 pub mod either;
 pub mod framed;
