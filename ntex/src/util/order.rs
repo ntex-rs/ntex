@@ -180,7 +180,7 @@ where
 
         let waker = self.waker.clone();
         let fut = self.service.call(request);
-        ntex_rt::spawn(async move {
+        crate::rt::spawn(async move {
             let res = fut.await;
             waker.wake();
             let _ = tx1.send(res);
@@ -248,7 +248,7 @@ mod tests {
             let rx2 = rx2;
             let rx3 = rx3;
             let tx_stop = tx_stop;
-            let _ = ntex_rt::System::new("test").block_on(async {
+            let _ = crate::rt::System::new("test").block_on(async {
                 let mut srv = InOrderService::new(Srv);
 
                 let _ = lazy(|cx| srv.poll_ready(cx)).await;
@@ -256,7 +256,7 @@ mod tests {
                 let res2 = srv.call(rx2);
                 let res3 = srv.call(rx3);
 
-                ntex_rt::spawn(async move {
+                crate::rt::spawn(async move {
                     let _ = poll_fn(|cx| {
                         let _ = srv.poll_ready(cx);
                         Poll::<()>::Pending
@@ -269,7 +269,7 @@ mod tests {
                 assert_eq!(res3.await.unwrap(), 3);
 
                 let _ = tx_stop.send(());
-                ntex_rt::System::current().stop();
+                crate::rt::System::current().stop();
             });
         });
 

@@ -4,13 +4,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time;
 
+use crate::rt::time::{delay_until, Delay, Instant};
+use crate::rt::{spawn, Arbiter};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot;
 use futures::future::{join_all, LocalBoxFuture, MapOk};
 use futures::{Future, FutureExt, Stream, TryFutureExt};
 use log::{error, info, trace};
-use ntex_rt::time::{delay_until, Delay, Instant};
-use ntex_rt::{spawn, Arbiter};
 
 use crate::util::counter::Counter;
 
@@ -229,7 +229,7 @@ impl Worker {
             self.services.iter_mut().for_each(|srv| {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopped;
-                    ntex_rt::spawn(
+                    crate::rt::spawn(
                         srv.service
                             .call((None, ServerMessage::ForceShutdown))
                             .map(|_| ()),
@@ -241,7 +241,7 @@ impl Worker {
             self.services.iter_mut().for_each(move |srv| {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopping;
-                    ntex_rt::spawn(
+                    crate::rt::spawn(
                         srv.service
                             .call((None, ServerMessage::Shutdown(timeout)))
                             .map(|_| ()),

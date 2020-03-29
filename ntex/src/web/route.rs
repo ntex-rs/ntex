@@ -206,8 +206,8 @@ impl<Err: ErrorRenderer> Route<Err> {
 mod tests {
     use std::time::Duration;
 
+    use crate::rt::time::delay_for;
     use bytes::Bytes;
-    use ntex_rt::time::delay_for;
     use serde_derive::Serialize;
 
     use crate::http::{Method, StatusCode};

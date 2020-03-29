@@ -8,8 +8,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, time};
 
+use crate::rt::time::{delay_for, Delay};
 use futures::future::{ok, Ready};
-use ntex_rt::time::{delay_for, Delay};
 
 use crate::service::{IntoService, Service, Transform};
 
@@ -203,7 +203,7 @@ mod tests {
         }
 
         fn call(&mut self, _: ()) -> Self::Future {
-            ntex_rt::time::delay_for(self.0)
+            crate::rt::time::delay_for(self.0)
                 .then(|_| ok::<_, ()>(()))
                 .boxed_local()
         }

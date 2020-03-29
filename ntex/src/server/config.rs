@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::{fmt, io, net};
 
+use crate::rt::net::TcpStream;
 use futures::future::{ok, Future, FutureExt, LocalBoxFuture};
 use log::error;
-use ntex_rt::net::TcpStream;
 
 use crate::service;
 use crate::util::counter::CounterGuard;

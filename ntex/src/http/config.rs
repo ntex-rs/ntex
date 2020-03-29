@@ -266,7 +266,7 @@ impl DateService {
 
             // periodic date update
             let s = self.clone();
-            ntex_rt::spawn(delay_for(Duration::from_millis(500)).then(move |_| {
+            crate::rt::spawn(delay_for(Duration::from_millis(500)).then(move |_| {
                 s.0.reset();
                 future::ready(())
             }));

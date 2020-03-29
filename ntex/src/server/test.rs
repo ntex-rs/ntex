@@ -2,8 +2,8 @@
 use std::sync::mpsc;
 use std::{net, thread};
 
+use crate::rt::{net::TcpStream, System};
 use net2::TcpBuilder;
-use ntex_rt::{net::TcpStream, System};
 
 use super::{Server, ServerBuilder, ServiceFactory};
 

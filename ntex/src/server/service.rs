@@ -3,10 +3,10 @@ use std::net::SocketAddr;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use crate::rt::spawn;
 use futures::future::{err, ok, LocalBoxFuture, Ready};
 use futures::{FutureExt, TryFutureExt};
 use log::error;
-use ntex_rt::spawn;
 
 use crate::service::{Service, ServiceFactory as ActixServiceFactory};
 use crate::util::counter::CounterGuard;

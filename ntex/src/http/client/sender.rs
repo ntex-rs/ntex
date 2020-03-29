@@ -5,10 +5,10 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use crate::rt::time::{delay_for, Delay};
 use bytes::Bytes;
 use derive_more::From;
 use futures::{Future, Stream};
-use ntex_rt::time::{delay_for, Delay};
 use serde::Serialize;
 use serde_json;
 
