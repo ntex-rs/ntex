@@ -10,7 +10,7 @@ pub use self::runtime::Runtime;
 pub use self::system::System;
 
 #[cfg(not(test))] // Work around for rust-lang/rust#62127
-pub use ntex_macros::{main, test};
+pub use ntex_macros::{rt_main as main, rt_test as test};
 
 #[doc(hidden)]
 pub use actix_threadpool as blocking;

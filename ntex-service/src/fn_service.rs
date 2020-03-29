@@ -35,7 +35,7 @@ where
 ///     }
 /// }
 ///
-/// #[ntex::main]
+/// #[ntex_rt::main]
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory that produces `div` services
 ///     let factory = fn_factory(|| {
@@ -76,7 +76,7 @@ where
 /// use ntex_service::{fn_factory_with_config, fn_service, Service, ServiceFactory};
 /// use futures_util::future::ok;
 ///
-/// #[ntex::main]
+/// #[ntex_rt::main]
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory. factory uses config argument for
 ///     // services it generates.
