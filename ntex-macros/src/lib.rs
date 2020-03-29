@@ -1,4 +1,4 @@
-//! Macros for use with Tokio
+//! Macros for use with Ntex
 extern crate proc_macro;
 
 use proc_macro::TokenStream;

@@ -93,8 +93,6 @@ mio-uds = { version = "0.6.7" }
 brotli2 = { version="0.3.2", optional = true }
 flate2 = { version = "1.0.13", optional = true }
 
-tokio = "0.2.4"
-
 [dev-dependencies]
 futures = "0.3.1"
 env_logger = "0.7"
