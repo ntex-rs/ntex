@@ -233,7 +233,8 @@ impl ResourceDef {
         let mut end = None;
         let mut tail = false;
         let mut rem = pattern;
-        let mut pattern = &pattern[1..];
+        let start = if pattern.starts_with('/') { 1 } else { 0 };
+        let mut pattern = &pattern[start..];
         elems.push(PathElement::Str('/'.to_string()));
 
         while let Some(start_idx) = pattern.find('{') {
@@ -850,5 +851,10 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("user/profile")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/profile")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/profile/profile")), None);
+
+        let tree = Tree::new(&ResourceDef::new("{user}/profile/{no}"), 1);
+        assert_eq!(tree.find(&mut Path::new("user/profile/123")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/user/profile/123")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/user/profile/p/test/")), None);
     }
 }
