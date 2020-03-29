@@ -8,12 +8,16 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, time};
 
-use futures::future::{ok, Ready};
+use futures::future::{ok, Either, Ready};
 
 use crate::rt::time::{delay_for, Delay};
 use crate::service::{IntoService, Service, Transform};
 
+const ZERO: time::Duration = time::Duration::from_millis(0);
+
 /// Applies a timeout to requests.
+///
+/// Timeout transform is disabled if timeout is set to 0
 #[derive(Debug)]
 pub struct Timeout<E = ()> {
     timeout: time::Duration,
@@ -130,7 +134,7 @@ where
     type Request = S::Request;
     type Response = S::Response;
     type Error = TimeoutError<S::Error>;
-    type Future = TimeoutServiceResponse<S>;
+    type Future = Either<TimeoutServiceResponse<S>, TimeoutServiceResponse2<S>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx).map_err(TimeoutError::Service)
@@ -141,9 +145,15 @@ where
     }
 
     fn call(&mut self, request: S::Request) -> Self::Future {
-        TimeoutServiceResponse {
-            fut: self.service.call(request),
-            sleep: delay_for(self.timeout),
+        if self.timeout == ZERO {
+            Either::Right(TimeoutServiceResponse2 {
+                fut: self.service.call(request),
+            })
+        } else {
+            Either::Left(TimeoutServiceResponse {
+                fut: self.service.call(request),
+                sleep: delay_for(self.timeout),
+            })
         }
     }
 }
@@ -177,6 +187,29 @@ where
         match Pin::new(&mut this.sleep).poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(_) => Poll::Ready(Err(TimeoutError::Timeout)),
+        }
+    }
+}
+
+/// `TimeoutService` response future
+#[pin_project::pin_project]
+#[derive(Debug)]
+pub struct TimeoutServiceResponse2<T: Service> {
+    #[pin]
+    fut: T::Future,
+}
+
+impl<T> Future for TimeoutServiceResponse2<T>
+where
+    T: Service,
+{
+    type Output = Result<T::Response, TimeoutError<T::Error>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.project().fut.poll(cx) {
+            Poll::Ready(Ok(v)) => Poll::Ready(Ok(v)),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(TimeoutError::Service(e))),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

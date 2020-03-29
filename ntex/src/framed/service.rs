@@ -1,3 +1,4 @@
+use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -31,6 +32,7 @@ where
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
+    C::Error: fmt::Debug,
     Io: AsyncRead + AsyncWrite,
     Codec: Decoder + Encoder,
     <Codec as Encoder>::Item: 'static,
@@ -41,13 +43,6 @@ where
     pub fn new<F>(connect: F) -> Builder<St, C, Io, Codec, Out>
     where
         F: IntoService<C>,
-        Io: AsyncRead + AsyncWrite,
-        C: Service<
-            Request = Connect<Io, Codec>,
-            Response = ConnectResult<Io, St, Codec, Out>,
-        >,
-        Codec: Decoder + Encoder,
-        Out: Stream<Item = <Codec as Encoder>::Item>,
     {
         Builder {
             connect: connect.into_service(),
@@ -90,6 +85,7 @@ where
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
+    C::Error: fmt::Debug,
     Codec: Decoder + Encoder,
     <Codec as Encoder>::Error: std::fmt::Debug,
     Out: Stream<Item = <Codec as Encoder>::Item> + Unpin,
@@ -98,14 +94,6 @@ where
     pub fn new<F>(connect: F) -> FactoryBuilder<St, C, Io, Codec, Out>
     where
         F: IntoServiceFactory<C>,
-        Io: AsyncRead + AsyncWrite,
-        C: ServiceFactory<
-            Config = (),
-            Request = Connect<Io, Codec>,
-            Response = ConnectResult<Io, St, Codec, Out>,
-        >,
-        Codec: Decoder + Encoder,
-        Out: Stream<Item = <Codec as Encoder>::Item> + Unpin,
     {
         FactoryBuilder {
             connect: connect.into_factory(),
@@ -150,6 +138,7 @@ where
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
+    C::Error: fmt::Debug,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -190,6 +179,7 @@ where
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
+    C::Error: fmt::Debug,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -217,6 +207,7 @@ where
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
+    C::Error: fmt::Debug,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -259,6 +250,7 @@ where
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
+    C::Error: fmt::Debug,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -287,6 +279,7 @@ where
     }
 
     fn call(&mut self, req: Io) -> Self::Future {
+        log::trace!("Start connection handshake");
         FramedServiceImplResponse {
             inner: FramedServiceImplResponseInner::Connect(
                 self.connect.call(Connect::new(req)),
@@ -303,6 +296,7 @@ where
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
+    C::Error: fmt::Debug,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -329,6 +323,7 @@ where
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
+    C::Error: fmt::Debug,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -368,6 +363,7 @@ where
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
+    C::Error: fmt::Debug,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -394,6 +390,7 @@ where
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
+    C::Error: fmt::Debug,
     T: ServiceFactory<
         Config = St,
         Request = RequestItem<Codec>,
@@ -422,6 +419,7 @@ where
             FramedServiceImplResponseInner::Connect(fut, handler) => {
                 match fut.poll(cx) {
                     Poll::Ready(Ok(res)) => {
+                        log::trace!("Connection handshake succeeded");
                         Either::Left(FramedServiceImplResponseInner::Handler(
                             handler.new_service(res.state),
                             Some(res.framed),
@@ -429,12 +427,18 @@ where
                         ))
                     }
                     Poll::Pending => Either::Right(Poll::Pending),
-                    Poll::Ready(Err(e)) => Either::Right(Poll::Ready(Err(e.into()))),
+                    Poll::Ready(Err(e)) => {
+                        log::trace!("Connection handshake failed: {:?}", e);
+                        Either::Right(Poll::Ready(Err(e.into())))
+                    }
                 }
             }
             FramedServiceImplResponseInner::Handler(fut, framed, out) => {
                 match fut.poll(cx) {
                     Poll::Ready(Ok(handler)) => {
+                        log::trace!(
+                            "Connection handler is created, starting dispatcher"
+                        );
                         Either::Left(FramedServiceImplResponseInner::Dispatcher(
                             Dispatcher::new(framed.take().unwrap(), handler, out.take()),
                         ))
