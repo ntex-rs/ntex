@@ -149,7 +149,7 @@ where
                         self.state = FramedState::Error(ServiceError::Service(err));
                         return true;
                     }
-                    Poll::Ready(None) | Poll::Pending => (),
+                    Poll::Ready(None) | Poll::Pending => {}
                 }
 
                 if self.sink.is_some() {
@@ -195,75 +195,75 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), ServiceError<S::Error, U>>> {
-        match self.state {
-            FramedState::Processing => loop {
-                let read = self.poll_read(cx);
-                let write = self.poll_write(cx);
-                if read || write {
-                    continue;
-                } else {
-                    return Poll::Pending;
-                }
-            },
-            FramedState::Error(_) => {
-                // flush write buffer
-                if !self.framed.is_write_buf_empty() {
-                    if let Poll::Pending = self.framed.flush(cx) {
+        loop {
+            match self.state {
+                FramedState::Processing => {
+                    let read = self.poll_read(cx);
+                    let write = self.poll_write(cx);
+                    if read || write {
+                        continue;
+                    } else {
                         return Poll::Pending;
                     }
                 }
-                self.state = FramedState::Shutdown(Some(self.state.take_error()));
-                self.poll(cx)
-            }
-            FramedState::FlushAndStop => {
-                // drain service responses
-                match Pin::new(&mut self.rx).poll_next(cx) {
-                    Poll::Ready(Some(Ok(msg))) => {
-                        if let Err(err) = self.framed.write(msg) {
-                            self.state =
-                                FramedState::Shutdown(Some(ServiceError::Encoder(err)));
-                            return self.poll(cx);
-                        }
-                    }
-                    Poll::Ready(Some(Err(err))) => {
-                        self.state = FramedState::Shutdown(Some(err.into()));
-                        return self.poll(cx);
-                    }
-                    Poll::Ready(None) | Poll::Pending => (),
-                }
-
-                // flush io
-                if !self.framed.is_write_buf_empty() {
-                    match self.framed.flush(cx) {
-                        Poll::Ready(Err(err)) => {
-                            debug!("Error sending data: {:?}", err);
-                        }
-                        Poll::Pending => {
+                FramedState::Error(_) => {
+                    // flush write buffer
+                    if !self.framed.is_write_buf_empty() {
+                        if let Poll::Pending = self.framed.flush(cx) {
                             return Poll::Pending;
                         }
-                        Poll::Ready(_) => (),
                     }
-                };
-                self.state = FramedState::Shutdown(None);
-                self.poll(cx)
-            }
-            FramedState::FramedError(_) => {
-                self.state = FramedState::Shutdown(Some(self.state.take_framed_error()));
-                self.poll(cx)
-            }
-            FramedState::Stopping => {
-                self.state = FramedState::Shutdown(None);
-                self.poll(cx)
-            }
-            FramedState::Shutdown(ref mut err) => {
-                if self.service.poll_shutdown(cx, err.is_some()).is_ready() {
-                    if let Some(err) = err.take() {
-                        Poll::Ready(Err(err))
+                    self.state = FramedState::Shutdown(Some(self.state.take_error()));
+                }
+                FramedState::FlushAndStop => {
+                    // drain service responses
+                    match Pin::new(&mut self.rx).poll_next(cx) {
+                        Poll::Ready(Some(Ok(msg))) => {
+                            if let Err(err) = self.framed.write(msg) {
+                                self.state = FramedState::Shutdown(Some(
+                                    ServiceError::Encoder(err),
+                                ));
+                                continue;
+                            }
+                        }
+                        Poll::Ready(Some(Err(err))) => {
+                            self.state = FramedState::Shutdown(Some(err.into()));
+                            continue;
+                        }
+                        Poll::Ready(None) | Poll::Pending => (),
+                    }
+
+                    // flush io
+                    if !self.framed.is_write_buf_empty() {
+                        match self.framed.flush(cx) {
+                            Poll::Ready(Err(err)) => {
+                                debug!("Error sending data: {:?}", err);
+                            }
+                            Poll::Pending => {
+                                return Poll::Pending;
+                            }
+                            Poll::Ready(_) => (),
+                        }
+                    };
+                    self.state = FramedState::Shutdown(None);
+                }
+                FramedState::FramedError(_) => {
+                    self.state =
+                        FramedState::Shutdown(Some(self.state.take_framed_error()));
+                }
+                FramedState::Stopping => {
+                    self.state = FramedState::Shutdown(None);
+                }
+                FramedState::Shutdown(ref mut err) => {
+                    return if self.service.poll_shutdown(cx, err.is_some()).is_ready() {
+                        if let Some(err) = err.take() {
+                            Poll::Ready(Err(err))
+                        } else {
+                            Poll::Ready(Ok(()))
+                        }
                     } else {
-                        Poll::Ready(Ok(()))
+                        Poll::Pending
                     }
-                } else {
-                    Poll::Pending
                 }
             }
         }
