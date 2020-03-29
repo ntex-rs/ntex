@@ -2,8 +2,8 @@
 use std::convert::TryFrom;
 use std::{borrow, fmt, hash, ops, str};
 
-use bytes::Bytes;
 use crate::router::ResourcePath;
+use bytes::Bytes;
 
 /// A utf-8 encoded string with [`Bytes`] as a storage.
 ///

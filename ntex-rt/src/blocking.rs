@@ -1,11 +1,11 @@
 //! Thread pool for blocking operations
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
+use std::task::{Context, Poll};
 use std::thread;
 
 use derive_more::Display;
@@ -90,7 +90,6 @@ impl<I, E: fmt::Debug> Future for CpuFuture<I, E> {
         Poll::Ready(res)
     }
 }
-
 
 // Copyright 2014 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
@@ -256,7 +255,7 @@ impl Builder {
     ///
     /// ```rust
     /// use ntex_rt::blocking;
-    /// 
+    ///
     /// let builder = blocking::Builder::new();
     /// ```
     pub fn new() -> Builder {
@@ -341,7 +340,7 @@ impl Builder {
     ///
     /// ```rust
     /// use ntex_rt::blocking;
-    /// 
+    ///
     /// let pool = blocking::Builder::new()
     ///     .thread_stack_size(4_000_000)
     ///     .build();
@@ -366,7 +365,7 @@ impl Builder {
     ///
     /// ```rust
     /// use ntex_rt::blocking;
-    /// 
+    ///
     /// let pool = blocking::Builder::new()
     ///     .num_threads(8)
     ///     .thread_stack_size(4_000_000)
@@ -417,13 +416,15 @@ struct ThreadPoolSharedData {
 
 impl ThreadPoolSharedData {
     fn has_work(&self) -> bool {
-        self.queued_count.load(Ordering::SeqCst) > 0 || self.active_count.load(Ordering::SeqCst) > 0
+        self.queued_count.load(Ordering::SeqCst) > 0
+            || self.active_count.load(Ordering::SeqCst) > 0
     }
 
     /// Notify all observers joining this pool if there is no more work to do.
     fn no_work_notify_all(&self) {
         if !self.has_work() {
-            *self.empty_trigger
+            *self
+                .empty_trigger
                 .lock()
                 .expect("Unable to notify all joining threads");
             self.empty_condvar.notify_all();
@@ -507,9 +508,9 @@ impl ThreadPool {
     ///
     /// Execute four jobs on a thread pool that can run two jobs concurrently:
     ///
-     /// ```rust
+    /// ```rust
     /// use ntex_rt::blocking::ThreadPool;
-    /// 
+    ///
     ///
     /// let pool = ThreadPool::new(2);
     /// pool.execute(|| println!("hello"));
@@ -663,7 +664,8 @@ impl ThreadPool {
     /// ```
     pub fn set_num_threads(&mut self, num_threads: usize) {
         assert!(num_threads >= 1);
-        let prev_num_threads = self.shared_data
+        let prev_num_threads = self
+            .shared_data
             .max_thread_count
             .swap(num_threads, Ordering::Release);
         if let Some(num_spawn) = num_threads.checked_sub(prev_num_threads) {
@@ -835,8 +837,10 @@ fn spawn_in_pool(shared_data: Arc<ThreadPoolSharedData>) {
 
             loop {
                 // Shutdown this thread if the pool has become smaller
-                let thread_counter_val = shared_data.active_count.load(Ordering::Acquire);
-                let max_thread_count_val = shared_data.max_thread_count.load(Ordering::Relaxed);
+                let thread_counter_val =
+                    shared_data.active_count.load(Ordering::Acquire);
+                let max_thread_count_val =
+                    shared_data.max_thread_count.load(Ordering::Relaxed);
                 if thread_counter_val >= max_thread_count_val {
                     break;
                 }

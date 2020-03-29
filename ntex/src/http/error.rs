@@ -10,9 +10,9 @@ use http::{header, StatusCode};
 use httparse;
 
 // re-export for convinience
+pub use crate::rt::blocking::BlockingError;
 pub use futures::channel::oneshot::Canceled;
 pub use http::Error as HttpError;
-pub use crate::rt::blocking::BlockingError;
 
 use crate::codec::{Decoder, Encoder};
 use crate::framed::ServiceError as FramedDispatcherError;

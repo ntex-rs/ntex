@@ -6,10 +6,10 @@
 pub use ntex_macros::{main, test};
 
 mod arbiter;
+pub mod blocking;
 mod builder;
 mod runtime;
 mod system;
-pub mod blocking;
 
 pub use self::arbiter::Arbiter;
 pub use self::builder::{Builder, SystemRunner};

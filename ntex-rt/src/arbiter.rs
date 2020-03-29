@@ -19,7 +19,8 @@ thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = RefCell::new(None);
     static RUNNING: Cell<bool> = Cell::new(false);
     static Q: RefCell<Vec<Pin<Box<dyn Future<Output = ()>>>>> = RefCell::new(Vec::new());
-    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::new());
+    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> =
+        RefCell::new(HashMap::new());
 );
 
 pub(crate) static COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -237,7 +238,9 @@ impl Arbiter {
 
     /// Set item to arbiter storage
     pub fn set_item<T: 'static>(item: T) {
-        STORAGE.with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), Box::new(item)));
+        STORAGE.with(move |cell| {
+            cell.borrow_mut().insert(TypeId::of::<T>(), Box::new(item))
+        });
     }
 
     /// Check if arbiter storage contains item
@@ -273,7 +276,9 @@ impl Arbiter {
             let mut st = cell.borrow_mut();
             let item = st
                 .get_mut(&TypeId::of::<T>())
-                .and_then(|boxed| (&mut **boxed as &mut (dyn Any + 'static)).downcast_mut())
+                .and_then(|boxed| {
+                    (&mut **boxed as &mut (dyn Any + 'static)).downcast_mut()
+                })
                 .unwrap();
             f(item)
         })
@@ -356,7 +361,10 @@ pub(crate) struct SystemArbiter {
 }
 
 impl SystemArbiter {
-    pub(crate) fn new(stop: Sender<i32>, commands: UnboundedReceiver<SystemCommand>) -> Self {
+    pub(crate) fn new(
+        stop: Sender<i32>,
+        commands: UnboundedReceiver<SystemCommand>,
+    ) -> Self {
         SystemArbiter {
             commands,
             stop: Some(stop),

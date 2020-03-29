@@ -2,8 +2,8 @@ use std::convert::Infallible;
 use std::task::{Context, Poll};
 use std::time::{self, Duration, Instant};
 
-use ntex_rt::time::delay_for;
 use futures::future::{ok, ready, FutureExt, Ready};
+use ntex_rt::time::delay_for;
 
 use super::cell::Cell;
 use crate::service::{Service, ServiceFactory};

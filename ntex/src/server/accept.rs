@@ -2,9 +2,9 @@ use std::sync::mpsc as sync_mpsc;
 use std::time::Duration;
 use std::{io, thread};
 
+use log::{error, info};
 use ntex_rt::time::{delay_until, Instant};
 use ntex_rt::System;
-use log::{error, info};
 use slab::Slab;
 
 use super::server::Server;

@@ -3,9 +3,6 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use std::{io, mem, net};
 
-use ntex_rt::net::TcpStream;
-use ntex_rt::time::{delay_until, Instant};
-use ntex_rt::{spawn, System};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use futures::channel::oneshot;
 use futures::future::ready;
@@ -13,6 +10,9 @@ use futures::stream::FuturesUnordered;
 use futures::{ready, Future, FutureExt, Stream, StreamExt};
 use log::{error, info};
 use net2::TcpBuilder;
+use ntex_rt::net::TcpStream;
+use ntex_rt::time::{delay_until, Instant};
+use ntex_rt::{spawn, System};
 use num_cpus;
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};

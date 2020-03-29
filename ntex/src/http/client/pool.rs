@@ -334,9 +334,7 @@ where
                             Poll::Ready(Ok(n)) if n > 0 => {
                                 if let Some(timeout) = self.disconnect_timeout {
                                     if let ConnectionType::H1(io) = io {
-                                        ntex_rt::spawn(CloseConnection::new(
-                                            io, timeout,
-                                        ))
+                                        ntex_rt::spawn(CloseConnection::new(io, timeout))
                                     }
                                 }
                                 continue;

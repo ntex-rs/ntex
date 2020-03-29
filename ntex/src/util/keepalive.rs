@@ -5,8 +5,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use ntex_rt::time::{delay_until, Delay, Instant};
 use futures::future::{ok, Ready};
+use ntex_rt::time::{delay_until, Delay, Instant};
 
 use super::time::{LowResTime, LowResTimeService};
 use crate::{Service, ServiceFactory};

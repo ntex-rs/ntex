@@ -8,8 +8,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, time};
 
-use ntex_rt::time::{delay_for, Delay};
 use futures::future::{ok, Ready};
+use ntex_rt::time::{delay_for, Delay};
 
 use crate::service::{IntoService, Service, Transform};
 

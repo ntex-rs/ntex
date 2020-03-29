@@ -558,8 +558,8 @@ impl<Err: ErrorRenderer> ServiceFactory for ResourceEndpoint<Err> {
 mod tests {
     use std::time::Duration;
 
-    use ntex_rt::time::delay_for;
     use futures::future::{ok, ready};
+    use ntex_rt::time::delay_for;
 
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
