@@ -211,7 +211,7 @@ impl RequestSender {
     ) -> SendClientRequest {
         let body = match serde_json::to_string(value) {
             Ok(body) => body,
-            Err(e) => return SendRequestError::Body(Box::new(e)).into(),
+            Err(e) => return SendRequestError::Error(Box::new(e)).into(),
         };
 
         if let Err(e) = self.set_header_if_none(header::CONTENT_TYPE, "application/json")
@@ -238,7 +238,7 @@ impl RequestSender {
     ) -> SendClientRequest {
         let body = match serde_urlencoded::to_string(value) {
             Ok(body) => body,
-            Err(e) => return SendRequestError::Body(Box::new(e)).into(),
+            Err(e) => return SendRequestError::Error(Box::new(e)).into(),
         };
 
         // set content-type

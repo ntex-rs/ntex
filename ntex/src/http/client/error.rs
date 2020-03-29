@@ -180,7 +180,7 @@ pub enum SendRequestError {
     #[display(fmt = "Tunnels are not supported for http2 connection")]
     TunnelNotSupported,
     /// Error sending request body
-    Body(Box<dyn Error>),
+    Error(Box<dyn Error>),
 }
 
 impl std::error::Error for SendRequestError {}
