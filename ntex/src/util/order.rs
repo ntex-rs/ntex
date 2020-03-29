@@ -236,7 +236,7 @@ mod tests {
         }
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_inorder() {
         let (tx1, rx1) = oneshot::channel();
         let (tx2, rx2) = oneshot::channel();

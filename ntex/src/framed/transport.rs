@@ -4,13 +4,14 @@ use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use futures::{Future, FutureExt, Stream};
 use log::debug;
 
-use super::error::ServiceError;
 use crate::channel::mpsc;
+use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use crate::service::{IntoService, Service};
+
+use super::error::ServiceError;
 
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;
@@ -156,7 +157,7 @@ where
                     };
 
                     let tx = self.tx.clone();
-                    actix_rt::spawn(self.service.call(item).map(move |item| {
+                    crate::rt::spawn(self.service.call(item).map(move |item| {
                         let _ = tx.send(item.map(Message::Item));
                     }));
                 }

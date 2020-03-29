@@ -1,3 +1,4 @@
+#![deny(rust_2018_idioms, unreachable_pub)]
 #![allow(clippy::cognitive_complexity)]
 
 //! Resource path matching library.

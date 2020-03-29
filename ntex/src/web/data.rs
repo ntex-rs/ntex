@@ -5,7 +5,7 @@ use futures::future::{err, ok, Ready};
 
 use crate::http::{Extensions, Payload};
 
-use super::error::{ErrorInternalServerError, WebError};
+use super::error::{DataExtractorError, ErrorRenderer};
 use super::extract::FromRequest;
 use super::request::HttpRequest;
 
@@ -38,17 +38,17 @@ pub(crate) trait DataFactory {
 ///
 /// ```rust
 /// use std::sync::Mutex;
-/// use ntex::web::{self, App, HttpResponse, Responder};
+/// use ntex::web::{self, App, HttpResponse};
 ///
 /// struct MyData {
 ///     counter: usize,
 /// }
 ///
 /// /// Use `Data<T>` extractor to access data in handler.
-/// async fn index(data: web::Data<Mutex<MyData>>) -> impl Responder {
+/// async fn index(data: web::Data<Mutex<MyData>>) -> HttpResponse {
 ///     let mut data = data.lock().unwrap();
 ///     data.counter += 1;
-///     HttpResponse::Ok()
+///     HttpResponse::Ok().into()
 /// }
 ///
 /// fn main() {
@@ -100,9 +100,8 @@ impl<T> Clone for Data<T> {
     }
 }
 
-impl<T: 'static, E: 'static> FromRequest<E> for Data<T> {
-    type Config = ();
-    type Error = WebError<E>;
+impl<T: 'static, E: ErrorRenderer> FromRequest<E> for Data<T> {
+    type Error = DataExtractorError;
     type Future = Ready<Result<Self, Self::Error>>;
 
     #[inline]
@@ -115,9 +114,7 @@ impl<T: 'static, E: 'static> FromRequest<E> for Data<T> {
                  Request path: {:?}",
                 req.path()
             );
-            err(ErrorInternalServerError(
-                "App data is not configured, to configure use App::data()",
-            ))
+            err(DataExtractorError::NotConfigured)
         }
     }
 }
@@ -143,7 +140,7 @@ mod tests {
     use crate::web::{self, App, HttpResponse};
     use crate::Service;
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_data_extractor() {
         let mut srv = init_service(App::new().data("TEST".to_string()).service(
             web::resource("/").to(|data: web::Data<String>| async move {
@@ -166,7 +163,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_app_data_extractor() {
         let mut srv = init_service(App::new().app_data(Data::new(10usize)).service(
             web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
@@ -186,7 +183,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_route_data_extractor() {
         let mut srv =
             init_service(App::new().service(web::resource("/").data(10usize).route(
@@ -212,7 +209,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_override_data() {
         let mut srv = init_service(App::new().data(1usize).service(
             web::resource("/").data(10usize).route(web::get().to(
@@ -230,7 +227,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_data_drop() {
         struct TestData(Arc<AtomicUsize>);
 

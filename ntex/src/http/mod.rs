@@ -1,4 +1,4 @@
-//! Basic http primitives for actix-net framework.
+//! Http protocol support.
 pub mod body;
 mod builder;
 pub mod client;

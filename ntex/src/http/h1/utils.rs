@@ -3,8 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_codec::{AsyncRead, AsyncWrite, Framed};
-
+use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::h1::{Codec, Message};
 use crate::http::response::Response;

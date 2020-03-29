@@ -7,16 +7,14 @@ use std::time::Duration;
 use brotli2::write::BrotliEncoder;
 use bytes::Bytes;
 use coo_kie::Cookie;
-use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
-use flate2::Compression;
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use futures::future::ok;
 use rand::Rng;
 
 use ntex::http::client::{error::SendRequestError, Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{header, HttpMessage, HttpService};
-use ntex::service::{map_config, pipeline_factory};
+use ntex::service::{map_config, pipeline_factory, Service};
 use ntex::web::dev::{AppConfig, BodyEncoding};
 use ntex::web::middleware::Compress;
 use ntex::web::{self, test, App, Error, HttpRequest, HttpResponse};
@@ -107,15 +105,16 @@ async fn test_form() {
 async fn test_timeout() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
-            actix_rt::time::delay_for(Duration::from_millis(200)).await;
+            ntex::rt::time::delay_for(Duration::from_millis(200)).await;
             HttpResponse::Ok().body(STR)
         })))
     });
 
     let connector = Connector::new()
-        .connector(actix_connect::new_connector(
-            actix_connect::start_default_resolver(),
-        ))
+        .connector(
+            ntex::connect::Connector::new(ntex::connect::start_default_resolver())
+                .map(|sock| (sock, ntex::http::Protocol::Http1)),
+        )
         .timeout(Duration::from_secs(15))
         .finish();
 
@@ -135,7 +134,7 @@ async fn test_timeout() {
 async fn test_timeout_override() {
     let srv = test::start(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
-            actix_rt::time::delay_for(Duration::from_millis(200)).await;
+            ntex::rt::time::delay_for(Duration::from_millis(200)).await;
             HttpResponse::Ok().body(STR)
         })))
     });
@@ -738,7 +737,7 @@ async fn test_client_cookie_handling() {
 //         }
 //     });
 
-//     let mut sys = actix::System::new("test");
+//     let mut sys = ntex::rt::System::new("test");
 
 //     // client request
 //     let req = client::ClientRequest::get(format!("http://{}/", addr).as_str())

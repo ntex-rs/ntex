@@ -2,6 +2,8 @@
 
 ## [0.3.0] - 2020-03-22
 
+* Case insensitive routing
+
 * Use prefix tree for underling data representation
 
 ## [0.2.4] - 2019-12-31

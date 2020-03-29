@@ -47,7 +47,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 struct TestBody {
     data: Bytes,
     chunk_size: usize,
-    delay: actix_rt::time::Delay,
+    delay: ntex::rt::time::Delay,
 }
 
 impl TestBody {
@@ -55,7 +55,7 @@ impl TestBody {
         TestBody {
             data,
             chunk_size,
-            delay: actix_rt::time::delay_for(std::time::Duration::from_millis(10)),
+            delay: ntex::rt::time::delay_for(std::time::Duration::from_millis(10)),
         }
     }
 }
@@ -69,7 +69,7 @@ impl futures::Stream for TestBody {
     ) -> Poll<Option<Self::Item>> {
         ready!(Pin::new(&mut self.delay).poll(cx));
 
-        self.delay = actix_rt::time::delay_for(std::time::Duration::from_millis(10));
+        self.delay = ntex::rt::time::delay_for(std::time::Duration::from_millis(10));
         let chunk_size = std::cmp::min(self.chunk_size, self.data.len());
         let chunk = self.data.split_to(chunk_size);
         if chunk.is_empty() {
@@ -793,7 +793,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
 
 // #[test]
 // fn test_server_cookies() {
-//     use actix_web::http;
+//     use ntex::http;
 
 //     let srv = test::TestServer::with_factory(|| {
 //         App::new().resource("/", |r| {
@@ -898,7 +898,26 @@ async fn test_custom_error() {
     #[derive(Debug, Display)]
     struct TestError;
 
+    #[derive(Debug, Display)]
+    struct JsonContainer(Box<dyn WebResponseError<JsonRenderer>>);
+
+    impl ntex::http::ResponseError for JsonContainer {
+        fn error_response(&self) -> HttpResponse {
+            self.0.error_response()
+        }
+    }
+
+    impl From<TestError> for JsonContainer {
+        fn from(e: TestError) -> JsonContainer {
+            JsonContainer(Box::new(e))
+        }
+    }
+
     struct JsonRenderer;
+
+    impl ntex::web::error::ErrorRenderer for JsonRenderer {
+        type Container = JsonContainer;
+    }
 
     impl WebResponseError<JsonRenderer> for TestError {
         fn error_response(&self) -> HttpResponse {

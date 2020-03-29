@@ -149,8 +149,8 @@ impl ClientBuilder {
 mod tests {
     use super::*;
 
-    #[test]
-    fn client_basic_auth() {
+    #[crate::test]
+    async fn client_basic_auth() {
         let client = ClientBuilder::new().basic_auth("username", Some("password"));
         assert_eq!(
             client
@@ -176,8 +176,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn client_bearer_auth() {
+    #[crate::test]
+    async fn client_bearer_auth() {
         let client = ClientBuilder::new().bearer_auth("someS3cr3tAutht0k3n");
         assert_eq!(
             client

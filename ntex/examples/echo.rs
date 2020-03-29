@@ -7,7 +7,7 @@ use ntex::http::header::HeaderValue;
 use ntex::http::{HttpService, Request, Response};
 use ntex::server::Server;
 
-#[actix_rt::main]
+#[ntex::main]
 async fn main() -> io::Result<()> {
     env::set_var("RUST_LOG", "echo=info");
     env_logger::init();

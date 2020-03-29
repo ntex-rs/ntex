@@ -11,7 +11,7 @@ use crate::http::{
 use crate::router::Path;
 
 use super::config::AppConfig;
-use super::error::{UrlGenerationError, WebError};
+use super::error::{ErrorRenderer, UrlGenerationError};
 use super::extract::FromRequest;
 use super::info::ConnectionInfo;
 use super::rmap::ResourceMap;
@@ -277,9 +277,8 @@ impl Drop for HttpRequest {
 ///     );
 /// }
 /// ```
-impl<E: 'static> FromRequest<E> for HttpRequest {
-    type Config = ();
-    type Error = WebError<E>;
+impl<Err: ErrorRenderer> FromRequest<Err> for HttpRequest {
+    type Error = Err::Container;
     type Future = Ready<Result<Self, Self::Error>>;
 
     #[inline]
@@ -461,7 +460,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_data() {
         let mut srv = init_service(App::new().app_data(10usize).service(
             web::resource("/").to(|req: HttpRequest| {
@@ -494,7 +493,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_extensions_dropped() {
         struct Tracker {
             dropped: bool,

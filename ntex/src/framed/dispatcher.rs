@@ -2,11 +2,11 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use futures::Stream;
 use log::debug;
 
 use crate::channel::mpsc;
+use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use crate::service::Service;
 
 use super::error::ServiceError;
@@ -113,7 +113,7 @@ where
 
                     let tx = self.rx.sender();
                     let fut = self.service.call(item);
-                    actix_rt::spawn(async move {
+                    crate::rt::spawn(async move {
                         let item = fut.await;
                         let item = match item {
                             Ok(Some(item)) => Ok(item),

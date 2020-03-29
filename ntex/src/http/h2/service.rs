@@ -4,14 +4,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{net, rc};
 
-use actix_codec::{AsyncRead, AsyncWrite};
-use actix_rt::net::TcpStream;
 use bytes::Bytes;
 use futures::future::ok;
 use futures::ready;
 use h2::server::{self, Handshake};
 use log::error;
 
+use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::MessageBody;
 use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
@@ -19,6 +18,7 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
+use crate::rt::net::TcpStream;
 use crate::{
     fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
     ServiceFactory,
@@ -95,8 +95,8 @@ where
 
 #[cfg(feature = "openssl")]
 mod openssl {
-    use actix_tls::openssl::{Acceptor, SslAcceptor, SslStream};
-    use actix_tls::{openssl::HandshakeError, SslError};
+    use crate::server::openssl::{Acceptor, SslAcceptor, SslStream};
+    use crate::server::{openssl::HandshakeError, SslError};
 
     use super::*;
     use crate::{fn_factory, fn_service};
@@ -139,8 +139,8 @@ mod openssl {
 #[cfg(feature = "rustls")]
 mod rustls {
     use super::*;
-    use actix_tls::rustls::{Acceptor, ServerConfig, TlsStream};
-    use actix_tls::SslError;
+    use crate::server::rustls::{Acceptor, ServerConfig, TlsStream};
+    use crate::server::SslError;
     use std::io;
 
     impl<S, B> H2Service<TlsStream<TcpStream>, S, B>

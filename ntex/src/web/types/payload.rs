@@ -11,7 +11,7 @@ use futures::{Stream, StreamExt};
 use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
-use crate::web::error::{PayloadError, WebError};
+use crate::web::error::{ErrorRenderer, PayloadError};
 use crate::web::extract::FromRequest;
 use crate::web::request::HttpRequest;
 
@@ -92,9 +92,8 @@ impl Stream for Payload {
 ///     );
 /// }
 /// ```
-impl<Err: 'static> FromRequest<Err> for Payload {
-    type Config = PayloadConfig;
-    type Error = WebError<Err>;
+impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
+    type Error = Err::Container;
     type Future = Ready<Result<Payload, Self::Error>>;
 
     #[inline]
@@ -131,8 +130,7 @@ impl<Err: 'static> FromRequest<Err> for Payload {
 ///     );
 /// }
 /// ```
-impl<Err: 'static> FromRequest<Err> for Bytes {
-    type Config = PayloadConfig;
+impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
     type Error = PayloadError;
     type Future = Either<
         LocalBoxFuture<'static, Result<Bytes, Self::Error>>,
@@ -189,8 +187,7 @@ impl<Err: 'static> FromRequest<Err> for Bytes {
 ///     );
 /// }
 /// ```
-impl<Err: 'static> FromRequest<Err> for String {
-    type Config = PayloadConfig;
+impl<Err: ErrorRenderer> FromRequest<Err> for String {
     type Error = PayloadError;
     type Future = Either<
         LocalBoxFuture<'static, Result<String, Self::Error>>,
@@ -425,7 +422,7 @@ impl Future for HttpMessageBody {
 //     use crate::http::header;
 //     use crate::web::test::TestRequest;
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_payload_config() {
 //         let req = TestRequest::default().to_http_request();
 //         let cfg = PayloadConfig::default().mimetype(mime::APPLICATION_JSON);
@@ -443,7 +440,7 @@ impl Future for HttpMessageBody {
 //         assert!(cfg.check_mimetype(&req).is_ok());
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_bytes() {
 //         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
 //             .set_payload(Bytes::from_static(b"hello=world"))
@@ -453,7 +450,7 @@ impl Future for HttpMessageBody {
 //         assert_eq!(s, Bytes::from_static(b"hello=world"));
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_string() {
 //         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
 //             .set_payload(Bytes::from_static(b"hello=world"))
@@ -463,7 +460,7 @@ impl Future for HttpMessageBody {
 //         assert_eq!(s, "hello=world");
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_message_body() {
 //         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "xxxx")
 //             .to_srv_request()

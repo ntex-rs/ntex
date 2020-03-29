@@ -14,12 +14,14 @@ pub struct ResourceInfo {
 pub struct Router<T, U = ()> {
     tree: Tree,
     resources: Vec<(ResourceDef, T, Option<U>)>,
+    insensitive: bool,
 }
 
 impl<T, U> Router<T, U> {
     pub fn build() -> RouterBuilder<T, U> {
         RouterBuilder {
             resources: Vec::new(),
+            insensitive: false,
         }
     }
 
@@ -28,7 +30,11 @@ impl<T, U> Router<T, U> {
         R: Resource<P>,
         P: ResourcePath,
     {
-        if let Some(idx) = self.tree.find(resource) {
+        if let Some(idx) = if self.insensitive {
+            self.tree.find_insensitive(resource)
+        } else {
+            self.tree.find(resource)
+        } {
             let item = &self.resources[idx];
             Some((&item.1, ResourceId(item.0.id())))
         } else {
@@ -44,7 +50,11 @@ impl<T, U> Router<T, U> {
         R: Resource<P>,
         P: ResourcePath,
     {
-        if let Some(idx) = self.tree.find(resource) {
+        if let Some(idx) = if self.insensitive {
+            self.tree.find_insensitive(resource)
+        } else {
+            self.tree.find(resource)
+        } {
             let item = &mut self.resources[idx];
             Some((&mut item.1, ResourceId(item.0.id())))
         } else {
@@ -62,10 +72,17 @@ impl<T, U> Router<T, U> {
         R: Resource<P>,
         P: ResourcePath,
     {
-        if let Some(idx) = self.tree.find_checked(resource, &|idx, res| {
-            let item = &self.resources[idx];
-            check(res, item.2.as_ref())
-        }) {
+        if let Some(idx) = if self.insensitive {
+            self.tree.find_checked_insensitive(resource, &|idx, res| {
+                let item = &self.resources[idx];
+                check(res, item.2.as_ref())
+            })
+        } else {
+            self.tree.find_checked(resource, &|idx, res| {
+                let item = &self.resources[idx];
+                check(res, item.2.as_ref())
+            })
+        } {
             let item = &mut self.resources[idx];
             Some((&mut item.1, ResourceId(item.0.id())))
         } else {
@@ -75,10 +92,19 @@ impl<T, U> Router<T, U> {
 }
 
 pub struct RouterBuilder<T, U = ()> {
+    insensitive: bool,
     resources: Vec<(ResourceDef, T, Option<U>)>,
 }
 
 impl<T, U> RouterBuilder<T, U> {
+    /// Make router case insensitive. Only static segments
+    /// could be case insensitive.
+    ///
+    /// By default router is case sensitive.
+    pub fn case_insensitive(&mut self) {
+        self.insensitive = true;
+    }
+
     /// Register resource for specified path.
     pub fn path<P: IntoPattern>(
         &mut self,
@@ -126,6 +152,7 @@ impl<T, U> RouterBuilder<T, U> {
         Router {
             tree,
             resources: self.resources,
+            insensitive: self.insensitive,
         }
     }
 }
@@ -233,6 +260,26 @@ mod tests {
         let mut path = Path::new("/test.json");
         let (h, _) = router.recognize_mut(&mut path).unwrap();
         assert_eq!(*h, 11);
+    }
+
+    #[test]
+    fn test_recognizer_3() {
+        let mut router = Router::<usize>::build();
+        router.path("/index.json", 10);
+        router.path("/{source}.json", 11);
+        router.case_insensitive();
+        let mut router = router.finish();
+
+        let mut path = Path::new("/index.json");
+        let (h, _) = router.recognize_mut(&mut path).unwrap();
+        assert_eq!(*h, 10);
+
+        let mut path = Path::new("/indeX.json");
+        let (h, _) = router.recognize_mut(&mut path).unwrap();
+        assert_eq!(*h, 10);
+
+        let mut path = Path::new("/test.jsoN");
+        assert!(router.recognize_mut(&mut path).is_none());
     }
 
     #[test]

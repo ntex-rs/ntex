@@ -33,7 +33,7 @@ macro_rules! parse_single_value {
     }
 }
 
-pub struct PathDeserializer<'de, T: ResourcePath + 'de> {
+pub struct PathDeserializer<'de, T: ResourcePath> {
     path: &'de Path<T>,
 }
 

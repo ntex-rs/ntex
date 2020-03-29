@@ -10,11 +10,12 @@ use rust_tls::{
     NoClientAuth, ServerConfig as RustlsServerConfig,
 };
 
-use ntex::http::error::{self, PayloadError};
+use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
 use ntex::http::{body, HttpService, Method, Request, Response, StatusCode, Version};
 use ntex::service::{fn_factory_with_config, fn_service};
+use ntex::web::error::InternalError;
 
 async fn load_body<S>(mut stream: S) -> Result<BytesMut, PayloadError>
 where
@@ -394,7 +395,7 @@ async fn test_h2_service_error() {
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|_| {
-                err::<Response, _>(error::InternalError::new(
+                err::<Response, _>(InternalError::default(
                     "error",
                     StatusCode::BAD_REQUEST,
                 ))
@@ -415,7 +416,7 @@ async fn test_h1_service_error() {
     let mut srv = test_server(move || {
         HttpService::build()
             .h1(|_| {
-                err::<Response, _>(error::InternalError::new(
+                err::<Response, _>(InternalError::default(
                     "error",
                     StatusCode::BAD_REQUEST,
                 ))

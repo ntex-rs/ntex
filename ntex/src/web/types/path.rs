@@ -6,7 +6,7 @@ use serde::de;
 
 use crate::http::Payload;
 use crate::router::PathDeserializer;
-use crate::web::error::PathError;
+use crate::web::error::{ErrorRenderer, PathError};
 use crate::web::request::HttpRequest;
 use crate::web::FromRequest;
 
@@ -154,13 +154,12 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 ///     );
 /// }
 /// ```
-impl<T, Err: 'static> FromRequest<Err> for Path<T>
+impl<T, Err: ErrorRenderer> FromRequest<Err> for Path<T>
 where
     T: de::DeserializeOwned,
 {
     type Error = PathError;
     type Future = Ready<Result<Self, Self::Error>>;
-    type Config = ();
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
@@ -203,7 +202,7 @@ where
 //         value: u32,
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_extract_path_single() {
 //         let resource = ResourceDef::new("/{value}/");
 
@@ -215,7 +214,7 @@ where
 //         assert!(Path::<MyStruct>::from_request(&req, &mut pl).await.is_err());
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_tuple_extract() {
 //         let resource = ResourceDef::new("/{key}/{value}/");
 
@@ -242,7 +241,7 @@ where
 //         let () = <()>::from_request(&req, &mut pl).await.unwrap();
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_request_extract() {
 //         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
 
@@ -290,7 +289,7 @@ where
 //         assert_eq!(res[1], "32".to_owned());
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_custom_err_handler() {
 //         let (req, mut pl) = TestRequest::with_uri("/name/user1/")
 //             .data(PathConfig::default().error_handler(|err, _| {

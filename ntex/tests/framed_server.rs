@@ -1,11 +1,11 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use actix_codec::BytesCodec;
 use bytes::{Bytes, BytesMut};
 use futures::future::ok;
 
 use ntex::channel::mpsc;
+use ntex::codec::BytesCodec;
 use ntex::framed::{Builder, Connect, FactoryBuilder};
 use ntex::server::test_server;
 use ntex::{fn_factory_with_config, fn_service, IntoService, Service};
@@ -13,7 +13,7 @@ use ntex::{fn_factory_with_config, fn_service, IntoService, Service};
 #[derive(Clone)]
 struct State(Option<mpsc::Sender<Bytes>>);
 
-#[actix_rt::test]
+#[ntex::test]
 async fn test_basic() {
     let client_item = Rc::new(Cell::new(false));
 
@@ -43,11 +43,11 @@ async fn test_basic() {
         .into_service())
     }));
 
-    let conn = actix_connect::default_connector()
-        .call(actix_connect::Connect::with(String::new(), srv.addr()))
+    let conn = ntex::connect::Connector::default()
+        .call(ntex::connect::Connect::with(String::new(), srv.addr()))
         .await
         .unwrap();
 
-    client.call(conn.into_parts().0).await.unwrap();
+    client.call(conn).await.unwrap();
     assert!(client_item.get());
 }

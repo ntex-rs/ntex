@@ -19,7 +19,7 @@ use crate::http::{HttpMessage, Payload, Response, StatusCode};
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
 
-use crate::web::error::{JsonError, JsonPayloadError, WebResponseError};
+use crate::web::error::{ErrorRenderer, JsonError, JsonPayloadError};
 use crate::web::extract::FromRequest;
 use crate::web::request::HttpRequest;
 use crate::web::responder::Responder;
@@ -122,10 +122,7 @@ where
     }
 }
 
-impl<T: Serialize, Err: 'static> Responder<Err> for Json<T>
-where
-    JsonError: WebResponseError<Err>,
-{
+impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Json<T> {
     type Error = JsonError;
     type Future = Ready<Result<Response, Self::Error>>;
 
@@ -173,19 +170,18 @@ where
 ///     );
 /// }
 /// ```
-impl<T, Err: 'static> FromRequest<Err> for Json<T>
+impl<T, Err: ErrorRenderer> FromRequest<Err> for Json<T>
 where
     T: DeserializeOwned + 'static,
 {
     type Error = JsonPayloadError;
     type Future = LocalBoxFuture<'static, Result<Self, Self::Error>>;
-    type Config = JsonConfig;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         let req2 = req.clone();
         let (limit, ctype) = req
-            .app_data::<Self::Config>()
+            .app_data::<JsonConfig>()
             .map(|c| (c.limit, c.content_type.clone()))
             .unwrap_or((32768, None));
 
@@ -418,7 +414,7 @@ where
 //         }
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_responder() {
 //         let req = TestRequest::default().to_http_request();
 
@@ -435,7 +431,7 @@ where
 //         assert_eq!(resp.body().bin_ref(), b"{\"name\":\"test\"}");
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_custom_error_responder() {
 //         let (req, mut pl) = TestRequest::default()
 //             .header(
@@ -466,7 +462,7 @@ where
 //         assert_eq!(msg.name, "invalid request");
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_extract() {
 //         let (req, mut pl) = TestRequest::default()
 //             .header(
@@ -526,7 +522,7 @@ where
 //         assert!(format!("{}", s.err().unwrap()).contains("Content type error"));
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_json_body() {
 //         let (req, mut pl) = TestRequest::default().to_http_parts();
 //         let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
@@ -578,7 +574,7 @@ where
 //         );
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_with_json_and_bad_content_type() {
 //         let (req, mut pl) = TestRequest::with_header(
 //             header::CONTENT_TYPE,
@@ -596,7 +592,7 @@ where
 //         assert!(s.is_err())
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_with_json_and_good_custom_content_type() {
 //         let (req, mut pl) = TestRequest::with_header(
 //             header::CONTENT_TYPE,
@@ -616,7 +612,7 @@ where
 //         assert!(s.is_ok())
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_with_json_and_bad_custom_content_type() {
 //         let (req, mut pl) = TestRequest::with_header(
 //             header::CONTENT_TYPE,

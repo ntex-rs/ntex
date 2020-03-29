@@ -14,7 +14,7 @@ use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, ServiceFactory, Transform,
 };
 
-use super::app_service::{AppEntry, AppInit, AppRoutingFactory};
+use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
 use super::config::ServiceConfig;
 use super::data::{Data, DataFactory};
 use super::resource::Resource;
@@ -23,16 +23,16 @@ use super::service::{
     AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, WebRequest,
     WebResponse,
 };
-use super::{DefaultError, WebError};
+use super::{DefaultError, ErrorRenderer};
 
-type HttpNewService<Err> =
-    BoxServiceFactory<(), WebRequest, WebResponse, WebError<Err>, ()>;
+type HttpNewService<Err: ErrorRenderer> =
+    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type FnDataFactory =
     Box<dyn Fn() -> LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>;
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
-pub struct App<T, B, Err = DefaultError> {
+pub struct App<T, B, Err: ErrorRenderer = DefaultError> {
     endpoint: T,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
@@ -42,6 +42,7 @@ pub struct App<T, B, Err = DefaultError> {
     external: Vec<ResourceDef>,
     extensions: Extensions,
     error_renderer: Err,
+    case_insensitive: bool,
     _t: PhantomData<B>,
 }
 
@@ -59,12 +60,13 @@ impl App<AppEntry<DefaultError>, Body, DefaultError> {
             external: Vec::new(),
             extensions: Extensions::new(),
             error_renderer: DefaultError,
+            case_insensitive: false,
             _t: PhantomData,
         }
     }
 }
 
-impl<Err> App<AppEntry<Err>, Body, Err> {
+impl<Err: ErrorRenderer> App<AppEntry<Err>, Body, Err> {
     /// Create application builder with custom error renderer.
     pub fn with(err: Err) -> Self {
         let fref = Rc::new(RefCell::new(None));
@@ -78,6 +80,7 @@ impl<Err> App<AppEntry<Err>, Body, Err> {
             external: Vec::new(),
             extensions: Extensions::new(),
             error_renderer: err,
+            case_insensitive: false,
             _t: PhantomData,
         }
     }
@@ -88,12 +91,12 @@ where
     B: MessageBody,
     T: ServiceFactory<
         Config = (),
-        Request = WebRequest,
+        Request = WebRequest<Err>,
         Response = WebResponse<B>,
-        Error = WebError<Err>,
+        Error = Err::Container,
         InitError = (),
     >,
-    Err: 'static,
+    Err: ErrorRenderer,
 {
     /// Set application data. Application data could be accessed
     /// by using `Data<T>` extractor where `T` is data type.
@@ -108,15 +111,15 @@ where
     ///
     /// ```rust
     /// use std::cell::Cell;
-    /// use ntex::web::{self, App, HttpResponse, Responder};
+    /// use ntex::web::{self, App, HttpResponse};
     ///
     /// struct MyData {
     ///     counter: Cell<usize>,
     /// }
     ///
-    /// async fn index(data: web::Data<MyData>) -> impl Responder {
+    /// async fn index(data: web::Data<MyData>) -> HttpResponse {
     ///     data.counter.set(data.counter.get() + 1);
-    ///     HttpResponse::Ok()
+    ///     HttpResponse::Ok().into()
     /// }
     ///
     /// let app = App::new()
@@ -294,9 +297,9 @@ where
         F: IntoServiceFactory<U>,
         U: ServiceFactory<
                 Config = (),
-                Request = WebRequest,
+                Request = WebRequest<Err>,
                 Response = WebResponse,
-                Error = WebError<Err>,
+                Error = Err::Container,
             > + 'static,
         U::InitError: fmt::Debug,
     {
@@ -315,7 +318,7 @@ where
     /// `HttpRequest::url_for()` will work as expected.
     ///
     /// ```rust
-    /// use ntex::web::{self, App, HttpRequest, HttpResponse, Error, WebError};
+    /// use ntex::web::{self, App, HttpRequest, HttpResponse, Error};
     ///
     /// async fn index(req: HttpRequest) -> Result<HttpResponse, Error> {
     ///     let url = req.url_for("youtube", &["asdlkjqme"])?;
@@ -376,9 +379,9 @@ where
     ) -> App<
         impl ServiceFactory<
             Config = (),
-            Request = WebRequest,
+            Request = WebRequest<Err>,
             Response = WebResponse<B1>,
-            Error = WebError<Err>,
+            Error = Err::Container,
             InitError = (),
         >,
         B1,
@@ -387,9 +390,9 @@ where
     where
         M: Transform<
             T::Service,
-            Request = WebRequest,
+            Request = WebRequest<Err>,
             Response = WebResponse<B1>,
-            Error = WebError<Err>,
+            Error = Err::Container,
             InitError = (),
         >,
         B1: MessageBody,
@@ -404,6 +407,7 @@ where
             external: self.external,
             extensions: self.extensions,
             error_renderer: self.error_renderer,
+            case_insensitive: self.case_insensitive,
             _t: PhantomData,
         }
     }
@@ -445,9 +449,9 @@ where
     ) -> App<
         impl ServiceFactory<
             Config = (),
-            Request = WebRequest,
+            Request = WebRequest<Err>,
             Response = WebResponse<B1>,
-            Error = WebError<Err>,
+            Error = Err::Container,
             InitError = (),
         >,
         B1,
@@ -455,8 +459,8 @@ where
     >
     where
         B1: MessageBody,
-        F: FnMut(WebRequest, &mut T::Service) -> R + Clone,
-        R: Future<Output = Result<WebResponse<B1>, WebError<Err>>>,
+        F: FnMut(WebRequest<Err>, &mut T::Service) -> R + Clone,
+        R: Future<Output = Result<WebResponse<B1>, Err::Container>>,
     {
         App {
             endpoint: apply_fn_factory(self.endpoint, mw),
@@ -468,25 +472,34 @@ where
             external: self.external,
             extensions: self.extensions,
             error_renderer: self.error_renderer,
+            case_insensitive: self.case_insensitive,
             _t: PhantomData,
         }
     }
+
+    /// Use ascii case-insensitive routing.
+    ///
+    /// Only static segments could be case-insensitive.
+    pub fn case_insensitive_routing(mut self) -> Self {
+        self.case_insensitive = true;
+        self
+    }
 }
 
-impl<T, B, Err> IntoServiceFactory<AppInit<T, B, Err>> for App<T, B, Err>
+impl<T, B, Err> IntoServiceFactory<AppFactory<T, B, Err>> for App<T, B, Err>
 where
     B: MessageBody,
     T: ServiceFactory<
         Config = (),
-        Request = WebRequest,
+        Request = WebRequest<Err>,
         Response = WebResponse<B>,
-        Error = WebError<Err>,
+        Error = Err::Container,
         InitError = (),
     >,
-    Err: 'static,
+    Err: ErrorRenderer,
 {
-    fn into_factory(self) -> AppInit<T, B, Err> {
-        AppInit {
+    fn into_factory(self) -> AppFactory<T, B, Err> {
+        AppFactory {
             data: Rc::new(self.data),
             data_factories: Rc::new(self.data_factories),
             endpoint: self.endpoint,
@@ -495,6 +508,7 @@ where
             default: self.default,
             factory_ref: self.factory_ref,
             extensions: RefCell::new(Some(self.extensions)),
+            case_insensitive: self.case_insensitive,
         }
     }
 }
@@ -510,10 +524,10 @@ mod tests {
     use crate::web::middleware::DefaultHeaders;
     use crate::web::service::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
-    use crate::web::{self, HttpRequest, HttpResponse};
+    use crate::web::{self, DefaultError, HttpRequest, HttpResponse};
     use crate::Service;
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_default_resource() {
         let mut srv = init_service(
             App::new()
@@ -533,12 +547,12 @@ mod tests {
                 .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
                 .service(
                     web::resource("/test2")
-                        .default_service(|r: WebRequest| {
+                        .default_service(|r: WebRequest<DefaultError>| {
                             ok(r.into_response(HttpResponse::Created()))
                         })
                         .route(web::get().to(|| async { HttpResponse::Ok() })),
                 )
-                .default_service(|r: WebRequest| {
+                .default_service(|r: WebRequest<DefaultError>| {
                     ok(r.into_response(HttpResponse::MethodNotAllowed()))
                 }),
         )
@@ -559,7 +573,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_data_factory() {
         let mut srv = init_service(
             App::new().data_factory(|| ok::<_, ()>(10usize)).service(
@@ -584,7 +598,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_extension() {
         let mut srv = init_service(App::new().app_data(10usize).service(
             web::resource("/").to(|req: HttpRequest| async move {
@@ -598,7 +612,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_wrap() {
         let mut srv = init_service(
             App::new()
@@ -618,7 +632,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_router_wrap() {
         let mut srv = init_service(
             App::new()
@@ -638,7 +652,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_wrap_fn() {
         let mut srv = init_service(
             App::new()
@@ -665,7 +679,7 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
     async fn test_router_wrap_fn() {
         let mut srv = init_service(
             App::new()
@@ -692,7 +706,24 @@ mod tests {
         );
     }
 
-    #[actix_rt::test]
+    #[crate::test]
+    async fn test_case_insensitive_router() {
+        let mut srv = init_service(
+            App::new()
+                .case_insensitive_routing()
+                .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
+        )
+        .await;
+        let req = TestRequest::with_uri("/test").to_request();
+        let resp = call_service(&mut srv, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let req = TestRequest::with_uri("/Test").to_request();
+        let resp = call_service(&mut srv, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[crate::test]
     async fn test_external_resource() {
         let mut srv = init_service(
             App::new()

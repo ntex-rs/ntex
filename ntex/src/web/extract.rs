@@ -7,7 +7,7 @@ use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
 use crate::http::Payload;
 
-use super::error::{IntoWebError, WebError, WebResponseError};
+use super::error::ErrorRenderer;
 use super::request::HttpRequest;
 
 /// Trait implemented by types that can be extracted from request.
@@ -15,13 +15,10 @@ use super::request::HttpRequest;
 /// Types that implement this trait can be used with `Route` handlers.
 pub trait FromRequest<Err>: Sized {
     /// The associated error which can be returned.
-    type Error: WebResponseError<Err>;
+    type Error;
 
     /// Future that resolves to a Self
     type Future: Future<Output = Result<Self, Self::Error>>;
-
-    /// Configuration for this extractor
-    type Config: Default + 'static;
 
     /// Convert request to a Self
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future;
@@ -42,7 +39,7 @@ pub trait FromRequest<Err>: Sized {
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, dev, App, HttpRequest, FromRequest, DefaultError, WebError};
+/// use ntex::web::{self, error, App, HttpRequest, FromRequest, DefaultError};
 /// use futures::future::{ok, err, Ready};
 /// use serde_derive::Deserialize;
 /// use rand;
@@ -52,16 +49,15 @@ pub trait FromRequest<Err>: Sized {
 ///     name: String
 /// }
 ///
-/// impl FromRequest<DefaultError> for Thing {
-///     type Error = WebError<DefaultError>;
+/// impl<Err> FromRequest<Err> for Thing {
+///     type Error = error::Error;
 ///     type Future = Ready<Result<Self, Self::Error>>;
-///     type Config = ();
 ///
 ///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
 ///         if rand::random() {
 ///             ok(Thing { name: "thingy".into() })
 ///         } else {
-///             err(error::ErrorBadRequest("no luck"))
+///             err(error::ErrorBadRequest("no luck").into())
 ///         }
 ///
 ///     }
@@ -83,13 +79,14 @@ pub trait FromRequest<Err>: Sized {
 ///     );
 /// }
 /// ```
-impl<T: 'static, Err: 'static> FromRequest<Err> for Option<T>
+impl<T, Err> FromRequest<Err> for Option<T>
 where
-    T: FromRequest<Err>,
+    T: FromRequest<Err> + 'static,
     T::Future: 'static,
+    Err: ErrorRenderer,
+    <T as FromRequest<Err>>::Error: Into<Err::Container>,
 {
-    type Config = T::Config;
-    type Error = WebError<Err>;
+    type Error = Err::Container;
     type Future = LocalBoxFuture<'static, Result<Option<T>, Self::Error>>;
 
     #[inline]
@@ -98,7 +95,7 @@ where
             .then(|r| match r {
                 Ok(v) => ok(Some(v)),
                 Err(e) => {
-                    log::debug!("Error for Option<T> extractor: {}", e.into_error());
+                    log::debug!("Error for Option<T> extractor: {}", e.into());
                     ok(None)
                 }
             })
@@ -114,7 +111,7 @@ where
 ///
 /// ```rust
 /// use ntex::http;
-/// use ntex::web::{self, error, App, HttpRequest, FromRequest, WebError, DefaultError};
+/// use ntex::web::{self, error, App, HttpRequest, FromRequest};
 /// use futures::future::{ok, err, Ready};
 /// use serde_derive::Deserialize;
 /// use rand;
@@ -124,22 +121,21 @@ where
 ///     name: String
 /// }
 ///
-/// impl FromRequest<DefaultError> for Thing {
-///     type Error = WebError<DefaultError>;
+/// impl<Err> FromRequest<Err> for Thing {
+///     type Error = error::Error;
 ///     type Future = Ready<Result<Thing, Self::Error>>;
-///     type Config = ();
 ///
 ///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
 ///         if rand::random() {
 ///             ok(Thing { name: "thingy".into() })
 ///         } else {
-///             err(error::ErrorBadRequest("no luck"))
+///             err(error::ErrorBadRequest("no luck").into())
 ///         }
 ///     }
 /// }
 ///
 /// /// extract `Thing` from request
-/// async fn index(supplied_thing: Result<Thing, WebError<DefaultError>>) -> String {
+/// async fn index(supplied_thing: Result<Thing, error::Error>) -> String {
 ///     match supplied_thing {
 ///         Ok(thing) => format!("Got thing: {:?}", thing),
 ///         Err(e) => format!("Error extracting thing: {}", e)
@@ -157,9 +153,8 @@ where
     T: FromRequest<E> + 'static,
     T::Error: 'static,
     T::Future: 'static,
-    E: 'static,
+    E: ErrorRenderer,
 {
-    type Config = T::Config;
     type Error = T::Error;
     type Future = LocalBoxFuture<'static, Result<Result<T, T::Error>, Self::Error>>;
 
@@ -175,10 +170,9 @@ where
 }
 
 #[doc(hidden)]
-impl<E: 'static> FromRequest<E> for () {
-    type Config = ();
-    type Error = WebError<E>;
-    type Future = Ready<Result<(), WebError<E>>>;
+impl<E: ErrorRenderer> FromRequest<E> for () {
+    type Error = E::Container;
+    type Future = Ready<Result<(), E::Container>>;
 
     fn from_request(_: &HttpRequest, _: &mut Payload) -> Self::Future {
         ok(())
@@ -190,11 +184,12 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
     /// FromRequest implementation for tuple
     #[doc(hidden)]
     #[allow(unused_parens)]
-    impl<Err: 'static, $($T: FromRequest<Err> + 'static),+> FromRequest<Err> for ($($T,)+)
+    impl<Err: ErrorRenderer, $($T: FromRequest<Err> + 'static),+> FromRequest<Err> for ($($T,)+)
+    where
+        $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
     {
-        type Error = WebError<Err>;
+        type Error = Err::Container;
         type Future = $fut_type<Err, $($T),+>;
-        type Config = ($($T::Config),+);
 
         fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
             $fut_type {
@@ -206,14 +201,19 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
 
     #[doc(hidden)]
     #[pin_project::pin_project]
-    pub struct $fut_type<Err: 'static, $($T: FromRequest<Err>),+> {
+    pub struct $fut_type<Err: ErrorRenderer, $($T: FromRequest<Err>),+>
+    where
+        $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
+    {
         items: ($(Option<$T>,)+),
         futs: ($($T::Future,)+),
     }
 
-    impl<Err: 'static, $($T: FromRequest<Err>),+> Future for $fut_type<Err, $($T),+>
+    impl<Err: ErrorRenderer, $($T: FromRequest<Err>),+> Future for $fut_type<Err, $($T),+>
+    where
+        $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
     {
-        type Output = Result<($($T,)+), WebError<Err>>;
+        type Output = Result<($($T,)+), Err::Container>;
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let this = self.project();
@@ -226,7 +226,7 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
                             this.items.$n = Some(item);
                         }
                         Poll::Pending => ready = false,
-                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into_error())),
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                     }
                 }
             )+
@@ -280,7 +280,7 @@ tuple_from_req!(TupleFromRequest10, (0, A), (1, B), (2, C), (3, D), (4, E), (5, 
 //         extract
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_option() {
 //         let (req, mut pl) = TestRequest::with_header(
 //             header::CONTENT_TYPE,
@@ -326,7 +326,7 @@ tuple_from_req!(TupleFromRequest10, (0, A), (1, B), (2, C), (3, D), (4, E), (5, 
 //         assert_eq!(r, None);
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_result() {
 //         let (req, mut pl) = TestRequest::with_header(
 //             header::CONTENT_TYPE,

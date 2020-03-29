@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::web::error::{UrlencodedError, WebError};
+use crate::web::error::{ErrorRenderer, UrlencodedError};
 use crate::web::extract::FromRequest;
 use crate::web::request::HttpRequest;
 use crate::web::responder::Responder;
@@ -108,9 +108,8 @@ impl<T> ops::DerefMut for Form<T> {
 impl<T, Err> FromRequest<Err> for Form<T>
 where
     T: DeserializeOwned + 'static,
-    Err: 'static,
+    Err: ErrorRenderer,
 {
-    type Config = FormConfig;
     type Error = UrlencodedError;
     type Future = LocalBoxFuture<'static, Result<Self, Self::Error>>;
 
@@ -143,11 +142,8 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
     }
 }
 
-impl<T: Serialize, Err: 'static> Responder<Err> for Form<T>
-where
-    WebError<Err>: From<serde_urlencoded::ser::Error>,
-{
-    type Error = WebError<Err>;
+impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Form<T> {
+    type Error = serde_urlencoded::ser::Error;
     type Future = Ready<Result<Response, Self::Error>>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
@@ -366,7 +362,7 @@ where
 //         counter: i64,
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_form() {
 //         let (req, mut pl) =
 //             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -402,7 +398,7 @@ where
 //         }
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_urlencoded_error() {
 //         let (req, mut pl) =
 //             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -428,7 +424,7 @@ where
 //         assert!(eq(info.err().unwrap(), UrlencodedError::ContentType));
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_urlencoded() {
 //         let (req, mut pl) =
 //             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -463,7 +459,7 @@ where
 //         );
 //     }
 
-//     #[actix_rt::test]
+//     #[crate::test]
 //     async fn test_responder() {
 //         let req = TestRequest::default().to_http_request();
 

@@ -3,13 +3,12 @@ use std::io;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
-use actix_codec::{AsyncRead, AsyncWrite, Framed};
 use bytes::Bytes;
-use futures::future;
-use futures::task::{Context, Poll};
-use futures::{Future, SinkExt, StreamExt};
+use futures::{future, Future, SinkExt, StreamExt};
 
+use ntex::codec::{AsyncRead, AsyncWrite, Framed};
 use ntex::framed::Dispatcher;
 use ntex::http::ws::handshake;
 use ntex::http::{body, h1, test, HttpService, Request, Response};

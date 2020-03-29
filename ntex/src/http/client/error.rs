@@ -2,12 +2,12 @@
 use std::error::Error;
 use std::io;
 
-use actix_connect::resolver::ResolveError;
 use derive_more::{Display, From};
 use serde_json::error::Error as JsonError;
 
 #[cfg(feature = "openssl")]
-use actix_connect::ssl::openssl::{HandshakeError, SslError};
+use crate::connect::openssl::{HandshakeError, SslError};
+use crate::connect::resolver::ResolveError;
 
 use crate::http::error::{HttpError, ParseError, PayloadError};
 use crate::http::header::HeaderValue;
@@ -121,14 +121,14 @@ pub enum ConnectError {
 
 impl std::error::Error for ConnectError {}
 
-impl From<actix_connect::ConnectError> for ConnectError {
-    fn from(err: actix_connect::ConnectError) -> ConnectError {
+impl From<crate::connect::ConnectError> for ConnectError {
+    fn from(err: crate::connect::ConnectError) -> ConnectError {
         match err {
-            actix_connect::ConnectError::Resolver(e) => ConnectError::Resolver(e),
-            actix_connect::ConnectError::NoRecords => ConnectError::NoRecords,
-            actix_connect::ConnectError::InvalidInput => panic!(),
-            actix_connect::ConnectError::Unresolverd => ConnectError::Unresolverd,
-            actix_connect::ConnectError::Io(e) => ConnectError::Io(e),
+            crate::connect::ConnectError::Resolver(e) => ConnectError::Resolver(e),
+            crate::connect::ConnectError::NoRecords => ConnectError::NoRecords,
+            crate::connect::ConnectError::InvalidInput => panic!(),
+            crate::connect::ConnectError::Unresolverd => ConnectError::Unresolverd,
+            crate::connect::ConnectError::Io(e) => ConnectError::Io(e),
         }
     }
 }

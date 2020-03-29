@@ -1,13 +1,13 @@
 use std::convert::TryFrom;
 use std::time;
 
-use actix_codec::{AsyncRead, AsyncWrite};
 use bytes::Bytes;
 use futures::future::poll_fn;
 use h2::{client::SendRequest, SendStream};
 use http::header::{HeaderValue, CONNECTION, CONTENT_LENGTH, TRANSFER_ENCODING};
 use http::{request::Request, Method, Version};
 
+use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::header::HeaderMap;
 use crate::http::message::{RequestHeadType, ResponseHead};
@@ -17,7 +17,7 @@ use super::connection::{ConnectionType, IoConnection};
 use super::error::SendRequestError;
 use super::pool::Acquired;
 
-pub(crate) async fn send_request<T, B>(
+pub(super) async fn send_request<T, B>(
     mut io: SendRequest<Bytes>,
     head: RequestHeadType,
     body: B,

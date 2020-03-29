@@ -151,7 +151,7 @@ impl<T: ResourcePath> Path<T> {
     }
 
     /// Return iterator to items in parameter container
-    pub fn iter(&self) -> PathIter<T> {
+    pub fn iter(&self) -> PathIter<'_, T> {
         PathIter {
             idx: 0,
             params: self,

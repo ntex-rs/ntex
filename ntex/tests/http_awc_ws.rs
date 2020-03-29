@@ -1,10 +1,10 @@
 use std::io;
 
-use actix_codec::Framed;
 use bytes::Bytes;
 use futures::future::ok;
 use futures::{SinkExt, StreamExt};
 
+use ntex::codec::Framed;
 use ntex::http::test::server as test_server;
 use ntex::http::ws::handshake_response;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};

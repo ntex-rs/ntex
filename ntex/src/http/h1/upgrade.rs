@@ -2,9 +2,9 @@ use std::io;
 use std::marker::PhantomData;
 use std::task::{Context, Poll};
 
-use actix_codec::Framed;
 use futures::future::Ready;
 
+use crate::codec::Framed;
 use crate::http::h1::Codec;
 use crate::http::request::Request;
 use crate::{Service, ServiceFactory};
