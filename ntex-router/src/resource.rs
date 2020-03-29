@@ -825,4 +825,16 @@ mod tests {
         assert!(resource.resource_path_named(&mut s, &map));
         assert_eq!(s, "/user/item/item2/");
     }
+
+    #[test]
+    fn test_non_rooted() {
+        let re = ResourceDef::new("name");
+        let tree = Tree::new(&re, 1);
+        assert_eq!(tree.find(&mut Path::new("name")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/")), None);
+        assert_eq!(tree.find(&mut Path::new("/name1")), None);
+        assert_eq!(tree.find(&mut Path::new("/name/")), None);
+        assert_eq!(tree.find(&mut Path::new("/name~")), None);
+    }
 }

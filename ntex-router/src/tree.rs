@@ -224,6 +224,13 @@ impl Tree {
                     }
                 }
             }
+
+            let path = if path.starts_with('/') {
+                &path[1..]
+            } else {
+                path
+            };
+
             let res = self
                 .children
                 .iter()
@@ -247,6 +254,12 @@ impl Tree {
             return None;
         }
 
+        let path = if path.starts_with('/') {
+            &path[1..]
+        } else {
+            path
+        };
+
         if let Some((val, skip)) =
             self.find_inner2(path, resource, check, 1, &mut segments, insensitive)
         {
@@ -261,7 +274,7 @@ impl Tree {
 
     fn find_inner2<T, R, F>(
         &self,
-        path: &str,
+        mut path: &str,
         resource: &R,
         check: &F,
         mut skip: usize,
@@ -274,7 +287,6 @@ impl Tree {
         F: Fn(usize, &R) -> bool,
     {
         let mut key: &[_] = &self.key;
-        let mut path = &path[1..];
 
         loop {
             let idx = if let Some(idx) = path.find('/') {
@@ -405,6 +417,8 @@ impl Tree {
                             return Some((v, skip - 1));
                         }
                     }
+
+                    let path = &path[1..];
 
                     return self
                         .children
