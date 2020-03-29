@@ -155,13 +155,13 @@ macro_rules! array_impls {
 array_impls!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16);
 
 impl fmt::Debug for ByteString {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         (**self).fmt(fmt)
     }
 }
 
 impl fmt::Display for ByteString {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         (**self).fmt(fmt)
     }
 }
