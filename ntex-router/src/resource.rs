@@ -329,14 +329,20 @@ impl ResourceDef {
             );
         }
 
-        while let Some(idx) = pattern[1..].find(|c| c == '{' || c == '/') {
-            let idx = idx + 1;
+        loop {
+            let start = if pattern.starts_with('/') { 1 } else { 0 };
+            let idx = if let Some(idx) = pattern[start..].find(|c| c == '{' || c == '/')
+            {
+                idx + start
+            } else {
+                break;
+            };
 
             // static segment
-            if let Some(i) = pattern[1..idx + 1].find('/') {
-                elems.push(PathElement::Str(pattern[..i + 1].to_string()));
-                pelems.push(Segment::Static(pattern[1..i + 1].to_string()));
-                pattern = &pattern[i + 1..];
+            if let Some(i) = pattern[start..idx + 1].find('/') {
+                elems.push(PathElement::Str(pattern[..i + start].to_string()));
+                pelems.push(Segment::Static(pattern[start..i + start].to_string()));
+                pattern = &pattern[i + start..];
                 continue;
             }
 
@@ -488,8 +494,7 @@ mod tests {
 
     #[test]
     fn test_parse_param() {
-        let re = ResourceDef::new("/{id}");
-        let tree = Tree::new(&re, 1);
+        let tree = Tree::new(&ResourceDef::new("/{id}"), 1);
         assert_eq!(tree.find(&mut Path::new("/profile")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/2345")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/2345/")), None);
@@ -511,8 +516,7 @@ mod tests {
         assert_eq!(tree.find(&mut resource), Some(1));
         assert_eq!(resource.get("id").unwrap(), "1245125");
 
-        let re = ResourceDef::new("/v{version}/resource/{id}");
-        let tree = Tree::new(&re, 1);
+        let tree = Tree::new(&ResourceDef::new("/v{version}/resource/{id}"), 1);
         assert_eq!(tree.find(&mut Path::new("/v1/resource/320120")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/v1/resource/320120/")), None,);
         assert_eq!(tree.find(&mut Path::new("/v/resource/1")), None);
@@ -828,13 +832,23 @@ mod tests {
 
     #[test]
     fn test_non_rooted() {
-        let re = ResourceDef::new("name");
-        let tree = Tree::new(&re, 1);
+        let tree = Tree::new(&ResourceDef::new("name"), 1);
         assert_eq!(tree.find(&mut Path::new("name")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/name")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/")), None);
         assert_eq!(tree.find(&mut Path::new("/name1")), None);
         assert_eq!(tree.find(&mut Path::new("/name/")), None);
         assert_eq!(tree.find(&mut Path::new("/name~")), None);
+
+        let tree = Tree::new(&ResourceDef::new("name/"), 1);
+        assert_eq!(tree.find(&mut Path::new("name/")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name/")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name")), None);
+        assert_eq!(tree.find(&mut Path::new("/name/gs")), None);
+
+        let tree = Tree::new(&ResourceDef::new("user/profile"), 1);
+        assert_eq!(tree.find(&mut Path::new("user/profile")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/user/profile")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/user/profile/profile")), None);
     }
 }

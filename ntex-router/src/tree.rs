@@ -418,7 +418,7 @@ impl Tree {
                         }
                     }
 
-                    let path = &path[1..];
+                    let path = if path.len() != 1 { &path[1..] } else { path };
 
                     return self
                         .children
