@@ -7,9 +7,6 @@ members = [
   "ntex-rt",
   "ntex-service",
   # "ntex-web-macros",
-
-  "actix-net/actix-service",
-  "actix-net/router",
 ]
 
 [patch.crates-io]
@@ -20,5 +17,3 @@ ntex-router = { path = "ntex-router" }
 ntex-rt = { path = "ntex-rt" }
 ntex-service = { path = "ntex-service" }
 ntex-web-macros = { path = "ntex-web-macros" }
-
-bytestring = { path = "actix-net/string" }
