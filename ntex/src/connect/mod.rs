@@ -19,7 +19,7 @@ pub mod rustls;
 
 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 use trust_dns_resolver::system_conf::read_system_conf;
-use trust_dns_resolver::AsyncResolver;
+pub use trust_dns_resolver::AsyncResolver;
 
 pub mod resolver {
     pub use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
@@ -42,7 +42,7 @@ pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver 
 
 struct DefaultResolver(AsyncResolver);
 
-pub(crate) fn get_default_resolver() -> AsyncResolver {
+pub fn default_resolver() -> AsyncResolver {
     if Arbiter::contains_item::<DefaultResolver>() {
         Arbiter::get_item(|item: &DefaultResolver| item.0.clone())
     } else {
@@ -60,8 +60,4 @@ pub(crate) fn get_default_resolver() -> AsyncResolver {
         Arbiter::set_item(DefaultResolver(resolver.clone()));
         resolver
     }
-}
-
-pub fn start_default_resolver() -> AsyncResolver {
-    get_default_resolver()
 }

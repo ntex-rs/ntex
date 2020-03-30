@@ -84,7 +84,7 @@ async fn test_connection_reuse_h2() {
         .set_certificate_verifier(Arc::new(danger::NoCertificateVerification {}));
 
     let client = Client::build()
-        .connector(Connector::new().rustls(Arc::new(config)).finish())
+        .connector(Connector::default().rustls(Arc::new(config)).finish())
         .finish();
 
     // req 1

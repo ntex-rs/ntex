@@ -56,7 +56,7 @@ async fn test_start() {
 
     let client = client::Client::build()
         .connector(
-            client::Connector::new()
+            client::Connector::default()
                 .timeout(Duration::from_millis(100))
                 .finish(),
         )
@@ -131,7 +131,7 @@ async fn test_start_ssl() {
 
     let client = ntex::http::client::Client::build()
         .connector(
-            ntex::http::client::Connector::new()
+            ntex::http::client::Connector::default()
                 .ssl(builder.build())
                 .timeout(Duration::from_millis(100))
                 .finish(),

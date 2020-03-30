@@ -337,7 +337,7 @@ pub fn server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
                 let _ = builder
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
                     .map_err(|e| log::error!("Can not set alpn protocol: {:?}", e));
-                Connector::new()
+                Connector::default()
                     .conn_lifetime(time::Duration::from_secs(0))
                     .timeout(time::Duration::from_millis(30000))
                     .ssl(builder.build())
@@ -345,7 +345,7 @@ pub fn server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
             }
             #[cfg(not(feature = "openssl"))]
             {
-                Connector::new()
+                Connector::default()
                     .conn_lifetime(time::Duration::from_secs(0))
                     .timeout(time::Duration::from_millis(30000))
                     .finish()
@@ -354,7 +354,6 @@ pub fn server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
 
         Client::build().connector(connector).finish()
     };
-    crate::connect::start_default_resolver();
 
     TestServer {
         addr,

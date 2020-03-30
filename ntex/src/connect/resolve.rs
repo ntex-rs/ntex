@@ -11,8 +11,8 @@ use trust_dns_resolver::{AsyncResolver, Background};
 use crate::service::{Service, ServiceFactory};
 
 use super::connect::{Address, Connect};
+use super::default_resolver;
 use super::error::ConnectError;
-use super::get_default_resolver;
 
 /// DNS Resolver Service
 pub struct Resolver<T> {
@@ -51,7 +51,7 @@ impl<T: Address> Resolver<T> {
 impl<T> Default for Resolver<T> {
     fn default() -> Resolver<T> {
         Resolver {
-            resolver: get_default_resolver(),
+            resolver: default_resolver(),
             _t: PhantomData,
         }
     }

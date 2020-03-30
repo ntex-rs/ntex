@@ -54,7 +54,7 @@ async fn test_static_str() {
         })
     });
 
-    let resolver = ntex::connect::start_default_resolver();
+    let resolver = ntex::connect::default_resolver();
     let mut conn = ntex::connect::Connector::new(resolver.clone());
 
     let con = conn.call(Connect::with("10", srv.addr())).await.unwrap();

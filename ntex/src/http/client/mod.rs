@@ -88,7 +88,7 @@ impl Default for Client {
     fn default() -> Self {
         Client(Rc::new(ClientConfig {
             connector: RefCell::new(Box::new(ConnectorWrapper(
-                Connector::new().finish(),
+                Connector::default().finish(),
             ))),
             headers: HeaderMap::new(),
             timeout: Some(Duration::from_secs(5)),

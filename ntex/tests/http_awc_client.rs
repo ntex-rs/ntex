@@ -110,9 +110,9 @@ async fn test_timeout() {
         })))
     });
 
-    let connector = Connector::new()
+    let connector = Connector::default()
         .connector(
-            ntex::connect::Connector::new(ntex::connect::start_default_resolver())
+            ntex::connect::Connector::new(ntex::connect::default_resolver())
                 .map(|sock| (sock, ntex::http::Protocol::Http1)),
         )
         .timeout(Duration::from_secs(15))
@@ -290,7 +290,7 @@ async fn test_connection_wait_queue() {
     });
 
     let client = Client::build()
-        .connector(Connector::new().limit(1).finish())
+        .connector(Connector::default().limit(1).finish())
         .finish();
 
     // req 1
@@ -337,7 +337,7 @@ async fn test_connection_wait_queue_force_close() {
     });
 
     let client = Client::build()
-        .connector(Connector::new().limit(1).finish())
+        .connector(Connector::default().limit(1).finish())
         .finish();
 
     // req 1
