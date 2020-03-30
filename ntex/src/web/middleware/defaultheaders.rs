@@ -129,11 +129,17 @@ where
     type Error = S::Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: WebRequest<E>) -> Self::Future {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
+    }
+
+    fn call(&self, req: WebRequest<E>) -> Self::Future {
         let inner = self.inner.clone();
         let fut = self.service.call(req);
 
@@ -172,7 +178,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_default_headers() {
-        let mut mw = DefaultHeaders::<DefaultError>::new()
+        let mw = DefaultHeaders::<DefaultError>::new()
             .header(CONTENT_TYPE, "0001")
             .new_transform(ok_service())
             .await
@@ -189,7 +195,7 @@ mod tests {
                     HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish(),
                 ))
             };
-        let mut mw = DefaultHeaders::<DefaultError>::new()
+        let mw = DefaultHeaders::<DefaultError>::new()
             .header(CONTENT_TYPE, "0001")
             .new_transform(srv.into_service())
             .await
@@ -203,7 +209,7 @@ mod tests {
         let srv = |req: WebRequest<DefaultError>| {
             ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))
         };
-        let mut mw = DefaultHeaders::<DefaultError>::new()
+        let mw = DefaultHeaders::<DefaultError>::new()
             .content_type()
             .new_transform(srv.into_service())
             .await

@@ -62,6 +62,34 @@ impl<T, U> Router<T, U> {
         }
     }
 
+    pub fn recognize_checked<R, P, F>(
+        &self,
+        resource: &mut R,
+        check: F,
+    ) -> Option<(&T, ResourceId)>
+    where
+        F: Fn(&R, Option<&U>) -> bool,
+        R: Resource<P>,
+        P: ResourcePath,
+    {
+        if let Some(idx) = if self.insensitive {
+            self.tree.find_checked_insensitive(resource, &|idx, res| {
+                let item = &self.resources[idx];
+                check(res, item.2.as_ref())
+            })
+        } else {
+            self.tree.find_checked(resource, &|idx, res| {
+                let item = &self.resources[idx];
+                check(res, item.2.as_ref())
+            })
+        } {
+            let item = &self.resources[idx];
+            Some((&item.1, ResourceId(item.0.id())))
+        } else {
+            None
+        }
+    }
+
     pub fn recognize_mut_checked<R, P, F>(
         &mut self,
         resource: &mut R,

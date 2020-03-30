@@ -12,7 +12,7 @@ pub fn apply_fn<T, F, R, In, Out, Err, U>(
 ) -> Apply<T, F, R, In, Out, Err>
 where
     T: Service<Error = Err>,
-    F: FnMut(In, &mut T) -> R,
+    F: Fn(In, &T) -> R,
     R: Future<Output = Result<Out, Err>>,
     U: IntoService<T>,
 {
@@ -26,7 +26,7 @@ pub fn apply_fn_factory<T, F, R, In, Out, Err, U>(
 ) -> ApplyServiceFactory<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R + Clone,
+    F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
     U: IntoServiceFactory<T>,
 {
@@ -46,7 +46,7 @@ where
 impl<T, F, R, In, Out, Err> Apply<T, F, R, In, Out, Err>
 where
     T: Service<Error = Err>,
-    F: FnMut(In, &mut T) -> R,
+    F: Fn(In, &T) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     /// Create new `Apply` combinator
@@ -62,7 +62,7 @@ where
 impl<T, F, R, In, Out, Err> Clone for Apply<T, F, R, In, Out, Err>
 where
     T: Service<Error = Err> + Clone,
-    F: FnMut(In, &mut T) -> R + Clone,
+    F: Fn(In, &T) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     fn clone(&self) -> Self {
@@ -77,7 +77,7 @@ where
 impl<T, F, R, In, Out, Err> Service for Apply<T, F, R, In, Out, Err>
 where
     T: Service<Error = Err>,
-    F: FnMut(In, &mut T) -> R,
+    F: Fn(In, &T) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Request = In;
@@ -86,18 +86,18 @@ where
     type Future = R;
 
     #[inline]
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(futures_util::ready!(self.service.poll_ready(cx)))
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.service.poll_ready(cx)
     }
 
     #[inline]
-    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
         self.service.poll_shutdown(cx, is_error)
     }
 
     #[inline]
-    fn call(&mut self, req: In) -> Self::Future {
-        (self.f)(req, &mut self.service)
+    fn call(&self, req: In) -> Self::Future {
+        (self.f)(req, &self.service)
     }
 }
 
@@ -105,7 +105,7 @@ where
 pub struct ApplyServiceFactory<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R + Clone,
+    F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     service: T,
@@ -116,7 +116,7 @@ where
 impl<T, F, R, In, Out, Err> ApplyServiceFactory<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R + Clone,
+    F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     /// Create new `ApplyNewService` new service instance
@@ -132,7 +132,7 @@ where
 impl<T, F, R, In, Out, Err> Clone for ApplyServiceFactory<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err> + Clone,
-    F: FnMut(In, &mut T::Service) -> R + Clone,
+    F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     fn clone(&self) -> Self {
@@ -147,7 +147,7 @@ where
 impl<T, F, R, In, Out, Err> ServiceFactory for ApplyServiceFactory<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R + Clone,
+    F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     type Request = In;
@@ -168,7 +168,7 @@ where
 pub struct ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R,
+    F: Fn(In, &T::Service) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     #[pin]
@@ -180,7 +180,7 @@ where
 impl<T, F, R, In, Out, Err> ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R,
+    F: Fn(In, &T::Service) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     fn new(fut: T::Future, f: F) -> Self {
@@ -195,7 +195,7 @@ where
 impl<T, F, R, In, Out, Err> Future for ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
-    F: FnMut(In, &mut T::Service) -> R,
+    F: Fn(In, &T::Service) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Output = Result<Apply<T::Service, F, R, In, Out, Err>, T::InitError>;
@@ -229,18 +229,18 @@ mod tests {
         type Error = ();
         type Future = Ready<Result<(), ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future {
             ok(())
         }
     }
 
     #[ntex_rt::test]
     async fn test_call() {
-        let mut srv = pipeline(apply_fn(Srv, |req: &'static str, srv| {
+        let srv = pipeline(apply_fn(Srv, |req: &'static str, srv| {
             let fut = srv.call(());
             async move {
                 let res = fut.await.unwrap();
@@ -268,7 +268,7 @@ mod tests {
             },
         ));
 
-        let mut srv = new_srv.new_service(()).await.unwrap();
+        let srv = new_srv.new_service(()).await.unwrap();
 
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 

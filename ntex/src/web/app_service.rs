@@ -246,11 +246,17 @@ where
     type Error = T::Error;
     type Future = T::Future;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request) -> Self::Future {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
+    }
+
+    fn call(&self, req: Request) -> Self::Future {
         let (head, payload) = req.into_parts();
 
         let req = if let Some(mut req) = self.pool.get_request() {
@@ -419,7 +425,8 @@ impl<Err: ErrorRenderer> Service for AppRouting<Err> {
     type Error = Err::Container;
     type Future = BoxResponse<Err>;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if self.ready.is_none() {
             Poll::Ready(Ok(()))
         } else {
@@ -427,8 +434,8 @@ impl<Err: ErrorRenderer> Service for AppRouting<Err> {
         }
     }
 
-    fn call(&mut self, mut req: WebRequest<Err>) -> Self::Future {
-        let res = self.router.recognize_mut_checked(&mut req, |req, guards| {
+    fn call(&self, mut req: WebRequest<Err>) -> Self::Future {
+        let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
                 for f in guards {
                     if !f.check(req.head()) {
@@ -441,7 +448,7 @@ impl<Err: ErrorRenderer> Service for AppRouting<Err> {
 
         if let Some((srv, _info)) = res {
             srv.call(req)
-        } else if let Some(ref mut default) = self.default {
+        } else if let Some(ref default) = self.default {
             default.call(req)
         } else {
             let req = req.into_parts().0;
@@ -497,7 +504,7 @@ mod tests {
         let data = Arc::new(AtomicBool::new(false));
 
         {
-            let mut app =
+            let app =
                 init_service(App::new().data(DropData(data.clone())).service(
                     web::resource("/test").to(|| async { HttpResponse::Ok() }),
                 ))

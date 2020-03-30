@@ -37,7 +37,7 @@ impl From<Authority> for Key {
 }
 
 /// Connections pool
-pub(super) struct ConnectionPool<T, Io: 'static>(Rc<RefCell<T>>, Rc<RefCell<Inner<Io>>>);
+pub(super) struct ConnectionPool<T, Io: 'static>(Rc<T>, Rc<RefCell<Inner<Io>>>);
 
 impl<T, Io> ConnectionPool<T, Io>
 where
@@ -52,7 +52,7 @@ where
         limit: usize,
     ) -> Self {
         ConnectionPool(
-            Rc::new(RefCell::new(connector)),
+            Rc::new(connector),
             Rc::new(RefCell::new(Inner {
                 conn_lifetime,
                 conn_keep_alive,
@@ -88,18 +88,25 @@ where
     type Error = ConnectError;
     type Future = LocalBoxFuture<'static, Result<IoConnection<Io>, ConnectError>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.0.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Connect) -> Self::Future {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.0.poll_shutdown(cx, is_error)
+    }
+
+    #[inline]
+    fn call(&self, req: Connect) -> Self::Future {
         // start support future
         crate::rt::spawn(ConnectorPoolSupport {
             connector: self.0.clone(),
             inner: self.1.clone(),
         });
 
-        let mut connector = self.0.clone();
+        let connector = self.0.clone();
         let inner = self.1.clone();
 
         let fut = async move {
@@ -619,7 +626,7 @@ where
 impl<T> Drop for Acquired<T> {
     fn drop(&mut self) {
         if let Some(inner) = self.1.take() {
-            inner.as_ref().borrow_mut().release();
+            inner.borrow_mut().release();
         }
     }
 }

@@ -75,7 +75,7 @@ impl<T: Service> Pipeline<T> {
         Self: Sized,
         I: IntoService<U>,
         U: Service,
-        F: FnMut(T::Response, &mut U) -> Fut,
+        F: Fn(T::Response, &U) -> Fut,
         Fut: Future<Output = Result<Res, Err>>,
         Err: From<T::Error> + From<U::Error>,
     {
@@ -161,17 +161,17 @@ impl<T: Service> Service for Pipeline<T> {
     type Future = T::Future;
 
     #[inline]
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), T::Error>> {
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), T::Error>> {
         self.service.poll_ready(cx)
     }
 
     #[inline]
-    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
         self.service.poll_shutdown(cx, is_error)
     }
 
     #[inline]
-    fn call(&mut self, req: T::Request) -> Self::Future {
+    fn call(&self, req: T::Request) -> Self::Future {
         self.service.call(req)
     }
 }
@@ -240,7 +240,7 @@ impl<T: ServiceFactory> PipelineFactory<T> {
         T::Config: Clone,
         I: IntoServiceFactory<U>,
         U: ServiceFactory<Config = T::Config, InitError = T::InitError>,
-        F: FnMut(T::Response, &mut U::Service) -> Fut + Clone,
+        F: Fn(T::Response, &U::Service) -> Fut + Clone,
         Fut: Future<Output = Result<Res, Err>>,
         Err: From<T::Error> + From<U::Error>,
     {

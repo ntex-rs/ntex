@@ -10,7 +10,6 @@ use futures::ready;
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::body::MessageBody;
-use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
 use crate::http::error::{DispatchError, ParseError, ResponseError};
 use crate::http::helpers::DataFactory;
@@ -365,9 +364,9 @@ where
 
 /// `Service` implementation for HTTP1 transport
 pub struct H1ServiceHandler<T, S: Service, B, X: Service, U: Service> {
-    srv: CloneableService<S>,
-    expect: CloneableService<X>,
-    upgrade: Option<CloneableService<U>>,
+    srv: Rc<S>,
+    expect: Rc<X>,
+    upgrade: Option<Rc<U>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     cfg: ServiceConfig,
     _t: PhantomData<(T, B)>,
@@ -392,9 +391,9 @@ where
         on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     ) -> H1ServiceHandler<T, S, B, X, U> {
         H1ServiceHandler {
-            srv: CloneableService::new(srv),
-            expect: CloneableService::new(expect),
-            upgrade: upgrade.map(CloneableService::new),
+            srv: Rc::new(srv),
+            expect: Rc::new(expect),
+            upgrade: upgrade.map(Rc::new),
             cfg,
             on_connect,
             _t: PhantomData,
@@ -419,7 +418,7 @@ where
     type Error = DispatchError;
     type Future = Dispatcher<T, S, B, X, U>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let ready = self
             .expect
             .poll_ready(cx)
@@ -439,7 +438,7 @@ where
             .is_ready()
             && ready;
 
-        let ready = if let Some(ref mut upg) = self.upgrade {
+        let ready = if let Some(ref upg) = self.upgrade {
             upg.poll_ready(cx)
                 .map_err(|e| {
                     log::error!("Http service readiness error: {:?}", e);
@@ -458,7 +457,23 @@ where
         }
     }
 
-    fn call(&mut self, (io, addr): Self::Request) -> Self::Future {
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        let ready = self.expect.poll_shutdown(cx, is_error).is_ready();
+        let ready = self.srv.poll_shutdown(cx, is_error).is_ready() && ready;
+        let ready = if let Some(ref upg) = self.upgrade {
+            upg.poll_shutdown(cx, is_error).is_ready() && ready
+        } else {
+            ready
+        };
+
+        if ready {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn call(&self, (io, addr): Self::Request) -> Self::Future {
         let on_connect = if let Some(ref on_connect) = self.on_connect {
             Some(on_connect(&io))
         } else {
@@ -533,11 +548,13 @@ where
     type Error = ParseError;
     type Future = OneRequestServiceResponse<T>;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    #[inline]
+    fn call(&self, req: Self::Request) -> Self::Future {
         OneRequestServiceResponse {
             framed: Some(Framed::new(req, Codec::new(self.config.clone()))),
         }

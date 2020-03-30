@@ -255,7 +255,7 @@ mod tests {
             cfg.data(10usize);
         };
 
-        let mut srv = init_service(App::new().configure(cfg).service(
+        let srv = init_service(App::new().configure(cfg).service(
             web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
         ))
         .await;

@@ -331,7 +331,7 @@ where
         >,
     >
     where
-        F: FnMut(WebRequest<Err>, &mut T::Service) -> R + Clone,
+        F: Fn(WebRequest<Err>, &T::Service) -> R + Clone,
         R: Future<Output = Result<WebResponse, Err::Container>>,
     {
         Resource {
@@ -504,12 +504,13 @@ impl<Err: ErrorRenderer> Service for ResourceService<Err> {
         LocalBoxFuture<'static, Result<WebResponse, Err::Container>>,
     >;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, mut req: WebRequest<Err>) -> Self::Future {
-        for route in self.routes.iter_mut() {
+    fn call(&self, mut req: WebRequest<Err>) -> Self::Future {
+        for route in self.routes.iter() {
             if route.check(&mut req) {
                 if let Some(ref data) = self.data {
                     req.set_data_container(data.clone());
@@ -517,7 +518,7 @@ impl<Err: ErrorRenderer> Service for ResourceService<Err> {
                 return Either::Right(route.call(req));
             }
         }
-        if let Some(ref mut default) = self.default {
+        if let Some(ref default) = self.default {
             Either::Right(default.call(req))
         } else {
             let req = req.into_parts().0;

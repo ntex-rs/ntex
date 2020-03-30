@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::convert::Infallible;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -72,9 +73,13 @@ pub struct KeepAliveService<R, E, F> {
     f: F,
     ka: Duration,
     time: LowResTimeService,
+    inner: RefCell<Inner>,
+    _t: PhantomData<(R, E)>,
+}
+
+struct Inner {
     delay: Delay,
     expire: Instant,
-    _t: PhantomData<(R, E)>,
 }
 
 impl<R, E, F> KeepAliveService<R, E, F>
@@ -87,8 +92,10 @@ where
             f,
             ka,
             time,
-            expire,
-            delay: delay_until(expire),
+            inner: RefCell::new(Inner {
+                expire,
+                delay: delay_until(expire),
+            }),
             _t: PhantomData,
         }
     }
@@ -103,15 +110,18 @@ where
     type Error = E;
     type Future = Ready<Result<R, E>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match Pin::new(&mut self.delay).poll(cx) {
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let mut inner = self.inner.borrow_mut();
+
+        match Pin::new(&mut inner.delay).poll(cx) {
             Poll::Ready(_) => {
                 let now = Instant::from_std(self.time.now());
-                if self.expire <= now {
+                if inner.expire <= now {
                     Poll::Ready(Err((self.f)()))
                 } else {
-                    self.delay.reset(self.expire);
-                    let _ = Pin::new(&mut self.delay).poll(cx);
+                    let expire = inner.expire;
+                    inner.delay.reset(expire);
+                    let _ = Pin::new(&mut inner.delay).poll(cx);
                     Poll::Ready(Ok(()))
                 }
             }
@@ -119,8 +129,8 @@ where
         }
     }
 
-    fn call(&mut self, req: R) -> Self::Future {
-        self.expire = Instant::from_std(self.time.now() + self.ka);
+    fn call(&self, req: R) -> Self::Future {
+        self.inner.borrow_mut().expire = Instant::from_std(self.time.now() + self.ka);
         ok(req)
     }
 }

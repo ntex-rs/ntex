@@ -3,6 +3,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::net;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
@@ -13,7 +14,6 @@ use log::{error, trace};
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
-use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
@@ -32,7 +32,7 @@ pub struct Dispatcher<T, S: Service<Request = Request>, B: MessageBody>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    service: CloneableService<S>,
+    service: Rc<S>,
     connection: Connection<T, Bytes>,
     on_connect: Option<Box<dyn DataFactory>>,
     config: ServiceConfig,
@@ -47,12 +47,11 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
     S::Error: ResponseError,
-    // S::Future: 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     pub(crate) fn new(
-        service: CloneableService<S>,
+        service: Rc<S>,
         connection: Connection<T, Bytes>,
         on_connect: Option<Box<dyn DataFactory>>,
         config: ServiceConfig,

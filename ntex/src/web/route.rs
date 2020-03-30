@@ -82,11 +82,13 @@ impl<Err: ErrorRenderer> Service for RouteService<Err> {
     type Error = Err::Container;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: WebRequest<Err>) -> Self::Future {
+    #[inline]
+    fn call(&self, req: WebRequest<Err>) -> Self::Future {
         self.handler.call(req)
     }
 }

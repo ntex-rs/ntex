@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::fmt;
@@ -58,7 +59,7 @@ pub struct InOrder<S> {
 
 impl<S> InOrder<S>
 where
-    S: Service,
+    S: Service + 'static,
     S::Response: 'static,
     S::Future: 'static,
     S::Error: 'static,
@@ -74,7 +75,7 @@ where
 
 impl<S> Default for InOrder<S>
 where
-    S: Service,
+    S: Service + 'static,
     S::Response: 'static,
     S::Future: 'static,
     S::Error: 'static,
@@ -86,7 +87,7 @@ where
 
 impl<S> Transform<S> for InOrder<S>
 where
-    S: Service,
+    S: Service + 'static,
     S::Response: 'static,
     S::Future: 'static,
     S::Error: 'static,
@@ -105,7 +106,11 @@ where
 
 pub struct InOrderService<S: Service> {
     service: S,
-    waker: Rc<LocalWaker>,
+    inner: Rc<RefCell<Inner<S>>>,
+}
+
+struct Inner<S: Service> {
+    waker: LocalWaker,
     acks: VecDeque<Record<S::Response, S::Error>>,
 }
 
@@ -122,15 +127,17 @@ where
     {
         Self {
             service: service.into_service(),
-            acks: VecDeque::new(),
-            waker: Rc::new(LocalWaker::new()),
+            inner: Rc::new(RefCell::new(Inner {
+                acks: VecDeque::new(),
+                waker: LocalWaker::new(),
+            })),
         }
     }
 }
 
 impl<S> Service for InOrderService<S>
 where
-    S: Service,
+    S: Service + 'static,
     S::Response: 'static,
     S::Future: 'static,
     S::Error: 'static,
@@ -140,16 +147,18 @@ where
     type Error = InOrderError<S::Error>;
     type Future = InOrderServiceResponse<S>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let mut inner = self.inner.borrow_mut();
+
         // poll_ready could be called from different task
-        self.waker.register(cx.waker());
+        inner.waker.register(cx.waker());
 
         // check acks
-        while !self.acks.is_empty() {
-            let rec = self.acks.front_mut().unwrap();
+        while !inner.acks.is_empty() {
+            let rec = inner.acks.front_mut().unwrap();
             match Pin::new(&mut rec.rx).poll(cx) {
                 Poll::Ready(Ok(res)) => {
-                    let rec = self.acks.pop_front().unwrap();
+                    let rec = inner.acks.pop_front().unwrap();
                     let _ = rec.tx.send(res);
                 }
                 Poll::Pending => break,
@@ -169,20 +178,24 @@ where
         }
     }
 
-    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
         self.service.poll_shutdown(cx, is_error)
     }
 
-    fn call(&mut self, request: S::Request) -> Self::Future {
+    fn call(&self, request: S::Request) -> Self::Future {
+        let inner = self.inner.clone();
+        let mut inner_b = inner.borrow_mut();
+
         let (tx1, rx1) = oneshot::channel();
         let (tx2, rx2) = oneshot::channel();
-        self.acks.push_back(Record { rx: rx1, tx: tx2 });
+        inner_b.acks.push_back(Record { rx: rx1, tx: tx2 });
 
-        let waker = self.waker.clone();
         let fut = self.service.call(request);
+        drop(inner_b);
         crate::rt::spawn(async move {
             let res = fut.await;
-            waker.wake();
+            inner.borrow().waker.wake();
             let _ = tx1.send(res);
         });
 
@@ -227,11 +240,11 @@ mod tests {
         type Error = ();
         type Future = LocalBoxFuture<'static, Result<usize, ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, req: oneshot::Receiver<usize>) -> Self::Future {
+        fn call(&self, req: oneshot::Receiver<usize>) -> Self::Future {
             req.map(|res| res.map_err(|_| ())).boxed_local()
         }
     }
@@ -249,7 +262,7 @@ mod tests {
             let rx3 = rx3;
             let tx_stop = tx_stop;
             let _ = crate::rt::System::new("test").block_on(async {
-                let mut srv = InOrderService::new(Srv);
+                let srv = InOrderService::new(Srv);
 
                 let _ = lazy(|cx| srv.poll_ready(cx)).await;
                 let res1 = srv.call(rx1);

@@ -73,7 +73,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin + 'static> Service for AcceptorService<T>
     type Error = HandshakeError<T>;
     type Future = AcceptorServiceResponse<T>;
 
-    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if self.conns.available(ctx) {
             Poll::Ready(Ok(()))
         } else {
@@ -81,7 +82,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin + 'static> Service for AcceptorService<T>
         }
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    #[inline]
+    fn call(&self, req: Self::Request) -> Self::Future {
         let acc = self.acceptor.clone();
         AcceptorServiceResponse {
             _guard: self.conns.get(),

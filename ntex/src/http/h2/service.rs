@@ -1,8 +1,9 @@
 use std::future::Future;
 use std::marker::PhantomData;
+use std::net;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::task::{Context, Poll};
-use std::{net, rc};
 
 use bytes::Bytes;
 use futures::future::ok;
@@ -12,7 +13,6 @@ use log::error;
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::MessageBody;
-use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
@@ -30,7 +30,7 @@ use super::dispatcher::Dispatcher;
 pub struct H2Service<T, S, B> {
     srv: S,
     cfg: ServiceConfig,
-    on_connect: Option<rc::Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     _t: PhantomData<(T, B)>,
 }
 
@@ -58,7 +58,7 @@ where
     /// Set on connect callback.
     pub(crate) fn on_connect(
         mut self,
-        f: Option<rc::Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+        f: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     ) -> Self {
         self.on_connect = f;
         self
@@ -214,7 +214,7 @@ pub struct H2ServiceResponse<T, S: ServiceFactory, B> {
     #[pin]
     fut: S::Future,
     cfg: Option<ServiceConfig>,
-    on_connect: Option<rc::Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     _t: PhantomData<(T, B)>,
 }
 
@@ -245,9 +245,9 @@ where
 
 /// `Service` implementation for http/2 transport
 pub struct H2ServiceHandler<T, S: Service, B> {
-    srv: CloneableService<S>,
+    srv: Rc<S>,
     cfg: ServiceConfig,
-    on_connect: Option<rc::Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     _t: PhantomData<(T, B)>,
 }
 
@@ -261,13 +261,13 @@ where
 {
     fn new(
         cfg: ServiceConfig,
-        on_connect: Option<rc::Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+        on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
         srv: S,
     ) -> H2ServiceHandler<T, S, B> {
         H2ServiceHandler {
             cfg,
             on_connect,
-            srv: CloneableService::new(srv),
+            srv: Rc::new(srv),
             _t: PhantomData,
         }
     }
@@ -287,14 +287,20 @@ where
     type Error = DispatchError;
     type Future = H2ServiceHandlerResponse<T, S, B>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.srv.poll_ready(cx).map_err(|e| {
             error!("Service readiness error: {:?}", e);
             DispatchError::Service(Box::new(e))
         })
     }
 
-    fn call(&mut self, (io, addr): Self::Request) -> Self::Future {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.srv.poll_shutdown(cx, is_error)
+    }
+
+    fn call(&self, (io, addr): Self::Request) -> Self::Future {
         let on_connect = if let Some(ref on_connect) = self.on_connect {
             Some(on_connect(&io))
         } else {
@@ -320,7 +326,7 @@ where
 {
     Incoming(Dispatcher<T, S, B>),
     Handshake(
-        Option<CloneableService<S>>,
+        Option<Rc<S>>,
         Option<ServiceConfig>,
         Option<net::SocketAddr>,
         Option<Box<dyn DataFactory>>,

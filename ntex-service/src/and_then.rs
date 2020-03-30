@@ -4,13 +4,12 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use super::{Service, ServiceFactory};
-use crate::cell::Cell;
 
 /// Service for the `and_then` combinator, chaining a computation onto the end
 /// of another service which completes successfully.
 ///
 /// This is created by the `ServiceExt::and_then` method.
-pub(crate) struct AndThenService<A, B>(Cell<(A, B)>);
+pub(crate) struct AndThenService<A, B>(Rc<(A, B)>);
 
 impl<A, B> AndThenService<A, B> {
     /// Create new `AndThen` combinator
@@ -19,7 +18,7 @@ impl<A, B> AndThenService<A, B> {
         A: Service,
         B: Service<Request = A::Response, Error = A::Error>,
     {
-        Self(Cell::new((a, b)))
+        Self(Rc::new((a, b)))
     }
 }
 
@@ -39,8 +38,8 @@ where
     type Error = A::Error;
     type Future = AndThenServiceResponse<A, B>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let srv = self.0.get_mut();
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let srv = self.0.as_ref();
         let not_ready = !srv.0.poll_ready(cx)?.is_ready();
         if !srv.1.poll_ready(cx)?.is_ready() || not_ready {
             Poll::Pending
@@ -49,8 +48,8 @@ where
         }
     }
 
-    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        let srv = self.0.get_mut();
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        let srv = self.0.as_ref();
 
         if srv.0.poll_shutdown(cx, is_error).is_ready()
             && srv.1.poll_shutdown(cx, is_error).is_ready()
@@ -62,9 +61,9 @@ where
     }
 
     #[inline]
-    fn call(&mut self, req: A::Request) -> Self::Future {
+    fn call(&self, req: A::Request) -> Self::Future {
         AndThenServiceResponse {
-            state: State::A(self.0.get_mut().0.call(req), Some(self.0.clone())),
+            state: State::A(self.0.as_ref().0.call(req), Some(self.0.clone())),
         }
     }
 }
@@ -85,7 +84,7 @@ where
     A: Service,
     B: Service<Request = A::Response, Error = A::Error>,
 {
-    A(#[pin] A::Future, Option<Cell<(A, B)>>),
+    A(#[pin] A::Future, Option<Rc<(A, B)>>),
     B(#[pin] B::Future),
     Empty,
 }
@@ -105,9 +104,9 @@ where
         match this.state.as_mut().project() {
             State::A(fut, b) => match fut.poll(cx)? {
                 Poll::Ready(res) => {
-                    let mut b = b.take().unwrap();
+                    let b = b.take().unwrap();
                     this.state.set(State::Empty); // drop fut A
-                    let fut = b.get_mut().1.call(res);
+                    let fut = b.as_ref().1.call(res);
                     this.state.set(State::B(fut));
                     self.poll(cx)
                 }
@@ -284,12 +283,12 @@ mod tests {
         type Error = ();
         type Future = Ready<Result<Self::Response, ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.set(self.0.get() + 1);
             Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, req: &'static str) -> Self::Future {
+        fn call(&self, req: &'static str) -> Self::Future {
             ok(req)
         }
     }
@@ -303,12 +302,12 @@ mod tests {
         type Error = ();
         type Future = Ready<Result<Self::Response, ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.set(self.0.get() + 1);
             Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, req: &'static str) -> Self::Future {
+        fn call(&self, req: &'static str) -> Self::Future {
             ok((req, "srv2"))
         }
     }
@@ -316,7 +315,7 @@ mod tests {
     #[ntex_rt::test]
     async fn test_poll_ready() {
         let cnt = Rc::new(Cell::new(0));
-        let mut srv = pipeline(Srv1(cnt.clone())).and_then(Srv2(cnt.clone()));
+        let srv = pipeline(Srv1(cnt.clone())).and_then(Srv2(cnt.clone()));
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 2);
@@ -325,7 +324,7 @@ mod tests {
     #[ntex_rt::test]
     async fn test_call() {
         let cnt = Rc::new(Cell::new(0));
-        let mut srv = pipeline(Srv1(cnt.clone())).and_then(Srv2(cnt));
+        let srv = pipeline(Srv1(cnt.clone())).and_then(Srv2(cnt));
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), (("srv1", "srv2")));
@@ -339,7 +338,7 @@ mod tests {
             pipeline_factory(fn_factory(move || ready(Ok::<_, ()>(Srv1(cnt2.clone())))))
                 .and_then(move || ready(Ok(Srv2(cnt.clone()))));
 
-        let mut srv = new_srv.new_service(()).await.unwrap();
+        let srv = new_srv.new_service(()).await.unwrap();
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));

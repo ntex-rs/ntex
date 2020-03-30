@@ -142,7 +142,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_data_extractor() {
-        let mut srv = init_service(App::new().data("TEST".to_string()).service(
+        let srv = init_service(App::new().data("TEST".to_string()).service(
             web::resource("/").to(|data: web::Data<String>| async move {
                 assert_eq!(data.to_lowercase(), "test");
                 HttpResponse::Ok()
@@ -154,7 +154,7 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let mut srv = init_service(App::new().data(10u32).service(
+        let srv = init_service(App::new().data(10u32).service(
             web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
         ))
         .await;
@@ -165,7 +165,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_app_data_extractor() {
-        let mut srv = init_service(App::new().app_data(Data::new(10usize)).service(
+        let srv = init_service(App::new().app_data(Data::new(10usize)).service(
             web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
         ))
         .await;
@@ -174,7 +174,7 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let mut srv = init_service(App::new().app_data(Data::new(10u32)).service(
+        let srv = init_service(App::new().app_data(Data::new(10u32)).service(
             web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
         ))
         .await;
@@ -185,7 +185,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_route_data_extractor() {
-        let mut srv =
+        let srv =
             init_service(App::new().service(web::resource("/").data(10usize).route(
                 web::get().to(|data: web::Data<usize>| async move {
                     let _ = data.clone();
@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         // different type
-        let mut srv =
+        let srv =
             init_service(App::new().service(web::resource("/").data(10u32).route(
                 web::get().to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
             )))
@@ -211,7 +211,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_override_data() {
-        let mut srv = init_service(App::new().data(1usize).service(
+        let srv = init_service(App::new().data(1usize).service(
             web::resource("/").data(10usize).route(web::get().to(
                 |data: web::Data<usize>| async move {
                     assert_eq!(**data, 10);

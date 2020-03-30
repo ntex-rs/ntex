@@ -97,11 +97,17 @@ where
     type Error = S::Error;
     type Future = CompressResponse<S, B, E>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: WebRequest<E>) -> Self::Future {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
+    }
+
+    fn call(&self, req: WebRequest<E>) -> Self::Future {
         // negotiate content-encoding
         let encoding = if let Some(val) = req.headers().get(&ACCEPT_ENCODING) {
             if let Ok(enc) = val.to_str() {

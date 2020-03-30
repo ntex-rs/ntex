@@ -21,7 +21,7 @@ async fn test_string() {
         })
     });
 
-    let mut conn = ntex::connect::Connector::default();
+    let conn = ntex::connect::Connector::default();
     let addr = format!("localhost:{}", srv.addr().port());
     let con = conn.call(addr.into()).await.unwrap();
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
@@ -38,7 +38,7 @@ async fn test_rustls_string() {
         })
     });
 
-    let mut conn = ntex::connect::Connector::default();
+    let conn = ntex::connect::Connector::default();
     let addr = format!("localhost:{}", srv.addr().port());
     let con = conn.call(addr.into()).await.unwrap();
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
@@ -55,13 +55,13 @@ async fn test_static_str() {
     });
 
     let resolver = ntex::connect::default_resolver();
-    let mut conn = ntex::connect::Connector::new(resolver.clone());
+    let conn = ntex::connect::Connector::new(resolver.clone());
 
     let con = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
 
     let connect = Connect::new("127.0.0.1".to_owned());
-    let mut conn = ntex::connect::Connector::new(resolver);
+    let conn = ntex::connect::Connector::new(resolver);
     let con = conn.call(connect).await;
     assert!(con.is_err());
 }
@@ -83,7 +83,7 @@ async fn test_new_service() {
 
     let factory = ntex::connect::Connector::new(resolver);
 
-    let mut conn = factory.new_service(()).await.unwrap();
+    let conn = factory.new_service(()).await.unwrap();
     let con = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
 }
@@ -101,7 +101,7 @@ async fn test_uri() {
         })
     });
 
-    let mut conn = ntex::connect::Connector::default();
+    let conn = ntex::connect::Connector::default();
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
             .unwrap();
@@ -122,7 +122,7 @@ async fn test_rustls_uri() {
         })
     });
 
-    let mut conn = ntex::connect::Connector::default();
+    let conn = ntex::connect::Connector::default();
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
             .unwrap();

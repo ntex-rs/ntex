@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::{fmt, io, net};
 
@@ -10,7 +11,6 @@ use log::{error, trace};
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
-use crate::http::cloneable::CloneableService;
 use crate::http::config::ServiceConfig;
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::error::{ParseError, PayloadError};
@@ -79,9 +79,9 @@ where
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
-    service: CloneableService<S>,
-    expect: CloneableService<X>,
-    upgrade: Option<CloneableService<U>>,
+    service: Rc<S>,
+    expect: Rc<X>,
+    upgrade: Option<Rc<U>>,
     on_connect: Option<Box<dyn DataFactory>>,
     flags: Flags,
     peer_addr: Option<net::SocketAddr>,
@@ -179,9 +179,9 @@ where
     pub(crate) fn new(
         stream: T,
         config: ServiceConfig,
-        service: CloneableService<S>,
-        expect: CloneableService<X>,
-        upgrade: Option<CloneableService<U>>,
+        service: Rc<S>,
+        expect: Rc<X>,
+        upgrade: Option<Rc<U>>,
         on_connect: Option<Box<dyn DataFactory>>,
         peer_addr: Option<net::SocketAddr>,
     ) -> Self {
@@ -206,9 +206,9 @@ where
         config: ServiceConfig,
         read_buf: BytesMut,
         timeout: Option<Delay>,
-        service: CloneableService<S>,
-        expect: CloneableService<X>,
-        upgrade: Option<CloneableService<U>>,
+        service: Rc<S>,
+        expect: Rc<X>,
+        upgrade: Option<Rc<U>>,
         on_connect: Option<Box<dyn DataFactory>>,
         peer_addr: Option<net::SocketAddr>,
     ) -> Self {
@@ -921,10 +921,10 @@ mod tests {
             let mut h1 = Dispatcher::<_, _, _, _, UpgradeHandler<TestBuffer>>::new(
                 buf,
                 ServiceConfig::default(),
-                CloneableService::new(
+                Rc::new(
                     (|_| ok::<_, io::Error>(Response::Ok().finish())).into_service(),
                 ),
-                CloneableService::new(ExpectHandler),
+                Rc::new(ExpectHandler),
                 None,
                 None,
                 None,

@@ -125,7 +125,7 @@ where
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn call_service<S, R, B, E>(app: &mut S, req: R) -> S::Response
+pub async fn call_service<S, R, B, E>(app: &S, req: R) -> S::Response
 where
     S: Service<Request = R, Response = WebResponse<B>, Error = E>,
     E: std::fmt::Debug,
@@ -159,7 +159,7 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_response<S, B>(app: &mut S, req: Request) -> Bytes
+pub async fn read_response<S, B>(app: &S, req: Request) -> Bytes
 where
     S: Service<Request = Request, Response = WebResponse<B>>,
     B: MessageBody,
@@ -262,7 +262,7 @@ where
 ///     let result: Person = test::read_response_json(&mut app, req).await;
 /// }
 /// ```
-pub async fn read_response_json<S, B, T>(app: &mut S, req: Request) -> T
+pub async fn read_response_json<S, B, T>(app: &S, req: Request) -> T
 where
     S: Service<Request = Request, Response = WebResponse<B>>,
     B: MessageBody,
@@ -1129,7 +1129,7 @@ mod tests {
             }
         }
 
-        let mut app = init_service(
+        let app = init_service(
             App::new().service(
                 web::resource("/index.html")
                     .to(crate::web::dev::__assert_handler(async_with_block)),
@@ -1149,7 +1149,7 @@ mod tests {
             HttpResponse::Ok()
         }
 
-        let mut app = init_service(App::new().data(10usize).service(
+        let app = init_service(App::new().data(10usize).service(
             web::resource("/index.html").to(crate::web::dev::__assert_handler1(handler)),
         ))
         .await;

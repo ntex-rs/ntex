@@ -54,6 +54,7 @@ impl<T: Address> ServiceFactory for Connector<T> {
     type InitError = ();
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
+    #[inline]
     fn new_service(&self, _: ()) -> Self::Future {
         ok(self.clone())
     }
@@ -65,11 +66,13 @@ impl<T: Address> Service for Connector<T> {
     type Error = ConnectError;
     type Future = ConnectServiceResponse<T>;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: Connect<T>) -> Self::Future {
+    #[inline]
+    fn call(&self, req: Connect<T>) -> Self::Future {
         ConnectServiceResponse {
             state: ConnectState::Resolve(self.resolver.lookup(req)),
         }

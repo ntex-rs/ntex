@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use crate::cell::Cell;
 use crate::{Service, ServiceFactory};
 
 /// `Apply` service combinator
@@ -12,11 +11,11 @@ pub(crate) struct AndThenApplyFn<A, B, F, Fut, Res, Err>
 where
     A: Service,
     B: Service,
-    F: FnMut(A::Response, &mut B) -> Fut,
+    F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
-    srv: Cell<(A, B, F)>,
+    srv: Rc<(A, B, F)>,
     r: PhantomData<(Fut, Res, Err)>,
 }
 
@@ -24,14 +23,14 @@ impl<A, B, F, Fut, Res, Err> AndThenApplyFn<A, B, F, Fut, Res, Err>
 where
     A: Service,
     B: Service,
-    F: FnMut(A::Response, &mut B) -> Fut,
+    F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
     /// Create new `Apply` combinator
     pub(crate) fn new(a: A, b: B, f: F) -> Self {
         Self {
-            srv: Cell::new((a, b, f)),
+            srv: Rc::new((a, b, f)),
             r: PhantomData,
         }
     }
@@ -41,7 +40,7 @@ impl<A, B, F, Fut, Res, Err> Clone for AndThenApplyFn<A, B, F, Fut, Res, Err>
 where
     A: Service,
     B: Service,
-    F: FnMut(A::Response, &mut B) -> Fut,
+    F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
@@ -57,7 +56,7 @@ impl<A, B, F, Fut, Res, Err> Service for AndThenApplyFn<A, B, F, Fut, Res, Err>
 where
     A: Service,
     B: Service,
-    F: FnMut(A::Response, &mut B) -> Fut,
+    F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
@@ -66,8 +65,8 @@ where
     type Error = Err;
     type Future = AndThenApplyFnFuture<A, B, F, Fut, Res, Err>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let inner = self.srv.get_mut();
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let inner = self.srv.as_ref();
         let not_ready = inner.0.poll_ready(cx)?.is_pending();
         if inner.1.poll_ready(cx)?.is_pending() || not_ready {
             Poll::Pending
@@ -76,8 +75,8 @@ where
         }
     }
 
-    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        let srv = self.srv.get_mut();
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        let srv = self.srv.as_ref();
 
         if srv.0.poll_shutdown(cx, is_error).is_ready()
             && srv.1.poll_shutdown(cx, is_error).is_ready()
@@ -88,8 +87,8 @@ where
         }
     }
 
-    fn call(&mut self, req: A::Request) -> Self::Future {
-        let fut = self.srv.get_mut().0.call(req);
+    fn call(&self, req: A::Request) -> Self::Future {
+        let fut = self.srv.as_ref().0.call(req);
         AndThenApplyFnFuture {
             state: State::A(fut, Some(self.srv.clone())),
         }
@@ -101,7 +100,7 @@ pub(crate) struct AndThenApplyFnFuture<A, B, F, Fut, Res, Err>
 where
     A: Service,
     B: Service,
-    F: FnMut(A::Response, &mut B) -> Fut,
+    F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error>,
     Err: From<B::Error>,
@@ -115,12 +114,12 @@ enum State<A, B, F, Fut, Res, Err>
 where
     A: Service,
     B: Service,
-    F: FnMut(A::Response, &mut B) -> Fut,
+    F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error>,
     Err: From<B::Error>,
 {
-    A(#[pin] A::Future, Option<Cell<(A, B, F)>>),
+    A(#[pin] A::Future, Option<Rc<(A, B, F)>>),
     B(#[pin] Fut),
     Empty,
 }
@@ -129,7 +128,7 @@ impl<A, B, F, Fut, Res, Err> Future for AndThenApplyFnFuture<A, B, F, Fut, Res, 
 where
     A: Service,
     B: Service,
-    F: FnMut(A::Response, &mut B) -> Fut,
+    F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
@@ -143,10 +142,10 @@ where
         match this.state.as_mut().project() {
             State::A(fut, b) => match fut.poll(cx)? {
                 Poll::Ready(res) => {
-                    let mut b = b.take().unwrap();
+                    let b = b.take().unwrap();
                     this.state.set(State::Empty);
-                    let b = b.get_mut();
-                    let fut = (&mut b.2)(res, &mut b.1);
+                    let b = b.as_ref();
+                    let fut = (&b.2)(res, &b.1);
                     this.state.set(State::B(fut));
                     self.poll(cx)
                 }
@@ -173,7 +172,7 @@ impl<A, B, F, Fut, Res, Err> AndThenApplyFnFactory<A, B, F, Fut, Res, Err>
 where
     A: ServiceFactory,
     B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Fut + Clone,
+    F: Fn(A::Response, &B::Service) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
@@ -201,7 +200,7 @@ where
     A: ServiceFactory,
     A::Config: Clone,
     B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Fut + Clone,
+    F: Fn(A::Response, &B::Service) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
@@ -230,7 +229,7 @@ pub(crate) struct AndThenApplyFnFactoryResponse<A, B, F, Fut, Res, Err>
 where
     A: ServiceFactory,
     B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Fut + Clone,
+    F: Fn(A::Response, &B::Service) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error>,
     Err: From<B::Error>,
@@ -249,7 +248,7 @@ impl<A, B, F, Fut, Res, Err> Future
 where
     A: ServiceFactory,
     B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
-    F: FnMut(A::Response, &mut B::Service) -> Fut + Clone,
+    F: Fn(A::Response, &B::Service) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
@@ -273,7 +272,7 @@ where
 
         if this.a.is_some() && this.b.is_some() {
             Poll::Ready(Ok(AndThenApplyFn {
-                srv: Cell::new((
+                srv: Rc::new((
                     this.a.take().unwrap(),
                     this.b.take().unwrap(),
                     this.f.clone(),
@@ -302,18 +301,18 @@ mod tests {
         type Error = ();
         type Future = Ready<Result<(), ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, req: Self::Request) -> Self::Future {
+        fn call(&self, req: Self::Request) -> Self::Future {
             ok(req)
         }
     }
 
     #[ntex_rt::test]
     async fn test_service() {
-        let mut srv = pipeline(|r: &'static str| ok(r))
+        let srv = pipeline(|r: &'static str| ok(r))
             .and_then_apply_fn(Srv, |req: &'static str, s| {
                 s.call(()).map_ok(move |res| (req, res))
             });
@@ -333,7 +332,7 @@ mod tests {
                     || ok(Srv),
                     |req: &'static str, s| s.call(()).map_ok(move |res| (req, res)),
                 );
-        let mut srv = new_srv.new_service(()).await.unwrap();
+        let srv = new_srv.new_service(()).await.unwrap();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 

@@ -1,7 +1,6 @@
 #![deny(rust_2018_idioms, warnings)]
 #![allow(clippy::type_complexity)]
 
-use std::cell::RefCell;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -12,7 +11,6 @@ mod and_then_apply_fn;
 mod apply;
 mod apply_cfg;
 pub mod boxed;
-mod cell;
 mod fn_service;
 mod map;
 mod map_config;
@@ -95,10 +93,7 @@ pub trait Service {
     /// 1. `.poll_ready()` might be called on different task from actual service call.
     ///
     /// 2. In case of chained services, `.poll_ready()` get called for all services at once.
-    fn poll_ready(
-        &mut self,
-        ctx: &mut task::Context<'_>,
-    ) -> Poll<Result<(), Self::Error>>;
+    fn poll_ready(&self, ctx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>>;
 
     #[inline]
     #[allow(unused_variables)]
@@ -106,11 +101,7 @@ pub trait Service {
     ///
     /// Returns `Ready` when the service is properly shutdowned. This method might be called
     /// after it returns `Ready`.
-    fn poll_shutdown(
-        &mut self,
-        ctx: &mut task::Context<'_>,
-        is_error: bool,
-    ) -> Poll<()> {
+    fn poll_shutdown(&self, ctx: &mut task::Context<'_>, is_error: bool) -> Poll<()> {
         Poll::Ready(())
     }
 
@@ -123,7 +114,7 @@ pub trait Service {
     ///
     /// Calling `call` without calling `poll_ready` is permitted. The
     /// implementation must be resilient to this fact.
-    fn call(&mut self, req: Self::Request) -> Self::Future;
+    fn call(&self, req: Self::Request) -> Self::Future;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service
@@ -199,6 +190,7 @@ pub trait ServiceFactory {
     /// Create and return a new service value asynchronously.
     fn new_service(&self, cfg: Self::Config) -> Self::Future;
 
+    #[inline]
     /// Map this service's output to a different type, returning a new service
     /// of the resulting type.
     fn map<F, R>(self, f: F) -> crate::map::MapServiceFactory<Self, F, R>
@@ -209,6 +201,7 @@ pub trait ServiceFactory {
         crate::map::MapServiceFactory::new(self, f)
     }
 
+    #[inline]
     /// Map this service's error to a different error, returning a new service.
     fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrServiceFactory<Self, F, E>
     where
@@ -218,6 +211,7 @@ pub trait ServiceFactory {
         crate::map_err::MapErrServiceFactory::new(self, f)
     }
 
+    #[inline]
     /// Map this factory's init error to a different error, returning a new service.
     fn map_init_err<F, E>(self, f: F) -> crate::map_init_err::MapInitErr<Self, F, E>
     where
@@ -237,11 +231,18 @@ where
     type Error = S::Error;
     type Future = S::Future;
 
-    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        (**self).poll_ready(ctx)
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        (**self).poll_ready(cx)
     }
 
-    fn call(&mut self, request: Self::Request) -> S::Future {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        (**self).poll_shutdown(cx, is_error)
+    }
+
+    #[inline]
+    fn call(&self, request: Self::Request) -> S::Future {
         (**self).call(request)
     }
 }
@@ -255,16 +256,23 @@ where
     type Error = S::Error;
     type Future = S::Future;
 
-    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
-        (**self).poll_ready(ctx)
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+        (**self).poll_ready(cx)
     }
 
-    fn call(&mut self, request: Self::Request) -> S::Future {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        (**self).poll_shutdown(cx, is_error)
+    }
+
+    #[inline]
+    fn call(&self, request: Self::Request) -> S::Future {
         (**self).call(request)
     }
 }
 
-impl<S> Service for RefCell<S>
+impl<S> Service for Rc<S>
 where
     S: Service,
 {
@@ -273,30 +281,17 @@ where
     type Error = S::Error;
     type Future = S::Future;
 
-    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.borrow_mut().poll_ready(ctx)
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        (**self).poll_ready(cx)
     }
 
-    fn call(&mut self, request: Self::Request) -> S::Future {
-        self.borrow_mut().call(request)
-    }
-}
-
-impl<S> Service for Rc<RefCell<S>>
-where
-    S: Service,
-{
-    type Request = S::Request;
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.borrow_mut().poll_ready(ctx)
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        (**self).poll_shutdown(cx, is_error)
     }
 
-    fn call(&mut self, request: Self::Request) -> S::Future {
-        (&mut (**self).borrow_mut()).call(request)
+    fn call(&self, request: Self::Request) -> S::Future {
+        (**self).call(request)
     }
 }
 

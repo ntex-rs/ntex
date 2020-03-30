@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use bytes::{Bytes, BytesMut};
@@ -26,18 +26,19 @@ async fn test_basic() {
     });
 
     let item = client_item.clone();
-    let mut client = Builder::new(fn_service(move |conn: Connect<_, _>| async move {
+    let client = Builder::new(fn_service(move |conn: Connect<_, _>| async move {
         let (tx, rx) = mpsc::channel();
         let _ = tx.send(Bytes::from_static(b"Hello"));
         Ok(conn.codec(BytesCodec).out(rx).state(State(Some(tx))))
     }))
-    .build(fn_factory_with_config(move |mut cfg: State| {
+    .build(fn_factory_with_config(move |cfg: State| {
         let item = item.clone();
+        let cfg = RefCell::new(cfg);
         ok((move |t: BytesMut| {
             assert_eq!(t.freeze(), Bytes::from_static(b"Hello"));
             item.set(true);
             // drop Sender, which will close connection
-            cfg.0.take();
+            cfg.borrow_mut().0.take();
             ok::<_, ()>(None)
         })
         .into_service())

@@ -136,15 +136,17 @@ where
     type Error = TimeoutError<S::Error>;
     type Future = Either<TimeoutServiceResponse<S>, TimeoutServiceResponse2<S>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx).map_err(TimeoutError::Service)
     }
 
-    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
         self.service.poll_shutdown(cx, is_error)
     }
 
-    fn call(&mut self, request: S::Request) -> Self::Future {
+    fn call(&self, request: S::Request) -> Self::Future {
         if self.timeout == ZERO {
             Either::Right(TimeoutServiceResponse2 {
                 fut: self.service.call(request),
@@ -231,11 +233,11 @@ mod tests {
         type Error = ();
         type Future = LocalBoxFuture<'static, Result<(), ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future {
             crate::rt::time::delay_for(self.0)
                 .then(|_| ok::<_, ()>(()))
                 .boxed_local()
@@ -247,7 +249,7 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
 
-        let mut timeout = TimeoutService::new(resolution, SleepService(wait_time));
+        let timeout = TimeoutService::new(resolution, SleepService(wait_time));
         assert_eq!(timeout.call(()).await, Ok(()));
     }
 
@@ -256,7 +258,7 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
 
-        let mut timeout = TimeoutService::new(resolution, SleepService(wait_time));
+        let timeout = TimeoutService::new(resolution, SleepService(wait_time));
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
@@ -269,7 +271,7 @@ mod tests {
             Timeout::new(resolution),
             fn_factory(|| ok::<_, ()>(SleepService(wait_time))),
         );
-        let mut srv = timeout.new_service(&()).await.unwrap();
+        let srv = timeout.new_service(&()).await.unwrap();
 
         assert_eq!(srv.call(()).await, Err(TimeoutError::Timeout));
     }

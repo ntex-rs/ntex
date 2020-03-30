@@ -394,7 +394,7 @@ where
         >,
     >
     where
-        F: FnMut(WebRequest<Err>, &mut T::Service) -> R + Clone,
+        F: Fn(WebRequest<Err>, &T::Service) -> R + Clone,
         R: Future<Output = Result<WebResponse, Err::Container>>,
     {
         Scope {
@@ -619,12 +619,13 @@ impl<Err: ErrorRenderer> Service for ScopeService<Err> {
     type Error = Err::Container;
     type Future = Either<BoxedResponse<Err>, Ready<Result<Self::Response, Self::Error>>>;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, mut req: WebRequest<Err>) -> Self::Future {
-        let res = self.router.recognize_mut_checked(&mut req, |req, guards| {
+    fn call(&self, mut req: WebRequest<Err>) -> Self::Future {
+        let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
                 for f in guards {
                     if !f.check(req.head()) {
@@ -640,7 +641,7 @@ impl<Err: ErrorRenderer> Service for ScopeService<Err> {
                 req.set_data_container(data.clone());
             }
             Either::Left(srv.call(req))
-        } else if let Some(ref mut default) = self.default {
+        } else if let Some(ref default) = self.default {
             Either::Left(default.call(req))
         } else {
             let req = req.into_parts().0;
@@ -691,7 +692,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_scope() {
-        let mut srv =
+        let srv =
             init_service(App::new().service(
                 web::scope("/app").service(
                     web::resource("/path1").to(|| async { HttpResponse::Ok() }),
@@ -706,7 +707,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_scope_root() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::scope("/app")
                     .service(web::resource("").to(|| async { HttpResponse::Ok() }))
@@ -728,7 +729,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_scope_root2() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::scope("/app/")
                     .service(web::resource("").to(|| async { HttpResponse::Ok() })),
@@ -747,7 +748,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_scope_root3() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::scope("/app/")
                     .service(web::resource("/").to(|| async { HttpResponse::Ok() })),
@@ -766,7 +767,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_scope_route() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::scope("app")
                     .route("/path1", web::get().to(|| async { HttpResponse::Ok() }))
@@ -794,7 +795,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_scope_route_without_leading_slash() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::scope("app").service(
                     web::resource("path1")
@@ -824,7 +825,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_scope_guard() {
-        let mut srv =
+        let srv =
             init_service(App::new().service(
                 web::scope("/app").guard(guard::Get()).service(
                     web::resource("/path1").to(|| async { HttpResponse::Ok() }),
@@ -847,14 +848,13 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_scope_variable_segment() {
-        let mut srv =
-            init_service(App::new().service(web::scope("/ab-{project}").service(
-                web::resource("/path1").to(|r: HttpRequest| async move {
-                    HttpResponse::Ok()
-                        .body(format!("project: {}", &r.match_info()["project"]))
-                }),
-            )))
-            .await;
+        let srv = init_service(App::new().service(web::scope("/ab-{project}").service(
+            web::resource("/path1").to(|r: HttpRequest| async move {
+                HttpResponse::Ok()
+                    .body(format!("project: {}", &r.match_info()["project"]))
+            }),
+        )))
+        .await;
 
         let req = TestRequest::with_uri("/ab-project1/path1").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -875,7 +875,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_nested_scope() {
-        let mut srv = init_service(App::new().service(web::scope("/app").service(
+        let srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("/t1").service(
                 web::resource("/path1").to(|| async { HttpResponse::Created() }),
             ),
@@ -889,7 +889,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_nested_scope_no_slash() {
-        let mut srv = init_service(App::new().service(web::scope("/app").service(
+        let srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("t1").service(
                 web::resource("/path1").to(|| async { HttpResponse::Created() }),
             ),
@@ -903,7 +903,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_nested_scope_root() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::scope("/app").service(
                     web::scope("/t1")
@@ -927,7 +927,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_nested_scope_filter() {
-        let mut srv =
+        let srv =
             init_service(App::new().service(web::scope("/app").service(
                 web::scope("/t1").guard(guard::Get()).service(
                     web::resource("/path1").to(|| async { HttpResponse::Ok() }),
@@ -950,7 +950,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_nested_scope_with_variable_segment() {
-        let mut srv = init_service(App::new().service(web::scope("/app").service(
+        let srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("/{project_id}").service(web::resource("/path1").to(
                 |r: HttpRequest| async move {
                     HttpResponse::Created()
@@ -975,7 +975,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_nested2_scope_with_variable_segment() {
-        let mut srv = init_service(App::new().service(web::scope("/app").service(
+        let srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("/{project}").service(web::scope("/{id}").service(
                 web::resource("/path1").to(|r: HttpRequest| async move {
                     HttpResponse::Created().body(format!(
@@ -1007,7 +1007,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_default_resource() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::scope("/app")
                     .service(web::resource("/path1").to(|| async { HttpResponse::Ok() }))
@@ -1029,7 +1029,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_default_resource_propagation() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new()
                 .service(web::scope("/app1").default_service(
                     web::resource("").to(|| async { HttpResponse::BadRequest() }),
@@ -1056,7 +1056,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_middleware() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::scope("app")
                     .wrap(
@@ -1072,7 +1072,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),
@@ -1082,7 +1082,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_middleware_fn() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::scope("app")
                     .wrap_fn(|req, srv| {
@@ -1100,7 +1100,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),
@@ -1110,7 +1110,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_override_data() {
-        let mut srv = init_service(App::new().data(1usize).service(
+        let srv = init_service(App::new().data(1usize).service(
             web::scope("app").data(10usize).route(
                 "/t",
                 web::get().to(|data: web::Data<usize>| {
@@ -1123,13 +1123,13 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/t").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[ntex_rt::test]
     async fn test_override_app_data() {
-        let mut srv = init_service(App::new().app_data(web::Data::new(1usize)).service(
+        let srv = init_service(App::new().app_data(web::Data::new(1usize)).service(
             web::scope("app").app_data(web::Data::new(10usize)).route(
                 "/t",
                 web::get().to(|data: web::Data<usize>| {
@@ -1142,17 +1142,16 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/t").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[ntex_rt::test]
     async fn test_scope_config() {
-        let mut srv =
-            init_service(App::new().service(web::scope("/app").configure(|s| {
-                s.route("/path1", web::get().to(|| async { HttpResponse::Ok() }));
-            })))
-            .await;
+        let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
+            s.route("/path1", web::get().to(|| async { HttpResponse::Ok() }));
+        })))
+        .await;
 
         let req = TestRequest::with_uri("/app/path1").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -1161,13 +1160,12 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_scope_config_2() {
-        let mut srv =
-            init_service(App::new().service(web::scope("/app").configure(|s| {
-                s.service(web::scope("/v1").configure(|s| {
-                    s.route("/", web::get().to(|| async { HttpResponse::Ok() }));
-                }));
-            })))
-            .await;
+        let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
+            s.service(web::scope("/v1").configure(|s| {
+                s.route("/", web::get().to(|| async { HttpResponse::Ok() }));
+            }));
+        })))
+        .await;
 
         let req = TestRequest::with_uri("/app/v1/").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -1176,25 +1174,21 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_url_for_external() {
-        let mut srv =
-            init_service(App::new().service(web::scope("/app").configure(|s| {
-                s.service(web::scope("/v1").configure(|s| {
-                    s.external_resource(
-                        "youtube",
-                        "https://youtube.com/watch/{video_id}",
-                    );
-                    s.route(
-                        "/",
-                        web::get().to(|req: HttpRequest| async move {
-                            HttpResponse::Ok().body(format!(
-                                "{}",
-                                req.url_for("youtube", &["xxxxxx"]).unwrap().as_str()
-                            ))
-                        }),
-                    );
-                }));
-            })))
-            .await;
+        let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
+            s.service(web::scope("/v1").configure(|s| {
+                s.external_resource("youtube", "https://youtube.com/watch/{video_id}");
+                s.route(
+                    "/",
+                    web::get().to(|req: HttpRequest| async move {
+                        HttpResponse::Ok().body(format!(
+                            "{}",
+                            req.url_for("youtube", &["xxxxxx"]).unwrap().as_str()
+                        ))
+                    }),
+                );
+            }));
+        })))
+        .await;
 
         let req = TestRequest::with_uri("/app/v1/").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -1205,7 +1199,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_url_for_nested() {
-        let mut srv = init_service(App::new().service(web::scope("/a").service(
+        let srv = init_service(App::new().service(web::scope("/a").service(
             web::scope("/b").service(web::resource("/c/{stuff}").name("c").route(
                 web::get().to(|req: HttpRequest| async move {
                     HttpResponse::Ok()
@@ -1216,7 +1210,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/a/b/c/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = read_body(resp).await;
         assert_eq!(

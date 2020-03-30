@@ -2,7 +2,6 @@
 pub mod body;
 mod builder;
 pub mod client;
-mod cloneable;
 mod config;
 #[cfg(feature = "compress")]
 pub mod encoding;

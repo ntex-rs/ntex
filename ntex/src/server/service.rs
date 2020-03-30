@@ -71,14 +71,17 @@ where
     type Error = ();
     type Future = Ready<Result<(), ()>>;
 
-    fn poll_ready(&mut self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(ctx).map_err(|_| ())
     }
 
-    fn call(
-        &mut self,
-        (guard, req): (Option<CounterGuard>, ServerMessage),
-    ) -> Self::Future {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
+    }
+
+    fn call(&self, (guard, req): (Option<CounterGuard>, ServerMessage)) -> Self::Future {
         match req {
             ServerMessage::Connect(stream) => {
                 let stream = FromStream::from_stdstream(stream).map_err(|e| {
@@ -189,6 +192,7 @@ where
 {
     type Factory = T;
 
+    #[inline]
     fn create(&self) -> T {
         (self)()
     }

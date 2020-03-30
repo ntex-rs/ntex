@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -262,7 +261,7 @@ impl Connector {
             None
         };
 
-        Rc::new(RefCell::new(InnerConnector {
+        Rc::new(InnerConnector {
             tcp_pool: ConnectionPool::new(
                 tcp_service,
                 self.conn_lifetime,
@@ -271,7 +270,7 @@ impl Connector {
                 self.limit,
             ),
             ssl_pool,
-        }))
+        })
     }
 }
 
@@ -314,14 +313,40 @@ where
     type Future =
         Either<<Pool<T> as Service>::Future, Ready<Result<Self::Response, Self::Error>>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.tcp_pool.poll_ready(cx)
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let ready = self.tcp_pool.poll_ready(cx)?.is_ready();
+        let ready = if let Some(ref ssl_pool) = self.ssl_pool {
+            ssl_pool.poll_ready(cx)?.is_ready() && ready
+        } else {
+            ready
+        };
+        if ready {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
+        }
     }
 
-    fn call(&mut self, req: Connect) -> Self::Future {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        let ready = self.tcp_pool.poll_shutdown(cx, is_error).is_ready();
+        let ready = if let Some(ref ssl_pool) = self.ssl_pool {
+            ssl_pool.poll_shutdown(cx, is_error).is_ready() && ready
+        } else {
+            ready
+        };
+        if ready {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn call(&self, req: Connect) -> Self::Future {
         match req.uri.scheme_str() {
             Some("https") | Some("wss") => {
-                if let Some(ref mut conn) = self.ssl_pool {
+                if let Some(ref conn) = self.ssl_pool {
                     Either::Left(conn.call(req))
                 } else {
                     Either::Right(err(ConnectError::SslIsNotSupported))

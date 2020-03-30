@@ -17,6 +17,7 @@ impl ServiceFactory for ExpectHandler {
     type InitError = io::Error;
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
+    #[inline]
     fn new_service(&self, _: ()) -> Self::Future {
         ok(ExpectHandler)
     }
@@ -28,11 +29,13 @@ impl Service for ExpectHandler {
     type Error = io::Error;
     type Future = Ready<Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: Request) -> Self::Future {
+    #[inline]
+    fn call(&self, req: Request) -> Self::Future {
         ok(req)
     }
 }

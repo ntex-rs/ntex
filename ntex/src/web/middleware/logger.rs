@@ -164,11 +164,18 @@ where
     type Error = S::Error;
     type Future = LoggerResponse<S, B, E>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: WebRequest<E>) -> Self::Future {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
+    }
+
+    #[inline]
+    fn call(&self, req: WebRequest<E>) -> Self::Future {
         if self.inner.exclude.contains(req.path()) {
             LoggerResponse {
                 fut: self.service.call(req),
@@ -503,7 +510,7 @@ mod tests {
         };
         let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D test");
 
-        let mut srv = Transform::new_transform(&logger, srv.into_service())
+        let srv = Transform::new_transform(&logger, srv.into_service())
             .await
             .unwrap();
 

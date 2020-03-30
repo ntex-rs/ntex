@@ -270,15 +270,18 @@ where
     type Error = ServiceError<C::Error, Codec>;
     type Future = FramedServiceImplResponse<St, Io, Codec, Out, C, T>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.connect.poll_ready(cx).map_err(|e| e.into())
     }
 
-    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
         self.connect.poll_shutdown(cx, is_error)
     }
 
-    fn call(&mut self, req: Io) -> Self::Future {
+    #[inline]
+    fn call(&self, req: Io) -> Self::Future {
         log::trace!("Start connection handshake");
         FramedServiceImplResponse {
             inner: FramedServiceImplResponseInner::Connect(

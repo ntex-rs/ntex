@@ -63,11 +63,12 @@ impl<T: Address + 'static> Service for OpensslConnector<T> {
     type Error = ConnectError;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: Connect<T>) -> Self::Future {
+    fn call(&self, req: Connect<T>) -> Self::Future {
         let host = req.host().to_string();
         let conn = self.connector.call(req);
         let openssl = self.openssl.clone();

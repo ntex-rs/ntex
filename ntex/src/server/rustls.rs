@@ -79,7 +79,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {
     type Error = io::Error;
     type Future = AcceptorServiceFut<T>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if self.conns.available(cx) {
             Poll::Ready(Ok(()))
         } else {
@@ -87,7 +88,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {
         }
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    #[inline]
+    fn call(&self, req: Self::Request) -> Self::Future {
         AcceptorServiceFut {
             _guard: self.conns.get(),
             fut: self.acceptor.accept(req),

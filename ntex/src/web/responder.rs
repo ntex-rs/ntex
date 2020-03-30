@@ -487,7 +487,7 @@ pub(crate) mod tests {
 
     #[ntex_rt::test]
     async fn test_option_responder() {
-        let mut srv = init_service(
+        let srv = init_service(
             web::App::new()
                 .service(
                     web::resource("/none").to(|| async { Option::<&'static str>::None }),

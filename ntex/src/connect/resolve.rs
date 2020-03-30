@@ -86,11 +86,13 @@ impl<T: Address> Service for Resolver<T> {
     type Error = ConnectError;
     type Future = Either<ResolverFuture<T>, Ready<Result<Connect<T>, Self::Error>>>;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: Connect<T>) -> Self::Future {
+    #[inline]
+    fn call(&self, req: Connect<T>) -> Self::Future {
         self.lookup(req)
     }
 }

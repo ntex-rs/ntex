@@ -602,7 +602,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_service() {
-        let mut srv = init_service(App::new().service(
+        let srv = init_service(App::new().service(
             web::service("/test").name("test").finish(
                 |req: WebRequest<DefaultError>| {
                     ok(req.into_response(HttpResponse::Ok().finish()))
@@ -614,7 +614,7 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let mut srv = init_service(App::new().service(
+        let srv = init_service(App::new().service(
             web::service("/test").guard(guard::Get()).finish(
                 |req: WebRequest<DefaultError>| {
                     ok(req.into_response(HttpResponse::Ok().finish()))

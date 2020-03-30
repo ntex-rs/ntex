@@ -57,6 +57,27 @@ pub struct Waiter {
     inner: Cell<Inner>,
 }
 
+impl Waiter {
+    pub fn poll_waiter(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let inner = unsafe {
+            self.inner
+                .get_mut_unsafe()
+                .data
+                .get_unchecked_mut(self.token)
+        };
+        if inner.is_none() {
+            let waker = LocalWaker::default();
+            waker.register(cx.waker());
+            *inner = Some(waker);
+            Poll::Pending
+        } else if inner.as_mut().unwrap().register(cx.waker()) {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    }
+}
+
 impl Clone for Waiter {
     fn clone(&self) -> Self {
         let token = unsafe { self.inner.get_mut_unsafe() }.data.insert(None);

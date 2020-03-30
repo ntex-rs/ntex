@@ -52,7 +52,8 @@ where
     type Error = A::Error;
     type Future = future::Either<A::Future, B::Future>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let left = self.left.poll_ready(cx)?;
         let right = self.right.poll_ready(cx)?;
 
@@ -63,7 +64,8 @@ where
         }
     }
 
-    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
         if self.left.poll_shutdown(cx, is_error).is_ready()
             && self.right.poll_shutdown(cx, is_error).is_ready()
         {
@@ -73,7 +75,8 @@ where
         }
     }
 
-    fn call(&mut self, req: either::Either<A::Request, B::Request>) -> Self::Future {
+    #[inline]
+    fn call(&self, req: either::Either<A::Request, B::Request>) -> Self::Future {
         match req {
             either::Either::Left(req) => future::Either::Left(self.left.call(req)),
             either::Either::Right(req) => future::Either::Right(self.right.call(req)),

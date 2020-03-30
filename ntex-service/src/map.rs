@@ -34,6 +34,7 @@ where
     A: Clone,
     F: Clone,
 {
+    #[inline]
     fn clone(&self) -> Self {
         Map {
             service: self.service.clone(),
@@ -54,17 +55,17 @@ where
     type Future = MapFuture<A, F, Response>;
 
     #[inline]
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
 
     #[inline]
-    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
         self.service.poll_shutdown(cx, is_error)
     }
 
     #[inline]
-    fn call(&mut self, req: A::Request) -> Self::Future {
+    fn call(&self, req: A::Request) -> Self::Future {
         MapFuture::new(self.service.call(req), self.f.clone())
     }
 }
@@ -135,6 +136,7 @@ where
     A: Clone,
     F: Clone,
 {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             a: self.a.clone(),
@@ -158,6 +160,7 @@ where
     type InitError = A::InitError;
     type Future = MapServiceFuture<A, F, Res>;
 
+    #[inline]
     fn new_service(&self, cfg: A::Config) -> Self::Future {
         MapServiceFuture::new(self.a.new_service(cfg), self.f.clone())
     }
@@ -217,25 +220,25 @@ mod tests {
         type Error = ();
         type Future = Ready<Result<(), ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future {
             ok(())
         }
     }
 
     #[ntex_rt::test]
     async fn test_poll_ready() {
-        let mut srv = Srv.map(|_| "ok");
+        let srv = Srv.map(|_| "ok");
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
     }
 
     #[ntex_rt::test]
     async fn test_call() {
-        let mut srv = Srv.map(|_| "ok");
+        let srv = Srv.map(|_| "ok");
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -244,7 +247,7 @@ mod tests {
     #[ntex_rt::test]
     async fn test_new_service() {
         let new_srv = (|| ok::<_, ()>(Srv)).into_factory().map(|_| "ok");
-        let mut srv = new_srv.new_service(&()).await.unwrap();
+        let srv = new_srv.new_service(&()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));

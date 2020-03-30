@@ -51,6 +51,7 @@ impl ServiceFactory for LowResTime {
     type Service = LowResTimeService;
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
+    #[inline]
     fn new_service(&self, _: ()) -> Self::Future {
         ok(self.timer())
     }
@@ -94,11 +95,13 @@ impl Service for LowResTimeService {
     type Error = Infallible;
     type Future = Ready<Result<Self::Response, Self::Error>>;
 
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, _: ()) -> Self::Future {
+    #[inline]
+    fn call(&self, _: ()) -> Self::Future {
         ok(self.now())
     }
 }

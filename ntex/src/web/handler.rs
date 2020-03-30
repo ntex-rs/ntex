@@ -36,7 +36,7 @@ where
 
 pub(super) trait HandlerFn<Err: ErrorRenderer> {
     fn call(
-        &mut self,
+        &self,
         _: WebRequest<Err>,
     ) -> LocalBoxFuture<'static, Result<WebResponse, Err::Container>>;
 
@@ -86,7 +86,7 @@ where
     Err: ErrorRenderer,
 {
     fn call(
-        &mut self,
+        &self,
         req: WebRequest<Err>,
     ) -> LocalBoxFuture<'static, Result<WebResponse, Err::Container>> {
         let (req, mut payload) = req.into_parts();

@@ -1,7 +1,8 @@
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::task::{Context, Poll};
-use std::{fmt, net, rc};
+use std::{fmt, net};
 
 use bytes::Bytes;
 use futures::future::ok;
@@ -15,7 +16,6 @@ use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFacto
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
-use super::cloneable::CloneableService;
 use super::config::{KeepAlive, ServiceConfig};
 use super::error::{DispatchError, ResponseError};
 use super::helpers::DataFactory;
@@ -29,7 +29,7 @@ pub struct HttpService<T, S, B, X = h1::ExpectHandler, U = h1::UpgradeHandler<T>
     cfg: ServiceConfig,
     expect: X,
     upgrade: Option<U>,
-    on_connect: Option<rc::Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     _t: PhantomData<(T, B)>,
 }
 
@@ -146,7 +146,7 @@ where
     /// Set on connect callback.
     pub(crate) fn on_connect(
         mut self,
-        f: Option<rc::Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+        f: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     ) -> Self {
         self.on_connect = f;
         self
@@ -379,7 +379,7 @@ pub struct HttpServiceResponse<
     fut_upg: Option<U::Future>,
     expect: Option<X::Service>,
     upgrade: Option<U::Service>,
-    on_connect: Option<rc::Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     cfg: ServiceConfig,
     _t: PhantomData<(T, B)>,
 }
@@ -445,11 +445,11 @@ where
 
 /// `Service` implementation for http transport
 pub struct HttpServiceHandler<T, S: Service, B, X: Service, U: Service> {
-    srv: CloneableService<S>,
-    expect: CloneableService<X>,
-    upgrade: Option<CloneableService<U>>,
+    srv: Rc<S>,
+    expect: Rc<X>,
+    upgrade: Option<Rc<U>>,
     cfg: ServiceConfig,
-    on_connect: Option<rc::Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     _t: PhantomData<(T, B, X)>,
 }
 
@@ -470,14 +470,14 @@ where
         srv: S,
         expect: X,
         upgrade: Option<U>,
-        on_connect: Option<rc::Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+        on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     ) -> HttpServiceHandler<T, S, B, X, U> {
         HttpServiceHandler {
             cfg,
             on_connect,
-            srv: CloneableService::new(srv),
-            expect: CloneableService::new(expect),
-            upgrade: upgrade.map(CloneableService::new),
+            srv: Rc::new(srv),
+            expect: Rc::new(expect),
+            upgrade: upgrade.map(Rc::new),
             _t: PhantomData,
         }
     }
@@ -501,7 +501,7 @@ where
     type Error = DispatchError;
     type Future = HttpServiceHandlerResponse<T, S, B, X, U>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let ready = self
             .expect
             .poll_ready(cx)
@@ -521,7 +521,7 @@ where
             .is_ready()
             && ready;
 
-        let ready = if let Some(ref mut upg) = self.upgrade {
+        let ready = if let Some(ref upg) = self.upgrade {
             upg.poll_ready(cx)
                 .map_err(|e| {
                     log::error!("Http service readiness error: {:?}", e);
@@ -540,7 +540,23 @@ where
         }
     }
 
-    fn call(&mut self, (io, proto, peer_addr): Self::Request) -> Self::Future {
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        let ready = self.expect.poll_shutdown(cx, is_error).is_ready();
+        let ready = self.srv.poll_shutdown(cx, is_error).is_ready() && ready;
+        let ready = if let Some(ref upg) = self.upgrade {
+            upg.poll_shutdown(cx, is_error).is_ready() && ready
+        } else {
+            ready
+        };
+
+        if ready {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn call(&self, (io, proto, peer_addr): Self::Request) -> Self::Future {
         let on_connect = if let Some(ref on_connect) = self.on_connect {
             Some(on_connect(&io))
         } else {
@@ -591,7 +607,7 @@ where
         Option<(
             Handshake<T, Bytes>,
             ServiceConfig,
-            CloneableService<S>,
+            Rc<S>,
             Option<Box<dyn DataFactory>>,
             Option<net::SocketAddr>,
         )>,

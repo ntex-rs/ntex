@@ -73,7 +73,8 @@ where
     type Error = T::Error;
     type Future = InFlightServiceResponse<T>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if let Poll::Pending = self.service.poll_ready(cx)? {
             Poll::Pending
         } else if !self.count.available(cx) {
@@ -84,11 +85,13 @@ where
         }
     }
 
-    fn poll_shutdown(&mut self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
         self.service.poll_shutdown(cx, is_error)
     }
 
-    fn call(&mut self, req: T::Request) -> Self::Future {
+    #[inline]
+    fn call(&self, req: T::Request) -> Self::Future {
         InFlightServiceResponse {
             fut: self.service.call(req),
             _guard: self.count.get(),
@@ -129,11 +132,11 @@ mod tests {
         type Error = ();
         type Future = LocalBoxFuture<'static, Result<(), ()>>;
 
-        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future {
             crate::rt::time::delay_for(self.0)
                 .then(|_| ok::<_, ()>(()))
                 .boxed_local()
@@ -144,7 +147,7 @@ mod tests {
     async fn test_transform() {
         let wait_time = Duration::from_millis(50);
 
-        let mut srv = InFlightService::new(1, SleepService(wait_time));
+        let srv = InFlightService::new(1, SleepService(wait_time));
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let res = srv.call(());
@@ -160,7 +163,7 @@ mod tests {
 
         let srv = apply(InFlight::new(1), fn_factory(|| ok(SleepService(wait_time))));
 
-        let mut srv = srv.new_service(&()).await.unwrap();
+        let srv = srv.new_service(&()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let res = srv.call(());

@@ -126,8 +126,8 @@ struct PoolInner<T> {
 }
 
 impl<T> Pool<T> {
-    pub fn channel(&mut self) -> (PSender<T>, PReceiver<T>) {
-        let token = self.0.get_mut().insert(PoolInner {
+    pub fn channel(&self) -> (PSender<T>, PReceiver<T>) {
+        let token = unsafe { self.0.get_mut_unsafe() }.insert(PoolInner {
             flags: Flags::all(),
             value: None,
             waker: LocalWaker::default(),
