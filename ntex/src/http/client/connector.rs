@@ -36,7 +36,7 @@ type BoxedConnector =
 /// use std::time::Duration;
 /// use ntex::http::client::Connector;
 ///
-/// let connector = Connector::new()
+/// let connector = Connector::default()
 ///      .timeout(Duration::from_secs(5))
 ///      .finish();
 /// ```
@@ -85,7 +85,7 @@ impl Connector {
             let mut ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
             let _ = ssl
                 .set_alpn_protos(b"\x02h2\x08http/1.1")
-                .map_err(|e| error!("Can not set alpn protocol: {:?}", e));
+                .map_err(|e| error!("Can not set ALPN protocol: {:?}", e));
             conn.ssl(ssl.build())
         }
         #[cfg(all(not(feature = "openssl"), feature = "rustls"))]

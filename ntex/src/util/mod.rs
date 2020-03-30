@@ -10,3 +10,5 @@ pub mod time;
 pub mod timeout;
 
 pub(crate) use self::cell::Cell;
+
+pub use self::either::either;

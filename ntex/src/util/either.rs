@@ -6,6 +6,23 @@ use futures::{future, ready, Future};
 
 use crate::service::{Service, ServiceFactory};
 
+/// Construct `Either` service factor.
+///
+/// Either service allow to combine two different services into a single service.
+pub fn either<A, B>(left: A, right: B) -> Either<A, B>
+where
+    A: ServiceFactory,
+    A::Config: Clone,
+    B: ServiceFactory<
+        Config = A::Config,
+        Response = A::Response,
+        Error = A::Error,
+        InitError = A::InitError,
+    >,
+{
+    Either { left, right }
+}
+
 /// Combine two different service types into a single type.
 ///
 /// Both services must be of the same request, response, and error types.
@@ -68,22 +85,6 @@ where
 pub struct Either<A, B> {
     left: A,
     right: B,
-}
-
-impl<A, B> Either<A, B> {
-    pub fn new(left: A, right: B) -> Either<A, B>
-    where
-        A: ServiceFactory,
-        A::Config: Clone,
-        B: ServiceFactory<
-            Config = A::Config,
-            Response = A::Response,
-            Error = A::Error,
-            InitError = A::InitError,
-        >,
-    {
-        Either { left, right }
-    }
 }
 
 impl<A, B> ServiceFactory for Either<A, B>
