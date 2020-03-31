@@ -1,8 +1,10 @@
 # Changes
 
-## [1.0.0] - 2019-12-11
+## [0.1.0] - 2020-03-31
 
-* Rename crate
+* Remove support to spawn futures with stopped runtime
+
+* Fork to ntex namespace
 
 ## [1.0.0] - 2019-12-11
 
