@@ -26,8 +26,8 @@ impl Condition {
     }
 
     /// Get condition waiter
-    pub fn wait(&mut self) -> Waiter {
-        let token = self.0.get_mut().data.insert(None);
+    pub fn wait(&self) -> Waiter {
+        let token = unsafe { self.0.get_mut_unchecked() }.data.insert(None);
         Waiter {
             token,
             inner: self.0.clone(),
