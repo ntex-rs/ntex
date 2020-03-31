@@ -41,7 +41,9 @@ pub trait Connection {
     fn open_tunnel<H: Into<RequestHeadType>>(self, head: H) -> Self::TunnelFuture;
 }
 
-pub(super) trait ConnectionLifetime: AsyncRead + AsyncWrite + 'static {
+pub(super) trait ConnectionLifetime:
+    AsyncRead + AsyncWrite + Unpin + 'static
+{
     /// Close connection
     fn close(&mut self);
 

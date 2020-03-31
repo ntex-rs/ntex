@@ -17,7 +17,7 @@ where
 
 impl<Io, Codec> Connect<Io, Codec>
 where
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     Codec: Encoder + Decoder,
 {
     pub(crate) fn new(io: Io) -> Self {
@@ -80,7 +80,7 @@ impl<Io, St, Codec: Encoder + Decoder, Out: Unpin> ConnectResult<Io, St, Codec, 
 
 impl<Io, St, Codec, Out> Stream for ConnectResult<Io, St, Codec, Out>
 where
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     Codec: Encoder + Decoder,
 {
     type Item = Result<<Codec as Decoder>::Item, <Codec as Decoder>::Error>;
@@ -96,7 +96,7 @@ where
 impl<Io, St, Codec, Out> futures::Sink<<Codec as Encoder>::Item>
     for ConnectResult<Io, St, Codec, Out>
 where
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     Codec: Encoder + Decoder,
 {
     type Error = <Codec as Encoder>::Error;

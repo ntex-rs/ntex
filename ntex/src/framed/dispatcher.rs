@@ -86,7 +86,7 @@ where
     S: Service<Request = Request<U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
     U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,

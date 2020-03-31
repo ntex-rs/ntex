@@ -33,7 +33,7 @@ where
         Response = ConnectResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     Codec: Decoder + Encoder,
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,
@@ -79,7 +79,7 @@ pub struct FactoryBuilder<St, C, Io, Codec, Out> {
 
 impl<St, C, Io, Codec, Out> FactoryBuilder<St, C, Io, Codec, Out>
 where
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     C: ServiceFactory<
         Config = (),
         Request = Connect<Io, Codec>,
@@ -132,7 +132,7 @@ pub struct FramedService<St, C, T, Io, Codec, Out, Cfg> {
 impl<St, C, T, Io, Codec, Out, Cfg> ServiceFactory
     for FramedService<St, C, T, Io, Codec, Out, Cfg>
 where
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     C: ServiceFactory<
         Config = (),
         Request = Connect<Io, Codec>,
@@ -173,7 +173,7 @@ where
 #[pin_project::pin_project]
 pub struct FramedServiceResponse<St, C, T, Io, Codec, Out>
 where
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     C: ServiceFactory<
         Config = (),
         Request = Connect<Io, Codec>,
@@ -201,7 +201,7 @@ where
 
 impl<St, C, T, Io, Codec, Out> Future for FramedServiceResponse<St, C, T, Io, Codec, Out>
 where
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     C: ServiceFactory<
         Config = (),
         Request = Connect<Io, Codec>,
@@ -245,7 +245,7 @@ pub struct FramedServiceImpl<St, C, T, Io, Codec, Out> {
 
 impl<St, C, T, Io, Codec, Out> Service for FramedServiceImpl<St, C, T, Io, Codec, Out>
 where
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     C: Service<
         Request = Connect<Io, Codec>,
         Response = ConnectResult<Io, St, Codec, Out>,
@@ -309,7 +309,7 @@ where
     >,
     <T::Service as Service>::Error: 'static,
     <T::Service as Service>::Future: 'static,
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     Codec: Encoder + Decoder,
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,
@@ -336,7 +336,7 @@ where
     >,
     <T::Service as Service>::Error: 'static,
     <T::Service as Service>::Future: 'static,
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     Codec: Encoder + Decoder,
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,
@@ -376,7 +376,7 @@ where
     >,
     <T::Service as Service>::Error: 'static,
     <T::Service as Service>::Future: 'static,
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     Codec: Encoder + Decoder,
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,
@@ -403,7 +403,7 @@ where
     >,
     <T::Service as Service>::Error: 'static,
     <T::Service as Service>::Future: 'static,
-    Io: AsyncRead + AsyncWrite,
+    Io: AsyncRead + AsyncWrite + Unpin,
     Codec: Encoder + Decoder,
     <Codec as Encoder>::Item: 'static,
     <Codec as Encoder>::Error: std::fmt::Debug,

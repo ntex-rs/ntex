@@ -29,7 +29,7 @@ where
     S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
     U: Encoder + Decoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
@@ -70,7 +70,7 @@ where
     S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
     U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
@@ -130,16 +130,7 @@ where
         &mut self.framed
     }
 
-    fn poll_read(&mut self, cx: &mut Context<'_>) -> bool
-    where
-        S: Service<Request = Request<U>, Response = Response<U>>,
-        S::Error: 'static,
-        S::Future: 'static,
-        T: AsyncRead + AsyncWrite,
-        U: Decoder + Encoder,
-        <U as Encoder>::Item: 'static,
-        <U as Encoder>::Error: std::fmt::Debug,
-    {
+    fn poll_read(&mut self, cx: &mut Context<'_>) -> bool {
         loop {
             match self.service.poll_ready(cx) {
                 Poll::Ready(Ok(_)) => {
@@ -171,16 +162,7 @@ where
     }
 
     /// write to framed object
-    fn poll_write(&mut self, cx: &mut Context<'_>) -> bool
-    where
-        S: Service<Request = Request<U>, Response = Response<U>>,
-        S::Error: 'static,
-        S::Future: 'static,
-        T: AsyncRead + AsyncWrite,
-        U: Decoder + Encoder,
-        <U as Encoder>::Item: 'static,
-        <U as Encoder>::Error: std::fmt::Debug,
-    {
+    fn poll_write(&mut self, cx: &mut Context<'_>) -> bool {
         loop {
             while !self.framed.is_write_buf_full() {
                 match Pin::new(&mut self.rx).poll_next(cx) {
@@ -226,7 +208,7 @@ where
     S: Service<Request = Request<U>, Response = Response<U>>,
     S::Error: 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
     U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,

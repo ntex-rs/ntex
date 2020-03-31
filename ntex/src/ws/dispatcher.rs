@@ -12,14 +12,14 @@ use super::{Codec, Frame, Message};
 pub struct Dispatcher<S, T>
 where
     S: Service<Request = Frame, Response = Message> + 'static,
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     inner: framed::Dispatcher<S, T, Codec>,
 }
 
 impl<S, T> Dispatcher<S, T>
 where
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Frame, Response = Message>,
     S::Future: 'static,
     S::Error: 'static,
@@ -39,7 +39,7 @@ where
 
 impl<S, T> Future for Dispatcher<S, T>
 where
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Frame, Response = Message>,
     S::Future: 'static,
     S::Error: 'static,
