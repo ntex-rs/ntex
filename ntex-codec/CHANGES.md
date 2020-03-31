@@ -1,6 +1,12 @@
 # Changes
 
+## [0.1.0] - 2020-03-31
+
+* Fork crate to ntex namespace
+
 * Use `.advance()` intead of `.split_to()`
+
+* Add Unpin constraint and remove unneeded unsafe
 
 ## [0.2.0] - 2019-12-10
 
