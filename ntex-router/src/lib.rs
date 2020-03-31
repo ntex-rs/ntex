@@ -22,7 +22,7 @@ pub trait Resource<T: ResourcePath> {
 pub trait ResourcePath {
     fn path(&self) -> &str;
 
-    fn unquote<'a>(s: &'a str) -> std::borrow::Cow<'a, str> {
+    fn unquote(s: &str) -> std::borrow::Cow<'_, str> {
         s.into()
     }
 }
@@ -70,7 +70,7 @@ impl<'a> IntoPattern for &'a str {
 
 impl<T: AsRef<str>> IntoPattern for Vec<T> {
     fn patterns(&self) -> Vec<String> {
-        self.into_iter().map(|v| v.as_ref().to_string()).collect()
+        self.iter().map(|v| v.as_ref().to_string()).collect()
     }
 }
 
@@ -128,7 +128,7 @@ mod http_support {
             self.path()
         }
 
-        fn unquote<'a>(s: &'a str) -> std::borrow::Cow<'a, str> {
+        fn unquote(s: &str) -> std::borrow::Cow<'_, str> {
             if let Some(q) = super::quoter::requote(s.as_bytes()) {
                 std::borrow::Cow::Owned(q)
             } else {
