@@ -1,15 +1,16 @@
+use std::cell::RefCell;
 use std::convert::Infallible;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::{self, Duration, Instant};
 
 use futures::future::{ok, ready, FutureExt, Ready};
 
-use super::cell::Cell;
 use crate::rt::time::delay_for;
 use crate::service::{Service, ServiceFactory};
 
 #[derive(Clone, Debug)]
-pub struct LowResTime(Cell<Inner>);
+pub struct LowResTime(Rc<RefCell<Inner>>);
 
 #[derive(Debug)]
 struct Inner {
@@ -28,7 +29,7 @@ impl Inner {
 
 impl LowResTime {
     pub fn with(resolution: Duration) -> LowResTime {
-        LowResTime(Cell::new(Inner::new(resolution)))
+        LowResTime(Rc::new(RefCell::new(Inner::new(resolution))))
     }
 
     pub fn timer(&self) -> LowResTimeService {
@@ -38,7 +39,7 @@ impl LowResTime {
 
 impl Default for LowResTime {
     fn default() -> Self {
-        LowResTime(Cell::new(Inner::new(Duration::from_secs(1))))
+        LowResTime(Rc::new(RefCell::new(Inner::new(Duration::from_secs(1)))))
     }
 }
 
@@ -58,30 +59,30 @@ impl ServiceFactory for LowResTime {
 }
 
 #[derive(Clone, Debug)]
-pub struct LowResTimeService(Cell<Inner>);
+pub struct LowResTimeService(Rc<RefCell<Inner>>);
 
 impl LowResTimeService {
     pub fn with(resolution: Duration) -> LowResTimeService {
-        LowResTimeService(Cell::new(Inner::new(resolution)))
+        LowResTimeService(Rc::new(RefCell::new(Inner::new(resolution))))
     }
 
     /// Get current time. This function has to be called from
     /// future's poll method, otherwise it panics.
     pub fn now(&self) -> Instant {
-        let cur = self.0.get_ref().current;
+        let cur = self.0.borrow().current;
         if let Some(cur) = cur {
             cur
         } else {
             let now = Instant::now();
-            let mut inner = self.0.clone();
+            let inner = self.0.clone();
             let interval = {
-                let mut b = inner.get_mut();
+                let mut b = inner.borrow_mut();
                 b.current = Some(now);
                 b.resolution
             };
 
             crate::rt::spawn(delay_for(interval).then(move |_| {
-                inner.get_mut().current.take();
+                inner.borrow_mut().current.take();
                 ready(())
             }));
             now
@@ -107,7 +108,7 @@ impl Service for LowResTimeService {
 }
 
 #[derive(Clone, Debug)]
-pub struct SystemTime(Cell<SystemTimeInner>);
+pub struct SystemTime(Rc<RefCell<SystemTimeInner>>);
 
 #[derive(Debug)]
 struct SystemTimeInner {
@@ -125,30 +126,30 @@ impl SystemTimeInner {
 }
 
 #[derive(Clone, Debug)]
-pub struct SystemTimeService(Cell<SystemTimeInner>);
+pub struct SystemTimeService(Rc<RefCell<SystemTimeInner>>);
 
 impl SystemTimeService {
     pub fn with(resolution: Duration) -> SystemTimeService {
-        SystemTimeService(Cell::new(SystemTimeInner::new(resolution)))
+        SystemTimeService(Rc::new(RefCell::new(SystemTimeInner::new(resolution))))
     }
 
     /// Get current time. This function has to be called from
     /// future's poll method, otherwise it panics.
     pub fn now(&self) -> time::SystemTime {
-        let cur = self.0.get_ref().current;
+        let cur = self.0.borrow().current;
         if let Some(cur) = cur {
             cur
         } else {
             let now = time::SystemTime::now();
-            let mut inner = self.0.clone();
+            let inner = self.0.clone();
             let interval = {
-                let mut b = inner.get_mut();
+                let mut b = inner.borrow_mut();
                 b.current = Some(now);
                 b.resolution
             };
 
             crate::rt::spawn(delay_for(interval).then(move |_| {
-                inner.get_mut().current.take();
+                inner.borrow_mut().current.take();
                 ready(())
             }));
             now

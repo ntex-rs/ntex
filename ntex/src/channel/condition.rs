@@ -4,8 +4,8 @@ use std::task::{Context, Poll};
 
 use slab::Slab;
 
+use super::cell::Cell;
 use crate::task::LocalWaker;
-use crate::util::Cell;
 
 /// Condition allows to notify multiple receivers at the same time
 pub struct Condition(Cell<Inner>);
@@ -61,7 +61,7 @@ impl Waiter {
     pub fn poll_waiter(&self, cx: &mut Context<'_>) -> Poll<()> {
         let inner = unsafe {
             self.inner
-                .get_mut_unsafe()
+                .get_mut_unchecked()
                 .data
                 .get_unchecked_mut(self.token)
         };
@@ -80,7 +80,7 @@ impl Waiter {
 
 impl Clone for Waiter {
     fn clone(&self) -> Self {
-        let token = unsafe { self.inner.get_mut_unsafe() }.data.insert(None);
+        let token = unsafe { self.inner.get_mut_unchecked() }.data.insert(None);
         Waiter {
             token,
             inner: self.inner.clone(),
@@ -144,5 +144,23 @@ mod tests {
         drop(cond);
         assert_eq!(waiter.await, ());
         assert_eq!(waiter2.await, ());
+    }
+
+    #[ntex_rt::test]
+    async fn test_condition_poll() {
+        let mut cond = Condition::new();
+        let waiter = cond.wait();
+        assert_eq!(lazy(|cx| waiter.poll_waiter(cx)).await, Poll::Pending);
+        cond.notify();
+        assert_eq!(lazy(|cx| waiter.poll_waiter(cx)).await, Poll::Ready(()));
+
+        let waiter = cond.wait();
+        assert_eq!(lazy(|cx| waiter.poll_waiter(cx)).await, Poll::Pending);
+        let waiter2 = waiter.clone();
+        assert_eq!(lazy(|cx| waiter2.poll_waiter(cx)).await, Poll::Pending);
+
+        drop(cond);
+        assert_eq!(lazy(|cx| waiter.poll_waiter(cx)).await, Poll::Ready(()));
+        assert_eq!(lazy(|cx| waiter2.poll_waiter(cx)).await, Poll::Ready(()));
     }
 }

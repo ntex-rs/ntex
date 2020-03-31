@@ -8,8 +8,8 @@ use std::task::{Context, Poll};
 
 use futures::{Sink, Stream};
 
+use super::cell::Cell;
 use crate::task::LocalWaker;
-use crate::util::Cell;
 
 /// Creates a unbounded in-memory channel with buffered storage.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -45,7 +45,7 @@ impl<T> Unpin for Sender<T> {}
 impl<T> Sender<T> {
     /// Sends the provided message along this channel.
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
-        let shared = unsafe { self.shared.get_mut_unsafe() };
+        let shared = unsafe { self.shared.get_mut_unchecked() };
         if !shared.has_receiver {
             return Err(SendError(item)); // receiver was dropped
         };

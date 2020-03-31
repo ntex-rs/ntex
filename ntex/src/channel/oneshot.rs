@@ -6,8 +6,8 @@ use std::task::{Context, Poll};
 pub use futures::channel::oneshot::Canceled;
 use slab::Slab;
 
+use super::cell::Cell;
 use crate::task::LocalWaker;
-use crate::util::Cell;
 
 /// Creates a new futures-aware, one-shot channel.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -127,7 +127,7 @@ struct PoolInner<T> {
 
 impl<T> Pool<T> {
     pub fn channel(&self) -> (PSender<T>, PReceiver<T>) {
-        let token = unsafe { self.0.get_mut_unsafe() }.insert(PoolInner {
+        let token = unsafe { self.0.get_mut_unchecked() }.insert(PoolInner {
             flags: Flags::all(),
             value: None,
             waker: LocalWaker::default(),
