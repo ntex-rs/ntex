@@ -1,5 +1,13 @@
 # Changes
 
+## [0.1.0] - 2020-03-31
+
+* Fork to ntex namespace
+
+* Change Service trait to use `&self` instead of `&mut self`
+
+* Add `fn_mut_service` for `FnMut` functions
+
 ## [1.0.5] - 2020-01-16
 
 ### Fixed

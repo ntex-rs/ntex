@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::task::{Context, Poll};
@@ -16,6 +17,16 @@ where
     Fut: Future<Output = Result<Res, Err>>,
 {
     FnServiceFactory::new(f)
+}
+
+#[inline]
+/// Create `Service` for mut function that can act as a `Service`
+pub fn fn_mut_service<F, Fut, Req, Res, Err>(f: F) -> FnMutService<F, Fut, Req, Res, Err>
+where
+    F: FnMut(Req) -> Fut,
+    Fut: Future<Output = Result<Res, Err>>,
+{
+    FnMutService::new(f)
 }
 
 #[inline]
@@ -378,6 +389,60 @@ where
     }
 }
 
+pub struct FnMutService<F, Fut, Req, Res, Err>
+where
+    F: FnMut(Req) -> Fut,
+    Fut: Future<Output = Result<Res, Err>>,
+{
+    f: RefCell<F>,
+    _t: PhantomData<Req>,
+}
+
+impl<F, Fut, Req, Res, Err> FnMutService<F, Fut, Req, Res, Err>
+where
+    F: FnMut(Req) -> Fut,
+    Fut: Future<Output = Result<Res, Err>>,
+{
+    pub(crate) fn new(f: F) -> Self {
+        Self {
+            f: RefCell::new(f),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<F, Fut, Req, Res, Err> Clone for FnMutService<F, Fut, Req, Res, Err>
+where
+    F: FnMut(Req) -> Fut + Clone,
+    Fut: Future<Output = Result<Res, Err>>,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Self::new(self.f.borrow().clone())
+    }
+}
+
+impl<F, Fut, Req, Res, Err> Service for FnMutService<F, Fut, Req, Res, Err>
+where
+    F: FnMut(Req) -> Fut,
+    Fut: Future<Output = Result<Res, Err>>,
+{
+    type Request = Req;
+    type Response = Res;
+    type Error = Err;
+    type Future = Fut;
+
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    #[inline]
+    fn call(&self, req: Req) -> Self::Future {
+        (&mut *self.f.borrow_mut())(req)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::task::Poll;
@@ -392,6 +457,16 @@ mod tests {
         let new_srv = fn_service(|()| ok::<_, ()>("srv"));
 
         let srv = new_srv.new_service(()).await.unwrap();
+        let res = srv.call(()).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "srv");
+    }
+
+    #[ntex_rt::test]
+    async fn test_fn_mut_service() {
+        let srv = fn_mut_service(|()| ok::<_, ()>("srv"));
+
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
