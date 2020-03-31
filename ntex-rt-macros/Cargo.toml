@@ -1,10 +1,10 @@
 [package]
-name = "ntex-macros"
+name = "ntex-rt-macros"
 version = "0.1.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
-description = "Ntex runtime macros"
+description = "ntex runtime macros"
 repository = "https://github.com/ntex-rs/ntex"
-documentation = "https://docs.rs/ntex-macros/"
+documentation = "https://docs.rs/ntex-rt-macros/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT"
 edition = "2018"
@@ -17,4 +17,4 @@ quote = "^1"
 syn = { version = "^1", features = ["full"] }
 
 [dev-dependencies]
-ntex = { version = "0.1.1" }
+ntex = { version = "0.1.0" }

@@ -35,6 +35,7 @@ where
     T: AsyncRead + AsyncWrite,
     U: Decoder + Encoder,
 {
+    #[inline]
     /// Provides a `Stream` and `Sink` interface for reading and writing to this
     /// `Io` object, using `Decode` and `Encode` to read and write the raw data.
     ///
@@ -60,6 +61,7 @@ where
 }
 
 impl<T, U> Framed<T, U> {
+    #[inline]
     /// Provides a `Stream` and `Sink` interface for reading and writing to this
     /// `Io` object, using `Decode` and `Encode` to read and write the raw data.
     ///
@@ -87,16 +89,19 @@ impl<T, U> Framed<T, U> {
         }
     }
 
+    #[inline]
     /// Returns a reference to the underlying codec.
     pub fn get_codec(&self) -> &U {
         &self.codec
     }
 
+    #[inline]
     /// Returns a mutable reference to the underlying codec.
     pub fn get_codec_mut(&mut self) -> &mut U {
         &mut self.codec
     }
 
+    #[inline]
     /// Returns a reference to the underlying I/O stream wrapped by
     /// `Frame`.
     ///
@@ -107,6 +112,7 @@ impl<T, U> Framed<T, U> {
         &self.io
     }
 
+    #[inline]
     /// Returns a mutable reference to the underlying I/O stream wrapped by
     /// `Frame`.
     ///
@@ -117,16 +123,19 @@ impl<T, U> Framed<T, U> {
         &mut self.io
     }
 
+    #[inline]
     /// Check if write buffer is empty.
     pub fn is_write_buf_empty(&self) -> bool {
         self.write_buf.is_empty()
     }
 
+    #[inline]
     /// Check if write buffer is full.
     pub fn is_write_buf_full(&self) -> bool {
         self.write_buf.len() >= HW
     }
 
+    #[inline]
     /// Consume the `Frame`, returning `Frame` with different codec.
     pub fn into_framed<U2>(self, codec: U2) -> Framed<T, U2> {
         Framed {
@@ -138,6 +147,7 @@ impl<T, U> Framed<T, U> {
         }
     }
 
+    #[inline]
     /// Consume the `Frame`, returning `Frame` with different io.
     pub fn map_io<F, T2>(self, f: F) -> Framed<T2, U>
     where
@@ -152,6 +162,7 @@ impl<T, U> Framed<T, U> {
         }
     }
 
+    #[inline]
     /// Consume the `Frame`, returning `Frame` with different codec.
     pub fn map_codec<F, U2>(self, f: F) -> Framed<T, U2>
     where
@@ -166,6 +177,7 @@ impl<T, U> Framed<T, U> {
         }
     }
 
+    #[inline]
     /// Consumes the `Frame`, returning its underlying I/O stream, the buffer
     /// with unprocessed data, and the codec.
     ///

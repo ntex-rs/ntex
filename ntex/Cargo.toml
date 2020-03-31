@@ -37,10 +37,10 @@ cookie = ["coo-kie", "coo-kie/percent-encode"]
 
 [dependencies]
 ntex-codec = "0.1"
-ntex-macros = "0.1"
-ntex-rt = "1.0"
+ntex-rt = "0.1"
+ntex-rt-macros = "0.1"
 ntex-router = "0.3"
-ntex-service = "1.0"
+ntex-service = "0.1"
 ntex-web-macros = "0.1"
 
 actix-threadpool = "0.3.1"
@@ -95,7 +95,7 @@ mio-uds = { version = "0.6.7" }
 brotli2 = { version="0.3.2", optional = true }
 flate2 = { version = "1.0.13", optional = true }
 
-tokio = { version = "0.2.6", default-features=false, features = ["rt-core", "rt-util", "io-driver", "tcp", "uds", "udp", "time", "signal", "stream"] }
+tokio = "0.2.6"
 
 [dev-dependencies]
 futures = "0.3.1"
