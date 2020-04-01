@@ -19,7 +19,7 @@ use super::dev::{insert_slesh, AppService, HttpServiceFactory};
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::guard::Guard;
-use super::handler::Factory;
+use super::handler::Handler;
 use super::responder::Responder;
 use super::route::{Route, RouteService};
 use super::service::{WebRequest, WebResponse};
@@ -231,7 +231,7 @@ where
     /// ```
     pub fn to<F, Args>(mut self, handler: F) -> Self
     where
-        F: Factory<Args, Err>,
+        F: Handler<Args, Err>,
         Args: FromRequest<Err> + 'static,
         Args::Error: Into<Err::Container>,
         <F::Result as Responder<Err>>::Error: Into<Err::Container>,

@@ -11,7 +11,7 @@ use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
 use super::extract::FromRequest;
 use super::guard::{self, Guard};
-use super::handler::{Factory, Handler, HandlerFn};
+use super::handler::{Handler, HandlerFn, HandlerWrapper};
 use super::responder::Responder;
 use super::service::{WebRequest, WebResponse};
 use super::HttpResponse;
@@ -30,7 +30,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// Create new route which matches any request.
     pub fn new() -> Route<Err> {
         Route {
-            handler: Box::new(Handler::new(|| ready(HttpResponse::NotFound()))),
+            handler: Box::new(HandlerWrapper::new(|| ready(HttpResponse::NotFound()))),
             methods: Vec::new(),
             guards: Rc::new(Vec::new()),
         }
@@ -194,12 +194,12 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// ```
     pub fn to<F, Args>(mut self, handler: F) -> Self
     where
-        F: Factory<Args, Err>,
+        F: Handler<Args, Err>,
         Args: FromRequest<Err> + 'static,
         Args::Error: Into<Err::Container>,
         <F::Result as Responder<Err>>::Error: Into<Err::Container>,
     {
-        self.handler = Box::new(Handler::new(handler));
+        self.handler = Box::new(HandlerWrapper::new(handler));
         self
     }
 }

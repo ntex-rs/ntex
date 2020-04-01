@@ -11,7 +11,7 @@ use crate::{IntoServiceFactory, Service, ServiceFactory};
 use super::config::AppConfig;
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
-use super::handler::Factory;
+use super::handler::Handler;
 use super::resource::Resource;
 use super::responder::Responder;
 use super::route::Route;
@@ -223,7 +223,7 @@ pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
 /// ```
 pub fn to<F, Args, Err>(handler: F) -> Route<Err>
 where
-    F: Factory<Args, Err>,
+    F: Handler<Args, Err>,
     Args: FromRequest<Err> + 'static,
     Err: ErrorRenderer,
     Err::Container: From<Args::Error>,

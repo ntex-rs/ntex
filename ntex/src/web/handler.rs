@@ -12,8 +12,8 @@ use super::request::HttpRequest;
 use super::responder::Responder;
 use super::service::{WebRequest, WebResponse};
 
-/// Async fn handler factory
-pub trait Factory<T, Err>: Clone + 'static
+/// Async fn handler
+pub trait Handler<T, Err>: Clone + 'static
 where
     Err: ErrorRenderer,
 {
@@ -23,7 +23,7 @@ where
     fn call(&self, param: T) -> Self::Future;
 }
 
-impl<F, R, Err> Factory<(), Err> for F
+impl<F, R, Err> Handler<(), Err> for F
 where
     F: Fn() -> R + Clone + 'static,
     R: Future + 'static,
@@ -47,46 +47,40 @@ pub(super) trait HandlerFn<Err: ErrorRenderer> {
     fn clone_handler(&self) -> Box<dyn HandlerFn<Err>>;
 }
 
-pub(super) struct Handler<F, T, R, O, Err>
+pub(super) struct HandlerWrapper<F, T, Err>
 where
-    F: Factory<T, Err, Future = R, Result = O>,
+    F: Handler<T, Err>,
     T: FromRequest<Err>,
     T::Error: Into<Err::Container>,
-    R: Future<Output = O> + 'static,
-    O: Responder<Err>,
-    O::Error: Into<Err::Container>,
+    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     hnd: F,
-    _t: PhantomData<(T, R, O, Err)>,
+    _t: PhantomData<(T, Err)>,
 }
 
-impl<F, T, R, O, Err> Handler<F, T, R, O, Err>
+impl<F, T, Err> HandlerWrapper<F, T, Err>
 where
-    F: Factory<T, Err, Future = R, Result = O>,
+    F: Handler<T, Err>,
     T: FromRequest<Err>,
     T::Error: Into<Err::Container>,
-    R: Future<Output = O> + 'static,
-    O: Responder<Err>,
-    O::Error: Into<Err::Container>,
+    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     pub(super) fn new(hnd: F) -> Self {
-        Handler {
+        HandlerWrapper {
             hnd,
             _t: PhantomData,
         }
     }
 }
 
-impl<F, T, R, O, Err> HandlerFn<Err> for Handler<F, T, R, O, Err>
+impl<F, T, Err> HandlerFn<Err> for HandlerWrapper<F, T, Err>
 where
-    F: Factory<T, Err, Future = R, Result = O>,
+    F: Handler<T, Err>,
     T: FromRequest<Err> + 'static,
     T::Error: Into<Err::Container>,
-    R: Future<Output = O> + 'static,
-    O: Responder<Err> + 'static,
-    O::Error: Into<Err::Container>,
+    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     fn call(
@@ -95,7 +89,7 @@ where
     ) -> LocalBoxFuture<'static, Result<WebResponse, Err::Container>> {
         let (req, mut payload) = req.into_parts();
 
-        HandlerWebResponse {
+        HandlerWrapperResponse {
             hnd: self.hnd.clone(),
             fut1: Some(T::from_request(&req, &mut payload)),
             fut2: None,
@@ -106,25 +100,23 @@ where
     }
 
     fn clone_handler(&self) -> Box<dyn HandlerFn<Err>> {
-        Box::new(Handler {
+        Box::new(HandlerWrapper {
             hnd: self.hnd.clone(),
             _t: PhantomData,
         })
     }
 }
 
-impl<F, T, R, O, Err> Clone for Handler<F, T, R, O, Err>
+impl<F, T, Err> Clone for HandlerWrapper<F, T, Err>
 where
-    F: Factory<T, Err, Future = R, Result = O>,
+    F: Handler<T, Err>,
     T: FromRequest<Err>,
     T::Error: Into<Err::Container>,
-    R: Future<Output = O> + 'static,
-    O: Responder<Err>,
-    O::Error: Into<Err::Container>,
+    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     fn clone(&self) -> Self {
-        Handler {
+        Self {
             hnd: self.hnd.clone(),
             _t: PhantomData,
         }
@@ -132,34 +124,30 @@ where
 }
 
 #[pin_project]
-pub(super) struct HandlerWebResponse<F, T, R, O, Err>
+pub(super) struct HandlerWrapperResponse<F, T, Err>
 where
-    F: Factory<T, Err, Future = R, Result = O>,
+    F: Handler<T, Err>,
     T: FromRequest<Err>,
     T::Error: Into<Err::Container>,
-    R: Future<Output = O> + 'static,
-    O: Responder<Err>,
-    O::Error: Into<Err::Container>,
+    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     hnd: F,
     #[pin]
     fut1: Option<T::Future>,
     #[pin]
-    fut2: Option<R>,
+    fut2: Option<F::Future>,
     #[pin]
-    fut3: Option<O::Future>,
+    fut3: Option<<F::Result as Responder<Err>>::Future>,
     req: Option<HttpRequest>,
 }
 
-impl<F, T, R, O, Err> Future for HandlerWebResponse<F, T, R, O, Err>
+impl<F, T, Err> Future for HandlerWrapperResponse<F, T, Err>
 where
-    F: Factory<T, Err, Future = R, Result = O>,
+    F: Handler<T, Err>,
     T: FromRequest<Err>,
     T::Error: Into<Err::Container>,
-    R: Future<Output = O> + 'static,
-    O: Responder<Err>,
-    O::Error: Into<Err::Container>,
+    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     type Output = Result<WebResponse, Err::Container>;
@@ -216,7 +204,7 @@ where
 
 /// FromRequest trait impl for tuples
 macro_rules! factory_tuple ({ $(($n:tt, $T:ident)),+} => {
-    impl<Func, $($T,)+ Res, Err> Factory<($($T,)+), Err> for Func
+    impl<Func, $($T,)+ Res, Err> Handler<($($T,)+), Err> for Func
     where Func: Fn($($T,)+) -> Res + Clone + 'static,
           Res: Future + 'static,
           Res::Output: Responder<Err>,

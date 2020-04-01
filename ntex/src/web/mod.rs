@@ -99,6 +99,7 @@ pub use self::config::ServiceConfig;
 pub use self::data::Data;
 pub use self::error::{DefaultError, Error, ErrorRenderer, WebResponseError};
 pub use self::extract::FromRequest;
+pub use self::handler::Handler;
 pub use self::request::HttpRequest;
 pub use self::resource::Resource;
 pub use self::responder::{Either, Responder};
@@ -114,9 +115,8 @@ pub mod dev {
     //! The purpose of this module is to alleviate imports of many common actix
     //! traits by adding a glob import to the top of actix heavy modules:
 
+    use super::Handler;
     pub use crate::web::config::{AppConfig, AppService};
-    #[doc(hidden)]
-    pub use crate::web::handler::Factory;
     pub use crate::web::info::ConnectionInfo;
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::service::{
@@ -190,7 +190,7 @@ pub mod dev {
     #[inline(always)]
     pub fn __assert_handler<Err, Fun, Fut>(
         f: Fun,
-    ) -> impl Factory<(), Err, Future = Fut, Result = Fut::Output>
+    ) -> impl Handler<(), Err, Future = Fut, Result = Fut::Output>
     where
         Err: super::ErrorRenderer,
         Fun: Fn() -> Fut + Clone + 'static,
@@ -205,7 +205,7 @@ pub mod dev {
         #[inline(always)]
         pub fn $name<Err, Fun, Fut, $($T,)+>(
             f: Fun,
-        ) -> impl Factory<($($T,)+), Err, Future = Fut, Result = Fut::Output>
+        ) -> impl Handler<($($T,)+), Err, Future = Fut, Result = Fut::Output>
         where
             Err: $crate::web::ErrorRenderer,
             Fun: Fn($($T,)+) -> Fut + Clone + 'static,
