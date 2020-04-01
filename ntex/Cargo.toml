@@ -75,11 +75,12 @@ serde_urlencoded = "0.6.1"
 url = "2.1"
 time = { version = "0.2.9", default-features = false, features = ["std"] }
 coo-kie = { version = "0.13.3", package = "cookie", optional = true }
-tokio = "0.2.6"
+tokio = "=0.2.6"
 
 # resolver
-trust-dns-proto = { version = "0.19.3", features = ["tokio-runtime"] }
-trust-dns-resolver = { version = "0.19.3", features = ["tokio-runtime"] }
+trust-dns-proto = { version = "0.19.3", default-features = false }
+trust-dns-resolver = { version = "0.19.3", default-features = false, features=["system-config"] }
+async-trait = "0.1.27" # this is only for trust-dns
 
 # FIXME: Remove it and use mio own uds feature once mio 0.7 is released
 mio-uds = { version = "0.6.7" }
