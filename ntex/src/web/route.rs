@@ -1,3 +1,4 @@
+use std::mem;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
@@ -21,6 +22,7 @@ use super::HttpResponse;
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
 pub struct Route<Err: ErrorRenderer = DefaultError> {
     handler: Box<dyn HandlerFn<Err>>,
+    methods: Vec<Method>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
 
@@ -29,18 +31,26 @@ impl<Err: ErrorRenderer> Route<Err> {
     pub fn new() -> Route<Err> {
         Route {
             handler: Box::new(Handler::new(|| ready(HttpResponse::NotFound()))),
+            methods: Vec::new(),
             guards: Rc::new(Vec::new()),
         }
     }
 
     pub(super) fn take_guards(&mut self) -> Vec<Box<dyn Guard>> {
-        std::mem::replace(Rc::get_mut(&mut self.guards).unwrap(), Vec::new())
+        for m in &self.methods {
+            Rc::get_mut(&mut self.guards)
+                .unwrap()
+                .push(Box::new(guard::Method(m.clone())));
+        }
+
+        mem::replace(Rc::get_mut(&mut self.guards).unwrap(), Vec::new())
     }
 
     pub(super) fn service(&self) -> RouteService<Err> {
         RouteService {
             handler: self.handler.clone_handler(),
             guards: self.guards.clone(),
+            methods: self.methods.clone(),
         }
     }
 }
@@ -61,11 +71,16 @@ impl<Err: ErrorRenderer> ServiceFactory for Route<Err> {
 
 pub struct RouteService<Err: ErrorRenderer> {
     handler: Box<dyn HandlerFn<Err>>,
+    methods: Vec<Method>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
 
 impl<Err: ErrorRenderer> RouteService<Err> {
     pub fn check(&self, req: &mut WebRequest<Err>) -> bool {
+        if !self.methods.is_empty() && !self.methods.contains(&req.head().method) {
+            return false;
+        }
+
         for f in self.guards.iter() {
             if !f.check(req.head()) {
                 return false;
@@ -99,7 +114,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// # use ntex::web::{self, *};
     /// # fn main() {
     /// App::new().service(web::resource("/path").route(
-    ///     web::get()
+    ///     web::route()
     ///         .method(http::Method::CONNECT)
     ///         .guard(guard::Header("content-type", "text/plain"))
     ///         .to(|req: HttpRequest| async { HttpResponse::Ok() }))
@@ -107,9 +122,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// # }
     /// ```
     pub fn method(mut self, method: Method) -> Self {
-        Rc::get_mut(&mut self.guards)
-            .unwrap()
-            .push(Box::new(guard::Method(method)));
+        self.methods.push(method);
         self
     }
 
