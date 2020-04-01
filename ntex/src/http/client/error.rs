@@ -7,7 +7,7 @@ use serde_json::error::Error as JsonError;
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl::{HandshakeError, SslError};
-use crate::connect::resolver::ResolveError;
+use crate::connect::ResolveError;
 
 use crate::http::error::{HttpError, ParseError, PayloadError};
 use crate::http::header::HeaderValue;

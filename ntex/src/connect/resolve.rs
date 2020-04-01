@@ -1,13 +1,19 @@
+use std::cell::RefCell;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use futures::future::{ok, Either, Ready};
-use trust_dns_resolver::lookup_ip::LookupIpFuture;
-use trust_dns_resolver::{AsyncResolver, Background};
+use futures::future::{ok, Either, FutureExt, LocalBoxFuture, Ready};
+use futures::ready;
+use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
+use trust_dns_resolver::error::ResolveError;
+use trust_dns_resolver::lookup_ip::LookupIp;
+use trust_dns_resolver::TokioAsyncResolver;
 
+use crate::channel::condition::{Condition, Waiter};
 use crate::service::{Service, ServiceFactory};
 
 use super::connect::{Address, Connect};
@@ -101,7 +107,7 @@ impl<T: Address> Service for Resolver<T> {
 /// Resolver future
 pub struct ResolverFuture<T: Address> {
     req: Option<Connect<T>>,
-    lookup: Background<LookupIpFuture>,
+    lookup: LookupIpFuture,
 }
 
 impl<T: Address> ResolverFuture<T> {
@@ -151,6 +157,120 @@ impl<T: Address> Future for ResolverFuture<T> {
                     e
                 );
                 Poll::Ready(Err(e.into()))
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+/// An asynchronous resolver for DNS.
+pub struct AsyncResolver {
+    state: Rc<RefCell<AsyncResolverState>>,
+}
+
+impl AsyncResolver {
+    /// Construct a new `AsyncResolver` with the provided configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - configuration, name_servers, etc. for the Resolver
+    /// * `options` - basic lookup options for the resolver
+    pub fn new(config: ResolverConfig, options: ResolverOpts) -> Self {
+        AsyncResolver {
+            state: Rc::new(RefCell::new(AsyncResolverState::New(config, options))),
+        }
+    }
+
+    /// Constructs a new Resolver with the system configuration.
+    ///
+    /// This will use `/etc/resolv.conf` on Unix OSes and the registry on Windows.
+    pub fn from_system_conf() -> Self {
+        AsyncResolver {
+            state: Rc::new(RefCell::new(AsyncResolverState::NewFromSystem)),
+        }
+    }
+
+    pub fn lookup_ip(&self, host: &str) -> LookupIpFuture {
+        LookupIpFuture {
+            host: host.to_string(),
+            state: self.state.clone(),
+            fut: LookupIpState::Init,
+        }
+    }
+}
+
+enum AsyncResolverState {
+    New(ResolverConfig, ResolverOpts),
+    NewFromSystem,
+    Creating(Condition),
+    Resolver(TokioAsyncResolver),
+}
+
+pub struct LookupIpFuture {
+    host: String,
+    state: Rc<RefCell<AsyncResolverState>>,
+    fut: LookupIpState,
+}
+
+enum LookupIpState {
+    Init,
+    Create(LocalBoxFuture<'static, Result<TokioAsyncResolver, ResolveError>>),
+    Wait(Waiter),
+    Lookup(LocalBoxFuture<'static, Result<LookupIp, ResolveError>>),
+}
+
+impl Future for LookupIpFuture {
+    type Output = Result<LookupIp, ResolveError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().get_mut();
+
+        loop {
+            match this.fut {
+                LookupIpState::Lookup(ref mut fut) => return Pin::new(fut).poll(cx),
+                LookupIpState::Create(ref mut fut) => {
+                    let resolver = ready!(Pin::new(fut).poll(cx))?;
+                    this.fut = LookupIpState::Init;
+                    *this.state.borrow_mut() = AsyncResolverState::Resolver(resolver);
+                }
+                LookupIpState::Wait(ref mut waiter) => {
+                    ready!(waiter.poll_waiter(cx));
+                    this.fut = LookupIpState::Init;
+                }
+                LookupIpState::Init => {
+                    let mut state = this.state.borrow_mut();
+                    match &mut *state {
+                        AsyncResolverState::New(config, options) => {
+                            this.fut = LookupIpState::Create(
+                                TokioAsyncResolver::tokio(
+                                    config.clone(),
+                                    options.clone(),
+                                )
+                                .boxed_local(),
+                            );
+                            *state = AsyncResolverState::Creating(Condition::default());
+                        }
+                        AsyncResolverState::NewFromSystem => {
+                            this.fut = LookupIpState::Create(
+                                TokioAsyncResolver::tokio_from_system_conf()
+                                    .boxed_local(),
+                            );
+                            *state = AsyncResolverState::Creating(Condition::default());
+                        }
+                        AsyncResolverState::Creating(ref cond) => {
+                            this.fut = LookupIpState::Wait(cond.wait());
+                        }
+                        AsyncResolverState::Resolver(ref resolver) => {
+                            let host = this.host.clone();
+                            let resolver = resolver.clone();
+
+                            this.fut = LookupIpState::Lookup(
+                                async move { resolver.lookup_ip(host.as_str()).await }
+                                    .boxed_local(),
+                            );
+                        }
+                    }
+                }
             }
         }
     }

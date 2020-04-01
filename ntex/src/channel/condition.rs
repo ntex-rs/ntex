@@ -121,7 +121,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_condition() {
-        let mut cond = Condition::new();
+        let cond = Condition::new();
         let mut waiter = cond.wait();
         assert_eq!(
             lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
@@ -148,7 +148,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_condition_poll() {
-        let mut cond = Condition::new();
+        let cond = Condition::new();
         let waiter = cond.wait();
         assert_eq!(lazy(|cx| waiter.poll_waiter(cx)).await, Poll::Pending);
         cond.notify();

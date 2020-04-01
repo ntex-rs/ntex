@@ -7,14 +7,13 @@ use std::task::{Context, Poll};
 
 use either::Either;
 use futures::future::{self, err, ok, FutureExt, LocalBoxFuture, Ready};
-use trust_dns_resolver::AsyncResolver;
 
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
 
 use super::connect::{Address, Connect};
 use super::error::ConnectError;
-use super::resolve::Resolver;
+use super::resolve::{AsyncResolver, Resolver};
 
 pub struct Connector<T> {
     resolver: Resolver<T>,

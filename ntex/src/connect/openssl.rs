@@ -1,15 +1,14 @@
 use std::io;
 use std::task::{Context, Poll};
 
+use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 pub use open_ssl::ssl::{Error as SslError, SslConnector, SslMethod};
 pub use tokio_openssl::{HandshakeError, SslStream};
 
-use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
-use trust_dns_resolver::AsyncResolver;
-
-use crate::connect::{Address, Connect, ConnectError, Connector};
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
+
+use super::{Address, AsyncResolver, Connect, ConnectError, Connector};
 
 pub struct OpensslConnector<T> {
     connector: Connector<T>,

@@ -4,8 +4,7 @@ use bytes::Bytes;
 use futures::SinkExt;
 
 use ntex::codec::{BytesCodec, Framed};
-use ntex::connect::resolver::{ResolverConfig, ResolverOpts};
-use ntex::connect::Connect;
+use ntex::connect::{Connect, ResolverConfig, ResolverOpts};
 use ntex::rt::net::TcpStream;
 use ntex::server::test_server;
 use ntex::service::{fn_service, Service, ServiceFactory};

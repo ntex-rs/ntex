@@ -7,14 +7,12 @@ pub use tokio_rustls::{client::TlsStream, rustls::ClientConfig};
 
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 use tokio_rustls::{self, TlsConnector};
-use trust_dns_resolver::AsyncResolver;
 use webpki::DNSNameRef;
 
-use crate::connect::Address;
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
 
-use super::{Connect, ConnectError, Connector};
+use super::{Address, AsyncResolver, Connect, ConnectError, Connector};
 
 /// Rustls connector factory
 pub struct RustlsConnector<T> {

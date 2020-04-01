@@ -17,27 +17,19 @@ pub mod openssl;
 #[cfg(feature = "rustls")]
 pub mod rustls;
 
-use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
+pub use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
+pub use trust_dns_resolver::error::ResolveError;
 use trust_dns_resolver::system_conf::read_system_conf;
-pub use trust_dns_resolver::AsyncResolver;
-
-pub mod resolver {
-    pub use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
-    pub use trust_dns_resolver::system_conf::read_system_conf;
-    pub use trust_dns_resolver::{error::ResolveError, AsyncResolver};
-}
 
 use crate::rt::Arbiter;
 
 pub use self::connect::{Address, Connect};
 pub use self::error::ConnectError;
-pub use self::resolve::Resolver;
+pub use self::resolve::{AsyncResolver, Resolver};
 pub use self::service::Connector;
 
 pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver {
-    let (resolver, bg) = AsyncResolver::new(cfg, opts);
-    crate::rt::spawn(bg);
-    resolver
+    AsyncResolver::new(cfg, opts)
 }
 
 struct DefaultResolver(AsyncResolver);
@@ -54,8 +46,7 @@ pub fn default_resolver() -> AsyncResolver {
             }
         };
 
-        let (resolver, bg) = AsyncResolver::new(cfg, opts);
-        crate::rt::spawn(bg);
+        let resolver = AsyncResolver::new(cfg, opts);
 
         Arbiter::set_item(DefaultResolver(resolver.clone()));
         resolver
