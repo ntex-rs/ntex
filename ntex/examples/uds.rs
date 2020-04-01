@@ -1,6 +1,4 @@
-use ntex::web::{
-    self, get, middleware, App, Error, HttpRequest, HttpResponse, HttpServer,
-};
+use ntex::web::{self, middleware, App, Error, HttpRequest, HttpResponse, HttpServer};
 
 // #[get("/resource1/{name}/index.html")]
 async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {

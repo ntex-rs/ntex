@@ -91,12 +91,6 @@ pub mod test;
 pub mod types;
 mod util;
 
-pub use ntex_macros::{
-    web_connect as connect, web_delete as delete, web_get as get, web_head as head,
-    web_options as options, web_patch as patch, web_post as post, web_put as put,
-    web_trace as trace,
-};
-
 pub use crate::http::Response as HttpResponse;
 pub use crate::http::ResponseBuilder as HttpResponseBuilder;
 
