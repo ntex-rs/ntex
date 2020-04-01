@@ -91,7 +91,11 @@ pub mod test;
 pub mod types;
 mod util;
 
-pub use ntex_web_macros::*;
+pub use ntex_macros::{
+    web_connect as connect, web_delete as delete, web_get as get, web_head as head,
+    web_options as options, web_patch as patch, web_post as post, web_put as put,
+    web_trace as trace,
+};
 
 pub use crate::http::Response as HttpResponse;
 pub use crate::http::ResponseBuilder as HttpResponseBuilder;
@@ -190,15 +194,14 @@ pub mod dev {
 
     #[doc(hidden)]
     #[inline(always)]
-    pub fn __assert_handler<Err, Fun, Fut, Res>(
+    pub fn __assert_handler<Err, Fun, Fut>(
         f: Fun,
-    ) -> impl Factory<(), Fut, Res, Err>
+    ) -> impl Factory<(), Err, Future = Fut, Result = Fut::Output>
     where
         Err: super::ErrorRenderer,
         Fun: Fn() -> Fut + Clone + 'static,
-        Fut: std::future::Future<Output = Res>,
-        Res: super::Responder<Err>,
-        // <Res as super::Responder<Err>>::Error: Into<Err::Container>,
+        Fut: std::future::Future + 'static,
+        Fut::Output: super::Responder<Err>,
     {
         f
     }
@@ -206,17 +209,15 @@ pub mod dev {
     macro_rules! assert_handler ({ $name:ident, $($T:ident),+} => {
         #[doc(hidden)]
         #[inline(always)]
-        pub fn $name<Err, Fun, Fut, Res, $($T,)+>(
+        pub fn $name<Err, Fun, Fut, $($T,)+>(
             f: Fun,
-        ) -> impl Factory<($($T,)+), Fut, Res, Err>
+        ) -> impl Factory<($($T,)+), Err, Future = Fut, Result = Fut::Output>
         where
             Err: $crate::web::ErrorRenderer,
             Fun: Fn($($T,)+) -> Fut + Clone + 'static,
-            Fut: std::future::Future<Output = Res>,
-            Res: $crate::web::Responder<Err>,
-            // <Res as $crate::web::Responder<Err>>::Error: Into<Err::Container>,
-            $($T: $crate::web::FromRequest<Err>),+,
-            // $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
+            Fut: std::future::Future + 'static,
+            Fut::Output: $crate::web::Responder<Err>,
+        $($T: $crate::web::FromRequest<Err>),+,
         {
             f
         }

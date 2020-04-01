@@ -161,7 +161,7 @@ impl Route {
         .unwrap();
 
         let stream = quote! {
-            // #[allow(non_camel_case_types)]
+            #[allow(non_camel_case_types)]
             pub struct #name;
 
             impl<__E: 'static> ntex::web::dev::HttpServiceFactory<__E> for #name

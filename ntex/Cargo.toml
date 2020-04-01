@@ -41,7 +41,7 @@ ntex-rt = "0.1"
 ntex-rt-macros = "0.1"
 ntex-router = "0.3"
 ntex-service = "0.1"
-ntex-web-macros = "0.1"
+ntex-macros = "0.1"
 
 actix-threadpool = "0.3.1"
 base64 = "0.12"

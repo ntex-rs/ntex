@@ -7,15 +7,15 @@
 //!
 //! Macros:
 //!
-//! - [get](attr.get.html)
-//! - [post](attr.post.html)
-//! - [put](attr.put.html)
-//! - [delete](attr.delete.html)
-//! - [head](attr.head.html)
-//! - [connect](attr.connect.html)
-//! - [options](attr.options.html)
-//! - [trace](attr.trace.html)
-//! - [patch](attr.patch.html)
+//! - [web_get](attr.get.html)
+//! - [web_post](attr.post.html)
+//! - [web_put](attr.put.html)
+//! - [web_delete](attr.delete.html)
+//! - [web_head](attr.head.html)
+//! - [web_connect](attr.connect.html)
+//! - [web_options](attr.options.html)
+//! - [web_trace](attr.trace.html)
+//! - [web_patch](attr.patch.html)
 //!
 //! ### Attributes:
 //!
@@ -55,7 +55,7 @@ use syn::parse_macro_input;
 /// - `"path"` - Raw literal string with path for which to register handler. Mandatory.
 /// - `guard="function_name"` - Registers function as guard using `ntex::web::guard::fn_guard`
 #[proc_macro_attribute]
-pub fn get(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn web_get(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen = match route::Route::new(args, input, route::GuardType::Get) {
         Ok(gen) => gen,
@@ -70,7 +70,7 @@ pub fn get(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Attributes are the same as in [get](attr.get.html)
 #[proc_macro_attribute]
-pub fn post(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn web_post(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen = match route::Route::new(args, input, route::GuardType::Post) {
         Ok(gen) => gen,
@@ -85,7 +85,7 @@ pub fn post(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Attributes are the same as in [get](attr.get.html)
 #[proc_macro_attribute]
-pub fn put(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn web_put(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen = match route::Route::new(args, input, route::GuardType::Put) {
         Ok(gen) => gen,
@@ -100,7 +100,7 @@ pub fn put(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Attributes are the same as in [get](attr.get.html)
 #[proc_macro_attribute]
-pub fn delete(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn web_delete(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen = match route::Route::new(args, input, route::GuardType::Delete) {
         Ok(gen) => gen,
@@ -115,7 +115,7 @@ pub fn delete(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Attributes are the same as in [head](attr.head.html)
 #[proc_macro_attribute]
-pub fn head(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn web_head(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen = match route::Route::new(args, input, route::GuardType::Head) {
         Ok(gen) => gen,
@@ -130,7 +130,7 @@ pub fn head(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Attributes are the same as in [connect](attr.connect.html)
 #[proc_macro_attribute]
-pub fn connect(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn web_connect(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen = match route::Route::new(args, input, route::GuardType::Connect) {
         Ok(gen) => gen,
@@ -145,7 +145,7 @@ pub fn connect(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Attributes are the same as in [options](attr.options.html)
 #[proc_macro_attribute]
-pub fn options(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn web_options(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen = match route::Route::new(args, input, route::GuardType::Options) {
         Ok(gen) => gen,
@@ -160,7 +160,7 @@ pub fn options(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Attributes are the same as in [trace](attr.trace.html)
 #[proc_macro_attribute]
-pub fn trace(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn web_trace(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen = match route::Route::new(args, input, route::GuardType::Trace) {
         Ok(gen) => gen,
@@ -175,7 +175,7 @@ pub fn trace(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Attributes are the same as in [patch](attr.patch.html)
 #[proc_macro_attribute]
-pub fn patch(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen = match route::Route::new(args, input, route::GuardType::Patch) {
         Ok(gen) => gen,

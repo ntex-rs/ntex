@@ -37,7 +37,7 @@ async fn main() -> std::io::Result<()> {
                     .default_service(
                         web::route().to(|| async { HttpResponse::MethodNotAllowed() }),
                     )
-                    .route(web::get().to(web::dev::__assert_handler1(index_async))),
+                    .route(web::get().to(index_async)),
             )
             .service(web::resource("/test1.html").to(|| async { "Test\r\n" }))
     })

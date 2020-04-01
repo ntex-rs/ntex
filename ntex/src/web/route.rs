@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
@@ -180,29 +179,17 @@ impl<Err: ErrorRenderer> Route<Err> {
     ///     );
     /// }
     /// ```
-    pub fn to<F, T, R, U>(mut self, handler: F) -> Self
+    pub fn to<F, Args>(mut self, handler: F) -> Self
     where
-        F: Factory<T, R, U, Err>,
-        T: FromRequest<Err> + 'static,
-        <T as FromRequest<Err>>::Error: Into<Err::Container>,
-        R: Future<Output = U> + 'static,
-        U: Responder<Err> + 'static,
-        <U as Responder<Err>>::Error: Into<Err::Container>,
+        F: Factory<Args, Err>,
+        Args: FromRequest<Err> + 'static,
+        Args::Error: Into<Err::Container>,
+        <F::Result as Responder<Err>>::Error: Into<Err::Container>,
     {
         self.handler = Box::new(Handler::new(handler));
         self
     }
 }
-
-// fn call(&mut self, req: WebRequest<Err>) -> Self::Future {
-//     self.service
-//         .call(req)
-//         .map(|res| match res {
-//             Ok(res) => Ok(res),
-//             Err((e, _)) => Err(e),
-//         })
-//         .boxed_local()
-// }
 
 #[cfg(test)]
 mod tests {

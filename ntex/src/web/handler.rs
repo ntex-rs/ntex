@@ -12,23 +12,27 @@ use super::request::HttpRequest;
 use super::responder::Responder;
 use super::service::{WebRequest, WebResponse};
 
-/// Async handler converter factory
-pub trait Factory<T, R, O, Err>: Clone + 'static
+/// Async fn handler factory
+pub trait Factory<T, Err>: Clone + 'static
 where
-    R: Future<Output = O>,
-    O: Responder<Err>,
     Err: ErrorRenderer,
 {
-    fn call(&self, param: T) -> R;
+    type Future: Future<Output = Self::Result> + 'static;
+    type Result: Responder<Err>;
+
+    fn call(&self, param: T) -> Self::Future;
 }
 
-impl<F, R, O, Err> Factory<(), R, O, Err> for F
+impl<F, R, Err> Factory<(), Err> for F
 where
     F: Fn() -> R + Clone + 'static,
-    R: Future<Output = O>,
-    O: Responder<Err>,
+    R: Future + 'static,
+    R::Output: Responder<Err>,
     Err: ErrorRenderer,
 {
+    type Future = R;
+    type Result = R::Output;
+
     fn call(&self, _: ()) -> R {
         (self)()
     }
@@ -45,12 +49,12 @@ pub(super) trait HandlerFn<Err: ErrorRenderer> {
 
 pub(super) struct Handler<F, T, R, O, Err>
 where
-    F: Factory<T, R, O, Err>,
+    F: Factory<T, Err, Future = R, Result = O>,
     T: FromRequest<Err>,
-    <T as FromRequest<Err>>::Error: Into<Err::Container>,
-    R: Future<Output = O>,
+    T::Error: Into<Err::Container>,
+    R: Future<Output = O> + 'static,
     O: Responder<Err>,
-    <O as Responder<Err>>::Error: Into<Err::Container>,
+    O::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     hnd: F,
@@ -59,12 +63,12 @@ where
 
 impl<F, T, R, O, Err> Handler<F, T, R, O, Err>
 where
-    F: Factory<T, R, O, Err>,
+    F: Factory<T, Err, Future = R, Result = O>,
     T: FromRequest<Err>,
-    <T as FromRequest<Err>>::Error: Into<Err::Container>,
-    R: Future<Output = O>,
+    T::Error: Into<Err::Container>,
+    R: Future<Output = O> + 'static,
     O: Responder<Err>,
-    <O as Responder<Err>>::Error: Into<Err::Container>,
+    O::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     pub(super) fn new(hnd: F) -> Self {
@@ -77,12 +81,12 @@ where
 
 impl<F, T, R, O, Err> HandlerFn<Err> for Handler<F, T, R, O, Err>
 where
-    F: Factory<T, R, O, Err>,
+    F: Factory<T, Err, Future = R, Result = O>,
     T: FromRequest<Err> + 'static,
-    <T as FromRequest<Err>>::Error: Into<Err::Container>,
+    T::Error: Into<Err::Container>,
     R: Future<Output = O> + 'static,
     O: Responder<Err> + 'static,
-    <O as Responder<Err>>::Error: Into<Err::Container>,
+    O::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     fn call(
@@ -111,12 +115,12 @@ where
 
 impl<F, T, R, O, Err> Clone for Handler<F, T, R, O, Err>
 where
-    F: Factory<T, R, O, Err>,
+    F: Factory<T, Err, Future = R, Result = O>,
     T: FromRequest<Err>,
-    <T as FromRequest<Err>>::Error: Into<Err::Container>,
-    R: Future<Output = O>,
+    T::Error: Into<Err::Container>,
+    R: Future<Output = O> + 'static,
     O: Responder<Err>,
-    <O as Responder<Err>>::Error: Into<Err::Container>,
+    O::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     fn clone(&self) -> Self {
@@ -130,12 +134,12 @@ where
 #[pin_project]
 pub(super) struct HandlerWebResponse<F, T, R, O, Err>
 where
-    F: Factory<T, R, O, Err>,
+    F: Factory<T, Err, Future = R, Result = O>,
     T: FromRequest<Err>,
-    <T as FromRequest<Err>>::Error: Into<Err::Container>,
-    R: Future<Output = O>,
+    T::Error: Into<Err::Container>,
+    R: Future<Output = O> + 'static,
     O: Responder<Err>,
-    <O as Responder<Err>>::Error: Into<Err::Container>,
+    O::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     hnd: F,
@@ -150,12 +154,12 @@ where
 
 impl<F, T, R, O, Err> Future for HandlerWebResponse<F, T, R, O, Err>
 where
-    F: Factory<T, R, O, Err>,
+    F: Factory<T, Err, Future = R, Result = O>,
     T: FromRequest<Err>,
-    <T as FromRequest<Err>>::Error: Into<Err::Container>,
-    R: Future<Output = O>,
+    T::Error: Into<Err::Container>,
+    R: Future<Output = O> + 'static,
     O: Responder<Err>,
-    <O as Responder<Err>>::Error: Into<Err::Container>,
+    O::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     type Output = Result<WebResponse, Err::Container>;
@@ -212,13 +216,15 @@ where
 
 /// FromRequest trait impl for tuples
 macro_rules! factory_tuple ({ $(($n:tt, $T:ident)),+} => {
-    impl<Func, $($T,)+ Res, O, Err> Factory<($($T,)+), Res, O, Err> for Func
+    impl<Func, $($T,)+ Res, Err> Factory<($($T,)+), Err> for Func
     where Func: Fn($($T,)+) -> Res + Clone + 'static,
-          Res: Future<Output = O>,
-          O: Responder<Err>,
-         // <O as Responder<Err>>::Error: Into<Err::Container>,
+          Res: Future + 'static,
+          Res::Output: Responder<Err>,
           Err: ErrorRenderer,
     {
+        type Future = Res;
+        type Result = Res::Output;
+
         fn call(&self, param: ($($T,)+)) -> Res {
             (self)($(param.$n,)+)
         }

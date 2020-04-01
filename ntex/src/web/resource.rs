@@ -229,14 +229,12 @@ where
     /// # async fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
     /// App::new().service(web::resource("/").route(web::route().to(index)));
     /// ```
-    pub fn to<F, I, R, U>(mut self, handler: F) -> Self
+    pub fn to<F, Args>(mut self, handler: F) -> Self
     where
-        F: Factory<I, R, U, Err>,
-        I: FromRequest<Err> + 'static,
-        <I as FromRequest<Err>>::Error: Into<Err::Container>,
-        R: Future<Output = U> + 'static,
-        U: Responder<Err> + 'static,
-        <U as Responder<Err>>::Error: Into<Err::Container>,
+        F: Factory<Args, Err>,
+        Args: FromRequest<Err> + 'static,
+        Args::Error: Into<Err::Container>,
+        <F::Result as Responder<Err>>::Error: Into<Err::Container>,
     {
         self.routes.push(Route::new().to(handler));
         self

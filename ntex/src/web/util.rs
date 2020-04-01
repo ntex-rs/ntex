@@ -1,6 +1,5 @@
 //! Essentials helper functions and types for application registration.
 use std::fmt;
-use std::future::Future;
 
 use ntex_router::IntoPattern;
 
@@ -222,15 +221,13 @@ pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
 ///     web::resource("/").route(web::to(index))
 /// );
 /// ```
-pub fn to<F, I, R, U, Err>(handler: F) -> Route<Err>
+pub fn to<F, Args, Err>(handler: F) -> Route<Err>
 where
-    F: Factory<I, R, U, Err>,
-    I: FromRequest<Err> + 'static,
-    R: Future<Output = U> + 'static,
-    U: Responder<Err> + 'static,
+    F: Factory<Args, Err>,
+    Args: FromRequest<Err> + 'static,
     Err: ErrorRenderer,
-    Err::Container: From<<I as FromRequest<Err>>::Error>,
-    Err::Container: From<<U as Responder<Err>>::Error>,
+    Err::Container: From<Args::Error>,
+    Err::Container: From<<F::Result as Responder<Err>>::Error>,
 {
     Route::new().to(handler)
 }

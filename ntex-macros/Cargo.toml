@@ -1,10 +1,10 @@
 [package]
-name = "ntex-web-macros"
+name = "ntex-macros"
 version = "0.1.0"
-description = "ntex web proc macros"
+description = "ntex proc macros"
 readme = "README.md"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
-license = "MIT/Apache-2.0"
+license = "MIT"
 edition = "2018"
 
 [lib]
