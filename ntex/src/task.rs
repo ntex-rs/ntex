@@ -37,7 +37,7 @@ impl LocalWaker {
 
     #[inline]
     /// Check if waker has been registered.
-    pub fn is_registed(&self) -> bool {
+    pub fn is_registered(&self) -> bool {
         unsafe { (*self.waker.get()).is_some() }
     }
 
