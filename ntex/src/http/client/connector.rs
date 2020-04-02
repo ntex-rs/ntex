@@ -277,8 +277,12 @@ impl Connector {
 fn connector(
     connector: BoxedConnector,
     timeout: Duration,
-) -> impl Service<Request = Connect, Response = (Box<dyn Io>, Protocol), Error = ConnectError>
-{
+) -> impl Service<
+    Request = Connect,
+    Response = (Box<dyn Io>, Protocol),
+    Error = ConnectError,
+    Future = impl Unpin,
+> + Unpin {
     TimeoutService::new(
         timeout,
         apply_fn(connector, |msg: Connect, srv| {
@@ -305,7 +309,9 @@ where
             Request = Connect,
             Response = (Box<dyn Io>, Protocol),
             Error = ConnectError,
-        > + 'static,
+        > + Unpin
+        + 'static,
+    T::Future: Unpin,
 {
     type Request = Connect;
     type Response = <Pool<T> as Service>::Response;

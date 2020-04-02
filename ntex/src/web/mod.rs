@@ -24,7 +24,7 @@
 //! at!), several other resources are available:
 //!
 //! * [User Guide](https://docs.rs/ntex/)
-//! * [GitHub repository](https://github.com/fafhrd91/ntex)
+//! * [GitHub repository](https://github.com/mtex-rs/ntex)
 //! * [Cargo package](https://crates.io/crates/ntex)
 //!
 //! To get started navigating the API documentation you may want to
@@ -51,7 +51,6 @@
 //! * *WebSockets* server/client
 //! * Transparent content compression/decompression (br, gzip, deflate)
 //! * Configurable request routing
-//! * Multipart streams
 //! * SSL support with OpenSSL or `rustls`
 //! * Middlewares
 //! * Supported Rust version: 1.41 or later
@@ -60,13 +59,8 @@
 //!
 //! * `cookie` - enables http cookie support
 //! * `compress` - enables content encoding compression support
-//! * `openssl` - enables ssl support via `openssl` crate, supports `http/2`
-//! * `rustls` - enables ssl support via `rustls` crate, supports `http/2`
-#![allow(
-    type_alias_bounds,
-    clippy::type_complexity,
-    clippy::new_without_default
-)]
+//! * `openssl` - enables ssl support via `openssl` crate
+//! * `rustls` - enables ssl support via `rustls` crate
 
 mod app;
 mod app_service;
@@ -110,10 +104,10 @@ pub use self::service::WebService;
 pub use self::util::*;
 
 pub mod dev {
-    //! The `actix-web` prelude for library developers
+    //! The `ntex::web` prelude for library developers
     //!
-    //! The purpose of this module is to alleviate imports of many common actix
-    //! traits by adding a glob import to the top of actix heavy modules:
+    //! The purpose of this module is to alleviate imports of many common
+    //! traits by adding a glob import to the top of ntex::web heavy modules:
 
     use super::Handler;
     pub use crate::web::config::{AppConfig, AppService};

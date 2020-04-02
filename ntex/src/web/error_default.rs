@@ -32,11 +32,6 @@ impl Error {
     pub fn as_response_error(&self) -> &dyn WebResponseError<DefaultError> {
         self.cause.as_ref()
     }
-
-    /// Similar to `as_response_error` but downcasts.
-    pub fn as_error<T: WebResponseError<DefaultError> + 'static>(&self) -> Option<&T> {
-        WebResponseError::downcast_ref(self.cause.as_ref())
-    }
 }
 
 impl ErrorRenderer for DefaultError {

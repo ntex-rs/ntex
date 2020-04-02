@@ -290,7 +290,6 @@ where
     /// true - got whouldblock
     /// false - didnt get whouldblock
     fn poll_flush(&mut self, cx: &mut Context<'_>) -> Result<bool, DispatchError> {
-        // println!("POLL-FLUSH");
         if self.write_buf.is_empty() {
             return Ok(false);
         }
@@ -298,9 +297,7 @@ where
         let len = self.write_buf.len();
         let mut written = 0;
         while written < len {
-            match unsafe { Pin::new_unchecked(&mut self.io) }
-                .poll_write(cx, &self.write_buf[written..])
-            {
+            match Pin::new(&mut self.io).poll_write(cx, &self.write_buf[written..]) {
                 Poll::Ready(Ok(0)) => {
                     return Err(DispatchError::Io(io::Error::new(
                         io::ErrorKind::WriteZero,
@@ -357,7 +354,6 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Result<PollResponse, DispatchError> {
-        // println!("POLL-RESPONSE");
         loop {
             let state = match self.state {
                 State::None => match self.messages.pop_front() {
@@ -502,7 +498,6 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Result<bool, DispatchError> {
-        // println!("POLL-REQUEST");
         // limit a mount of non processed requests
         if self.messages.len() >= MAX_PIPELINED_MESSAGES || !self.can_read(cx) {
             return Ok(false);
@@ -606,7 +601,6 @@ where
 
     /// keep-alive timer
     fn poll_keepalive(&mut self, cx: &mut Context<'_>) -> Result<(), DispatchError> {
-        //println!("POLL-KEEPALIVE {:?}", self.ka_timer.is_some());
         if self.ka_timer.is_none() {
             // shutdown timeout
             if self.flags.contains(Flags::SHUTDOWN) {
@@ -626,8 +620,6 @@ where
 
         match Pin::new(&mut self.ka_timer.as_mut().unwrap()).poll(cx) {
             Poll::Ready(()) => {
-                // println!("KEEPALIVE done");
-
                 // if we get timeout during shutdown, drop connection
                 if self.flags.contains(Flags::SHUTDOWN) {
                     return Err(DispatchError::DisconnectTimeout);
@@ -636,7 +628,6 @@ where
                     if self.state.is_empty() && self.write_buf.is_empty() {
                         if self.flags.contains(Flags::STARTED) {
                             trace!("Keep-alive timeout, close connection");
-                            // println!("add SHUTDOWN 1");
                             self.flags.insert(Flags::SHUTDOWN);
 
                             // start shutdown timer
@@ -663,7 +654,6 @@ where
                             } else {
                                 trace!("Keep-alive connection timeout");
                             }
-                            // println!("add SHUTDOWN 2");
                             self.flags.insert(Flags::STARTED | Flags::SHUTDOWN);
                             self.state = State::None;
                         }
@@ -719,13 +709,10 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.as_mut().inner {
             DispatcherState::Normal(ref mut inner) => {
-                // println!("POLL -------- {:?}", inner.flags);
-
                 inner.poll_keepalive(cx)?;
 
                 if inner.flags.contains(Flags::SHUTDOWN) {
                     if inner.flags.contains(Flags::WRITE_DISCONNECT) {
-                        // println!("POLL -- exit 1");
                         Poll::Ready(Ok(()))
                     } else {
                         // flush buffer
@@ -737,7 +724,6 @@ where
                         } else {
                             match Pin::new(&mut inner.io).poll_shutdown(cx) {
                                 Poll::Ready(res) => {
-                                    // println!("POLL -- exit 2 {:?}", res);
                                     Poll::Ready(res.map_err(DispatchError::from))
                                 }
                                 Poll::Pending => Poll::Pending,
@@ -801,7 +787,6 @@ where
 
                     // client is gone
                     if inner.flags.contains(Flags::WRITE_DISCONNECT) {
-                        // println!("POLL -- exit 3");
                         return Poll::Ready(Ok(()));
                     }
 
@@ -809,21 +794,18 @@ where
 
                     // read half is closed and we do not processing any responses
                     if inner.flags.contains(Flags::READ_DISCONNECT) && is_empty {
-                        // println!("add SHUTDOWN 3");
                         inner.flags.insert(Flags::SHUTDOWN);
                     }
 
                     // keep-alive and stream errors
                     if is_empty && inner.write_buf.is_empty() {
                         if let Some(err) = inner.error.take() {
-                            // println!("POLL -- exit 4 {:?}", err);
                             Poll::Ready(Err(err))
                         }
                         // disconnect if keep-alive is not enabled
                         else if inner.flags.contains(Flags::STARTED)
                             && !inner.flags.intersects(Flags::KEEPALIVE)
                         {
-                            // println!("add SHUTDOWN 5");
                             inner.flags.insert(Flags::SHUTDOWN);
                             self.poll(cx)
                         }
@@ -870,7 +852,6 @@ where
             }
             Poll::Ready(Ok(n)) => {
                 if n == 0 {
-                    // println!("DISCONNECT");
                     return Ok(Some(true));
                 } else {
                     read_some = true;

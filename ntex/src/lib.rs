@@ -5,6 +5,7 @@
     // missing_docs,
 )]
 #![allow(
+    type_alias_bounds,
     clippy::type_complexity,
     clippy::borrow_interior_mutable_const,
     clippy::needless_doctest_main,

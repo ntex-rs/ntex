@@ -406,16 +406,14 @@ impl MessageBody for String {
 
 /// Type represent streaming body.
 /// Response does not contain `content-length` header and appropriate transfer encoding is used.
-#[pin_project]
 pub struct BodyStream<S, E> {
-    #[pin]
     stream: S,
     _t: PhantomData<E>,
 }
 
 impl<S, E> BodyStream<S, E>
 where
-    S: Stream<Item = Result<Bytes, E>>,
+    S: Stream<Item = Result<Bytes, E>> + Unpin,
     E: Error,
 {
     pub fn new(stream: S) -> Self {
@@ -444,22 +442,21 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
-        let mut stream = unsafe { Pin::new_unchecked(self) }.project().stream;
         loop {
-            return Poll::Ready(match ready!(stream.as_mut().poll_next(cx)) {
-                Some(Ok(ref bytes)) if bytes.is_empty() => continue,
-                opt => opt.map(|res| res.map_err(Into::into)),
-            });
+            return Poll::Ready(
+                match ready!(Pin::new(&mut self.stream).poll_next(cx)) {
+                    Some(Ok(ref bytes)) if bytes.is_empty() => continue,
+                    opt => opt.map(|res| res.map_err(Into::into)),
+                },
+            );
         }
     }
 }
 
 /// Type represent streaming body. This body implementation should be used
 /// if total size of stream is known. Data get sent as is without using transfer encoding.
-#[pin_project]
 pub struct SizedStream<S> {
     size: u64,
-    #[pin]
     stream: S,
 }
 
@@ -489,12 +486,13 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
-        let mut stream = unsafe { Pin::new_unchecked(self) }.project().stream;
         loop {
-            return Poll::Ready(match ready!(stream.as_mut().poll_next(cx)) {
-                Some(Ok(ref bytes)) if bytes.is_empty() => continue,
-                val => val,
-            });
+            return Poll::Ready(
+                match ready!(Pin::new(&mut self.stream).poll_next(cx)) {
+                    Some(Ok(ref bytes)) if bytes.is_empty() => continue,
+                    val => val,
+                },
+            );
         }
     }
 }

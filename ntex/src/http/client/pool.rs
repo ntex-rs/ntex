@@ -42,7 +42,9 @@ pub(super) struct ConnectionPool<T, Io: 'static>(Rc<T>, Rc<RefCell<Inner<Io>>>);
 impl<T, Io> ConnectionPool<T, Io>
 where
     Io: AsyncRead + AsyncWrite + Unpin + 'static,
-    T: Service<Request = Connect, Response = (Io, Protocol), Error = ConnectError>,
+    T: Service<Request = Connect, Response = (Io, Protocol), Error = ConnectError>
+        + Unpin,
+    T::Future: Unpin,
 {
     pub(crate) fn new(
         connector: T,
@@ -82,6 +84,7 @@ where
     Io: AsyncRead + AsyncWrite + Unpin + 'static,
     T: Service<Request = Connect, Response = (Io, Protocol), Error = ConnectError>
         + 'static,
+    T::Future: Unpin,
 {
     type Request = Connect;
     type Response = IoConnection<Io>;
@@ -101,7 +104,7 @@ where
     #[inline]
     fn call(&self, req: Connect) -> Self::Future {
         // start support future
-        crate::rt::spawn(ConnectorPoolSupport {
+        crate::rt::spawn(ConnectionPoolSupport {
             connector: self.0.clone(),
             inner: self.1.clone(),
         });
@@ -424,7 +427,7 @@ where
     }
 }
 
-struct ConnectorPoolSupport<T, Io>
+struct ConnectionPoolSupport<T, Io>
 where
     Io: AsyncRead + AsyncWrite + Unpin + 'static,
 {
@@ -432,16 +435,17 @@ where
     inner: Rc<RefCell<Inner<Io>>>,
 }
 
-impl<T, Io> Future for ConnectorPoolSupport<T, Io>
+impl<T, Io> Future for ConnectionPoolSupport<T, Io>
 where
     Io: AsyncRead + AsyncWrite + Unpin + 'static,
-    T: Service<Request = Connect, Response = (Io, Protocol), Error = ConnectError>,
-    T::Future: 'static,
+    T: Service<Request = Connect, Response = (Io, Protocol), Error = ConnectError>
+        + Unpin,
+    T::Future: Unpin + 'static,
 {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = self.get_mut();
 
         let mut inner = this.inner.as_ref().borrow_mut();
         inner.waker.register(cx.waker());
@@ -508,7 +512,7 @@ where
 
 impl<F, Io> OpenWaitingConnection<F, Io>
 where
-    F: Future<Output = Result<(Io, Protocol), ConnectError>> + 'static,
+    F: Future<Output = Result<(Io, Protocol), ConnectError>> + Unpin + 'static,
     Io: AsyncRead + AsyncWrite + Unpin + 'static,
 {
     fn spawn(
@@ -542,13 +546,13 @@ where
 
 impl<F, Io> Future for OpenWaitingConnection<F, Io>
 where
-    F: Future<Output = Result<(Io, Protocol), ConnectError>>,
+    F: Future<Output = Result<(Io, Protocol), ConnectError>> + Unpin,
     Io: AsyncRead + AsyncWrite + Unpin,
 {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().get_mut();
 
         if let Some(ref mut h2) = this.h2 {
             return match Pin::new(h2).poll(cx) {
@@ -573,7 +577,7 @@ where
             };
         }
 
-        match unsafe { Pin::new_unchecked(&mut this.fut) }.poll(cx) {
+        match Pin::new(&mut this.fut).poll(cx) {
             Poll::Ready(Err(err)) => {
                 let _ = this.inner.take();
                 if let Some(rx) = this.rx.take() {
@@ -592,7 +596,7 @@ where
                     Poll::Ready(())
                 } else {
                     this.h2 = Some(handshake(io).boxed_local());
-                    unsafe { Pin::new_unchecked(this) }.poll(cx)
+                    self.poll(cx)
                 }
             }
             Poll::Pending => Poll::Pending,

@@ -1,5 +1,4 @@
 //! Web error
-use std::any::TypeId;
 use std::cell::RefCell;
 use std::fmt;
 use std::io::Write;
@@ -44,22 +43,6 @@ where
             header::HeaderValue::from_static("text/plain; charset=utf-8"),
         );
         resp.set_body(Body::from(buf))
-    }
-
-    #[doc(hidden)]
-    fn __private_get_type_id__(&self) -> TypeId {
-        TypeId::of::<Self>()
-    }
-}
-
-impl<Err: ErrorRenderer> dyn WebResponseError<Err> {
-    /// Downcasts a response error to a specific type.
-    pub fn downcast_ref<T: WebResponseError<Err> + 'static>(&self) -> Option<&T> {
-        if self.__private_get_type_id__() == TypeId::of::<T>() {
-            unsafe { Some(&*(self as *const dyn WebResponseError<Err> as *const T)) }
-        } else {
-            None
-        }
     }
 }
 
@@ -667,8 +650,7 @@ mod tests {
     #[test]
     fn test_into_error() {
         let err: Error = UrlencodedError::UnknownLength.into();
-        let err2: Error = err.into();
-        assert!(err2.as_error::<UrlencodedError>().is_some());
+        let _: Error = err.into();
     }
 
     #[test]
