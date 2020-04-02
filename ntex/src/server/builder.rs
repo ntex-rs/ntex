@@ -18,12 +18,11 @@ use crate::rt::{spawn, System};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfiguredService, ServiceConfig};
-use super::server::{Server, ServerCommand};
 use super::service::{InternalServiceFactory, ServiceFactory, StreamNewService};
 use super::signals::{Signal, Signals};
 use super::socket::StdListener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
-use super::Token;
+use super::{Server, ServerCommand, Token};
 
 /// Server builder
 pub struct ServerBuilder {
@@ -226,7 +225,7 @@ impl ServerBuilder {
         self.services.push(StreamNewService::create(
             name.as_ref().to_string(),
             token,
-            factory.clone(),
+            factory,
             addr,
         ));
         self.sockets

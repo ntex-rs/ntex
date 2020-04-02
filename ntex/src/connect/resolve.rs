@@ -23,9 +23,7 @@ use crate::channel::condition::{Condition, Waiter};
 use crate::rt::net::{self, TcpStream};
 use crate::service::{Service, ServiceFactory};
 
-use super::connect::{Address, Connect};
-use super::default_resolver;
-use super::error::ConnectError;
+use super::{default_resolver, Address, Connect, ConnectError};
 
 /// DNS Resolver Service
 pub struct Resolver<T> {
@@ -184,7 +182,9 @@ impl AsyncResolver {
     /// * `options` - basic lookup options for the resolver
     pub fn new(config: ResolverConfig, options: ResolverOpts) -> Self {
         AsyncResolver {
-            state: Rc::new(RefCell::new(AsyncResolverState::New(config, options))),
+            state: Rc::new(RefCell::new(AsyncResolverState::New(Some(
+                TAsyncResolver::new(config, options, Handle).boxed_local(),
+            )))),
         }
     }
 
@@ -193,7 +193,9 @@ impl AsyncResolver {
     /// This will use `/etc/resolv.conf` on Unix OSes and the registry on Windows.
     pub fn from_system_conf() -> Self {
         AsyncResolver {
-            state: Rc::new(RefCell::new(AsyncResolverState::NewFromSystem)),
+            state: Rc::new(RefCell::new(AsyncResolverState::New(Some(
+                TokioAsyncResolver::from_system_conf(Handle).boxed_local(),
+            )))),
         }
     }
 
@@ -210,10 +212,9 @@ type TokioAsyncResolver =
     TAsyncResolver<GenericConnection, GenericConnectionProvider<TokioRuntime>>;
 
 enum AsyncResolverState {
-    New(ResolverConfig, ResolverOpts),
-    NewFromSystem,
+    New(Option<LocalBoxFuture<'static, Result<TokioAsyncResolver, ResolveError>>>),
     Creating(Condition),
-    Resolver(TokioAsyncResolver),
+    Resolver(Box<TokioAsyncResolver>),
 }
 
 pub struct LookupIpFuture {
@@ -241,7 +242,8 @@ impl Future for LookupIpFuture {
                 LookupIpState::Create(ref mut fut) => {
                     let resolver = ready!(Pin::new(fut).poll(cx))?;
                     this.fut = LookupIpState::Init;
-                    *this.state.borrow_mut() = AsyncResolverState::Resolver(resolver);
+                    *this.state.borrow_mut() =
+                        AsyncResolverState::Resolver(Box::new(resolver));
                 }
                 LookupIpState::Wait(ref mut waiter) => {
                     ready!(waiter.poll_waiter(cx));
@@ -250,22 +252,8 @@ impl Future for LookupIpFuture {
                 LookupIpState::Init => {
                     let mut state = this.state.borrow_mut();
                     match &mut *state {
-                        AsyncResolverState::New(config, options) => {
-                            this.fut = LookupIpState::Create(
-                                TAsyncResolver::new(
-                                    config.clone(),
-                                    options.clone(),
-                                    Handle,
-                                )
-                                .boxed_local(),
-                            );
-                            *state = AsyncResolverState::Creating(Condition::default());
-                        }
-                        AsyncResolverState::NewFromSystem => {
-                            this.fut = LookupIpState::Create(
-                                TokioAsyncResolver::from_system_conf(Handle)
-                                    .boxed_local(),
-                            );
+                        AsyncResolverState::New(ref mut fut) => {
+                            this.fut = LookupIpState::Create(fut.take().unwrap());
                             *state = AsyncResolverState::Creating(Condition::default());
                         }
                         AsyncResolverState::Creating(ref cond) => {
@@ -361,7 +349,7 @@ impl trust_dns_proto::tcp::Connect for AsyncIo02As03<TcpStream> {
 #[async_trait::async_trait]
 impl trust_dns_proto::udp::UdpSocket for UdpSocket {
     async fn bind(addr: &SocketAddr) -> io::Result<Self> {
-        net::UdpSocket::bind(addr).await.map(|sock| UdpSocket(sock))
+        net::UdpSocket::bind(addr).await.map(UdpSocket)
     }
 
     async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {

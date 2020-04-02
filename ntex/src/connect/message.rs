@@ -37,9 +37,9 @@ impl Address for &'static str {
 /// Connect request
 #[derive(Eq, PartialEq, Debug, Hash)]
 pub struct Connect<T> {
-    pub(crate) req: T,
-    pub(crate) port: u16,
-    pub(crate) addr: Option<Either<SocketAddr, VecDeque<SocketAddr>>>,
+    pub(super) req: T,
+    pub(super) port: u16,
+    pub(super) addr: Option<Either<SocketAddr, VecDeque<SocketAddr>>>,
 }
 
 impl<T: Address> Connect<T> {

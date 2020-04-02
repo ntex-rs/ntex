@@ -149,7 +149,7 @@ impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Form<T> {
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
         let body = match serde_urlencoded::to_string(&self.0) {
             Ok(body) => body,
-            Err(e) => return err(e.into()),
+            Err(e) => return err(e),
         };
 
         ok(Response::build(StatusCode::OK)

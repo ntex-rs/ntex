@@ -371,11 +371,8 @@ impl Future for Worker {
                     Ok(false) => {
                         // push connection back to queue
                         if let Some(conn) = conn {
-                            match self.state {
-                                WorkerState::Unavailable(ref mut conns) => {
-                                    conns.push(conn);
-                                }
-                                _ => (),
+                            if let WorkerState::Unavailable(ref mut conns) = self.state {
+                                conns.push(conn);
                             }
                         }
                         Poll::Pending
@@ -398,7 +395,8 @@ impl Future for Worker {
             WorkerState::Restarting(idx, token, ref mut fut) => {
                 match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(item)) => {
-                        for (token, service) in item {
+                        // TODO: deal with multiple services
+                        if let Some((token, service)) = item.into_iter().next() {
                             trace!(
                                 "Service {:?} has been restarted",
                                 self.factories[idx].name(token)

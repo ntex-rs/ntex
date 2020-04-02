@@ -5,8 +5,8 @@
 //! * `openssl` - enables ssl support via `openssl` crate
 //! * `rustls` - enables ssl support via `rustls` crate
 
-mod connect;
 mod error;
+mod message;
 mod resolve;
 mod service;
 mod uri;
@@ -23,8 +23,8 @@ use trust_dns_resolver::system_conf::read_system_conf;
 
 use crate::rt::Arbiter;
 
-pub use self::connect::{Address, Connect};
 pub use self::error::ConnectError;
+pub use self::message::{Address, Connect};
 pub use self::resolve::{AsyncResolver, Resolver};
 pub use self::service::Connector;
 

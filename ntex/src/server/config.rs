@@ -96,7 +96,7 @@ impl ConfiguredService {
 
     pub(super) fn stream(&mut self, token: Token, name: String, addr: net::SocketAddr) {
         self.names.insert(token, (name.clone(), addr));
-        self.topics.insert(name.clone(), token);
+        self.topics.insert(name, token);
         self.services.push(token);
     }
 }

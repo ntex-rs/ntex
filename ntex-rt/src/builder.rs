@@ -165,7 +165,7 @@ impl SystemRunner {
         let SystemRunner { mut rt, stop, .. } = self;
 
         // run loop
-        let result = match rt.block_on(stop) {
+        match rt.block_on(stop) {
             Ok(code) => {
                 if code != 0 {
                     Err(io::Error::new(
@@ -177,8 +177,7 @@ impl SystemRunner {
                 }
             }
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
-        };
-        result
+        }
     }
 
     /// Execute a future and wait for result.

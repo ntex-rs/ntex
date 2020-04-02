@@ -11,9 +11,7 @@ use futures::future::{self, err, ok, FutureExt, LocalBoxFuture, Ready};
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
 
-use super::connect::{Address, Connect};
-use super::error::ConnectError;
-use super::resolve::{AsyncResolver, Resolver};
+use super::{Address, AsyncResolver, Connect, ConnectError, Resolver};
 
 pub struct Connector<T> {
     resolver: Resolver<T>,

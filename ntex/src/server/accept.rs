@@ -8,10 +8,9 @@ use slab::Slab;
 use crate::rt::time::{delay_until, Instant};
 use crate::rt::System;
 
-use super::server::Server;
 use super::socket::{SocketAddr, SocketListener, StdListener};
 use super::worker::{Conn, WorkerClient};
-use super::Token;
+use super::{Server, Token};
 
 pub(super) enum Command {
     Pause,
