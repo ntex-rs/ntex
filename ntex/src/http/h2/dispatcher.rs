@@ -156,14 +156,16 @@ where
 
 #[pin_project::pin_project]
 struct ServiceResponse<F, I, E, B> {
+    #[pin]
     state: ServiceResponseState<F, B>,
     config: ServiceConfig,
     buffer: Option<Bytes>,
     _t: PhantomData<(I, E)>,
 }
 
+#[pin_project::pin_project]
 enum ServiceResponseState<F, B> {
-    ServiceCall(F, Option<SendResponse<Bytes>>),
+    ServiceCall(#[pin] F, Option<SendResponse<Bytes>>),
     SendPayload(SendStream<Bytes>, ResponseBody<B>),
 }
 
@@ -245,71 +247,69 @@ where
 {
     type Output = ();
 
+    #[pin_project::project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        match this.state {
-            ServiceResponseState::ServiceCall(ref mut call, ref mut send) => {
-                match unsafe { Pin::new_unchecked(call) }.poll(cx) {
-                    Poll::Ready(Ok(res)) => {
-                        let (res, body) = res.into().replace_body(());
+        #[project]
+        match this.state.project() {
+            ServiceResponseState::ServiceCall(call, send) => match call.poll(cx) {
+                Poll::Ready(Ok(res)) => {
+                    let (res, body) = res.into().replace_body(());
 
-                        let mut send = send.take().unwrap();
-                        let mut size = body.size();
-                        let h2_res =
-                            self.as_mut().prepare_response(res.head(), &mut size);
-                        this = self.as_mut().project();
+                    let mut send = send.take().unwrap();
+                    let mut size = body.size();
+                    let h2_res = self.as_mut().prepare_response(res.head(), &mut size);
+                    this = self.as_mut().project();
 
-                        let stream = match send.send_response(h2_res, size.is_eof()) {
-                            Err(e) => {
-                                trace!("Error sending h2 response: {:?}", e);
-                                return Poll::Ready(());
-                            }
-                            Ok(stream) => stream,
-                        };
-
-                        if size.is_eof() {
-                            Poll::Ready(())
-                        } else {
-                            *this.state =
-                                ServiceResponseState::SendPayload(stream, body);
-                            self.poll(cx)
+                    let stream = match send.send_response(h2_res, size.is_eof()) {
+                        Err(e) => {
+                            trace!("Error sending h2 response: {:?}", e);
+                            return Poll::Ready(());
                         }
-                    }
-                    Poll::Pending => Poll::Pending,
-                    Poll::Ready(Err(e)) => {
-                        let res: Response = e.into();
-                        let (res, body) = res.replace_body(());
+                        Ok(stream) => stream,
+                    };
 
-                        let mut send = send.take().unwrap();
-                        let mut size = body.size();
-                        let h2_res =
-                            self.as_mut().prepare_response(res.head(), &mut size);
-                        this = self.as_mut().project();
-
-                        let stream = match send.send_response(h2_res, size.is_eof()) {
-                            Err(e) => {
-                                trace!("Error sending h2 response: {:?}", e);
-                                return Poll::Ready(());
-                            }
-                            Ok(stream) => stream,
-                        };
-
-                        if size.is_eof() {
-                            Poll::Ready(())
-                        } else {
-                            *this.state = ServiceResponseState::SendPayload(
-                                stream,
-                                body.into_body(),
-                            );
-                            self.poll(cx)
-                        }
+                    if size.is_eof() {
+                        Poll::Ready(())
+                    } else {
+                        this.state
+                            .set(ServiceResponseState::SendPayload(stream, body));
+                        self.poll(cx)
                     }
                 }
-            }
-            ServiceResponseState::SendPayload(ref mut stream, ref mut body) => loop {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(Err(e)) => {
+                    let res: Response = e.into();
+                    let (res, body) = res.replace_body(());
+
+                    let mut send = send.take().unwrap();
+                    let mut size = body.size();
+                    let h2_res = self.as_mut().prepare_response(res.head(), &mut size);
+                    this = self.as_mut().project();
+
+                    let stream = match send.send_response(h2_res, size.is_eof()) {
+                        Err(e) => {
+                            trace!("Error sending h2 response: {:?}", e);
+                            return Poll::Ready(());
+                        }
+                        Ok(stream) => stream,
+                    };
+
+                    if size.is_eof() {
+                        Poll::Ready(())
+                    } else {
+                        this.state.set(ServiceResponseState::SendPayload(
+                            stream,
+                            body.into_body(),
+                        ));
+                        self.poll(cx)
+                    }
+                }
+            },
+            ServiceResponseState::SendPayload(stream, body) => loop {
                 loop {
-                    if let Some(ref mut buffer) = this.buffer {
+                    if let Some(buffer) = this.buffer {
                         match stream.poll_capacity(cx) {
                             Poll::Pending => return Poll::Pending,
                             Poll::Ready(None) => return Poll::Ready(()),
