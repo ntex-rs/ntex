@@ -896,30 +896,42 @@ mod tests {
 
     use super::*;
     use crate::http::h1::{ExpectHandler, UpgradeHandler};
-    use crate::http::test::TestBuffer;
-    use crate::service::fn_service;
+    use crate::service::IntoService;
+    use crate::testing::Io;
+
+    /// Create http/1 dispatcher.
+    pub(crate) fn h1<F, S, B>(
+        stream: Io,
+        service: F,
+    ) -> Dispatcher<Io, S, B, ExpectHandler, UpgradeHandler<Io>>
+    where
+        F: IntoService<S>,
+        S: Service<Request = Request>,
+        S::Error: ResponseError,
+        S::Response: Into<Response<B>>,
+        B: MessageBody,
+    {
+        Dispatcher::new(
+            stream,
+            ServiceConfig::default(),
+            Rc::new(service.into_service()),
+            Rc::new(ExpectHandler),
+            None,
+            None,
+            None,
+        )
+    }
 
     #[ntex_rt::test]
     async fn test_req_parse_err() {
-        lazy(|cx| {
-            let buf = TestBuffer::new("GET /test HTTP/1\r\n\r\n");
+        let (client, server) = Io::create();
+        client.write("GET /test HTTP/1\r\n\r\n");
 
-            let mut h1 = Dispatcher::<_, _, _, _, UpgradeHandler<TestBuffer>>::new(
-                buf,
-                ServiceConfig::default(),
-                Rc::new(fn_service(|_| ok::<_, io::Error>(Response::Ok().finish()))),
-                Rc::new(ExpectHandler),
-                None,
-                None,
-                None,
-            );
-            assert!(Pin::new(&mut h1).poll(cx).is_ready());
-            assert!(h1.inner.flags.contains(Flags::SHUTDOWN));
-            assert_eq!(
-                &h1.inner.io.unwrap().write_buf[..26],
-                b"HTTP/1.1 400 Bad Request\r\n"
-            );
-        })
-        .await;
+        let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        assert!(h1.inner.flags.contains(Flags::SHUTDOWN));
+        client.read_buffer(|buf| {
+            assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n")
+        });
     }
 }

@@ -1,12 +1,10 @@
 //! Test helpers to use during testing.
 use std::convert::TryFrom;
-use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::mpsc;
-use std::task::{Context, Poll};
 use std::{io, net, thread, time};
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures::Stream;
 
 #[cfg(feature = "cookie")]
@@ -184,79 +182,6 @@ impl TestRequest {
 #[inline]
 fn parts(parts: &mut Option<Inner>) -> &mut Inner {
     parts.as_mut().expect("cannot reuse test request builder")
-}
-
-/// Async io buffer
-pub struct TestBuffer {
-    pub read_buf: BytesMut,
-    pub write_buf: BytesMut,
-    pub err: Option<io::Error>,
-}
-
-impl TestBuffer {
-    /// Create new TestBuffer instance
-    pub fn new<T>(data: T) -> TestBuffer
-    where
-        BytesMut: From<T>,
-    {
-        TestBuffer {
-            read_buf: BytesMut::from(data),
-            write_buf: BytesMut::new(),
-            err: None,
-        }
-    }
-
-    /// Create new empty TestBuffer instance
-    pub fn empty() -> TestBuffer {
-        TestBuffer::new("")
-    }
-
-    /// Add extra data to read buffer.
-    pub fn extend_read_buf<T: AsRef<[u8]>>(&mut self, data: T) {
-        self.read_buf.extend_from_slice(data.as_ref())
-    }
-}
-
-impl AsyncRead for TestBuffer {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        let result = if self.read_buf.is_empty() {
-            if self.err.is_some() {
-                Err(self.err.take().unwrap())
-            } else {
-                return Poll::Pending;
-            }
-        } else {
-            let size = std::cmp::min(self.read_buf.len(), buf.len());
-            let b = self.read_buf.split_to(size);
-            buf[..size].copy_from_slice(&b);
-            Ok(size)
-        };
-
-        Poll::Ready(result)
-    }
-}
-
-impl AsyncWrite for TestBuffer {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        self.write_buf.extend(buf);
-        Poll::Ready(Ok(buf.len()))
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
 }
 
 /// Start test server

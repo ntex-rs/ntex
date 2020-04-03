@@ -28,6 +28,7 @@ pub mod rt;
 pub mod server;
 pub mod service;
 pub mod task;
+pub mod testing;
 pub mod util;
 pub mod web;
 pub mod ws;
