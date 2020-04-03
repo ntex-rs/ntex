@@ -1,11 +1,10 @@
 //! Test helpers to use during testing.
 use std::convert::TryFrom;
-use std::io::{self, Read, Write};
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::mpsc;
 use std::task::{Context, Poll};
-use std::{net, thread, time};
+use std::{io, net, thread, time};
 
 use bytes::{Bytes, BytesMut};
 use futures::Stream;
@@ -218,50 +217,37 @@ impl TestBuffer {
     }
 }
 
-impl io::Read for TestBuffer {
-    fn read(&mut self, dst: &mut [u8]) -> Result<usize, io::Error> {
-        if self.read_buf.is_empty() {
-            if self.err.is_some() {
-                Err(self.err.take().unwrap())
-            } else {
-                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
-            }
-        } else {
-            let size = std::cmp::min(self.read_buf.len(), dst.len());
-            let b = self.read_buf.split_to(size);
-            dst[..size].copy_from_slice(&b);
-            Ok(size)
-        }
-    }
-}
-
-impl io::Write for TestBuffer {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.write_buf.extend(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 impl AsyncRead for TestBuffer {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         _: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.get_mut().read(buf))
+        let result = if self.read_buf.is_empty() {
+            if self.err.is_some() {
+                Err(self.err.take().unwrap())
+            } else {
+                return Poll::Pending;
+            }
+        } else {
+            let size = std::cmp::min(self.read_buf.len(), buf.len());
+            let b = self.read_buf.split_to(size);
+            buf[..size].copy_from_slice(&b);
+            Ok(size)
+        };
+
+        Poll::Ready(result)
     }
 }
 
 impl AsyncWrite for TestBuffer {
     fn poll_write(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.get_mut().write(buf))
+        self.write_buf.extend(buf);
+        Poll::Ready(Ok(buf.len()))
     }
 
     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
