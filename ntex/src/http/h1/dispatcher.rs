@@ -892,7 +892,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::future::{lazy, ok};
+    use futures::future::{lazy, ok, Future, FutureExt};
 
     use super::*;
     use crate::http::h1::{ExpectHandler, UpgradeHandler};
@@ -922,6 +922,28 @@ mod tests {
         )
     }
 
+    pub(crate) fn spawn_h1<F, S, B>(stream: Io, service: F)
+    where
+        F: IntoService<S>,
+        S: Service<Request = Request> + 'static,
+        S::Error: ResponseError,
+        S::Response: Into<Response<B>>,
+        B: MessageBody + 'static,
+    {
+        crate::rt::spawn(
+            Dispatcher::<Io, S, B, ExpectHandler, UpgradeHandler<Io>>::new(
+                stream,
+                ServiceConfig::default(),
+                Rc::new(service.into_service()),
+                Rc::new(ExpectHandler),
+                None,
+                None,
+                None,
+            )
+            .map(|_| ()),
+        )
+    }
+
     #[ntex_rt::test]
     async fn test_req_parse_err() {
         let (client, server) = Io::create();
@@ -930,8 +952,30 @@ mod tests {
         let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         assert!(h1.inner.flags.contains(Flags::SHUTDOWN));
-        client.read_buffer(|buf| {
-            assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n")
-        });
+        client
+            .read_buffer(|buf| assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n"));
+    }
+
+    #[ntex_rt::test]
+    async fn test_pipeline() {
+        let (client, server) = Io::create();
+        spawn_h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        let buf = client.read().await.unwrap();
+        assert_eq!(
+            &buf[..36][..],
+            &b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n"[..]
+        );
+        assert!(!client.is_server_closed());
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        let buf = client.read().await.unwrap();
+        assert_eq!(
+            &buf[..36][..],
+            &b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n"[..]
+        );
+        assert!(!client.is_server_closed());
     }
 }

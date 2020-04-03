@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
+use futures::future::poll_fn;
 use futures::task::AtomicWaker;
 
 use crate::codec::{AsyncRead, AsyncWrite};
@@ -15,13 +16,6 @@ pub struct Io {
     state: Arc<Cell<State>>,
     read: Arc<Mutex<RefCell<Channel>>>,
     write: Arc<Mutex<RefCell<Channel>>>,
-}
-
-enum Command {
-    Bytes(Bytes),
-    ReadErr(io::Error),
-    WriteErr(io::Error),
-    Close(Option<io::Error>),
 }
 
 enum Type {
@@ -102,6 +96,26 @@ impl Io {
         let mut write = guard.borrow_mut();
         write.buf.extend_from_slice(data.as_ref());
         write.read_waker.wake();
+    }
+
+    /// Add extra data to the buffer and notify reader
+    pub async fn read(&self) -> Result<Bytes, io::Error> {
+        if self.read.lock().unwrap().borrow().buf.is_empty() {
+            poll_fn(|cx| {
+                let guard = self.read.lock().unwrap();
+                let read = guard.borrow_mut();
+                if read.buf.is_empty() {
+                    read.read_waker.register(cx.waker());
+                    drop(read);
+                    drop(guard);
+                    Poll::Pending
+                } else {
+                    Poll::Ready(())
+                }
+            })
+            .await;
+        }
+        Ok(self.read.lock().unwrap().borrow_mut().buf.split().freeze())
     }
 }
 
