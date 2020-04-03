@@ -59,6 +59,7 @@ where
     S: ServiceFactory<Config = AppConfig, Request = Request>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
+    <S::Service as Service>::Future: 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {

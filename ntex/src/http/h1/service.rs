@@ -5,13 +5,13 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::{fmt, net};
 
-use futures::future::{ok, Ready};
+use futures::future::ok;
 use futures::ready;
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::body::MessageBody;
 use crate::http::config::ServiceConfig;
-use crate::http::error::{DispatchError, ParseError, ResponseError};
+use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
@@ -20,7 +20,7 @@ use crate::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;
-use super::{ExpectHandler, Message, UpgradeHandler};
+use super::{ExpectHandler, UpgradeHandler};
 
 /// `ServiceFactory` implementation for HTTP1 transport
 pub struct H1Service<T, S, B, X = ExpectHandler, U = UpgradeHandler<T>> {
@@ -372,17 +372,7 @@ pub struct H1ServiceHandler<T, S: Service, B, X: Service, U: Service> {
     _t: PhantomData<(T, B)>,
 }
 
-impl<T, S, B, X, U> H1ServiceHandler<T, S, B, X, U>
-where
-    S: Service<Request = Request>,
-    S::Error: ResponseError,
-    S::Response: Into<Response<B>>,
-    B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
-    U::Error: fmt::Display,
-{
+impl<T, S: Service, B, X: Service, U: Service> H1ServiceHandler<T, S, B, X, U> {
     fn new(
         cfg: ServiceConfig,
         srv: S,
@@ -489,103 +479,5 @@ where
             on_connect,
             addr,
         )
-    }
-}
-
-/// `ServiceFactory` implementation for `OneRequestService` service
-#[derive(Default)]
-pub struct OneRequest<T> {
-    config: ServiceConfig,
-    _t: PhantomData<T>,
-}
-
-impl<T> OneRequest<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    /// Create new `H1SimpleService` instance.
-    pub fn new() -> Self {
-        OneRequest {
-            config: ServiceConfig::default(),
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<T> ServiceFactory for OneRequest<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    type Config = ();
-    type Request = T;
-    type Response = (Request, Framed<T, Codec>);
-    type Error = ParseError;
-    type InitError = ();
-    type Service = OneRequestService<T>;
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
-
-    fn new_service(&self, _: ()) -> Self::Future {
-        ok(OneRequestService {
-            _t: PhantomData,
-            config: self.config.clone(),
-        })
-    }
-}
-
-/// `Service` implementation for HTTP1 transport. Reads one request and returns
-/// request and framed object.
-pub struct OneRequestService<T> {
-    _t: PhantomData<T>,
-    config: ServiceConfig,
-}
-
-impl<T> Service for OneRequestService<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    type Request = T;
-    type Response = (Request, Framed<T, Codec>);
-    type Error = ParseError;
-    type Future = OneRequestServiceResponse<T>;
-
-    #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn call(&self, req: Self::Request) -> Self::Future {
-        OneRequestServiceResponse {
-            framed: Some(Framed::new(req, Codec::new(self.config.clone()))),
-        }
-    }
-}
-
-#[doc(hidden)]
-pub struct OneRequestServiceResponse<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    framed: Option<Framed<T, Codec>>,
-}
-
-impl<T> Future for OneRequestServiceResponse<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    type Output = Result<(Request, Framed<T, Codec>), ParseError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.framed.as_mut().unwrap().next_item(cx) {
-            Poll::Ready(Some(Ok(req))) => match req {
-                Message::Item(req) => {
-                    Poll::Ready(Ok((req, self.framed.take().unwrap())))
-                }
-                Message::Chunk(_) => unreachable!("Something is wrong"),
-            },
-            Poll::Ready(Some(Err(err))) => Poll::Ready(Err(err)),
-            Poll::Ready(None) => Poll::Ready(Err(ParseError::Incomplete)),
-            Poll::Pending => Poll::Pending,
-        }
     }
 }

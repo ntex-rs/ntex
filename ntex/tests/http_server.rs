@@ -97,6 +97,7 @@ async fn test_expect_continue_h1() {
                     }
                 })
             }))
+            .keep_alive(KeepAlive::Disabled)
             .h1(fn_service(|_| {
                 future::ok::<_, io::Error>(Response::Ok().finish())
             }))

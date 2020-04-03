@@ -8,7 +8,7 @@ use bytes::Bytes;
 use futures::future::ok;
 use futures::{ready, Future};
 use h2::server::{self, Handshake};
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::rt::net::TcpStream;
@@ -106,7 +106,6 @@ where
         X1: ServiceFactory<Config = (), Request = Request, Response = Request>,
         X1::Error: ResponseError,
         X1::InitError: fmt::Debug,
-        <X1::Service as Service>::Future: 'static,
     {
         HttpService {
             expect,
@@ -131,7 +130,6 @@ where
         >,
         U1::Error: fmt::Display,
         U1::InitError: fmt::Debug,
-        <U1::Service as Service>::Future: 'static,
     {
         HttpService {
             upgrade,
@@ -453,18 +451,7 @@ pub struct HttpServiceHandler<T, S: Service, B, X: Service, U: Service> {
     _t: PhantomData<(T, B, X)>,
 }
 
-impl<T, S, B, X, U> HttpServiceHandler<T, S, B, X, U>
-where
-    S: Service<Request = Request>,
-    S::Error: ResponseError,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
-    B: MessageBody + 'static,
-    X: Service<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
-    U::Error: fmt::Display,
-{
+impl<T, S: Service, B, X: Service, U: Service> HttpServiceHandler<T, S, B, X, U> {
     fn new(
         cfg: ServiceConfig,
         srv: S,
@@ -589,38 +576,11 @@ where
 }
 
 #[pin_project]
-enum State<T, S, B, X, U>
-where
-    S: Service<Request = Request>,
-    S::Future: 'static,
-    S::Error: ResponseError,
-    T: AsyncRead + AsyncWrite + Unpin,
-    B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
-    U::Error: fmt::Display,
-{
-    H1(#[pin] h1::Dispatcher<T, S, B, X, U>),
-    H2(#[pin] Dispatcher<T, S, B>),
-    H2Handshake(
-        Option<(
-            Handshake<T, Bytes>,
-            ServiceConfig,
-            Rc<S>,
-            Option<Box<dyn DataFactory>>,
-            Option<net::SocketAddr>,
-        )>,
-    ),
-}
-
-#[pin_project]
 pub struct HttpServiceHandlerResponse<T, S, B, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
     S::Error: ResponseError,
-    S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
     X: Service<Request = Request, Response = Request>,
@@ -630,6 +590,31 @@ where
 {
     #[pin]
     state: State<T, S, B, X, U>,
+}
+
+#[pin_project]
+enum State<T, S, B, X, U>
+where
+    S: Service<Request = Request>,
+    S::Error: ResponseError,
+    T: AsyncRead + AsyncWrite + Unpin,
+    B: MessageBody,
+    X: Service<Request = Request, Response = Request>,
+    X::Error: ResponseError,
+    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
+    U::Error: fmt::Display,
+{
+    H1(#[pin] h1::Dispatcher<T, S, B, X, U>),
+    H2(Dispatcher<T, S, B>),
+    H2Handshake(
+        Option<(
+            Handshake<T, Bytes>,
+            ServiceConfig,
+            Rc<S>,
+            Option<Box<dyn DataFactory>>,
+            Option<net::SocketAddr>,
+        )>,
+    ),
 }
 
 impl<T, S, B, X, U> Future for HttpServiceHandlerResponse<T, S, B, X, U>
@@ -647,32 +632,14 @@ where
 {
     type Output = Result<(), DispatchError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.project().state.poll(cx)
-    }
-}
+    #[pin_project::project]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().project();
 
-impl<T, S, B, X, U> State<T, S, B, X, U>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-    S: Service<Request = Request>,
-    S::Error: ResponseError,
-    S::Response: Into<Response<B>> + 'static,
-    B: MessageBody + 'static,
-    X: Service<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
-    U::Error: fmt::Display,
-{
-    #[project]
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), DispatchError>> {
         #[project]
-        match self.as_mut().project() {
+        match this.state.project() {
             State::H1(disp) => disp.poll(cx),
-            State::H2(disp) => disp.poll(cx),
+            State::H2(ref mut disp) => Pin::new(disp).poll(cx),
             State::H2Handshake(ref mut data) => {
                 let conn = if let Some(ref mut item) = data {
                     match Pin::new(&mut item.0).poll(cx) {
@@ -687,7 +654,7 @@ where
                     panic!()
                 };
                 let (_, cfg, srv, on_connect, peer_addr) = data.take().unwrap();
-                self.set(State::H2(Dispatcher::new(
+                self.as_mut().project().state.set(State::H2(Dispatcher::new(
                     srv, conn, on_connect, cfg, None, peer_addr,
                 )));
                 self.poll(cx)

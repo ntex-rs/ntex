@@ -3,11 +3,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
-use std::{fmt, io, net};
+use std::{fmt, io, mem, net};
 
 use bitflags::bitflags;
 use bytes::{Buf, BytesMut};
-use log::{error, trace};
+// use log::{error, trace};
+use futures::ready;
+use pin_project::{pin_project, project};
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
@@ -34,13 +36,14 @@ bitflags! {
         const KEEPALIVE          = 0b0000_0010;
         const POLLED             = 0b0000_0100;
         const SHUTDOWN           = 0b0000_1000;
-        const READ_DISCONNECT    = 0b0001_0000;
-        const WRITE_DISCONNECT   = 0b0010_0000;
-        const UPGRADE            = 0b0100_0000;
+        const DISCONNECT         = 0b0001_0000;
+        const STOP_READING       = 0b0010_0000;
+        const SHUTDOWN_TM        = 0b0100_0000;
     }
 }
 
 /// Dispatcher for HTTP/1.1 protocol
+#[pin_project]
 pub struct Dispatcher<T, S, B, X, U>
 where
     S: Service<Request = Request>,
@@ -51,22 +54,26 @@ where
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
-    inner: DispatcherState<T, S, B, X, U>,
+    #[pin]
+    call: CallState<S, X, U>,
+    inner: InnerDispatcher<T, S, B, X, U>,
 }
 
-enum DispatcherState<T, S, B, X, U>
-where
-    S: Service<Request = Request>,
-    S::Error: ResponseError,
-    B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
-    U::Error: fmt::Display,
-{
-    Normal(InnerDispatcher<T, S, B, X, U>),
-    Upgrade(U::Future),
-    None,
+#[pin_project]
+enum CallState<S: Service, X: Service, U: Service> {
+    Io,
+    Expect(#[pin] X::Future),
+    Service(#[pin] S::Future),
+    Upgrade(#[pin] U::Future),
+}
+
+impl<S: Service, X: Service, U: Service> CallState<S, X, U> {
+    fn is_io(&self) -> bool {
+        match self {
+            CallState::Io => true,
+            _ => false,
+        }
+    }
 }
 
 struct InnerDispatcher<T, S, B, X, U>
@@ -87,80 +94,37 @@ where
     peer_addr: Option<net::SocketAddr>,
     error: Option<DispatchError>,
 
-    state: State<S, B, X>,
+    send_payload: Option<ResponseBody<B>>,
     payload: Option<PayloadSender>,
     messages: VecDeque<DispatcherMessage>,
 
     ka_expire: Instant,
     ka_timer: Option<Delay>,
 
-    io: T,
+    io: Option<T>,
     read_buf: BytesMut,
     write_buf: BytesMut,
     codec: Codec,
 }
 
 enum DispatcherMessage {
-    Item(Request),
+    Request(Request),
     Upgrade(Request),
     Error(Response<()>),
 }
 
-enum State<S, B, X>
-where
-    S: Service<Request = Request>,
-    X: Service<Request = Request, Response = Request>,
-    B: MessageBody,
-{
-    None,
-    ExpectCall(X::Future),
-    ServiceCall(S::Future),
-    SendPayload(ResponseBody<B>),
-}
-
-impl<S, B, X> State<S, B, X>
-where
-    S: Service<Request = Request>,
-    X: Service<Request = Request, Response = Request>,
-    B: MessageBody,
-{
-    fn is_empty(&self) -> bool {
-        if let State::None = self {
-            true
-        } else {
-            false
-        }
-    }
-
-    fn is_call(&self) -> bool {
-        if let State::ServiceCall(_) = self {
-            true
-        } else {
-            false
-        }
-    }
-}
-
 enum PollResponse {
-    Upgrade(Request),
-    DoNothing,
-    DrainWriteBuf,
+    // allowed to process next request
+    AllowNext,
+    // waiting for response stream (app response)
+    // or write buffer is full
+    Pending,
 }
 
-impl PartialEq for PollResponse {
-    fn eq(&self, other: &PollResponse) -> bool {
-        match self {
-            PollResponse::DrainWriteBuf => match other {
-                PollResponse::DrainWriteBuf => true,
-                _ => false,
-            },
-            PollResponse::DoNothing => match other {
-                PollResponse::DoNothing => true,
-                _ => false,
-            },
-            _ => false,
-        }
-    }
+#[derive(Copy, Clone, PartialEq)]
+enum PollRequest {
+    NoUpdates,
+    HasUpdates,
 }
 
 impl<T, S, B, X, U> Dispatcher<T, S, B, X, U>
@@ -229,13 +193,14 @@ where
         };
 
         Dispatcher {
-            inner: DispatcherState::Normal(InnerDispatcher {
+            call: CallState::Io,
+            inner: InnerDispatcher {
                 write_buf: BytesMut::with_capacity(HW_BUFFER_SIZE),
                 payload: None,
-                state: State::None,
+                send_payload: None,
                 error: None,
                 messages: VecDeque::new(),
-                io,
+                io: Some(io),
                 codec,
                 read_buf,
                 service,
@@ -246,7 +211,175 @@ where
                 peer_addr,
                 ka_expire,
                 ka_timer,
-            }),
+            },
+        }
+    }
+}
+
+enum CallProcess<S: Service, X: Service, U: Service> {
+    // next call is available
+    Next(CallState<S, X, U>),
+    // waiting for service call
+    Pending,
+    // call queue is empty
+    Io,
+}
+
+impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+    S: Service<Request = Request>,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
+    X: Service<Request = Request, Response = Request>,
+    X::Error: ResponseError,
+    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
+    U::Error: fmt::Display,
+{
+    type Output = Result<(), DispatchError>;
+
+    #[project]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.as_mut().project();
+
+        // shutdown process
+        if this.inner.flags.contains(Flags::SHUTDOWN) {
+            return this.inner.poll_shutdown(cx);
+        }
+
+        // keep-alive book-keeping
+        let _ = this.inner.poll_keepalive(cx, this.call.is_io())?;
+
+        loop {
+            // process incoming stream
+            this.inner.poll_request(cx)?;
+
+            #[project]
+            let st = match this.call.project() {
+                CallState::Service(mut fut) => loop {
+                    // we have to loop because of
+                    // read back-pressure, check Poll::Pending processing
+                    match fut.poll(cx) {
+                        Poll::Ready(Ok(res)) => {
+                            break CallProcess::Next(
+                                this.inner.process_response(res.into())?,
+                            )
+                        }
+                        Poll::Ready(Err(e)) => {
+                            let res: Response = e.into();
+                            break CallProcess::Next(this.inner.process_response(
+                                res.map_body(|_, body| body.into_body()),
+                            )?);
+                        }
+                        Poll::Pending => {
+                            // if read-backpressure is enabled, we might need
+                            // to read more data (ie service future can wait for payload data)
+                            if this.inner.poll_request(cx)? == PollRequest::HasUpdates {
+                                // poll_request has read more data, try
+                                // to poll service future again
+
+                                // restore consumed future
+                                this = self.as_mut().project();
+                                #[project]
+                                let new_fut = match this.call.project() {
+                                    CallState::Service(fut) => fut,
+                                    _ => panic!(),
+                                };
+                                fut = new_fut;
+                                continue;
+                            }
+                            break CallProcess::Pending;
+                        }
+                    }
+                },
+                // handle EXPECT call
+                CallState::Expect(fut) => match fut.poll(cx) {
+                    Poll::Ready(Ok(req)) => {
+                        this.inner
+                            .write_buf
+                            .extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
+                        CallProcess::Next(CallState::Service(
+                            this.inner.service.call(req),
+                        ))
+                    }
+                    Poll::Ready(Err(e)) => {
+                        let res: Response = e.into();
+                        CallProcess::Next(this.inner.process_response(
+                            res.map_body(|_, body| body.into_body()),
+                        )?)
+                    }
+                    Poll::Pending => {
+                        // expect service call must resolve before
+                        // we can do any more io processing.
+                        //
+                        // TODO: check keep-alive timer interaction
+                        return Poll::Pending;
+                    }
+                },
+                CallState::Upgrade(fut) => {
+                    return fut.poll(cx).map_err(|e| {
+                        error!("Upgrade handler error: {}", e);
+                        DispatchError::Upgrade
+                    })
+                }
+                CallState::Io => CallProcess::Io,
+            };
+
+            let processing = match st {
+                CallProcess::Next(st) => {
+                    // we have next call state, just proceed with it
+                    this = self.as_mut().project();
+                    this.call.set(st);
+                    continue;
+                }
+                CallProcess::Pending => {
+                    // service response is in process,
+                    // we just flush output and that is it
+                    this.inner.poll_response_stream(cx)?;
+                    true
+                }
+                CallProcess::Io => {
+                    // service call queue is empty, we can process next request
+                    match this.inner.poll_response_stream(cx)? {
+                        PollResponse::AllowNext => {
+                            if !this.inner.messages.is_empty() {
+                                this = self.as_mut().project();
+                                this.call.set(this.inner.process_messages()?);
+                                continue;
+                            }
+                        }
+                        PollResponse::Pending => (),
+                    }
+                    false
+                }
+            };
+
+            // socket is closed and we do not processing any responses
+            if this.inner.flags.contains(Flags::DISCONNECT) && !processing {
+                this.inner.flags.insert(Flags::SHUTDOWN);
+            }
+            // handle situation when we dont have any parsed requests
+            // and output buffer is flushed
+            else if !processing && this.inner.write_buf.is_empty() {
+                if let Some(err) = this.inner.error.take() {
+                    return Poll::Ready(Err(err));
+                }
+
+                // disconnect if keep-alive is not enabled
+                if this.inner.flags.contains(Flags::STARTED)
+                    && !this.inner.flags.contains(Flags::KEEPALIVE)
+                {
+                    this.inner.flags.insert(Flags::SHUTDOWN);
+                }
+            }
+
+            // disconnect if shutdown
+            return if this.inner.flags.contains(Flags::SHUTDOWN) {
+                this.inner.poll_shutdown(cx)
+            } else {
+                Poll::Pending
+            };
         }
     }
 }
@@ -263,246 +396,228 @@ where
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
-    fn can_read(&self, cx: &mut Context<'_>) -> bool {
-        if self
-            .flags
-            .intersects(Flags::READ_DISCONNECT | Flags::UPGRADE)
-        {
-            false
-        } else if let Some(ref info) = self.payload {
-            info.need_read(cx) == PayloadStatus::Read
-        } else {
-            true
+    // shutdown process
+    fn poll_shutdown(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), DispatchError>> {
+        // we can not do anything here
+        if self.flags.contains(Flags::DISCONNECT) {
+            return Poll::Ready(Ok(()));
         }
-    }
 
-    // if checked is set to true, delay disconnect until all tasks have finished.
-    fn client_disconnected(&mut self) {
-        self.flags
-            .insert(Flags::READ_DISCONNECT | Flags::WRITE_DISCONNECT);
-        if let Some(mut payload) = self.payload.take() {
-            payload.set_error(PayloadError::Incomplete(None));
+        self.poll_flush(cx)?;
+
+        if self.write_buf.is_empty() {
+            if let Poll::Ready(res) =
+                Pin::new(self.io.as_mut().unwrap()).poll_shutdown(cx)
+            {
+                return Poll::Ready(res.map_err(DispatchError::from));
+            }
+        }
+
+        // shutdown timeout
+        if self.ka_timer.is_none() {
+            if self.flags.contains(Flags::SHUTDOWN_TM) {
+                // shutdown timeout is not enabled
+                Poll::Ready(Ok(()))
+            } else {
+                self.flags.insert(Flags::SHUTDOWN_TM);
+                if let Some(interval) = self.codec.config().client_disconnect_timer() {
+                    self.ka_timer = Some(delay_until(interval));
+                    let _ = Pin::new(&mut self.ka_timer.as_mut().unwrap()).poll(cx);
+                    Poll::Pending
+                } else {
+                    // shutdown timeout is not enabled
+                    Poll::Ready(Ok(()))
+                }
+            }
+        } else {
+            match Pin::new(&mut self.ka_timer.as_mut().unwrap()).poll(cx) {
+                Poll::Ready(_) => {
+                    // if we get timeout during shutdown, drop connection
+                    Poll::Ready(Err(DispatchError::DisconnectTimeout))
+                }
+                _ => Poll::Pending,
+            }
         }
     }
 
     /// Flush stream
-    ///
-    /// true - got whouldblock
-    /// false - didnt get whouldblock
-    fn poll_flush(&mut self, cx: &mut Context<'_>) -> Result<bool, DispatchError> {
-        if self.write_buf.is_empty() {
-            return Ok(false);
+    fn poll_flush(&mut self, cx: &mut Context<'_>) -> Result<(), DispatchError> {
+        let len = self.write_buf.len();
+        if len == 0 {
+            return Ok(());
         }
 
-        let len = self.write_buf.len();
         let mut written = 0;
         while written < len {
-            match Pin::new(&mut self.io).poll_write(cx, &self.write_buf[written..]) {
-                Poll::Ready(Ok(0)) => {
-                    return Err(DispatchError::Io(io::Error::new(
-                        io::ErrorKind::WriteZero,
-                        "",
-                    )));
-                }
+            match Pin::new(self.io.as_mut().unwrap())
+                .poll_write(cx, &self.write_buf[written..])
+            {
                 Poll::Ready(Ok(n)) => {
-                    written += n;
-                }
-                Poll::Pending => {
-                    if written > 0 {
-                        self.write_buf.advance(written);
+                    if n == 0 {
+                        return Err(DispatchError::Io(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "",
+                        )));
+                    } else {
+                        written += n
                     }
-                    return Ok(true);
                 }
+                Poll::Pending => break,
                 Poll::Ready(Err(err)) => return Err(DispatchError::Io(err)),
             }
         }
-        if written == self.write_buf.len() {
+        if written == len {
+            // flushed same amount as buffer, we dont need to reallocate
             unsafe { self.write_buf.set_len(0) }
         } else {
             self.write_buf.advance(written);
         }
-        Ok(false)
+        Ok(())
     }
 
     fn send_response(
         &mut self,
-        message: Response<()>,
+        msg: Response<()>,
         body: ResponseBody<B>,
-    ) -> Result<State<S, B, X>, DispatchError> {
-        self.codec
-            .encode(Message::Item((message, body.size())), &mut self.write_buf)
-            .map_err(|err| {
-                if let Some(mut payload) = self.payload.take() {
-                    payload.set_error(PayloadError::Incomplete(None));
-                }
-                DispatchError::Io(err)
-            })?;
+    ) -> Result<bool, DispatchError> {
+        // we dont need to process responses if socket is disconnected
+        // but we still want to handle requests with app service
+        if !self.flags.contains(Flags::DISCONNECT) {
+            self.codec
+                .encode(Message::Item((msg, body.size())), &mut self.write_buf)
+                .map_err(|err| {
+                    if let Some(mut payload) = self.payload.take() {
+                        payload.set_error(PayloadError::Incomplete(None));
+                    }
+                    DispatchError::Io(err)
+                })?;
 
-        self.flags.set(Flags::KEEPALIVE, self.codec.keepalive());
-        match body.size() {
-            BodySize::None | BodySize::Empty => Ok(State::None),
-            _ => Ok(State::SendPayload(body)),
-        }
-    }
+            self.flags.set(Flags::KEEPALIVE, self.codec.keepalive());
 
-    fn send_continue(&mut self) {
-        self.write_buf
-            .extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
-    }
-
-    fn poll_response(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Result<PollResponse, DispatchError> {
-        loop {
-            let state = match self.state {
-                State::None => match self.messages.pop_front() {
-                    Some(DispatcherMessage::Item(req)) => {
-                        Some(self.handle_request(req, cx)?)
-                    }
-                    Some(DispatcherMessage::Error(res)) => {
-                        Some(self.send_response(res, ResponseBody::Other(Body::Empty))?)
-                    }
-                    Some(DispatcherMessage::Upgrade(req)) => {
-                        return Ok(PollResponse::Upgrade(req));
-                    }
-                    None => None,
-                },
-                State::ExpectCall(ref mut fut) => {
-                    match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
-                        Poll::Ready(Ok(req)) => {
-                            self.send_continue();
-                            self.state = State::ServiceCall(self.service.call(req));
-                            continue;
-                        }
-                        Poll::Ready(Err(e)) => {
-                            let res: Response = e.into();
-                            let (res, body) = res.replace_body(());
-                            Some(self.send_response(res, body.into_body())?)
-                        }
-                        Poll::Pending => None,
-                    }
-                }
-                State::ServiceCall(ref mut fut) => {
-                    match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
-                        Poll::Ready(Ok(res)) => {
-                            let (res, body) = res.into().replace_body(());
-                            self.state = self.send_response(res, body)?;
-                            continue;
-                        }
-                        Poll::Ready(Err(e)) => {
-                            let res: Response = e.into();
-                            let (res, body) = res.replace_body(());
-                            Some(self.send_response(res, body.into_body())?)
-                        }
-                        Poll::Pending => None,
-                    }
-                }
-                State::SendPayload(ref mut stream) => {
-                    loop {
-                        if self.write_buf.len() < HW_BUFFER_SIZE {
-                            match stream.poll_next_chunk(cx) {
-                                Poll::Ready(Some(Ok(item))) => {
-                                    self.codec.encode(
-                                        Message::Chunk(Some(item)),
-                                        &mut self.write_buf,
-                                    )?;
-                                    continue;
-                                }
-                                Poll::Ready(None) => {
-                                    self.codec.encode(
-                                        Message::Chunk(None),
-                                        &mut self.write_buf,
-                                    )?;
-                                    self.state = State::None;
-                                }
-                                Poll::Ready(Some(Err(_))) => {
-                                    return Err(DispatchError::Unknown)
-                                }
-                                Poll::Pending => return Ok(PollResponse::DoNothing),
-                            }
-                        } else {
-                            return Ok(PollResponse::DrainWriteBuf);
-                        }
-                        break;
-                    }
-                    continue;
-                }
-            };
-
-            // set new state
-            if let Some(state) = state {
-                self.state = state;
-                if !self.state.is_empty() {
-                    continue;
-                }
-            } else {
-                // if read-backpressure is enabled and we consumed some data.
-                // we may read more data and retry
-                if self.state.is_call() {
-                    if self.poll_request(cx)? {
-                        continue;
-                    }
-                } else if !self.messages.is_empty() {
-                    continue;
-                }
-            }
-            break;
-        }
-
-        Ok(PollResponse::DoNothing)
-    }
-
-    fn handle_request(
-        &mut self,
-        req: Request,
-        cx: &mut Context<'_>,
-    ) -> Result<State<S, B, X>, DispatchError> {
-        // Handle `EXPECT: 100-Continue` header
-        let req = if req.head().expect() {
-            let mut task = self.expect.call(req);
-            match unsafe { Pin::new_unchecked(&mut task) }.poll(cx) {
-                Poll::Ready(Ok(req)) => {
-                    self.send_continue();
-                    req
-                }
-                Poll::Pending => return Ok(State::ExpectCall(task)),
-                Poll::Ready(Err(e)) => {
-                    let res: Response = e.into();
-                    let (res, body) = res.replace_body(());
-                    return self.send_response(res, body.into_body());
+            match body.size() {
+                BodySize::None | BodySize::Empty => Ok(true),
+                _ => {
+                    self.send_payload = Some(body);
+                    Ok(false)
                 }
             }
         } else {
-            req
-        };
+            Ok(false)
+        }
+    }
 
-        // Call service
-        let mut task = self.service.call(req);
-        match unsafe { Pin::new_unchecked(&mut task) }.poll(cx) {
-            Poll::Ready(Ok(res)) => {
-                let (res, body) = res.into().replace_body(());
-                self.send_response(res, body)
+    fn poll_response_stream(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Result<PollResponse, DispatchError> {
+        let mut flushed = false;
+
+        loop {
+            if let Some(ref mut stream) = self.send_payload {
+                // resize write buffer
+                let len = self.write_buf.len();
+                let remaining = self.write_buf.capacity() - len;
+                if remaining < LW_BUFFER_SIZE {
+                    self.write_buf.reserve(HW_BUFFER_SIZE - remaining);
+                }
+
+                if len < HW_BUFFER_SIZE {
+                    match stream.poll_next_chunk(cx) {
+                        Poll::Ready(Some(Ok(item))) => {
+                            flushed = false;
+                            self.codec.encode(
+                                Message::Chunk(Some(item)),
+                                &mut self.write_buf,
+                            )?;
+                        }
+                        Poll::Ready(None) => {
+                            flushed = false;
+                            self.codec
+                                .encode(Message::Chunk(None), &mut self.write_buf)?;
+                            self.send_payload = None;
+                            break;
+                        }
+                        Poll::Ready(Some(Err(_))) => return Err(DispatchError::Unknown),
+                        Poll::Pending => {
+                            // response payload stream is not ready
+                            // we can only flush
+                            if !flushed {
+                                self.poll_flush(cx)?;
+                            }
+                            return Ok(PollResponse::Pending);
+                        }
+                    }
+                } else {
+                    // write buffer is full, try to flush and check if we have
+                    // space in buffer
+                    flushed = true;
+                    self.poll_flush(cx)?;
+                    if self.write_buf.len() >= HW_BUFFER_SIZE {
+                        return Ok(PollResponse::Pending);
+                    }
+                }
+            } else {
+                break;
             }
-            Poll::Pending => Ok(State::ServiceCall(task)),
-            Poll::Ready(Err(e)) => {
-                let res: Response = e.into();
-                let (res, body) = res.replace_body(());
-                self.send_response(res, body.into_body())
-            }
+        }
+
+        if !flushed {
+            self.poll_flush(cx)?;
+        }
+
+        // we have enought space in write bffer
+        if self.write_buf.len() < HW_BUFFER_SIZE {
+            Ok(PollResponse::AllowNext)
+        } else {
+            Ok(PollResponse::Pending)
         }
     }
 
     /// Process one incoming requests
-    pub(self) fn poll_request(
+    fn poll_request(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Result<bool, DispatchError> {
-        // limit a mount of non processed requests
-        if self.messages.len() >= MAX_PIPELINED_MESSAGES || !self.can_read(cx) {
-            return Ok(false);
+    ) -> Result<PollRequest, DispatchError> {
+        // read socket data into a buf
+        if !self
+            .flags
+            .intersects(Flags::DISCONNECT | Flags::STOP_READING)
+        {
+            // limit amount of non processed requests
+            if self.messages.len() >= MAX_PIPELINED_MESSAGES
+                || !self
+                    .payload
+                    .as_ref()
+                    .map(|info| info.need_read(cx) == PayloadStatus::Read)
+                    .unwrap_or(true)
+            {
+                return Ok(PollRequest::NoUpdates);
+            }
+
+            if read_available(cx, self.io.as_mut().unwrap(), &mut self.read_buf)? {
+                self.flags.insert(Flags::DISCONNECT);
+
+                let result = self.input_decode();
+
+                // socket is disconnected clear read buf
+                self.read_buf.clear();
+                if let Some(mut payload) = self.payload.take() {
+                    payload.feed_eof();
+                }
+                return result;
+            }
         }
 
+        if self.read_buf.is_empty() {
+            return Ok(PollRequest::NoUpdates);
+        }
+        self.input_decode()
+    }
+
+    fn input_decode(&mut self) -> Result<PollRequest, DispatchError> {
         let mut updated = false;
         loop {
             match self.codec.decode(&mut self.read_buf) {
@@ -520,10 +635,14 @@ where
                                 on_connect.set(&mut req.extensions_mut());
                             }
 
+                            // handle upgrade request
                             if pl == MessageType::Stream && self.upgrade.is_some() {
+                                self.flags.insert(Flags::STOP_READING);
                                 self.messages.push_back(DispatcherMessage::Upgrade(req));
                                 break;
                             }
+
+                            // handle request with payload
                             if pl == MessageType::Payload || pl == MessageType::Stream {
                                 let (ps, pl) = Payload::create(false);
                                 let (req1, _) =
@@ -533,11 +652,7 @@ where
                             }
 
                             // handle request early
-                            if self.state.is_empty() {
-                                self.state = self.handle_request(req, cx)?;
-                            } else {
-                                self.messages.push_back(DispatcherMessage::Item(req));
-                            }
+                            self.messages.push_back(DispatcherMessage::Request(req));
                         }
                         Message::Chunk(Some(chunk)) => {
                             if let Some(ref mut payload) = self.payload {
@@ -546,7 +661,7 @@ where
                                 error!(
                                     "Internal server error: unexpected payload chunk"
                                 );
-                                self.flags.insert(Flags::READ_DISCONNECT);
+                                self.flags.insert(Flags::DISCONNECT);
                                 self.messages.push_back(DispatcherMessage::Error(
                                     Response::InternalServerError().finish().drop_body(),
                                 ));
@@ -559,7 +674,7 @@ where
                                 payload.feed_eof();
                             } else {
                                 error!("Internal server error: unexpected eof");
-                                self.flags.insert(Flags::READ_DISCONNECT);
+                                self.flags.insert(Flags::DISCONNECT);
                                 self.messages.push_back(DispatcherMessage::Error(
                                     Response::InternalServerError().finish().drop_body(),
                                 ));
@@ -571,11 +686,16 @@ where
                 }
                 Ok(None) => break,
                 Err(ParseError::Io(e)) => {
-                    self.client_disconnected();
+                    self.read_buf.clear();
                     self.error = Some(DispatchError::Io(e));
+                    self.flags.insert(Flags::DISCONNECT);
+                    if let Some(mut payload) = self.payload.take() {
+                        payload.set_error(PayloadError::Incomplete(None));
+                    }
                     break;
                 }
                 Err(e) => {
+                    // error during request decoding
                     if let Some(mut payload) = self.payload.take() {
                         payload.set_error(PayloadError::EncodingCorrupted);
                     }
@@ -584,7 +704,8 @@ where
                     self.messages.push_back(DispatcherMessage::Error(
                         Response::BadRequest().finish().drop_body(),
                     ));
-                    self.flags.insert(Flags::READ_DISCONNECT);
+                    self.flags.insert(Flags::STOP_READING);
+                    self.read_buf.clear();
                     self.error = Some(e.into());
                     break;
                 }
@@ -596,238 +717,115 @@ where
                 self.ka_expire = expire;
             }
         }
-        Ok(updated)
+
+        if updated {
+            Ok(PollRequest::HasUpdates)
+        } else {
+            Ok(PollRequest::NoUpdates)
+        }
     }
 
     /// keep-alive timer
-    fn poll_keepalive(&mut self, cx: &mut Context<'_>) -> Result<(), DispatchError> {
-        if self.ka_timer.is_none() {
-            // shutdown timeout
-            if self.flags.contains(Flags::SHUTDOWN) {
-                if let Some(interval) = self.codec.config().client_disconnect_timer() {
-                    self.ka_timer = Some(delay_until(interval));
-                } else {
-                    self.flags.insert(Flags::READ_DISCONNECT);
-                    if let Some(mut payload) = self.payload.take() {
-                        payload.set_error(PayloadError::Incomplete(None));
+    fn poll_keepalive(
+        &mut self,
+        cx: &mut Context<'_>,
+        is_empty: bool,
+    ) -> Poll<Result<(), DispatchError>> {
+        // do nothing for disconnected socket or is keep-alive timer is disabled
+        if self.flags.contains(Flags::DISCONNECT) || self.ka_timer.is_none() {
+            return Poll::Pending;
+        }
+
+        // slow request timeout
+        if !self.flags.contains(Flags::STARTED) {
+            ready!(Pin::new(&mut self.ka_timer.as_mut().unwrap()).poll(cx));
+            // timeout on first request (slow request) return 408
+            trace!("Slow request timeout");
+            let _ = self.send_response(
+                Response::RequestTimeout().finish().drop_body(),
+                ResponseBody::Other(Body::Empty),
+            );
+            self.flags.insert(Flags::STARTED | Flags::SHUTDOWN);
+            Poll::Pending
+        } else {
+            let mut timer = self.ka_timer.as_mut().unwrap();
+
+            // keep-alive timeout
+            ready!(Pin::new(&mut timer).poll(cx));
+            if timer.deadline() >= self.ka_expire {
+                // check for any outstanding tasks
+                if is_empty && self.write_buf.is_empty() {
+                    trace!("Keep-alive timeout, close connection");
+                    self.flags.insert(Flags::SHUTDOWN);
+
+                    // start shutdown timer
+                    if let Some(dl) = self.codec.config().client_disconnect_timer() {
+                        timer.reset(dl);
+                    } else {
+                        // no shutdown timeout, drop socket
+                        self.flags.insert(Flags::DISCONNECT);
+                        return Poll::Pending;
                     }
-                    return Ok(());
+                } else if let Some(dl) = self.codec.config().keep_alive_expire() {
+                    timer.reset(dl);
                 }
             } else {
-                return Ok(());
+                timer.reset(self.ka_expire);
             }
+            let _ = Pin::new(&mut timer).poll(cx);
+            Poll::Pending
         }
-
-        match Pin::new(&mut self.ka_timer.as_mut().unwrap()).poll(cx) {
-            Poll::Ready(()) => {
-                // if we get timeout during shutdown, drop connection
-                if self.flags.contains(Flags::SHUTDOWN) {
-                    return Err(DispatchError::DisconnectTimeout);
-                } else if self.ka_timer.as_mut().unwrap().deadline() >= self.ka_expire {
-                    // check for any outstanding tasks
-                    if self.state.is_empty() && self.write_buf.is_empty() {
-                        if self.flags.contains(Flags::STARTED) {
-                            trace!("Keep-alive timeout, close connection");
-                            self.flags.insert(Flags::SHUTDOWN);
-
-                            // start shutdown timer
-                            if let Some(deadline) =
-                                self.codec.config().client_disconnect_timer()
-                            {
-                                if let Some(mut timer) = self.ka_timer.as_mut() {
-                                    timer.reset(deadline);
-                                    let _ = Pin::new(&mut timer).poll(cx);
-                                }
-                            } else {
-                                // no shutdown timeout, drop socket
-                                self.flags.insert(Flags::WRITE_DISCONNECT);
-                                return Ok(());
-                            }
-                        } else {
-                            // timeout on first request (slow request) return 408
-                            if !self.flags.contains(Flags::STARTED) {
-                                trace!("Slow request timeout");
-                                let _ = self.send_response(
-                                    Response::RequestTimeout().finish().drop_body(),
-                                    ResponseBody::Other(Body::Empty),
-                                );
-                            } else {
-                                trace!("Keep-alive connection timeout");
-                            }
-                            self.flags.insert(Flags::STARTED | Flags::SHUTDOWN);
-                            self.state = State::None;
-                        }
-                    } else if let Some(deadline) =
-                        self.codec.config().keep_alive_expire()
-                    {
-                        if let Some(mut timer) = self.ka_timer.as_mut() {
-                            timer.reset(deadline);
-                            let _ = Pin::new(&mut timer).poll(cx);
-                        }
-                    }
-                } else if let Some(mut timer) = self.ka_timer.as_mut() {
-                    timer.reset(self.ka_expire);
-                    let _ = Pin::new(&mut timer).poll(cx);
-                }
-            }
-            Poll::Pending => (),
-        }
-
-        Ok(())
     }
-}
 
-impl<T, S, B, X, U> Unpin for Dispatcher<T, S, B, X, U>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-    S: Service<Request = Request>,
-    S::Error: ResponseError,
-    S::Response: Into<Response<B>>,
-    B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
-    U::Error: fmt::Display,
-{
-}
+    fn process_response(
+        &mut self,
+        res: Response<B>,
+    ) -> Result<CallState<S, X, U>, DispatchError> {
+        let (res, body) = res.replace_body(());
+        if self.send_response(res, body)? {
+            // response does not have body, so we can process next request
+            self.process_messages()
+        } else {
+            Ok(CallState::Io)
+        }
+    }
 
-impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-    S: Service<Request = Request>,
-    S::Error: ResponseError,
-    S::Response: Into<Response<B>>,
-    B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
-    U::Error: fmt::Display,
-{
-    type Output = Result<(), DispatchError>;
-
-    #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.as_mut().inner {
-            DispatcherState::Normal(ref mut inner) => {
-                inner.poll_keepalive(cx)?;
-
-                if inner.flags.contains(Flags::SHUTDOWN) {
-                    if inner.flags.contains(Flags::WRITE_DISCONNECT) {
-                        Poll::Ready(Ok(()))
+    fn process_messages(&mut self) -> Result<CallState<S, X, U>, DispatchError> {
+        while let Some(msg) = self.messages.pop_front() {
+            return match msg {
+                DispatcherMessage::Request(req) => {
+                    // Handle `EXPECT: 100-Continue` header
+                    Ok(if req.head().expect() {
+                        CallState::Expect(self.expect.call(req))
                     } else {
-                        // flush buffer
-                        if !inner.write_buf.is_empty() {
-                            inner.poll_flush(cx)?;
-                        }
-                        if !inner.write_buf.is_empty() {
-                            Poll::Pending
-                        } else {
-                            match Pin::new(&mut inner.io).poll_shutdown(cx) {
-                                Poll::Ready(res) => {
-                                    Poll::Ready(res.map_err(DispatchError::from))
-                                }
-                                Poll::Pending => Poll::Pending,
-                            }
-                        }
-                    }
-                } else {
-                    // read socket into a buf
-                    let should_disconnect =
-                        if !inner.flags.contains(Flags::READ_DISCONNECT) {
-                            read_available(cx, &mut inner.io, &mut inner.read_buf)?
-                        } else {
-                            None
-                        };
+                        CallState::Service(self.service.call(req))
+                    })
+                }
+                // switch to upgrade handler
+                DispatcherMessage::Upgrade(req) => {
+                    let mut parts = FramedParts::with_read_buf(
+                        self.io.take().unwrap(),
+                        mem::take(&mut self.codec),
+                        mem::take(&mut self.read_buf),
+                    );
+                    parts.write_buf = mem::take(&mut self.write_buf);
+                    let framed = Framed::from_parts(parts);
 
-                    inner.poll_request(cx)?;
-                    if let Some(true) = should_disconnect {
-                        inner.flags.insert(Flags::READ_DISCONNECT);
-                        if let Some(mut payload) = inner.payload.take() {
-                            payload.feed_eof();
-                        }
-                    };
-
-                    loop {
-                        let remaining =
-                            inner.write_buf.capacity() - inner.write_buf.len();
-                        if remaining < LW_BUFFER_SIZE {
-                            inner.write_buf.reserve(HW_BUFFER_SIZE - remaining);
-                        }
-                        let result = inner.poll_response(cx)?;
-                        let drain = result == PollResponse::DrainWriteBuf;
-
-                        // switch to upgrade handler
-                        if let PollResponse::Upgrade(req) = result {
-                            if let DispatcherState::Normal(inner) =
-                                std::mem::replace(&mut self.inner, DispatcherState::None)
-                            {
-                                let mut parts = FramedParts::with_read_buf(
-                                    inner.io,
-                                    inner.codec,
-                                    inner.read_buf,
-                                );
-                                parts.write_buf = inner.write_buf;
-                                let framed = Framed::from_parts(parts);
-                                self.inner = DispatcherState::Upgrade(
-                                    inner.upgrade.unwrap().call((req, framed)),
-                                );
-                                return self.poll(cx);
-                            } else {
-                                panic!()
-                            }
-                        }
-
-                        // we didnt get WouldBlock from write operation,
-                        // so data get written to kernel completely (OSX)
-                        // and we have to write again otherwise response can get stuck
-                        if inner.poll_flush(cx)? || !drain {
-                            break;
-                        }
-                    }
-
-                    // client is gone
-                    if inner.flags.contains(Flags::WRITE_DISCONNECT) {
-                        return Poll::Ready(Ok(()));
-                    }
-
-                    let is_empty = inner.state.is_empty();
-
-                    // read half is closed and we do not processing any responses
-                    if inner.flags.contains(Flags::READ_DISCONNECT) && is_empty {
-                        inner.flags.insert(Flags::SHUTDOWN);
-                    }
-
-                    // keep-alive and stream errors
-                    if is_empty && inner.write_buf.is_empty() {
-                        if let Some(err) = inner.error.take() {
-                            Poll::Ready(Err(err))
-                        }
-                        // disconnect if keep-alive is not enabled
-                        else if inner.flags.contains(Flags::STARTED)
-                            && !inner.flags.intersects(Flags::KEEPALIVE)
-                        {
-                            inner.flags.insert(Flags::SHUTDOWN);
-                            self.poll(cx)
-                        }
-                        // disconnect if shutdown
-                        else if inner.flags.contains(Flags::SHUTDOWN) {
-                            self.poll(cx)
-                        } else {
-                            Poll::Pending
-                        }
+                    Ok(CallState::Upgrade(
+                        self.upgrade.as_ref().unwrap().call((req, framed)),
+                    ))
+                }
+                DispatcherMessage::Error(res) => {
+                    if self.send_response(res, ResponseBody::Other(Body::Empty))? {
+                        // response does not have body, so we can process next request
+                        continue;
                     } else {
-                        Poll::Pending
+                        return Ok(CallState::Io);
                     }
                 }
-            }
-            DispatcherState::Upgrade(ref mut fut) => {
-                unsafe { Pin::new_unchecked(fut) }.poll(cx).map_err(|e| {
-                    error!("Upgrade handler error: {}", e);
-                    DispatchError::Upgrade
-                })
-            }
-            DispatcherState::None => panic!(),
+            };
         }
+        Ok(CallState::Io)
     }
 }
 
@@ -835,11 +833,10 @@ fn read_available<T>(
     cx: &mut Context<'_>,
     io: &mut T,
     buf: &mut BytesMut,
-) -> Result<Option<bool>, io::Error>
+) -> Result<bool, io::Error>
 where
     T: AsyncRead + Unpin,
 {
-    let mut read_some = false;
     loop {
         let remaining = buf.capacity() - buf.len();
         if remaining < LW_BUFFER_SIZE {
@@ -847,29 +844,13 @@ where
         }
 
         match read(cx, io, buf) {
-            Poll::Pending => {
-                return if read_some { Ok(Some(false)) } else { Ok(None) };
-            }
+            Poll::Pending => return Ok(false),
             Poll::Ready(Ok(n)) => {
                 if n == 0 {
-                    return Ok(Some(true));
-                } else {
-                    read_some = true;
+                    return Ok(true);
                 }
             }
-            Poll::Ready(Err(e)) => {
-                return if e.kind() == io::ErrorKind::WouldBlock {
-                    if read_some {
-                        Ok(Some(false))
-                    } else {
-                        Ok(None)
-                    }
-                } else if e.kind() == io::ErrorKind::ConnectionReset && read_some {
-                    Ok(Some(true))
-                } else {
-                    Err(e)
-                }
-            }
+            Poll::Ready(Err(e)) => return Err(e),
         }
     }
 }
@@ -892,7 +873,7 @@ mod tests {
     use super::*;
     use crate::http::h1::{ExpectHandler, UpgradeHandler};
     use crate::http::test::TestBuffer;
-    use crate::IntoService;
+    use crate::service::fn_service;
 
     #[ntex_rt::test]
     async fn test_req_parse_err() {
@@ -902,9 +883,7 @@ mod tests {
             let mut h1 = Dispatcher::<_, _, _, _, UpgradeHandler<TestBuffer>>::new(
                 buf,
                 ServiceConfig::default(),
-                Rc::new(
-                    (|_| ok::<_, io::Error>(Response::Ok().finish())).into_service(),
-                ),
+                Rc::new(fn_service(|_| ok::<_, io::Error>(Response::Ok().finish()))),
                 Rc::new(ExpectHandler),
                 None,
                 None,
@@ -915,10 +894,11 @@ mod tests {
                 Poll::Ready(res) => assert!(res.is_err()),
             }
 
-            if let DispatcherState::Normal(ref inner) = h1.inner {
-                assert!(inner.flags.contains(Flags::READ_DISCONNECT));
-                assert_eq!(&inner.io.write_buf[..26], b"HTTP/1.1 400 Bad Request\r\n");
-            }
+            assert!(h1.inner.flags.contains(Flags::DISCONNECT));
+            assert_eq!(
+                &h1.inner.io.unwrap().write_buf[..26],
+                b"HTTP/1.1 400 Bad Request\r\n"
+            );
         })
         .await;
     }

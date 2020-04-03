@@ -30,13 +30,7 @@ pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
     _t: PhantomData<(T, S)>,
 }
 
-impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>>
-where
-    S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError + 'static,
-    S::InitError: fmt::Debug,
-    <S::Service as Service>::Future: 'static,
-{
+impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
     /// Create instance of `ServiceConfigBuilder`
     pub fn new() -> Self {
         HttpServiceBuilder {
