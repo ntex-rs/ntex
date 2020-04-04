@@ -78,7 +78,7 @@ jobs:
         uses: actions/cache@v1
         with:
           path: ~/.cargo/bin/cargo-tarpaulin
-          key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-registry-trimmed-${{ hashFiles('**/cargo-tarpaulin') }}
+          key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-tarpaulin
 
       - name: Clear the cargo caches
         run: |
