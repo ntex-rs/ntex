@@ -780,7 +780,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     // client request
     let req = srv
         .post("/")
-        .timeout(Duration::from_millis(3000))
+        .timeout(Duration::from_millis(10000))
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
