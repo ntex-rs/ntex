@@ -147,12 +147,6 @@ impl From<SendRequestError> for SendClientRequest {
     }
 }
 
-// impl From<Error> for SendClientRequest {
-//     fn from(e: Error) -> Self {
-//         SendClientRequest::Err(Some(e.into()))
-//     }
-// }
-
 impl From<HttpError> for SendClientRequest {
     fn from(e: HttpError) -> Self {
         SendClientRequest::Err(Some(e.into()))

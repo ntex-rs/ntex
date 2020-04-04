@@ -43,7 +43,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 
 #[ntex::test]
 async fn test_simple() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(
             web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
         )
@@ -71,7 +71,7 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_json() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(
             |_: web::types::Json<String>| async { HttpResponse::Ok() },
         )))
@@ -87,7 +87,7 @@ async fn test_json() {
 
 #[ntex::test]
 async fn test_form() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(
             |_: web::types::Form<HashMap<String, String>>| async { HttpResponse::Ok() },
         )))
@@ -103,7 +103,7 @@ async fn test_form() {
 
 #[ntex::test]
 async fn test_timeout() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
             ntex::rt::time::delay_for(Duration::from_millis(200)).await;
             HttpResponse::Ok().body(STR)
@@ -132,7 +132,7 @@ async fn test_timeout() {
 
 #[ntex::test]
 async fn test_timeout_override() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
             ntex::rt::time::delay_for(Duration::from_millis(200)).await;
             HttpResponse::Ok().body(STR)
@@ -363,7 +363,7 @@ async fn test_connection_wait_queue_force_close() {
 
 #[ntex::test]
 async fn test_with_query_parameter() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").to(|req: HttpRequest| async move {
             if req.query_string().contains("qp") {
                 HttpResponse::Ok()
@@ -379,7 +379,7 @@ async fn test_with_query_parameter() {
 
 #[ntex::test]
 async fn test_no_decompress() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new()
             .wrap(Compress::default())
             .service(web::resource("/").route(web::to(|| async {
@@ -423,7 +423,7 @@ async fn test_no_decompress() {
 
 #[ntex::test]
 async fn test_client_gzip_encoding() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
             let mut e = GzEncoder::new(Vec::new(), Compression::default());
             e.write_all(STR.as_ref()).unwrap();
@@ -446,7 +446,7 @@ async fn test_client_gzip_encoding() {
 
 #[ntex::test]
 async fn test_client_gzip_encoding_large() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
             let mut e = GzEncoder::new(Vec::new(), Compression::default());
             e.write_all(STR.repeat(10).as_ref()).unwrap();
@@ -474,7 +474,7 @@ async fn test_client_gzip_encoding_large_random() {
         .take(100_000)
         .collect::<String>();
 
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
             let mut e = GzEncoder::new(Vec::new(), Compression::default());
             e.write_all(&data).unwrap();
@@ -496,7 +496,7 @@ async fn test_client_gzip_encoding_large_random() {
 
 #[ntex::test]
 async fn test_client_brotli_encoding() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
             let mut e = BrotliEncoder::new(Vec::new(), 5);
             e.write_all(&data).unwrap();
@@ -523,7 +523,7 @@ async fn test_client_brotli_encoding_large_random() {
         .take(70_000)
         .collect::<String>();
 
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
             let mut e = BrotliEncoder::new(Vec::new(), 5);
             e.write_all(&data).unwrap();
@@ -667,7 +667,7 @@ async fn test_client_cookie_handling() {
     let cookie1b = cookie1.clone();
     let cookie2b = cookie2.clone();
 
-    let srv = test::start(move || {
+    let srv = test::server(move || {
         let cookie1 = cookie1b.clone();
         let cookie2 = cookie2b.clone();
 
@@ -753,7 +753,7 @@ async fn test_client_cookie_handling() {
 
 #[ntex::test]
 async fn client_basic_auth() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().route(
             "/",
             web::to(|req: HttpRequest| async move {
@@ -781,7 +781,7 @@ async fn client_basic_auth() {
 
 #[ntex::test]
 async fn client_bearer_auth() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().route(
             "/",
             web::to(|req: HttpRequest| async move {

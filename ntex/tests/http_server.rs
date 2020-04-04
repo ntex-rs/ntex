@@ -156,9 +156,7 @@ async fn test_chunked_payload() {
             bytes.extend(b"\r\n");
             let _ = stream.write_all(&bytes);
         }
-
         let _ = stream.write_all(b"0\r\n\r\n");
-        stream.shutdown(net::Shutdown::Write).unwrap();
 
         let mut data = String::new();
         let _ = stream.read_to_string(&mut data);

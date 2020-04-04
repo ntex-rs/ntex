@@ -450,6 +450,7 @@ where
             } else {
                 self.flags.insert(Flags::SHUTDOWN_TM);
                 if let Some(interval) = self.codec.config().client_disconnect_timer() {
+                    trace!("Start shutdown timer for {:?}", interval);
                     self.ka_timer = Some(delay_until(interval));
                     let _ = Pin::new(&mut self.ka_timer.as_mut().unwrap()).poll(cx);
                     Poll::Pending
@@ -607,6 +608,8 @@ where
             .intersects(Flags::DISCONNECT | Flags::STOP_READING)
         {
             // limit amount of non processed requests
+            // drain messages queue until it contains just 1 message
+            // or request payload is consumed and requires more data (backpressure off)
             if self.messages.len() > LW_PIPELINED_MESSAGES
                 || !self
                     .payload
@@ -632,6 +635,7 @@ where
                     Poll::Ready(Ok(n)) => {
                         if n == 0 {
                             self.flags.insert(Flags::DISCONNECT);
+                            break;
                         } else {
                             updated = true;
                         }
@@ -893,9 +897,12 @@ where
 #[cfg(test)]
 mod tests {
     use futures::future::{lazy, ok, Future, FutureExt};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     use super::*;
-    use crate::http::h1::{ExpectHandler, UpgradeHandler};
+    use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
+    use crate::http::ResponseHead;
     use crate::service::IntoService;
     use crate::testing::Io;
 
@@ -944,6 +951,10 @@ mod tests {
         )
     }
 
+    fn load(decoder: &mut ClientCodec, buf: &mut BytesMut) -> ResponseHead {
+        decoder.decode(buf).unwrap().unwrap()
+    }
+
     #[ntex_rt::test]
     async fn test_req_parse_err() {
         let (client, server) = Io::create();
@@ -959,23 +970,50 @@ mod tests {
     #[ntex_rt::test]
     async fn test_pipeline() {
         let (client, server) = Io::create();
+        let mut decoder = ClientCodec::default();
         spawn_h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
-        let buf = client.read().await.unwrap();
-        assert_eq!(
-            &buf[..36][..],
-            &b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n"[..]
-        );
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_closed());
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
         client.write("GET /test HTTP/1.1\r\n\r\n");
-        let buf = client.read().await.unwrap();
-        assert_eq!(
-            &buf[..36][..],
-            &b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n"[..]
-        );
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(decoder.decode(&mut buf).unwrap().is_none());
         assert!(!client.is_server_closed());
+
+        client.close().await;
+        assert!(client.is_server_closed());
+    }
+
+    #[ntex_rt::test]
+    /// if socket is disconnected
+    /// h1 dispatcher still process all incoming requests
+    /// but it does not write any data to socket
+    async fn test_write_disconnected() {
+        let num = Arc::new(AtomicUsize::new(0));
+        let num2 = num.clone();
+
+        let (client, server) = Io::create();
+        spawn_h1(server, move |_| {
+            num2.fetch_add(1, Ordering::Relaxed);
+            ok::<_, io::Error>(Response::Ok().finish())
+        });
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.close().await;
+        assert!(client.is_server_closed());
+        assert!(client.read_any().is_empty());
+
+        // all request must be handled
+        assert_eq!(num.load(Ordering::Relaxed), 3);
     }
 }

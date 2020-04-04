@@ -1,14 +1,15 @@
 use std::cell::{Cell, RefCell};
-use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::{io, time};
 
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use futures::future::poll_fn;
 use futures::task::AtomicWaker;
 
 use crate::codec::{AsyncRead, AsyncWrite};
+use crate::rt::time::delay_for;
 
 /// Async io stream
 pub struct Io {
@@ -18,10 +19,12 @@ pub struct Io {
     write: Arc<Mutex<RefCell<Channel>>>,
 }
 
+#[derive(Copy, Clone)]
 enum Type {
     Client,
     Server,
-    Clone,
+    ClientClone,
+    ServerClone,
 }
 
 #[derive(Copy, Clone, Default)]
@@ -35,8 +38,20 @@ struct Channel {
     buf: BytesMut,
     read_err: Option<io::Error>,
     read_waker: AtomicWaker,
+    read_close: CloseState,
     write_err: Option<io::Error>,
     write_waker: AtomicWaker,
+}
+
+enum CloseState {
+    Opened,
+    Closed,
+}
+
+impl Default for CloseState {
+    fn default() -> Self {
+        CloseState::Opened
+    }
 }
 
 impl Io {
@@ -81,6 +96,17 @@ impl Io {
     }
 
     /// Access write buffer.
+    pub async fn close(&self) {
+        {
+            let guard = self.write.lock().unwrap();
+            let mut write = guard.borrow_mut();
+            write.read_close = CloseState::Closed;
+            write.read_waker.wake();
+        }
+        delay_for(time::Duration::from_millis(35)).await;
+    }
+
+    /// Access write buffer.
     pub fn write_buffer<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -98,31 +124,50 @@ impl Io {
         write.read_waker.wake();
     }
 
-    /// Add extra data to the buffer and notify reader
-    pub async fn read(&self) -> Result<Bytes, io::Error> {
+    /// Read any available data
+    pub fn read_any(&self) -> BytesMut {
+        self.read.lock().unwrap().borrow_mut().buf.split()
+    }
+
+    /// Read data, if data is not available wait for it
+    pub async fn read(&self) -> Result<BytesMut, io::Error> {
         if self.read.lock().unwrap().borrow().buf.is_empty() {
             poll_fn(|cx| {
                 let guard = self.read.lock().unwrap();
                 let read = guard.borrow_mut();
                 if read.buf.is_empty() {
-                    read.read_waker.register(cx.waker());
-                    drop(read);
-                    drop(guard);
-                    Poll::Pending
+                    let closed = match self.tp {
+                        Type::Client | Type::ClientClone => self.is_server_closed(),
+                        Type::Server | Type::ServerClone => self.is_client_closed(),
+                    };
+                    if closed {
+                        Poll::Ready(())
+                    } else {
+                        read.read_waker.register(cx.waker());
+                        drop(read);
+                        drop(guard);
+                        Poll::Pending
+                    }
                 } else {
                     Poll::Ready(())
                 }
             })
             .await;
         }
-        Ok(self.read.lock().unwrap().borrow_mut().buf.split().freeze())
+        Ok(self.read.lock().unwrap().borrow_mut().buf.split())
     }
 }
 
 impl Clone for Io {
     fn clone(&self) -> Self {
+        let tp = match self.tp {
+            Type::Server => Type::ServerClone,
+            Type::Client => Type::ClientClone,
+            val => val,
+        };
+
         Io {
-            tp: Type::Clone,
+            tp,
             read: self.read.clone(),
             write: self.write.clone(),
             state: self.state.clone(),
@@ -136,7 +181,7 @@ impl Drop for Io {
         match self.tp {
             Type::Server => state.server_closed = true,
             Type::Client => state.client_closed = true,
-            Type::Clone => (),
+            _ => (),
         }
         self.state.set(state);
     }
@@ -156,7 +201,10 @@ impl AsyncRead for Io {
             if let Some(err) = ch.read_err.take() {
                 Err(err)
             } else {
-                return Poll::Pending;
+                return match ch.read_close {
+                    CloseState::Opened => Poll::Pending,
+                    CloseState::Closed => Poll::Ready(Ok(0)),
+                };
             }
         } else {
             let size = std::cmp::min(ch.buf.len(), buf.len());

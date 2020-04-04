@@ -256,7 +256,7 @@ mod tests {
         let data = TestData::new(num.clone());
         assert_eq!(num.load(Ordering::SeqCst), 1);
 
-        let srv = test::start(move || {
+        let srv = test::server(move || {
             let data = data.clone();
 
             App::new()

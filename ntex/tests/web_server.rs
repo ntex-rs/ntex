@@ -82,7 +82,7 @@ impl futures::Stream for TestBody {
 
 #[ntex::test]
 async fn test_body() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new().service(
             web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
         )
@@ -98,7 +98,7 @@ async fn test_body() {
 
 #[ntex::test]
 async fn test_body_gzip() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
             .service(
@@ -128,7 +128,7 @@ async fn test_body_gzip() {
 
 #[ntex::test]
 async fn test_body_gzip2() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::to(|| async {
@@ -157,7 +157,7 @@ async fn test_body_gzip2() {
 
 #[ntex::test]
 async fn test_body_encoding_override() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::to(|| async {
@@ -219,7 +219,7 @@ async fn test_body_gzip_large() {
     let data = STR.repeat(10);
     let srv_data = data.clone();
 
-    let srv = test::start_with(test::config().h1(), move || {
+    let srv = test::server_with(test::config().h1(), move || {
         let data = srv_data.clone();
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
@@ -255,7 +255,7 @@ async fn test_body_gzip_large_random() {
         .collect::<String>();
     let srv_data = data.clone();
 
-    let srv = test::start_with(test::config().h1(), move || {
+    let srv = test::server_with(test::config().h1(), move || {
         let data = srv_data.clone();
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
@@ -286,7 +286,7 @@ async fn test_body_gzip_large_random() {
 
 #[ntex::test]
 async fn test_body_chunked_implicit() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::get().to(move || async {
@@ -320,7 +320,7 @@ async fn test_body_chunked_implicit() {
 
 #[ntex::test]
 async fn test_body_br_streaming() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().wrap(Compress::new(ContentEncoding::Br)).service(
             web::resource("/").route(web::to(move || async {
                 HttpResponse::Ok()
@@ -351,7 +351,7 @@ async fn test_body_br_streaming() {
 #[ntex::test]
 async fn test_head_binary() {
     let srv =
-        test::start_with(test::config().h1(), || {
+        test::server_with(test::config().h1(), || {
             App::new().service(web::resource("/").route(
                 web::head().to(move || async {
                     HttpResponse::Ok().content_length(100).body(STR)
@@ -374,7 +374,7 @@ async fn test_head_binary() {
 
 #[ntex::test]
 async fn test_no_chunking() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move || async {
             HttpResponse::Ok()
                 .no_chunking()
@@ -394,7 +394,7 @@ async fn test_no_chunking() {
 
 #[ntex::test]
 async fn test_body_deflate() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Deflate))
             .service(
@@ -424,7 +424,7 @@ async fn test_body_deflate() {
 
 #[ntex::test]
 async fn test_body_brotli() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().wrap(Compress::new(ContentEncoding::Br)).service(
             web::resource("/")
                 .route(web::to(move || async { HttpResponse::Ok().body(STR) })),
@@ -453,7 +453,7 @@ async fn test_body_brotli() {
 
 #[ntex::test]
 async fn test_encoding() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::default())
             .service(web::resource("/").route(web::to(move |body: Bytes| async {
@@ -480,7 +480,7 @@ async fn test_encoding() {
 
 #[ntex::test]
 async fn test_gzip_encoding() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
@@ -506,7 +506,7 @@ async fn test_gzip_encoding() {
 #[ntex::test]
 async fn test_gzip_encoding_large() {
     let data = STR.repeat(10);
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
@@ -536,7 +536,7 @@ async fn test_reading_gzip_encoding_large_random() {
         .take(60_000)
         .collect::<String>();
 
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
@@ -562,7 +562,7 @@ async fn test_reading_gzip_encoding_large_random() {
 
 #[ntex::test]
 async fn test_reading_deflate_encoding() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
@@ -588,7 +588,7 @@ async fn test_reading_deflate_encoding() {
 #[ntex::test]
 async fn test_reading_deflate_encoding_large() {
     let data = STR.repeat(10);
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
@@ -618,7 +618,7 @@ async fn test_reading_deflate_encoding_large_random() {
         .take(160_000)
         .collect::<String>();
 
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
@@ -644,7 +644,7 @@ async fn test_reading_deflate_encoding_large_random() {
 
 #[ntex::test]
 async fn test_brotli_encoding() {
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
@@ -674,7 +674,7 @@ async fn test_brotli_encoding_large() {
         .take(320_000)
         .collect::<String>();
 
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::new().service(
             web::resource("/")
                 .app_data(web::types::PayloadConfig::new(320_000))
@@ -715,7 +715,7 @@ async fn test_brotli_encoding_large_openssl() {
         .unwrap();
 
     let data = STR.repeat(10);
-    let srv = test::start_with(test::config().openssl(builder.build()), move || {
+    let srv = test::server_with(test::config().openssl(builder.build()), move || {
         App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
             HttpResponse::Ok()
                 .encoding(ContentEncoding::Identity)
@@ -763,7 +763,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     let mut keys = pkcs8_private_keys(key_file).unwrap();
     config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
 
-    let srv = test::start_with(test::config().rustls(config), || {
+    let srv = test::server_with(test::config().rustls(config), || {
         App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
             HttpResponse::Ok()
                 .encoding(ContentEncoding::Identity)
@@ -851,7 +851,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
 async fn test_slow_request() {
     use std::net;
 
-    let srv = test::start_with(test::config().client_timeout(200), || {
+    let srv = test::server_with(test::config().client_timeout(200), || {
         App::new()
             .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
     });
@@ -883,7 +883,7 @@ async fn test_slow_request() {
 //         .set_certificate_chain_file("tests/cert.pem")
 //         .unwrap();
 
-//     let srv = test::start_with(test::config().openssl(builder.build()), || {
+//     let srv = test::server_with(test::config().openssl(builder.build()), || {
 //         App::new().service(web::resource("/").route(web::to(|| HttpResponse::Ok())))
 //     });
 
@@ -935,7 +935,7 @@ async fn test_custom_error() {
         Err(TestError)
     }
 
-    let srv = test::start_with(test::config().h1(), || {
+    let srv = test::server_with(test::config().h1(), || {
         App::with(JsonRenderer)
             .service(web::resource("/").route(web::get().to(test)))
             .service(web::resource("/err").route(web::get().to(test_err)))

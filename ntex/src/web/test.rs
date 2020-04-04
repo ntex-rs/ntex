@@ -543,7 +543,7 @@ impl TestRequest {
 ///
 /// #[ntex::test]
 /// async fn test_example() {
-///     let mut srv = test::start(
+///     let mut srv = test::server(
 ///         || App::new().service(
 ///                 web::resource("/").to(my_handler))
 ///     );
@@ -553,7 +553,7 @@ impl TestRequest {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn start<F, I, S, B>(factory: F) -> TestServer
+pub fn server<F, I, S, B>(factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S>,
@@ -564,7 +564,7 @@ where
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
 {
-    start_with(TestServerConfig::default(), factory)
+    server_with(TestServerConfig::default(), factory)
 }
 
 /// Start test server with custom configuration
@@ -583,7 +583,7 @@ where
 ///
 /// #[ntex::test]
 /// async fn test_example() {
-///     let mut srv = test::start_with(test::config().h1(), ||
+///     let mut srv = test::server_with(test::config().h1(), ||
 ///         App::new().service(web::resource("/").to(my_handler))
 ///     );
 ///
@@ -592,7 +592,7 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn start_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
+pub fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S>,
