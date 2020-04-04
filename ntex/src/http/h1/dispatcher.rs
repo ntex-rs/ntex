@@ -348,7 +348,7 @@ where
                 CallProcess::Io => {
                     // service call queue is empty, we can process next request
                     if this.inner.poll_write(cx)? == PollWrite::AllowNext {
-                        match this.inner.process_messages()? {
+                        match this.inner.process_messages(CallProcess::Io)? {
                             CallProcess::Next(st) => {
                                 this = self.as_mut().project();
                                 this.call.set(st);
@@ -358,7 +358,8 @@ where
                                 this.upgrade.set(Some(fut));
                                 return self.poll(cx);
                             }
-                            CallProcess::Io | CallProcess::Pending => (),
+                            CallProcess::Io => (),
+                            CallProcess::Pending => unreachable!(),
                         }
                     }
                     false
@@ -837,13 +838,16 @@ where
         let (res, body) = res.replace_body(());
         if self.send_response(res, body)? {
             // response does not have body, so we can process next request
-            self.process_messages()
+            self.process_messages(CallProcess::Next(CallState::Io))
         } else {
             Ok(CallProcess::Next(CallState::Io))
         }
     }
 
-    fn process_messages(&mut self) -> Result<CallProcess<S, X, U>, DispatchError> {
+    fn process_messages(
+        &mut self,
+        io: CallProcess<S, X, U>,
+    ) -> Result<CallProcess<S, X, U>, DispatchError> {
         while let Some(msg) = self.messages.pop_front() {
             return match msg {
                 DispatcherMessage::Request(req) => {
@@ -874,12 +878,12 @@ where
                         // response does not have body, so we can process next request
                         continue;
                     } else {
-                        return Ok(CallProcess::Io);
+                        return Ok(io);
                     }
                 }
             };
         }
-        Ok(CallProcess::Io)
+        Ok(io)
     }
 }
 
