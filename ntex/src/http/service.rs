@@ -636,11 +636,7 @@ where
                 };
                 let (_, cfg, on_connect, peer_addr) = data.take().unwrap();
                 self.as_mut().project().state.set(State::H2(Dispatcher::new(
-                    cfg.clone(),
-                    conn,
-                    on_connect,
-                    None,
-                    peer_addr,
+                    cfg, conn, on_connect, None, peer_addr,
                 )));
                 self.poll(cx)
             }
