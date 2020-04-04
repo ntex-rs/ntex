@@ -1,6 +1,7 @@
 use std::io::{self, Read, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use brotli2::write::{BrotliDecoder, BrotliEncoder};
 use bytes::Bytes;
@@ -779,6 +780,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     // client request
     let req = srv
         .post("/")
+        .timeout(Duration::from_millis(10000))
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
