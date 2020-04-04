@@ -6,7 +6,7 @@ use http::{Method, Version};
 
 use crate::codec::{Decoder, Encoder};
 use crate::http::body::BodySize;
-use crate::http::config::ServiceConfig;
+use crate::http::config::DateService;
 use crate::http::error::ParseError;
 use crate::http::message::ConnectionType;
 use crate::http::request::Request;
@@ -26,7 +26,7 @@ bitflags! {
 
 /// HTTP/1 Codec
 pub struct Codec {
-    config: ServiceConfig,
+    timer: DateService,
     decoder: decoder::MessageDecoder<Request>,
     payload: Option<PayloadDecoder>,
     version: Version,
@@ -39,7 +39,7 @@ pub struct Codec {
 
 impl Default for Codec {
     fn default() -> Self {
-        Codec::new(ServiceConfig::default())
+        Codec::new(DateService::default(), false)
     }
 }
 
@@ -53,15 +53,16 @@ impl Codec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(config: ServiceConfig) -> Self {
-        let flags = if config.keep_alive_enabled() {
+    pub fn new(timer: DateService, keep_alive: bool) -> Self {
+        let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
             Flags::empty()
         };
+
         Codec {
-            config,
             flags,
+            timer,
             decoder: decoder::MessageDecoder::default(),
             payload: None,
             version: Version::HTTP_11,
@@ -98,11 +99,6 @@ impl Codec {
         } else {
             MessageType::Payload
         }
-    }
-
-    #[inline]
-    pub fn config(&self) -> &ServiceConfig {
-        &self.config
     }
 }
 
@@ -179,7 +175,7 @@ impl Encoder for Codec {
                     self.version,
                     length,
                     self.ctype,
-                    &self.config,
+                    &self.timer,
                 )?;
                 // self.headers_size = (dst.len() - len) as u32;
             }

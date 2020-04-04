@@ -7,9 +7,8 @@ use std::{cmp, io, mem, ptr, slice};
 use bytes::{buf::BufMutExt, BufMut, BytesMut};
 
 use crate::http::body::BodySize;
-use crate::http::config::ServiceConfig;
-use crate::http::header::map;
-use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
+use crate::http::config::DateService;
+use crate::http::header::{map, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
 use crate::http::helpers;
 use crate::http::message::{ConnectionType, RequestHeadType};
 use crate::http::response::Response;
@@ -55,7 +54,7 @@ pub(crate) trait MessageType: Sized {
         version: Version,
         mut length: BodySize,
         ctype: ConnectionType,
-        config: &ServiceConfig,
+        timer: &DateService,
     ) -> io::Result<()> {
         let chunked = self.chunked();
         let mut skip_len = length != BodySize::Stream;
@@ -225,7 +224,7 @@ pub(crate) trait MessageType: Sized {
 
         // optimized date header, set_date writes \r\n
         if !has_date {
-            config.set_date(dst);
+            timer.set_date_header(dst);
         } else {
             // msg eof
             dst.extend_from_slice(b"\r\n");
@@ -334,7 +333,7 @@ impl<T: MessageType> MessageEncoder<T> {
         version: Version,
         length: BodySize,
         ctype: ConnectionType,
-        config: &ServiceConfig,
+        timer: &DateService,
     ) -> io::Result<()> {
         // transfer encoding
         if !head {
@@ -356,7 +355,7 @@ impl<T: MessageType> MessageEncoder<T> {
         }
 
         message.encode_status(dst)?;
-        message.encode_headers(dst, version, length, ctype, config)
+        message.encode_headers(dst, version, length, ctype, timer)
     }
 }
 
@@ -701,7 +700,7 @@ mod tests {
             Version::HTTP_11,
             BodySize::Empty,
             ConnectionType::Close,
-            &ServiceConfig::default(),
+            &DateService::default(),
         );
         let data =
             String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
@@ -715,7 +714,7 @@ mod tests {
             Version::HTTP_11,
             BodySize::Stream,
             ConnectionType::KeepAlive,
-            &ServiceConfig::default(),
+            &DateService::default(),
         );
         let data =
             String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
@@ -728,7 +727,7 @@ mod tests {
             Version::HTTP_11,
             BodySize::Sized64(100),
             ConnectionType::KeepAlive,
-            &ServiceConfig::default(),
+            &DateService::default(),
         );
         let data =
             String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
@@ -750,7 +749,7 @@ mod tests {
             Version::HTTP_11,
             BodySize::Stream,
             ConnectionType::KeepAlive,
-            &ServiceConfig::default(),
+            &DateService::default(),
         );
         let data =
             String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
@@ -784,7 +783,7 @@ mod tests {
             Version::HTTP_11,
             BodySize::Empty,
             ConnectionType::Close,
-            &ServiceConfig::default(),
+            &DateService::default(),
         );
         let data =
             String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();

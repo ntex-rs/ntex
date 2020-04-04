@@ -1,8 +1,8 @@
 use std::cell::UnsafeCell;
+use std::fmt;
 use std::fmt::Write;
 use std::rc::Rc;
 use std::time::Duration;
-use std::{fmt, net};
 
 use bytes::BytesMut;
 use futures::{future, FutureExt};
@@ -41,7 +41,6 @@ impl From<Option<usize>> for KeepAlive {
 }
 
 pub(super) struct DispatcherConfig<S, X, U> {
-    pub(super) config: ServiceConfig,
     pub(super) service: S,
     pub(super) expect: X,
     pub(super) upgrade: Option<U>,
@@ -68,7 +67,6 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
             client_disconnect: cfg.0.client_disconnect,
             ka_enabled: cfg.0.ka_enabled,
             timer: cfg.0.timer.clone(),
-            config: cfg,
         }
     }
 
@@ -130,8 +128,6 @@ pub(super) struct Inner {
     pub(super) client_timeout: u64,
     pub(super) client_disconnect: u64,
     pub(super) ka_enabled: bool,
-    pub(super) secure: bool,
-    pub(super) local_addr: Option<std::net::SocketAddr>,
     pub(super) timer: DateService,
 }
 
@@ -143,7 +139,7 @@ impl Clone for ServiceConfig {
 
 impl Default for ServiceConfig {
     fn default() -> Self {
-        Self::new(KeepAlive::Timeout(5), 0, 0, false, None)
+        Self::new(KeepAlive::Timeout(5), 0, 0)
     }
 }
 
@@ -153,8 +149,6 @@ impl ServiceConfig {
         keep_alive: KeepAlive,
         client_timeout: u64,
         client_disconnect: u64,
-        secure: bool,
-        local_addr: Option<net::SocketAddr>,
     ) -> ServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (val as u64, true),
@@ -172,97 +166,8 @@ impl ServiceConfig {
             ka_enabled,
             client_timeout,
             client_disconnect,
-            secure,
-            local_addr,
             timer: DateService::new(),
         }))
-    }
-
-    #[inline]
-    /// Returns true if connection is secure(https)
-    pub fn secure(&self) -> bool {
-        self.0.secure
-    }
-
-    #[inline]
-    /// Returns the local address that this server is bound to.
-    pub fn local_addr(&self) -> Option<net::SocketAddr> {
-        self.0.local_addr
-    }
-
-    #[inline]
-    /// Keep alive duration if configured.
-    pub fn keep_alive(&self) -> Option<Duration> {
-        self.0.keep_alive
-    }
-
-    #[inline]
-    /// Return state of connection keep-alive funcitonality
-    pub fn keep_alive_enabled(&self) -> bool {
-        self.0.ka_enabled
-    }
-
-    #[inline]
-    /// Client timeout for first request.
-    pub fn client_timer(&self) -> Option<Delay> {
-        let delay_time = self.0.client_timeout;
-        if delay_time != 0 {
-            Some(delay_until(
-                self.0.timer.now() + Duration::from_millis(delay_time),
-            ))
-        } else {
-            None
-        }
-    }
-
-    /// Client timeout for first request.
-    pub fn client_timer_expire(&self) -> Option<Instant> {
-        let delay = self.0.client_timeout;
-        if delay != 0 {
-            Some(self.0.timer.now() + Duration::from_millis(delay))
-        } else {
-            None
-        }
-    }
-
-    /// Client disconnect timer
-    pub fn client_disconnect_timer(&self) -> Option<Instant> {
-        let delay = self.0.client_disconnect;
-        if delay != 0 {
-            Some(self.0.timer.now() + Duration::from_millis(delay))
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    /// Return keep-alive timer delay is configured.
-    pub fn keep_alive_timer(&self) -> Option<Delay> {
-        if let Some(ka) = self.0.keep_alive {
-            Some(delay_until(self.0.timer.now() + ka))
-        } else {
-            None
-        }
-    }
-
-    /// Keep-alive expire time
-    pub fn keep_alive_expire(&self) -> Option<Instant> {
-        if let Some(ka) = self.0.keep_alive {
-            Some(self.0.timer.now() + ka)
-        } else {
-            None
-        }
-    }
-
-    #[doc(hidden)]
-    pub fn set_date(&self, dst: &mut BytesMut) {
-        let mut buf: [u8; 39] = [0; 39];
-        buf[..6].copy_from_slice(b"date: ");
-        self.0
-            .timer
-            .set_date(|date| buf[6..35].copy_from_slice(&date.bytes));
-        buf[35..].copy_from_slice(b"\r\n\r\n");
-        dst.extend_from_slice(&buf);
     }
 }
 
@@ -302,7 +207,13 @@ impl fmt::Write for Date {
 }
 
 #[derive(Clone)]
-pub(super) struct DateService(Rc<DateServiceInner>);
+pub struct DateService(Rc<DateServiceInner>);
+
+impl Default for DateService {
+    fn default() -> Self {
+        DateService(Rc::new(DateServiceInner::new()))
+    }
+}
 
 struct DateServiceInner {
     current: UnsafeCell<Option<(Date, Instant)>>,
@@ -353,6 +264,15 @@ impl DateService {
         self.check_date();
         f(&unsafe { (&*self.0.current.get()).as_ref().unwrap().0 })
     }
+
+    #[doc(hidden)]
+    pub fn set_date_header(&self, dst: &mut BytesMut) {
+        let mut buf: [u8; 39] = [0; 39];
+        buf[..6].copy_from_slice(b"date: ");
+        self.set_date(|date| buf[6..35].copy_from_slice(&date.bytes));
+        buf[35..].copy_from_slice(b"\r\n\r\n");
+        dst.extend_from_slice(&buf);
+    }
 }
 
 #[cfg(test)]
@@ -366,11 +286,11 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_date() {
-        let settings = ServiceConfig::new(KeepAlive::Os, 0, 0, false, None);
+        let date = DateService::default();
         let mut buf1 = BytesMut::with_capacity(DATE_VALUE_LENGTH + 10);
-        settings.set_date(&mut buf1);
+        date.set_date_header(&mut buf1);
         let mut buf2 = BytesMut::with_capacity(DATE_VALUE_LENGTH + 10);
-        settings.set_date(&mut buf2);
+        date.set_date_header(&mut buf2);
         assert_eq!(buf1, buf2);
     }
 }

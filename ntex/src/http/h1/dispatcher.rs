@@ -165,7 +165,7 @@ where
         peer_addr: Option<net::SocketAddr>,
         on_connect: Option<Box<dyn DataFactory>>,
     ) -> Self {
-        let codec = Codec::new(config.config.clone());
+        let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
         // slow request timer
         let timeout = config.client_timer();
 
@@ -768,7 +768,7 @@ where
         }
 
         if updated && self.ka_timer.is_some() {
-            if let Some(expire) = self.codec.config().keep_alive_expire() {
+            if let Some(expire) = self.config.keep_alive_expire() {
                 self.ka_expire = expire;
             }
         }

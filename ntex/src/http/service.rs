@@ -59,7 +59,7 @@ where
 {
     /// Create new `HttpService` instance.
     pub fn new<F: IntoServiceFactory<S>>(service: F) -> Self {
-        let cfg = ServiceConfig::new(KeepAlive::Timeout(5), 5000, 0, false, None);
+        let cfg = ServiceConfig::new(KeepAlive::Timeout(5), 5000, 0);
 
         HttpService {
             cfg,

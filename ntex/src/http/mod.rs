@@ -25,7 +25,7 @@ pub mod ws;
 pub(crate) use self::message::Message;
 
 pub use self::builder::HttpServiceBuilder;
-pub use self::config::{KeepAlive, ServiceConfig};
+pub use self::config::{DateService, KeepAlive, ServiceConfig};
 pub use self::error::ResponseError;
 pub use self::extensions::Extensions;
 pub use self::header::HeaderMap;

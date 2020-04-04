@@ -259,7 +259,6 @@ where
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
-                    .local_addr(addr)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .tcp()
             },

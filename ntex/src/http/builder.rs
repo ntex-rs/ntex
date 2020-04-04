@@ -1,6 +1,6 @@
+use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::{fmt, net};
 
 use crate::codec::Framed;
 use crate::http::body::MessageBody;
@@ -22,8 +22,6 @@ pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
     keep_alive: KeepAlive,
     client_timeout: u64,
     client_disconnect: u64,
-    secure: bool,
-    local_addr: Option<net::SocketAddr>,
     expect: X,
     upgrade: Option<U>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
@@ -37,8 +35,6 @@ impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
             keep_alive: KeepAlive::Timeout(5),
             client_timeout: 5000,
             client_disconnect: 0,
-            secure: false,
-            local_addr: None,
             expect: ExpectHandler,
             upgrade: None,
             on_connect: None,
@@ -67,18 +63,6 @@ where
     /// By default keep alive is set to a 5 seconds.
     pub fn keep_alive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
         self.keep_alive = val.into();
-        self
-    }
-
-    /// Set connection secure state
-    pub fn secure(mut self) -> Self {
-        self.secure = true;
-        self
-    }
-
-    /// Set the local address that this service is bound to.
-    pub fn local_addr(mut self, addr: net::SocketAddr) -> Self {
-        self.local_addr = Some(addr);
         self
     }
 
@@ -126,8 +110,6 @@ where
             keep_alive: self.keep_alive,
             client_timeout: self.client_timeout,
             client_disconnect: self.client_disconnect,
-            secure: self.secure,
-            local_addr: self.local_addr,
             expect: expect.into_factory(),
             upgrade: self.upgrade,
             on_connect: self.on_connect,
@@ -155,8 +137,6 @@ where
             keep_alive: self.keep_alive,
             client_timeout: self.client_timeout,
             client_disconnect: self.client_disconnect,
-            secure: self.secure,
-            local_addr: self.local_addr,
             expect: self.expect,
             upgrade: Some(upgrade.into_factory()),
             on_connect: self.on_connect,
@@ -190,8 +170,6 @@ where
             self.keep_alive,
             self.client_timeout,
             self.client_disconnect,
-            self.secure,
-            self.local_addr,
         );
         H1Service::with_config(cfg, service.into_factory())
             .expect(self.expect)
@@ -213,8 +191,6 @@ where
             self.keep_alive,
             self.client_timeout,
             self.client_disconnect,
-            self.secure,
-            self.local_addr,
         );
         H2Service::with_config(cfg, service.into_factory()).on_connect(self.on_connect)
     }
@@ -233,8 +209,6 @@ where
             self.keep_alive,
             self.client_timeout,
             self.client_disconnect,
-            self.secure,
-            self.local_addr,
         );
         HttpService::with_config(cfg, service.into_factory())
             .expect(self.expect)
