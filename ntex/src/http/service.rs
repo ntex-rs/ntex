@@ -16,7 +16,7 @@ use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFacto
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
-use super::config::{KeepAlive, ServiceConfig};
+use super::config::{DispatcherConfig, KeepAlive, ServiceConfig};
 use super::error::{DispatchError, ResponseError};
 use super::helpers::DataFactory;
 use super::request::Request;
@@ -430,44 +430,28 @@ where
             .map_err(|e| log::error!("Init http service error: {:?}", e)));
         Poll::Ready(result.map(|service| {
             let this = self.as_mut().project();
-            HttpServiceHandler::new(
-                this.cfg.clone(),
+            let cfg = this.cfg.clone();
+            let config = DispatcherConfig::new(
+                cfg,
                 service,
                 this.expect.take().unwrap(),
                 this.upgrade.take(),
-                this.on_connect.clone(),
-            )
+            );
+
+            HttpServiceHandler {
+                config: Rc::new(config),
+                on_connect: this.on_connect.clone(),
+                _t: PhantomData,
+            }
         }))
     }
 }
 
 /// `Service` implementation for http transport
 pub struct HttpServiceHandler<T, S: Service, B, X: Service, U: Service> {
-    srv: Rc<S>,
-    expect: Rc<X>,
-    upgrade: Option<Rc<U>>,
-    cfg: ServiceConfig,
+    config: Rc<DispatcherConfig<S, X, U>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     _t: PhantomData<(T, B, X)>,
-}
-
-impl<T, S: Service, B, X: Service, U: Service> HttpServiceHandler<T, S, B, X, U> {
-    fn new(
-        cfg: ServiceConfig,
-        srv: S,
-        expect: X,
-        upgrade: Option<U>,
-        on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-    ) -> HttpServiceHandler<T, S, B, X, U> {
-        HttpServiceHandler {
-            cfg,
-            on_connect,
-            srv: Rc::new(srv),
-            expect: Rc::new(expect),
-            upgrade: upgrade.map(Rc::new),
-            _t: PhantomData,
-        }
-    }
 }
 
 impl<T, S, B, X, U> Service for HttpServiceHandler<T, S, B, X, U>
@@ -489,7 +473,9 @@ where
     type Future = HttpServiceHandlerResponse<T, S, B, X, U>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let ready = self
+        let cfg = self.config.as_ref();
+
+        let ready = cfg
             .expect
             .poll_ready(cx)
             .map_err(|e| {
@@ -498,8 +484,8 @@ where
             })?
             .is_ready();
 
-        let ready = self
-            .srv
+        let ready = cfg
+            .service
             .poll_ready(cx)
             .map_err(|e| {
                 log::error!("Http service readiness error: {:?}", e);
@@ -508,7 +494,7 @@ where
             .is_ready()
             && ready;
 
-        let ready = if let Some(ref upg) = self.upgrade {
+        let ready = if let Some(ref upg) = cfg.upgrade {
             upg.poll_ready(cx)
                 .map_err(|e| {
                     log::error!("Http service readiness error: {:?}", e);
@@ -528,9 +514,9 @@ where
     }
 
     fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        let ready = self.expect.poll_shutdown(cx, is_error).is_ready();
-        let ready = self.srv.poll_shutdown(cx, is_error).is_ready() && ready;
-        let ready = if let Some(ref upg) = self.upgrade {
+        let ready = self.config.expect.poll_shutdown(cx, is_error).is_ready();
+        let ready = self.config.service.poll_shutdown(cx, is_error).is_ready() && ready;
+        let ready = if let Some(ref upg) = self.config.upgrade {
             upg.poll_shutdown(cx, is_error).is_ready() && ready
         } else {
             ready
@@ -554,21 +540,17 @@ where
             Protocol::Http2 => HttpServiceHandlerResponse {
                 state: State::H2Handshake(Some((
                     server::handshake(io),
-                    self.cfg.clone(),
-                    self.srv.clone(),
+                    self.config.clone(),
                     on_connect,
                     peer_addr,
                 ))),
             },
             Protocol::Http1 => HttpServiceHandlerResponse {
                 state: State::H1(h1::Dispatcher::new(
+                    self.config.clone(),
                     io,
-                    self.cfg.clone(),
-                    self.srv.clone(),
-                    self.expect.clone(),
-                    self.upgrade.clone(),
-                    on_connect,
                     peer_addr,
+                    on_connect,
                 )),
             },
         }
@@ -605,12 +587,11 @@ where
     U::Error: fmt::Display,
 {
     H1(#[pin] h1::Dispatcher<T, S, B, X, U>),
-    H2(Dispatcher<T, S, B>),
+    H2(Dispatcher<T, S, B, X, U>),
     H2Handshake(
         Option<(
             Handshake<T, Bytes>,
-            ServiceConfig,
-            Rc<S>,
+            Rc<DispatcherConfig<S, X, U>>,
             Option<Box<dyn DataFactory>>,
             Option<net::SocketAddr>,
         )>,
@@ -653,9 +634,13 @@ where
                 } else {
                     panic!()
                 };
-                let (_, cfg, srv, on_connect, peer_addr) = data.take().unwrap();
+                let (_, cfg, on_connect, peer_addr) = data.take().unwrap();
                 self.as_mut().project().state.set(State::H2(Dispatcher::new(
-                    srv, conn, on_connect, cfg, None, peer_addr,
+                    cfg.clone(),
+                    conn,
+                    on_connect,
+                    None,
+                    peer_addr,
                 )));
                 self.poll(cx)
             }

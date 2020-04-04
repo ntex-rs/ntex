@@ -40,17 +40,99 @@ impl From<Option<usize>> for KeepAlive {
     }
 }
 
-/// Http service configuration
-pub struct ServiceConfig(Rc<Inner>);
+pub(super) struct DispatcherConfig<S, X, U> {
+    pub(super) config: ServiceConfig,
+    pub(super) service: S,
+    pub(super) expect: X,
+    pub(super) upgrade: Option<U>,
+    pub(super) keep_alive: Option<Duration>,
+    pub(super) client_timeout: u64,
+    pub(super) client_disconnect: u64,
+    pub(super) ka_enabled: bool,
+    pub(super) timer: DateService,
+}
 
-struct Inner {
-    keep_alive: Option<Duration>,
-    client_timeout: u64,
-    client_disconnect: u64,
-    ka_enabled: bool,
-    secure: bool,
-    local_addr: Option<std::net::SocketAddr>,
-    timer: DateService,
+impl<S, X, U> DispatcherConfig<S, X, U> {
+    pub(super) fn new(
+        cfg: ServiceConfig,
+        service: S,
+        expect: X,
+        upgrade: Option<U>,
+    ) -> Self {
+        DispatcherConfig {
+            service,
+            expect,
+            upgrade,
+            keep_alive: cfg.0.keep_alive,
+            client_timeout: cfg.0.client_timeout,
+            client_disconnect: cfg.0.client_disconnect,
+            ka_enabled: cfg.0.ka_enabled,
+            timer: cfg.0.timer.clone(),
+            config: cfg,
+        }
+    }
+
+    /// Return state of connection keep-alive funcitonality
+    pub(super) fn keep_alive_enabled(&self) -> bool {
+        self.ka_enabled
+    }
+
+    /// Client timeout for first request.
+    pub(super) fn client_timer(&self) -> Option<Delay> {
+        let delay_time = self.client_timeout;
+        if delay_time != 0 {
+            Some(delay_until(
+                self.timer.now() + Duration::from_millis(delay_time),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Client disconnect timer
+    pub(super) fn client_disconnect_timer(&self) -> Option<Instant> {
+        let delay = self.client_disconnect;
+        if delay != 0 {
+            Some(self.timer.now() + Duration::from_millis(delay))
+        } else {
+            None
+        }
+    }
+
+    /// Return keep-alive timer delay is configured.
+    pub(super) fn keep_alive_timer(&self) -> Option<Delay> {
+        if let Some(ka) = self.keep_alive {
+            Some(delay_until(self.timer.now() + ka))
+        } else {
+            None
+        }
+    }
+
+    /// Keep-alive expire time
+    pub(super) fn keep_alive_expire(&self) -> Option<Instant> {
+        if let Some(ka) = self.keep_alive {
+            Some(self.timer.now() + ka)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn now(&self) -> Instant {
+        self.timer.now()
+    }
+}
+
+/// Http service configuration
+pub struct ServiceConfig(pub(super) Rc<Inner>);
+
+pub(super) struct Inner {
+    pub(super) keep_alive: Option<Duration>,
+    pub(super) client_timeout: u64,
+    pub(super) client_disconnect: u64,
+    pub(super) ka_enabled: bool,
+    pub(super) secure: bool,
+    pub(super) local_addr: Option<std::net::SocketAddr>,
+    pub(super) timer: DateService,
 }
 
 impl Clone for ServiceConfig {
@@ -172,11 +254,6 @@ impl ServiceConfig {
         }
     }
 
-    #[inline]
-    pub(crate) fn now(&self) -> Instant {
-        self.0.timer.now()
-    }
-
     #[doc(hidden)]
     pub fn set_date(&self, dst: &mut BytesMut) {
         let mut buf: [u8; 39] = [0; 39];
@@ -187,17 +264,11 @@ impl ServiceConfig {
         buf[35..].copy_from_slice(b"\r\n\r\n");
         dst.extend_from_slice(&buf);
     }
-
-    pub(crate) fn set_date_header(&self, dst: &mut BytesMut) {
-        self.0
-            .timer
-            .set_date(|date| dst.extend_from_slice(&date.bytes));
-    }
 }
 
 #[derive(Copy, Clone)]
-struct Date {
-    bytes: [u8; DATE_VALUE_LENGTH],
+pub(super) struct Date {
+    pub(super) bytes: [u8; DATE_VALUE_LENGTH],
     pos: usize,
 }
 
@@ -231,7 +302,7 @@ impl fmt::Write for Date {
 }
 
 #[derive(Clone)]
-struct DateService(Rc<DateServiceInner>);
+pub(super) struct DateService(Rc<DateServiceInner>);
 
 struct DateServiceInner {
     current: UnsafeCell<Option<(Date, Instant)>>,
@@ -278,7 +349,7 @@ impl DateService {
         unsafe { (&*self.0.current.get()).as_ref().unwrap().1 }
     }
 
-    fn set_date<F: FnMut(&Date)>(&self, mut f: F) {
+    pub(super) fn set_date<F: FnMut(&Date)>(&self, mut f: F) {
         self.check_date();
         f(&unsafe { (&*self.0.current.get()).as_ref().unwrap().0 })
     }

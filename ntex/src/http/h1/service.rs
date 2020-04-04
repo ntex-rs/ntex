@@ -10,7 +10,7 @@ use futures::ready;
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::body::MessageBody;
-use crate::http::config::ServiceConfig;
+use crate::http::config::{DispatcherConfig, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
@@ -351,40 +351,32 @@ where
 
         Poll::Ready(result.map(|service| {
             let this = self.as_mut().project();
-            H1ServiceHandler::new(
-                this.cfg.take().unwrap(),
+            let cfg = this.cfg.take().unwrap();
+            let config = DispatcherConfig::new(
+                cfg,
                 service,
                 this.expect.take().unwrap(),
                 this.upgrade.take(),
-                this.on_connect.clone(),
-            )
+            );
+            H1ServiceHandler::new(Rc::new(config), this.on_connect.clone())
         }))
     }
 }
 
 /// `Service` implementation for HTTP1 transport
 pub struct H1ServiceHandler<T, S: Service, B, X: Service, U: Service> {
-    srv: Rc<S>,
-    expect: Rc<X>,
-    upgrade: Option<Rc<U>>,
+    config: Rc<DispatcherConfig<S, X, U>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-    cfg: ServiceConfig,
     _t: PhantomData<(T, B)>,
 }
 
 impl<T, S: Service, B, X: Service, U: Service> H1ServiceHandler<T, S, B, X, U> {
     fn new(
-        cfg: ServiceConfig,
-        srv: S,
-        expect: X,
-        upgrade: Option<U>,
+        config: Rc<DispatcherConfig<S, X, U>>,
         on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     ) -> H1ServiceHandler<T, S, B, X, U> {
         H1ServiceHandler {
-            srv: Rc::new(srv),
-            expect: Rc::new(expect),
-            upgrade: upgrade.map(Rc::new),
-            cfg,
+            config,
             on_connect,
             _t: PhantomData,
         }
@@ -409,7 +401,9 @@ where
     type Future = Dispatcher<T, S, B, X, U>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let ready = self
+        let cfg = self.config.as_ref();
+
+        let ready = cfg
             .expect
             .poll_ready(cx)
             .map_err(|e| {
@@ -418,8 +412,8 @@ where
             })?
             .is_ready();
 
-        let ready = self
-            .srv
+        let ready = cfg
+            .service
             .poll_ready(cx)
             .map_err(|e| {
                 log::error!("Http service readiness error: {:?}", e);
@@ -428,7 +422,7 @@ where
             .is_ready()
             && ready;
 
-        let ready = if let Some(ref upg) = self.upgrade {
+        let ready = if let Some(ref upg) = cfg.upgrade {
             upg.poll_ready(cx)
                 .map_err(|e| {
                     log::error!("Http service readiness error: {:?}", e);
@@ -448,9 +442,9 @@ where
     }
 
     fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        let ready = self.expect.poll_shutdown(cx, is_error).is_ready();
-        let ready = self.srv.poll_shutdown(cx, is_error).is_ready() && ready;
-        let ready = if let Some(ref upg) = self.upgrade {
+        let ready = self.config.expect.poll_shutdown(cx, is_error).is_ready();
+        let ready = self.config.service.poll_shutdown(cx, is_error).is_ready() && ready;
+        let ready = if let Some(ref upg) = self.config.upgrade {
             upg.poll_shutdown(cx, is_error).is_ready() && ready
         } else {
             ready
@@ -470,14 +464,6 @@ where
             None
         };
 
-        Dispatcher::new(
-            io,
-            self.cfg.clone(),
-            self.srv.clone(),
-            self.expect.clone(),
-            self.upgrade.clone(),
-            on_connect,
-            addr,
-        )
+        Dispatcher::new(self.config.clone(), io, addr, on_connect)
     }
 }

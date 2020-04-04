@@ -14,7 +14,7 @@ use log::{error, trace};
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
-use crate::http::config::ServiceConfig;
+use crate::http::config::{DateService, DispatcherConfig};
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::message::ResponseHead;
@@ -28,21 +28,20 @@ const CHUNK_SIZE: usize = 16_384;
 
 /// Dispatcher for HTTP/2 protocol
 #[pin_project::pin_project]
-pub struct Dispatcher<T, S: Service<Request = Request>, B: MessageBody>
+pub struct Dispatcher<T, S: Service<Request = Request>, B: MessageBody, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    service: Rc<S>,
+    config: Rc<DispatcherConfig<S, X, U>>,
     connection: Connection<T, Bytes>,
     on_connect: Option<Box<dyn DataFactory>>,
-    config: ServiceConfig,
     peer_addr: Option<net::SocketAddr>,
     ka_expire: Instant,
     ka_timer: Option<Delay>,
     _t: PhantomData<B>,
 }
 
-impl<T, S, B> Dispatcher<T, S, B>
+impl<T, S, B, X, U> Dispatcher<T, S, B, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
@@ -50,11 +49,10 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
-    pub(crate) fn new(
-        service: Rc<S>,
+    pub(in crate::http) fn new(
+        config: Rc<DispatcherConfig<S, X, U>>,
         connection: Connection<T, Bytes>,
         on_connect: Option<Box<dyn DataFactory>>,
-        config: ServiceConfig,
         timeout: Option<Delay>,
         peer_addr: Option<net::SocketAddr>,
     ) -> Self {
@@ -75,7 +73,6 @@ where
         };
 
         Dispatcher {
-            service,
             config,
             peer_addr,
             connection,
@@ -87,7 +84,7 @@ where
     }
 }
 
-impl<T, S, B> Future for Dispatcher<T, S, B>
+impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
@@ -140,10 +137,10 @@ where
                         B,
                     > {
                         state: ServiceResponseState::ServiceCall(
-                            this.service.call(req),
+                            this.config.service.call(req),
                             Some(res),
                         ),
-                        config: this.config.clone(),
+                        timer: this.config.timer.clone(),
                         buffer: None,
                         _t: PhantomData,
                     });
@@ -158,7 +155,7 @@ where
 struct ServiceResponse<F, I, E, B> {
     #[pin]
     state: ServiceResponseState<F, B>,
-    config: ServiceConfig,
+    timer: DateService,
     buffer: Option<Bytes>,
     _t: PhantomData<(I, E)>,
 }
@@ -228,7 +225,8 @@ where
         // set date header
         if !has_date {
             let mut bytes = BytesMut::with_capacity(29);
-            self.config.set_date_header(&mut bytes);
+            self.timer
+                .set_date(|date| bytes.extend_from_slice(&date.bytes));
             res.headers_mut().insert(DATE, unsafe {
                 HeaderValue::from_maybe_shared_unchecked(bytes.freeze())
             });

@@ -13,7 +13,7 @@ use log::error;
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::MessageBody;
-use crate::http::config::ServiceConfig;
+use crate::http::config::{DispatcherConfig, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
@@ -234,43 +234,23 @@ where
 
         Poll::Ready(ready!(this.fut.poll(cx)).map(|service| {
             let this = self.as_mut().project();
-            H2ServiceHandler::new(
-                this.cfg.take().unwrap(),
-                this.on_connect.clone(),
-                service,
-            )
+            let cfg = this.cfg.take().unwrap();
+            let config = DispatcherConfig::new(cfg, service, (), None);
+
+            H2ServiceHandler {
+                config: Rc::new(config),
+                on_connect: this.on_connect.clone(),
+                _t: PhantomData,
+            }
         }))
     }
 }
 
 /// `Service` implementation for http/2 transport
 pub struct H2ServiceHandler<T, S: Service, B> {
-    srv: Rc<S>,
-    cfg: ServiceConfig,
+    config: Rc<DispatcherConfig<S, (), ()>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     _t: PhantomData<(T, B)>,
-}
-
-impl<T, S, B> H2ServiceHandler<T, S, B>
-where
-    S: Service<Request = Request>,
-    S::Error: ResponseError,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
-    B: MessageBody + 'static,
-{
-    fn new(
-        cfg: ServiceConfig,
-        on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-        srv: S,
-    ) -> H2ServiceHandler<T, S, B> {
-        H2ServiceHandler {
-            cfg,
-            on_connect,
-            srv: Rc::new(srv),
-            _t: PhantomData,
-        }
-    }
 }
 
 impl<T, S, B> Service for H2ServiceHandler<T, S, B>
@@ -289,7 +269,7 @@ where
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.srv.poll_ready(cx).map_err(|e| {
+        self.config.service.poll_ready(cx).map_err(|e| {
             error!("Service readiness error: {:?}", e);
             DispatchError::Service(Box::new(e))
         })
@@ -297,7 +277,7 @@ where
 
     #[inline]
     fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.srv.poll_shutdown(cx, is_error)
+        self.config.service.poll_shutdown(cx, is_error)
     }
 
     fn call(&self, (io, addr): Self::Request) -> Self::Future {
@@ -309,8 +289,7 @@ where
 
         H2ServiceHandlerResponse {
             state: State::Handshake(
-                Some(self.srv.clone()),
-                Some(self.cfg.clone()),
+                self.config.clone(),
                 addr,
                 on_connect,
                 server::handshake(io),
@@ -324,10 +303,9 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
     S::Future: 'static,
 {
-    Incoming(Dispatcher<T, S, B>),
+    Incoming(Dispatcher<T, S, B, (), ()>),
     Handshake(
-        Option<Rc<S>>,
-        Option<ServiceConfig>,
+        Rc<DispatcherConfig<S, (), ()>>,
         Option<net::SocketAddr>,
         Option<Box<dyn DataFactory>>,
         Handshake<T, Bytes>,
@@ -361,20 +339,18 @@ where
         match self.state {
             State::Incoming(ref mut disp) => Pin::new(disp).poll(cx),
             State::Handshake(
-                ref mut srv,
-                ref mut config,
-                ref peer_addr,
+                ref config,
+                peer_addr,
                 ref mut on_connect,
                 ref mut handshake,
             ) => match Pin::new(handshake).poll(cx) {
                 Poll::Ready(Ok(conn)) => {
                     self.state = State::Incoming(Dispatcher::new(
-                        srv.take().unwrap(),
+                        config.clone(),
                         conn,
                         on_connect.take(),
-                        config.take().unwrap(),
                         None,
-                        *peer_addr,
+                        peer_addr,
                     ));
                     self.poll(cx)
                 }

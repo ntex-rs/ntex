@@ -7,13 +7,11 @@ use std::{fmt, io, mem, net};
 
 use bitflags::bitflags;
 use bytes::{Buf, BytesMut};
-// use log::{error, trace};
-use futures::ready;
 use pin_project::{pin_project, project};
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
-use crate::http::config::ServiceConfig;
+use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::error::{ParseError, PayloadError};
 use crate::http::helpers::DataFactory;
@@ -35,14 +33,20 @@ const LW_PIPELINED_MESSAGES: usize = 1;
 
 bitflags! {
     pub struct Flags: u8 {
+        /// We parsed one complete request message
         const STARTED            = 0b0000_0001;
+        /// Keep-alive is enabled on current connection
         const KEEPALIVE          = 0b0000_0010;
-        const POLLED             = 0b0000_0100;
-        const SHUTDOWN           = 0b0000_1000;
-        const DISCONNECT         = 0b0001_0000;
-        const STOP_READING       = 0b0010_0000;
-        const SHUTDOWN_TM        = 0b0100_0000;
-        const UPGRADE            = 0b1000_0000;
+        /// Socket is disconnected, read or write side
+        const DISCONNECT         = 0b0000_0100;
+        /// Connection is upgraded or request parse error (bad request)
+        const STOP_READING       = 0b0000_1000;
+        /// Shutdown is in process (flushing and io shutdown timer)
+        const SHUTDOWN           = 0b0001_0000;
+        /// Shutdown timer is started
+        const SHUTDOWN_TM        = 0b0010_0000;
+        /// Connection is upgraded
+        const UPGRADE            = 0b0100_0000;
     }
 }
 
@@ -91,12 +95,10 @@ where
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
-    service: Rc<S>,
-    expect: Rc<X>,
-    upgrade: Option<Rc<U>>,
+    config: Rc<DispatcherConfig<S, X, U>>,
     on_connect: Option<Box<dyn DataFactory>>,
-    flags: Flags,
     peer_addr: Option<net::SocketAddr>,
+    flags: Flags,
     error: Option<DispatchError>,
 
     send_payload: Option<ResponseBody<B>>,
@@ -120,10 +122,10 @@ enum DispatcherMessage {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PollWrite {
-    // allowed to process next request
+    /// allowed to process next request
     AllowNext,
-    // waiting for response stream (app response)
-    // or write buffer is full
+    /// waiting for response stream (app response)
+    /// or write buffer is full
     Pending,
 }
 
@@ -134,13 +136,13 @@ enum PollRead {
 }
 
 enum CallProcess<S: Service, X: Service, U: Service> {
-    // next call is available
+    /// next call is available
     Next(CallState<S, X>),
-    // waiting for service call
+    /// waiting for service call response completion
     Pending,
-    // call queue is empty
+    /// call queue is empty
     Io,
-    // Upgrade connection
+    /// Upgrade connection
     Upgrade(U::Future),
 }
 
@@ -157,41 +159,36 @@ where
     U::Error: fmt::Display,
 {
     /// Create http/1 dispatcher.
-    pub(crate) fn new(
+    pub(in crate::http) fn new(
+        config: Rc<DispatcherConfig<S, X, U>>,
         stream: T,
-        config: ServiceConfig,
-        service: Rc<S>,
-        expect: Rc<X>,
-        upgrade: Option<Rc<U>>,
-        on_connect: Option<Box<dyn DataFactory>>,
         peer_addr: Option<net::SocketAddr>,
+        on_connect: Option<Box<dyn DataFactory>>,
     ) -> Self {
+        let codec = Codec::new(config.config.clone());
+        // slow request timer
+        let timeout = config.client_timer();
+
         Dispatcher::with_timeout(
-            stream,
-            Codec::new(config.clone()),
             config,
+            stream,
+            codec,
             BytesMut::with_capacity(READ_BUFFER_SIZE),
-            None,
-            service,
-            expect,
-            upgrade,
-            on_connect,
+            timeout,
             peer_addr,
+            on_connect,
         )
     }
 
     /// Create http/1 dispatcher with slow request timeout.
-    pub(crate) fn with_timeout(
+    pub(in crate::http) fn with_timeout(
+        config: Rc<DispatcherConfig<S, X, U>>,
         io: T,
         codec: Codec,
-        config: ServiceConfig,
         read_buf: BytesMut,
         timeout: Option<Delay>,
-        service: Rc<S>,
-        expect: Rc<X>,
-        upgrade: Option<Rc<U>>,
-        on_connect: Option<Box<dyn DataFactory>>,
         peer_addr: Option<net::SocketAddr>,
+        on_connect: Option<Box<dyn DataFactory>>,
     ) -> Self {
         let keepalive = config.keep_alive_enabled();
         let flags = if keepalive {
@@ -219,14 +216,12 @@ where
                 error: None,
                 messages: VecDeque::new(),
                 io: Some(io),
+                config,
                 codec,
                 read_buf,
-                service,
-                expect,
-                upgrade,
-                on_connect,
                 flags,
                 peer_addr,
+                on_connect,
                 ka_expire,
                 ka_timer,
             },
@@ -252,11 +247,6 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        // shutdown process
-        if this.inner.flags.contains(Flags::SHUTDOWN) {
-            return this.inner.poll_shutdown(cx);
-        }
-
         // upgrade
         if this.inner.flags.contains(Flags::UPGRADE) {
             return this.upgrade.as_pin_mut().unwrap().poll(cx).map_err(|e| {
@@ -267,6 +257,11 @@ where
 
         // keep-alive book-keeping
         let _ = this.inner.poll_keepalive(cx, this.call.is_io())?;
+
+        // shutdown process
+        if this.inner.flags.contains(Flags::SHUTDOWN) {
+            return this.inner.poll_shutdown(cx);
+        }
 
         loop {
             // process incoming stream
@@ -316,7 +311,7 @@ where
                                 .write_buf
                                 .extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
                             CallProcess::Next(CallState::Service(
-                                this.inner.service.call(req),
+                                this.inner.config.service.call(req),
                             ))
                         }
                         Err(e) => {
@@ -353,19 +348,17 @@ where
                 CallProcess::Io => {
                     // service call queue is empty, we can process next request
                     if this.inner.poll_write(cx)? == PollWrite::AllowNext {
-                        if !this.inner.messages.is_empty() {
-                            match this.inner.process_messages()? {
-                                CallProcess::Next(st) => {
-                                    this = self.as_mut().project();
-                                    this.call.set(st);
-                                    continue;
-                                }
-                                CallProcess::Upgrade(fut) => {
-                                    this.upgrade.set(Some(fut));
-                                    return self.poll(cx);
-                                }
-                                CallProcess::Io | CallProcess::Pending => unreachable!(),
+                        match this.inner.process_messages()? {
+                            CallProcess::Next(st) => {
+                                this = self.as_mut().project();
+                                this.call.set(st);
+                                continue;
                             }
+                            CallProcess::Upgrade(fut) => {
+                                this.upgrade.set(Some(fut));
+                                return self.poll(cx);
+                            }
+                            CallProcess::Io | CallProcess::Pending => (),
                         }
                     }
                     false
@@ -376,7 +369,7 @@ where
                 }
             };
 
-            // socket is closed and we do not processing any responses
+            // socket is closed and we are not processing any service responses
             if this
                 .inner
                 .flags
@@ -385,8 +378,7 @@ where
             {
                 this.inner.flags.insert(Flags::SHUTDOWN);
             }
-            // handle situation when we dont have any parsed requests
-            // and output buffer is flushed
+            // we dont have any parsed requests and output buffer is flushed
             else if !processing && this.inner.write_buf.is_empty() {
                 if let Some(err) = this.inner.error.take() {
                     return Poll::Ready(Err(err));
@@ -422,7 +414,7 @@ where
     U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
     U::Error: fmt::Display,
 {
-    // shutdown process
+    /// shutdown process
     fn poll_shutdown(
         &mut self,
         cx: &mut Context<'_>,
@@ -446,21 +438,31 @@ where
         if self.ka_timer.is_none() {
             if self.flags.contains(Flags::SHUTDOWN_TM) {
                 // shutdown timeout is not enabled
-                Poll::Ready(Ok(()))
+                Poll::Pending
             } else {
                 self.flags.insert(Flags::SHUTDOWN_TM);
-                if let Some(interval) = self.codec.config().client_disconnect_timer() {
+                if let Some(interval) = self.config.client_disconnect_timer() {
                     trace!("Start shutdown timer for {:?}", interval);
                     self.ka_timer = Some(delay_until(interval));
                     let _ = Pin::new(&mut self.ka_timer.as_mut().unwrap()).poll(cx);
-                    Poll::Pending
-                } else {
-                    // shutdown timeout is not enabled
-                    Poll::Ready(Ok(()))
                 }
+                Poll::Pending
             }
         } else {
-            match Pin::new(&mut self.ka_timer.as_mut().unwrap()).poll(cx) {
+            let mut timer = self.ka_timer.as_mut().unwrap();
+
+            // configure timer
+            if !self.flags.contains(Flags::SHUTDOWN_TM) {
+                if let Some(interval) = self.config.client_disconnect_timer() {
+                    self.flags.insert(Flags::SHUTDOWN_TM);
+                    timer.reset(interval);
+                } else {
+                    let _ = self.ka_timer.take();
+                    return Poll::Pending;
+                }
+            }
+
+            match Pin::new(&mut timer).poll(cx) {
                 Poll::Ready(_) => {
                     // if we get timeout during shutdown, drop connection
                     Poll::Ready(Err(DispatchError::DisconnectTimeout))
@@ -688,7 +690,8 @@ where
                             }
 
                             // handle upgrade request
-                            if pl == MessageType::Stream && self.upgrade.is_some() {
+                            if pl == MessageType::Stream && self.config.upgrade.is_some()
+                            {
                                 self.flags.insert(Flags::STOP_READING);
                                 self.messages.push_back(DispatcherMessage::Upgrade(req));
                                 break;
@@ -781,53 +784,50 @@ where
         &mut self,
         cx: &mut Context<'_>,
         is_empty: bool,
-    ) -> Poll<Result<(), DispatchError>> {
+    ) -> Result<(), DispatchError> {
         // do nothing for disconnected or upgrade socket or if keep-alive timer is disabled
         if self.flags.intersects(Flags::DISCONNECT | Flags::UPGRADE)
             || self.ka_timer.is_none()
         {
-            return Poll::Pending;
+            return Ok(());
         }
 
-        // slow request timeout
         if !self.flags.contains(Flags::STARTED) {
-            ready!(Pin::new(&mut self.ka_timer.as_mut().unwrap()).poll(cx));
-            // timeout on first request (slow request) return 408
-            trace!("Slow request timeout");
-            let _ = self.send_response(
-                Response::RequestTimeout().finish().drop_body(),
-                ResponseBody::Other(Body::Empty),
-            );
-            self.flags.insert(Flags::STARTED | Flags::SHUTDOWN);
-            Poll::Pending
+            // slow request timeout
+            if Pin::new(&mut self.ka_timer.as_mut().unwrap())
+                .poll(cx)
+                .is_ready()
+            {
+                // timeout on first request (slow request) return 408
+                trace!("Slow request timeout");
+                let _ = self.send_response(
+                    Response::RequestTimeout().finish().drop_body(),
+                    ResponseBody::Other(Body::Empty),
+                );
+                self.flags.insert(Flags::STARTED | Flags::SHUTDOWN);
+            }
         } else {
             let mut timer = self.ka_timer.as_mut().unwrap();
 
-            // keep-alive timeout
-            ready!(Pin::new(&mut timer).poll(cx));
-            if timer.deadline() >= self.ka_expire {
-                // check for any outstanding tasks
-                if is_empty && self.write_buf.is_empty() {
-                    trace!("Keep-alive timeout, close connection");
-                    self.flags.insert(Flags::SHUTDOWN);
-
-                    // start shutdown timer
-                    if let Some(dl) = self.codec.config().client_disconnect_timer() {
+            // keep-alive timer
+            if Pin::new(&mut timer).poll(cx).is_ready() {
+                if timer.deadline() >= self.ka_expire {
+                    // check for any outstanding tasks
+                    if is_empty && self.write_buf.is_empty() {
+                        trace!("Keep-alive timeout, close connection");
+                        self.flags.insert(Flags::SHUTDOWN);
+                        return Ok(());
+                    } else if let Some(dl) = self.config.keep_alive_expire() {
+                        // extend keep-alive timer
                         timer.reset(dl);
-                    } else {
-                        // no shutdown timeout, drop socket
-                        self.flags.insert(Flags::DISCONNECT);
-                        return Poll::Pending;
                     }
-                } else if let Some(dl) = self.codec.config().keep_alive_expire() {
-                    timer.reset(dl);
+                } else {
+                    timer.reset(self.ka_expire);
                 }
-            } else {
-                timer.reset(self.ka_expire);
+                let _ = Pin::new(&mut timer).poll(cx);
             }
-            let _ = Pin::new(&mut timer).poll(cx);
-            Poll::Pending
         }
+        Ok(())
     }
 
     fn process_response(
@@ -849,9 +849,9 @@ where
                 DispatcherMessage::Request(req) => {
                     // Handle `EXPECT: 100-Continue` header
                     Ok(CallProcess::Next(if req.head().expect() {
-                        CallState::Expect(self.expect.call(req))
+                        CallState::Expect(self.config.expect.call(req))
                     } else {
-                        CallState::Service(self.service.call(req))
+                        CallState::Service(self.config.service.call(req))
                     }))
                 }
                 // switch to upgrade handler
@@ -866,7 +866,7 @@ where
                     let framed = Framed::from_parts(parts);
 
                     Ok(CallProcess::Upgrade(
-                        self.upgrade.as_ref().unwrap().call((req, framed)),
+                        self.config.upgrade.as_ref().unwrap().call((req, framed)),
                     ))
                 }
                 DispatcherMessage::Error(res) => {
@@ -874,12 +874,12 @@ where
                         // response does not have body, so we can process next request
                         continue;
                     } else {
-                        return Ok(CallProcess::Next(CallState::Io));
+                        return Ok(CallProcess::Io);
                     }
                 }
             };
         }
-        Ok(CallProcess::Next(CallState::Io))
+        Ok(CallProcess::Io)
     }
 }
 
@@ -897,10 +897,12 @@ where
 #[cfg(test)]
 mod tests {
     use futures::future::{lazy, ok, Future, FutureExt};
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use super::*;
+    use crate::http::config::{DispatcherConfig, ServiceConfig};
     use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
     use crate::http::ResponseHead;
     use crate::service::IntoService;
@@ -919,11 +921,13 @@ mod tests {
         B: MessageBody,
     {
         Dispatcher::new(
+            Rc::new(DispatcherConfig::new(
+                ServiceConfig::default(),
+                service.into_service(),
+                ExpectHandler,
+                None,
+            )),
             stream,
-            ServiceConfig::default(),
-            Rc::new(service.into_service()),
-            Rc::new(ExpectHandler),
-            None,
             None,
             None,
         )
@@ -939,11 +943,13 @@ mod tests {
     {
         crate::rt::spawn(
             Dispatcher::<Io, S, B, ExpectHandler, UpgradeHandler<Io>>::new(
+                Rc::new(DispatcherConfig::new(
+                    ServiceConfig::default(),
+                    service.into_service(),
+                    ExpectHandler,
+                    None,
+                )),
                 stream,
-                ServiceConfig::default(),
-                Rc::new(service.into_service()),
-                Rc::new(ExpectHandler),
-                None,
                 None,
                 None,
             )
@@ -994,7 +1000,7 @@ mod tests {
 
     #[ntex_rt::test]
     /// if socket is disconnected
-    /// h1 dispatcher still process all incoming requests
+    /// h1 dispatcher still processes all incoming requests
     /// but it does not write any data to socket
     async fn test_write_disconnected() {
         let num = Arc::new(AtomicUsize::new(0));
