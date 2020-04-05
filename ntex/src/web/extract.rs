@@ -8,7 +8,7 @@ use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 use crate::http::Payload;
 
 use super::error::ErrorRenderer;
-use super::request::HttpRequest;
+use super::httprequest::HttpRequest;
 
 /// Trait implemented by types that can be extracted from request.
 ///

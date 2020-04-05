@@ -13,16 +13,12 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json;
 
-use crate::http::header::CONTENT_LENGTH;
-use crate::http::{HttpMessage, Payload, Response, StatusCode};
-
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
-
+use crate::http::header::CONTENT_LENGTH;
+use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::web::error::{ErrorRenderer, JsonError, JsonPayloadError};
-use crate::web::extract::FromRequest;
-use crate::web::request::HttpRequest;
-use crate::web::responder::Responder;
+use crate::web::{FromRequest, HttpRequest, Responder};
 
 /// Json helper
 ///

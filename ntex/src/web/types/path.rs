@@ -7,8 +7,7 @@ use serde::de;
 use crate::http::Payload;
 use crate::router::PathDeserializer;
 use crate::web::error::{ErrorRenderer, PathError};
-use crate::web::request::HttpRequest;
-use crate::web::FromRequest;
+use crate::web::{FromRequest, HttpRequest};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 /// Extract typed information from the request's path.

@@ -12,8 +12,7 @@ use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
 use crate::web::error::{ErrorRenderer, PayloadError};
-use crate::web::extract::FromRequest;
-use crate::web::request::HttpRequest;
+use crate::web::{FromRequest, HttpRequest};
 
 /// Payload extractor returns request 's payload stream.
 ///

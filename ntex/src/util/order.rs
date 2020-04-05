@@ -19,7 +19,7 @@ struct Record<I, E> {
     tx: oneshot::Sender<Result<I, E>>,
 }
 
-/// Timeout error
+/// InOrder error
 pub enum InOrderError<E> {
     /// Service error
     Service(E),

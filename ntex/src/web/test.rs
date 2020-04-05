@@ -33,11 +33,11 @@ use crate::server::Server;
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use crate::web::config::AppConfig;
+use crate::web::dev::{WebRequest, WebResponse};
 use crate::web::error::ErrorRenderer;
-use crate::web::request::HttpRequestPool;
+use crate::web::httprequest::{HttpRequest, HttpRequestPool};
 use crate::web::rmap::ResourceMap;
-use crate::web::service::{WebRequest, WebResponse};
-use crate::web::{DefaultError, HttpRequest, HttpResponse};
+use crate::web::{DefaultError, HttpResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<Err: ErrorRenderer>() -> impl Service<
@@ -216,6 +216,7 @@ where
     bytes.freeze()
 }
 
+/// Reads response's body and combines it to a Bytes objects
 pub async fn load_stream<S>(mut stream: S) -> Result<Bytes, Box<dyn Error>>
 where
     S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
@@ -757,6 +758,7 @@ where
 }
 
 #[derive(Clone)]
+/// Test server configuration
 pub struct TestServerConfig {
     tp: HttpVer,
     stream: StreamType,

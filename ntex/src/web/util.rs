@@ -5,6 +5,7 @@ use ntex_router::IntoPattern;
 
 use crate::http::body::MessageBody;
 use crate::http::error::{BlockingError, ResponseError};
+use crate::http::header::ContentEncoding;
 use crate::http::{Method, Request, Response};
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
@@ -17,7 +18,8 @@ use super::responder::Responder;
 use super::route::Route;
 use super::scope::Scope;
 use super::server::HttpServer;
-use super::service::WebService;
+use super::service::WebServiceAdapter;
+use super::{HttpResponse, HttpResponseBuilder};
 
 /// Create resource for a specific path.
 ///
@@ -232,7 +234,7 @@ where
     Route::new().to(handler)
 }
 
-/// Create raw service for a specific path.
+/// Create service adapter for a specific path.
 ///
 /// ```rust
 /// use ntex::web::{self, dev, guard, App, HttpResponse, Error, DefaultError};
@@ -247,8 +249,8 @@ where
 ///         .finish(my_service)
 /// );
 /// ```
-pub fn service<T: IntoPattern>(path: T) -> WebService {
-    WebService::new(path)
+pub fn service<T: IntoPattern>(path: T) -> WebServiceAdapter {
+    WebServiceAdapter::new(path)
 }
 
 /// Execute blocking function on a thread pool, returns future that resolves
@@ -289,4 +291,45 @@ where
     B: MessageBody + 'static,
 {
     HttpServer::new(factory)
+}
+
+struct Enc(ContentEncoding);
+
+/// Helper trait that allows to set specific encoding for response.
+pub trait BodyEncoding {
+    /// Get content encoding
+    fn get_encoding(&self) -> Option<ContentEncoding>;
+
+    /// Set content encoding
+    fn encoding(&mut self, encoding: ContentEncoding) -> &mut Self;
+}
+
+impl BodyEncoding for HttpResponseBuilder {
+    fn get_encoding(&self) -> Option<ContentEncoding> {
+        if let Some(ref enc) = self.extensions().get::<Enc>() {
+            Some(enc.0)
+        } else {
+            None
+        }
+    }
+
+    fn encoding(&mut self, encoding: ContentEncoding) -> &mut Self {
+        self.extensions_mut().insert(Enc(encoding));
+        self
+    }
+}
+
+impl<B> BodyEncoding for HttpResponse<B> {
+    fn get_encoding(&self) -> Option<ContentEncoding> {
+        if let Some(ref enc) = self.extensions().get::<Enc>() {
+            Some(enc.0)
+        } else {
+            None
+        }
+    }
+
+    fn encoding(&mut self, encoding: ContentEncoding) -> &mut Self {
+        self.extensions_mut().insert(Enc(encoding));
+        self
+    }
 }

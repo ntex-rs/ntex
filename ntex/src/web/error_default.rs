@@ -16,7 +16,7 @@ use super::HttpResponse;
 #[derive(Clone, Copy, Default)]
 pub struct DefaultError;
 
-/// Generic error for error that supports `DefaultError` renderer.
+/// Generic error container for errors that supports `DefaultError` renderer.
 pub struct Error {
     cause: Box<dyn WebResponseError<DefaultError>>,
 }

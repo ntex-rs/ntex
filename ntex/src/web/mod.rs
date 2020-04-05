@@ -71,11 +71,13 @@ mod error_default;
 mod extract;
 pub mod guard;
 mod handler;
+mod httprequest;
 mod info;
 pub mod middleware;
 mod request;
 mod resource;
 mod responder;
+mod response;
 mod rmap;
 mod route;
 mod scope;
@@ -94,13 +96,12 @@ pub use self::data::Data;
 pub use self::error::{DefaultError, Error, ErrorRenderer, WebResponseError};
 pub use self::extract::FromRequest;
 pub use self::handler::Handler;
-pub use self::request::HttpRequest;
+pub use self::httprequest::HttpRequest;
 pub use self::resource::Resource;
 pub use self::responder::{Either, Responder};
 pub use self::route::Route;
 pub use self::scope::Scope;
 pub use self::server::HttpServer;
-pub use self::service::WebService;
 pub use self::util::*;
 
 pub mod dev {
@@ -110,11 +111,13 @@ pub mod dev {
     //! traits by adding a glob import to the top of ntex::web heavy modules:
 
     use super::Handler;
-    pub use crate::web::config::{AppConfig, AppService};
+    pub use crate::web::config::AppConfig;
     pub use crate::web::info::ConnectionInfo;
+    pub use crate::web::request::WebRequest;
+    pub use crate::web::response::WebResponse;
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::service::{
-        HttpServiceFactory, WebRequest, WebResponse, WebService,
+        WebServiceAdapter, WebServiceConfig, WebServiceFactory,
     };
 
     pub(crate) fn insert_slesh(mut patterns: Vec<String>) -> Vec<String> {
@@ -124,50 +127,6 @@ pub mod dev {
             };
         }
         patterns
-    }
-
-    use crate::http::header::ContentEncoding;
-    use crate::http::{Response, ResponseBuilder};
-
-    struct Enc(ContentEncoding);
-
-    /// Helper trait that allows to set specific encoding for response.
-    pub trait BodyEncoding {
-        /// Get content encoding
-        fn get_encoding(&self) -> Option<ContentEncoding>;
-
-        /// Set content encoding
-        fn encoding(&mut self, encoding: ContentEncoding) -> &mut Self;
-    }
-
-    impl BodyEncoding for ResponseBuilder {
-        fn get_encoding(&self) -> Option<ContentEncoding> {
-            if let Some(ref enc) = self.extensions().get::<Enc>() {
-                Some(enc.0)
-            } else {
-                None
-            }
-        }
-
-        fn encoding(&mut self, encoding: ContentEncoding) -> &mut Self {
-            self.extensions_mut().insert(Enc(encoding));
-            self
-        }
-    }
-
-    impl<B> BodyEncoding for Response<B> {
-        fn get_encoding(&self) -> Option<ContentEncoding> {
-            if let Some(ref enc) = self.extensions().get::<Enc>() {
-                Some(enc.0)
-            } else {
-                None
-            }
-        }
-
-        fn encoding(&mut self, encoding: ContentEncoding) -> &mut Self {
-            self.extensions_mut().insert(Enc(encoding));
-            self
-        }
     }
 
     #[doc(hidden)]

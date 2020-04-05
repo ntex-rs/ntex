@@ -9,7 +9,7 @@ use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::service::{Service, Transform};
-use crate::web::service::{WebRequest, WebResponse};
+use crate::web::dev::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
 ///
@@ -172,7 +172,7 @@ mod tests {
     use super::*;
     use crate::http::header::CONTENT_TYPE;
     use crate::service::IntoService;
-    use crate::web::service::WebRequest;
+    use crate::web::request::WebRequest;
     use crate::web::test::{ok_service, TestRequest};
     use crate::web::{DefaultError, Error, HttpResponse};
 

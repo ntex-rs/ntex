@@ -8,8 +8,7 @@ use serde_urlencoded;
 
 use crate::http::Payload;
 use crate::web::error::{ErrorRenderer, QueryPayloadError};
-use crate::web::extract::FromRequest;
-use crate::web::request::HttpRequest;
+use crate::web::{FromRequest, HttpRequest};
 
 /// Extract typed information from the request's query.
 ///

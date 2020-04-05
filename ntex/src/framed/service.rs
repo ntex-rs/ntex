@@ -90,7 +90,7 @@ where
     <Codec as Encoder>::Error: std::fmt::Debug,
     Out: Stream<Item = <Codec as Encoder>::Item> + Unpin,
 {
-    /// Construct framed handler new service with specified connect service
+    /// Construct framed handler service factory with specified connect service
     pub fn new<F>(connect: F) -> FactoryBuilder<St, C, Io, Codec, Out>
     where
         F: IntoServiceFactory<C>,

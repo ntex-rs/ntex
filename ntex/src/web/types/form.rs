@@ -17,9 +17,7 @@ use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::web::error::{ErrorRenderer, UrlencodedError};
-use crate::web::extract::FromRequest;
-use crate::web::request::HttpRequest;
-use crate::web::responder::Responder;
+use crate::web::{FromRequest, HttpRequest, Responder};
 
 /// Form data helper (`application/x-www-form-urlencoded`)
 ///

@@ -12,13 +12,15 @@ use crate::router::{Path, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::{fn_service, Service, ServiceFactory};
 
-use super::config::{AppConfig, AppService};
+use super::config::AppConfig;
 use super::data::DataFactory;
 use super::error::ErrorRenderer;
 use super::guard::Guard;
-use super::request::{HttpRequest, HttpRequestPool};
+use super::httprequest::{HttpRequest, HttpRequestPool};
+use super::request::WebRequest;
+use super::response::WebResponse;
 use super::rmap::ResourceMap;
-use super::service::{AppServiceFactory, WebRequest, WebResponse};
+use super::service::{AppServiceFactory, WebServiceConfig};
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
@@ -82,7 +84,8 @@ where
         });
 
         // App config
-        let mut config = AppService::new(config, default.clone(), self.data.clone());
+        let mut config =
+            WebServiceConfig::new(config, default.clone(), self.data.clone());
 
         // register services
         std::mem::replace(&mut *self.services.borrow_mut(), Vec::new())
