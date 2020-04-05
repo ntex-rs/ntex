@@ -993,24 +993,30 @@ mod tests {
         let (client, server) = Io::create();
         let mut decoder = ClientCodec::default();
         spawn_h1(server, |_| async {
-            delay_for(Duration::from_millis(50)).await;
+            delay_for(Duration::from_millis(100)).await;
             Ok::<_, io::Error>(Response::Ok().finish())
         });
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
 
         let mut buf = client.read().await.unwrap();
-        println!("buf: {:?}", buf);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_closed());
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
         client.write("GET /test HTTP/1.1\r\n\r\n");
+        delay_for(Duration::from_millis(50)).await;
+        client.write("GET /test HTTP/1.1\r\n\r\n");
 
         let mut buf = client.read().await.unwrap();
         assert!(load(&mut decoder, &mut buf).status.is_success());
 
         let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(decoder.decode(&mut buf).unwrap().is_none());
+        assert!(!client.is_server_closed());
+
+        buf.extend(client.read().await.unwrap());
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(decoder.decode(&mut buf).unwrap().is_none());
         assert!(!client.is_server_closed());
