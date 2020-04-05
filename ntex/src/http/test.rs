@@ -12,7 +12,7 @@ use coo_kie::{Cookie, CookieJar};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::rt::{net::TcpStream, System};
-use crate::server::{Server, ServiceFactory};
+use crate::server::{Server, StreamServiceFactory};
 
 use super::client::error::WsClientError;
 use super::client::{Client, ClientRequest, ClientResponse, Connector};
@@ -213,7 +213,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
+pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
     let (tx, rx) = mpsc::channel();
 
     // run server in separate thread

@@ -5,7 +5,7 @@ use std::{io, net, thread};
 use net2::TcpBuilder;
 
 use crate::rt::{net::TcpStream, System};
-use crate::server::{Server, ServerBuilder, ServiceFactory};
+use crate::server::{Server, ServerBuilder, StreamServiceFactory};
 
 /// Start test server
 ///
@@ -38,7 +38,7 @@ use crate::server::{Server, ServerBuilder, ServiceFactory};
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn test_server<F: ServiceFactory<TcpStream>>(factory: F) -> TestServer {
+pub fn test_server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
     let (tx, rx) = mpsc::channel();
 
     // run server in separate thread

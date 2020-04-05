@@ -29,7 +29,7 @@ pub mod rustls;
 
 pub use self::builder::ServerBuilder;
 pub use self::config::{ServiceConfig, ServiceRuntime};
-pub use self::service::ServiceFactory;
+pub use self::service::StreamServiceFactory;
 pub use self::test::{build_test_server, test_server, TestServer};
 
 #[doc(hidden)]
@@ -48,7 +48,7 @@ impl Token {
 }
 
 /// Start server building process
-pub fn new() -> ServerBuilder {
+pub fn build() -> ServerBuilder {
     ServerBuilder::default()
 }
 
