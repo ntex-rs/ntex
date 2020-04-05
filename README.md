@@ -1,9 +1,9 @@
 <div align="center">
  <p><h1>ntex</h1> </p>
-  <p><strong>This is personal project, do not use it</strong> </p>
+  <p><strong>Framework for composable network services. This is personal project.</strong> </p>
   <p>
 
-[![build status](https://github.com/ntex-rs/actix-net/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Linux)") 
+[![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Linux)") 
 [![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/master/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex) 
 [![crates.io](https://meritbadge.herokuapp.com/ntex)](https://crates.io/crates/ntex) 
 [![Documentation](https://docs.rs/ntex/badge.svg)](https://docs.rs/ntex) 
@@ -17,9 +17,9 @@
 
 | Platform         | Build Status |
 | ---------------- | ------------ |
-| Linux            | [![build status](https://github.com/ntex-rs/actix-net/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Linux)") |
-| macOS            | [![build status](https://github.com/ntex-rs/actix-net/workflows/CI%20%28OSX%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(OSX)") |
-| Windows          | [![build status](https://github.com/ntex-rs/actix-net/workflows/CI%20%28Windows%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Windows)") |
+| Linux            | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Linux)") |
+| macOS            | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28OSX%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(OSX)") |
+| Windows          | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Windows%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Windows)") |
 
 ## Documentation & community resources
 
