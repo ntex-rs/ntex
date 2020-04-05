@@ -194,7 +194,7 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
         fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
             $fut_type {
                 items: <($(Option<$T>,)+)>::default(),
-                futs: ($($T::from_request(req, payload),)+),
+                $($T: $T::from_request(req, payload),)+
             }
         }
     }
@@ -206,7 +206,7 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
         $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
     {
         items: ($(Option<$T>,)+),
-        futs: ($($T::Future,)+),
+        $(#[pin] $T: $T::Future),+
     }
 
     impl<Err: ErrorRenderer, $($T: FromRequest<Err>),+> Future for $fut_type<Err, $($T),+>
@@ -221,7 +221,7 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
             let mut ready = true;
             $(
                 if this.items.$n.is_none() {
-                    match unsafe { Pin::new_unchecked(&mut this.futs.$n) }.poll(cx) {
+                    match this.$T.poll(cx) {
                         Poll::Ready(Ok(item)) => {
                             this.items.$n = Some(item);
                         }
@@ -242,6 +242,7 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
     }
 });
 
+#[allow(non_snake_case)]
 #[rustfmt::skip]
 mod m {
     use super::*;
