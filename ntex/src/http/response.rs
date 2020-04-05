@@ -82,12 +82,6 @@ impl<B> Response<B> {
         &mut *self.head
     }
 
-    // /// The source `error` for this response
-    // #[inline]
-    // pub fn error(&self) -> Option<&Error> {
-    //     self.error.as_ref()
-    // }
-
     /// Get the response status code
     #[inline]
     pub fn status(&self) -> StatusCode {
@@ -840,6 +834,12 @@ mod tests {
             .finish();
         let dbg = format!("{:?}", resp);
         assert!(dbg.contains("Response"));
+
+        let mut resp = Response::Ok();
+        resp.header(COOKIE, HeaderValue::from_static("cookie1=value1; "));
+        resp.header(COOKIE, HeaderValue::from_static("cookie2=value2; "));
+        let dbg = format!("{:?}", resp);
+        assert!(dbg.contains("ResponseBuilder"));
     }
 
     #[cfg(feature = "cookie")]

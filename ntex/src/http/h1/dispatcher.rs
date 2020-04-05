@@ -12,8 +12,7 @@ use pin_project::{pin_project, project};
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::config::DispatcherConfig;
-use crate::http::error::{DispatchError, ResponseError};
-use crate::http::error::{ParseError, PayloadError};
+use crate::http::error::{DispatchError, PayloadError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
@@ -734,15 +733,6 @@ where
                     }
                 }
                 Ok(None) => break,
-                Err(ParseError::Io(e)) => {
-                    self.read_buf.clear();
-                    self.error = Some(DispatchError::Io(e));
-                    self.flags.insert(Flags::DISCONNECT);
-                    if let Some(mut payload) = self.payload.take() {
-                        payload.set_error(PayloadError::Incomplete(None));
-                    }
-                    break;
-                }
                 Err(e) => {
                     // error during request decoding
                     if let Some(mut payload) = self.payload.take() {
@@ -898,11 +888,13 @@ mod tests {
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
 
     use super::*;
     use crate::http::config::{DispatcherConfig, ServiceConfig};
     use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
     use crate::http::ResponseHead;
+    use crate::rt::time::delay_for;
     use crate::service::IntoService;
     use crate::testing::Io;
 
@@ -988,6 +980,43 @@ mod tests {
 
         let mut buf = client.read().await.unwrap();
         assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(decoder.decode(&mut buf).unwrap().is_none());
+        assert!(!client.is_server_closed());
+
+        client.close().await;
+        assert!(client.is_server_closed());
+    }
+
+    #[ntex_rt::test]
+    async fn test_pipeline_with_delay() {
+        let (client, server) = Io::create();
+        let mut decoder = ClientCodec::default();
+        spawn_h1(server, |_| async {
+            delay_for(Duration::from_millis(100)).await;
+            Ok::<_, io::Error>(Response::Ok().finish())
+        });
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(!client.is_server_closed());
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        delay_for(Duration::from_millis(50)).await;
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(decoder.decode(&mut buf).unwrap().is_none());
+        assert!(!client.is_server_closed());
+
+        buf.extend(client.read().await.unwrap());
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(decoder.decode(&mut buf).unwrap().is_none());
         assert!(!client.is_server_closed());

@@ -1,6 +1,7 @@
 #![cfg(feature = "rustls")]
 use std::fs::File;
 use std::io::{self, BufReader};
+use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use futures::future::{self, err, ok};
@@ -152,6 +153,7 @@ async fn test_h2_content_length() {
 
             let req = srv
                 .request(Method::HEAD, srv.surl(&format!("/{}", i)))
+                .timeout(Duration::from_secs(10))
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);

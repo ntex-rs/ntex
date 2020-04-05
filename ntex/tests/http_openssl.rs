@@ -73,6 +73,28 @@ async fn test_h2() -> io::Result<()> {
 }
 
 #[ntex::test]
+async fn test_h1() -> io::Result<()> {
+    let srv = test_server(move || {
+        let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        builder
+            .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
+            .unwrap();
+        builder
+            .set_certificate_chain_file("./tests/cert.pem")
+            .unwrap();
+
+        HttpService::build()
+            .h1(|_| ok::<_, io::Error>(Response::Ok().finish()))
+            .openssl(builder.build())
+            .map_err(|_| ())
+    });
+
+    let response = srv.sget("/").send().await.unwrap();
+    assert!(response.status().is_success());
+    Ok(())
+}
+
+#[ntex::test]
 async fn test_h2_1() -> io::Result<()> {
     let srv = test_server(move || {
         HttpService::build()
