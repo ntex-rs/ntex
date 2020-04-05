@@ -70,12 +70,14 @@ jobs:
 
       - name: Generate coverage file
         if: matrix.version == '1.42.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
+        continue-on-error: true
         run: |
           cargo install cargo-tarpaulin
           cargo tarpaulin --out Xml --all --all-features
 
       - name: Upload to Codecov
         if: matrix.version == '1.42.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
+        continue-on-error: true
         uses: codecov/codecov-action@v1
         with:
           file: cobertura.xml
