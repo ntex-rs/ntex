@@ -94,6 +94,8 @@ pub enum ParseError {
     #[allow(dead_code)]
     #[display(fmt = "Timeout")]
     Timeout,
+    /// An `InvalidInput` occurred while trying to parse incoming stream.
+    InvalidInput(&'static str),
     /// An `io::Error` that occurred while trying to read or write to a network
     /// stream.
     #[display(fmt = "IO error: {}", _0)]
@@ -143,7 +145,7 @@ impl From<httparse::Error> for ParseError {
     }
 }
 
-#[derive(Display, Debug)]
+#[derive(Display, Debug, From)]
 /// A set of errors that can occur during payload parsing
 pub enum PayloadError {
     /// A payload reached EOF, but is not complete.
@@ -164,30 +166,14 @@ pub enum PayloadError {
     /// Http2 payload error
     #[display(fmt = "{}", _0)]
     Http2Payload(h2::Error),
+    /// Parse error
+    Parse(ParseError),
     /// Io error
     #[display(fmt = "{}", _0)]
     Io(io::Error),
 }
 
 impl std::error::Error for PayloadError {}
-
-impl From<h2::Error> for PayloadError {
-    fn from(err: h2::Error) -> Self {
-        PayloadError::Http2Payload(err)
-    }
-}
-
-impl From<Option<io::Error>> for PayloadError {
-    fn from(err: Option<io::Error>) -> Self {
-        PayloadError::Incomplete(err)
-    }
-}
-
-impl From<io::Error> for PayloadError {
-    fn from(err: io::Error) -> Self {
-        PayloadError::Incomplete(Some(err))
-    }
-}
 
 impl From<BlockingError<io::Error>> for PayloadError {
     fn from(err: BlockingError<io::Error>) -> Self {

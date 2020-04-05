@@ -87,7 +87,11 @@ jobs:
         with:
           file: cobertura.xml
 
-      - name: Clear the cargo caches
+      - name: Install cargo-cache
+        continue-on-error: true
         run: |
           cargo install cargo-cache --no-default-features --features ci-autoclean
+
+      - name: Clear the cargo caches
+        run: |
           cargo-cache
