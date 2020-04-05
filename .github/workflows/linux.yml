@@ -48,6 +48,13 @@ jobs:
           path: target
           key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-build-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Cache cargo tarpaulin
+        if: matrix.version == 'stable' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/bin/cargo-tarpaulin
+          key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-tarpaulin
+
       - name: check build
         uses: actions-rs/cargo@v1
         with:

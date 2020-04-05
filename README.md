@@ -3,7 +3,7 @@
   <p><strong>This is personal project, please, do not use it</strong> </p>
   <p>
 
-[![Build Status](https://github.com/ntex-rs/ntex/workflows/CI%20(Linux)/badge.svg)](https://travis-ci.org/ntex-rs/ntex) 
+![Build Status](https://github.com/ntex-rs/ntex/workflows/CI%20(Linux)/badge.svg) 
 [![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/master/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex) 
 [![crates.io](https://meritbadge.herokuapp.com/ntex)](https://crates.io/crates/ntex) 
 [![Documentation](https://docs.rs/ntex/badge.svg)](https://docs.rs/ntex) 

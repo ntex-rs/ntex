@@ -2,6 +2,5 @@ ignore: # ignore codecoverage on following paths
   - "**/tests"
   - "**/benches"
   - "**/examples"
-  - "**/actix-net"
-  - "actix-net"
-  - "ntex-web-macros"
+  - "ntex-macros"
+  - "ntex-rt-macros"

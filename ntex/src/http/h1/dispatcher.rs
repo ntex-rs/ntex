@@ -256,7 +256,7 @@ where
         }
 
         // keep-alive book-keeping
-        let _ = this.inner.poll_keepalive(cx, this.call.is_io())?;
+        this.inner.poll_keepalive(cx, this.call.is_io())?;
 
         // shutdown process
         if this.inner.flags.contains(Flags::SHUTDOWN) {
@@ -542,52 +542,46 @@ where
     fn poll_write(&mut self, cx: &mut Context<'_>) -> Result<PollWrite, DispatchError> {
         let mut flushed = false;
 
-        loop {
-            if let Some(ref mut stream) = self.send_payload {
-                // resize write buffer
-                let len = self.write_buf.len();
-                let remaining = self.write_buf.capacity() - len;
-                if remaining < WRITE_LW_BUFFER_SIZE {
-                    self.write_buf.reserve(HW_BUFFER_SIZE - remaining);
-                }
+        while let Some(ref mut stream) = self.send_payload {
+            // resize write buffer
+            let len = self.write_buf.len();
+            let remaining = self.write_buf.capacity() - len;
+            if remaining < WRITE_LW_BUFFER_SIZE {
+                self.write_buf.reserve(HW_BUFFER_SIZE - remaining);
+            }
 
-                if len < HW_BUFFER_SIZE {
-                    match stream.poll_next_chunk(cx) {
-                        Poll::Ready(Some(Ok(item))) => {
-                            flushed = false;
-                            self.codec.encode(
-                                Message::Chunk(Some(item)),
-                                &mut self.write_buf,
-                            )?;
-                        }
-                        Poll::Ready(None) => {
-                            flushed = false;
-                            self.codec
-                                .encode(Message::Chunk(None), &mut self.write_buf)?;
-                            self.send_payload = None;
-                            break;
-                        }
-                        Poll::Ready(Some(Err(_))) => return Err(DispatchError::Unknown),
-                        Poll::Pending => {
-                            // response payload stream is not ready
-                            // we can only flush
-                            if !flushed {
-                                self.poll_flush(cx)?;
-                            }
-                            return Ok(PollWrite::Pending);
-                        }
+            if len < HW_BUFFER_SIZE {
+                match stream.poll_next_chunk(cx) {
+                    Poll::Ready(Some(Ok(item))) => {
+                        flushed = false;
+                        self.codec
+                            .encode(Message::Chunk(Some(item)), &mut self.write_buf)?;
                     }
-                } else {
-                    // write buffer is full, try to flush and check if we have
-                    // space in buffer
-                    flushed = true;
-                    self.poll_flush(cx)?;
-                    if self.write_buf.len() >= HW_BUFFER_SIZE {
+                    Poll::Ready(None) => {
+                        flushed = false;
+                        self.codec
+                            .encode(Message::Chunk(None), &mut self.write_buf)?;
+                        self.send_payload = None;
+                        break;
+                    }
+                    Poll::Ready(Some(Err(_))) => return Err(DispatchError::Unknown),
+                    Poll::Pending => {
+                        // response payload stream is not ready
+                        // we can only flush
+                        if !flushed {
+                            self.poll_flush(cx)?;
+                        }
                         return Ok(PollWrite::Pending);
                     }
                 }
             } else {
-                break;
+                // write buffer is full, try to flush and check if we have
+                // space in buffer
+                flushed = true;
+                self.poll_flush(cx)?;
+                if self.write_buf.len() >= HW_BUFFER_SIZE {
+                    return Ok(PollWrite::Pending);
+                }
             }
         }
 
@@ -657,7 +651,7 @@ where
         }
 
         if self.read_buf.is_empty() {
-            return Ok(PollRead::NoUpdates);
+            Ok(PollRead::NoUpdates)
         } else {
             let result = self.input_decode();
 

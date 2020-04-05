@@ -220,7 +220,10 @@ async fn test_connection_force_close() {
     assert!(response.status().is_success());
 
     // req 2
-    let req = client.post(srv.url("/")).force_close();
+    let req = client
+        .post(srv.url("/"))
+        .timeout(Duration::from_secs(10))
+        .force_close();
     let response = req.send().await.unwrap();
     assert!(response.status().is_success());
 
