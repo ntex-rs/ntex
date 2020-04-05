@@ -34,10 +34,10 @@ use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory
 
 use crate::web::config::AppConfig;
 use crate::web::dev::{WebRequest, WebResponse};
-use crate::web::error::ErrorRenderer;
+use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::{HttpRequest, HttpRequestPool};
 use crate::web::rmap::ResourceMap;
-use crate::web::{DefaultError, HttpResponse};
+use crate::web::{FromRequest, HttpResponse, Responder};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<Err: ErrorRenderer>() -> impl Service<
@@ -273,6 +273,22 @@ where
 
     serde_json::from_slice(&body)
         .unwrap_or_else(|_| panic!("read_response_json failed during deserialization"))
+}
+
+/// Helper method for extractors testing
+pub async fn from_request<T: FromRequest<DefaultError>>(
+    req: &HttpRequest,
+    payload: &mut Payload,
+) -> Result<T, T::Error> {
+    T::from_request(req, payload).await
+}
+
+/// Helper method for responders testing
+pub async fn respond_to<T: Responder<DefaultError>>(
+    slf: T,
+    req: &HttpRequest,
+) -> Result<HttpResponse, T::Error> {
+    T::respond_to(slf, req).await
 }
 
 /// Test `Request` builder.
