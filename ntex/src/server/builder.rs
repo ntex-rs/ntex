@@ -10,7 +10,6 @@ use futures::stream::FuturesUnordered;
 use futures::{ready, Future, FutureExt, Stream, StreamExt};
 use log::{error, info};
 use net2::TcpBuilder;
-use num_cpus;
 
 use crate::rt::net::TcpStream;
 use crate::rt::time::{delay_until, Instant};

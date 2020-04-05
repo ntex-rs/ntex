@@ -11,7 +11,6 @@ use futures::future::{err, ok, FutureExt, LocalBoxFuture, Ready};
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_json;
 
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;

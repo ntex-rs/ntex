@@ -9,7 +9,6 @@ use bytes::Bytes;
 use derive_more::From;
 use futures::{Future, Stream};
 use serde::Serialize;
-use serde_json;
 
 use crate::http::body::{Body, BodyStream};
 use crate::http::error::HttpError;

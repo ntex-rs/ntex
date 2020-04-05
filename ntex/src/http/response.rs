@@ -7,7 +7,6 @@ use std::{fmt, str};
 use bytes::{Bytes, BytesMut};
 use futures::Stream;
 use serde::Serialize;
-use serde_json;
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};

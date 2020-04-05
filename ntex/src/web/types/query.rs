@@ -4,7 +4,6 @@ use std::{fmt, ops};
 
 use futures::future::{err, ok, Ready};
 use serde::de;
-use serde_urlencoded;
 
 use crate::http::Payload;
 use crate::web::error::{ErrorRenderer, QueryPayloadError};

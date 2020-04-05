@@ -7,7 +7,6 @@ use std::{fmt, io};
 use derive_more::{Display, From};
 use http::uri::InvalidUri;
 use http::{header, StatusCode};
-use httparse;
 
 // re-export for convinience
 pub use actix_threadpool::BlockingError;

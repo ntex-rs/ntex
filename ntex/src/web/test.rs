@@ -12,7 +12,6 @@ use futures::stream::{Stream, StreamExt};
 use net2::TcpBuilder;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_json;
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;

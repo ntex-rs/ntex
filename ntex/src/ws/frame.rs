@@ -2,7 +2,6 @@ use std::convert::TryFrom;
 
 use bytes::{Buf, BufMut, BytesMut};
 use log::debug;
-use rand;
 
 use super::mask::apply_mask;
 use super::proto::{CloseCode, CloseReason, OpCode};
