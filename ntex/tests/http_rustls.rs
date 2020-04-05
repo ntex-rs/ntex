@@ -48,7 +48,7 @@ async fn test_h1() -> io::Result<()> {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     Ok(())
 }
@@ -61,7 +61,7 @@ async fn test_h2() -> io::Result<()> {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     Ok(())
 }
@@ -78,7 +78,7 @@ async fn test_h1_1() -> io::Result<()> {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     Ok(())
 }
@@ -95,7 +95,7 @@ async fn test_h2_1() -> io::Result<()> {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     Ok(())
 }
@@ -114,7 +114,11 @@ async fn test_h2_body1() -> io::Result<()> {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send_body(data.clone()).await.unwrap();
+    let response = srv
+        .srequest(Method::GET, "/")
+        .send_body(data.clone())
+        .await
+        .unwrap();
     assert!(response.status().is_success());
 
     let body = srv.load_body(response).await.unwrap();
@@ -201,7 +205,7 @@ async fn test_h2_headers() {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -239,7 +243,7 @@ async fn test_h2_body2() {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -255,7 +259,7 @@ async fn test_h2_head_empty() {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.shead("/").send().await.unwrap();
+    let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
     assert_eq!(response.version(), Version::HTTP_2);
 
@@ -284,7 +288,7 @@ async fn test_h2_head_binary() {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.shead("/").send().await.unwrap();
+    let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
@@ -308,7 +312,7 @@ async fn test_h2_head_binary2() {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.shead("/").send().await.unwrap();
+    let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
@@ -333,7 +337,7 @@ async fn test_h2_body_length() {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -356,7 +360,7 @@ async fn test_h2_body_chunked_explicit() {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     assert!(!response.headers().contains_key(header::TRANSFER_ENCODING));
 
@@ -384,7 +388,7 @@ async fn test_h2_response_http_error_handling() {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
 
     // read response
@@ -405,7 +409,7 @@ async fn test_h2_service_error() {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
 
     // read response
@@ -426,7 +430,7 @@ async fn test_h1_service_error() {
             .rustls(ssl_acceptor())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
 
     // read response

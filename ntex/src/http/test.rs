@@ -304,79 +304,16 @@ impl TestServer {
         }
     }
 
-    /// Create `GET` request
-    pub fn get<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.get(self.url(path.as_ref()).as_str())
-    }
-
-    /// Create https `GET` request
-    pub fn sget<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.get(self.surl(path.as_ref()).as_str())
-    }
-
-    /// Create `POST` request
-    pub fn post<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.post(self.url(path.as_ref()).as_str())
-    }
-
-    /// Create https `POST` request
-    pub fn spost<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.post(self.surl(path.as_ref()).as_str())
-    }
-
-    /// Create `HEAD` request
-    pub fn head<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.head(self.url(path.as_ref()).as_str())
-    }
-
-    /// Create https `HEAD` request
-    pub fn shead<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.head(self.surl(path.as_ref()).as_str())
-    }
-
-    /// Create `PUT` request
-    pub fn put<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.put(self.url(path.as_ref()).as_str())
-    }
-
-    /// Create https `PUT` request
-    pub fn sput<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.put(self.surl(path.as_ref()).as_str())
-    }
-
-    /// Create `PATCH` request
-    pub fn patch<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.patch(self.url(path.as_ref()).as_str())
-    }
-
-    /// Create https `PATCH` request
-    pub fn spatch<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.patch(self.surl(path.as_ref()).as_str())
-    }
-
-    /// Create `DELETE` request
-    pub fn delete<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.delete(self.url(path.as_ref()).as_str())
-    }
-
-    /// Create https `DELETE` request
-    pub fn sdelete<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.delete(self.surl(path.as_ref()).as_str())
-    }
-
-    /// Create `OPTIONS` request
-    pub fn options<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.options(self.url(path.as_ref()).as_str())
-    }
-
-    /// Create https `OPTIONS` request
-    pub fn soptions<S: AsRef<str>>(&self, path: S) -> ClientRequest {
-        self.client.options(self.surl(path.as_ref()).as_str())
-    }
-
-    /// Connect to test http server
+    /// Create client request
     pub fn request<S: AsRef<str>>(&self, method: Method, path: S) -> ClientRequest {
-        self.client.request(method, path.as_ref())
+        self.client
+            .request(method, self.url(path.as_ref()).as_str())
+    }
+
+    /// Create secure client request
+    pub fn srequest<S: AsRef<str>>(&self, method: Method, path: S) -> ClientRequest {
+        self.client
+            .request(method, self.surl(path.as_ref()).as_str())
     }
 
     pub async fn load_body<S>(

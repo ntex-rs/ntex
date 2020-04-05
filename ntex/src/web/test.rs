@@ -9,7 +9,6 @@ use std::{fmt, net, thread, time};
 use bytes::{Bytes, BytesMut};
 use futures::future::ok;
 use futures::stream::{Stream, StreamExt};
-use net2::TcpBuilder;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -850,16 +849,6 @@ impl TestServerConfig {
     }
 }
 
-/// Get first available unused address
-pub fn unused_addr() -> net::SocketAddr {
-    let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let socket = TcpBuilder::new_v4().unwrap();
-    socket.bind(&addr).unwrap();
-    socket.reuse_address(true).unwrap();
-    let tcp = socket.to_tcp_listener().unwrap();
-    tcp.local_addr().unwrap()
-}
-
 /// Test server controller
 pub struct TestServer {
     addr: net::SocketAddr,
@@ -997,6 +986,8 @@ mod tests {
         assert_eq!(req.version(), Version::HTTP_2);
         let data = req.app_data::<Data<u64>>().unwrap();
         assert_eq!(*data.get_ref(), 20);
+
+        // let req = TestRequest::with_uri("/test").to_http_
     }
 
     #[ntex_rt::test]

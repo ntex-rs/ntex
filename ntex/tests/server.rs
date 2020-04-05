@@ -6,25 +6,15 @@ use std::{net, thread, time};
 use bytes::Bytes;
 use futures::future::{lazy, ok};
 use futures::SinkExt;
-use net2::TcpBuilder;
 
 use ntex::codec::{BytesCodec, Framed};
 use ntex::rt::net::TcpStream;
-use ntex::server::Server;
+use ntex::server::{Server, TestServer};
 use ntex::service::fn_service;
-
-fn unused_addr() -> net::SocketAddr {
-    let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let socket = TcpBuilder::new_v4().unwrap();
-    socket.bind(&addr).unwrap();
-    socket.reuse_address(true).unwrap();
-    let tcp = socket.to_tcp_listener().unwrap();
-    tcp.local_addr().unwrap()
-}
 
 #[test]
 fn test_bind() {
-    let addr = unused_addr();
+    let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
@@ -50,7 +40,7 @@ fn test_bind() {
 
 #[test]
 fn test_listen() {
-    let addr = unused_addr();
+    let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
@@ -78,7 +68,7 @@ fn test_listen() {
 #[test]
 #[cfg(unix)]
 fn test_start() {
-    let addr = unused_addr();
+    let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
@@ -141,9 +131,9 @@ fn test_start() {
 
 #[test]
 fn test_configure() {
-    let addr1 = unused_addr();
-    let addr2 = unused_addr();
-    let addr3 = unused_addr();
+    let addr1 = TestServer::unused_addr();
+    let addr2 = TestServer::unused_addr();
+    let addr3 = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();

@@ -27,6 +27,7 @@ pub mod openssl;
 #[cfg(feature = "rustls")]
 pub mod rustls;
 
+pub(crate) use self::builder::create_tcp_listener;
 pub use self::builder::ServerBuilder;
 pub use self::config::{ServiceConfig, ServiceRuntime};
 pub use self::service::StreamServiceFactory;

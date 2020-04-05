@@ -67,7 +67,7 @@ async fn test_h2() -> io::Result<()> {
             .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     Ok(())
 }
@@ -89,7 +89,7 @@ async fn test_h1() -> io::Result<()> {
             .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     Ok(())
 }
@@ -107,7 +107,7 @@ async fn test_h2_1() -> io::Result<()> {
             .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     Ok(())
 }
@@ -127,7 +127,11 @@ async fn test_h2_body() -> io::Result<()> {
             .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send_body(data.clone()).await.unwrap();
+    let response = srv
+        .srequest(Method::GET, "/")
+        .send_body(data.clone())
+        .await
+        .unwrap();
     assert!(response.status().is_success());
 
     let body = srv.load_body(response).await.unwrap();
@@ -160,23 +164,17 @@ async fn test_h2_content_length() {
 
     {
         for i in 0..4 {
-            let req = srv
-                .request(Method::GET, srv.surl(&format!("/{}", i)))
-                .send();
+            let req = srv.srequest(Method::GET, format!("/{}", i)).send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
 
-            let req = srv
-                .request(Method::HEAD, srv.surl(&format!("/{}", i)))
-                .send();
+            let req = srv.srequest(Method::HEAD, format!("/{}", i)).send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
         }
 
         for i in 4..6 {
-            let req = srv
-                .request(Method::GET, srv.surl(&format!("/{}", i)))
-                .send();
+            let req = srv.srequest(Method::GET, format!("/{}", i)).send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), Some(&value));
         }
@@ -216,7 +214,7 @@ async fn test_h2_headers() {
                     .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -255,7 +253,7 @@ async fn test_h2_body2() {
             .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -272,7 +270,7 @@ async fn test_h2_head_empty() {
             .map_err(|_| ())
     });
 
-    let response = srv.shead("/").send().await.unwrap();
+    let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
     assert_eq!(response.version(), Version::HTTP_2);
 
@@ -299,7 +297,7 @@ async fn test_h2_head_binary() {
             .map_err(|_| ())
     });
 
-    let response = srv.shead("/").send().await.unwrap();
+    let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
@@ -321,7 +319,7 @@ async fn test_h2_head_binary2() {
             .map_err(|_| ())
     });
 
-    let response = srv.shead("/").send().await.unwrap();
+    let response = srv.srequest(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
@@ -344,7 +342,7 @@ async fn test_h2_body_length() {
             .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -368,7 +366,7 @@ async fn test_h2_body_chunked_explicit() {
             .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     assert!(!response.headers().contains_key(header::TRANSFER_ENCODING));
 
@@ -395,7 +393,7 @@ async fn test_h2_response_http_error_handling() {
             .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
     // read response
@@ -417,7 +415,7 @@ async fn test_h2_service_error() {
             .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     // read response
@@ -438,6 +436,6 @@ async fn test_h2_on_connect() {
             .map_err(|_| ())
     });
 
-    let response = srv.sget("/").send().await.unwrap();
+    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 }

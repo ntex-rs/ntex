@@ -2,7 +2,7 @@
 use std::sync::mpsc;
 use std::{io, net, thread};
 
-use net2::TcpBuilder;
+use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::rt::{net::TcpStream, System};
 use crate::server::{Server, ServerBuilder, StreamServiceFactory};
@@ -119,10 +119,10 @@ impl TestServer {
     /// Get first available unused address
     pub fn unused_addr() -> net::SocketAddr {
         let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let socket = TcpBuilder::new_v4().unwrap();
-        socket.bind(&addr).unwrap();
-        socket.reuse_address(true).unwrap();
-        let tcp = socket.to_tcp_listener().unwrap();
+        let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
+        socket.set_reuse_address(true).unwrap();
+        socket.bind(&SockAddr::from(addr)).unwrap();
+        let tcp = socket.into_tcp_listener();
         tcp.local_addr().unwrap()
     }
 }

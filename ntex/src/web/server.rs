@@ -9,8 +9,6 @@ use crate::server::rustls::ServerConfig as RustlsServerConfig;
 #[cfg(unix)]
 use futures::future::ok;
 
-use net2::TcpBuilder;
-
 #[cfg(unix)]
 use crate::http::Protocol;
 use crate::http::{
@@ -381,7 +379,7 @@ where
         let mut succ = false;
         let mut sockets = Vec::new();
         for addr in addr.to_socket_addrs()? {
-            match create_tcp_listener(addr, self.backlog) {
+            match crate::server::create_tcp_listener(addr, self.backlog) {
                 Ok(lst) => {
                     succ = true;
                     sockets.push(lst);
@@ -562,19 +560,6 @@ where
     pub fn run(self) -> Server {
         self.builder.start()
     }
-}
-
-fn create_tcp_listener(
-    addr: net::SocketAddr,
-    backlog: i32,
-) -> io::Result<net::TcpListener> {
-    let builder = match addr {
-        net::SocketAddr::V4(_) => TcpBuilder::new_v4()?,
-        net::SocketAddr::V6(_) => TcpBuilder::new_v6()?,
-    };
-    builder.reuse_address(true)?;
-    builder.bind(addr)?;
-    Ok(builder.listen(backlog)?)
 }
 
 #[cfg(feature = "openssl")]

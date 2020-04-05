@@ -8,7 +8,9 @@ use futures::stream::{once, StreamExt};
 use regex::Regex;
 
 use ntex::http::test::server as test_server;
-use ntex::http::{body, header, HttpService, KeepAlive, Request, Response, StatusCode};
+use ntex::http::{
+    body, header, HttpService, KeepAlive, Method, Request, Response, StatusCode,
+};
 use ntex::rt::time::delay_for;
 use ntex::service::fn_service;
 use ntex::web::error;
@@ -27,7 +29,7 @@ async fn test_h1() {
             .tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 }
 
@@ -46,7 +48,7 @@ async fn test_h1_2() {
             .tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 }
 
@@ -406,7 +408,7 @@ async fn test_h1_headers() {
         }).tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -444,7 +446,7 @@ async fn test_h1_body() {
             .tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -460,7 +462,7 @@ async fn test_h1_head_empty() {
             .tcp()
     });
 
-    let response = srv.head("/").send().await.unwrap();
+    let response = srv.request(http::Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
@@ -488,7 +490,7 @@ async fn test_h1_head_binary() {
             .tcp()
     });
 
-    let response = srv.head("/").send().await.unwrap();
+    let response = srv.request(http::Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
@@ -512,7 +514,7 @@ async fn test_h1_head_binary2() {
             .tcp()
     });
 
-    let response = srv.head("/").send().await.unwrap();
+    let response = srv.request(http::Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
@@ -537,7 +539,7 @@ async fn test_h1_body_length() {
             .tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -560,7 +562,7 @@ async fn test_h1_body_chunked_explicit() {
             .tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     assert_eq!(
         response
@@ -590,7 +592,7 @@ async fn test_h1_body_chunked_implicit() {
             .tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
     assert_eq!(
         response
@@ -622,7 +624,7 @@ async fn test_h1_response_http_error_handling() {
             .tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
 
     // read response
@@ -643,7 +645,7 @@ async fn test_h1_service_error() {
             .tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
 
     // read response
@@ -663,6 +665,6 @@ async fn test_h1_on_connect() {
             .tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 }

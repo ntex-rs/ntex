@@ -9,7 +9,7 @@ use futures::future::ready;
 use futures::stream::FuturesUnordered;
 use futures::{ready, Future, FutureExt, Stream, StreamExt};
 use log::{error, info};
-use net2::TcpBuilder;
+use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::rt::net::TcpStream;
 use crate::rt::time::{delay_until, Instant};
@@ -489,15 +489,16 @@ pub(super) fn bind_addr<S: net::ToSocketAddrs>(
     }
 }
 
-fn create_tcp_listener(
+pub(crate) fn create_tcp_listener(
     addr: net::SocketAddr,
     backlog: i32,
 ) -> io::Result<net::TcpListener> {
     let builder = match addr {
-        net::SocketAddr::V4(_) => TcpBuilder::new_v4()?,
-        net::SocketAddr::V6(_) => TcpBuilder::new_v6()?,
+        net::SocketAddr::V4(_) => Socket::new(Domain::ipv4(), Type::stream(), None)?,
+        net::SocketAddr::V6(_) => Socket::new(Domain::ipv6(), Type::stream(), None)?,
     };
-    builder.reuse_address(true)?;
-    builder.bind(addr)?;
-    Ok(builder.listen(backlog)?)
+    builder.set_reuse_address(true)?;
+    builder.bind(&SockAddr::from(addr))?;
+    builder.listen(backlog)?;
+    Ok(builder.into_tcp_listener())
 }

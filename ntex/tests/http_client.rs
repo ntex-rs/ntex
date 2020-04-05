@@ -37,10 +37,10 @@ async fn test_h1_v2() {
             .tcp()
     });
 
-    let response = srv.get("/").send().await.unwrap();
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
-    let request = srv.get("/").header("x-test", "111").send();
+    let request = srv.request(Method::GET, "/").header("x-test", "111").send();
     let mut response = request.await.unwrap();
     assert!(response.status().is_success());
 
@@ -48,7 +48,7 @@ async fn test_h1_v2() {
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 
-    let mut response = srv.post("/").send().await.unwrap();
+    let mut response = srv.request(http::Method::POST, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -65,7 +65,12 @@ async fn test_connection_close() {
             .map(|_| ())
     });
 
-    let response = srv.get("/").force_close().send().await.unwrap();
+    let response = srv
+        .request(Method::GET, "/")
+        .force_close()
+        .send()
+        .await
+        .unwrap();
     assert!(response.status().is_success());
 }
 
