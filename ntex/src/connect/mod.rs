@@ -1,9 +1,4 @@
-//! Actix connect - tcp connector service
-//!
-//! ## Package feature
-//!
-//! * `openssl` - enables ssl support via `openssl` crate
-//! * `rustls` - enables ssl support via `rustls` crate
+//! Tcp connector service
 
 mod error;
 mod message;

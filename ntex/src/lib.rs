@@ -1,3 +1,12 @@
+//! ntex - framework for composable network services
+//!
+//! ## Package feature
+//!
+//! * `openssl` - enables ssl support via `openssl` crate
+//! * `rustls` - enables ssl support via `rustls` crate
+//! * `compress` - enables compression support in http and web modules
+//! * `cookie` - enables cookie support in http and web modules
+
 #![warn(
     rust_2018_idioms,
     unreachable_pub,
