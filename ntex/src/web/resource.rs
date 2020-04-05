@@ -15,14 +15,15 @@ use crate::service::{
 };
 
 use super::data::Data;
-use super::dev::{insert_slesh, AppService, HttpServiceFactory};
+use super::dev::{insert_slesh, WebServiceConfig, WebServiceFactory};
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::guard::Guard;
 use super::handler::Handler;
+use super::request::WebRequest;
 use super::responder::Responder;
+use super::response::WebResponse;
 use super::route::{Route, RouteService};
-use super::service::{WebRequest, WebResponse};
 
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
@@ -369,7 +370,7 @@ where
     }
 }
 
-impl<Err, T> HttpServiceFactory<Err> for Resource<Err, T>
+impl<Err, T> WebServiceFactory<Err> for Resource<Err, T>
 where
     T: ServiceFactory<
             Config = (),
@@ -380,7 +381,7 @@ where
         > + 'static,
     Err: ErrorRenderer,
 {
-    fn register(mut self, config: &mut AppService<Err>) {
+    fn register(mut self, config: &mut WebServiceConfig<Err>) {
         let guards = if self.guards.is_empty() {
             None
         } else {
@@ -563,7 +564,7 @@ mod tests {
     use crate::http::{Method, StatusCode};
     use crate::rt::time::delay_for;
     use crate::web::middleware::DefaultHeaders;
-    use crate::web::service::WebRequest;
+    use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, TestRequest};
     use crate::web::{self, guard, App, DefaultError, Error, HttpResponse};
     use crate::Service;

@@ -8,8 +8,7 @@ use serde_urlencoded;
 
 use crate::http::Payload;
 use crate::web::error::{ErrorRenderer, QueryPayloadError};
-use crate::web::extract::FromRequest;
-use crate::web::request::HttpRequest;
+use crate::web::{FromRequest, HttpRequest};
 
 /// Extract typed information from the request's query.
 ///
@@ -153,55 +152,51 @@ where
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use derive_more::Display;
-//     use serde_derive::Deserialize;
+#[cfg(test)]
+mod tests {
+    use derive_more::Display;
+    use serde_derive::Deserialize;
 
-//     use super::*;
-//     use crate::http::error::InternalError;
-//     use crate::http::StatusCode;
-//     use crate::web::test::TestRequest;
-//     use crate::web::{DefaultError, HttpResponse};
+    use super::*;
+    use crate::web::test::{from_request, TestRequest};
 
-//     #[derive(Deserialize, Debug, Display)]
-//     struct Id {
-//         id: String,
-//     }
+    #[derive(Deserialize, Debug, Display)]
+    struct Id {
+        id: String,
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_service_request_extract() {
-//         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
-//         assert!(Query::<Id>::from_query(&req.query_string()).is_err());
+    #[ntex_rt::test]
+    async fn test_service_request_extract() {
+        let req = TestRequest::with_uri("/name/user1/").to_srv_request();
+        assert!(Query::<Id>::from_query(&req.query_string()).is_err());
 
-//         let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
-//         let mut s = Query::<Id>::from_query(&req.query_string()).unwrap();
+        let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
+        let mut s = Query::<Id>::from_query(&req.query_string()).unwrap();
 
-//         assert_eq!(s.id, "test");
-//         assert_eq!(format!("{}, {:?}", s, s), "test, Id { id: \"test\" }");
+        assert_eq!(s.id, "test");
+        assert_eq!(format!("{}, {:?}", s, s), "test, Id { id: \"test\" }");
 
-//         s.id = "test1".to_string();
-//         let s = s.into_inner();
-//         assert_eq!(s.id, "test1");
-//     }
+        s.id = "test1".to_string();
+        let s = s.into_inner();
+        assert_eq!(s.id, "test1");
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_request_extract() {
-//         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
-//         let (req, mut pl) = req.into_parts();
-//         let res: Result<Query<Id>, QueryPayloadError> = FromRequest::from_request(&req, &mut pl).await;
-//         assert!(res.is_err());
+    #[ntex_rt::test]
+    async fn test_request_extract() {
+        let req = TestRequest::with_uri("/name/user1/").to_srv_request();
+        let (req, mut pl) = req.into_parts();
+        let res = from_request::<Query<Id>>(&req, &mut pl).await;
+        assert!(res.is_err());
 
-//         let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
-//         let (req, mut pl) = req.into_parts();
+        let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
+        let (req, mut pl) = req.into_parts();
 
-//         let mut s: Result<Query<Id>, QueryPayloadError> = FromRequest::<DefaultError>::from_request(&req, &mut pl).await;
-//         let s = s.unwrap();
-//         assert_eq!(s.id, "test");
-//         assert_eq!(format!("{}, {:?}", s, s), "test, Id { id: \"test\" }");
+        let mut s = from_request::<Query<Id>>(&req, &mut pl).await.unwrap();
+        assert_eq!(s.id, "test");
+        assert_eq!(format!("{}, {:?}", s, s), "test, Id { id: \"test\" }");
 
-//         s.id = "test1".to_string();
-//         let s = s.into_inner();
-//         assert_eq!(s.id, "test1");
-//     }
-// }
+        s.id = "test1".to_string();
+        let s = s.into_inner();
+        assert_eq!(s.id, "test1");
+    }
+}

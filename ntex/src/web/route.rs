@@ -12,8 +12,9 @@ use super::error_default::DefaultError;
 use super::extract::FromRequest;
 use super::guard::{self, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
+use super::request::WebRequest;
 use super::responder::Responder;
-use super::service::{WebRequest, WebResponse};
+use super::response::WebResponse;
 use super::HttpResponse;
 
 /// Resource route definition

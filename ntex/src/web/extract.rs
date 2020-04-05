@@ -8,7 +8,7 @@ use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 use crate::http::Payload;
 
 use super::error::ErrorRenderer;
-use super::request::HttpRequest;
+use super::httprequest::HttpRequest;
 
 /// Trait implemented by types that can be extracted from request.
 ///
@@ -258,105 +258,98 @@ tuple_from_req!(TupleFromRequest9, (0, A), (1, B), (2, C), (3, D), (4, E), (5, F
 tuple_from_req!(TupleFromRequest10, (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J));
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use bytes::Bytes;
-//     use serde_derive::Deserialize;
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use serde_derive::Deserialize;
 
-//     use super::*;
-//     use crate::http::header;
-//     use crate::web::error::DefaultError;
-//     use crate::web::test::TestRequest;
-//     use crate::web::types::{Form, FormConfig};
+    use crate::http::header;
+    use crate::web::error::UrlencodedError;
+    use crate::web::test::{from_request, TestRequest};
+    use crate::web::types::{Form, FormConfig};
 
-//     #[derive(Deserialize, Debug, PartialEq)]
-//     struct Info {
-//         hello: String,
-//     }
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct Info {
+        hello: String,
+    }
 
-//     fn extract<T: FromRequest<DefaultError>>(
-//         extract: T,
-//     ) -> impl FromRequest<DefaultError, Error = T::Error> {
-//         extract
-//     }
+    #[ntex_rt::test]
+    async fn test_option() {
+        let (req, mut pl) = TestRequest::with_header(
+            header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .data(FormConfig::default().limit(4096))
+        .to_http_parts();
 
-//     #[ntex_rt::test]
-//     async fn test_option() {
-//         let (req, mut pl) = TestRequest::with_header(
-//             header::CONTENT_TYPE,
-//             "application/x-www-form-urlencoded",
-//         )
-//         .data(FormConfig::default().limit(4096))
-//         .to_http_parts();
+        let r = from_request::<Option<Form<Info>>>(&req, &mut pl)
+            .await
+            .unwrap();
+        assert_eq!(r, None);
 
-//         let r = Option::<Form<Info>>::from_request(&req, &mut pl)
-//             .await
-//             .unwrap();
-//         assert_eq!(r, None);
+        let (req, mut pl) = TestRequest::with_header(
+            header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .header(header::CONTENT_LENGTH, "9")
+        .set_payload(Bytes::from_static(b"hello=world"))
+        .to_http_parts();
 
-//         let (req, mut pl) = TestRequest::with_header(
-//             header::CONTENT_TYPE,
-//             "application/x-www-form-urlencoded",
-//         )
-//         .header(header::CONTENT_LENGTH, "9")
-//         .set_payload(Bytes::from_static(b"hello=world"))
-//         .to_http_parts();
+        let r = from_request::<Option<Form<Info>>>(&req, &mut pl)
+            .await
+            .unwrap();
+        assert_eq!(
+            r,
+            Some(Form(Info {
+                hello: "world".into()
+            }))
+        );
 
-//         let r = Option::<Form<Info>>::from_request(&req, &mut pl)
-//             .await
-//             .unwrap();
-//         assert_eq!(
-//             r,
-//             Some(Form(Info {
-//                 hello: "world".into()
-//             }))
-//         );
+        let (req, mut pl) = TestRequest::with_header(
+            header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .header(header::CONTENT_LENGTH, "9")
+        .set_payload(Bytes::from_static(b"bye=world"))
+        .to_http_parts();
 
-//         let (req, mut pl) = TestRequest::with_header(
-//             header::CONTENT_TYPE,
-//             "application/x-www-form-urlencoded",
-//         )
-//         .header(header::CONTENT_LENGTH, "9")
-//         .set_payload(Bytes::from_static(b"bye=world"))
-//         .to_http_parts();
+        let r = from_request::<Option<Form<Info>>>(&req, &mut pl)
+            .await
+            .unwrap();
+        assert_eq!(r, None);
+    }
 
-//         let r = Option::<Form<Info>>::from_request(&req, &mut pl)
-//             .await
-//             .unwrap();
-//         assert_eq!(r, None);
-//     }
+    #[ntex_rt::test]
+    async fn test_result() {
+        let (req, mut pl) = TestRequest::with_header(
+            header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .header(header::CONTENT_LENGTH, "11")
+        .set_payload(Bytes::from_static(b"hello=world"))
+        .to_http_parts();
 
-//     #[ntex_rt::test]
-//     async fn test_result() {
-//         let (req, mut pl) = TestRequest::with_header(
-//             header::CONTENT_TYPE,
-//             "application/x-www-form-urlencoded",
-//         )
-//         .header(header::CONTENT_LENGTH, "11")
-//         .set_payload(Bytes::from_static(b"hello=world"))
-//         .to_http_parts();
+        let r = from_request::<Result<Form<Info>, UrlencodedError>>(&req, &mut pl)
+            .await
+            .unwrap();
+        assert_eq!(
+            r.unwrap(),
+            Form(Info {
+                hello: "world".into()
+            })
+        );
 
-//         let r: Result<Form<Info>, WebError> = FromRequest::<DefaultError>::from_request(&req, &mut pl)
-//             .await
-//             .unwrap();
-//         assert_eq!(
-//             r.unwrap(),
-//             Form(Info {
-//                 hello: "world".into()
-//             })
-//         );
+        let (req, mut pl) = TestRequest::with_header(
+            header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .header(header::CONTENT_LENGTH, "9")
+        .set_payload(Bytes::from_static(b"bye=world"))
+        .to_http_parts();
 
-//         let (req, mut pl) = TestRequest::with_header(
-//             header::CONTENT_TYPE,
-//             "application/x-www-form-urlencoded",
-//         )
-//         .header(header::CONTENT_LENGTH, "9")
-//         .set_payload(Bytes::from_static(b"bye=world"))
-//         .to_http_parts();
-
-//         let r: Result::<Form<Info>, WebError> = FromRequest::from_request(&req, &mut pl)
-//             .await
-//             .unwrap();
-//         assert!(r.is_err());
-//     }
-// }
+        let r = from_request::<Result<Form<Info>, UrlencodedError>>(&req, &mut pl)
+            .await
+            .unwrap();
+        assert!(r.is_err());
+    }
+}

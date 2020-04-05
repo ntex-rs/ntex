@@ -8,9 +8,10 @@ use pin_project::pin_project;
 
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
-use super::request::HttpRequest;
+use super::httprequest::HttpRequest;
+use super::request::WebRequest;
 use super::responder::Responder;
-use super::service::{WebRequest, WebResponse};
+use super::response::WebResponse;
 
 /// Async fn handler
 pub trait Handler<T, Err>: Clone + 'static

@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
 use crate::service::{Service, Transform};
-use crate::web::service::{WebRequest, WebResponse};
+use crate::web::dev::{WebRequest, WebResponse};
 use crate::web::HttpResponse;
 
 /// `Middleware` for logging request and response info to the terminal.

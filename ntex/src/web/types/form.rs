@@ -17,9 +17,7 @@ use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::web::error::{ErrorRenderer, UrlencodedError};
-use crate::web::extract::FromRequest;
-use crate::web::request::HttpRequest;
-use crate::web::responder::Responder;
+use crate::web::{FromRequest, HttpRequest, Responder};
 
 /// Form data helper (`application/x-www-form-urlencoded`)
 ///
@@ -347,133 +345,133 @@ where
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use bytes::Bytes;
-//     use serde::{Deserialize, Serialize};
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use serde::{Deserialize, Serialize};
 
-//     use super::*;
-//     use crate::http::header::{HeaderValue, CONTENT_TYPE};
-//     use crate::web::test::TestRequest;
+    use super::*;
+    use crate::http::header::{HeaderValue, CONTENT_TYPE};
+    use crate::web::test::{from_request, respond_to, TestRequest};
 
-//     #[derive(Deserialize, Serialize, Debug, PartialEq)]
-//     struct Info {
-//         hello: String,
-//         counter: i64,
-//     }
+    #[derive(Deserialize, Serialize, Debug, PartialEq)]
+    struct Info {
+        hello: String,
+        counter: i64,
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_form() {
-//         let (req, mut pl) =
-//             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-//                 .header(CONTENT_LENGTH, "11")
-//                 .set_payload(Bytes::from_static(b"hello=world&counter=123"))
-//                 .to_http_parts();
+    #[ntex_rt::test]
+    async fn test_form() {
+        let (req, mut pl) =
+            TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(CONTENT_LENGTH, "11")
+                .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+                .to_http_parts();
 
-//         let Form(s) = Form::<Info>::from_request(&req, &mut pl).await.unwrap();
-//         assert_eq!(
-//             s,
-//             Info {
-//                 hello: "world".into(),
-//                 counter: 123
-//             }
-//         );
-//     }
+        let Form(s) = from_request::<Form<Info>>(&req, &mut pl).await.unwrap();
+        assert_eq!(
+            s,
+            Info {
+                hello: "world".into(),
+                counter: 123
+            }
+        );
+    }
 
-//     fn eq(err: UrlencodedError, other: UrlencodedError) -> bool {
-//         match err {
-//             UrlencodedError::Overflow { .. } => match other {
-//                 UrlencodedError::Overflow { .. } => true,
-//                 _ => false,
-//             },
-//             UrlencodedError::UnknownLength => match other {
-//                 UrlencodedError::UnknownLength => true,
-//                 _ => false,
-//             },
-//             UrlencodedError::ContentType => match other {
-//                 UrlencodedError::ContentType => true,
-//                 _ => false,
-//             },
-//             _ => false,
-//         }
-//     }
+    fn eq(err: UrlencodedError, other: UrlencodedError) -> bool {
+        match err {
+            UrlencodedError::Overflow { .. } => match other {
+                UrlencodedError::Overflow { .. } => true,
+                _ => false,
+            },
+            UrlencodedError::UnknownLength => match other {
+                UrlencodedError::UnknownLength => true,
+                _ => false,
+            },
+            UrlencodedError::ContentType => match other {
+                UrlencodedError::ContentType => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_urlencoded_error() {
-//         let (req, mut pl) =
-//             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-//                 .header(CONTENT_LENGTH, "xxxx")
-//                 .to_http_parts();
-//         let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
-//         assert!(eq(info.err().unwrap(), UrlencodedError::UnknownLength));
+    #[ntex_rt::test]
+    async fn test_urlencoded_error() {
+        let (req, mut pl) =
+            TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(CONTENT_LENGTH, "xxxx")
+                .to_http_parts();
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
+        assert!(eq(info.err().unwrap(), UrlencodedError::UnknownLength));
 
-//         let (req, mut pl) =
-//             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-//                 .header(CONTENT_LENGTH, "1000000")
-//                 .to_http_parts();
-//         let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
-//         assert!(eq(
-//             info.err().unwrap(),
-//             UrlencodedError::Overflow { size: 0, limit: 0 }
-//         ));
+        let (req, mut pl) =
+            TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(CONTENT_LENGTH, "1000000")
+                .to_http_parts();
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
+        assert!(eq(
+            info.err().unwrap(),
+            UrlencodedError::Overflow { size: 0, limit: 0 }
+        ));
 
-//         let (req, mut pl) = TestRequest::with_header(CONTENT_TYPE, "text/plain")
-//             .header(CONTENT_LENGTH, "10")
-//             .to_http_parts();
-//         let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
-//         assert!(eq(info.err().unwrap(), UrlencodedError::ContentType));
-//     }
+        let (req, mut pl) = TestRequest::with_header(CONTENT_TYPE, "text/plain")
+            .header(CONTENT_LENGTH, "10")
+            .to_http_parts();
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
+        assert!(eq(info.err().unwrap(), UrlencodedError::ContentType));
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_urlencoded() {
-//         let (req, mut pl) =
-//             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-//                 .header(CONTENT_LENGTH, "11")
-//                 .set_payload(Bytes::from_static(b"hello=world&counter=123"))
-//                 .to_http_parts();
+    #[ntex_rt::test]
+    async fn test_urlencoded() {
+        let (req, mut pl) =
+            TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(CONTENT_LENGTH, "11")
+                .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+                .to_http_parts();
 
-//         let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();
-//         assert_eq!(
-//             info,
-//             Info {
-//                 hello: "world".to_owned(),
-//                 counter: 123
-//             }
-//         );
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();
+        assert_eq!(
+            info,
+            Info {
+                hello: "world".to_owned(),
+                counter: 123
+            }
+        );
 
-//         let (req, mut pl) = TestRequest::with_header(
-//             CONTENT_TYPE,
-//             "application/x-www-form-urlencoded; charset=utf-8",
-//         )
-//         .header(CONTENT_LENGTH, "11")
-//         .set_payload(Bytes::from_static(b"hello=world&counter=123"))
-//         .to_http_parts();
+        let (req, mut pl) = TestRequest::with_header(
+            CONTENT_TYPE,
+            "application/x-www-form-urlencoded; charset=utf-8",
+        )
+        .header(CONTENT_LENGTH, "11")
+        .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+        .to_http_parts();
 
-//         let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();
-//         assert_eq!(
-//             info,
-//             Info {
-//                 hello: "world".to_owned(),
-//                 counter: 123
-//             }
-//         );
-//     }
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();
+        assert_eq!(
+            info,
+            Info {
+                hello: "world".to_owned(),
+                counter: 123
+            }
+        );
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_responder() {
-//         let req = TestRequest::default().to_http_request();
+    #[ntex_rt::test]
+    async fn test_responder() {
+        let req = TestRequest::default().to_http_request();
 
-//         let form = Form(Info {
-//             hello: "world".to_string(),
-//             counter: 123,
-//         });
-//         let resp = form.respond_to(&req).await.unwrap();
-//         assert_eq!(resp.status(), StatusCode::OK);
-//         assert_eq!(
-//             resp.headers().get(CONTENT_TYPE).unwrap(),
-//             HeaderValue::from_static("application/x-www-form-urlencoded")
-//         );
+        let form = Form(Info {
+            hello: "world".to_string(),
+            counter: 123,
+        });
+        let resp = respond_to(form, &req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(CONTENT_TYPE).unwrap(),
+            HeaderValue::from_static("application/x-www-form-urlencoded")
+        );
 
-//         assert_eq!(resp.body().bin_ref(), b"hello=world&counter=123");
-//     }
-// }
+        assert_eq!(resp.body().bin_ref(), b"hello=world&counter=123");
+    }
+}

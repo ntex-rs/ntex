@@ -6,7 +6,7 @@ use futures::{future, ready, Future};
 
 use crate::service::{Service, ServiceFactory};
 
-/// Construct `Either` service factor.
+/// Construct `Either` service factory.
 ///
 /// Either service allow to combine two different services into a single service.
 pub fn either<A, B>(left: A, right: B) -> Either<A, B>

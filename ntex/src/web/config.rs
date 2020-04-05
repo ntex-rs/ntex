@@ -1,128 +1,15 @@
 use std::net::SocketAddr;
 use std::rc::Rc;
 
-use crate::http::Extensions;
 use crate::router::ResourceDef;
-use crate::service::{boxed, IntoServiceFactory, ServiceFactory};
 
 use super::data::{Data, DataFactory};
-use super::guard::Guard;
 use super::resource::Resource;
-use super::rmap::ResourceMap;
 use super::route::Route;
-use super::service::{
-    AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, WebRequest,
-    WebResponse,
-};
+use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
 use super::{DefaultError, ErrorRenderer};
 
-type Guards = Vec<Box<dyn Guard>>;
-type HttpNewService<Err: ErrorRenderer> =
-    boxed::BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
-
 /// Application configuration
-pub struct AppService<Err: ErrorRenderer> {
-    config: AppConfig,
-    root: bool,
-    default: Rc<HttpNewService<Err>>,
-    services: Vec<(
-        ResourceDef,
-        HttpNewService<Err>,
-        Option<Guards>,
-        Option<Rc<ResourceMap>>,
-    )>,
-    service_data: Rc<Vec<Box<dyn DataFactory>>>,
-}
-
-impl<Err: ErrorRenderer> AppService<Err> {
-    /// Crate server settings instance
-    pub(crate) fn new(
-        config: AppConfig,
-        default: Rc<HttpNewService<Err>>,
-        service_data: Rc<Vec<Box<dyn DataFactory>>>,
-    ) -> Self {
-        AppService {
-            config,
-            default,
-            service_data,
-            root: true,
-            services: Vec::new(),
-        }
-    }
-
-    /// Check if root is beeing configured
-    pub fn is_root(&self) -> bool {
-        self.root
-    }
-
-    pub(crate) fn into_services(
-        self,
-    ) -> (
-        AppConfig,
-        Vec<(
-            ResourceDef,
-            HttpNewService<Err>,
-            Option<Guards>,
-            Option<Rc<ResourceMap>>,
-        )>,
-    ) {
-        (self.config, self.services)
-    }
-
-    pub(crate) fn clone_config(&self) -> Self {
-        AppService {
-            config: self.config.clone(),
-            default: self.default.clone(),
-            services: Vec::new(),
-            root: false,
-            service_data: self.service_data.clone(),
-        }
-    }
-
-    /// Service configuration
-    pub fn config(&self) -> &AppConfig {
-        &self.config
-    }
-
-    /// Default resource
-    pub fn default_service(&self) -> Rc<HttpNewService<Err>> {
-        self.default.clone()
-    }
-
-    /// Set global route data
-    pub fn set_service_data(&self, extensions: &mut Extensions) -> bool {
-        for f in self.service_data.iter() {
-            f.create(extensions);
-        }
-        !self.service_data.is_empty()
-    }
-
-    /// Register http service
-    pub fn register_service<F, S>(
-        &mut self,
-        rdef: ResourceDef,
-        guards: Option<Vec<Box<dyn Guard>>>,
-        factory: F,
-        nested: Option<Rc<ResourceMap>>,
-    ) where
-        F: IntoServiceFactory<S>,
-        S: ServiceFactory<
-                Config = (),
-                Request = WebRequest<Err>,
-                Response = WebResponse,
-                Error = Err::Container,
-                InitError = (),
-            > + 'static,
-    {
-        self.services.push((
-            rdef,
-            boxed::factory(factory.into_factory()),
-            guards,
-            nested,
-        ));
-    }
-}
-
 #[derive(Clone)]
 pub struct AppConfig(Rc<AppConfigInner>);
 
@@ -213,7 +100,7 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     /// This is same as `App::service()` method.
     pub fn service<F>(&mut self, factory: F) -> &mut Self
     where
-        F: HttpServiceFactory<Err> + 'static,
+        F: WebServiceFactory<Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -250,7 +137,7 @@ mod tests {
     use crate::Service;
 
     #[ntex_rt::test]
-    async fn test_data() {
+    async fn test_configure_data() {
         let cfg = |cfg: &mut ServiceConfig<_>| {
             cfg.data(10usize);
         };
@@ -264,40 +151,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    // #[ntex_rt::test]
-    // async fn test_data_factory() {
-    //     let cfg = |cfg: &mut ServiceConfig| {
-    //         cfg.data_factory(|| {
-    //             sleep(std::time::Duration::from_millis(50)).then(|_| {
-    //                 println!("READY");
-    //                 Ok::<_, ()>(10usize)
-    //             })
-    //         });
-    //     };
-
-    //     let mut srv =
-    //         init_service(App::new().configure(cfg).service(
-    //             web::resource("/").to(|_: web::Data<usize>| HttpResponse::Ok()),
-    //         ));
-    //     let req = TestRequest::default().to_request();
-    //     let resp = srv.call(req).await.unwrap();
-    //     assert_eq!(resp.status(), StatusCode::OK);
-
-    //     let cfg2 = |cfg: &mut ServiceConfig| {
-    //         cfg.data_factory(|| Ok::<_, ()>(10u32));
-    //     };
-    //     let mut srv = init_service(
-    //         App::new()
-    //             .service(web::resource("/").to(|_: web::Data<usize>| HttpResponse::Ok()))
-    //             .configure(cfg2),
-    //     );
-    //     let req = TestRequest::default().to_request();
-    //     let resp = srv.call(req).await.unwrap();
-    //     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    // }
-
     #[ntex_rt::test]
-    async fn test_external_resource() {
+    async fn test_configure_external_resource() {
         let mut srv = init_service(
             App::new()
                 .configure(|cfg| {
@@ -325,7 +180,7 @@ mod tests {
     }
 
     #[ntex_rt::test]
-    async fn test_service() {
+    async fn test_configure_service() {
         let mut srv = init_service(App::new().configure(|cfg| {
             cfg.service(
                 web::resource("/test")

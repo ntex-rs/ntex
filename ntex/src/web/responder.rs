@@ -14,7 +14,7 @@ use crate::http::header::{HeaderMap, HeaderName, IntoHeaderValue};
 use crate::http::{Response, ResponseBuilder, StatusCode};
 
 use super::error::{DefaultError, ErrorRenderer, InternalError, WebResponseError};
-use super::request::HttpRequest;
+use super::httprequest::HttpRequest;
 
 /// Trait implemented by types that can be converted to a http response.
 ///

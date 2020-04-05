@@ -15,9 +15,9 @@ use ntex::http::client::{error::SendRequestError, Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{header, HttpMessage, HttpService};
 use ntex::service::{map_config, pipeline_factory, Service};
-use ntex::web::dev::{AppConfig, BodyEncoding};
+use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
-use ntex::web::{self, test, App, Error, HttpRequest, HttpResponse};
+use ntex::web::{self, test, App, BodyEncoding, Error, HttpRequest, HttpResponse};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \

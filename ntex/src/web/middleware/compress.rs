@@ -14,9 +14,8 @@ use crate::http::encoding::Encoder;
 use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
 use crate::service::{Service, Transform};
 
-use crate::web::dev::BodyEncoding;
-use crate::web::service::{WebRequest, WebResponse};
-use crate::web::ErrorRenderer;
+use crate::web::dev::{WebRequest, WebResponse};
+use crate::web::{BodyEncoding, ErrorRenderer};
 
 #[derive(Debug, Clone)]
 /// `Middleware` for compressing response body.

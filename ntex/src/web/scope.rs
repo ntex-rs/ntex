@@ -15,15 +15,15 @@ use crate::service::{
 
 use super::config::ServiceConfig;
 use super::data::Data;
-use super::dev::{AppService, HttpServiceFactory};
+use super::dev::{WebServiceConfig, WebServiceFactory};
 use super::error::ErrorRenderer;
 use super::guard::Guard;
+use super::request::WebRequest;
 use super::resource::Resource;
+use super::response::WebResponse;
 use super::rmap::ResourceMap;
 use super::route::Route;
-use super::service::{
-    AppServiceFactory, ServiceFactoryWrapper, WebRequest, WebResponse,
-};
+use super::service::{AppServiceFactory, ServiceFactoryWrapper};
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
@@ -245,7 +245,7 @@ where
     /// ```
     pub fn service<F>(mut self, factory: F) -> Self
     where
-        F: HttpServiceFactory<Err> + 'static,
+        F: WebServiceFactory<Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -410,7 +410,7 @@ where
     }
 }
 
-impl<Err, T> HttpServiceFactory<Err> for Scope<Err, T>
+impl<Err, T> WebServiceFactory<Err> for Scope<Err, T>
 where
     T: ServiceFactory<
             Config = (),
@@ -421,7 +421,7 @@ where
         > + 'static,
     Err: ErrorRenderer,
 {
-    fn register(mut self, config: &mut AppService<Err>) {
+    fn register(mut self, config: &mut WebServiceConfig<Err>) {
         // update default resource if needed
         if self.default.borrow().is_none() {
             *self.default.borrow_mut() = Some(config.default_service());
@@ -685,7 +685,7 @@ mod tests {
     use crate::http::{Method, StatusCode};
     use crate::service::Service;
     use crate::web::middleware::DefaultHeaders;
-    use crate::web::service::WebRequest;
+    use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::DefaultError;
     use crate::web::{self, guard, App, HttpRequest, HttpResponse};

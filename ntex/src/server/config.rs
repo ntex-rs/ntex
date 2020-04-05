@@ -39,7 +39,7 @@ impl ServiceConfig {
         self.threads = num;
     }
 
-    /// Add new service to server
+    /// Add new service to a server
     pub fn bind<U, N: AsRef<str>>(&mut self, name: N, addr: U) -> io::Result<&mut Self>
     where
         U: net::ToSocketAddrs,
@@ -53,7 +53,7 @@ impl ServiceConfig {
         Ok(self)
     }
 
-    /// Add new service to server
+    /// Add new service to a server
     pub fn listen<N: AsRef<str>>(
         &mut self,
         name: N,

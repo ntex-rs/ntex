@@ -18,7 +18,7 @@ use crate::rt::{spawn, System};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfiguredService, ServiceConfig};
-use super::service::{InternalServiceFactory, ServiceFactory, StreamNewService};
+use super::service::{Factory, InternalServiceFactory, StreamServiceFactory};
 use super::signals::{Signal, Signals};
 use super::socket::StdListener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
@@ -164,14 +164,14 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: ServiceFactory<TcpStream>,
+        F: StreamServiceFactory<TcpStream>,
         U: net::ToSocketAddrs,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
         for lst in sockets {
             let token = self.token.next();
-            self.services.push(StreamNewService::create(
+            self.services.push(Factory::create(
                 name.as_ref().to_string(),
                 token,
                 factory.clone(),
@@ -187,7 +187,7 @@ impl ServerBuilder {
     /// Add new unix domain service to the server.
     pub fn bind_uds<F, U, N>(self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
-        F: ServiceFactory<crate::rt::net::UnixStream>,
+        F: StreamServiceFactory<crate::rt::net::UnixStream>,
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
     {
@@ -217,12 +217,12 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: ServiceFactory<crate::rt::net::UnixStream>,
+        F: StreamServiceFactory<crate::rt::net::UnixStream>,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        self.services.push(StreamNewService::create(
+        self.services.push(Factory::create(
             name.as_ref().to_string(),
             token,
             factory,
@@ -241,10 +241,10 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: ServiceFactory<TcpStream>,
+        F: StreamServiceFactory<TcpStream>,
     {
         let token = self.token.next();
-        self.services.push(StreamNewService::create(
+        self.services.push(Factory::create(
             name.as_ref().to_string(),
             token,
             factory,

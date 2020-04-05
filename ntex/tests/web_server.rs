@@ -19,9 +19,8 @@ use ntex::http::header::{
 };
 use ntex::http::{Method, StatusCode};
 
-use ntex::web::dev::BodyEncoding;
 use ntex::web::middleware::Compress;
-use ntex::web::{self, test, App, HttpResponse, WebResponseError};
+use ntex::web::{self, test, App, BodyEncoding, HttpResponse, WebResponseError};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \

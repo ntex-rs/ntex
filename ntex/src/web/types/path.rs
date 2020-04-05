@@ -7,8 +7,7 @@ use serde::de;
 use crate::http::Payload;
 use crate::router::PathDeserializer;
 use crate::web::error::{ErrorRenderer, PathError};
-use crate::web::request::HttpRequest;
-use crate::web::FromRequest;
+use crate::web::{FromRequest, HttpRequest};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 /// Extract typed information from the request's path.
@@ -178,134 +177,117 @@ where
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use actix_router::ResourceDef;
-//     use derive_more::Display;
-//     use serde_derive::Deserialize;
+#[cfg(test)]
+mod tests {
+    use derive_more::Display;
+    use serde_derive::Deserialize;
 
-//     use super::*;
-//     use crate::http::{error, StatusCode};
-//     use crate::web::test::TestRequest;
-//     use crate::web::HttpResponse;
+    use super::*;
+    use crate::router::Router;
+    use crate::web::test::{from_request, TestRequest};
 
-//     #[derive(Deserialize, Debug, Display)]
-//     #[display(fmt = "MyStruct({}, {})", key, value)]
-//     struct MyStruct {
-//         key: String,
-//         value: String,
-//     }
+    #[derive(Deserialize, Debug, Display)]
+    #[display(fmt = "MyStruct({}, {})", key, value)]
+    struct MyStruct {
+        key: String,
+        value: String,
+    }
 
-//     #[derive(Deserialize)]
-//     struct Test2 {
-//         key: String,
-//         value: u32,
-//     }
+    #[derive(Deserialize)]
+    struct Test2 {
+        key: String,
+        value: u32,
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_extract_path_single() {
-//         let resource = ResourceDef::new("/{value}/");
+    #[ntex_rt::test]
+    async fn test_extract_path_single() {
+        let mut router = Router::<usize>::build();
+        router.path("/{value}/", 10).0.set_id(0);
+        let router = router.finish();
 
-//         let mut req = TestRequest::with_uri("/32/").to_srv_request();
-//         resource.match_path(req.match_info_mut());
+        let mut req = TestRequest::with_uri("/32/").to_srv_request();
+        router.recognize(req.match_info_mut());
 
-//         let (req, mut pl) = req.into_parts();
-//         assert_eq!(*Path::<i8>::from_request(&req, &mut pl).await.unwrap(), 32);
-//         assert!(Path::<MyStruct>::from_request(&req, &mut pl).await.is_err());
-//     }
+        let (req, mut pl) = req.into_parts();
+        assert_eq!(*from_request::<Path<i8>>(&req, &mut pl).await.unwrap(), 32);
+        assert!(from_request::<Path<MyStruct>>(&req, &mut pl).await.is_err());
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_tuple_extract() {
-//         let resource = ResourceDef::new("/{key}/{value}/");
+    #[ntex_rt::test]
+    async fn test_tuple_extract() {
+        let mut router = Router::<usize>::build();
+        router.path("/{key}/{value}/", 10).0.set_id(0);
+        let router = router.finish();
 
-//         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
-//         resource.match_path(req.match_info_mut());
+        let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
+        router.recognize(req.match_info_mut());
 
-//         let (req, mut pl) = req.into_parts();
-//         let res = <(Path<(String, String)>,)>::from_request(&req, &mut pl)
-//             .await
-//             .unwrap();
-//         assert_eq!((res.0).0, "name");
-//         assert_eq!((res.0).1, "user1");
+        let (req, mut pl) = req.into_parts();
+        let res = from_request::<(Path<(String, String)>,)>(&req, &mut pl)
+            .await
+            .unwrap();
+        assert_eq!((res.0).0, "name");
+        assert_eq!((res.0).1, "user1");
 
-//         let res = <(Path<(String, String)>, Path<(String, String)>)>::from_request(
-//             &req, &mut pl,
-//         )
-//         .await
-//         .unwrap();
-//         assert_eq!((res.0).0, "name");
-//         assert_eq!((res.0).1, "user1");
-//         assert_eq!((res.1).0, "name");
-//         assert_eq!((res.1).1, "user1");
+        let res = from_request::<(Path<(String, String)>, Path<(String, String)>)>(
+            &req, &mut pl,
+        )
+        .await
+        .unwrap();
+        assert_eq!((res.0).0, "name");
+        assert_eq!((res.0).1, "user1");
+        assert_eq!((res.1).0, "name");
+        assert_eq!((res.1).1, "user1");
 
-//         let () = <()>::from_request(&req, &mut pl).await.unwrap();
-//     }
+        let () = from_request::<()>(&req, &mut pl).await.unwrap();
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_request_extract() {
-//         let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
+    #[ntex_rt::test]
+    async fn test_request_extract() {
+        let mut router = Router::<usize>::build();
+        router.path("/{key}/{value}/", 10).0.set_id(0);
+        let router = router.finish();
 
-//         let resource = ResourceDef::new("/{key}/{value}/");
-//         resource.match_path(req.match_info_mut());
+        let mut req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
+        router.recognize(req.match_info_mut());
 
-//         let (req, mut pl) = req.into_parts();
-//         let mut s = Path::<MyStruct>::from_request(&req, &mut pl).await.unwrap();
-//         assert_eq!(s.key, "name");
-//         assert_eq!(s.value, "user1");
-//         s.value = "user2".to_string();
-//         assert_eq!(s.value, "user2");
-//         assert_eq!(
-//             format!("{}, {:?}", s, s),
-//             "MyStruct(name, user2), MyStruct { key: \"name\", value: \"user2\" }"
-//         );
-//         let s = s.into_inner();
-//         assert_eq!(s.value, "user2");
+        let (req, mut pl) = req.into_parts();
+        let mut s = from_request::<Path<MyStruct>>(&req, &mut pl).await.unwrap();
+        assert_eq!(s.key, "name");
+        assert_eq!(s.value, "user1");
+        s.value = "user2".to_string();
+        assert_eq!(s.value, "user2");
+        assert_eq!(
+            format!("{}, {:?}", s, s),
+            "MyStruct(name, user2), MyStruct { key: \"name\", value: \"user2\" }"
+        );
+        let s = s.into_inner();
+        assert_eq!(s.value, "user2");
 
-//         let s = Path::<(String, String)>::from_request(&req, &mut pl)
-//             .await
-//             .unwrap();
-//         assert_eq!(s.0, "name");
-//         assert_eq!(s.1, "user1");
+        let s = from_request::<Path<(String, String)>>(&req, &mut pl)
+            .await
+            .unwrap();
+        assert_eq!(s.0, "name");
+        assert_eq!(s.1, "user1");
 
-//         let mut req = TestRequest::with_uri("/name/32/").to_srv_request();
-//         let resource = ResourceDef::new("/{key}/{value}/");
-//         resource.match_path(req.match_info_mut());
+        let mut req = TestRequest::with_uri("/name/32/").to_srv_request();
+        router.recognize(req.match_info_mut());
 
-//         let (req, mut pl) = req.into_parts();
-//         let s = Path::<Test2>::from_request(&req, &mut pl).await.unwrap();
-//         assert_eq!(s.as_ref().key, "name");
-//         assert_eq!(s.value, 32);
+        let (req, mut pl) = req.into_parts();
+        let s = from_request::<Path<Test2>>(&req, &mut pl).await.unwrap();
+        assert_eq!(s.as_ref().key, "name");
+        assert_eq!(s.value, 32);
 
-//         let s = Path::<(String, u8)>::from_request(&req, &mut pl)
-//             .await
-//             .unwrap();
-//         assert_eq!(s.0, "name");
-//         assert_eq!(s.1, 32);
+        let s = from_request::<Path<(String, u8)>>(&req, &mut pl)
+            .await
+            .unwrap();
+        assert_eq!(s.0, "name");
+        assert_eq!(s.1, 32);
 
-//         let res = Path::<Vec<String>>::from_request(&req, &mut pl)
-//             .await
-//             .unwrap();
-//         assert_eq!(res[0], "name".to_owned());
-//         assert_eq!(res[1], "32".to_owned());
-//     }
-
-//     #[ntex_rt::test]
-//     async fn test_custom_err_handler() {
-//         let (req, mut pl) = TestRequest::with_uri("/name/user1/")
-//             .data(PathConfig::default().error_handler(|err, _| {
-//                 error::InternalError::from_response(
-//                     err,
-//                     HttpResponse::Conflict().finish(),
-//                 )
-//                 .into()
-//             }))
-//             .to_http_parts();
-
-//         let s = Path::<(usize,)>::from_request(&req, &mut pl)
-//             .await
-//             .unwrap_err();
-//         let res: HttpResponse = s.into();
-
-//         assert_eq!(res.status(), StatusCode::CONFLICT);
-//     }
-// }
+        let res = from_request::<Path<Vec<String>>>(&req, &mut pl)
+            .await
+            .unwrap();
+        assert_eq!(res[0], "name".to_owned());
+        assert_eq!(res[1], "32".to_owned());
+    }
+}

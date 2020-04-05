@@ -6,7 +6,7 @@ use url::Url;
 
 use crate::router::ResourceDef;
 use crate::web::error::UrlGenerationError;
-use crate::web::request::HttpRequest;
+use crate::web::httprequest::HttpRequest;
 
 #[derive(Clone, Debug)]
 pub struct ResourceMap {

@@ -161,6 +161,7 @@ where
 }
 
 /// `TimeoutService` response future
+#[doc(hidden)]
 #[pin_project::pin_project]
 #[derive(Debug)]
 pub struct TimeoutServiceResponse<T: Service> {
@@ -194,6 +195,7 @@ where
 }
 
 /// `TimeoutService` response future
+#[doc(hidden)]
 #[pin_project::pin_project]
 #[derive(Debug)]
 pub struct TimeoutServiceResponse2<T: Service> {

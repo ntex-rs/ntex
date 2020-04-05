@@ -1,3 +1,5 @@
+//! Service that limits number of in-flight async requests.
+
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
@@ -8,7 +10,7 @@ use futures::future::{ok, Ready};
 use super::counter::{Counter, CounterGuard};
 use crate::service::{IntoService, Service, Transform};
 
-/// InFlight - new service for service that can limit number of in-flight
+/// InFlight - service factory for service that can limit number of in-flight
 /// async requests.
 ///
 /// Default number of in-flight requests is 15

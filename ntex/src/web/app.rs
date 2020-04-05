@@ -17,12 +17,11 @@ use crate::service::{
 use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
 use super::config::ServiceConfig;
 use super::data::{Data, DataFactory};
+use super::request::WebRequest;
 use super::resource::Resource;
+use super::response::WebResponse;
 use super::route::Route;
-use super::service::{
-    AppServiceFactory, HttpServiceFactory, ServiceFactoryWrapper, WebRequest,
-    WebResponse,
-};
+use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
 use super::{DefaultError, ErrorRenderer};
 
 type HttpNewService<Err: ErrorRenderer> =
@@ -242,7 +241,7 @@ where
 
     /// Register http service.
     ///
-    /// Http service is any type that implements `HttpServiceFactory` trait.
+    /// Http service is any type that implements `WebServiceFactory` trait.
     ///
     /// Actix web provides several services implementations:
     ///
@@ -251,7 +250,7 @@ where
     /// * "StaticFiles" is a service for static files support
     pub fn service<F>(mut self, factory: F) -> Self
     where
-        F: HttpServiceFactory<Err> + 'static,
+        F: WebServiceFactory<Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -522,7 +521,7 @@ mod tests {
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
     use crate::web::middleware::DefaultHeaders;
-    use crate::web::service::WebRequest;
+    use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, DefaultError, HttpRequest, HttpResponse};
     use crate::Service;

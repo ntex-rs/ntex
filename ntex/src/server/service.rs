@@ -15,7 +15,7 @@ use super::socket::{FromStream, StdStream};
 use super::Token;
 
 /// Server message
-pub(crate) enum ServerMessage {
+pub(super) enum ServerMessage {
     /// New stream
     Connect(StdStream),
     /// Gracefull shutdown
@@ -24,13 +24,13 @@ pub(crate) enum ServerMessage {
     ForceShutdown,
 }
 
-pub trait ServiceFactory<Stream: FromStream>: Send + Clone + 'static {
+pub trait StreamServiceFactory<Stream: FromStream>: Send + Clone + 'static {
     type Factory: ActixServiceFactory<Config = (), Request = Stream>;
 
     fn create(&self) -> Self::Factory;
 }
 
-pub(crate) trait InternalServiceFactory: Send {
+pub(super) trait InternalServiceFactory: Send {
     fn name(&self, token: Token) -> &str;
 
     fn clone_factory(&self) -> Box<dyn InternalServiceFactory>;
@@ -40,7 +40,7 @@ pub(crate) trait InternalServiceFactory: Send {
     ) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>;
 }
 
-pub(crate) type BoxedServerService = Box<
+pub(super) type BoxedServerService = Box<
     dyn Service<
         Request = (Option<CounterGuard>, ServerMessage),
         Response = (),
@@ -49,7 +49,7 @@ pub(crate) type BoxedServerService = Box<
     >,
 >;
 
-pub(crate) struct StreamService<T> {
+pub(super) struct StreamService<T> {
     service: T,
 }
 
@@ -104,7 +104,7 @@ where
     }
 }
 
-pub(crate) struct StreamNewService<F: ServiceFactory<Io>, Io: FromStream> {
+pub(super) struct Factory<F: StreamServiceFactory<Io>, Io: FromStream> {
     name: String,
     inner: F,
     token: Token,
@@ -112,9 +112,9 @@ pub(crate) struct StreamNewService<F: ServiceFactory<Io>, Io: FromStream> {
     _t: PhantomData<Io>,
 }
 
-impl<F, Io> StreamNewService<F, Io>
+impl<F, Io> Factory<F, Io>
 where
-    F: ServiceFactory<Io>,
+    F: StreamServiceFactory<Io>,
     Io: FromStream + Send + 'static,
 {
     pub(crate) fn create(
@@ -133,9 +133,9 @@ where
     }
 }
 
-impl<F, Io> InternalServiceFactory for StreamNewService<F, Io>
+impl<F, Io> InternalServiceFactory for Factory<F, Io>
 where
-    F: ServiceFactory<Io>,
+    F: StreamServiceFactory<Io>,
     Io: FromStream + Send + 'static,
 {
     fn name(&self, _: Token) -> &str {
@@ -184,7 +184,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
     }
 }
 
-impl<F, T, I> ServiceFactory<I> for F
+impl<F, T, I> StreamServiceFactory<I> for F
 where
     F: Fn() -> T + Send + Clone + 'static,
     T: ActixServiceFactory<Config = (), Request = I>,

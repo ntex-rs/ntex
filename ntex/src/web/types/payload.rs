@@ -12,8 +12,7 @@ use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
 use crate::web::error::{ErrorRenderer, PayloadError};
-use crate::web::extract::FromRequest;
-use crate::web::request::HttpRequest;
+use crate::web::{FromRequest, HttpRequest};
 
 /// Payload extractor returns request 's payload stream.
 ///
@@ -414,85 +413,85 @@ impl Future for HttpMessageBody {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use bytes::Bytes;
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
 
-//     use super::*;
-//     use crate::http::header;
-//     use crate::web::test::TestRequest;
+    use super::*;
+    use crate::http::header;
+    use crate::web::test::{from_request, TestRequest};
 
-//     #[ntex_rt::test]
-//     async fn test_payload_config() {
-//         let req = TestRequest::default().to_http_request();
-//         let cfg = PayloadConfig::default().mimetype(mime::APPLICATION_JSON);
-//         assert!(cfg.check_mimetype(&req).is_err());
+    #[ntex_rt::test]
+    async fn test_payload_config() {
+        let req = TestRequest::default().to_http_request();
+        let cfg = PayloadConfig::default().mimetype(mime::APPLICATION_JSON);
+        assert!(cfg.check_mimetype(&req).is_err());
 
-//         let req = TestRequest::with_header(
-//             header::CONTENT_TYPE,
-//             "application/x-www-form-urlencoded",
-//         )
-//         .to_http_request();
-//         assert!(cfg.check_mimetype(&req).is_err());
+        let req = TestRequest::with_header(
+            header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .to_http_request();
+        assert!(cfg.check_mimetype(&req).is_err());
 
-//         let req = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
-//             .to_http_request();
-//         assert!(cfg.check_mimetype(&req).is_ok());
-//     }
+        let req = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
+            .to_http_request();
+        assert!(cfg.check_mimetype(&req).is_ok());
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_bytes() {
-//         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
-//             .set_payload(Bytes::from_static(b"hello=world"))
-//             .to_http_parts();
+    #[ntex_rt::test]
+    async fn test_bytes() {
+        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .set_payload(Bytes::from_static(b"hello=world"))
+            .to_http_parts();
 
-//         let s = Bytes::from_request(&req, &mut pl).await.unwrap();
-//         assert_eq!(s, Bytes::from_static(b"hello=world"));
-//     }
+        let s = from_request::<Bytes>(&req, &mut pl).await.unwrap();
+        assert_eq!(s, Bytes::from_static(b"hello=world"));
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_string() {
-//         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
-//             .set_payload(Bytes::from_static(b"hello=world"))
-//             .to_http_parts();
+    #[ntex_rt::test]
+    async fn test_string() {
+        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .set_payload(Bytes::from_static(b"hello=world"))
+            .to_http_parts();
 
-//         let s = String::from_request(&req, &mut pl).await.unwrap();
-//         assert_eq!(s, "hello=world");
-//     }
+        let s = from_request::<String>(&req, &mut pl).await.unwrap();
+        assert_eq!(s, "hello=world");
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_message_body() {
-//         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "xxxx")
-//             .to_srv_request()
-//             .into_parts();
-//         let res = HttpMessageBody::new(&req, &mut pl).await;
-//         match res.err().unwrap() {
-//             PayloadError::Payload(error::PayloadError::UnknownLength) => (),
-//             _ => unreachable!("error"),
-//         }
+    #[ntex_rt::test]
+    async fn test_message_body() {
+        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "xxxx")
+            .to_srv_request()
+            .into_parts();
+        let res = HttpMessageBody::new(&req, &mut pl).await;
+        match res.err().unwrap() {
+            PayloadError::Payload(error::PayloadError::UnknownLength) => (),
+            _ => unreachable!("error"),
+        }
 
-//         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "1000000")
-//             .to_srv_request()
-//             .into_parts();
-//         let res = HttpMessageBody::new(&req, &mut pl).await;
-//         match res.err().unwrap() {
-//             PayloadError::Payload(error::PayloadError::Overflow) => (),
-//             _ => unreachable!("error"),
-//         }
+        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "1000000")
+            .to_srv_request()
+            .into_parts();
+        let res = HttpMessageBody::new(&req, &mut pl).await;
+        match res.err().unwrap() {
+            PayloadError::Payload(error::PayloadError::Overflow) => (),
+            _ => unreachable!("error"),
+        }
 
-//         let (req, mut pl) = TestRequest::default()
-//             .set_payload(Bytes::from_static(b"test"))
-//             .to_http_parts();
-//         let res = HttpMessageBody::new(&req, &mut pl).await;
-//         assert_eq!(res.ok().unwrap(), Bytes::from_static(b"test"));
+        let (req, mut pl) = TestRequest::default()
+            .set_payload(Bytes::from_static(b"test"))
+            .to_http_parts();
+        let res = HttpMessageBody::new(&req, &mut pl).await;
+        assert_eq!(res.ok().unwrap(), Bytes::from_static(b"test"));
 
-//         let (req, mut pl) = TestRequest::default()
-//             .set_payload(Bytes::from_static(b"11111111111111"))
-//             .to_http_parts();
-//         let res = HttpMessageBody::new(&req, &mut pl).limit(5).await;
-//         match res.err().unwrap() {
-//             PayloadError::Payload(error::PayloadError::Overflow) => (),
-//             _ => unreachable!("error"),
-//         }
-//     }
-// }
+        let (req, mut pl) = TestRequest::default()
+            .set_payload(Bytes::from_static(b"11111111111111"))
+            .to_http_parts();
+        let res = HttpMessageBody::new(&req, &mut pl).limit(5).await;
+        match res.err().unwrap() {
+            PayloadError::Payload(error::PayloadError::Overflow) => (),
+            _ => unreachable!("error"),
+        }
+    }
+}

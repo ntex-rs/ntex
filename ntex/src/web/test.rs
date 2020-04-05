@@ -33,11 +33,11 @@ use crate::server::Server;
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use crate::web::config::AppConfig;
-use crate::web::error::ErrorRenderer;
-use crate::web::request::HttpRequestPool;
+use crate::web::dev::{WebRequest, WebResponse};
+use crate::web::error::{DefaultError, ErrorRenderer};
+use crate::web::httprequest::{HttpRequest, HttpRequestPool};
 use crate::web::rmap::ResourceMap;
-use crate::web::service::{WebRequest, WebResponse};
-use crate::web::{DefaultError, HttpRequest, HttpResponse};
+use crate::web::{FromRequest, HttpResponse, Responder};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<Err: ErrorRenderer>() -> impl Service<
@@ -216,6 +216,7 @@ where
     bytes.freeze()
 }
 
+/// Reads response's body and combines it to a Bytes objects
 pub async fn load_stream<S>(mut stream: S) -> Result<Bytes, Box<dyn Error>>
 where
     S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
@@ -272,6 +273,22 @@ where
 
     serde_json::from_slice(&body)
         .unwrap_or_else(|_| panic!("read_response_json failed during deserialization"))
+}
+
+/// Helper method for extractors testing
+pub async fn from_request<T: FromRequest<DefaultError>>(
+    req: &HttpRequest,
+    payload: &mut Payload,
+) -> Result<T, T::Error> {
+    T::from_request(req, payload).await
+}
+
+/// Helper method for responders testing
+pub async fn respond_to<T: Responder<DefaultError>>(
+    slf: T,
+    req: &HttpRequest,
+) -> Result<HttpResponse, T::Error> {
+    T::respond_to(slf, req).await
 }
 
 /// Test `Request` builder.
@@ -757,6 +774,7 @@ where
 }
 
 #[derive(Clone)]
+/// Test server configuration
 pub struct TestServerConfig {
     tp: HttpVer,
     stream: StreamType,

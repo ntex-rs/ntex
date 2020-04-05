@@ -13,16 +13,12 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json;
 
-use crate::http::header::CONTENT_LENGTH;
-use crate::http::{HttpMessage, Payload, Response, StatusCode};
-
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
-
+use crate::http::header::CONTENT_LENGTH;
+use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::web::error::{ErrorRenderer, JsonError, JsonPayloadError};
-use crate::web::extract::FromRequest;
-use crate::web::request::HttpRequest;
-use crate::web::responder::Responder;
+use crate::web::{FromRequest, HttpRequest, Responder};
 
 /// Json helper
 ///
@@ -384,251 +380,199 @@ where
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use bytes::Bytes;
-//     use serde_derive::{Deserialize, Serialize};
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use serde_derive::{Deserialize, Serialize};
 
-//     use super::*;
-//     use crate::http::error::InternalError;
-//     use crate::http::header;
-//     use crate::web::test::{load_stream, TestRequest};
-//     use crate::web::HttpResponse;
+    use super::*;
+    use crate::http::header;
+    use crate::web::test::{from_request, respond_to, TestRequest};
 
-//     #[derive(Serialize, Deserialize, PartialEq, Debug)]
-//     struct MyObject {
-//         name: String,
-//     }
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    struct MyObject {
+        name: String,
+    }
 
-//     fn json_eq(err: JsonPayloadError, other: JsonPayloadError) -> bool {
-//         match err {
-//             JsonPayloadError::Overflow => match other {
-//                 JsonPayloadError::Overflow => true,
-//                 _ => false,
-//             },
-//             JsonPayloadError::ContentType => match other {
-//                 JsonPayloadError::ContentType => true,
-//                 _ => false,
-//             },
-//             _ => false,
-//         }
-//     }
+    fn json_eq(err: JsonPayloadError, other: JsonPayloadError) -> bool {
+        match err {
+            JsonPayloadError::Overflow => match other {
+                JsonPayloadError::Overflow => true,
+                _ => false,
+            },
+            JsonPayloadError::ContentType => match other {
+                JsonPayloadError::ContentType => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_responder() {
-//         let req = TestRequest::default().to_http_request();
+    #[ntex_rt::test]
+    async fn test_responder() {
+        let req = TestRequest::default().to_http_request();
 
-//         let j = Json(MyObject {
-//             name: "test".to_string(),
-//         });
-//         let resp = j.respond_to(&req).await.unwrap();
-//         assert_eq!(resp.status(), StatusCode::OK);
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             header::HeaderValue::from_static("application/json")
-//         );
+        let j = Json(MyObject {
+            name: "test".to_string(),
+        });
+        let resp = respond_to(j, &req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            header::HeaderValue::from_static("application/json")
+        );
 
-//         assert_eq!(resp.body().bin_ref(), b"{\"name\":\"test\"}");
-//     }
+        assert_eq!(resp.body().bin_ref(), b"{\"name\":\"test\"}");
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_custom_error_responder() {
-//         let (req, mut pl) = TestRequest::default()
-//             .header(
-//                 header::CONTENT_TYPE,
-//                 header::HeaderValue::from_static("application/json"),
-//             )
-//             .header(
-//                 header::CONTENT_LENGTH,
-//                 header::HeaderValue::from_static("16"),
-//             )
-//             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-//             .data(JsonConfig::default().limit(10).error_handler(|err, _| {
-//                 let msg = MyObject {
-//                     name: "invalid request".to_string(),
-//                 };
-//                 let resp = HttpResponse::BadRequest()
-//                     .body(serde_json::to_string(&msg).unwrap());
-//                 InternalError::from_response(err, resp).into()
-//             }))
-//             .to_http_parts();
+    #[ntex_rt::test]
+    async fn test_extract() {
+        let (req, mut pl) = TestRequest::default()
+            .header(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/json"),
+            )
+            .header(
+                header::CONTENT_LENGTH,
+                header::HeaderValue::from_static("16"),
+            )
+            .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
+            .to_http_parts();
 
-//         let s = Json::<MyObject>::from_request(&req, &mut pl).await;
-//         let mut resp = Response::from_error(s.err().unwrap().into());
-//         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let s = from_request::<Json<MyObject>>(&req, &mut pl).await.unwrap();
+        assert_eq!(s.name, "test");
+        assert_eq!(
+            s.into_inner(),
+            MyObject {
+                name: "test".to_string()
+            }
+        );
 
-//         let body = load_stream(resp.take_body()).await.unwrap();
-//         let msg: MyObject = serde_json::from_slice(&body).unwrap();
-//         assert_eq!(msg.name, "invalid request");
-//     }
+        let (req, mut pl) = TestRequest::default()
+            .header(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/json"),
+            )
+            .header(
+                header::CONTENT_LENGTH,
+                header::HeaderValue::from_static("16"),
+            )
+            .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
+            .data(JsonConfig::default().limit(10))
+            .to_http_parts();
 
-//     #[ntex_rt::test]
-//     async fn test_extract() {
-//         let (req, mut pl) = TestRequest::default()
-//             .header(
-//                 header::CONTENT_TYPE,
-//                 header::HeaderValue::from_static("application/json"),
-//             )
-//             .header(
-//                 header::CONTENT_LENGTH,
-//                 header::HeaderValue::from_static("16"),
-//             )
-//             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-//             .to_http_parts();
+        let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
+        assert!(format!("{}", s.err().unwrap())
+            .contains("Json payload size is bigger than allowed"));
+    }
 
-//         let s = Json::<MyObject>::from_request(&req, &mut pl).await.unwrap();
-//         assert_eq!(s.name, "test");
-//         assert_eq!(
-//             s.into_inner(),
-//             MyObject {
-//                 name: "test".to_string()
-//             }
-//         );
+    #[ntex_rt::test]
+    async fn test_json_body() {
+        let (req, mut pl) = TestRequest::default().to_http_parts();
+        let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
+        assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
 
-//         let (req, mut pl) = TestRequest::default()
-//             .header(
-//                 header::CONTENT_TYPE,
-//                 header::HeaderValue::from_static("application/json"),
-//             )
-//             .header(
-//                 header::CONTENT_LENGTH,
-//                 header::HeaderValue::from_static("16"),
-//             )
-//             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-//             .data(JsonConfig::default().limit(10))
-//             .to_http_parts();
+        let (req, mut pl) = TestRequest::default()
+            .header(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/text"),
+            )
+            .to_http_parts();
+        let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
+        assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
 
-//         let s = Json::<MyObject>::from_request(&req, &mut pl).await;
-//         assert!(format!("{}", s.err().unwrap())
-//             .contains("Json payload size is bigger than allowed"));
+        let (req, mut pl) = TestRequest::default()
+            .header(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/json"),
+            )
+            .header(
+                header::CONTENT_LENGTH,
+                header::HeaderValue::from_static("10000"),
+            )
+            .to_http_parts();
 
-//         let (req, mut pl) = TestRequest::default()
-//             .header(
-//                 header::CONTENT_TYPE,
-//                 header::HeaderValue::from_static("application/json"),
-//             )
-//             .header(
-//                 header::CONTENT_LENGTH,
-//                 header::HeaderValue::from_static("16"),
-//             )
-//             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-//             .data(
-//                 JsonConfig::default()
-//                     .limit(10)
-//                     .error_handler(|_, _| JsonPayloadError::ContentType.into()),
-//             )
-//             .to_http_parts();
-//         let s = Json::<MyObject>::from_request(&req, &mut pl).await;
-//         assert!(format!("{}", s.err().unwrap()).contains("Content type error"));
-//     }
+        let json = JsonBody::<MyObject>::new(&req, &mut pl, None)
+            .limit(100)
+            .await;
+        assert!(json_eq(json.err().unwrap(), JsonPayloadError::Overflow));
 
-//     #[ntex_rt::test]
-//     async fn test_json_body() {
-//         let (req, mut pl) = TestRequest::default().to_http_parts();
-//         let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
-//         assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
+        let (req, mut pl) = TestRequest::default()
+            .header(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/json"),
+            )
+            .header(
+                header::CONTENT_LENGTH,
+                header::HeaderValue::from_static("16"),
+            )
+            .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
+            .to_http_parts();
 
-//         let (req, mut pl) = TestRequest::default()
-//             .header(
-//                 header::CONTENT_TYPE,
-//                 header::HeaderValue::from_static("application/text"),
-//             )
-//             .to_http_parts();
-//         let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
-//         assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
+        let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
+        assert_eq!(
+            json.ok().unwrap(),
+            MyObject {
+                name: "test".to_owned()
+            }
+        );
+    }
 
-//         let (req, mut pl) = TestRequest::default()
-//             .header(
-//                 header::CONTENT_TYPE,
-//                 header::HeaderValue::from_static("application/json"),
-//             )
-//             .header(
-//                 header::CONTENT_LENGTH,
-//                 header::HeaderValue::from_static("10000"),
-//             )
-//             .to_http_parts();
+    #[ntex_rt::test]
+    async fn test_with_json_and_bad_content_type() {
+        let (req, mut pl) = TestRequest::with_header(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("text/plain"),
+        )
+        .header(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_static("16"),
+        )
+        .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
+        .data(JsonConfig::default().limit(4096))
+        .to_http_parts();
 
-//         let json = JsonBody::<MyObject>::new(&req, &mut pl, None)
-//             .limit(100)
-//             .await;
-//         assert!(json_eq(json.err().unwrap(), JsonPayloadError::Overflow));
+        let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
+        assert!(s.is_err())
+    }
 
-//         let (req, mut pl) = TestRequest::default()
-//             .header(
-//                 header::CONTENT_TYPE,
-//                 header::HeaderValue::from_static("application/json"),
-//             )
-//             .header(
-//                 header::CONTENT_LENGTH,
-//                 header::HeaderValue::from_static("16"),
-//             )
-//             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-//             .to_http_parts();
+    #[ntex_rt::test]
+    async fn test_with_json_and_good_custom_content_type() {
+        let (req, mut pl) = TestRequest::with_header(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("text/plain"),
+        )
+        .header(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_static("16"),
+        )
+        .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
+        .data(JsonConfig::default().content_type(|mime: mime::Mime| {
+            mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
+        }))
+        .to_http_parts();
 
-//         let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
-//         assert_eq!(
-//             json.ok().unwrap(),
-//             MyObject {
-//                 name: "test".to_owned()
-//             }
-//         );
-//     }
+        let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
+        assert!(s.is_ok())
+    }
 
-//     #[ntex_rt::test]
-//     async fn test_with_json_and_bad_content_type() {
-//         let (req, mut pl) = TestRequest::with_header(
-//             header::CONTENT_TYPE,
-//             header::HeaderValue::from_static("text/plain"),
-//         )
-//         .header(
-//             header::CONTENT_LENGTH,
-//             header::HeaderValue::from_static("16"),
-//         )
-//         .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-//         .data(JsonConfig::default().limit(4096))
-//         .to_http_parts();
+    #[ntex_rt::test]
+    async fn test_with_json_and_bad_custom_content_type() {
+        let (req, mut pl) = TestRequest::with_header(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("text/html"),
+        )
+        .header(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_static("16"),
+        )
+        .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
+        .data(JsonConfig::default().content_type(|mime: mime::Mime| {
+            mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
+        }))
+        .to_http_parts();
 
-//         let s = Json::<MyObject>::from_request(&req, &mut pl).await;
-//         assert!(s.is_err())
-//     }
-
-//     #[ntex_rt::test]
-//     async fn test_with_json_and_good_custom_content_type() {
-//         let (req, mut pl) = TestRequest::with_header(
-//             header::CONTENT_TYPE,
-//             header::HeaderValue::from_static("text/plain"),
-//         )
-//         .header(
-//             header::CONTENT_LENGTH,
-//             header::HeaderValue::from_static("16"),
-//         )
-//         .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-//         .data(JsonConfig::default().content_type(|mime: mime::Mime| {
-//             mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
-//         }))
-//         .to_http_parts();
-
-//         let s = Json::<MyObject>::from_request(&req, &mut pl).await;
-//         assert!(s.is_ok())
-//     }
-
-//     #[ntex_rt::test]
-//     async fn test_with_json_and_bad_custom_content_type() {
-//         let (req, mut pl) = TestRequest::with_header(
-//             header::CONTENT_TYPE,
-//             header::HeaderValue::from_static("text/html"),
-//         )
-//         .header(
-//             header::CONTENT_LENGTH,
-//             header::HeaderValue::from_static("16"),
-//         )
-//         .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-//         .data(JsonConfig::default().content_type(|mime: mime::Mime| {
-//             mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
-//         }))
-//         .to_http_parts();
-
-//         let s = Json::<MyObject>::from_request(&req, &mut pl).await;
-//         assert!(s.is_err())
-//     }
-// }
+        let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
+        assert!(s.is_err())
+    }
+}

@@ -7,7 +7,7 @@ use crate::http::{Extensions, Payload};
 
 use super::error::{DataExtractorError, ErrorRenderer};
 use super::extract::FromRequest;
-use super::request::HttpRequest;
+use super::httprequest::HttpRequest;
 
 /// Application data factory
 pub(crate) trait DataFactory {
