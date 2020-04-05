@@ -12,9 +12,9 @@ use pin_project::project;
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use crate::service::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
-use super::connect::{Connect, ConnectResult};
 use super::dispatcher::Dispatcher;
 use super::error::ServiceError;
+use super::handshake::{Handshake, HandshakeResult};
 
 type RequestItem<U> = <U as Decoder>::Item;
 type ResponseItem<U> = Option<<U as Encoder>::Item>;
@@ -29,8 +29,8 @@ pub struct Builder<St, C, Io, Codec, Out> {
 impl<St, C, Io, Codec, Out> Builder<St, C, Io, Codec, Out>
 where
     C: Service<
-        Request = Connect<Io, Codec>,
-        Response = ConnectResult<Io, St, Codec, Out>,
+        Request = Handshake<Io, Codec>,
+        Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
     Io: AsyncRead + AsyncWrite + Unpin,
@@ -82,8 +82,8 @@ where
     Io: AsyncRead + AsyncWrite + Unpin,
     C: ServiceFactory<
         Config = (),
-        Request = Connect<Io, Codec>,
-        Response = ConnectResult<Io, St, Codec, Out>,
+        Request = Handshake<Io, Codec>,
+        Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
     Codec: Decoder + Encoder,
@@ -135,8 +135,8 @@ where
     Io: AsyncRead + AsyncWrite + Unpin,
     C: ServiceFactory<
         Config = (),
-        Request = Connect<Io, Codec>,
-        Response = ConnectResult<Io, St, Codec, Out>,
+        Request = Handshake<Io, Codec>,
+        Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
     T: ServiceFactory<
@@ -176,8 +176,8 @@ where
     Io: AsyncRead + AsyncWrite + Unpin,
     C: ServiceFactory<
         Config = (),
-        Request = Connect<Io, Codec>,
-        Response = ConnectResult<Io, St, Codec, Out>,
+        Request = Handshake<Io, Codec>,
+        Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
     T: ServiceFactory<
@@ -204,8 +204,8 @@ where
     Io: AsyncRead + AsyncWrite + Unpin,
     C: ServiceFactory<
         Config = (),
-        Request = Connect<Io, Codec>,
-        Response = ConnectResult<Io, St, Codec, Out>,
+        Request = Handshake<Io, Codec>,
+        Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
     T: ServiceFactory<
@@ -247,8 +247,8 @@ impl<St, C, T, Io, Codec, Out> Service for FramedServiceImpl<St, C, T, Io, Codec
 where
     Io: AsyncRead + AsyncWrite + Unpin,
     C: Service<
-        Request = Connect<Io, Codec>,
-        Response = ConnectResult<Io, St, Codec, Out>,
+        Request = Handshake<Io, Codec>,
+        Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
     T: ServiceFactory<
@@ -284,8 +284,8 @@ where
     fn call(&self, req: Io) -> Self::Future {
         log::trace!("Start connection handshake");
         FramedServiceImplResponse {
-            inner: FramedServiceImplResponseInner::Connect(
-                self.connect.call(Connect::new(req)),
+            inner: FramedServiceImplResponseInner::Handshake(
+                self.connect.call(Handshake::new(req)),
                 self.handler.clone(),
             ),
         }
@@ -296,8 +296,8 @@ where
 pub struct FramedServiceImplResponse<St, Io, Codec, Out, C, T>
 where
     C: Service<
-        Request = Connect<Io, Codec>,
-        Response = ConnectResult<Io, St, Codec, Out>,
+        Request = Handshake<Io, Codec>,
+        Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
     T: ServiceFactory<
@@ -323,8 +323,8 @@ impl<St, Io, Codec, Out, C, T> Future
     for FramedServiceImplResponse<St, Io, Codec, Out, C, T>
 where
     C: Service<
-        Request = Connect<Io, Codec>,
-        Response = ConnectResult<Io, St, Codec, Out>,
+        Request = Handshake<Io, Codec>,
+        Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
     T: ServiceFactory<
@@ -363,8 +363,8 @@ where
 enum FramedServiceImplResponseInner<St, Io, Codec, Out, C, T>
 where
     C: Service<
-        Request = Connect<Io, Codec>,
-        Response = ConnectResult<Io, St, Codec, Out>,
+        Request = Handshake<Io, Codec>,
+        Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
     T: ServiceFactory<
@@ -382,7 +382,7 @@ where
     <Codec as Encoder>::Error: std::fmt::Debug,
     Out: Stream<Item = <Codec as Encoder>::Item> + Unpin,
 {
-    Connect(#[pin] C::Future, Rc<T>),
+    Handshake(#[pin] C::Future, Rc<T>),
     Handler(#[pin] T::Future, Option<Framed<Io, Codec>>, Option<Out>),
     Dispatcher(Dispatcher<T::Service, Io, Codec, Out>),
 }
@@ -390,8 +390,8 @@ where
 impl<St, Io, Codec, Out, C, T> FramedServiceImplResponseInner<St, Io, Codec, Out, C, T>
 where
     C: Service<
-        Request = Connect<Io, Codec>,
-        Response = ConnectResult<Io, St, Codec, Out>,
+        Request = Handshake<Io, Codec>,
+        Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
     T: ServiceFactory<
@@ -419,7 +419,7 @@ where
     > {
         #[project]
         match self.project() {
-            FramedServiceImplResponseInner::Connect(fut, handler) => {
+            FramedServiceImplResponseInner::Handshake(fut, handler) => {
                 match fut.poll(cx) {
                     Poll::Ready(Ok(res)) => {
                         log::trace!("Connection handshake succeeded");
