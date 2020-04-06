@@ -290,6 +290,7 @@ impl Tree {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn find_inner2<T, R, F>(
         &self,
         mut path: &str,

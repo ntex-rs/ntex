@@ -263,7 +263,8 @@ pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
             }
         };
 
-        Client::build().connector(connector)
+        Client::build()
+            .connector(connector)
             .timeout(time::Duration::from_millis(30000))
             .finish()
     };
