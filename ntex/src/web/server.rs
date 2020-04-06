@@ -31,6 +31,7 @@ struct Config {
     keep_alive: KeepAlive,
     client_timeout: u64,
     client_shutdown: u64,
+    handshake_timeout: u64,
 }
 
 /// An HTTP Server.
@@ -89,6 +90,7 @@ where
                 keep_alive: KeepAlive::Timeout(5),
                 client_timeout: 5000,
                 client_shutdown: 5000,
+                handshake_timeout: 5000,
             })),
             backlog: 1024,
             sockets: Vec::new(),
@@ -179,6 +181,17 @@ where
         self
     }
 
+    /// Set server ssl handshake timeout in milliseconds.
+    ///
+    /// Defines a timeout for connection ssl handshake negotiation.
+    /// To disable timeout set value to 0.
+    ///
+    /// By default handshake timeout is set to 5 seconds.
+    pub fn ssl_handshake_timeout(self, val: u64) -> Self {
+        self.config.lock().unwrap().handshake_timeout = val;
+        self
+    }
+
     /// Set server host name.
     ///
     /// Host name is used by application router as a hostname for url generation.
@@ -191,7 +204,7 @@ where
         self
     }
 
-    /// Stop actix system.
+    /// Stop ntex system.
     pub fn system_exit(mut self) -> Self {
         self.builder = self.builder.system_exit();
         self
@@ -244,7 +257,7 @@ where
         });
 
         self.builder = self.builder.listen(
-            format!("actix-web-service-{}", addr),
+            format!("ntex-web-service-{}", addr),
             lst,
             move || {
                 let c = cfg.lock().unwrap();
@@ -291,7 +304,7 @@ where
         });
 
         self.builder = self.builder.listen(
-            format!("actix-web-service-{}", addr),
+            format!("ntex-web-service-{}", addr),
             lst,
             move || {
                 let c = cfg.lock().unwrap();
@@ -304,6 +317,7 @@ where
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
                     .client_disconnect(c.client_shutdown)
+                    .ssl_handshake_timeout(c.handshake_timeout)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .openssl(acceptor.clone())
             },
@@ -338,7 +352,7 @@ where
         });
 
         self.builder = self.builder.listen(
-            format!("actix-web-service-{}", addr),
+            format!("ntex-web-service-{}", addr),
             lst,
             move || {
                 let c = cfg.lock().unwrap();
@@ -351,6 +365,7 @@ where
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
                     .client_disconnect(c.client_shutdown)
+                    .ssl_handshake_timeout(c.handshake_timeout)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .rustls(config.clone())
             },
@@ -461,7 +476,7 @@ where
             addr: socket_addr,
         });
 
-        let addr = format!("actix-web-service-{:?}", lst.local_addr()?);
+        let addr = format!("ntex-web-service-{:?}", lst.local_addr()?);
 
         self.builder = self.builder.listen_uds(addr, lst, move || {
             let c = cfg.lock().unwrap();
@@ -502,7 +517,7 @@ where
         });
 
         self.builder = self.builder.bind_uds(
-            format!("actix-web-service-{:?}", addr.as_ref()),
+            format!("ntex-web-service-{:?}", addr.as_ref()),
             addr,
             move || {
                 let c = cfg.lock().unwrap();
@@ -541,8 +556,8 @@ where
     /// For each address this method starts separate thread which does
     /// `accept()` in a loop.
     ///
-    /// This methods panics if no socket address can be bound or an `Actix` system is not yet
-    /// configured.
+    /// This methods panics if no socket address can be bound or an ntex system
+    /// is not yet configured.
     ///
     /// ```rust,no_run
     /// use ntex::web::{self, App, HttpResponse, HttpServer};

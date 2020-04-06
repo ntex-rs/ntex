@@ -866,31 +866,6 @@ async fn test_slow_request() {
     assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
 }
 
-// #[cfg(feature = "openssl")]
-// #[ntex::test]
-// async fn test_ssl_handshake_timeout() {
-//     use open_ssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
-//     use std::net;
-
-//     // load ssl keys
-//     let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
-//     builder
-//         .set_private_key_file("tests/key.pem", SslFiletype::PEM)
-//         .unwrap();
-//     builder
-//         .set_certificate_chain_file("tests/cert.pem")
-//         .unwrap();
-
-//     let srv = test::server_with(test::config().openssl(builder.build()), || {
-//         App::new().service(web::resource("/").route(web::to(|| HttpResponse::Ok())))
-//     });
-
-//     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-//     let mut data = String::new();
-//     let _ = stream.read_to_string(&mut data);
-//     assert!(data.is_empty());
-// }
-
 #[ntex::test]
 async fn test_custom_error() {
     #[derive(Debug, Display)]

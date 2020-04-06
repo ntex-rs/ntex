@@ -1,5 +1,6 @@
 //! General purpose tcp server
 #![allow(clippy::type_complexity)]
+use std::error::Error;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -63,7 +64,8 @@ pub fn max_concurrent_ssl_accept(num: usize) {
     MAX_CONN.store(num, Ordering::Relaxed);
 }
 
-pub(crate) static MAX_CONN: AtomicUsize = AtomicUsize::new(256);
+pub(self) const ZERO: std::time::Duration = std::time::Duration::from_millis(0);
+pub(self) static MAX_CONN: AtomicUsize = AtomicUsize::new(256);
 
 thread_local! {
     static MAX_CONN_COUNTER: Counter = Counter::new(MAX_CONN.load(Ordering::Relaxed));
@@ -71,9 +73,9 @@ thread_local! {
 
 /// Ssl error combinded with service error.
 #[derive(Debug)]
-pub enum SslError<E1, E2> {
-    Ssl(E1),
-    Service(E2),
+pub enum SslError<E> {
+    Ssl(Box<dyn Error>),
+    Service(E),
 }
 
 #[derive(Debug)]

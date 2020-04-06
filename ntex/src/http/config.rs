@@ -40,6 +40,60 @@ impl From<Option<usize>> for KeepAlive {
     }
 }
 
+/// Http service configuration
+pub struct ServiceConfig(pub(super) Rc<Inner>);
+
+pub(super) struct Inner {
+    pub(super) keep_alive: Option<Duration>,
+    pub(super) client_timeout: u64,
+    pub(super) client_disconnect: u64,
+    pub(super) ka_enabled: bool,
+    pub(super) timer: DateService,
+    pub(super) ssl_handshake_timeout: u64,
+}
+
+impl Clone for ServiceConfig {
+    fn clone(&self) -> Self {
+        ServiceConfig(self.0.clone())
+    }
+}
+
+impl Default for ServiceConfig {
+    fn default() -> Self {
+        Self::new(KeepAlive::Timeout(5), 0, 0, 5000)
+    }
+}
+
+impl ServiceConfig {
+    /// Create instance of `ServiceConfig`
+    pub fn new(
+        keep_alive: KeepAlive,
+        client_timeout: u64,
+        client_disconnect: u64,
+        ssl_handshake_timeout: u64,
+    ) -> ServiceConfig {
+        let (keep_alive, ka_enabled) = match keep_alive {
+            KeepAlive::Timeout(val) => (val as u64, true),
+            KeepAlive::Os => (0, true),
+            KeepAlive::Disabled => (0, false),
+        };
+        let keep_alive = if ka_enabled && keep_alive > 0 {
+            Some(Duration::from_secs(keep_alive))
+        } else {
+            None
+        };
+
+        ServiceConfig(Rc::new(Inner {
+            keep_alive,
+            ka_enabled,
+            client_timeout,
+            client_disconnect,
+            ssl_handshake_timeout,
+            timer: DateService::new(),
+        }))
+    }
+}
+
 pub(super) struct DispatcherConfig<S, X, U> {
     pub(super) service: S,
     pub(super) expect: X,
@@ -117,57 +171,6 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
 
     pub(super) fn now(&self) -> Instant {
         self.timer.now()
-    }
-}
-
-/// Http service configuration
-pub struct ServiceConfig(pub(super) Rc<Inner>);
-
-pub(super) struct Inner {
-    pub(super) keep_alive: Option<Duration>,
-    pub(super) client_timeout: u64,
-    pub(super) client_disconnect: u64,
-    pub(super) ka_enabled: bool,
-    pub(super) timer: DateService,
-}
-
-impl Clone for ServiceConfig {
-    fn clone(&self) -> Self {
-        ServiceConfig(self.0.clone())
-    }
-}
-
-impl Default for ServiceConfig {
-    fn default() -> Self {
-        Self::new(KeepAlive::Timeout(5), 0, 0)
-    }
-}
-
-impl ServiceConfig {
-    /// Create instance of `ServiceConfig`
-    pub fn new(
-        keep_alive: KeepAlive,
-        client_timeout: u64,
-        client_disconnect: u64,
-    ) -> ServiceConfig {
-        let (keep_alive, ka_enabled) = match keep_alive {
-            KeepAlive::Timeout(val) => (val as u64, true),
-            KeepAlive::Os => (0, true),
-            KeepAlive::Disabled => (0, false),
-        };
-        let keep_alive = if ka_enabled && keep_alive > 0 {
-            Some(Duration::from_secs(keep_alive))
-        } else {
-            None
-        };
-
-        ServiceConfig(Rc::new(Inner {
-            keep_alive,
-            ka_enabled,
-            client_timeout,
-            client_disconnect,
-            timer: DateService::new(),
-        }))
     }
 }
 

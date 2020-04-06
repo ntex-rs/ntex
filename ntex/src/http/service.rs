@@ -59,7 +59,7 @@ where
 {
     /// Create new `HttpService` instance.
     pub fn new<F: IntoServiceFactory<S>>(service: F) -> Self {
-        let cfg = ServiceConfig::new(KeepAlive::Timeout(5), 5000, 0);
+        let cfg = ServiceConfig::new(KeepAlive::Timeout(5), 5000, 0, 5000);
 
         HttpService {
             cfg,
@@ -194,7 +194,7 @@ where
 mod openssl {
     use super::*;
     use crate::server::openssl::{Acceptor, SslAcceptor, SslStream};
-    use crate::server::{openssl::HandshakeError, SslError};
+    use crate::server::SslError;
 
     impl<S, B, X, U> HttpService<SslStream<TcpStream>, S, B, X, U>
     where
@@ -225,11 +225,12 @@ mod openssl {
             Config = (),
             Request = TcpStream,
             Response = (),
-            Error = SslError<HandshakeError<TcpStream>, DispatchError>,
+            Error = SslError<DispatchError>,
             InitError = (),
         > {
             pipeline_factory(
                 Acceptor::new(acceptor)
+                    .timeout(self.cfg.0.ssl_handshake_timeout)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
@@ -256,7 +257,6 @@ mod rustls {
     use super::*;
     use crate::server::rustls::{Acceptor, ServerConfig, Session, TlsStream};
     use crate::server::SslError;
-    use std::io;
 
     impl<S, B, X, U> HttpService<TlsStream<TcpStream>, S, B, X, U>
     where
@@ -287,7 +287,7 @@ mod rustls {
             Config = (),
             Request = TcpStream,
             Response = (),
-            Error = SslError<io::Error, DispatchError>,
+            Error = SslError<DispatchError>,
             InitError = (),
         > {
             let protos = vec!["h2".to_string().into(), "http/1.1".to_string().into()];
@@ -295,6 +295,7 @@ mod rustls {
 
             pipeline_factory(
                 Acceptor::new(config)
+                    .timeout(self.cfg.0.ssl_handshake_timeout)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )

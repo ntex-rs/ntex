@@ -95,8 +95,8 @@ impl WebResponseError<DefaultError> for crate::connect::openssl::SslError {}
 
 #[cfg(feature = "openssl")]
 /// `InternalServerError` for `openssl::ssl::HandshakeError`
-impl<T: std::fmt::Debug + 'static> WebResponseError<DefaultError>
-    for crate::server::openssl::HandshakeError<T>
+impl<T: fmt::Debug + 'static> WebResponseError<DefaultError>
+    for tokio_openssl::HandshakeError<T>
 {
 }
 

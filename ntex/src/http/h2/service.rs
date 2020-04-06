@@ -31,6 +31,7 @@ pub struct H2Service<T, S, B> {
     srv: S,
     cfg: ServiceConfig,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    handshake_timeout: u64,
     _t: PhantomData<(T, B)>,
 }
 
@@ -48,10 +49,11 @@ where
         service: F,
     ) -> Self {
         H2Service {
-            cfg,
             on_connect: None,
             srv: service.into_factory(),
+            handshake_timeout: cfg.0.ssl_handshake_timeout,
             _t: PhantomData,
+            cfg,
         }
     }
 
@@ -96,7 +98,7 @@ where
 #[cfg(feature = "openssl")]
 mod openssl {
     use crate::server::openssl::{Acceptor, SslAcceptor, SslStream};
-    use crate::server::{openssl::HandshakeError, SslError};
+    use crate::server::SslError;
 
     use super::*;
     use crate::{fn_factory, fn_service};
@@ -117,11 +119,12 @@ mod openssl {
             Config = (),
             Request = TcpStream,
             Response = (),
-            Error = SslError<HandshakeError<TcpStream>, DispatchError>,
+            Error = SslError<DispatchError>,
             InitError = S::InitError,
         > {
             pipeline_factory(
                 Acceptor::new(acceptor)
+                    .timeout(self.handshake_timeout)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
@@ -141,7 +144,6 @@ mod rustls {
     use super::*;
     use crate::server::rustls::{Acceptor, ServerConfig, TlsStream};
     use crate::server::SslError;
-    use std::io;
 
     impl<S, B> H2Service<TlsStream<TcpStream>, S, B>
     where
@@ -159,7 +161,7 @@ mod rustls {
             Config = (),
             Request = TcpStream,
             Response = (),
-            Error = SslError<io::Error, DispatchError>,
+            Error = SslError<DispatchError>,
             InitError = S::InitError,
         > {
             let protos = vec!["h2".to_string().into()];
@@ -167,6 +169,7 @@ mod rustls {
 
             pipeline_factory(
                 Acceptor::new(config)
+                    .timeout(self.handshake_timeout)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )

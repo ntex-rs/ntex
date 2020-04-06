@@ -439,3 +439,20 @@ async fn test_h1_service_error() {
     let bytes = srv.load_body(response).await.unwrap();
     assert_eq!(bytes, Bytes::from_static(b"error"));
 }
+
+#[ntex::test]
+async fn test_ssl_handshake_timeout() {
+    use std::io::Read;
+
+    let srv = test_server(move || {
+        HttpService::build()
+            .ssl_handshake_timeout(50)
+            .h2(|_| ok::<_, io::Error>(Response::Ok().finish()))
+            .rustls(ssl_acceptor())
+    });
+
+    let mut stream = std::net::TcpStream::connect(srv.addr()).unwrap();
+    let mut data = String::new();
+    let _ = stream.read_to_string(&mut data);
+    assert!(data.is_empty());
+}

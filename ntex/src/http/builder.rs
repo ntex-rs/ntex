@@ -22,6 +22,7 @@ pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
     keep_alive: KeepAlive,
     client_timeout: u64,
     client_disconnect: u64,
+    handshake_timeout: u64,
     expect: X,
     upgrade: Option<U>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
@@ -35,6 +36,7 @@ impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
             keep_alive: KeepAlive::Timeout(5),
             client_timeout: 5000,
             client_disconnect: 0,
+            handshake_timeout: 5000,
             expect: ExpectHandler,
             upgrade: None,
             on_connect: None,
@@ -93,6 +95,17 @@ where
         self
     }
 
+    /// Set server ssl handshake timeout in milliseconds.
+    ///
+    /// Defines a timeout for connection ssl handshake negotiation.
+    /// To disable timeout set value to 0.
+    ///
+    /// By default handshake timeout is set to 5 seconds.
+    pub fn ssl_handshake_timeout(mut self, val: u64) -> Self {
+        self.handshake_timeout = val;
+        self
+    }
+
     /// Provide service for `EXPECT: 100-Continue` support.
     ///
     /// Service get called with request that contains `EXPECT` header.
@@ -110,6 +123,7 @@ where
             keep_alive: self.keep_alive,
             client_timeout: self.client_timeout,
             client_disconnect: self.client_disconnect,
+            handshake_timeout: self.handshake_timeout,
             expect: expect.into_factory(),
             upgrade: self.upgrade,
             on_connect: self.on_connect,
@@ -137,6 +151,7 @@ where
             keep_alive: self.keep_alive,
             client_timeout: self.client_timeout,
             client_disconnect: self.client_disconnect,
+            handshake_timeout: self.handshake_timeout,
             expect: self.expect,
             upgrade: Some(upgrade.into_factory()),
             on_connect: self.on_connect,
@@ -170,6 +185,7 @@ where
             self.keep_alive,
             self.client_timeout,
             self.client_disconnect,
+            self.handshake_timeout,
         );
         H1Service::with_config(cfg, service.into_factory())
             .expect(self.expect)
@@ -191,6 +207,7 @@ where
             self.keep_alive,
             self.client_timeout,
             self.client_disconnect,
+            self.handshake_timeout,
         );
         H2Service::with_config(cfg, service.into_factory()).on_connect(self.on_connect)
     }
@@ -209,6 +226,7 @@ where
             self.keep_alive,
             self.client_timeout,
             self.client_disconnect,
+            self.handshake_timeout,
         );
         HttpService::with_config(cfg, service.into_factory())
             .expect(self.expect)

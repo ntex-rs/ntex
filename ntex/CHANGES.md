@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.3] - 2020-04-06
+
+* Add server ssl handshake timeout
+
+* Simplify server ssl erroor
+
 ## [0.1.2] - 2020-04-05
 
 * HTTP1 dispatcher refactoring

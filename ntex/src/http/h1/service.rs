@@ -29,6 +29,7 @@ pub struct H1Service<T, S, B, X = ExpectHandler, U = UpgradeHandler<T>> {
     expect: X,
     upgrade: Option<U>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    handshake_timeout: u64,
     _t: PhantomData<(T, B)>,
 }
 
@@ -46,12 +47,13 @@ where
         service: F,
     ) -> Self {
         H1Service {
-            cfg,
             srv: service.into_factory(),
             expect: ExpectHandler,
             upgrade: None,
             on_connect: None,
+            handshake_timeout: cfg.0.ssl_handshake_timeout,
             _t: PhantomData,
+            cfg,
         }
     }
 }
@@ -97,7 +99,7 @@ mod openssl {
     use super::*;
 
     use crate::server::openssl::{Acceptor, SslAcceptor, SslStream};
-    use crate::server::{openssl::HandshakeError, SslError};
+    use crate::server::SslError;
 
     impl<S, B, X, U> H1Service<SslStream<TcpStream>, S, B, X, U>
     where
@@ -125,11 +127,12 @@ mod openssl {
             Config = (),
             Request = TcpStream,
             Response = (),
-            Error = SslError<HandshakeError<TcpStream>, DispatchError>,
+            Error = SslError<DispatchError>,
             InitError = (),
         > {
             pipeline_factory(
                 Acceptor::new(acceptor)
+                    .timeout(self.handshake_timeout)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
@@ -147,7 +150,7 @@ mod rustls {
     use super::*;
     use crate::server::rustls::{Acceptor, ServerConfig, TlsStream};
     use crate::server::SslError;
-    use std::{fmt, io};
+    use std::fmt;
 
     impl<S, B, X, U> H1Service<TlsStream<TcpStream>, S, B, X, U>
     where
@@ -175,11 +178,12 @@ mod rustls {
             Config = (),
             Request = TcpStream,
             Response = (),
-            Error = SslError<io::Error, DispatchError>,
+            Error = SslError<DispatchError>,
             InitError = (),
         > {
             pipeline_factory(
                 Acceptor::new(config)
+                    .timeout(self.handshake_timeout)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
@@ -212,6 +216,7 @@ where
             srv: self.srv,
             upgrade: self.upgrade,
             on_connect: self.on_connect,
+            handshake_timeout: self.handshake_timeout,
             _t: PhantomData,
         }
     }
@@ -228,6 +233,7 @@ where
             srv: self.srv,
             expect: self.expect,
             on_connect: self.on_connect,
+            handshake_timeout: self.handshake_timeout,
             _t: PhantomData,
         }
     }
@@ -273,7 +279,7 @@ where
             expect: None,
             upgrade: None,
             on_connect: self.on_connect.clone(),
-            cfg: Some(self.cfg.clone()),
+            cfg: self.cfg.clone(),
             _t: PhantomData,
         }
     }
@@ -302,7 +308,7 @@ where
     expect: Option<X::Service>,
     upgrade: Option<U::Service>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-    cfg: Option<ServiceConfig>,
+    cfg: ServiceConfig,
     _t: PhantomData<(T, B)>,
 }
 
@@ -351,7 +357,7 @@ where
 
         Poll::Ready(result.map(|service| {
             let this = self.as_mut().project();
-            let cfg = this.cfg.take().unwrap();
+            let cfg = this.cfg.clone();
             let config = DispatcherConfig::new(
                 cfg,
                 service,
