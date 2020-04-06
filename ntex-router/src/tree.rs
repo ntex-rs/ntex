@@ -200,7 +200,7 @@ impl Tree {
         F: Fn(usize, &R) -> bool,
     {
         let path = resource.resource_path();
-        let base_skip = path.skip;
+        let mut base_skip = path.skip as isize;
         let mut segments = mem::take(&mut path.segments);
         let path = resource.path();
 
@@ -230,6 +230,7 @@ impl Tree {
             let path = if path.starts_with('/') {
                 &path[1..]
             } else {
+                base_skip -= 1;
                 path
             };
 
@@ -267,6 +268,7 @@ impl Tree {
         let path = if path.starts_with('/') {
             &path[1..]
         } else {
+            base_skip -= 1;
             path
         };
 
@@ -296,7 +298,7 @@ impl Tree {
         mut skip: usize,
         segments: &mut Vec<(&'static str, PathItem)>,
         insensitive: bool,
-        base_skip: u16,
+        base_skip: isize,
     ) -> Option<(usize, usize)>
     where
         T: ResourcePath,
@@ -344,8 +346,8 @@ impl Tree {
                                     PathItem::Segment(m.as_str().to_string())
                                 } else {
                                     PathItem::IdxSegment(
-                                        base_skip + (skip + m.start()) as u16,
-                                        base_skip + (skip + m.end()) as u16,
+                                        (base_skip + (skip + m.start()) as isize) as u16,
+                                        (base_skip + (skip + m.end()) as isize) as u16,
                                     )
                                 };
                                 segments.push((name, item));

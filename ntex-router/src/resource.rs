@@ -890,9 +890,49 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/user/profile")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/profile/profile")), None);
 
+        let tree = Tree::new(&ResourceDef::new("{id}"), 1);
+        assert_eq!(tree.find(&mut Path::new("profile")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("2345")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/2345/")), None);
+        assert_eq!(tree.find(&mut Path::new("/2345/sdg")), None);
+
         let tree = Tree::new(&ResourceDef::new("{user}/profile/{no}"), 1);
         assert_eq!(tree.find(&mut Path::new("user/profile/123")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/profile/123")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/profile/p/test/")), None);
+
+        let tree = Tree::new(&ResourceDef::new("v{version}/resource/{id}/test"), 1);
+        assert_eq!(
+            tree.find(&mut Path::new("v1/resource/320120/test")),
+            Some(1)
+        );
+        assert_eq!(tree.find(&mut Path::new("v/resource/1/test")), None);
+
+        let mut resource = Path::new("v151/resource/adahg32/test");
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(resource.get("version").unwrap(), "151");
+        assert_eq!(resource.get("id").unwrap(), "adahg32");
+
+        let re = ResourceDef::new("v/{id:[[:digit:]]{6}}");
+        let tree = Tree::new(&re, 1);
+        assert_eq!(tree.find(&mut Path::new("v/012345")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("v/012345/")), None);
+        assert_eq!(tree.find(&mut Path::new("v/012345/index")), None);
+        assert_eq!(tree.find(&mut Path::new("v/012")), None);
+        assert_eq!(tree.find(&mut Path::new("v/01234567")), None);
+        assert_eq!(tree.find(&mut Path::new("v/XXXXXX")), None);
+
+        let mut resource = Path::new("v/012345");
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(resource.get("id").unwrap(), "012345");
+
+        let re = ResourceDef::new("u/test/v{version}-no-{minor}xx/resource/{id}/{name}");
+        let tree = Tree::new(&re, 1);
+        let mut resource = Path::new("u/test/v1-no-3xx/resource/320120/name");
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(resource.get("version").unwrap(), "1");
+        assert_eq!(resource.get("minor").unwrap(), "3");
+        assert_eq!(resource.get("id").unwrap(), "320120");
+        assert_eq!(resource.get("name").unwrap(), "name");
     }
 }
