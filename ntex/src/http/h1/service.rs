@@ -29,6 +29,7 @@ pub struct H1Service<T, S, B, X = ExpectHandler, U = UpgradeHandler<T>> {
     expect: X,
     upgrade: Option<U>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    #[allow(dead_code)]
     handshake_timeout: u64,
     _t: PhantomData<(T, B)>,
 }

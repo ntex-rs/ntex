@@ -36,12 +36,6 @@ jobs:
           Get-ChildItem C:\vcpkg\installed\x64-windows\bin
           Get-ChildItem C:\vcpkg\installed\x64-windows\lib
 
-      - name: check build
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --all --all-features --bins --examples --tests
-
       - name: tests
         uses: actions-rs/cargo@v1
         with:

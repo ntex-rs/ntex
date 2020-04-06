@@ -31,6 +31,7 @@ pub struct H2Service<T, S, B> {
     srv: S,
     cfg: ServiceConfig,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    #[allow(dead_code)]
     handshake_timeout: u64,
     _t: PhantomData<(T, B)>,
 }

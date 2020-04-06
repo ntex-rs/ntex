@@ -64,6 +64,7 @@ pub fn max_concurrent_ssl_accept(num: usize) {
     MAX_CONN.store(num, Ordering::Relaxed);
 }
 
+#[allow(dead_code)]
 pub(self) const ZERO: std::time::Duration = std::time::Duration::from_millis(0);
 pub(self) static MAX_CONN: AtomicUsize = AtomicUsize::new(256);
 

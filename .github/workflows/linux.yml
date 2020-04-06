@@ -55,12 +55,6 @@ jobs:
           path: ~/.cargo/bin
           key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-tarpaulin
 
-      - name: check build
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --all --all-features --bins --examples --tests
-
       - name: tests
         uses: actions-rs/cargo@v1
         timeout-minutes: 40
