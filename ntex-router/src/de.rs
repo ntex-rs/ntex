@@ -528,6 +528,9 @@ mod tests {
             ("value", PathItem::Static("user1")),
         ];
 
+        let s: () = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(s, ());
+
         let s: MyStruct =
             de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(s.key, "name");
@@ -553,10 +556,20 @@ mod tests {
         assert_eq!(s.0, "name");
         assert_eq!(s.1, 32);
 
+        #[derive(Deserialize)]
+        struct T(Test1);
+        let s: T = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!((s.0).0, "name");
+        assert_eq!((s.0).1, 32);
+
         let s: Test2 =
             de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(s.key, "name");
         assert_eq!(s.value, 32);
+
+        let s: Result<(Test2,), _> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_err());
 
         let s: (String, u8) =
             de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
@@ -589,6 +602,11 @@ mod tests {
         let i: Test =
             de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(i.0, 32);
+
+        path.segments.push(("value2", PathItem::Static("32")));
+        let i: Result<i8, _> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(i.is_err());
     }
 
     #[test]

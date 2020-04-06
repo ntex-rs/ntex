@@ -9,6 +9,7 @@ use crate::{Resource, ResourcePath};
 pub(super) enum PathItem {
     Static(&'static str),
     Segment(String),
+    IdxSegment(u16, u16),
 }
 
 /// Resource path match information
@@ -123,6 +124,9 @@ impl<T: ResourcePath> Path<T> {
                 return match item.1 {
                     PathItem::Static(ref s) => Some(&s),
                     PathItem::Segment(ref s) => Some(s),
+                    PathItem::IdxSegment(s, e) => {
+                        Some(&self.path.path()[(s as usize)..(e as usize)])
+                    }
                 };
             }
         }
@@ -182,6 +186,9 @@ impl<'a, T: ResourcePath> Iterator for PathIter<'a, T> {
             let res = match self.params.segments[idx].1 {
                 PathItem::Static(s) => s,
                 PathItem::Segment(ref s) => s.as_str(),
+                PathItem::IdxSegment(s, e) => {
+                    &self.params.path.path()[(s as usize)..(e as usize)]
+                }
             };
             self.idx += 1;
             return Some((&self.params.segments[idx].0, res));
@@ -206,6 +213,7 @@ impl<T: ResourcePath> Index<usize> for Path<T> {
         match self.segments[idx].1 {
             PathItem::Static(ref s) => &s,
             PathItem::Segment(ref s) => &s,
+            PathItem::IdxSegment(s, e) => &self.path.path()[(s as usize)..(e as usize)],
         }
     }
 }
@@ -217,5 +225,33 @@ impl<T: ResourcePath> Resource<T> for Path<T> {
 
     fn resource_path(&mut self) -> &mut Path<T> {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_path() {
+        let mut p: Path<String> = Path::default();
+        assert_eq!(p.get_ref(), &String::new());
+        p.get_mut().push_str("test");
+        assert_eq!(p.get_ref().as_str(), "test");
+        let p2 = p.clone();
+        assert_eq!(p2.get_ref().as_str(), "test");
+
+        p.skip(2);
+        assert_eq!(p.get("tail").unwrap(), "st");
+        assert_eq!(p.get("unknown"), None);
+        assert_eq!(p.query("tail"), "st");
+        assert_eq!(p.query("unknown"), "");
+        assert_eq!(p.unprocessed(), "st");
+
+        p.reset();
+        assert_eq!(p.unprocessed(), "test");
+
+        p.segments.push(("k1", PathItem::IdxSegment(0, 2)));
+        assert_eq!(p.get("k1").unwrap(), "te");
     }
 }

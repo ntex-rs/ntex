@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::mem;
 
 use super::path::PathItem;
@@ -199,6 +200,7 @@ impl Tree {
         F: Fn(usize, &R) -> bool,
     {
         let path = resource.resource_path();
+        let base_skip = path.skip;
         let mut segments = mem::take(&mut path.segments);
         let path = resource.path();
 
@@ -235,7 +237,15 @@ impl Tree {
                 .children
                 .iter()
                 .map(|x| {
-                    x.find_inner2(path, resource, check, 1, &mut segments, insensitive)
+                    x.find_inner2(
+                        path,
+                        resource,
+                        check,
+                        1,
+                        &mut segments,
+                        insensitive,
+                        base_skip,
+                    )
                 })
                 .filter_map(|x| x)
                 .next();
@@ -260,9 +270,15 @@ impl Tree {
             path
         };
 
-        if let Some((val, skip)) =
-            self.find_inner2(path, resource, check, 1, &mut segments, insensitive)
-        {
+        if let Some((val, skip)) = self.find_inner2(
+            path,
+            resource,
+            check,
+            1,
+            &mut segments,
+            insensitive,
+            base_skip,
+        ) {
             let path = resource.resource_path();
             path.segments = segments;
             path.skip += skip as u16;
@@ -280,6 +296,7 @@ impl Tree {
         mut skip: usize,
         segments: &mut Vec<(&'static str, PathItem)>,
         insensitive: bool,
+        base_skip: u16,
     ) -> Option<(usize, usize)>
     where
         T: ResourcePath,
@@ -295,6 +312,11 @@ impl Tree {
                 path.len()
             };
             let segment = T::unquote(&path[..idx]);
+            let quoted = if let Cow::Owned(_) = segment {
+                true
+            } else {
+                false
+            };
 
             // check segment match
             let is_match = match key[0] {
@@ -318,10 +340,15 @@ impl Tree {
                         let mut is_match = true;
                         for name in names.iter() {
                             if let Some(m) = captures.name(&name) {
-                                segments.push((
-                                    name,
-                                    PathItem::Segment(m.as_str().to_string()),
-                                ));
+                                let item = if quoted {
+                                    PathItem::Segment(m.as_str().to_string())
+                                } else {
+                                    PathItem::IdxSegment(
+                                        base_skip + (skip + m.start()) as u16,
+                                        base_skip + (skip + m.end()) as u16,
+                                    )
+                                };
+                                segments.push((name, item));
                             } else {
                                 log::error!(
                                     "Dynamic path match but not all segments found: {}",
@@ -431,6 +458,7 @@ impl Tree {
                                 skip,
                                 segments,
                                 insensitive,
+                                base_skip,
                             )
                         })
                         .filter_map(|x| x)

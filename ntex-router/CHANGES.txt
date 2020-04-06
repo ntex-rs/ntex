@@ -1,5 +1,11 @@
 # Changes
 
+## [0.3.1] - 2020-04-06
+
+* Fix url quoter
+
+* Add non-allocating path item
+
 ## [0.3.0] - 2020-03-31
 
 * Case insensitive routing

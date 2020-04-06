@@ -13,7 +13,14 @@ pub(super) fn requote(val: &[u8]) -> Option<String> {
             has_pct += 1;
             if has_pct == 3 {
                 has_pct = 0;
-                let buf = cloned.as_mut().unwrap();
+                let buf = if let Some(ref mut buf) = cloned {
+                    buf
+                } else {
+                    let mut c = Vec::with_capacity(len);
+                    c.extend_from_slice(&val[..idx - 2]);
+                    cloned = Some(c);
+                    cloned.as_mut().unwrap()
+                };
 
                 if let Some(ch) = restore_ch(pct[1], pct[2]) {
                     buf.push(ch);
@@ -23,18 +30,16 @@ pub(super) fn requote(val: &[u8]) -> Option<String> {
             }
         } else if ch == b'%' {
             has_pct = 1;
-            if cloned.is_none() {
-                let mut c = Vec::with_capacity(len);
-                c.extend_from_slice(&val[..idx]);
-                cloned = Some(c);
-            }
         } else if let Some(ref mut cloned) = cloned {
             cloned.push(ch)
         }
         idx += 1;
     }
 
-    if let Some(data) = cloned {
+    if let Some(mut data) = cloned {
+        if has_pct > 0 {
+            data.extend(&pct[..has_pct]);
+        }
         // Unsafe: we get data from http::Uri, which does utf-8 checks already
         // this code only decodes valid pct encoded values
         Some(unsafe { String::from_utf8_unchecked(data) })

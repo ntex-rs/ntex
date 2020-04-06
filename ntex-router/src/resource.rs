@@ -675,7 +675,11 @@ mod tests {
         test_single_value!("/%2B/", "+");
         test_single_value!("/%252B/", "%2B");
         test_single_value!("/%2F/", "/");
+        test_single_value!("/test%2Ftest/", "test/test");
         test_single_value!("/%252F/", "%2F");
+        test_single_value!("/%m/", "%m");
+        test_single_value!("/%mm/", "%mm");
+        test_single_value!("/test%mm/", "test%mm");
         test_single_value!(
             "/http%3A%2F%2Flocalhost%3A80%2Ffoo/",
             "http://localhost:80/foo"
