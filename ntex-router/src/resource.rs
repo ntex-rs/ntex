@@ -653,6 +653,40 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "http")]
+    #[test]
+    fn test_extract_path_decode() {
+        use http::Uri;
+        use std::convert::TryFrom;
+
+        let tree = Tree::new(&ResourceDef::new("/{id}/"), 1);
+
+        macro_rules! test_single_value {
+            ($value:expr, $expected:expr) => {{
+                let uri = Uri::try_from($value).unwrap();
+                let mut resource = Path::new(uri);
+                assert_eq!(tree.find(&mut resource), Some(1));
+                assert_eq!(resource.get("id").unwrap(), $expected);
+            }};
+        }
+
+        test_single_value!("/%25/", "%");
+        test_single_value!("/%40%C2%A3%24%25%5E%26%2B%3D/", "@£$%^&+=");
+        test_single_value!("/%2B/", "+");
+        test_single_value!("/%252B/", "%2B");
+        test_single_value!("/%2F/", "/");
+        test_single_value!("/%252F/", "%2F");
+        test_single_value!(
+            "/http%3A%2F%2Flocalhost%3A80%2Ffoo/",
+            "http://localhost:80/foo"
+        );
+        test_single_value!("/%2Fvar%2Flog%2Fsyslog/", "/var/log/syslog");
+        test_single_value!(
+            "/http%3A%2F%2Flocalhost%3A80%2Ffile%2F%252Fvar%252Flog%252Fsyslog/",
+            "http://localhost:80/file/%2Fvar%2Flog%2Fsyslog"
+        );
+    }
+
     #[test]
     fn test_parse_tail() {
         let re = ResourceDef::new("/user/-{id}*");

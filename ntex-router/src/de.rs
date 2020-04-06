@@ -480,235 +480,174 @@ impl<'de> de::VariantAccess<'de> for UnitVariant {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use serde::de;
-//     use serde_derive::Deserialize;
+#[cfg(test)]
+mod tests {
+    use serde::de;
+    use serde_derive::Deserialize;
 
-//     use super::*;
-//     use crate::path::Path;
-//     use crate::router::Router;
+    use super::*;
+    use crate::path::{Path, PathItem};
 
-//     #[derive(Deserialize)]
-//     struct MyStruct {
-//         key: String,
-//         value: String,
-//     }
+    #[derive(Deserialize)]
+    struct MyStruct {
+        key: String,
+        value: String,
+    }
 
-//     #[derive(Deserialize)]
-//     struct Id {
-//         _id: String,
-//     }
+    #[derive(Deserialize)]
+    struct Id {
+        _id: String,
+    }
 
-//     #[derive(Debug, Deserialize)]
-//     struct Test1(String, u32);
+    #[derive(Debug, Deserialize)]
+    struct Test1(String, u32);
 
-//     #[derive(Debug, Deserialize)]
-//     struct Test2 {
-//         key: String,
-//         value: u32,
-//     }
+    #[derive(Debug, Deserialize)]
+    struct Test2 {
+        key: String,
+        value: u32,
+    }
 
-//     #[derive(Debug, Deserialize, PartialEq)]
-//     #[serde(rename_all = "lowercase")]
-//     enum TestEnum {
-//         Val1,
-//         Val2,
-//     }
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(rename_all = "lowercase")]
+    enum TestEnum {
+        Val1,
+        Val2,
+    }
 
-//     #[derive(Debug, Deserialize)]
-//     struct Test3 {
-//         val: TestEnum,
-//     }
+    #[derive(Debug, Deserialize)]
+    struct Test3 {
+        val: TestEnum,
+    }
 
-//     #[test]
-//     fn test_request_extract() {
-//         let mut router = Router::<()>::build();
-//         router.path("/{key}/{value}/", ());
-//         let router = router.finish();
+    #[test]
+    fn test_request_extract() {
+        let mut path = Path::new("/name/user1/");
+        path.segments = vec![
+            ("key", PathItem::Static("name")),
+            ("value", PathItem::Static("user1")),
+        ];
 
-//         let mut path = Path::new("/name/user1/");
-//         assert!(router.recognize(&mut path).is_some());
+        let s: MyStruct =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(s.key, "name");
+        assert_eq!(s.value, "user1");
 
-//         let s: MyStruct = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
-//         assert_eq!(s.key, "name");
-//         assert_eq!(s.value, "user1");
+        let s: MyStruct = path.load().unwrap();
+        assert_eq!(s.key, "name");
+        assert_eq!(s.value, "user1");
 
-//         let s: (String, String) =
-//             de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
-//         assert_eq!(s.0, "name");
-//         assert_eq!(s.1, "user1");
+        let s: (String, String) =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(s.0, "name");
+        assert_eq!(s.1, "user1");
 
-//         let mut router = Router::<()>::build();
-//         router.path("/{key}/{value}/", ());
-//         let router = router.finish();
+        let mut path = Path::new("/name/user1/");
+        path.segments = vec![
+            ("key", PathItem::Static("name")),
+            ("value", PathItem::Static("32")),
+        ];
 
-//         let mut path = Path::new("/name/32/");
-//         assert!(router.recognize(&mut path).is_some());
+        let s: Test1 =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(s.0, "name");
+        assert_eq!(s.1, 32);
 
-//         let s: Test1 = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
-//         assert_eq!(s.0, "name");
-//         assert_eq!(s.1, 32);
+        let s: Test2 =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(s.key, "name");
+        assert_eq!(s.value, 32);
 
-//         let s: Test2 = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
-//         assert_eq!(s.key, "name");
-//         assert_eq!(s.value, 32);
+        let s: (String, u8) =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(s.0, "name");
+        assert_eq!(s.1, 32);
 
-//         let s: (String, u8) =
-//             de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
-//         assert_eq!(s.0, "name");
-//         assert_eq!(s.1, 32);
+        let res: Vec<String> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(res[0], "name".to_owned());
+        assert_eq!(res[1], "32".to_owned());
+    }
 
-//         let res: Vec<String> =
-//             de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
-//         assert_eq!(res[0], "name".to_owned());
-//         assert_eq!(res[1], "32".to_owned());
-//     }
+    #[test]
+    fn test_extract_path_single() {
+        let mut path = Path::new("/name/user1/");
+        path.segments = vec![("value", PathItem::Static("32"))];
+        let i: i8 = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(i, 32);
 
-//     #[test]
-//     fn test_extract_path_single() {
-//         let mut router = Router::<()>::build();
-//         router.path("/{value}/", ());
-//         let router = router.finish();
+        let i: (i8,) =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(i, (32,));
 
-//         let mut path = Path::new("/32/");
-//         assert!(router.recognize(&mut path).is_some());
-//         let i: i8 = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
-//         assert_eq!(i, 32);
-//     }
+        let i: Result<(i8, i8), _> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(i.is_err());
 
-//     #[test]
-//     fn test_extract_enum() {
-//         let mut router = Router::<()>::build();
-//         router.path("/{val}/", ());
-//         let router = router.finish();
+        #[derive(Deserialize)]
+        struct Test(i8);
+        let i: Test =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(i.0, 32);
+    }
 
-//         let mut path = Path::new("/val1/");
-//         assert!(router.recognize(&mut path).is_some());
-//         let i: TestEnum = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
-//         assert_eq!(i, TestEnum::Val1);
+    #[test]
+    fn test_extract_enum() {
+        let mut path = Path::new("/val1/");
+        path.segments = vec![("val", PathItem::Static("val1"))];
+        let i: TestEnum =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(i, TestEnum::Val1);
 
-//         let mut router = Router::<()>::build();
-//         router.path("/{val1}/{val2}/", ());
-//         let router = router.finish();
+        let mut path = Path::new("/val1/");
+        path.segments = vec![
+            ("val1", PathItem::Static("val1")),
+            ("val2", PathItem::Static("val2")),
+        ];
+        let i: (TestEnum, TestEnum) =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(i, (TestEnum::Val1, TestEnum::Val2));
+    }
 
-//         let mut path = Path::new("/val1/val2/");
-//         assert!(router.recognize(&mut path).is_some());
-//         let i: (TestEnum, TestEnum) =
-//             de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
-//         assert_eq!(i, (TestEnum::Val1, TestEnum::Val2));
-//     }
+    #[test]
+    fn test_extract_enum_value() {
+        let mut path = Path::new("/val1/");
+        path.segments = vec![("val", PathItem::Static("val1"))];
+        let i: Test3 =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(i.val, TestEnum::Val1);
 
-//     #[test]
-//     fn test_extract_enum_value() {
-//         let mut router = Router::<()>::build();
-//         router.path("/{val}/", ());
-//         let router = router.finish();
+        let mut path = Path::new("/val3/");
+        path.segments = vec![("val", PathItem::Static("val3"))];
+        let i: Result<Test3, de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(i.is_err());
+        assert!(format!("{:?}", i).contains("unknown variant"));
+    }
 
-//         let mut path = Path::new("/val1/");
-//         assert!(router.recognize(&mut path).is_some());
-//         let i: Test3 = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
-//         assert_eq!(i.val, TestEnum::Val1);
+    #[test]
+    fn test_extract_errors() {
+        let mut path = Path::new("/name/");
+        path.segments = vec![("value", PathItem::Static("name"))];
 
-//         let mut path = Path::new("/val3/");
-//         assert!(router.recognize(&mut path).is_some());
-//         let i: Result<Test3, de::value::Error> =
-//             de::Deserialize::deserialize(PathDeserializer::new(&path));
-//         assert!(i.is_err());
-//         assert!(format!("{:?}", i).contains("unknown variant"));
-//     }
+        let s: Result<Test1, de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_err());
+        assert!(format!("{:?}", s).contains("wrong number of parameters"));
 
-//     #[test]
-//     fn test_extract_errors() {
-//         let mut router = Router::<()>::build();
-//         router.path("/{value}/", ());
-//         let router = router.finish();
+        let s: Result<Test2, de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_err());
+        assert!(format!("{:?}", s).contains("can not parse"));
 
-//         let mut path = Path::new("/name/");
-//         assert!(router.recognize(&mut path).is_some());
+        let s: Result<(String, String), de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_err());
+        assert!(format!("{:?}", s).contains("wrong number of parameters"));
 
-//         let s: Result<Test1, de::value::Error> =
-//             de::Deserialize::deserialize(PathDeserializer::new(&path));
-//         assert!(s.is_err());
-//         assert!(format!("{:?}", s).contains("wrong number of parameters"));
-
-//         let s: Result<Test2, de::value::Error> =
-//             de::Deserialize::deserialize(PathDeserializer::new(&path));
-//         assert!(s.is_err());
-//         assert!(format!("{:?}", s).contains("can not parse"));
-
-//         let s: Result<(String, String), de::value::Error> =
-//             de::Deserialize::deserialize(PathDeserializer::new(&path));
-//         assert!(s.is_err());
-//         assert!(format!("{:?}", s).contains("wrong number of parameters"));
-
-//         let s: Result<u32, de::value::Error> =
-//             de::Deserialize::deserialize(PathDeserializer::new(&path));
-//         assert!(s.is_err());
-//         assert!(format!("{:?}", s).contains("can not parse"));
-//     }
-
-// #[test]
-// fn test_extract_path_decode() {
-//     let mut router = Router::<()>::default();
-//     router.register_resource(Resource::new(ResourceDef::new("/{value}/")));
-
-//     macro_rules! test_single_value {
-//         ($value:expr, $expected:expr) => {{
-//             let req = TestRequest::with_uri($value).finish();
-//             let info = router.recognize(&req, &(), 0);
-//             let req = req.with_route_info(info);
-//             assert_eq!(
-//                 *Path::<String>::from_request(&req, &PathConfig::default()).unwrap(),
-//                 $expected
-//             );
-//         }};
-//     }
-
-//     test_single_value!("/%25/", "%");
-//     test_single_value!("/%40%C2%A3%24%25%5E%26%2B%3D/", "@£$%^&+=");
-//     test_single_value!("/%2B/", "+");
-//     test_single_value!("/%252B/", "%2B");
-//     test_single_value!("/%2F/", "/");
-//     test_single_value!("/%252F/", "%2F");
-//     test_single_value!(
-//         "/http%3A%2F%2Flocalhost%3A80%2Ffoo/",
-//         "http://localhost:80/foo"
-//     );
-//     test_single_value!("/%2Fvar%2Flog%2Fsyslog/", "/var/log/syslog");
-//     test_single_value!(
-//         "/http%3A%2F%2Flocalhost%3A80%2Ffile%2F%252Fvar%252Flog%252Fsyslog/",
-//         "http://localhost:80/file/%2Fvar%2Flog%2Fsyslog"
-//     );
-
-//     let req = TestRequest::with_uri("/%25/7/?id=test").finish();
-
-//     let mut router = Router::<()>::default();
-//     router.register_resource(Resource::new(ResourceDef::new("/{key}/{value}/")));
-//     let info = router.recognize(&req, &(), 0);
-//     let req = req.with_route_info(info);
-
-//     let s = Path::<Test2>::from_request(&req, &PathConfig::default()).unwrap();
-//     assert_eq!(s.key, "%");
-//     assert_eq!(s.value, 7);
-
-//     let s = Path::<(String, String)>::from_request(&req, &PathConfig::default()).unwrap();
-//     assert_eq!(s.0, "%");
-//     assert_eq!(s.1, "7");
-// }
-
-// #[test]
-// fn test_extract_path_no_decode() {
-//     let mut router = Router::<()>::default();
-//     router.register_resource(Resource::new(ResourceDef::new("/{value}/")));
-
-//     let req = TestRequest::with_uri("/%25/").finish();
-//     let info = router.recognize(&req, &(), 0);
-//     let req = req.with_route_info(info);
-//     assert_eq!(
-//         *Path::<String>::from_request(&req, &&PathConfig::default().disable_decoding())
-//             .unwrap(),
-//         "%25"
-//     );
-// }
-// }
+        let s: Result<u32, de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_err());
+        assert!(format!("{:?}", s).contains("can not parse"));
+    }
+}
