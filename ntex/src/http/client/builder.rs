@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::convert::TryFrom;
 use std::fmt;
 use std::rc::Rc;
@@ -38,9 +37,7 @@ impl ClientBuilder {
             config: ClientConfig {
                 headers: HeaderMap::new(),
                 timeout: Some(Duration::from_secs(5)),
-                connector: RefCell::new(Box::new(ConnectorWrapper(
-                    Connector::default().finish(),
-                ))),
+                connector: Box::new(ConnectorWrapper(Connector::default().finish())),
             },
         }
     }
@@ -53,7 +50,7 @@ impl ClientBuilder {
         <T::Response as Connection>::Future: 'static,
         T::Future: 'static,
     {
-        self.config.connector = RefCell::new(Box::new(ConnectorWrapper(connector)));
+        self.config.connector = Box::new(ConnectorWrapper(connector));
         self
     }
 

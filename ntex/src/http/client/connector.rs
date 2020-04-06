@@ -85,7 +85,7 @@ impl Connector {
             let _ = ssl
                 .set_alpn_protos(b"\x02h2\x08http/1.1")
                 .map_err(|e| error!("Can not set ALPN protocol: {:?}", e));
-            conn.ssl(ssl.build())
+            conn.openssl(ssl.build())
         }
         #[cfg(all(not(feature = "openssl"), feature = "rustls"))]
         {
@@ -112,9 +112,16 @@ impl Connector {
         self
     }
 
+    #[deprecated(since = "0.1.4", note = "Please use `openssl()` method instead")]
+    #[doc(hidden)]
+    #[cfg(feature = "openssl")]
+    pub fn ssl(self, connector: OpensslConnector) -> Self {
+        self.openssl(connector)
+    }
+
     #[cfg(feature = "openssl")]
     /// Use custom `SslConnector` instance.
-    pub fn ssl(self, connector: OpensslConnector) -> Self {
+    pub fn openssl(self, connector: OpensslConnector) -> Self {
         use crate::connect::openssl::OpensslConnector;
 
         let resolver = self.resolver.clone();

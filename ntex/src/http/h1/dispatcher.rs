@@ -284,7 +284,9 @@ where
                         Poll::Pending => {
                             // if read-backpressure is enabled, we might need
                             // to read more data (ie service future can wait for payload data)
-                            if this.inner.poll_read(cx)? == PollRead::HasUpdates {
+                            if this.inner.payload.is_some()
+                                && this.inner.poll_read(cx)? == PollRead::HasUpdates
+                            {
                                 // poll_request has read more data, try
                                 // to poll service future again
 
@@ -376,11 +378,13 @@ where
                 .intersects(Flags::DISCONNECT | Flags::STOP_READING)
                 && !processing
             {
+                trace!("Shutdown connection (no more work) {:?}", this.inner.flags);
                 this.inner.flags.insert(Flags::SHUTDOWN);
             }
             // we dont have any parsed requests and output buffer is flushed
             else if !processing && this.inner.write_buf.is_empty() {
                 if let Some(err) = this.inner.error.take() {
+                    trace!("Dispatcher error {:?}", err);
                     return Poll::Ready(Err(err));
                 }
 
@@ -388,6 +392,7 @@ where
                 if this.inner.flags.contains(Flags::STARTED)
                     && !this.inner.flags.contains(Flags::KEEPALIVE)
                 {
+                    trace!("Shutdown, keep-alive is not enabled");
                     this.inner.flags.insert(Flags::SHUTDOWN);
                 }
             }
@@ -486,6 +491,7 @@ where
             {
                 Poll::Ready(Ok(n)) => {
                     if n == 0 {
+                        trace!("Disconnected during flush, written {}", written);
                         return Err(DispatchError::Io(io::Error::new(
                             io::ErrorKind::WriteZero,
                             "",
@@ -495,7 +501,10 @@ where
                     }
                 }
                 Poll::Pending => break,
-                Poll::Ready(Err(err)) => return Err(DispatchError::Io(err)),
+                Poll::Ready(Err(e)) => {
+                    trace!("Error during flush: {}", e);
+                    return Err(DispatchError::Io(e));
+                }
             }
         }
         if written == len {
@@ -512,6 +521,7 @@ where
         msg: Response<()>,
         body: ResponseBody<B>,
     ) -> Result<bool, DispatchError> {
+        trace!("Sending response: {:?}", msg);
         // we dont need to process responses if socket is disconnected
         // but we still want to handle requests with app service
         if !self.flags.contains(Flags::DISCONNECT) {
@@ -563,7 +573,10 @@ where
                         self.send_payload = None;
                         break;
                     }
-                    Poll::Ready(Some(Err(_))) => return Err(DispatchError::Unknown),
+                    Poll::Ready(Some(Err(e))) => {
+                        trace!("Error during response body poll: {:?}", e);
+                        return Err(DispatchError::Unknown);
+                    }
                     Poll::Pending => {
                         // response payload stream is not ready
                         // we can only flush
@@ -630,6 +643,10 @@ where
                     Poll::Pending => break,
                     Poll::Ready(Ok(n)) => {
                         if n == 0 {
+                            trace!(
+                                "Disconnected during read, buffer size {}",
+                                buf.len()
+                            );
                             self.flags.insert(Flags::DISCONNECT);
                             break;
                         } else {
@@ -637,6 +654,7 @@ where
                         }
                     }
                     Poll::Ready(Err(e)) => {
+                        trace!("Error during read: {:?}", e);
                         self.flags.insert(Flags::DISCONNECT);
                         self.error = Some(DispatchError::Io(e));
                         break;

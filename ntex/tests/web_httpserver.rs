@@ -123,8 +123,8 @@ async fn test_start_ssl() {
     let client = ntex::http::client::Client::build()
         .connector(
             ntex::http::client::Connector::default()
-                .ssl(builder.build())
-                .timeout(Duration::from_millis(3000))
+                .openssl(builder.build())
+                .timeout(Duration::from_millis(30000))
                 .finish(),
         )
         .finish();

@@ -251,7 +251,7 @@ pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
                 Connector::default()
                     .conn_lifetime(time::Duration::from_secs(0))
                     .timeout(time::Duration::from_millis(30000))
-                    .ssl(builder.build())
+                    .openssl(builder.build())
                     .finish()
             }
             #[cfg(not(feature = "openssl"))]
@@ -263,7 +263,9 @@ pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
             }
         };
 
-        Client::build().connector(connector).finish()
+        Client::build().connector(connector)
+            .timeout(time::Duration::from_millis(30000))
+            .finish()
     };
 
     TestServer {

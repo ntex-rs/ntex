@@ -16,7 +16,6 @@
 //!     println!("Response: {:?}", response);
 //! }
 //! ```
-use std::cell::RefCell;
 use std::convert::TryFrom;
 use std::rc::Rc;
 use std::time::Duration;
@@ -79,7 +78,7 @@ pub struct Connect {
 pub struct Client(Rc<ClientConfig>);
 
 pub(crate) struct ClientConfig {
-    pub(crate) connector: RefCell<Box<dyn InnerConnect>>,
+    pub(crate) connector: Box<dyn InnerConnect>,
     pub(crate) headers: HeaderMap,
     pub(crate) timeout: Option<Duration>,
 }
@@ -87,9 +86,7 @@ pub(crate) struct ClientConfig {
 impl Default for Client {
     fn default() -> Self {
         Client(Rc::new(ClientConfig {
-            connector: RefCell::new(Box::new(ConnectorWrapper(
-                Connector::default().finish(),
-            ))),
+            connector: Box::new(ConnectorWrapper(Connector::default().finish())),
             headers: HeaderMap::new(),
             timeout: Some(Duration::from_secs(5)),
         }))

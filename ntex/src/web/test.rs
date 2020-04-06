@@ -747,7 +747,7 @@ where
                 Connector::default()
                     .conn_lifetime(time::Duration::from_secs(0))
                     .timeout(time::Duration::from_millis(30000))
-                    .ssl(builder.build())
+                    .openssl(builder.build())
                     .finish()
             }
             #[cfg(not(feature = "openssl"))]
@@ -759,7 +759,9 @@ where
             }
         };
 
-        Client::build().connector(connector).finish()
+        Client::build().connector(connector)
+            .timeout(time::Duration::from_millis(30000))
+            .finish()
     };
 
     TestServer {
