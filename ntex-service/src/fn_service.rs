@@ -461,6 +461,11 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
+
+        let srv2 = new_srv.clone();
+        let res = srv2.call(()).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "srv");
     }
 
     #[ntex_rt::test]
