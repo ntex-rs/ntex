@@ -56,13 +56,6 @@ where
         timeout: Option<Delay>,
         peer_addr: Option<net::SocketAddr>,
     ) -> Self {
-        // let keepalive = config.keep_alive_enabled();
-        // let flags = if keepalive {
-        // Flags::KEEPALIVE | Flags::KEEPALIVE_ENABLED
-        // } else {
-        //     Flags::empty()
-        // };
-
         // keep-alive timer
         let (ka_expire, ka_timer) = if let Some(delay) = timeout {
             (delay.deadline(), Some(delay))

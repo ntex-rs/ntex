@@ -13,10 +13,10 @@ const HW: usize = 8 * 1024;
 
 bitflags::bitflags! {
     struct Flags: u8 {
-        const EOF             = 0b0001;
-        const READABLE        = 0b0010;
-        const WR_DISCONNECTED = 0b0100;
-        const SHUTDOWN        = 0b1000;
+        const EOF          = 0b0001;
+        const READABLE     = 0b0010;
+        const DISCONNECTED = 0b0100;
+        const SHUTDOWN     = 0b1000;
     }
 }
 
@@ -149,6 +149,12 @@ impl<T, U> Framed<T, U> {
     }
 
     #[inline]
+    /// Check if framed object is closed
+    pub fn is_closed(&self) -> bool {
+        self.flags.contains(Flags::DISCONNECTED)
+    }
+
+    #[inline]
     /// Consume the `Frame`, returning `Frame` with different codec.
     pub fn into_framed<U2>(self, codec: U2) -> Framed<T, U2> {
         Framed {
@@ -252,7 +258,7 @@ where
                 Poll::Ready(Ok(n)) => {
                     if n == 0 {
                         log::trace!("Disconnected during flush, written {}", written);
-                        self.flags.insert(Flags::WR_DISCONNECTED);
+                        self.flags.insert(Flags::DISCONNECTED);
                         return Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::WriteZero,
                             "failed to write frame to transport",
@@ -264,7 +270,7 @@ where
                 }
                 Poll::Ready(Err(e)) => {
                     log::trace!("Error during flush: {}", e);
-                    self.flags.insert(Flags::WR_DISCONNECTED);
+                    self.flags.insert(Flags::DISCONNECTED);
                     return Poll::Ready(Err(e.into()));
                 }
             }
@@ -296,13 +302,16 @@ where
     /// then reads until disconnect or error, high level code must use
     /// timeout for close operation.
     pub fn close(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        if !self.flags.contains(Flags::WR_DISCONNECTED) {
+        if !self.flags.contains(Flags::DISCONNECTED) {
             // flush write buffer
             ready!(Pin::new(&mut self.io).poll_flush(cx))?;
 
             if !self.flags.contains(Flags::SHUTDOWN) {
                 // shutdown WRITE side
-                ready!(Pin::new(&mut self.io).poll_shutdown(cx))?;
+                ready!(Pin::new(&mut self.io).poll_shutdown(cx)).map_err(|e| {
+                    self.flags.insert(Flags::DISCONNECTED);
+                    e
+                })?;
                 self.flags.insert(Flags::SHUTDOWN);
             }
 
@@ -310,14 +319,13 @@ where
             let mut buf = [0u8; 512];
             loop {
                 match ready!(Pin::new(&mut self.io).poll_read(cx, &mut buf)) {
-                    Ok(n) => {
-                        if n == 0 {
-                            break;
-                        }
+                    Err(_) | Ok(0) => {
+                        break;
                     }
-                    Err(_) => break,
+                    _ => (),
                 }
             }
+            self.flags.insert(Flags::DISCONNECTED);
         }
         log::trace!("framed transport flushed and closed");
         Poll::Ready(Ok(()))
@@ -595,5 +603,6 @@ mod tests {
             .await
             .is_ready());
         assert!(client.is_closed());
+        assert!(server.is_closed());
     }
 }

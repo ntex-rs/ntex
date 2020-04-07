@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.5] - 2020-04-07
+
+* ntex::http: enable client disconnect timeout by default
+
+* ntex::http: properly close h1 connection
+
 ## [0.1.4] - 2020-04-06
 
 * Remove unneeded RefCell from client connector
