@@ -21,11 +21,6 @@ use crate::{map_config, IntoServiceFactory, Service, ServiceFactory};
 
 use super::config::AppConfig;
 
-struct Socket {
-    scheme: &'static str,
-    addr: net::SocketAddr,
-}
-
 struct Config {
     host: Option<String>,
     keep_alive: KeepAlive,
@@ -65,7 +60,6 @@ where
     pub(super) factory: F,
     config: Arc<Mutex<Config>>,
     backlog: i32,
-    sockets: Vec<Socket>,
     builder: ServerBuilder,
     _t: PhantomData<(S, B)>,
 }
@@ -93,7 +87,6 @@ where
                 handshake_timeout: 5000,
             })),
             backlog: 1024,
-            sockets: Vec::new(),
             builder: ServerBuilder::default(),
             _t: PhantomData,
         }
@@ -228,21 +221,6 @@ where
         self
     }
 
-    /// Get addresses of bound sockets.
-    pub fn addrs(&self) -> Vec<net::SocketAddr> {
-        self.sockets.iter().map(|s| s.addr).collect()
-    }
-
-    /// Get addresses of bound sockets and the scheme for it.
-    ///
-    /// This is useful when the server is bound from different sources
-    /// with some sockets listening on http and some listening on https
-    /// and the user should be presented with an enumeration of which
-    /// socket requires which protocol.
-    pub fn addrs_with_scheme(&self) -> Vec<(net::SocketAddr, &str)> {
-        self.sockets.iter().map(|s| (s.addr, s.scheme)).collect()
-    }
-
     /// Use listener for accepting incoming connection requests
     ///
     /// HttpServer does not change any configuration for TcpListener,
@@ -251,10 +229,6 @@ where
         let cfg = self.config.clone();
         let factory = self.factory.clone();
         let addr = lst.local_addr().unwrap();
-        self.sockets.push(Socket {
-            addr,
-            scheme: "http",
-        });
 
         self.builder = self.builder.listen(
             format!("ntex-web-service-{}", addr),
@@ -299,10 +273,6 @@ where
         let factory = self.factory.clone();
         let cfg = self.config.clone();
         let addr = lst.local_addr().unwrap();
-        self.sockets.push(Socket {
-            addr,
-            scheme: "https",
-        });
 
         self.builder = self.builder.listen(
             format!("ntex-web-service-{}", addr),
@@ -347,10 +317,6 @@ where
         let factory = self.factory.clone();
         let cfg = self.config.clone();
         let addr = lst.local_addr().unwrap();
-        self.sockets.push(Socket {
-            addr,
-            scheme: "https",
-        });
 
         self.builder = self.builder.listen(
             format!("ntex-web-service-{}", addr),
@@ -472,10 +438,6 @@ where
             net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)),
             8080,
         );
-        self.sockets.push(Socket {
-            scheme: "http",
-            addr: socket_addr,
-        });
 
         let addr = format!("ntex-web-service-{:?}", lst.local_addr()?);
 
@@ -512,10 +474,6 @@ where
             net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)),
             8080,
         );
-        self.sockets.push(Socket {
-            scheme: "http",
-            addr: socket_addr,
-        });
 
         self.builder = self.builder.bind_uds(
             format!("ntex-web-service-{:?}", addr.as_ref()),

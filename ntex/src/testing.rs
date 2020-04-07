@@ -231,7 +231,7 @@ impl AsyncRead for Io {
         let mut ch = guard.borrow_mut();
         ch.waker.register(cx.waker());
 
-        let res = match mem::take(&mut ch.read) {
+        match mem::take(&mut ch.read) {
             IoState::Ok => {
                 if ch.buf.is_empty() {
                     Poll::Pending
@@ -251,9 +251,7 @@ impl AsyncRead for Io {
             }
             IoState::Pending => Poll::Pending,
             IoState::Err(e) => Poll::Ready(Err(e)),
-        };
-        println!("RES: {:?}", res);
-        res
+        }
     }
 }
 
