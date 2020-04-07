@@ -151,14 +151,14 @@ async fn test_h2_content_length() {
         for i in 0..4 {
             let req = srv
                 .srequest(Method::GET, &format!("/{}", i))
-                .timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30))
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
 
             let req = srv
                 .srequest(Method::HEAD, &format!("/{}", i))
-                .timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30))
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
@@ -167,7 +167,7 @@ async fn test_h2_content_length() {
         for i in 4..6 {
             let req = srv
                 .srequest(Method::GET, &format!("/{}", i))
-                .timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(30))
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), Some(&value));

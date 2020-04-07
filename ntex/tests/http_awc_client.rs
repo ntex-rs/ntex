@@ -376,7 +376,7 @@ async fn test_with_query_parameter() {
         }))
     });
 
-    let res = Client::new().get(srv.url("/?qp=5")).send().await.unwrap();
+    let res = srv.get("/?qp=5").send().await.unwrap();
     assert!(res.status().is_success());
 }
 
@@ -392,7 +392,9 @@ async fn test_no_decompress() {
             })))
     });
 
-    let mut res = Client::new()
+    let client = Client::build().timeout(Duration::from_secs(30)).finish();
+
+    let mut res = client
         .get(srv.url("/"))
         .no_decompress()
         .send()
@@ -409,7 +411,7 @@ async fn test_no_decompress() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 
     // POST
-    let mut res = Client::new()
+    let mut res = client
         .post(srv.url("/"))
         .no_decompress()
         .send()

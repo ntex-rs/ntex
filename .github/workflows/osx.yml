@@ -47,13 +47,7 @@ jobs:
           path: target
           key: ${{ matrix.version }}-x86_64-apple-darwin-cargo-build-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: check build
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --all --all-features --bins --examples --tests
-
-      - name: tests
+      - name: Run tests
         uses: actions-rs/cargo@v1
         with:
           command: test

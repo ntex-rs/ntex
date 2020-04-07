@@ -27,6 +27,12 @@ jobs:
           profile: minimal
           override: true
 
+      - name: Cache vcpkg
+        uses: actions/cache@v1
+        with:
+          path: C:\vcpkg\installed\x64-windows\
+          key: x86_64-pc-windows-msvc-openssl
+
       - name: Install OpenSSL
         run: |
           vcpkg integrate install
@@ -36,8 +42,8 @@ jobs:
           Get-ChildItem C:\vcpkg\installed\x64-windows\bin
           Get-ChildItem C:\vcpkg\installed\x64-windows\lib
 
-      - name: tests
+      - name: Run tests
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --all --all-features --no-fail-fast -- --nocapture
+          args: --all --all-features -- --nocapture
