@@ -249,15 +249,12 @@ where
                 Poll::Pending => break,
                 Poll::Ready(Ok(n)) => {
                     if n == 0 {
-                        log::trace!(
-                            "Disconnected during flush, written {}",
-                            written
-                        );
+                        log::trace!("Disconnected during flush, written {}", written);
                         return Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::WriteZero,
                             "failed to write frame to transport",
                         )
-                                               .into()));
+                        .into()));
                     } else {
                         written += n
                     }
