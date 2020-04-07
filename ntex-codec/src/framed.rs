@@ -15,6 +15,7 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const EOF = 0b0001;
         const READABLE = 0b0010;
+        const FLUSHED = 0b0100;
     }
 }
 
@@ -27,8 +28,6 @@ pub struct Framed<T, U> {
     read_buf: BytesMut,
     write_buf: BytesMut,
 }
-
-impl<T, U> Unpin for Framed<T, U> {}
 
 impl<T, U> Framed<T, U>
 where
@@ -121,6 +120,18 @@ impl<T, U> Framed<T, U> {
     /// being worked with.
     pub fn get_mut(&mut self) -> &mut T {
         &mut self.io
+    }
+
+    #[inline]
+    /// Get read buffer.
+    pub fn read_buf_mut(&mut self) -> &mut BytesMut {
+        &mut self.read_buf
+    }
+
+    #[inline]
+    /// Get write buffer.
+    pub fn write_buf_mut(&mut self) -> &mut BytesMut {
+        &mut self.write_buf
     }
 
     #[inline]
@@ -227,27 +238,62 @@ where
     pub fn flush(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), U::Error>> {
         log::trace!("flushing framed transport");
 
-        while !self.write_buf.is_empty() {
-            log::trace!("writing; remaining={}", self.write_buf.len());
+        loop {
+            let len = self.write_buf.len();
+            if len == 0 {
+                if !self.flags.contains(Flags::FLUSHED) {
+                    ready!(Pin::new(&mut self.io).poll_flush(cx))?;
+                    self.flags.insert(Flags::FLUSHED);
+                }
+                return Poll::Ready(Ok(()));
+            }
 
-            let n = ready!(Pin::new(&mut self.io).poll_write(cx, &self.write_buf))?;
-            if n == 0 {
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "failed to write frame to transport",
-                )
-                .into()));
+            let mut written = 0;
+            while written < len {
+                match Pin::new(&mut self.io).poll_write(cx, &self.write_buf[written..]) {
+                    Poll::Pending => break,
+                    Poll::Ready(Ok(n)) => {
+                        if n == 0 {
+                            log::trace!(
+                                "Disconnected during flush, written {}",
+                                written
+                            );
+                            return Poll::Ready(Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "failed to write frame to transport",
+                            )
+                            .into()));
+                        } else {
+                            self.flags.remove(Flags::FLUSHED);
+                            written += n
+                        }
+                    }
+                    Poll::Ready(Err(e)) => {
+                        log::trace!("Error during flush: {}", e);
+                        return Poll::Ready(Err(e.into()));
+                    }
+                }
             }
 
             // remove written data
-            self.write_buf.advance(n);
+            if written == len {
+                // flushed same amount as in buffer, we dont need to reallocate
+                unsafe { self.write_buf.set_len(0) }
+            } else {
+                self.write_buf.advance(written);
+            }
+
+            // Try flushing the underlying IO
+            if !self.flags.contains(Flags::FLUSHED) {
+                ready!(Pin::new(&mut self.io).poll_flush(cx))?;
+                self.flags.insert(Flags::FLUSHED);
+                log::trace!("Framed transport flushed");
+            } else {
+                // this happens when we have non-empty write buffer
+                // and we flushed io, buf io write still returns Pending
+                return Poll::Pending;
+            }
         }
-
-        // Try flushing the underlying IO
-        ready!(Pin::new(&mut self.io).poll_flush(cx))?;
-
-        log::trace!("framed transport flushed");
-        Poll::Ready(Ok(()))
     }
 
     #[inline]
@@ -269,11 +315,9 @@ where
     pub fn next_item(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<U::Item, U::Error>>>
-    where
-        T: AsyncRead,
-        U: Decoder,
-    {
+    ) -> Poll<Option<Result<U::Item, U::Error>>> {
+        let mut done_read = false;
+
         loop {
             // Repeatedly call `decode` or `decode_eof` as long as it is
             // "readable". Readable is defined as not having returned `None`. If
@@ -302,26 +346,45 @@ where
                 }
 
                 self.flags.remove(Flags::READABLE);
+                if done_read {
+                    return Poll::Pending;
+                }
             }
 
             debug_assert!(!self.flags.contains(Flags::EOF));
 
-            // Otherwise, try to read more data and try again. Make sure we've got room
-            let remaining = self.read_buf.capacity() - self.read_buf.len();
-            if remaining < LW {
-                self.read_buf.reserve(HW - remaining)
+            // read all data from socket
+            let mut updated = false;
+            loop {
+                // Otherwise, try to read more data and try again. Make sure we've got room
+                let remaining = self.read_buf.capacity() - self.read_buf.len();
+                if remaining < LW {
+                    self.read_buf.reserve(HW - remaining)
+                }
+                match Pin::new(&mut self.io).poll_read_buf(cx, &mut self.read_buf) {
+                    Poll::Pending => {
+                        if updated {
+                            done_read = true;
+                            self.flags.insert(Flags::READABLE);
+                            break;
+                        } else {
+                            return Poll::Pending;
+                        }
+                    }
+                    Poll::Ready(Ok(n)) => {
+                        if n == 0 {
+                            self.flags.insert(Flags::EOF | Flags::READABLE);
+                            if updated {
+                                done_read = true;
+                            }
+                            break;
+                        } else {
+                            updated = true;
+                        }
+                    }
+                    Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
+                }
             }
-            let cnt = match Pin::new(&mut self.io).poll_read_buf(cx, &mut self.read_buf)
-            {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
-                Poll::Ready(Ok(cnt)) => cnt,
-            };
-
-            if cnt == 0 {
-                self.flags.insert(Flags::EOF);
-            }
-            self.flags.insert(Flags::READABLE);
         }
     }
 }
@@ -329,7 +392,7 @@ where
 impl<T, U> Stream for Framed<T, U>
 where
     T: AsyncRead + Unpin,
-    U: Decoder,
+    U: Decoder + Unpin,
 {
     type Item = Result<U::Item, U::Error>;
 
@@ -345,7 +408,7 @@ where
 impl<T, U> Sink<U::Item> for Framed<T, U>
 where
     T: AsyncWrite + Unpin,
-    U: Encoder,
+    U: Encoder + Unpin,
     U::Error: From<io::Error>,
 {
     type Error = U::Error;
@@ -441,5 +504,73 @@ impl<T, U> FramedParts<T, U> {
             flags: Flags::empty(),
             write_buf: BytesMut::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use futures::future::lazy;
+    use futures::Sink;
+    use ntex::testing::Io;
+
+    use super::*;
+    use crate::BytesCodec;
+
+    #[ntex::test]
+    async fn test_sink() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(1024);
+        let mut server = Framed::new(server, BytesCodec);
+
+        assert!(lazy(|cx| Pin::new(&mut server).poll_ready(cx))
+            .await
+            .is_ready());
+
+        let data = Bytes::from_static(b"GET /test HTTP/1.1\r\n\r\n");
+        Pin::new(&mut server).start_send(data).unwrap();
+        assert_eq!(client.read_any(), b"".as_ref());
+
+        assert!(lazy(|cx| Pin::new(&mut server).poll_flush(cx))
+            .await
+            .is_ready());
+        assert!(client.is_flushed());
+        assert_eq!(client.read_any(), b"GET /test HTTP/1.1\r\n\r\n".as_ref());
+
+        assert!(lazy(|cx| Pin::new(&mut server).poll_close(cx))
+            .await
+            .is_ready());
+        assert!(client.is_closed());
+    }
+
+    #[ntex::test]
+    async fn test_write_pending() {
+        let (client, server) = Io::create();
+        let mut server = Framed::new(server, BytesCodec);
+
+        assert!(lazy(|cx| Pin::new(&mut server).poll_ready(cx))
+            .await
+            .is_ready());
+        let data = Bytes::from_static(b"GET /test HTTP/1.1\r\n\r\n");
+        Pin::new(&mut server).start_send(data).unwrap();
+
+        client.remote_buffer_cap(3);
+        assert!(lazy(|cx| Pin::new(&mut server).poll_flush(cx))
+            .await
+            .is_pending());
+        assert!(!client.is_flushed());
+        assert_eq!(client.read_any(), b"GET".as_ref());
+
+        client.remote_buffer_cap(1024);
+        assert!(lazy(|cx| Pin::new(&mut server).poll_flush(cx))
+            .await
+            .is_ready());
+        assert!(client.is_flushed());
+        assert_eq!(client.read_any(), b" /test HTTP/1.1\r\n\r\n".as_ref());
+
+        assert!(lazy(|cx| Pin::new(&mut server).poll_close(cx))
+            .await
+            .is_ready());
+        assert!(client.is_closed());
     }
 }

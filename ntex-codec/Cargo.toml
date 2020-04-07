@@ -1,6 +1,6 @@
 [package]
 name = "ntex-codec"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Utilities for encoding and decoding frames"
 keywords = ["network", "framework", "async", "futures"]
@@ -8,7 +8,7 @@ homepage = "https://ntex.rs"
 repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-codec/"
 categories = ["network-programming", "asynchronous"]
-license = "MIT/Apache-2.0"
+license = "MIT"
 edition = "2018"
 
 [lib]
@@ -20,6 +20,10 @@ bitflags = "1.2.1"
 bytes = "0.5.4"
 futures-core = "0.3.4"
 futures-sink = "0.3.4"
-tokio = { version = "0.2.4", default-features=false }
+tokio = { version = "0.2.6", default-features=false }
 tokio-util = { version = "0.2.0", default-features=false, features=["codec"] }
 log = "0.4"
+
+[dev-dependencies]
+ntex = "0.1.4"
+futures = "0.3.4"
