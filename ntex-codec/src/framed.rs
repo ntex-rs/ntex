@@ -13,14 +13,14 @@ const HW: usize = 8 * 1024;
 
 bitflags::bitflags! {
     struct Flags: u8 {
-        const EOF = 0b0001;
-        const READABLE = 0b0010;
-        const FLUSHED = 0b0100;
+        const EOF           = 0b0001;
+        const READABLE      = 0b0010;
     }
 }
 
 /// A unified `Stream` and `Sink` interface to an underlying I/O object, using
 /// the `Encoder` and `Decoder` traits to encode and decode frames.
+/// `Framed` is heavily optimized for streaming io.
 pub struct Framed<T, U> {
     io: T,
     codec: U,
@@ -238,61 +238,48 @@ where
     pub fn flush(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), U::Error>> {
         log::trace!("flushing framed transport");
 
-        loop {
-            let len = self.write_buf.len();
-            if len == 0 {
-                if !self.flags.contains(Flags::FLUSHED) {
-                    ready!(Pin::new(&mut self.io).poll_flush(cx))?;
-                    self.flags.insert(Flags::FLUSHED);
-                }
-                return Poll::Ready(Ok(()));
-            }
+        let len = self.write_buf.len();
+        if len == 0 {
+            return Poll::Ready(Ok(()));
+        }
 
-            let mut written = 0;
-            while written < len {
-                match Pin::new(&mut self.io).poll_write(cx, &self.write_buf[written..]) {
-                    Poll::Pending => break,
-                    Poll::Ready(Ok(n)) => {
-                        if n == 0 {
-                            log::trace!(
-                                "Disconnected during flush, written {}",
-                                written
-                            );
-                            return Poll::Ready(Err(io::Error::new(
-                                io::ErrorKind::WriteZero,
-                                "failed to write frame to transport",
-                            )
-                            .into()));
-                        } else {
-                            self.flags.remove(Flags::FLUSHED);
-                            written += n
-                        }
-                    }
-                    Poll::Ready(Err(e)) => {
-                        log::trace!("Error during flush: {}", e);
-                        return Poll::Ready(Err(e.into()));
+        let mut written = 0;
+        while written < len {
+            match Pin::new(&mut self.io).poll_write(cx, &self.write_buf[written..]) {
+                Poll::Pending => break,
+                Poll::Ready(Ok(n)) => {
+                    if n == 0 {
+                        log::trace!(
+                            "Disconnected during flush, written {}",
+                            written
+                        );
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "failed to write frame to transport",
+                        )
+                                               .into()));
+                    } else {
+                        written += n
                     }
                 }
+                Poll::Ready(Err(e)) => {
+                    log::trace!("Error during flush: {}", e);
+                    return Poll::Ready(Err(e.into()));
+                }
             }
+        }
 
-            // remove written data
-            if written == len {
-                // flushed same amount as in buffer, we dont need to reallocate
-                unsafe { self.write_buf.set_len(0) }
-            } else {
-                self.write_buf.advance(written);
-            }
-
-            // Try flushing the underlying IO
-            if !self.flags.contains(Flags::FLUSHED) {
-                ready!(Pin::new(&mut self.io).poll_flush(cx))?;
-                self.flags.insert(Flags::FLUSHED);
-                log::trace!("Framed transport flushed");
-            } else {
-                // this happens when we have non-empty write buffer
-                // and we flushed io, buf io write still returns Pending
-                return Poll::Pending;
-            }
+        // remove written data
+        if written == len {
+            // flushed same amount as in buffer, we dont need to reallocate
+            unsafe { self.write_buf.set_len(0) }
+        } else {
+            self.write_buf.advance(written);
+        }
+        if self.write_buf.is_empty() {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
         }
     }
 
@@ -534,7 +521,6 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut server).poll_flush(cx))
             .await
             .is_ready());
-        assert!(client.is_flushed());
         assert_eq!(client.read_any(), b"GET /test HTTP/1.1\r\n\r\n".as_ref());
 
         assert!(lazy(|cx| Pin::new(&mut server).poll_close(cx))
@@ -558,14 +544,12 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut server).poll_flush(cx))
             .await
             .is_pending());
-        assert!(!client.is_flushed());
         assert_eq!(client.read_any(), b"GET".as_ref());
 
         client.remote_buffer_cap(1024);
         assert!(lazy(|cx| Pin::new(&mut server).poll_flush(cx))
             .await
             .is_ready());
-        assert!(client.is_flushed());
         assert_eq!(client.read_any(), b" /test HTTP/1.1\r\n\r\n".as_ref());
 
         assert!(lazy(|cx| Pin::new(&mut server).poll_close(cx))

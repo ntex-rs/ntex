@@ -125,12 +125,12 @@ impl Io {
 
     /// Check if channel is closed from remoote side
     pub fn is_closed(&self) -> bool {
-        self.local.lock().unwrap().borrow().is_closed()
+        self.remote.lock().unwrap().borrow().is_closed()
     }
 
     /// Check flushed state
     pub fn is_flushed(&self) -> bool {
-        self.local.lock().unwrap().borrow().is_flushed()
+        self.remote.lock().unwrap().borrow().is_flushed()
     }
 
     /// Access read buffer.
