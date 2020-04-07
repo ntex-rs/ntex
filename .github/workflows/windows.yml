@@ -46,4 +46,4 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --all --all-features --no-fail-fast -- --nocapture
+          args: --all --all-features -- --nocapture
