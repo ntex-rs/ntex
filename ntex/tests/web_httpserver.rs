@@ -29,7 +29,7 @@ async fn test_start() {
             .maxconnrate(10)
             .keep_alive(10)
             .client_timeout(5000)
-            .client_disconnect(1000)
+            .disconnect_timeout(1000)
             .ssl_handshake_timeout(1000)
             .server_hostname("localhost")
             .system_exit()

@@ -1,12 +1,15 @@
 //! Framed dispatcher service and related utilities
+use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
-use futures::Stream;
+use futures::{ready, Stream};
 use log::debug;
 
 use crate::channel::mpsc;
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
+use crate::rt::time::{delay_for, Delay};
 use crate::service::Service;
 
 use super::error::ServiceError;
@@ -32,6 +35,7 @@ where
     state: FramedState<S, U>,
     framed: Framed<T, U>,
     rx: mpsc::Receiver<Result<<U as Encoder>::Item, S::Error>>,
+    disconnect_timeout: usize,
 }
 
 impl<S, T, U, Out> Dispatcher<S, T, U, Out>
@@ -45,13 +49,19 @@ where
     <U as Encoder>::Error: std::fmt::Debug,
     Out: Stream<Item = <U as Encoder>::Item> + Unpin,
 {
-    pub(super) fn new(framed: Framed<T, U>, service: S, sink: Option<Out>) -> Self {
+    pub(super) fn new(
+        framed: Framed<T, U>,
+        service: S,
+        sink: Option<Out>,
+        timeout: usize,
+    ) -> Self {
         Dispatcher {
             sink,
             service,
             framed,
             rx: mpsc::channel().1,
             state: FramedState::Processing,
+            disconnect_timeout: timeout,
         }
     }
 }
@@ -61,6 +71,7 @@ enum FramedState<S: Service, U: Encoder + Decoder> {
     Error(ServiceError<S::Error, U>),
     FlushAndStop,
     Shutdown(Option<ServiceError<S::Error, U>>),
+    ShutdownIo(Delay),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -250,10 +261,30 @@ where
                         if let Some(err) = err.take() {
                             Poll::Ready(Err(err))
                         } else {
-                            Poll::Ready(Ok(()))
+                            let pending = self.framed.close(cx).is_pending();
+                            if self.disconnect_timeout == 0 && pending {
+                                self.state = FramedState::ShutdownIo(delay_for(
+                                    Duration::from_millis(
+                                        self.disconnect_timeout as u64,
+                                    ),
+                                ));
+                                continue;
+                            } else {
+                                Poll::Ready(Ok(()))
+                            }
                         }
                     } else {
                         Poll::Pending
+                    }
+                }
+                FramedState::ShutdownIo(ref mut delay) => {
+                    if let Poll::Ready(res) = self.framed.close(cx) {
+                        return Poll::Ready(
+                            res.map_err(|e| ServiceError::Encoder(e.into())),
+                        );
+                    } else {
+                        ready!(Pin::new(delay).poll(cx));
+                        return Poll::Ready(Ok(()));
                     }
                 }
             }

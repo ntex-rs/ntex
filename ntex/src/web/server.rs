@@ -176,7 +176,7 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default client timeout is set to 5 seconds.
-    pub fn client_disconnect(self, val: u64) -> Self {
+    pub fn disconnect_timeout(self, val: u64) -> Self {
         self.config.lock().unwrap().client_disconnect = val;
         self
     }
@@ -270,7 +270,7 @@ where
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
-                    .client_disconnect(c.client_disconnect)
+                    .disconnect_timeout(c.client_disconnect)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .tcp()
             },
@@ -317,7 +317,7 @@ where
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
-                    .client_disconnect(c.client_disconnect)
+                    .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .openssl(acceptor.clone())
@@ -365,7 +365,7 @@ where
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
-                    .client_disconnect(c.client_disconnect)
+                    .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .rustls(config.clone())

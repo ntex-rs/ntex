@@ -23,6 +23,7 @@ type ResponseItem<U> = Option<<U as Encoder>::Item>;
 /// for building instances for framed services.
 pub struct Builder<St, C, Io, Codec, Out> {
     connect: C,
+    disconnect_timeout: usize,
     _t: PhantomData<(St, Io, Codec, Out)>,
 }
 
@@ -46,8 +47,22 @@ where
     {
         Builder {
             connect: connect.into_service(),
+            disconnect_timeout: 3000,
             _t: PhantomData,
         }
+    }
+
+    /// Set connection disconnect timeout in milliseconds.
+    ///
+    /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
+    /// within this time, the connection get dropped.
+    ///
+    /// To disable timeout set value to 0.
+    ///
+    /// By default disconnect timeout is set to 3 seconds.
+    pub fn disconnect_timeout(mut self, val: usize) -> Self {
+        self.disconnect_timeout = val;
+        self
     }
 
     /// Provide stream items handler service and construct service factory.
@@ -65,6 +80,7 @@ where
         FramedServiceImpl {
             connect: self.connect,
             handler: Rc::new(service.into_factory()),
+            disconnect_timeout: self.disconnect_timeout,
             _t: PhantomData,
         }
     }
@@ -74,6 +90,7 @@ where
 /// for building instances for framed services.
 pub struct FactoryBuilder<St, C, Io, Codec, Out> {
     connect: C,
+    disconnect_timeout: usize,
     _t: PhantomData<(St, Io, Codec, Out)>,
 }
 
@@ -97,8 +114,22 @@ where
     {
         FactoryBuilder {
             connect: connect.into_factory(),
+            disconnect_timeout: 3000,
             _t: PhantomData,
         }
+    }
+
+    /// Set connection disconnect timeout in milliseconds.
+    ///
+    /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
+    /// within this time, the connection get dropped.
+    ///
+    /// To disable timeout set value to 0.
+    ///
+    /// By default disconnect timeout is set to 3 seconds.
+    pub fn disconnect_timeout(mut self, val: usize) -> Self {
+        self.disconnect_timeout = val;
+        self
     }
 
     pub fn build<F, T, Cfg>(
@@ -118,6 +149,7 @@ where
         FramedService {
             connect: self.connect,
             handler: Rc::new(service.into_factory()),
+            disconnect_timeout: self.disconnect_timeout,
             _t: PhantomData,
         }
     }
@@ -126,6 +158,7 @@ where
 pub struct FramedService<St, C, T, Io, Codec, Out, Cfg> {
     connect: C,
     handler: Rc<T>,
+    disconnect_timeout: usize,
     _t: PhantomData<(St, Io, Codec, Out, Cfg)>,
 }
 
@@ -166,6 +199,7 @@ where
         FramedServiceResponse {
             fut: self.connect.new_service(()),
             handler: self.handler.clone(),
+            disconnect_timeout: self.disconnect_timeout,
         }
     }
 }
@@ -197,6 +231,7 @@ where
     #[pin]
     fut: C::Future,
     handler: Rc<T>,
+    disconnect_timeout: usize,
 }
 
 impl<St, C, T, Io, Codec, Out> Future for FramedServiceResponse<St, C, T, Io, Codec, Out>
@@ -232,6 +267,7 @@ where
         Poll::Ready(Ok(FramedServiceImpl {
             connect,
             handler: this.handler.clone(),
+            disconnect_timeout: *this.disconnect_timeout,
             _t: PhantomData,
         }))
     }
@@ -240,6 +276,7 @@ where
 pub struct FramedServiceImpl<St, C, T, Io, Codec, Out> {
     connect: C,
     handler: Rc<T>,
+    disconnect_timeout: usize,
     _t: PhantomData<(St, Io, Codec, Out)>,
 }
 
@@ -287,6 +324,7 @@ where
             inner: FramedServiceImplResponseInner::Handshake(
                 self.connect.call(Handshake::new(req)),
                 self.handler.clone(),
+                self.disconnect_timeout,
             ),
         }
     }
@@ -382,8 +420,13 @@ where
     <Codec as Encoder>::Error: std::fmt::Debug,
     Out: Stream<Item = <Codec as Encoder>::Item> + Unpin,
 {
-    Handshake(#[pin] C::Future, Rc<T>),
-    Handler(#[pin] T::Future, Option<Framed<Io, Codec>>, Option<Out>),
+    Handshake(#[pin] C::Future, Rc<T>, usize),
+    Handler(
+        #[pin] T::Future,
+        Option<Framed<Io, Codec>>,
+        Option<Out>,
+        usize,
+    ),
     Dispatcher(Dispatcher<T::Service, Io, Codec, Out>),
 }
 
@@ -419,7 +462,7 @@ where
     > {
         #[project]
         match self.project() {
-            FramedServiceImplResponseInner::Handshake(fut, handler) => {
+            FramedServiceImplResponseInner::Handshake(fut, handler, timeout) => {
                 match fut.poll(cx) {
                     Poll::Ready(Ok(res)) => {
                         log::trace!("Connection handshake succeeded");
@@ -427,6 +470,7 @@ where
                             handler.new_service(res.state),
                             Some(res.framed),
                             res.out,
+                            *timeout,
                         ))
                     }
                     Poll::Pending => Either::Right(Poll::Pending),
@@ -436,14 +480,19 @@ where
                     }
                 }
             }
-            FramedServiceImplResponseInner::Handler(fut, framed, out) => {
+            FramedServiceImplResponseInner::Handler(fut, framed, out, timeout) => {
                 match fut.poll(cx) {
                     Poll::Ready(Ok(handler)) => {
                         log::trace!(
                             "Connection handler is created, starting dispatcher"
                         );
                         Either::Left(FramedServiceImplResponseInner::Dispatcher(
-                            Dispatcher::new(framed.take().unwrap(), handler, out.take()),
+                            Dispatcher::new(
+                                framed.take().unwrap(),
+                                handler,
+                                out.take(),
+                                *timeout,
+                            ),
                         ))
                     }
                     Poll::Pending => Either::Right(Poll::Pending),

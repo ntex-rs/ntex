@@ -6,6 +6,8 @@
 
 * ntex::http: properly close h1 connection
 
+* ntex::framed: add connection disconnect timeout to framed service
+
 ## [0.1.4] - 2020-04-06
 
 * Remove unneeded RefCell from client connector
