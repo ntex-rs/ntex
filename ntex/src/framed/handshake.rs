@@ -130,6 +130,6 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        self.get_mut().framed.close(cx)
+        self.get_mut().framed.close(cx).map_err(|e| e.into())
     }
 }

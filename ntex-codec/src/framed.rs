@@ -13,8 +13,10 @@ const HW: usize = 8 * 1024;
 
 bitflags::bitflags! {
     struct Flags: u8 {
-        const EOF           = 0b0001;
-        const READABLE      = 0b0010;
+        const EOF             = 0b0001;
+        const READABLE        = 0b0010;
+        const WR_DISCONNECTED = 0b0100;
+        const SHUTDOWN        = 0b1000;
     }
 }
 
@@ -250,6 +252,7 @@ where
                 Poll::Ready(Ok(n)) => {
                     if n == 0 {
                         log::trace!("Disconnected during flush, written {}", written);
+                        self.flags.insert(Flags::WR_DISCONNECTED);
                         return Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::WriteZero,
                             "failed to write frame to transport",
@@ -261,6 +264,7 @@ where
                 }
                 Poll::Ready(Err(e)) => {
                     log::trace!("Error during flush: {}", e);
+                    self.flags.insert(Flags::WR_DISCONNECTED);
                     return Poll::Ready(Err(e.into()));
                 }
             }
@@ -279,12 +283,42 @@ where
             Poll::Pending
         }
     }
+}
 
+impl<T, U> Framed<T, U>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
     #[inline]
     /// Flush write buffer and shutdown underlying I/O stream.
-    pub fn close(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), U::Error>> {
-        ready!(Pin::new(&mut self.io).poll_flush(cx))?;
-        ready!(Pin::new(&mut self.io).poll_shutdown(cx))?;
+    ///
+    /// Close method shutdown write side of a io object and
+    /// then reads until disconnect or error, high level code must use
+    /// timeout for close operation.
+    pub fn close(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        if !self.flags.contains(Flags::WR_DISCONNECTED) {
+            // flush write buffer
+            ready!(Pin::new(&mut self.io).poll_flush(cx))?;
+
+            if !self.flags.contains(Flags::SHUTDOWN) {
+                // shutdown WRITE side
+                ready!(Pin::new(&mut self.io).poll_shutdown(cx))?;
+                self.flags.insert(Flags::SHUTDOWN);
+            }
+
+            // read until 0 or err
+            let mut buf = [0u8; 512];
+            loop {
+                match ready!(Pin::new(&mut self.io).poll_read(cx, &mut buf)) {
+                    Ok(n) => {
+                        if n == 0 {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
         log::trace!("framed transport flushed and closed");
         Poll::Ready(Ok(()))
     }
@@ -391,7 +425,7 @@ where
 
 impl<T, U> Sink<U::Item> for Framed<T, U>
 where
-    T: AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + Unpin,
     U: Encoder + Unpin,
     U::Error: From<io::Error>,
 {
@@ -430,7 +464,7 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        self.close(cx)
+        self.close(cx).map_err(|e| e.into())
     }
 }
 
@@ -522,6 +556,10 @@ mod tests {
 
         assert!(lazy(|cx| Pin::new(&mut server).poll_close(cx))
             .await
+            .is_pending());
+        client.close().await;
+        assert!(lazy(|cx| Pin::new(&mut server).poll_close(cx))
+            .await
             .is_ready());
         assert!(client.is_closed());
     }
@@ -549,6 +587,10 @@ mod tests {
             .is_ready());
         assert_eq!(client.read_any(), b" /test HTTP/1.1\r\n\r\n".as_ref());
 
+        assert!(lazy(|cx| Pin::new(&mut server).poll_close(cx))
+            .await
+            .is_pending());
+        client.close().await;
         assert!(lazy(|cx| Pin::new(&mut server).poll_close(cx))
             .await
             .is_ready());
