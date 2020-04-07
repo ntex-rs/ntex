@@ -21,12 +21,12 @@ pub struct Io {
 
 bitflags::bitflags! {
     struct Flags: u8 {
-        const FLUSHED            = 0b0000_0001;
-        const CLOSED             = 0b0000_0010;
+        const FLUSHED = 0b0000_0001;
+        const CLOSED  = 0b0000_0010;
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum Type {
     Client,
     Server,
@@ -231,7 +231,7 @@ impl AsyncRead for Io {
         let mut ch = guard.borrow_mut();
         ch.waker.register(cx.waker());
 
-        match mem::take(&mut ch.read) {
+        let res = match mem::take(&mut ch.read) {
             IoState::Ok => {
                 if ch.buf.is_empty() {
                     Poll::Pending
@@ -244,11 +244,16 @@ impl AsyncRead for Io {
             }
             IoState::Close => {
                 ch.read = IoState::Close;
-                Poll::Ready(Ok(0))
+                let size = std::cmp::min(ch.buf.len(), buf.len());
+                let b = ch.buf.split_to(size);
+                buf[..size].copy_from_slice(&b);
+                Poll::Ready(Ok(size))
             }
             IoState::Pending => Poll::Pending,
             IoState::Err(e) => Poll::Ready(Err(e)),
-        }
+        };
+        println!("RES: {:?}", res);
+        res
     }
 }
 
@@ -297,21 +302,23 @@ impl AsyncWrite for Io {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[ntex_rt::test]
-    fn basic() {
+    async fn basic() {
         let (client, server) = Io::create();
         assert_eq!(client.tp, Type::Client);
         assert_eq!(client.clone().tp, Type::ClientClone);
         assert_eq!(server.tp, Type::Server);
         assert_eq!(server.clone().tp, Type::ServerClone);
 
-        assert!(!server.is_client_dtopped());
+        assert!(!server.is_client_dropped());
         drop(client);
-        assert!(server.is_client_dtopped());
+        assert!(server.is_client_dropped());
 
         let server2 = server.clone();
-        assert!(!server2.is_server_dtopped());
+        assert!(!server2.is_server_dropped());
         drop(server);
-        assert!(server2.is_server_dtopped());
+        assert!(server2.is_server_dropped());
     }
 }

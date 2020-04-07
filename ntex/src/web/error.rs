@@ -80,8 +80,8 @@ pub enum UrlencodedError {
         limit
     )]
     Overflow { size: usize, limit: usize },
-    /// Payload size is now known
-    #[display(fmt = "Payload size is now known")]
+    /// Payload size is unknown
+    #[display(fmt = "Payload size is unknown")]
     UnknownLength,
     /// Content type error
     #[display(fmt = "Content type error")]
@@ -643,14 +643,46 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io;
 
+    use super::*;
     use crate::web::DefaultError;
 
     #[test]
     fn test_into_error() {
-        let err: Error = UrlencodedError::UnknownLength.into();
-        let _: Error = err.into();
+        let err = UrlencodedError::UnknownLength;
+        let e: Error = err.into();
+        let s = format!("{}", e);
+        assert!(s.contains("Payload size is unknown"));
+
+        let e = Error::new(UrlencodedError::UnknownLength);
+        let s = format!("{:?}", e);
+        assert!(s.contains("UnknownLength"));
+    }
+
+    #[test]
+    fn test_io_error() {
+        assert_eq!(
+            StatusCode::NOT_FOUND,
+            WebResponseError::<DefaultError>::status_code(&io::Error::new(
+                io::ErrorKind::NotFound,
+                ""
+            )),
+        );
+        assert_eq!(
+            StatusCode::FORBIDDEN,
+            WebResponseError::<DefaultError>::status_code(&io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                ""
+            )),
+        );
+        assert_eq!(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            WebResponseError::<DefaultError>::status_code(&io::Error::new(
+                io::ErrorKind::Other,
+                ""
+            )),
+        );
     }
 
     #[test]
@@ -683,12 +715,29 @@ mod tests {
 
     #[test]
     fn test_query_payload_error() {
-        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
-            &QueryPayloadError::Deserialize(
-                serde_urlencoded::from_str::<i32>("bad query").unwrap_err(),
-            ),
+        let err = QueryPayloadError::Deserialize(
+            serde_urlencoded::from_str::<i32>("bad query").unwrap_err(),
         );
+
+        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(&err);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            WebResponseError::<DefaultError>::status_code(&err),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn test_path_error() {
+        let err = PathError::Deserialize(
+            serde_urlencoded::from_str::<i32>("bad path").unwrap_err(),
+        );
+        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(&err);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            WebResponseError::<DefaultError>::status_code(&err),
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[test]

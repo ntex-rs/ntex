@@ -708,10 +708,10 @@ async fn test_brotli_encoding_large_openssl() {
     use open_ssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
     let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
     builder
-        .set_private_key_file("tests/key.pem", SslFiletype::PEM)
+        .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
         .unwrap();
     builder
-        .set_certificate_chain_file("tests/cert.pem")
+        .set_certificate_chain_file("./tests/cert.pem")
         .unwrap();
 
     let data = STR.repeat(10);
