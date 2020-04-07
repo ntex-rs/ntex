@@ -26,7 +26,7 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 enum Type {
     Client,
     Server,
@@ -46,19 +46,13 @@ struct Channel {
     buf_cap: usize,
     flags: Flags,
     waker: AtomicWaker,
-    read_err: Option<io::Error>,
-    read_close: CloseState,
+    read: IoState,
     write: IoState,
-    flush: IoState,
 }
 
 impl Channel {
     fn is_closed(&self) -> bool {
         self.flags.contains(Flags::CLOSED)
-    }
-
-    fn is_flushed(&self) -> bool {
-        self.flags.contains(Flags::FLUSHED)
     }
 }
 
@@ -72,23 +66,13 @@ impl Default for Flags {
 enum IoState {
     Ok,
     Pending,
+    Close,
     Err(io::Error),
 }
 
 impl Default for IoState {
     fn default() -> Self {
         IoState::Ok
-    }
-}
-
-enum CloseState {
-    Opened,
-    Closed,
-}
-
-impl Default for CloseState {
-    fn default() -> Self {
-        CloseState::Opened
     }
 }
 
@@ -128,9 +112,14 @@ impl Io {
         self.remote.lock().unwrap().borrow().is_closed()
     }
 
-    /// Check flushed state
-    pub fn is_flushed(&self) -> bool {
-        self.remote.lock().unwrap().borrow().is_flushed()
+    /// Set read to Pending state
+    pub fn read_pending(&self) {
+        self.remote.lock().unwrap().borrow_mut().read = IoState::Pending;
+    }
+
+    /// Set read to error
+    pub fn read_error(&self, err: io::Error) {
+        self.remote.lock().unwrap().borrow_mut().read = IoState::Err(err);
     }
 
     /// Access read buffer.
@@ -147,9 +136,9 @@ impl Io {
     pub async fn close(&self) {
         {
             let guard = self.remote.lock().unwrap();
-            let mut write = guard.borrow_mut();
-            write.read_close = CloseState::Closed;
-            write.waker.wake();
+            let mut remote = guard.borrow_mut();
+            remote.read = IoState::Close;
+            remote.waker.wake();
         }
         delay_for(time::Duration::from_millis(35)).await;
     }
@@ -160,16 +149,6 @@ impl Io {
         let mut write = guard.borrow_mut();
         write.buf.extend_from_slice(data.as_ref());
         write.waker.wake();
-    }
-
-    /// Set flush to Pending state
-    pub fn flush_pending(&self) {
-        self.remote.lock().unwrap().borrow_mut().flush = IoState::Pending;
-    }
-
-    /// Set flush to errore
-    pub fn flush_error(&self, err: io::Error) {
-        self.remote.lock().unwrap().borrow_mut().flush = IoState::Err(err);
     }
 
     /// Read any available data
@@ -252,23 +231,24 @@ impl AsyncRead for Io {
         let mut ch = guard.borrow_mut();
         ch.waker.register(cx.waker());
 
-        let result = if ch.buf.is_empty() {
-            if let Some(err) = ch.read_err.take() {
-                Err(err)
-            } else {
-                return match ch.read_close {
-                    CloseState::Opened => Poll::Pending,
-                    CloseState::Closed => Poll::Ready(Ok(0)),
-                };
+        match mem::take(&mut ch.read) {
+            IoState::Ok => {
+                if ch.buf.is_empty() {
+                    Poll::Pending
+                } else {
+                    let size = std::cmp::min(ch.buf.len(), buf.len());
+                    let b = ch.buf.split_to(size);
+                    buf[..size].copy_from_slice(&b);
+                    Poll::Ready(Ok(size))
+                }
             }
-        } else {
-            let size = std::cmp::min(ch.buf.len(), buf.len());
-            let b = ch.buf.split_to(size);
-            buf[..size].copy_from_slice(&b);
-            Ok(size)
-        };
-
-        Poll::Ready(result)
+            IoState::Close => {
+                ch.read = IoState::Close;
+                Poll::Ready(Ok(0))
+            }
+            IoState::Pending => Poll::Pending,
+            IoState::Err(e) => Poll::Ready(Err(e)),
+        }
     }
 }
 
@@ -294,23 +274,14 @@ impl AsyncWrite for Io {
                     Poll::Pending
                 }
             }
+            IoState::Close => Poll::Ready(Ok(0)),
             IoState::Pending => Poll::Pending,
             IoState::Err(e) => Poll::Ready(Err(e)),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let guard = self.local.lock().unwrap();
-        let mut ch = guard.borrow_mut();
-
-        match mem::take(&mut ch.flush) {
-            IoState::Ok => {
-                ch.flags.insert(Flags::FLUSHED);
-                Poll::Ready(Ok(()))
-            }
-            IoState::Pending => Poll::Pending,
-            IoState::Err(e) => Poll::Ready(Err(e)),
-        }
+        Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -321,5 +292,26 @@ impl AsyncWrite for Io {
             .flags
             .insert(Flags::CLOSED);
         Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[ntex_rt::test]
+    fn basic() {
+        let (client, server) = Io::create();
+        assert_eq!(client.tp, Type::Client);
+        assert_eq!(client.clone().tp, Type::ClientClone);
+        assert_eq!(server.tp, Type::Server);
+        assert_eq!(server.clone().tp, Type::ServerClone);
+
+        assert!(!server.is_client_dtopped());
+        drop(client);
+        assert!(server.is_client_dtopped());
+
+        let server2 = server.clone();
+        assert!(!server2.is_server_dtopped());
+        drop(server);
+        assert!(server2.is_server_dtopped());
     }
 }
