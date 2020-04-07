@@ -392,7 +392,7 @@ async fn test_no_decompress() {
             })))
     });
 
-    let client = Client::new().timeout(Duration::from_secs(30));
+    let client = Client::build().timeout(Duration::from_secs(30)).finish();
 
     let mut res = client
         .get(srv.url("/"))
