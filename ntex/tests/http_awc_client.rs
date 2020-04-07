@@ -376,7 +376,7 @@ async fn test_with_query_parameter() {
         }))
     });
 
-    let res = srv.get(srv.url("/?qp=5")).send().await.unwrap();
+    let res = srv.get("/?qp=5").send().await.unwrap();
     assert!(res.status().is_success());
 }
 
