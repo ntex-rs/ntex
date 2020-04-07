@@ -21,7 +21,7 @@ async fn test_h1() {
         HttpService::build()
             .keep_alive(KeepAlive::Disabled)
             .client_timeout(1000)
-            .client_disconnect(1000)
+            .disconnect_timeout(1000)
             .h1(|req: Request| {
                 assert!(req.peer_addr().is_some());
                 future::ok::<_, io::Error>(Response::Ok().finish())
@@ -39,7 +39,7 @@ async fn test_h1_2() {
         HttpService::build()
             .keep_alive(KeepAlive::Disabled)
             .client_timeout(1000)
-            .client_disconnect(1000)
+            .disconnect_timeout(1000)
             .finish(|req: Request| {
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), http::Version::HTTP_11);

@@ -30,7 +30,7 @@ struct Config {
     host: Option<String>,
     keep_alive: KeepAlive,
     client_timeout: u64,
-    client_shutdown: u64,
+    client_disconnect: u64,
     handshake_timeout: u64,
 }
 
@@ -89,7 +89,7 @@ where
                 host: None,
                 keep_alive: KeepAlive::Timeout(5),
                 client_timeout: 5000,
-                client_shutdown: 5000,
+                client_disconnect: 5000,
                 handshake_timeout: 5000,
             })),
             backlog: 1024,
@@ -162,22 +162,22 @@ where
     ///
     /// To disable timeout set value to 0.
     ///
-    /// By default client timeout is set to 5000 milliseconds.
+    /// By default client timeout is set to 5 seconds.
     pub fn client_timeout(self, val: u64) -> Self {
         self.config.lock().unwrap().client_timeout = val;
         self
     }
 
-    /// Set server connection shutdown timeout in milliseconds.
+    /// Set server connection disconnect timeout in milliseconds.
     ///
     /// Defines a timeout for shutdown connection. If a shutdown procedure does not complete
     /// within this time, the request is dropped.
     ///
     /// To disable timeout set value to 0.
     ///
-    /// By default client timeout is set to 5000 milliseconds.
-    pub fn client_shutdown(self, val: u64) -> Self {
-        self.config.lock().unwrap().client_shutdown = val;
+    /// By default client timeout is set to 5 seconds.
+    pub fn disconnect_timeout(self, val: u64) -> Self {
+        self.config.lock().unwrap().client_disconnect = val;
         self
     }
 
@@ -270,6 +270,7 @@ where
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
+                    .disconnect_timeout(c.client_disconnect)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .tcp()
             },
@@ -316,7 +317,7 @@ where
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
-                    .client_disconnect(c.client_shutdown)
+                    .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .openssl(acceptor.clone())
@@ -364,7 +365,7 @@ where
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
-                    .client_disconnect(c.client_shutdown)
+                    .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .rustls(config.clone())

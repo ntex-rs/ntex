@@ -249,7 +249,6 @@ pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
                     .map_err(|e| log::error!("Can not set alpn protocol: {:?}", e));
                 Connector::default()
-                    .conn_lifetime(time::Duration::from_secs(0))
                     .timeout(time::Duration::from_millis(30000))
                     .openssl(builder.build())
                     .finish()
@@ -257,7 +256,6 @@ pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
             #[cfg(not(feature = "openssl"))]
             {
                 Connector::default()
-                    .conn_lifetime(time::Duration::from_secs(0))
                     .timeout(time::Duration::from_millis(30000))
                     .finish()
             }

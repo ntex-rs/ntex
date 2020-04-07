@@ -34,8 +34,8 @@ impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
     pub fn new() -> Self {
         HttpServiceBuilder {
             keep_alive: KeepAlive::Timeout(5),
-            client_timeout: 5000,
-            client_disconnect: 0,
+            client_timeout: 3000,
+            client_disconnect: 3000,
             handshake_timeout: 5000,
             expect: ExpectHandler,
             upgrade: None,
@@ -76,7 +76,7 @@ where
     ///
     /// To disable timeout set value to 0.
     ///
-    /// By default client timeout is set to 5000 milliseconds.
+    /// By default client timeout is set to 3 seconds.
     pub fn client_timeout(mut self, val: u64) -> Self {
         self.client_timeout = val;
         self
@@ -85,12 +85,12 @@ where
     /// Set server connection disconnect timeout in milliseconds.
     ///
     /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
-    /// within this time, the request get dropped. This timeout affects secure connections.
+    /// within this time, the connection get dropped.
     ///
     /// To disable timeout set value to 0.
     ///
-    /// By default disconnect timeout is set to 0.
-    pub fn client_disconnect(mut self, val: u64) -> Self {
+    /// By default disconnect timeout is set to 3 seconds.
+    pub fn disconnect_timeout(mut self, val: u64) -> Self {
         self.client_disconnect = val;
         self
     }

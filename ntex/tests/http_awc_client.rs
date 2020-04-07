@@ -57,7 +57,12 @@ async fn test_simple() {
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 
-    let mut response = srv.post("/").send().await.unwrap();
+    let mut response = srv
+        .post("/")
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .unwrap();
     assert!(response.status().is_success());
 
     // read response

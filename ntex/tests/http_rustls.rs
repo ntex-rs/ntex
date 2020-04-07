@@ -158,7 +158,7 @@ async fn test_h2_content_length() {
 
             let req = srv
                 .srequest(Method::HEAD, &format!("/{}", i))
-                .timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(100))
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);

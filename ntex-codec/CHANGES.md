@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.1] - 2020-04-07
+
+* Optimize io operations
+
+* Fix framed close method
+
 ## [0.1.0] - 2020-03-31
 
 * Fork crate to ntex namespace

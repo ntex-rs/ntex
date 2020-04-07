@@ -7,6 +7,7 @@ use std::{fmt, io, mem, net};
 
 use bitflags::bitflags;
 use bytes::{Buf, BytesMut};
+use futures::ready;
 use pin_project::{pin_project, project};
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
@@ -42,10 +43,12 @@ bitflags! {
         const STOP_READING       = 0b0000_1000;
         /// Shutdown is in process (flushing and io shutdown timer)
         const SHUTDOWN           = 0b0001_0000;
+        /// Io shutdown process started
+        const SHUTDOWN_IO        = 0b0010_0000;
         /// Shutdown timer is started
-        const SHUTDOWN_TM        = 0b0010_0000;
+        const SHUTDOWN_TM        = 0b0100_0000;
         /// Connection is upgraded
-        const UPGRADE            = 0b0100_0000;
+        const UPGRADE            = 0b1000_0000;
     }
 }
 
@@ -429,13 +432,23 @@ where
             return Poll::Ready(Ok(()));
         }
 
-        self.poll_flush(cx)?;
+        if !self.flags.contains(Flags::SHUTDOWN_IO) {
+            self.poll_flush(cx)?;
 
-        if self.write_buf.is_empty() {
-            if let Poll::Ready(res) =
-                Pin::new(self.io.as_mut().unwrap()).poll_shutdown(cx)
-            {
-                return Poll::Ready(res.map_err(DispatchError::from));
+            if self.write_buf.is_empty() {
+                ready!(Pin::new(self.io.as_mut().unwrap()).poll_shutdown(cx)?);
+                self.flags.insert(Flags::SHUTDOWN_IO);
+            }
+        }
+
+        // read until 0 or err
+        let mut buf = [0u8; 512];
+        while let Poll::Ready(res) =
+            Pin::new(self.io.as_mut().unwrap()).poll_read(cx, &mut buf)
+        {
+            match res {
+                Err(_) | Ok(0) => return Poll::Ready(Ok(())),
+                _ => (),
             }
         }
 
@@ -494,7 +507,7 @@ where
                         trace!("Disconnected during flush, written {}", written);
                         return Err(DispatchError::Io(io::Error::new(
                             io::ErrorKind::WriteZero,
-                            "",
+                            "failed to write frame to transport",
                         )));
                     } else {
                         written += n
@@ -972,18 +985,24 @@ mod tests {
     #[ntex_rt::test]
     async fn test_req_parse_err() {
         let (client, server) = Io::create();
+        client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
         let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
-        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(h1.inner.flags.contains(Flags::SHUTDOWN));
         client
             .read_buffer(|buf| assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n"));
+
+        client.close().await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        assert!(h1.inner.flags.contains(Flags::SHUTDOWN_IO));
     }
 
     #[ntex_rt::test]
     async fn test_pipeline() {
         let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
         spawn_h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
 
@@ -991,7 +1010,7 @@ mod tests {
 
         let mut buf = client.read().await.unwrap();
         assert!(load(&mut decoder, &mut buf).status.is_success());
-        assert!(!client.is_server_closed());
+        assert!(!client.is_server_dropped());
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
         client.write("GET /test HTTP/1.1\r\n\r\n");
@@ -1000,15 +1019,16 @@ mod tests {
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(decoder.decode(&mut buf).unwrap().is_none());
-        assert!(!client.is_server_closed());
+        assert!(!client.is_server_dropped());
 
         client.close().await;
-        assert!(client.is_server_closed());
+        assert!(client.is_server_dropped());
     }
 
     #[ntex_rt::test]
     async fn test_pipeline_with_delay() {
         let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
         spawn_h1(server, |_| async {
             delay_for(Duration::from_millis(100)).await;
@@ -1019,7 +1039,7 @@ mod tests {
 
         let mut buf = client.read().await.unwrap();
         assert!(load(&mut decoder, &mut buf).status.is_success());
-        assert!(!client.is_server_closed());
+        assert!(!client.is_server_dropped());
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
         client.write("GET /test HTTP/1.1\r\n\r\n");
@@ -1032,15 +1052,15 @@ mod tests {
         let mut buf = client.read().await.unwrap();
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(decoder.decode(&mut buf).unwrap().is_none());
-        assert!(!client.is_server_closed());
+        assert!(!client.is_server_dropped());
 
         buf.extend(client.read().await.unwrap());
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(decoder.decode(&mut buf).unwrap().is_none());
-        assert!(!client.is_server_closed());
+        assert!(!client.is_server_dropped());
 
         client.close().await;
-        assert!(client.is_server_closed());
+        assert!(client.is_server_dropped());
     }
 
     #[ntex_rt::test]
@@ -1057,11 +1077,12 @@ mod tests {
             ok::<_, io::Error>(Response::Ok().finish())
         });
 
+        client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1.1\r\n\r\n");
         client.write("GET /test HTTP/1.1\r\n\r\n");
         client.write("GET /test HTTP/1.1\r\n\r\n");
         client.close().await;
-        assert!(client.is_server_closed());
+        assert!(client.is_server_dropped());
         assert!(client.read_any().is_empty());
 
         // all request must be handled
