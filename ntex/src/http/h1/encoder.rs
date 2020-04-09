@@ -157,16 +157,15 @@ pub(crate) trait MessageType: Sized {
                     let v_len = v.len();
                     let k_len = k.len();
                     let len = k_len + v_len + 4;
-                    if len > remaining {
-                        unsafe {
-                            dst.advance_mut(pos);
-                        }
-                        pos = 0;
-                        dst.reserve(len * 2);
-                        remaining = dst.capacity() - dst.len();
-                        buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
-                    }
+
                     unsafe {
+                        if len > remaining {
+                            dst.advance_mut(pos);
+                            pos = 0;
+                            dst.reserve(len * 2);
+                            remaining = dst.capacity() - dst.len();
+                            buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
+                        }
                         if camel_case {
                             write_camel_case(k, from_raw_parts_mut(buf, k_len))
                         } else {
@@ -179,9 +178,9 @@ pub(crate) trait MessageType: Sized {
                         buf = buf.add(v_len);
                         copy_nonoverlapping(b"\r\n".as_ptr(), buf, 2);
                         buf = buf.add(2);
-                        pos += len;
-                        remaining -= len;
                     }
+                    pos += len;
+                    remaining -= len;
                 }
                 map::Value::Multi(ref vec) => {
                     for val in vec {
@@ -189,16 +188,15 @@ pub(crate) trait MessageType: Sized {
                         let v_len = v.len();
                         let k_len = k.len();
                         let len = k_len + v_len + 4;
-                        if len > remaining {
-                            unsafe {
-                                dst.advance_mut(pos);
-                            }
-                            pos = 0;
-                            dst.reserve(len * 2);
-                            remaining = dst.capacity() - dst.len();
-                            buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
-                        }
+
                         unsafe {
+                            if len > remaining {
+                                dst.advance_mut(pos);
+                                pos = 0;
+                                dst.reserve(len * 2);
+                                remaining = dst.capacity() - dst.len();
+                                buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
+                            }
                             if camel_case {
                                 write_camel_case(k, from_raw_parts_mut(buf, k_len));
                             } else {
@@ -599,13 +597,13 @@ fn write_content_length(mut n: usize, bytes: &mut BytesMut) {
         bytes.put_slice(&buf);
     } else {
         bytes.put_slice(b"\r\ncontent-length: ");
-        convert_usize(n, bytes);
+        unsafe { convert_usize(n, bytes) };
     }
 }
 
-fn convert_usize(mut n: usize, bytes: &mut BytesMut) {
+unsafe fn convert_usize(mut n: usize, bytes: &mut BytesMut) {
     let mut curr: isize = 39;
-    let mut buf: [u8; 41] = unsafe { mem::MaybeUninit::uninit().assume_init() };
+    let mut buf: [u8; 41] = mem::MaybeUninit::uninit().assume_init();
     buf[39] = b'\r';
     buf[40] = b'\n';
     let buf_ptr = buf.as_mut_ptr();
@@ -619,10 +617,8 @@ fn convert_usize(mut n: usize, bytes: &mut BytesMut) {
         let d1 = (rem / 100) << 1;
         let d2 = (rem % 100) << 1;
         curr -= 4;
-        unsafe {
-            ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
-            ptr::copy_nonoverlapping(lut_ptr.offset(d2), buf_ptr.offset(curr + 2), 2);
-        }
+        ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
+        ptr::copy_nonoverlapping(lut_ptr.offset(d2), buf_ptr.offset(curr + 2), 2);
     }
 
     // if we reach here numbers are <= 9999, so at most 4 chars long
@@ -633,31 +629,23 @@ fn convert_usize(mut n: usize, bytes: &mut BytesMut) {
         let d1 = (n % 100) << 1;
         n /= 100;
         curr -= 2;
-        unsafe {
-            ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
-        }
+        ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
     }
 
     // decode last 1 or 2 chars
     if n < 10 {
         curr -= 1;
-        unsafe {
-            *buf_ptr.offset(curr) = (n as u8) + b'0';
-        }
+        *buf_ptr.offset(curr) = (n as u8) + b'0';
     } else {
         let d1 = n << 1;
         curr -= 2;
-        unsafe {
-            ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
-        }
+        ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
     }
 
-    unsafe {
-        bytes.extend_from_slice(slice::from_raw_parts(
-            buf_ptr.offset(curr),
-            41 - curr as usize,
-        ));
-    }
+    bytes.extend_from_slice(slice::from_raw_parts(
+        buf_ptr.offset(curr),
+        41 - curr as usize,
+    ));
 }
 
 #[cfg(test)]

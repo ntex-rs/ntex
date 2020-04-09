@@ -170,3 +170,82 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures::future::{lazy, ok, Ready};
+    use std::task::{Context, Poll};
+
+    use super::*;
+    use crate::service::{fn_factory, Service, ServiceFactory};
+
+    struct Srv1;
+
+    impl Service for Srv1 {
+        type Request = ();
+        type Response = usize;
+        type Error = ();
+        type Future = Ready<Result<usize, ()>>;
+
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
+            Poll::Ready(())
+        }
+
+        fn call(&self, _: ()) -> Self::Future {
+            ok::<_, ()>(1)
+        }
+    }
+
+    struct Srv2;
+
+    impl Service for Srv2 {
+        type Request = ();
+        type Response = usize;
+        type Error = ();
+        type Future = Ready<Result<usize, ()>>;
+
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
+            Poll::Ready(())
+        }
+
+        fn call(&self, _: ()) -> Self::Future {
+            ok::<_, ()>(2)
+        }
+    }
+
+    #[ntex_rt::test]
+    async fn test_service() {
+        let service = EitherService {
+            left: Srv1,
+            right: Srv2,
+        };
+        assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
+        assert!(lazy(|cx| service.poll_shutdown(cx, true)).await.is_ready());
+
+        assert_eq!(service.call(either::Either::Left(())).await, Ok(1));
+        assert_eq!(service.call(either::Either::Right(())).await, Ok(2));
+    }
+
+    #[ntex_rt::test]
+    async fn test_factory() {
+        let factory = either(
+            fn_factory(|| ok::<_, ()>(Srv1)),
+            fn_factory(|| ok::<_, ()>(Srv2)),
+        );
+        let service = factory.new_service(&()).await.unwrap();
+
+        assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
+        assert!(lazy(|cx| service.poll_shutdown(cx, true)).await.is_ready());
+
+        assert_eq!(service.call(either::Either::Left(())).await, Ok(1));
+        assert_eq!(service.call(either::Either::Right(())).await, Ok(2));
+    }
+}

@@ -280,6 +280,14 @@ mod tests {
             io::Error::new(io::ErrorKind::Other, "ParseError").into();
         assert!(format!("{}", err).contains("ParseError"));
 
+        let err: PayloadError = BlockingError::Canceled.into();
+        assert!(format!("{}", err).contains("Operation is canceled"));
+
+        let err: PayloadError =
+            BlockingError::Error(io::Error::new(io::ErrorKind::Other, "ParseError"))
+                .into();
+        assert!(format!("{}", err).contains("ParseError"));
+
         let err = PayloadError::Incomplete(None);
         assert_eq!(
             format!("{}", err),

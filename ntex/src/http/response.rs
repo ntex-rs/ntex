@@ -1058,6 +1058,17 @@ mod tests {
         #[cfg(feature = "cookie")]
         resp.add_cookie(&coo_kie::Cookie::new("cookie1", "val100"))
             .unwrap();
+        let (resp, _) = resp.into_parts();
+
+        let mut builder: ResponseBuilder = resp.head().into();
+        let resp = builder.status(StatusCode::BAD_REQUEST).finish();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        #[cfg(feature = "cookie")]
+        {
+            let cookie = resp.cookies().next().unwrap();
+            assert_eq!((cookie.name(), cookie.value()), ("cookie1", "val100"));
+        }
 
         let mut builder: ResponseBuilder = resp.into();
         let resp = builder.status(StatusCode::BAD_REQUEST).finish();

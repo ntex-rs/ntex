@@ -185,7 +185,7 @@ impl MessageType for Request {
 
     #[allow(clippy::uninit_assumed_init)]
     fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, ParseError> {
-        // Unsafe: we read only this data only after httparse parses headers into.
+        // Unsafe: we read this data only after httparse parses headers into.
         // performance bump for pipeline benchmarks.
         let mut headers: [HeaderIndex; MAX_HEADERS] =
             unsafe { MaybeUninit::uninit().assume_init() };
@@ -261,7 +261,7 @@ impl MessageType for ResponseHead {
 
     #[allow(clippy::uninit_assumed_init)]
     fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, ParseError> {
-        // Unsafe: we read only this data only after httparse parses headers into.
+        // Unsafe: we read this data only after httparse parses headers into.
         // performance bump for pipeline benchmarks.
         let mut headers: [HeaderIndex; MAX_HEADERS] =
             unsafe { MaybeUninit::uninit().assume_init() };

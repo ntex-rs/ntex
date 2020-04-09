@@ -220,7 +220,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::future::{ok, FutureExt, LocalBoxFuture};
+    use derive_more::Display;
+    use futures::future::{lazy, ok, FutureExt, LocalBoxFuture};
     use std::task::{Context, Poll};
     use std::time::Duration;
 
@@ -229,19 +230,30 @@ mod tests {
 
     struct SleepService(Duration);
 
+    #[derive(Debug, Display, PartialEq)]
+    struct SrvError;
+
     impl Service for SleepService {
         type Request = ();
         type Response = ();
-        type Error = ();
-        type Future = LocalBoxFuture<'static, Result<(), ()>>;
+        type Error = SrvError;
+        type Future = LocalBoxFuture<'static, Result<(), SrvError>>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
+        fn poll_shutdown(&self, _: &mut Context<'_>, is_error: bool) -> Poll<()> {
+            if is_error {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }
+
         fn call(&self, _: ()) -> Self::Future {
             crate::rt::time::delay_for(self.0)
-                .then(|_| ok::<_, ()>(()))
+                .then(|_| ok::<_, SrvError>(()))
                 .boxed_local()
         }
     }
@@ -253,6 +265,21 @@ mod tests {
 
         let timeout = TimeoutService::new(resolution, SleepService(wait_time));
         assert_eq!(timeout.call(()).await, Ok(()));
+        assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
+        assert!(lazy(|cx| timeout.poll_shutdown(cx, true)).await.is_ready());
+        assert!(lazy(|cx| timeout.poll_shutdown(cx, false))
+            .await
+            .is_pending());
+    }
+
+    #[ntex_rt::test]
+    async fn test_zero() {
+        let wait_time = Duration::from_millis(50);
+        let resolution = Duration::from_millis(0);
+
+        let timeout = TimeoutService::new(resolution, SleepService(wait_time));
+        assert_eq!(timeout.call(()).await, Ok(()));
+        assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
     }
 
     #[ntex_rt::test]
@@ -275,6 +302,18 @@ mod tests {
         );
         let srv = timeout.new_service(&()).await.unwrap();
 
-        assert_eq!(srv.call(()).await, Err(TimeoutError::Timeout));
+        let res = srv.call(()).await.unwrap_err();
+        assert_eq!(res, TimeoutError::Timeout);
+    }
+
+    #[test]
+    fn test_error() {
+        let err1 = TimeoutError::<SrvError>::Timeout;
+        assert!(format!("{:?}", err1).contains("TimeoutError::Timeout"));
+        assert!(format!("{}", err1).contains("Service call timeout"));
+
+        let err2: TimeoutError<_> = SrvError.into();
+        assert!(format!("{:?}", err2).contains("TimeoutError::Service"));
+        assert!(format!("{}", err2).contains("SrvError"));
     }
 }

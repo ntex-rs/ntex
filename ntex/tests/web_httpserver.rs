@@ -9,7 +9,7 @@ use ntex::web::{self, App, HttpResponse, HttpServer};
 
 #[cfg(unix)]
 #[ntex::test]
-async fn test_start() {
+async fn test_run() {
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
 
@@ -67,9 +67,10 @@ async fn test_start() {
 
 #[cfg(feature = "openssl")]
 fn ssl_acceptor() -> std::io::Result<SslAcceptorBuilder> {
-    use open_ssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+    use open_ssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
     // load ssl keys
     let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
     builder
         .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
         .unwrap();
@@ -79,9 +80,29 @@ fn ssl_acceptor() -> std::io::Result<SslAcceptorBuilder> {
     Ok(builder)
 }
 
+#[cfg(feature = "openssl")]
+fn client() -> ntex::http::client::Client {
+    use open_ssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+    let _ = builder
+        .set_alpn_protos(b"\x02h2\x08http/1.1")
+        .map_err(|e| log::error!("Can not set alpn protocol: {:?}", e));
+
+    ntex::http::client::Client::build()
+        .timeout(Duration::from_millis(30000))
+        .connector(
+            ntex::http::client::Connector::default()
+                .timeout(Duration::from_millis(30000))
+                .openssl(builder.build())
+                .finish(),
+        )
+        .finish()
+}
+
 #[ntex::test]
 #[cfg(feature = "openssl")]
-async fn test_start_openssl() {
+async fn test_openssl() {
     use ntex::web::HttpRequest;
 
     let addr = TestServer::unused_addr();
@@ -114,22 +135,7 @@ async fn test_start_openssl() {
     });
     let (srv, sys) = rx.recv().unwrap();
 
-    use open_ssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
-    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    builder.set_verify(SslVerifyMode::NONE);
-    let _ = builder
-        .set_alpn_protos(b"\x02h2\x08http/1.1")
-        .map_err(|e| log::error!("Can not set alpn protocol: {:?}", e));
-
-    let client = ntex::http::client::Client::build()
-        .connector(
-            ntex::http::client::Connector::default()
-                .openssl(builder.build())
-                .timeout(Duration::from_millis(30000))
-                .finish(),
-        )
-        .finish();
-
+    let client = client();
     let host = format!("https://{}", addr);
     let response = client.get(host.clone()).send().await.unwrap();
     assert!(response.status().is_success());
@@ -142,38 +148,62 @@ async fn test_start_openssl() {
 }
 
 #[ntex::test]
-#[cfg(feature = "rustls")]
-async fn test_start_rustls() {
+#[cfg(all(feature = "rustls", feature = "openssl"))]
+async fn test_rustls() {
     use std::fs::File;
     use std::io::BufReader;
 
+    use ntex::web::HttpRequest;
     use rust_tls::{
         internal::pemfile::{certs, pkcs8_private_keys},
         NoClientAuth, ServerConfig as RustlsServerConfig,
     };
 
-    // load ssl keys
-    let mut config = RustlsServerConfig::new(NoClientAuth::new());
-    let cert_file = &mut BufReader::new(File::open("./tests/cert.pem").unwrap());
-    let key_file = &mut BufReader::new(File::open("./tests/key.pem").unwrap());
-    let cert_chain = certs(cert_file).unwrap();
-    let mut keys = pkcs8_private_keys(key_file).unwrap();
-    config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
+    let addr = TestServer::unused_addr();
+    let (tx, rx) = mpsc::channel();
 
-    use ntex::web::HttpRequest;
+    thread::spawn(move || {
+        let mut sys = ntex::rt::System::new("test");
 
-    let srv = web::test::server_with(
-        web::test::TestServerConfig::default().rustls(config),
-        || {
-            App::new().service(web::resource("/").route(web::to(
-                |req: HttpRequest| async move {
-                    assert!(req.app_config().secure());
-                    HttpResponse::Ok().body("test")
-                },
-            )))
-        },
-    );
+        // load ssl keys
+        let mut config = RustlsServerConfig::new(NoClientAuth::new());
+        let cert_file = &mut BufReader::new(File::open("./tests/cert.pem").unwrap());
+        let key_file = &mut BufReader::new(File::open("./tests/key.pem").unwrap());
+        let cert_chain = certs(cert_file).unwrap();
+        let mut keys = pkcs8_private_keys(key_file).unwrap();
+        config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
 
-    let response = srv.get("/").send().await.unwrap();
+        let srv = sys.exec(|| {
+            HttpServer::new(|| {
+                App::new().service(web::resource("/").route(web::to(
+                    |req: HttpRequest| async move {
+                        assert!(req.app_config().secure());
+                        HttpResponse::Ok().body("test")
+                    },
+                )))
+            })
+            .workers(1)
+            .shutdown_timeout(1)
+            .system_exit()
+            .disable_signals()
+            .bind_rustls(format!("{}", addr), config)
+            .unwrap()
+            .run()
+        });
+
+        let _ = tx.send((srv, ntex::rt::System::current()));
+        let _ = sys.run();
+    });
+    let (srv, sys) = rx.recv().unwrap();
+
+    let client = client();
+    let host = format!("https://localhost:{}", addr.port());
+    let response = client.get(host).send().await.unwrap();
     assert!(response.status().is_success());
+
+    // stop
+    let _ = srv.stop(false);
+
+    thread::sleep(Duration::from_millis(100));
+    let _ = sys.stop();
 }

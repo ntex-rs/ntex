@@ -296,4 +296,10 @@ mod tests {
         date.set_date_header(&mut buf2);
         assert_eq!(buf1, buf2);
     }
+
+    #[test]
+    fn keep_alive() {
+        assert_eq!(KeepAlive::Disabled, Option::<usize>::None.into());
+        assert_eq!(KeepAlive::Timeout(10), Option::<usize>::Some(10).into());
+    }
 }
