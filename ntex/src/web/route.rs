@@ -198,7 +198,7 @@ impl<Err: ErrorRenderer> Route<Err> {
         F: Handler<Args, Err>,
         Args: FromRequest<Err> + 'static,
         Args::Error: Into<Err::Container>,
-        <F::Result as Responder<Err>>::Error: Into<Err::Container>,
+        <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     {
         self.handler = Box::new(HandlerWrapper::new(handler));
         self

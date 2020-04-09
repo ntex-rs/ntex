@@ -181,8 +181,7 @@ impl<E: ErrorRenderer> FromRequest<E> for () {
 
 macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
 
-    /// FromRequest implementation for tuple
-    #[doc(hidden)]
+    /// FromRequest implementation for a tuple
     #[allow(unused_parens)]
     impl<Err: ErrorRenderer, $($T: FromRequest<Err> + 'static),+> FromRequest<Err> for ($($T,)+)
     where

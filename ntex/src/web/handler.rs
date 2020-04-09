@@ -18,8 +18,8 @@ pub trait Handler<T, Err>: Clone + 'static
 where
     Err: ErrorRenderer,
 {
-    type Future: Future<Output = Self::Result> + 'static;
-    type Result: Responder<Err>;
+    type Output: Responder<Err>;
+    type Future: Future<Output = Self::Output> + 'static;
 
     fn call(&self, param: T) -> Self::Future;
 }
@@ -32,7 +32,7 @@ where
     Err: ErrorRenderer,
 {
     type Future = R;
-    type Result = R::Output;
+    type Output = R::Output;
 
     fn call(&self, _: ()) -> R {
         (self)()
@@ -53,7 +53,7 @@ where
     F: Handler<T, Err>,
     T: FromRequest<Err>,
     T::Error: Into<Err::Container>,
-    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
+    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     hnd: F,
@@ -65,7 +65,7 @@ where
     F: Handler<T, Err>,
     T: FromRequest<Err>,
     T::Error: Into<Err::Container>,
-    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
+    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     pub(super) fn new(hnd: F) -> Self {
@@ -81,7 +81,7 @@ where
     F: Handler<T, Err>,
     T: FromRequest<Err> + 'static,
     T::Error: Into<Err::Container>,
-    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
+    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     fn call(
@@ -113,7 +113,7 @@ where
     F: Handler<T, Err>,
     T: FromRequest<Err>,
     T::Error: Into<Err::Container>,
-    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
+    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     fn clone(&self) -> Self {
@@ -130,7 +130,7 @@ where
     F: Handler<T, Err>,
     T: FromRequest<Err>,
     T::Error: Into<Err::Container>,
-    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
+    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     hnd: F,
@@ -139,7 +139,7 @@ where
     #[pin]
     fut2: Option<F::Future>,
     #[pin]
-    fut3: Option<<F::Result as Responder<Err>>::Future>,
+    fut3: Option<<F::Output as Responder<Err>>::Future>,
     req: Option<HttpRequest>,
 }
 
@@ -148,7 +148,7 @@ where
     F: Handler<T, Err>,
     T: FromRequest<Err>,
     T::Error: Into<Err::Container>,
-    <F::Result as Responder<Err>>::Error: Into<Err::Container>,
+    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     type Output = Result<WebResponse, Err::Container>;
@@ -212,7 +212,7 @@ macro_rules! factory_tuple ({ $(($n:tt, $T:ident)),+} => {
           Err: ErrorRenderer,
     {
         type Future = Res;
-        type Result = Res::Output;
+        type Output = Res::Output;
 
         fn call(&self, param: ($($T,)+)) -> Res {
             (self)($(param.$n,)+)

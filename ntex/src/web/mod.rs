@@ -143,7 +143,7 @@ pub mod dev {
     #[inline(always)]
     pub fn __assert_handler<Err, Fun, Fut>(
         f: Fun,
-    ) -> impl Handler<(), Err, Future = Fut, Result = Fut::Output>
+    ) -> impl Handler<(), Err, Future = Fut, Output = Fut::Output>
     where
         Err: super::ErrorRenderer,
         Fun: Fn() -> Fut + Clone + 'static,
@@ -158,7 +158,7 @@ pub mod dev {
         #[inline(always)]
         pub fn $name<Err, Fun, Fut, $($T,)+>(
             f: Fun,
-        ) -> impl Handler<($($T,)+), Err, Future = Fut, Result = Fut::Output>
+        ) -> impl Handler<($($T,)+), Err, Future = Fut, Output = Fut::Output>
         where
             Err: $crate::web::ErrorRenderer,
             Fun: Fn($($T,)+) -> Fut + Clone + 'static,

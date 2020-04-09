@@ -235,7 +235,7 @@ where
         F: Handler<Args, Err>,
         Args: FromRequest<Err> + 'static,
         Args::Error: Into<Err::Container>,
-        <F::Result as Responder<Err>>::Error: Into<Err::Container>,
+        <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     {
         self.routes.push(Route::new().to(handler));
         self

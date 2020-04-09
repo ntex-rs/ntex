@@ -229,7 +229,7 @@ where
     Args: FromRequest<Err> + 'static,
     Err: ErrorRenderer,
     Err::Container: From<Args::Error>,
-    Err::Container: From<<F::Result as Responder<Err>>::Error>,
+    Err::Container: From<<F::Output as Responder<Err>>::Error>,
 {
     Route::new().to(handler)
 }

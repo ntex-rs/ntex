@@ -1,6 +1,8 @@
 # Changes
 
-## [0.1.6] - 2020-04-xx
+## [0.1.6] - 2020-04-09
+
+* ntex::web: Allow to add multiple services at once
 
 * ntex::http: Remove ResponseBuilder::json2 method
 
