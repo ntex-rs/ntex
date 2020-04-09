@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.6] - 2020-04-xx
+
+* ntex::http: Remove ResponseBuilder::json2 method
+
 ## [0.1.5] - 2020-04-07
 
 * ntex::http: enable client disconnect timeout by default
