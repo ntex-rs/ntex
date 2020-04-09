@@ -13,6 +13,9 @@ use crate::{Service, ServiceFactory};
 
 use super::time::{LowResTime, LowResTimeService};
 
+/// KeepAlive service factory
+///
+/// Controls min time between requests.
 pub struct KeepAlive<R, E, F> {
     f: F,
     ka: Duration,
@@ -24,11 +27,15 @@ impl<R, E, F> KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
-    pub fn new(ka: Duration, time: LowResTime, f: F) -> Self {
+    /// Construct KeepAlive service factory.
+    ///
+    /// ka - keep-alive timeout
+    /// err - error factory function
+    pub fn new(ka: Duration, time: LowResTime, err: F) -> Self {
         KeepAlive {
-            f,
             ka,
             time,
+            f: err,
             _t: PhantomData,
         }
     }
@@ -132,5 +139,38 @@ where
     fn call(&self, req: R) -> Self::Future {
         self.inner.borrow_mut().expire = Instant::from_std(self.time.now() + self.ka);
         ok(req)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::future::lazy;
+
+    use super::*;
+    use crate::rt::time::delay_for;
+    use crate::service::{Service, ServiceFactory};
+
+    #[derive(Debug, PartialEq)]
+    struct TestErr;
+
+    #[ntex_rt::test]
+    async fn test_ka() {
+        let factory = KeepAlive::new(
+            Duration::from_millis(100),
+            LowResTime::with(Duration::from_millis(10)),
+            || TestErr,
+        );
+        let _ = factory.clone();
+
+        let service = factory.new_service(()).await.unwrap();
+
+        assert_eq!(service.call(1usize).await, Ok(1usize));
+        assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
+
+        delay_for(Duration::from_millis(500)).await;
+        assert_eq!(
+            lazy(|cx| service.poll_ready(cx)).await,
+            Poll::Ready(Err(TestErr))
+        );
     }
 }
