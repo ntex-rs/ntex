@@ -123,7 +123,7 @@ impl Io {
     }
 
     /// Access read buffer.
-    pub fn read_buffer<F, R>(&self, f: F) -> R
+    pub fn local_buffer<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
@@ -132,7 +132,17 @@ impl Io {
         f(&mut ch.buf)
     }
 
-    /// Access write buffer.
+    /// Access remote buffer.
+    pub fn remote_buffer<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut BytesMut) -> R,
+    {
+        let guard = self.remote.lock().unwrap();
+        let mut ch = guard.borrow_mut();
+        f(&mut ch.buf)
+    }
+
+    /// Closed remote side.
     pub async fn close(&self) {
         {
             let guard = self.remote.lock().unwrap();
@@ -143,7 +153,7 @@ impl Io {
         delay_for(time::Duration::from_millis(35)).await;
     }
 
-    /// Add extra data to the buffer and notify reader
+    /// Add extra data to the remote buffer and notify reader
     pub fn write<T: AsRef<[u8]>>(&self, data: T) {
         let guard = self.remote.lock().unwrap();
         let mut write = guard.borrow_mut();

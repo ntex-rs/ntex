@@ -14,7 +14,8 @@ use crate::http::header::HeaderMap;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::request::Request;
 
-const MAX_BUFFER_SIZE: usize = 131_072;
+use super::MAX_BUFFER_SIZE;
+
 const MAX_HEADERS: usize = 96;
 
 /// Incoming messagd decoder
@@ -209,7 +210,13 @@ impl MessageType for Request {
 
                     (len, method, uri, version, req.headers.len())
                 }
-                httparse::Status::Partial => return Ok(None),
+                httparse::Status::Partial => {
+                    if src.len() >= MAX_BUFFER_SIZE {
+                        trace!("MAX_BUFFER_SIZE unprocessed data reached, closing");
+                        return Err(ParseError::TooLarge);
+                    }
+                    return Ok(None);
+                }
             }
         };
 
@@ -228,9 +235,6 @@ impl MessageType for Request {
             PayloadLength::None => {
                 if method == Method::CONNECT {
                     PayloadType::Stream(PayloadDecoder::eof())
-                } else if src.len() >= MAX_BUFFER_SIZE {
-                    trace!("MAX_BUFFER_SIZE unprocessed data reached, closing");
-                    return Err(ParseError::TooLarge);
                 } else {
                     PayloadType::None
                 }
@@ -284,7 +288,14 @@ impl MessageType for ResponseHead {
 
                     (len, version, status, res.headers.len())
                 }
-                httparse::Status::Partial => return Ok(None),
+                httparse::Status::Partial => {
+                    return if src.len() >= MAX_BUFFER_SIZE {
+                        error!("MAX_BUFFER_SIZE unprocessed data reached, closing");
+                        Err(ParseError::TooLarge)
+                    } else {
+                        Ok(None)
+                    }
+                }
             }
         };
 
@@ -300,9 +311,6 @@ impl MessageType for ResponseHead {
         } else if status == StatusCode::SWITCHING_PROTOCOLS {
             // switching protocol or connect
             PayloadType::Stream(PayloadDecoder::eof())
-        } else if src.len() >= MAX_BUFFER_SIZE {
-            error!("MAX_BUFFER_SIZE unprocessed data reached, closing");
-            return Err(ParseError::TooLarge);
         } else {
             // for HTTP/1.0 read to eof and close connection
             if msg.version == Version::HTTP_10 {

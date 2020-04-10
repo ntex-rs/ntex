@@ -8,10 +8,10 @@ members = [
   "ntex-service",
 ]
 
-[patch.crates-io]
-ntex = { path = "ntex" }
-ntex-codec = { path = "ntex-codec" }
-ntex-router = { path = "ntex-router" }
-ntex-rt = { path = "ntex-rt" }
-ntex-rt-macros = { path = "ntex-rt-macros" }
-ntex-service = { path = "ntex-service" }
+#[patch.crates-io]
+#ntex = { path = "ntex" }
+#ntex-codec = { path = "ntex-codec" }
+#ntex-router = { path = "ntex-router" }
+#ntex-rt = { path = "ntex-rt" }
+#ntex-rt-macros = { path = "ntex-rt-macros" }
+#ntex-service = { path = "ntex-service" }

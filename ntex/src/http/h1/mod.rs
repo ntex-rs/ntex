@@ -20,6 +20,8 @@ pub use self::upgrade::UpgradeHandler;
 
 pub(super) use self::dispatcher::Dispatcher;
 
+const MAX_BUFFER_SIZE: usize = 65_536;
+
 #[derive(Debug)]
 /// Codec message
 pub enum Message<T> {

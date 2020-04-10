@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.7] - 2020-04-xx
+
+* ntex::http: Fix handling of large http messages
+
+* ntex::http: Refine read back-pressure for h1 dispatcher
+
 ## [0.1.6] - 2020-04-09
 
 * ntex::web: Allow to add multiple services at once

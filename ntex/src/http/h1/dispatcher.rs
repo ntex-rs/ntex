@@ -22,7 +22,7 @@ use crate::Service;
 
 use super::codec::Codec;
 use super::payload::{Payload, PayloadSender, PayloadStatus};
-use super::{Message, MessageType};
+use super::{Message, MessageType, MAX_BUFFER_SIZE};
 
 const READ_BUFFER_SIZE: usize = 4096;
 const READ_LW_BUFFER_SIZE: usize = 1024;
@@ -646,7 +646,7 @@ where
             let io = self.io.as_mut().unwrap();
             let buf = &mut self.read_buf;
             let mut updated = false;
-            loop {
+            while buf.len() < MAX_BUFFER_SIZE {
                 let remaining = buf.capacity() - buf.len();
                 if remaining < READ_LW_BUFFER_SIZE {
                     buf.reserve(HW_BUFFER_SIZE - remaining);
@@ -916,15 +916,16 @@ where
 #[cfg(test)]
 mod tests {
     use futures::future::{lazy, ok, Future, FutureExt};
+    use rand::Rng;
     use std::rc::Rc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
     use super::*;
     use crate::http::config::{DispatcherConfig, ServiceConfig};
     use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
-    use crate::http::ResponseHead;
+    use crate::http::{ResponseHead, StatusCode};
     use crate::rt::time::delay_for;
     use crate::service::IntoService;
     use crate::testing::Io;
@@ -992,7 +993,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert!(h1.inner.flags.contains(Flags::SHUTDOWN));
         client
-            .read_buffer(|buf| assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n"));
+            .local_buffer(|buf| assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n"));
 
         client.close().await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
@@ -1087,5 +1088,57 @@ mod tests {
 
         // all request must be handled
         assert_eq!(num.load(Ordering::Relaxed), 3);
+    }
+
+    #[ntex_rt::test]
+    async fn test_read_large_message() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
+        let mut decoder = ClientCodec::default();
+
+        let data = rand::thread_rng()
+            .sample_iter(&rand::distributions::Alphanumeric)
+            .take(70_000)
+            .collect::<String>();
+        client.write("GET /test HTTP/1.1\r\nContent-Length: ");
+        client.write(data);
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(h1.inner.flags.contains(Flags::SHUTDOWN));
+
+        let mut buf = client.read().await.unwrap();
+        assert_eq!(load(&mut decoder, &mut buf).status, StatusCode::BAD_REQUEST);
+    }
+
+    #[ntex_rt::test]
+    async fn test_read_backpressure() {
+        let mark = Arc::new(AtomicBool::new(false));
+        let mark2 = mark.clone();
+
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+        spawn_h1(server, move |_| {
+            mark2.store(true, Ordering::Relaxed);
+            async {
+                delay_for(Duration::from_secs(999999)).await;
+                Ok::<_, io::Error>(Response::Ok().finish())
+            }
+        });
+
+        client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
+        delay_for(Duration::from_millis(50)).await;
+        assert!(mark.load(Ordering::Relaxed));
+
+        // buf must be consumed
+        assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
+
+        // io should be drained only by no more than MAX_BUFFER_SIZE
+        let random_bytes: Vec<u8> = (0..1048576).map(|_| rand::random::<u8>()).collect();
+        client.write(random_bytes);
+
+        delay_for(Duration::from_millis(50)).await;
+        assert!(client.remote_buffer(|buf| buf.len()) > 1048576 - MAX_BUFFER_SIZE * 2);
     }
 }
