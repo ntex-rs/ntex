@@ -1,10 +1,12 @@
 # Changes
 
-## [0.1.7] - 2020-04-xx
+## [0.1.7] - 2020-04-10
 
 * ntex::http: Fix handling of large http messages
 
 * ntex::http: Refine read/write back-pressure for h1 dispatcher
+
+* ntex::web: Restore proc macros for handler registration
 
 ## [0.1.6] - 2020-04-09
 
