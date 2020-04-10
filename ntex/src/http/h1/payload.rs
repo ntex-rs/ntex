@@ -12,16 +12,16 @@ use crate::http::error::PayloadError;
 use crate::task::LocalWaker;
 
 /// max buffer size 32k
-pub(crate) const MAX_BUFFER_SIZE: usize = 32_768;
+const MAX_BUFFER_SIZE: usize = 32_768;
 
 #[derive(Debug, PartialEq)]
-pub enum PayloadStatus {
+pub(super) enum PayloadStatus {
     Read,
     Pause,
     Dropped,
 }
 
-/// Buffered stream of bytes chunks
+/// Buffered stream of byte chunks
 ///
 /// Payload stores chunks in a vector. First chunk can be received with
 /// `.readany()` method. Payload stream is not thread safe. Payload does not
@@ -42,7 +42,7 @@ impl Payload {
     /// * `PayloadSender` - *Sender* side of the stream
     ///
     /// * `Payload` - *Receiver* side of the stream
-    pub fn create(eof: bool) -> (PayloadSender, Payload) {
+    pub(super) fn create(eof: bool) -> (PayloadSender, Payload) {
         let shared = Rc::new(RefCell::new(Inner::new(eof)));
 
         (
@@ -59,18 +59,6 @@ impl Payload {
         Payload {
             inner: Rc::new(RefCell::new(Inner::new(true))),
         }
-    }
-
-    /// Length of the data in this payload
-    #[cfg(test)]
-    pub fn len(&self) -> usize {
-        self.inner.borrow().len()
-    }
-
-    /// Is payload empty
-    #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
-        self.inner.borrow().len() == 0
     }
 
     /// Put unused data back to payload
@@ -100,34 +88,30 @@ impl Stream for Payload {
 }
 
 /// Sender part of the payload stream
-pub struct PayloadSender {
+pub(super) struct PayloadSender {
     inner: Weak<RefCell<Inner>>,
 }
 
 impl PayloadSender {
-    #[inline]
-    pub fn set_error(&mut self, err: PayloadError) {
+    pub(super) fn set_error(&mut self, err: PayloadError) {
         if let Some(shared) = self.inner.upgrade() {
             shared.borrow_mut().set_error(err)
         }
     }
 
-    #[inline]
-    pub fn feed_eof(&mut self) {
+    pub(super) fn feed_eof(&mut self) {
         if let Some(shared) = self.inner.upgrade() {
             shared.borrow_mut().feed_eof()
         }
     }
 
-    #[inline]
-    pub fn feed_data(&mut self, data: Bytes) {
+    pub(super) fn feed_data(&mut self, data: Bytes) {
         if let Some(shared) = self.inner.upgrade() {
             shared.borrow_mut().feed_data(data)
         }
     }
 
-    #[inline]
-    pub fn need_read(&self, cx: &mut Context<'_>) -> PayloadStatus {
+    pub(super) fn need_read(&self, cx: &mut Context<'_>) -> PayloadStatus {
         // we check need_read only if Payload (other side) is alive,
         // otherwise always return true (consume payload)
         if let Some(shared) = self.inner.upgrade() {
@@ -167,17 +151,14 @@ impl Inner {
         }
     }
 
-    #[inline]
     fn set_error(&mut self, err: PayloadError) {
         self.err = Some(err);
     }
 
-    #[inline]
     fn feed_eof(&mut self) {
         self.eof = true;
     }
 
-    #[inline]
     fn feed_data(&mut self, data: Bytes) {
         self.len += data.len();
         self.items.push_back(data);
@@ -185,11 +166,6 @@ impl Inner {
         if let Some(task) = self.task.take() {
             task.wake()
         }
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.len
     }
 
     fn readany(
@@ -233,8 +209,7 @@ mod tests {
         let (_, mut payload) = Payload::create(false);
 
         payload.unread_data(Bytes::from("data"));
-        assert!(!payload.is_empty());
-        assert_eq!(payload.len(), 4);
+        assert_eq!(payload.inner.borrow().len, 4);
 
         assert_eq!(
             Bytes::from("data"),

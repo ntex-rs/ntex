@@ -24,11 +24,11 @@ use super::codec::Codec;
 use super::payload::{Payload, PayloadSender, PayloadStatus};
 use super::{Message, MessageType, MAX_BUFFER_SIZE};
 
-const READ_BUFFER_SIZE: usize = 4096;
 const READ_LW_BUFFER_SIZE: usize = 1024;
-const WRITE_BUFFER_SIZE: usize = 8192;
+const READ_HW_BUFFER_SIZE: usize = 4096;
 const WRITE_LW_BUFFER_SIZE: usize = 2048;
-const HW_BUFFER_SIZE: usize = 32_768;
+const WRITE_HW_BUFFER_SIZE: usize = 8192;
+const BUFFER_SIZE: usize = 32_768;
 const LW_PIPELINED_MESSAGES: usize = 1;
 
 bitflags! {
@@ -175,7 +175,7 @@ where
             config,
             stream,
             codec,
-            BytesMut::with_capacity(READ_BUFFER_SIZE),
+            BytesMut::with_capacity(READ_HW_BUFFER_SIZE),
             timeout,
             peer_addr,
             on_connect,
@@ -212,7 +212,7 @@ where
             call: CallState::Io,
             upgrade: None,
             inner: InnerDispatcher {
-                write_buf: BytesMut::with_capacity(WRITE_BUFFER_SIZE),
+                write_buf: BytesMut::with_capacity(WRITE_HW_BUFFER_SIZE),
                 payload: None,
                 send_payload: None,
                 error: None,
@@ -565,14 +565,15 @@ where
         let mut flushed = false;
 
         while let Some(ref mut stream) = self.send_payload {
-            // resize write buffer
             let len = self.write_buf.len();
-            let remaining = self.write_buf.capacity() - len;
-            if remaining < WRITE_LW_BUFFER_SIZE {
-                self.write_buf.reserve(HW_BUFFER_SIZE - remaining);
-            }
 
-            if len < HW_BUFFER_SIZE {
+            if len < BUFFER_SIZE {
+                // increase write buffer
+                let remaining = self.write_buf.capacity() - len;
+                if remaining < WRITE_LW_BUFFER_SIZE {
+                    self.write_buf.reserve(BUFFER_SIZE - remaining);
+                }
+
                 match stream.poll_next_chunk(cx) {
                     Poll::Ready(Some(Ok(item))) => {
                         flushed = false;
@@ -604,7 +605,7 @@ where
                 // space in buffer
                 flushed = true;
                 self.poll_flush(cx)?;
-                if self.write_buf.len() >= HW_BUFFER_SIZE {
+                if self.write_buf.len() >= BUFFER_SIZE {
                     return Ok(PollWrite::Pending);
                 }
             }
@@ -615,7 +616,7 @@ where
         }
 
         // we have enought space in write bffer
-        if self.write_buf.len() < HW_BUFFER_SIZE {
+        if self.write_buf.len() < BUFFER_SIZE {
             Ok(PollWrite::AllowNext)
         } else {
             Ok(PollWrite::Pending)
@@ -647,9 +648,10 @@ where
             let buf = &mut self.read_buf;
             let mut updated = false;
             while buf.len() < MAX_BUFFER_SIZE {
+                // increase read buffer size
                 let remaining = buf.capacity() - buf.len();
                 if remaining < READ_LW_BUFFER_SIZE {
-                    buf.reserve(HW_BUFFER_SIZE - remaining);
+                    buf.reserve(BUFFER_SIZE);
                 }
 
                 match read(cx, io, buf) {
@@ -915,7 +917,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use futures::future::{lazy, ok, Future, FutureExt};
+    use futures::StreamExt;
     use rand::Rng;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -925,7 +929,7 @@ mod tests {
     use super::*;
     use crate::http::config::{DispatcherConfig, ServiceConfig};
     use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
-    use crate::http::{ResponseHead, StatusCode};
+    use crate::http::{body, Request, ResponseHead, StatusCode};
     use crate::rt::time::delay_for;
     use crate::service::IntoService;
     use crate::testing::Io;
@@ -1119,9 +1123,14 @@ mod tests {
 
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
-        spawn_h1(server, move |_| {
-            mark2.store(true, Ordering::Relaxed);
-            async {
+        spawn_h1(server, move |mut req: Request| {
+            let m = mark2.clone();
+            async move {
+                // read one chunk
+                let mut pl = req.take_payload();
+                let _ = pl.next().await.unwrap().unwrap();
+                m.store(true, Ordering::Relaxed);
+                // sleep
                 delay_for(Duration::from_secs(999999)).await;
                 Ok::<_, io::Error>(Response::Ok().finish())
             }
@@ -1129,7 +1138,6 @@ mod tests {
 
         client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
         delay_for(Duration::from_millis(50)).await;
-        assert!(mark.load(Ordering::Relaxed));
 
         // buf must be consumed
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
@@ -1139,6 +1147,107 @@ mod tests {
         client.write(random_bytes);
 
         delay_for(Duration::from_millis(50)).await;
-        assert!(client.remote_buffer(|buf| buf.len()) > 1048576 - MAX_BUFFER_SIZE * 2);
+        assert!(client.remote_buffer(|buf| buf.len()) > 1048576 - MAX_BUFFER_SIZE * 3);
+        assert!(mark.load(Ordering::Relaxed));
+    }
+
+    #[ntex_rt::test]
+    async fn test_write_backpressure() {
+        let num = Arc::new(AtomicUsize::new(0));
+        let num2 = num.clone();
+
+        struct Stream(Arc<AtomicUsize>);
+
+        impl body::MessageBody for Stream {
+            fn size(&self) -> body::BodySize {
+                body::BodySize::Stream
+            }
+            fn poll_next_chunk(
+                &mut self,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<Bytes, Box<dyn std::error::Error>>>> {
+                let data = rand::thread_rng()
+                    .sample_iter(&rand::distributions::Alphanumeric)
+                    .take(65_536)
+                    .collect::<String>();
+                self.0.fetch_add(data.len(), Ordering::Relaxed);
+
+                Poll::Ready(Some(Ok(Bytes::from(data))))
+            }
+        }
+
+        let (client, server) = Io::create();
+        let mut h1 = h1(server, move |_| {
+            let n = num2.clone();
+            async move { Ok::<_, io::Error>(Response::Ok().message_body(Stream(n.clone()))) }
+            .boxed_local()
+        });
+
+        // do not allow to write to socket
+        client.remote_buffer_cap(0);
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        // buf must be consumed
+        assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
+
+        // amount of generated data
+        assert_eq!(num.load(Ordering::Relaxed), 65_536);
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(num.load(Ordering::Relaxed), 65_536);
+        // response message + chunking encoding
+        assert_eq!(h1.inner.write_buf.len(), 65629);
+
+        client.remote_buffer_cap(65536);
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(num.load(Ordering::Relaxed), 65_536 * 2);
+    }
+
+    #[ntex_rt::test]
+    async fn test_disconnect_during_response_body_pending() {
+        struct Stream(bool);
+
+        impl body::MessageBody for Stream {
+            fn size(&self) -> body::BodySize {
+                body::BodySize::Sized(2048)
+            }
+            fn poll_next_chunk(
+                &mut self,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<Bytes, Box<dyn std::error::Error>>>> {
+                if self.0 {
+                    Poll::Pending
+                } else {
+                    self.0 = true;
+                    let data = rand::thread_rng()
+                        .sample_iter(&rand::distributions::Alphanumeric)
+                        .take(1024)
+                        .collect::<String>();
+                    Poll::Ready(Some(Ok(Bytes::from(data))))
+                }
+            }
+        }
+
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+        let mut h1 = h1(server, |_| {
+            ok::<_, io::Error>(Response::Ok().message_body(Stream(false)))
+        });
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        // buf must be consumed
+        assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
+
+        let mut decoder = ClientCodec::default();
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.close().await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
     }
 }
