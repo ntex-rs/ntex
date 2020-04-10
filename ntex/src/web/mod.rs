@@ -87,6 +87,17 @@ pub mod test;
 pub mod types;
 mod util;
 
+// re-export proc macro
+pub use ntex_macros::web_connect as connect;
+pub use ntex_macros::web_delete as delete;
+pub use ntex_macros::web_get as get;
+pub use ntex_macros::web_head as head;
+pub use ntex_macros::web_options as options;
+pub use ntex_macros::web_patch as patch;
+pub use ntex_macros::web_post as post;
+pub use ntex_macros::web_put as put;
+pub use ntex_macros::web_trace as trace;
+
 pub use crate::http::Response as HttpResponse;
 pub use crate::http::ResponseBuilder as HttpResponseBuilder;
 

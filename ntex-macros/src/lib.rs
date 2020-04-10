@@ -1,26 +1,27 @@
 #![recursion_limit = "512"]
 //! web macros module
 //!
-//! Generators for routes and scopes
+//! Generators for routes
 //!
 //! ## Route
 //!
 //! Macros:
 //!
-//! - [web_get](attr.get.html)
-//! - [web_post](attr.post.html)
-//! - [web_put](attr.put.html)
-//! - [web_delete](attr.delete.html)
-//! - [web_head](attr.head.html)
-//! - [web_connect](attr.connect.html)
-//! - [web_options](attr.options.html)
-//! - [web_trace](attr.trace.html)
-//! - [web_patch](attr.patch.html)
+//! - [get](attr.web_get.html)
+//! - [post](attr.web_post.html)
+//! - [put](attr.web_put.html)
+//! - [delete](attr.web_delete.html)
+//! - [head](attr.web_head.html)
+//! - [connect](attr.web_connect.html)
+//! - [options](attr.web_options.html)
+//! - [trace](attr.web_trace.html)
+//! - [patch](attr.web_patch.html)
 //!
 //! ### Attributes:
 //!
 //! - `"path"` - Raw literal string with path for which to register handle. Mandatory.
-//! - `guard="function_name"` - Registers function as guard using `ntex::web::guard::fn_guard`
+//! - `guard = "function_name"` - Registers function as guard using `ntex::web::guard::fn_guard`
+//! - `error = "ErrorRenderer"` - Register handler for specified error renderer
 //!
 //! ## Notes
 //!
@@ -30,11 +31,11 @@
 //! ## Example:
 //!
 //! ```rust
-//! use ntex::web::{get, HttpResponse};
+//! use ntex::web::{get, Error, HttpResponse};
 //! use futures::{future, Future};
 //!
 //! #[get("/test")]
-//! async fn async_test() -> Result<HttpResponse, ntex::http::Error> {
+//! async fn async_test() -> Result<HttpResponse, Error> {
 //!     Ok(HttpResponse::Ok().finish())
 //! }
 //! ```
@@ -53,11 +54,12 @@ use syn::parse_macro_input;
 /// ## Attributes:
 ///
 /// - `"path"` - Raw literal string with path for which to register handler. Mandatory.
-/// - `guard="function_name"` - Registers function as guard using `ntex::web::guard::fn_guard`
+/// - `guard = "function_name"` - Registers function as guard using `ntex::web::guard::fn_guard`
+/// - `error = "ErrorRenderer"` - Register handler for different error renderer
 #[proc_macro_attribute]
 pub fn web_get(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::GuardType::Get) {
+    let gen = match route::Route::new(args, input, route::MethodType::Get) {
         Ok(gen) => gen,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -72,7 +74,7 @@ pub fn web_get(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_post(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::GuardType::Post) {
+    let gen = match route::Route::new(args, input, route::MethodType::Post) {
         Ok(gen) => gen,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -87,7 +89,7 @@ pub fn web_post(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_put(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::GuardType::Put) {
+    let gen = match route::Route::new(args, input, route::MethodType::Put) {
         Ok(gen) => gen,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -102,7 +104,7 @@ pub fn web_put(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_delete(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::GuardType::Delete) {
+    let gen = match route::Route::new(args, input, route::MethodType::Delete) {
         Ok(gen) => gen,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -117,7 +119,7 @@ pub fn web_delete(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_head(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::GuardType::Head) {
+    let gen = match route::Route::new(args, input, route::MethodType::Head) {
         Ok(gen) => gen,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -132,7 +134,7 @@ pub fn web_head(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_connect(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::GuardType::Connect) {
+    let gen = match route::Route::new(args, input, route::MethodType::Connect) {
         Ok(gen) => gen,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -147,7 +149,7 @@ pub fn web_connect(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_options(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::GuardType::Options) {
+    let gen = match route::Route::new(args, input, route::MethodType::Options) {
         Ok(gen) => gen,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -162,7 +164,7 @@ pub fn web_options(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_trace(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::GuardType::Trace) {
+    let gen = match route::Route::new(args, input, route::MethodType::Trace) {
         Ok(gen) => gen,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -177,7 +179,7 @@ pub fn web_trace(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::GuardType::Patch) {
+    let gen = match route::Route::new(args, input, route::MethodType::Patch) {
         Ok(gen) => gen,
         Err(err) => return err.to_compile_error().into(),
     };

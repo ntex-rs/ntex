@@ -1,82 +1,80 @@
 use futures::{future, Future};
-use ntex::http::{Error, Method, StatusCode};
-use ntex::web::{test, types::Path, App, HttpResponse, Responder};
-use ntex_web_macros::{connect, delete, get, head, options, patch, post, put, trace};
+use ntex::http::{Method, StatusCode};
+use ntex::web::{test, types::Path, App, Error, HttpResponse, HttpResponseBuilder};
+use ntex_macros::{
+    web_connect, web_delete, web_get, web_head, web_options, web_patch, web_post,
+    web_put, web_trace,
+};
 
 // Make sure that we can name function as 'config'
-#[get("/config")]
-async fn config() -> impl Responder {
-    HttpResponse::Ok()
+#[web_get("/config")]
+async fn config() -> HttpResponse {
+    HttpResponse::Ok().finish()
 }
 
-#[get("/test")]
-async fn test_handler() -> impl Responder {
-    HttpResponse::Ok()
+#[web_get("/test")]
+async fn test_handler() -> HttpResponse {
+    HttpResponse::Ok().finish()
 }
 
-#[put("/test")]
-async fn put_test() -> impl Responder {
-    HttpResponse::Created()
+#[web_put("/test")]
+async fn put_test() -> HttpResponse {
+    HttpResponse::Created().finish()
 }
 
-#[patch("/test")]
-async fn patch_test() -> impl Responder {
-    HttpResponse::Ok()
+#[web_patch("/test")]
+async fn patch_test() -> HttpResponse {
+    HttpResponse::Ok().finish()
 }
 
-#[post("/test")]
-async fn post_test() -> impl Responder {
-    HttpResponse::NoContent()
+#[web_post("/test")]
+async fn post_test() -> HttpResponse {
+    HttpResponse::NoContent().finish()
 }
 
-#[head("/test")]
-async fn head_test() -> impl Responder {
-    HttpResponse::Ok()
+#[web_head("/test")]
+async fn head_test() -> HttpResponse {
+    HttpResponse::Ok().finish()
 }
 
-#[connect("/test")]
-async fn connect_test() -> impl Responder {
-    HttpResponse::Ok()
+#[web_connect("/test")]
+async fn connect_test() -> HttpResponse {
+    HttpResponse::Ok().finish()
 }
 
-#[options("/test")]
-async fn options_test() -> impl Responder {
-    HttpResponse::Ok()
+#[web_options("/test")]
+async fn options_test() -> HttpResponse {
+    HttpResponse::Ok().finish()
 }
 
-#[trace("/test")]
-async fn trace_test() -> impl Responder {
-    HttpResponse::Ok()
+#[web_trace("/test")]
+async fn trace_test() -> HttpResponse {
+    HttpResponse::Ok().finish()
 }
 
-#[get("/test")]
+#[web_get("/test")]
 fn auto_async() -> impl Future<Output = Result<HttpResponse, Error>> {
     future::ok(HttpResponse::Ok().finish())
 }
 
-#[get("/test")]
-fn auto_sync() -> impl Future<Output = Result<HttpResponse, Error>> {
-    future::ok(HttpResponse::Ok().finish())
-}
-
-#[put("/test/{param}")]
-async fn put_param_test(_: Path<String>) -> impl Responder {
+#[web_put("/test/{param}")]
+async fn put_param_test(_: Path<String>) -> HttpResponseBuilder {
     HttpResponse::Created()
 }
 
-#[delete("/test/{param}")]
-async fn delete_param_test(_: Path<String>) -> impl Responder {
+#[web_delete("/test/{param}")]
+async fn delete_param_test(_: Path<String>) -> HttpResponseBuilder {
     HttpResponse::NoContent()
 }
 
-#[get("/test/{param}")]
-async fn get_param_test(_: Path<String>) -> impl Responder {
-    HttpResponse::Ok()
+#[web_get("/test/{param}")]
+async fn get_param_test(_: Path<String>) -> HttpResponse {
+    HttpResponse::Ok().finish()
 }
 
 #[ntex::test]
 async fn test_params() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new()
             .service(get_param_test)
             .service(put_param_test)
@@ -98,7 +96,7 @@ async fn test_params() {
 
 #[ntex::test]
 async fn test_body() {
-    let srv = test::start(|| {
+    let srv = test::server(|| {
         App::new()
             .service(post_test)
             .service(put_test)
@@ -150,7 +148,7 @@ async fn test_body() {
 
 #[ntex::test]
 async fn test_auto_async() {
-    let srv = test::start(|| App::new().service(auto_async));
+    let srv = test::server(|| App::new().service(auto_async));
 
     let request = srv.request(Method::GET, srv.url("/test"));
     let response = request.send().await.unwrap();

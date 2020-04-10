@@ -1,10 +1,10 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens, TokenStreamExt};
-use syn::{AttributeArgs, Ident, NestedMeta};
+use syn::{AttributeArgs, Ident, NestedMeta, Path};
 
 #[derive(PartialEq)]
-pub enum GuardType {
+pub enum MethodType {
     Get,
     Post,
     Put,
@@ -16,23 +16,23 @@ pub enum GuardType {
     Patch,
 }
 
-impl GuardType {
+impl MethodType {
     fn as_str(&self) -> &'static str {
         match self {
-            GuardType::Get => "Get",
-            GuardType::Post => "Post",
-            GuardType::Put => "Put",
-            GuardType::Delete => "Delete",
-            GuardType::Head => "Head",
-            GuardType::Connect => "Connect",
-            GuardType::Options => "Options",
-            GuardType::Trace => "Trace",
-            GuardType::Patch => "Patch",
+            MethodType::Get => "Get",
+            MethodType::Post => "Post",
+            MethodType::Put => "Put",
+            MethodType::Delete => "Delete",
+            MethodType::Head => "Head",
+            MethodType::Connect => "Connect",
+            MethodType::Options => "Options",
+            MethodType::Trace => "Trace",
+            MethodType::Patch => "Patch",
         }
     }
 }
 
-impl ToTokens for GuardType {
+impl ToTokens for MethodType {
     fn to_tokens(&self, stream: &mut TokenStream2) {
         let ident = self.as_str();
         let ident = Ident::new(ident, Span::call_site());
@@ -43,12 +43,14 @@ impl ToTokens for GuardType {
 struct Args {
     path: syn::LitStr,
     guards: Vec<Ident>,
+    error: Path,
 }
 
 impl Args {
     fn new(args: AttributeArgs) -> syn::Result<Self> {
         let mut path = None;
         let mut guards = Vec::new();
+        let mut error: Option<Path> = None;
         for arg in args {
             match arg {
                 NestedMeta::Lit(syn::Lit::Str(lit)) => match path {
@@ -72,10 +74,19 @@ impl Args {
                                 "Attribute guard expects literal string!",
                             ));
                         }
+                    } else if nv.path.is_ident("error") {
+                        if let syn::Lit::Str(lit) = nv.lit {
+                            error = Some(syn::parse_str(&lit.value())?);
+                        } else {
+                            return Err(syn::Error::new_spanned(
+                                nv.lit,
+                                "Attribute error expects type path!",
+                            ));
+                        }
                     } else {
                         return Err(syn::Error::new_spanned(
                             nv.path,
-                            "Unknown attribute key is specified. Allowed: guard",
+                            "Unknown attribute key is specified. Allowed: guard or error",
                         ));
                     }
                 }
@@ -87,6 +98,8 @@ impl Args {
         Ok(Args {
             path: path.unwrap(),
             guards,
+            error: error
+                .unwrap_or_else(|| syn::parse_str("ntex::web::DefaultError").unwrap()),
         })
     }
 }
@@ -95,21 +108,21 @@ pub struct Route {
     name: syn::Ident,
     args: Args,
     ast: syn::ItemFn,
-    guard: GuardType,
+    method: MethodType,
 }
 
 impl Route {
     pub fn new(
         args: AttributeArgs,
         input: TokenStream,
-        guard: GuardType,
+        method: MethodType,
     ) -> syn::Result<Self> {
         if args.is_empty() {
             return Err(syn::Error::new(
                 Span::call_site(),
                 format!(
                     r#"invalid server definition, expected #[{}("<some path>")]"#,
-                    guard.as_str().to_ascii_lowercase()
+                    method.as_str().to_ascii_lowercase()
                 ),
             ));
         }
@@ -121,64 +134,35 @@ impl Route {
             name,
             args,
             ast,
-            guard,
+            method,
         })
     }
 
     pub fn generate(&self) -> TokenStream {
         let name = &self.name;
         let resource_name = name.to_string();
-        let guard = &self.guard;
         let ast = &self.ast;
         let path = &self.args.path;
         let extra_guards = &self.args.guards;
-
-        let args: Vec<_> = ast
-            .sig
-            .inputs
-            .iter()
-            .filter(|item| match item {
-                syn::FnArg::Receiver(_) => false,
-                syn::FnArg::Typed(_) => true,
-            })
-            .map(|item| match item {
-                syn::FnArg::Receiver(_) => panic!(),
-                syn::FnArg::Typed(ref pt) => pt.ty.clone(),
-            })
-            .collect();
-
-        let assert_responder: syn::Path = syn::parse_str(
-            format!(
-                "ntex::web::dev::__assert_handler{}",
-                if args.is_empty() {
-                    "".to_string()
-                } else {
-                    format!("{}", args.len())
-                }
-            )
-            .as_str(),
-        )
-        .unwrap();
+        let error = &self.args.error;
+        let method = &self.method;
 
         let stream = quote! {
             #[allow(non_camel_case_types)]
             pub struct #name;
 
-            impl<__E: 'static> ntex::web::dev::HttpServiceFactory<__E> for #name
-            where __E: ntex::web::error::ErrorRenderer
+            impl ntex::web::dev::WebServiceFactory<#error> for #name
             {
-                fn register(self, __config: &mut ntex::web::dev::AppService<__E>) {
-                    #(ntex::web::dev::__assert_extractor::<__E, #args>();)*
-
+                fn register(self, __config: &mut ntex::web::dev::WebServiceConfig<#error>) {
                     #ast
 
                     let __resource = ntex::web::Resource::new(#path)
                         .name(#resource_name)
-                        .guard(ntex::web::guard::#guard())
+                        .guard(ntex::web::guard::#method())
                         #(.guard(ntex::web::guard::fn_guard(#extra_guards)))*
-                        .to(#assert_responder(#name));
+                        .to(#name);
 
-                    ntex::web::dev::HttpServiceFactory::register(__resource, __config)
+                    ntex::web::dev::WebServiceFactory::register(__resource, __config)
                 }
             }
         };
