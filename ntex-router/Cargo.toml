@@ -1,6 +1,6 @@
 [package]
 name = "ntex-router"
-version = "0.3.2"
+version = "0.3.3"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Path router"
 keywords = ["ntex"]

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.3] - 2020-04-11
+
+* Fix `/` prefix match
+
 ## [0.3.2] - 2020-04-06
 
 * Fix IdxSegment item for paths with no root

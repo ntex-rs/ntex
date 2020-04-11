@@ -761,6 +761,11 @@ mod tests {
 
     #[test]
     fn test_resource_prefix() {
+        let tree = Tree::new(&ResourceDef::prefix("/"), 1);
+        assert_eq!(tree.find(&mut Path::new("/")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/a")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/a/test/test")), Some(1));
+
         let tree = Tree::new(&ResourceDef::prefix("/name"), 1);
         assert_eq!(tree.find(&mut Path::new("/name")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/name/")), Some(1));

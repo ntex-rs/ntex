@@ -208,7 +208,7 @@ impl Tree {
             if path == "/" {
                 for val in &self.value {
                     let v = match val {
-                        Value::Slesh(v) | Value::Prefix(v) => *v,
+                        Value::Slesh(v) | Value::Prefix(v) | Value::PrefixSlesh(v) => *v,
                         _ => continue,
                     };
                     if check(v, resource) {
@@ -219,6 +219,16 @@ impl Tree {
                 for val in &self.value {
                     let v = match val {
                         Value::Val(v) | Value::Prefix(v) => *v,
+                        _ => continue,
+                    };
+                    if check(v, resource) {
+                        return Some(v);
+                    }
+                }
+            } else {
+                for val in &self.value {
+                    let v = match val {
+                        Value::PrefixSlesh(v) => *v,
                         _ => continue,
                     };
                     if check(v, resource) {
