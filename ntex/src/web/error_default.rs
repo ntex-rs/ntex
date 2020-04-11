@@ -1,17 +1,20 @@
 //! Web error
+use std::io::Write;
 use std::str::Utf8Error;
 use std::{fmt, io};
 
+use bytes::BytesMut;
 use serde::de::value::Error as DeError;
 use serde_json::error::Error as JsonError;
 use serde_urlencoded::ser::Error as FormError;
 
-use crate::http;
-use crate::http::StatusCode;
+use crate::http::body::Body;
+use crate::http::helpers::Writer;
+use crate::http::{self, header, StatusCode};
 use crate::util::timeout::TimeoutError;
 
-use super::error::{self, ErrorRenderer, WebResponseError};
-use super::HttpResponse;
+use super::error::{self, ErrorContainer, ErrorRenderer, WebResponseError};
+use super::{HttpRequest, HttpResponse};
 
 /// Default error type
 #[derive(Clone, Copy, Default)]
@@ -50,9 +53,22 @@ impl<T: WebResponseError<DefaultError>> From<T> for Error {
 
 impl std::error::Error for Error {}
 
+impl ErrorContainer for Error {
+    fn error_response(&self, req: &HttpRequest) -> HttpResponse {
+        self.cause.error_response(req)
+    }
+}
+
 impl crate::http::error::ResponseError for Error {
     fn error_response(&self) -> HttpResponse {
-        self.cause.error_response()
+        let mut resp = HttpResponse::new(self.cause.status_code());
+        let mut buf = BytesMut::new();
+        let _ = write!(Writer(&mut buf), "{}", self.cause);
+        resp.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("text/plain; charset=utf-8"),
+        );
+        resp.set_body(Body::from(buf))
     }
 }
 

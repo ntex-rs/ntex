@@ -92,9 +92,9 @@ where
 
         HandlerWrapperResponse {
             hnd: self.hnd.clone(),
-            fut1: Some(T::from_request(&req, &mut payload)),
-            fut2: None,
-            fut3: None,
+            from_request: Some(T::from_request(&req, &mut payload)),
+            handler: None,
+            responder: None,
             req: Some(req),
         }
         .boxed_local()
@@ -135,11 +135,11 @@ where
 {
     hnd: F,
     #[pin]
-    fut1: Option<T::Future>,
+    from_request: Option<T::Future>,
     #[pin]
-    fut2: Option<F::Future>,
+    handler: Option<F::Future>,
     #[pin]
-    fut3: Option<<F::Output as Responder<Err>>::Future>,
+    responder: Option<<F::Output as Responder<Err>>::Future>,
     req: Option<HttpRequest>,
 }
 
@@ -156,13 +156,13 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        if let Some(fut) = this.fut1.as_pin_mut() {
+        if let Some(fut) = this.from_request.as_pin_mut() {
             return match fut.poll(cx) {
                 Poll::Ready(Ok(param)) => {
                     let fut = this.hnd.call(param);
                     this = self.as_mut().project();
-                    this.fut1.set(None);
-                    this.fut2.set(Some(fut));
+                    this.from_request.set(None);
+                    this.handler.set(Some(fut));
                     self.poll(cx)
                 }
                 Poll::Pending => Poll::Pending,
@@ -173,20 +173,20 @@ where
             };
         }
 
-        if let Some(fut) = this.fut2.as_pin_mut() {
+        if let Some(fut) = this.handler.as_pin_mut() {
             return match fut.poll(cx) {
                 Poll::Ready(res) => {
                     let fut = res.respond_to(this.req.as_ref().unwrap());
                     this = self.as_mut().project();
-                    this.fut2.set(None);
-                    this.fut3.set(Some(fut));
+                    this.handler.set(None);
+                    this.responder.set(Some(fut));
                     self.poll(cx)
                 }
                 Poll::Pending => Poll::Pending,
             };
         }
 
-        if let Some(fut) = this.fut3.as_pin_mut() {
+        if let Some(fut) = this.responder.as_pin_mut() {
             return match fut.poll(cx) {
                 Poll::Ready(Ok(res)) => {
                     Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))

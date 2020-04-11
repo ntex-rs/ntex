@@ -3,7 +3,7 @@ use std::fmt;
 use crate::http::body::{Body, MessageBody, ResponseBody};
 use crate::http::{HeaderMap, Response, ResponseHead, StatusCode};
 
-use super::error::ErrorRenderer;
+use super::error::{ErrorContainer, ErrorRenderer};
 use super::httprequest::HttpRequest;
 
 /// An service http response
@@ -23,10 +23,8 @@ impl WebResponse {
         err: E,
         request: HttpRequest,
     ) -> Self {
-        use crate::http::error::ResponseError;
-
         let err = err.into();
-        let res: Response = err.error_response();
+        let res: Response = err.error_response(&request);
 
         if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
             log::error!("Internal Server Error: {:?}", err);

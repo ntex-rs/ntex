@@ -433,8 +433,8 @@ where
     type Error = Err::Container;
     type Future = Ready<Result<Response, Self::Error>>;
 
-    fn respond_to(self, _: &HttpRequest) -> Self::Future {
-        ok(self.error_response())
+    fn respond_to(self, req: &HttpRequest) -> Self::Future {
+        ok(self.error_response(req))
     }
 }
 

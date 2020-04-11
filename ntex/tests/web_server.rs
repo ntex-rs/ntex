@@ -20,7 +20,9 @@ use ntex::http::header::{
 use ntex::http::{Method, StatusCode};
 
 use ntex::web::middleware::Compress;
-use ntex::web::{self, test, App, BodyEncoding, HttpResponse, WebResponseError};
+use ntex::web::{
+    self, test, App, BodyEncoding, HttpRequest, HttpResponse, WebResponseError,
+};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -874,11 +876,13 @@ async fn test_custom_error() {
     #[derive(Debug, Display)]
     struct JsonContainer(Box<dyn WebResponseError<JsonRenderer>>);
 
-    impl ntex::http::ResponseError for JsonContainer {
-        fn error_response(&self) -> HttpResponse {
-            self.0.error_response()
+    impl ntex::web::ErrorContainer for JsonContainer {
+        fn error_response(&self, req: &HttpRequest) -> HttpResponse {
+            self.0.error_response(req)
         }
     }
+
+    impl ntex::http::ResponseError for JsonContainer {}
 
     impl From<TestError> for JsonContainer {
         fn from(e: TestError) -> JsonContainer {
@@ -893,7 +897,7 @@ async fn test_custom_error() {
     }
 
     impl WebResponseError<JsonRenderer> for TestError {
-        fn error_response(&self) -> HttpResponse {
+        fn error_response(&self, _: &HttpRequest) -> HttpResponse {
             HttpResponse::BadRequest()
                 .header(CONTENT_TYPE, "application/json")
                 .body("Error")
