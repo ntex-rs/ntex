@@ -645,7 +645,7 @@ impl<Err: ErrorRenderer> Service for ScopeService<Err> {
             Either::Left(default.call(req))
         } else {
             let req = req.into_parts().0;
-            Either::Right(ok(WebResponse::new(req, Response::NotFound().finish())))
+            Either::Right(ok(WebResponse::new(Response::NotFound().finish(), req)))
         }
     }
 }

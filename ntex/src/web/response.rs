@@ -14,7 +14,7 @@ pub struct WebResponse {
 
 impl WebResponse {
     /// Create web response instance
-    pub fn new(request: HttpRequest, response: Response<Body>) -> Self {
+    pub fn new(response: Response<Body>, request: HttpRequest) -> Self {
         WebResponse { request, response }
     }
 
@@ -50,7 +50,7 @@ impl WebResponse {
     /// Create web response
     #[inline]
     pub fn into_response(self, response: Response) -> WebResponse {
-        WebResponse::new(self.request, response)
+        WebResponse::new(response, self.request)
     }
 
     /// Get reference to original request
@@ -100,7 +100,7 @@ impl WebResponse {
             Ok(_) => self,
             Err(err) => {
                 let res: Response = err.into().into();
-                WebResponse::new(self.request, res.into_body())
+                WebResponse::new(res, self.request)
             }
         }
     }

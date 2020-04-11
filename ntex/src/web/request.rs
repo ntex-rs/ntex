@@ -29,8 +29,7 @@ impl<Err: ErrorRenderer> WebRequest<Err> {
     /// Create web response for error
     #[inline]
     pub fn render_error<E: WebResponseError<Err>>(self, err: E) -> WebResponse {
-        let res = err.error_response(&self.req);
-        WebResponse::new(self.req, res)
+        WebResponse::new(err.error_response(&self.req), self.req)
     }
 
     /// Create web response for error
@@ -86,7 +85,7 @@ impl<Err> WebRequest<Err> {
     /// Create web response
     #[inline]
     pub fn into_response<R: Into<Response>>(self, res: R) -> WebResponse {
-        WebResponse::new(self.req, res.into())
+        WebResponse::new(res.into(), self.req)
     }
 
     /// This method returns reference to the request head

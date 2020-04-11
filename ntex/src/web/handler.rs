@@ -190,7 +190,7 @@ where
         if let Some(fut) = this.responder.as_pin_mut() {
             return match fut.poll(cx) {
                 Poll::Ready(res) => {
-                    Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
+                    Poll::Ready(Ok(WebResponse::new(res, this.req.take().unwrap())))
                 }
                 Poll::Pending => Poll::Pending,
             };

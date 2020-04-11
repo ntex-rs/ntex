@@ -520,10 +520,9 @@ impl<Err: ErrorRenderer> Service for ResourceService<Err> {
         if let Some(ref default) = self.default {
             Either::Right(default.call(req))
         } else {
-            let req = req.into_parts().0;
             Either::Left(ok(WebResponse::new(
-                req,
                 Response::MethodNotAllowed().finish(),
+                req.into_parts().0,
             )))
         }
     }

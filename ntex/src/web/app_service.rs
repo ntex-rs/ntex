@@ -455,7 +455,7 @@ impl<Err: ErrorRenderer> Service for AppRouting<Err> {
             default.call(req)
         } else {
             let req = req.into_parts().0;
-            ok(WebResponse::new(req, Response::NotFound().finish())).boxed_local()
+            ok(WebResponse::new(Response::NotFound().finish(), req)).boxed_local()
         }
     }
 }
