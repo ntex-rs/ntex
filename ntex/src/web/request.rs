@@ -10,7 +10,7 @@ use crate::http::{
 use crate::router::{Path, Resource};
 
 use super::config::AppConfig;
-use super::error::ErrorRenderer;
+use super::error::{ErrorRenderer, WebResponseError};
 use super::httprequest::HttpRequest;
 use super::info::ConnectionInfo;
 use super::response::WebResponse;
@@ -26,6 +26,13 @@ pub struct WebRequest<Err> {
 }
 
 impl<Err: ErrorRenderer> WebRequest<Err> {
+    /// Create web response for error
+    #[inline]
+    pub fn render_error<E: WebResponseError<Err>>(self, err: E) -> WebResponse {
+        let res = err.error_response(&self.req);
+        WebResponse::new(self.req, res)
+    }
+
     /// Create web response for error
     #[inline]
     pub fn error_response<E: Into<Err::Container>>(self, err: E) -> WebResponse {
