@@ -10,6 +10,8 @@
 
 * ntex::web: Move `web::Data` to `web::types::Data`
 
+* ntex::web: Simplify Responder trait
+
 * ntex::web: Simplify WebResponse, remove `B` generic parameter
 
 ## [0.1.7] - 2020-04-10

@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures::future::{FutureExt, LocalBoxFuture};
+use futures::future::{ok, FutureExt, LocalBoxFuture};
 use pin_project::pin_project;
 
 use super::error::ErrorRenderer;
@@ -12,6 +12,7 @@ use super::httprequest::HttpRequest;
 use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
+use super::HttpResponse;
 
 /// Async fn handler
 pub trait Handler<T, Err>: Clone + 'static
@@ -188,18 +189,35 @@ where
 
         if let Some(fut) = this.responder.as_pin_mut() {
             return match fut.poll(cx) {
-                Poll::Ready(Ok(res)) => {
+                Poll::Ready(res) => {
                     Poll::Ready(Ok(WebResponse::new(this.req.take().unwrap(), res)))
                 }
                 Poll::Pending => Poll::Pending,
-                Poll::Ready(Err(e)) => Poll::Ready(Ok(WebResponse::from_err::<Err, _>(
-                    e,
-                    this.req.take().unwrap(),
-                ))),
             };
         }
 
         unreachable!();
+    }
+}
+
+pub(super) struct DefaultHandler<Err: ErrorRenderer>(PhantomData<Err>);
+
+impl<Err: ErrorRenderer> DefaultHandler<Err> {
+    pub(super) fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<Err: ErrorRenderer> HandlerFn<Err> for DefaultHandler<Err> {
+    fn call(
+        &self,
+        req: WebRequest<Err>,
+    ) -> LocalBoxFuture<'static, Result<WebResponse, Err::Container>> {
+        ok(req.into_response(HttpResponse::NotFound())).boxed_local()
+    }
+
+    fn clone_handler(&self) -> Box<dyn HandlerFn<Err>> {
+        Box::new(DefaultHandler::new())
     }
 }
 

@@ -566,7 +566,7 @@ mod tests {
     use crate::web::middleware::DefaultHeaders;
     use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, TestRequest};
-    use crate::web::{self, guard, App, DefaultError, Error, HttpResponse};
+    use crate::web::{self, guard, App, DefaultError, HttpResponse};
     use crate::Service;
 
     #[ntex_rt::test]
@@ -628,7 +628,7 @@ mod tests {
         let mut srv =
             init_service(App::new().service(web::resource("/test").to(|| async {
                 delay_for(Duration::from_millis(100)).await;
-                Ok::<_, Error>(HttpResponse::Ok())
+                HttpResponse::Ok()
             })))
             .await;
         let req = TestRequest::with_uri("/test").to_request();

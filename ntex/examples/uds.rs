@@ -1,4 +1,4 @@
-use ntex::web::{self, middleware, App, Error, HttpRequest, HttpResponse, HttpServer};
+use ntex::web::{self, middleware, App, HttpRequest, HttpResponse, HttpServer};
 
 #[web::get("/resource1/{name}/index.html")]
 async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {
@@ -6,7 +6,7 @@ async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {
     format!("Hello: {}!\r\n", name)
 }
 
-async fn index_async(req: HttpRequest) -> Result<&'static str, Error> {
+async fn index_async(req: HttpRequest) -> Result<&'static str, std::io::Error> {
     println!("REQ: {:?}", req);
     Ok("Hello world!\r\n")
 }

@@ -7,7 +7,7 @@ use std::{fmt, ops};
 
 use bytes::BytesMut;
 use encoding_rs::{Encoding, UTF_8};
-use futures::future::{err, ok, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ready, FutureExt, LocalBoxFuture, Ready};
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::web::error::{ErrorRenderer, UrlencodedError};
+use crate::web::error::{ErrorRenderer, UrlencodedError, WebResponseError};
 use crate::web::{FromRequest, HttpRequest, Responder};
 
 /// Form data helper (`application/x-www-form-urlencoded`)
@@ -140,19 +140,24 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
     }
 }
 
-impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Form<T> {
+impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Form<T>
+where
+    Err::Container: From<serde_urlencoded::ser::Error>,
+{
     type Error = serde_urlencoded::ser::Error;
-    type Future = Ready<Result<Response, Self::Error>>;
+    type Future = Ready<Response>;
 
-    fn respond_to(self, _: &HttpRequest) -> Self::Future {
+    fn respond_to(self, req: &HttpRequest) -> Self::Future {
         let body = match serde_urlencoded::to_string(&self.0) {
             Ok(body) => body,
-            Err(e) => return err(e),
+            Err(e) => return ready(e.error_response(req)),
         };
 
-        ok(Response::build(StatusCode::OK)
-            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(body))
+        ready(
+            Response::build(StatusCode::OK)
+                .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(body),
+        )
     }
 }
 
@@ -465,7 +470,7 @@ mod tests {
             hello: "world".to_string(),
             counter: 123,
         });
-        let resp = respond_to(form, &req).await.unwrap();
+        let resp = respond_to(form, &req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),

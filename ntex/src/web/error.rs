@@ -57,6 +57,29 @@ where
     }
 }
 
+impl<Err: ErrorRenderer> WebResponseError<Err> for std::convert::Infallible {}
+
+impl<A, B, Err> WebResponseError<Err> for either::Either<A, B>
+where
+    A: WebResponseError<Err>,
+    B: WebResponseError<Err>,
+    Err: ErrorRenderer,
+{
+    fn status_code(&self) -> StatusCode {
+        match self {
+            either::Either::Left(ref a) => a.status_code(),
+            either::Either::Right(ref b) => b.status_code(),
+        }
+    }
+
+    fn error_response(&self, req: &HttpRequest) -> HttpResponse {
+        match self {
+            either::Either::Left(ref a) => a.error_response(req),
+            either::Either::Right(ref b) => b.error_response(req),
+        }
+    }
+}
+
 /// Errors which can occur when attempting to work with `Data` extractor
 #[derive(Debug, PartialEq, Display)]
 pub enum DataExtractorError {

@@ -99,6 +99,7 @@ pub use ntex_macros::web_trace as trace;
 
 pub use crate::http::Response as HttpResponse;
 pub use crate::http::ResponseBuilder as HttpResponseBuilder;
+pub use either::Either;
 
 pub use self::app::App;
 pub use self::config::ServiceConfig;
@@ -109,7 +110,7 @@ pub use self::extract::FromRequest;
 pub use self::handler::Handler;
 pub use self::httprequest::HttpRequest;
 pub use self::resource::Resource;
-pub use self::responder::{Either, Responder};
+pub use self::responder::Responder;
 pub use self::route::Route;
 pub use self::scope::Scope;
 pub use self::server::HttpServer;

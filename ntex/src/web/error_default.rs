@@ -96,9 +96,6 @@ impl<E: WebResponseError<DefaultError>> WebResponseError<DefaultError>
     }
 }
 
-/// `InternalServerError` for `Infallible`
-impl WebResponseError<DefaultError> for std::convert::Infallible {}
-
 /// `InternalServerError` for `DataExtractorError`
 impl WebResponseError<DefaultError> for error::DataExtractorError {}
 

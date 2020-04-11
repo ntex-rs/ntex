@@ -280,7 +280,7 @@ pub async fn from_request<T: FromRequest<DefaultError>>(
 pub async fn respond_to<T: Responder<DefaultError>>(
     slf: T,
     req: &HttpRequest,
-) -> Result<HttpResponse, T::Error> {
+) -> HttpResponse {
     T::respond_to(slf, req).await
 }
 
@@ -959,11 +959,12 @@ impl Drop for TestServer {
 #[cfg(test)]
 mod tests {
     use serde::{Deserialize, Serialize};
+    use std::convert::Infallible;
 
     use super::*;
     use crate::http::header;
     use crate::http::HttpMessage;
-    use crate::web::{self, App, Error, HttpResponse};
+    use crate::web::{self, App, HttpResponse};
 
     #[ntex_rt::test]
     async fn test_basics() {
@@ -1124,7 +1125,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_async_with_block() {
-        async fn async_with_block() -> Result<HttpResponse, Error> {
+        async fn async_with_block() -> Result<HttpResponse, Infallible> {
             let res = web::block(move || Some(4usize).ok_or("wrong")).await;
 
             match res {
@@ -1136,10 +1137,7 @@ mod tests {
         }
 
         let app = init_service(
-            App::new().service(
-                web::resource("/index.html")
-                    .to(crate::web::dev::__assert_handler(async_with_block)),
-            ),
+            App::new().service(web::resource("/index.html").to(async_with_block)),
         )
         .await;
 
