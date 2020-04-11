@@ -95,7 +95,17 @@ impl ResponseBody<Body> {
     }
 }
 
+impl<B> From<Body> for ResponseBody<B> {
+    fn from(b: Body) -> Self {
+        ResponseBody::Other(b)
+    }
+}
+
 impl<B> ResponseBody<B> {
+    pub fn new(body: B) -> Self {
+        ResponseBody::Body(body)
+    }
+
     pub fn take_body(&mut self) -> ResponseBody<B> {
         std::mem::replace(self, ResponseBody::Other(Body::None))
     }
