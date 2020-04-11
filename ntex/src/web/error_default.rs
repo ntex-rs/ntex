@@ -6,6 +6,7 @@ use serde::de::value::Error as DeError;
 use serde_json::error::Error as JsonError;
 use serde_urlencoded::ser::Error as FormError;
 
+use crate::http;
 use crate::http::StatusCode;
 use crate::util::timeout::TimeoutError;
 
@@ -179,5 +180,46 @@ impl WebResponseError<DefaultError> for error::QueryPayloadError {
 impl WebResponseError<DefaultError> for error::PayloadError {
     fn status_code(&self) -> StatusCode {
         StatusCode::BAD_REQUEST
+    }
+}
+
+/// `PayloadError` returns two possible results:
+///
+/// - `Overflow` returns `PayloadTooLarge`
+/// - Other errors returns `BadRequest`
+impl WebResponseError<DefaultError> for http::error::PayloadError {
+    fn status_code(&self) -> StatusCode {
+        match *self {
+            http::error::PayloadError::Overflow => StatusCode::PAYLOAD_TOO_LARGE,
+            _ => StatusCode::BAD_REQUEST,
+        }
+    }
+}
+
+#[cfg(feature = "cookie")]
+/// Return `BadRequest` for `cookie::ParseError`
+impl WebResponseError<DefaultError> for coo_kie::ParseError {
+    fn status_code(&self) -> StatusCode {
+        StatusCode::BAD_REQUEST
+    }
+}
+
+/// Return `BadRequest` for `ContentTypeError`
+impl WebResponseError<DefaultError> for http::error::ContentTypeError {
+    fn status_code(&self) -> StatusCode {
+        StatusCode::BAD_REQUEST
+    }
+}
+
+/// Convert `SendRequestError` to a server `Response`
+impl WebResponseError<DefaultError> for http::client::error::SendRequestError {
+    fn status_code(&self) -> StatusCode {
+        match *self {
+            http::client::error::SendRequestError::Connect(
+                http::client::error::ConnectError::Timeout,
+            ) => StatusCode::GATEWAY_TIMEOUT,
+            http::client::error::SendRequestError::Connect(_) => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        }
     }
 }

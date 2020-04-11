@@ -968,7 +968,7 @@ mod tests {
     use super::*;
     use crate::http::header;
     use crate::http::HttpMessage;
-    use crate::web::{self, App, Data, Error, HttpResponse};
+    use crate::web::{self, App, Error, HttpResponse};
 
     #[ntex_rt::test]
     async fn test_basics() {
@@ -976,7 +976,7 @@ mod tests {
             .version(Version::HTTP_2)
             .header(header::DATE, "some date")
             .param("test", "123")
-            .data(Data::new(20u64))
+            .data(web::types::Data::new(20u64))
             .peer_addr("127.0.0.1:8081".parse().unwrap())
             .to_http_request();
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
@@ -987,7 +987,7 @@ mod tests {
         );
         assert_eq!(&req.match_info()["test"], "123");
         assert_eq!(req.version(), Version::HTTP_2);
-        let data = req.app_data::<Data<u64>>().unwrap();
+        let data = req.app_data::<web::types::Data<u64>>().unwrap();
         assert_eq!(*data.get_ref(), 20);
 
         // let req = TestRequest::with_uri("/test").to_http_
@@ -1155,7 +1155,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_server_data() {
-        async fn handler(data: web::Data<usize>) -> crate::http::ResponseBuilder {
+        async fn handler(data: web::types::Data<usize>) -> crate::http::ResponseBuilder {
             assert_eq!(**data, 10);
             HttpResponse::Ok()
         }

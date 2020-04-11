@@ -14,7 +14,6 @@ use crate::service::{
 };
 
 use super::config::ServiceConfig;
-use super::data::Data;
 use super::dev::{WebServiceConfig, WebServiceFactory};
 use super::error::ErrorRenderer;
 use super::guard::Guard;
@@ -24,6 +23,7 @@ use super::response::WebResponse;
 use super::rmap::ResourceMap;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper};
+use super::types::Data;
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
@@ -137,7 +137,7 @@ where
     ///     counter: Cell<usize>,
     /// }
     ///
-    /// async fn index(data: web::Data<MyData>) -> HttpResponse {
+    /// async fn index(data: web::types::Data<MyData>) -> HttpResponse {
     ///     data.counter.set(data.counter.get() + 1);
     ///     HttpResponse::Ok().into()
     /// }
@@ -1113,7 +1113,7 @@ mod tests {
         let srv = init_service(App::new().data(1usize).service(
             web::scope("app").data(10usize).route(
                 "/t",
-                web::get().to(|data: web::Data<usize>| {
+                web::get().to(|data: web::types::Data<usize>| {
                     assert_eq!(**data, 10);
                     let _ = data.clone();
                     ready(HttpResponse::Ok())
@@ -1129,16 +1129,20 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_override_app_data() {
-        let srv = init_service(App::new().app_data(web::Data::new(1usize)).service(
-            web::scope("app").app_data(web::Data::new(10usize)).route(
-                "/t",
-                web::get().to(|data: web::Data<usize>| {
-                    assert_eq!(**data, 10);
-                    let _ = data.clone();
-                    ready(HttpResponse::Ok())
-                }),
+        let srv = init_service(
+            App::new().app_data(web::types::Data::new(1usize)).service(
+                web::scope("app")
+                    .app_data(web::types::Data::new(10usize))
+                    .route(
+                        "/t",
+                        web::get().to(|data: web::types::Data<usize>| {
+                            assert_eq!(**data, 10);
+                            let _ = data.clone();
+                            ready(HttpResponse::Ok())
+                        }),
+                    ),
             ),
-        ))
+        )
         .await;
 
         let req = TestRequest::with_uri("/app/t").to_request();

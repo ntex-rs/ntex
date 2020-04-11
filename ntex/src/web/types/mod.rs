@@ -1,11 +1,13 @@
 //! Extractor types
 
-pub(crate) mod form;
-pub(crate) mod json;
+pub(in crate::web) mod data;
+pub(in crate::web) mod form;
+pub(in crate::web) mod json;
 mod path;
-pub(crate) mod payload;
+pub(in crate::web) mod payload;
 mod query;
 
+pub use self::data::Data;
 pub use self::form::{Form, FormConfig};
 pub use self::json::{Json, JsonConfig};
 pub use self::path::Path;

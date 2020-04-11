@@ -13,7 +13,6 @@ use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::{fn_service, Service, ServiceFactory};
 
 use super::config::AppConfig;
-use super::data::DataFactory;
 use super::error::ErrorRenderer;
 use super::guard::Guard;
 use super::httprequest::{HttpRequest, HttpRequestPool};
@@ -21,6 +20,7 @@ use super::request::WebRequest;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, WebServiceConfig};
+use super::types::data::DataFactory;
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =

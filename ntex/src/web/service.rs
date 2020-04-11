@@ -5,13 +5,13 @@ use crate::router::{IntoPattern, ResourceDef};
 use crate::service::{boxed, IntoServiceFactory, ServiceFactory};
 
 use super::config::AppConfig;
-use super::data::DataFactory;
 use super::dev::insert_slesh;
 use super::error::ErrorRenderer;
 use super::guard::Guard;
 use super::request::WebRequest;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
+use super::types::data::DataFactory;
 
 pub trait WebServiceFactory<Err: ErrorRenderer> {
     fn register(self, config: &mut WebServiceConfig<Err>);

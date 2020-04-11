@@ -14,7 +14,6 @@ use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
 };
 
-use super::data::Data;
 use super::dev::{insert_slesh, WebServiceConfig, WebServiceFactory};
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
@@ -24,6 +23,7 @@ use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
 use super::route::{Route, RouteService};
+use super::types::Data;
 
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
@@ -742,16 +742,16 @@ mod tests {
             App::new()
                 .data(1.0f64)
                 .data(1usize)
-                .app_data(web::Data::new('-'))
+                .app_data(web::types::Data::new('-'))
                 .service(
                     web::resource("/test")
                         .data(10usize)
-                        .app_data(web::Data::new('*'))
+                        .app_data(web::types::Data::new('*'))
                         .guard(guard::Get())
                         .to(
-                            |data1: web::Data<usize>,
-                             data2: web::Data<char>,
-                             data3: web::Data<f64>| {
+                            |data1: web::types::Data<usize>,
+                             data2: web::types::Data<char>,
+                             data3: web::types::Data<f64>| {
                                 assert_eq!(**data1, 10);
                                 assert_eq!(**data2, '*');
                                 assert_eq!(**data3, 1.0);

@@ -4,10 +4,9 @@ use std::sync::Arc;
 use futures::future::{err, ok, Ready};
 
 use crate::http::{Extensions, Payload};
-
-use super::error::{DataExtractorError, ErrorRenderer};
-use super::extract::FromRequest;
-use super::httprequest::HttpRequest;
+use crate::web::error::{DataExtractorError, ErrorRenderer};
+use crate::web::extract::FromRequest;
+use crate::web::httprequest::HttpRequest;
 
 /// Application data factory
 pub(crate) trait DataFactory {
@@ -31,7 +30,7 @@ pub(crate) trait DataFactory {
 /// threads, a shareable object should be used, e.g. `Send + Sync`. Application
 /// data does not need to be `Send` or `Sync`. Internally `Data` type
 /// uses `Arc`. if your data implements `Send` + `Sync` traits you can
-/// use `web::Data::new()` and avoid double `Arc`.
+/// use `web::types::Data::new()` and avoid double `Arc`.
 ///
 /// If route data is not set for a handler, using `Data<T>` extractor would
 /// cause *Internal Server Error* response.
@@ -45,14 +44,14 @@ pub(crate) trait DataFactory {
 /// }
 ///
 /// /// Use `Data<T>` extractor to access data in handler.
-/// async fn index(data: web::Data<Mutex<MyData>>) -> HttpResponse {
+/// async fn index(data: web::types::Data<Mutex<MyData>>) -> HttpResponse {
 ///     let mut data = data.lock().unwrap();
 ///     data.counter += 1;
 ///     HttpResponse::Ok().into()
 /// }
 ///
 /// fn main() {
-///     let data = web::Data::new(Mutex::new(MyData{ counter: 0 }));
+///     let data = web::types::Data::new(Mutex::new(MyData{ counter: 0 }));
 ///
 ///     let app = App::new()
 ///         // Store `MyData` in application storage.
@@ -69,7 +68,7 @@ impl<T> Data<T> {
     /// Create new `Data` instance.
     ///
     /// Internally `Data` type uses `Arc`. if your data implements
-    /// `Send` + `Sync` traits you can use `web::Data::new()` and
+    /// `Send` + `Sync` traits you can use `web::types::Data::new()` and
     /// avoid double `Arc`.
     pub fn new(state: T) -> Data<T> {
         Data(Arc::new(state))
@@ -143,7 +142,7 @@ mod tests {
     #[ntex_rt::test]
     async fn test_data_extractor() {
         let srv = init_service(App::new().data("TEST".to_string()).service(
-            web::resource("/").to(|data: web::Data<String>| async move {
+            web::resource("/").to(|data: web::types::Data<String>| async move {
                 assert_eq!(data.to_lowercase(), "test");
                 HttpResponse::Ok()
             }),
@@ -154,9 +153,12 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let srv = init_service(App::new().data(10u32).service(
-            web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
-        ))
+        let srv = init_service(
+            App::new().data(10u32).service(
+                web::resource("/")
+                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+            ),
+        )
         .await;
         let req = TestRequest::default().to_request();
         let res = srv.call(req).await.unwrap();
@@ -165,18 +167,24 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_app_data_extractor() {
-        let srv = init_service(App::new().app_data(Data::new(10usize)).service(
-            web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
-        ))
+        let srv = init_service(
+            App::new().app_data(Data::new(10usize)).service(
+                web::resource("/")
+                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+            ),
+        )
         .await;
 
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let srv = init_service(App::new().app_data(Data::new(10u32)).service(
-            web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
-        ))
+        let srv = init_service(
+            App::new().app_data(Data::new(10u32)).service(
+                web::resource("/")
+                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+            ),
+        )
         .await;
         let req = TestRequest::default().to_request();
         let res = srv.call(req).await.unwrap();
@@ -187,7 +195,7 @@ mod tests {
     async fn test_route_data_extractor() {
         let srv =
             init_service(App::new().service(web::resource("/").data(10usize).route(
-                web::get().to(|data: web::Data<usize>| async move {
+                web::get().to(|data: web::types::Data<usize>| async move {
                     let _ = data.clone();
                     HttpResponse::Ok()
                 }),
@@ -201,7 +209,7 @@ mod tests {
         // different type
         let srv =
             init_service(App::new().service(web::resource("/").data(10u32).route(
-                web::get().to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
+                web::get().to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
             )))
             .await;
         let req = TestRequest::default().to_request();
@@ -213,7 +221,7 @@ mod tests {
     async fn test_override_data() {
         let srv = init_service(App::new().data(1usize).service(
             web::resource("/").data(10usize).route(web::get().to(
-                |data: web::Data<usize>| async move {
+                |data: web::types::Data<usize>| async move {
                     assert_eq!(**data, 10);
                     let _ = data.clone();
                     HttpResponse::Ok()

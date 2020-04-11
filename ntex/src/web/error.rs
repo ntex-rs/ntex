@@ -6,6 +6,10 @@ use std::marker::PhantomData;
 
 use bytes::BytesMut;
 use derive_more::{Display, From};
+
+pub use actix_threadpool::BlockingError;
+pub use futures::channel::oneshot::Canceled;
+pub use http::Error as HttpError;
 pub use serde_json::error::Error as JsonError;
 pub use url::ParseError as UrlParseError;
 
@@ -20,7 +24,8 @@ pub trait ErrorRenderer: Sized + 'static {
     type Container: error::ResponseError + Sized;
 }
 
-pub trait WebResponseError<Err>: fmt::Debug + fmt::Display + 'static
+pub trait WebResponseError<Err = DefaultError>:
+    fmt::Debug + fmt::Display + 'static
 where
     Err: ErrorRenderer,
 {

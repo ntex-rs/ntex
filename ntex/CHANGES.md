@@ -1,6 +1,14 @@
 # Changes
 
+## [0.1.8] - 2020-04-xx
+
 * ntex::web: Fix definition of `ok_service` and `default_service`.
+
+* ntex::web: Add default error impl for `http::PayloadError`
+
+* ntex::web: Add default error impl for `http::client::SendRequestError`
+
+* ntex::web: Move `web::Data` to `web::types::Data`
 
 ## [0.1.7] - 2020-04-10
 

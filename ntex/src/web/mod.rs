@@ -65,7 +65,6 @@
 mod app;
 mod app_service;
 mod config;
-mod data;
 pub mod error;
 mod error_default;
 mod extract;
@@ -103,7 +102,6 @@ pub use crate::http::ResponseBuilder as HttpResponseBuilder;
 
 pub use self::app::App;
 pub use self::config::ServiceConfig;
-pub use self::data::Data;
 pub use self::error::{DefaultError, Error, ErrorRenderer, WebResponseError};
 pub use self::extract::FromRequest;
 pub use self::handler::Handler;

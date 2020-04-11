@@ -3,10 +3,10 @@ use std::rc::Rc;
 
 use crate::router::ResourceDef;
 
-use super::data::{Data, DataFactory};
 use super::resource::Resource;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
+use super::types::data::{Data, DataFactory};
 use super::{DefaultError, ErrorRenderer};
 
 /// Application configuration
@@ -142,9 +142,12 @@ mod tests {
             cfg.data(10usize);
         };
 
-        let srv = init_service(App::new().configure(cfg).service(
-            web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
-        ))
+        let srv = init_service(
+            App::new().configure(cfg).service(
+                web::resource("/")
+                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+            ),
+        )
         .await;
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();

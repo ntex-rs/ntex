@@ -10,12 +10,12 @@ use crate::http::{
 use crate::router::{Path, Resource};
 
 use super::config::AppConfig;
-use super::data::Data;
 use super::error::ErrorRenderer;
 use super::httprequest::HttpRequest;
 use super::info::ConnectionInfo;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
+use super::types::Data;
 
 /// An service http request
 ///

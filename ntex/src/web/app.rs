@@ -16,12 +16,12 @@ use crate::service::{
 
 use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
 use super::config::ServiceConfig;
-use super::data::{Data, DataFactory};
 use super::request::WebRequest;
 use super::resource::Resource;
 use super::response::WebResponse;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
+use super::types::data::{Data, DataFactory};
 use super::{DefaultError, ErrorRenderer};
 
 type HttpNewService<Err: ErrorRenderer> =
@@ -116,7 +116,7 @@ where
     ///     counter: Cell<usize>,
     /// }
     ///
-    /// async fn index(data: web::Data<MyData>) -> HttpResponse {
+    /// async fn index(data: web::types::Data<MyData>) -> HttpResponse {
     ///     data.counter.set(data.counter.get() + 1);
     ///     HttpResponse::Ok().into()
     /// }
@@ -577,7 +577,7 @@ mod tests {
         let srv = init_service(
             App::new().data_factory(|| ok::<_, ()>(10usize)).service(
                 web::resource("/")
-                    .to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
+                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
             ),
         )
         .await;
@@ -585,9 +585,12 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let srv = init_service(App::new().data_factory(|| ok::<_, ()>(10u32)).service(
-            web::resource("/").to(|_: web::Data<usize>| async { HttpResponse::Ok() }),
-        ))
+        let srv = init_service(
+            App::new().data_factory(|| ok::<_, ()>(10u32)).service(
+                web::resource("/")
+                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+            ),
+        )
         .await;
         let req = TestRequest::default().to_request();
         let res = srv.call(req).await.unwrap();
