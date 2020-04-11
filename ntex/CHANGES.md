@@ -1,5 +1,7 @@
 # Changes
 
+* ntex::web: Fix definition of `ok_service` and `default_service`.
+
 ## [0.1.7] - 2020-04-10
 
 * ntex::http: Fix handling of large http messages

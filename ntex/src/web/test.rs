@@ -41,7 +41,7 @@ use crate::web::{FromRequest, HttpResponse, Responder};
 pub fn ok_service<Err: ErrorRenderer>() -> impl Service<
     Request = WebRequest<Err>,
     Response = WebResponse<Body>,
-    Error = Err::Container,
+    Error = std::convert::Infallible,
 > {
     default_service::<Err>(StatusCode::OK)
 }
@@ -52,7 +52,7 @@ pub fn default_service<Err: ErrorRenderer>(
 ) -> impl Service<
     Request = WebRequest<Err>,
     Response = WebResponse<Body>,
-    Error = Err::Container,
+    Error = std::convert::Infallible,
 > {
     (move |req: WebRequest<Err>| {
         ok(req.into_response(HttpResponse::build(status_code).finish()))

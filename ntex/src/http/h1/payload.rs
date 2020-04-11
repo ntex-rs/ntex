@@ -42,7 +42,7 @@ impl Payload {
     /// * `PayloadSender` - *Sender* side of the stream
     ///
     /// * `Payload` - *Receiver* side of the stream
-    pub(super) fn create(eof: bool) -> (PayloadSender, Payload) {
+    pub fn create(eof: bool) -> (PayloadSender, Payload) {
         let shared = Rc::new(RefCell::new(Inner::new(eof)));
 
         (
@@ -88,24 +88,24 @@ impl Stream for Payload {
 }
 
 /// Sender part of the payload stream
-pub(super) struct PayloadSender {
+pub struct PayloadSender {
     inner: Weak<RefCell<Inner>>,
 }
 
 impl PayloadSender {
-    pub(super) fn set_error(&mut self, err: PayloadError) {
+    pub fn set_error(&mut self, err: PayloadError) {
         if let Some(shared) = self.inner.upgrade() {
             shared.borrow_mut().set_error(err)
         }
     }
 
-    pub(super) fn feed_eof(&mut self) {
+    pub fn feed_eof(&mut self) {
         if let Some(shared) = self.inner.upgrade() {
             shared.borrow_mut().feed_eof()
         }
     }
 
-    pub(super) fn feed_data(&mut self, data: Bytes) {
+    pub fn feed_data(&mut self, data: Bytes) {
         if let Some(shared) = self.inner.upgrade() {
             shared.borrow_mut().feed_data(data)
         }

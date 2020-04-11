@@ -39,7 +39,7 @@ cookie = ["coo-kie", "coo-kie/percent-encode"]
 ntex-codec = "0.1.1"
 ntex-rt = "0.1"
 ntex-rt-macros = "0.1"
-ntex-router = "0.3.2"
+ntex-router = "0.3.3"
 ntex-service = "0.1"
 ntex-macros = "0.1"
 
