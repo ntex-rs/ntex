@@ -186,7 +186,7 @@ pub trait ServiceFactory {
     /// Errors produced while building a service.
     type InitError;
 
-    /// The future of the `Service` instance.
+    /// The future of the `ServiceFactory` instance.
     type Future: Future<Output = Result<Self::Service, Self::InitError>>;
 
     /// Create and return a new service value asynchronously.

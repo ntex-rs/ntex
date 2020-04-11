@@ -77,9 +77,8 @@ use crate::web::HttpResponse;
 ///
 /// `%{FOO}e`  os.environ['FOO']
 ///
-pub struct Logger<Err> {
+pub struct Logger {
     inner: Rc<Inner>,
-    _t: PhantomData<Err>,
 }
 
 struct Inner {
@@ -87,15 +86,14 @@ struct Inner {
     exclude: HashSet<String>,
 }
 
-impl<Err> Logger<Err> {
+impl Logger {
     /// Create `Logger` middleware with the specified `format`.
-    pub fn new(format: &str) -> Logger<Err> {
+    pub fn new(format: &str) -> Logger {
         Logger {
             inner: Rc::new(Inner {
                 format: Format::new(format),
                 exclude: HashSet::new(),
             }),
-            _t: PhantomData,
         }
     }
 
@@ -109,7 +107,7 @@ impl<Err> Logger<Err> {
     }
 }
 
-impl<Err> Default for Logger<Err> {
+impl Default for Logger {
     /// Create `Logger` middleware with format:
     ///
     /// ```ignore
@@ -121,12 +119,11 @@ impl<Err> Default for Logger<Err> {
                 format: Format::default(),
                 exclude: HashSet::new(),
             }),
-            _t: PhantomData,
         }
     }
 }
 
-impl<S, Err> Transform<S> for Logger<Err>
+impl<S, Err> Transform<S> for Logger
 where
     S: Service<Request = WebRequest<Err>, Response = WebResponse>,
 {

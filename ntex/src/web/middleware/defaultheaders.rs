@@ -30,9 +30,8 @@ use crate::web::dev::{WebRequest, WebResponse};
 /// }
 /// ```
 #[derive(Clone)]
-pub struct DefaultHeaders<E> {
+pub struct DefaultHeaders {
     inner: Rc<Inner>,
-    _t: PhantomData<E>,
 }
 
 struct Inner {
@@ -40,21 +39,20 @@ struct Inner {
     headers: HeaderMap,
 }
 
-impl<E> Default for DefaultHeaders<E> {
+impl Default for DefaultHeaders {
     fn default() -> Self {
         DefaultHeaders {
             inner: Rc::new(Inner {
                 ct: false,
                 headers: HeaderMap::new(),
             }),
-            _t: PhantomData,
         }
     }
 }
 
-impl<E> DefaultHeaders<E> {
+impl DefaultHeaders {
     /// Construct `DefaultHeaders` middleware.
-    pub fn new() -> DefaultHeaders<E> {
+    pub fn new() -> DefaultHeaders {
         DefaultHeaders::default()
     }
 
@@ -92,7 +90,7 @@ impl<E> DefaultHeaders<E> {
     }
 }
 
-impl<S, E> Transform<S> for DefaultHeaders<E>
+impl<S, E> Transform<S> for DefaultHeaders
 where
     S: Service<Request = WebRequest<E>, Response = WebResponse>,
     S::Future: 'static,
