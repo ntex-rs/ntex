@@ -5,7 +5,6 @@ use std::env;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::future::Future;
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
@@ -131,33 +130,31 @@ where
     type Response = WebResponse;
     type Error = S::Error;
     type InitError = ();
-    type Transform = LoggerMiddleware<S, Err>;
+    type Transform = LoggerMiddleware<S>;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
         ok(LoggerMiddleware {
             service,
             inner: self.inner.clone(),
-            _t: PhantomData,
         })
     }
 }
 
 /// Logger middleware
-pub struct LoggerMiddleware<S, Err> {
+pub struct LoggerMiddleware<S> {
     inner: Rc<Inner>,
     service: S,
-    _t: PhantomData<Err>,
 }
 
-impl<S, E> Service for LoggerMiddleware<S, E>
+impl<S, E> Service for LoggerMiddleware<S>
 where
     S: Service<Request = WebRequest<E>, Response = WebResponse>,
 {
     type Request = WebRequest<E>;
     type Response = WebResponse;
     type Error = S::Error;
-    type Future = LoggerResponse<S, E>;
+    type Future = LoggerResponse<S>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -176,7 +173,6 @@ where
                 fut: self.service.call(req),
                 format: None,
                 time: OffsetDateTime::now(),
-                _t: PhantomData,
             }
         } else {
             let now = OffsetDateTime::now();
@@ -189,7 +185,6 @@ where
                 fut: self.service.call(req),
                 format: Some(format),
                 time: now,
-                _t: PhantomData,
             }
         }
     }
@@ -197,7 +192,7 @@ where
 
 #[doc(hidden)]
 #[pin_project::pin_project]
-pub struct LoggerResponse<S, E>
+pub struct LoggerResponse<S>
 where
     S: Service,
 {
@@ -205,10 +200,9 @@ where
     fut: S::Future,
     time: OffsetDateTime,
     format: Option<Format>,
-    _t: PhantomData<(E,)>,
 }
 
-impl<S, E> Future for LoggerResponse<S, E>
+impl<S, E> Future for LoggerResponse<S>
 where
     S: Service<Request = WebRequest<E>, Response = WebResponse>,
 {
