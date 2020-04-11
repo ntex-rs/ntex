@@ -34,12 +34,12 @@ type FnDataFactory =
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes data factories.
-pub struct AppFactory<T, B, Err: ErrorRenderer>
+pub struct AppFactory<T, Err: ErrorRenderer>
 where
     T: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse<B>,
+        Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     >,
@@ -56,12 +56,12 @@ where
     pub(super) case_insensitive: bool,
 }
 
-impl<T, B, Err> ServiceFactory for AppFactory<T, B, Err>
+impl<T, Err> ServiceFactory for AppFactory<T, Err>
 where
     T: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse<B>,
+        Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     >,
@@ -69,11 +69,11 @@ where
 {
     type Config = AppConfig;
     type Request = Request;
-    type Response = WebResponse<B>;
+    type Response = WebResponse;
     type Error = T::Error;
     type InitError = T::InitError;
-    type Service = AppFactoryService<T::Service, B, Err>;
-    type Future = AppFactoryResult<T, B, Err>;
+    type Service = AppFactoryService<T::Service, Err>;
+    type Future = AppFactoryResult<T, Err>;
 
     fn new_service(&self, config: AppConfig) -> Self::Future {
         // update resource default service
@@ -141,7 +141,7 @@ where
 }
 
 #[pin_project::pin_project]
-pub struct AppFactoryResult<T, B, Err>
+pub struct AppFactoryResult<T, Err>
 where
     T: ServiceFactory,
 {
@@ -155,21 +155,21 @@ where
     data_factories_fut: Vec<LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>,
     case_insensitive: bool,
     extensions: Option<Extensions>,
-    _t: PhantomData<(B, Err)>,
+    _t: PhantomData<Err>,
 }
 
-impl<T, B, Err> Future for AppFactoryResult<T, B, Err>
+impl<T, Err> Future for AppFactoryResult<T, Err>
 where
     T: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse<B>,
+        Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     >,
     Err: ErrorRenderer,
 {
-    type Output = Result<AppFactoryService<T::Service, B, Err>, ()>;
+    type Output = Result<AppFactoryService<T::Service, Err>, ()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -218,11 +218,11 @@ where
 }
 
 /// Service to convert `Request` to a `WebRequest<Err>`
-pub struct AppFactoryService<T, B, Err>
+pub struct AppFactoryService<T, Err>
 where
     T: Service<
         Request = WebRequest<Err>,
-        Response = WebResponse<B>,
+        Response = WebResponse,
         Error = Err::Container,
     >,
     Err: ErrorRenderer,
@@ -235,17 +235,17 @@ where
     _t: PhantomData<Err>,
 }
 
-impl<T, B, Err> Service for AppFactoryService<T, B, Err>
+impl<T, Err> Service for AppFactoryService<T, Err>
 where
     T: Service<
         Request = WebRequest<Err>,
-        Response = WebResponse<B>,
+        Response = WebResponse,
         Error = Err::Container,
     >,
     Err: ErrorRenderer,
 {
     type Request = Request;
-    type Response = WebResponse<B>;
+    type Response = WebResponse;
     type Error = T::Error;
     type Future = T::Future;
 
@@ -284,11 +284,11 @@ where
     }
 }
 
-impl<T, B, Err> Drop for AppFactoryService<T, B, Err>
+impl<T, Err> Drop for AppFactoryService<T, Err>
 where
     T: Service<
         Request = WebRequest<Err>,
-        Response = WebResponse<B>,
+        Response = WebResponse,
         Error = Err::Container,
     >,
     Err: ErrorRenderer,

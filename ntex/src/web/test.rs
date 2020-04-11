@@ -16,7 +16,7 @@ use serde::Serialize;
 use coo_kie::Cookie;
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
-use crate::http::body::{Body, MessageBody};
+use crate::http::body::MessageBody;
 use crate::http::client::error::WsClientError;
 use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::error::{HttpError, PayloadError, ResponseError};
@@ -40,7 +40,7 @@ use crate::web::{FromRequest, HttpResponse, Responder};
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<Err: ErrorRenderer>() -> impl Service<
     Request = WebRequest<Err>,
-    Response = WebResponse<Body>,
+    Response = WebResponse,
     Error = std::convert::Infallible,
 > {
     default_service::<Err>(StatusCode::OK)
@@ -51,7 +51,7 @@ pub fn default_service<Err: ErrorRenderer>(
     status_code: StatusCode,
 ) -> impl Service<
     Request = WebRequest<Err>,
-    Response = WebResponse<Body>,
+    Response = WebResponse,
     Error = std::convert::Infallible,
 > {
     (move |req: WebRequest<Err>| {
@@ -83,15 +83,15 @@ pub fn default_service<Err: ErrorRenderer>(
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn init_service<R, S, B, E>(
+pub async fn init_service<R, S, E>(
     app: R,
-) -> impl Service<Request = Request, Response = WebResponse<B>, Error = E>
+) -> impl Service<Request = Request, Response = WebResponse, Error = E>
 where
     R: IntoServiceFactory<S>,
     S: ServiceFactory<
         Config = AppConfig,
         Request = Request,
-        Response = WebResponse<B>,
+        Response = WebResponse,
         Error = E,
     >,
     S::InitError: std::fmt::Debug,
@@ -123,9 +123,9 @@ where
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn call_service<S, R, B, E>(app: &S, req: R) -> S::Response
+pub async fn call_service<S, R, E>(app: &S, req: R) -> S::Response
 where
-    S: Service<Request = R, Response = WebResponse<B>, Error = E>,
+    S: Service<Request = R, Response = WebResponse, Error = E>,
     E: std::fmt::Debug,
 {
     app.call(req).await.unwrap()
@@ -157,10 +157,9 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_response<S, B>(app: &S, req: Request) -> Bytes
+pub async fn read_response<S>(app: &S, req: Request) -> Bytes
 where
-    S: Service<Request = Request, Response = WebResponse<B>>,
-    B: MessageBody,
+    S: Service<Request = Request, Response = WebResponse>,
 {
     let mut resp = app
         .call(req)
@@ -202,10 +201,7 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_body<B>(mut res: WebResponse<B>) -> Bytes
-where
-    B: MessageBody,
-{
+pub async fn read_body(mut res: WebResponse) -> Bytes {
     let mut body = res.take_body();
     let mut bytes = BytesMut::new();
     while let Some(item) = body.next().await {
@@ -261,13 +257,12 @@ where
 ///     let result: Person = test::read_response_json(&mut app, req).await;
 /// }
 /// ```
-pub async fn read_response_json<S, B, T>(app: &S, req: Request) -> T
+pub async fn read_response_json<S, T>(app: &S, req: Request) -> T
 where
-    S: Service<Request = Request, Response = WebResponse<B>>,
-    B: MessageBody,
+    S: Service<Request = Request, Response = WebResponse>,
     T: DeserializeOwned,
 {
-    let body = read_response::<S, B>(app, req).await;
+    let body = read_response::<S>(app, req).await;
 
     serde_json::from_slice(&body)
         .unwrap_or_else(|_| panic!("read_response_json failed during deserialization"))
@@ -501,7 +496,7 @@ impl TestRequest {
     }
 
     /// Complete request creation and generate `WebResponse` instance
-    pub fn to_srv_response<B>(self, res: HttpResponse<B>) -> WebResponse<B> {
+    pub fn to_srv_response(self, res: HttpResponse) -> WebResponse {
         self.to_srv_request().into_response(res)
     }
 

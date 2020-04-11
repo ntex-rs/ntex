@@ -17,6 +17,10 @@ use super::HttpResponse;
 #[derive(Clone, Copy, Default)]
 pub struct DefaultError;
 
+impl ErrorRenderer for DefaultError {
+    type Container = Error;
+}
+
 /// Generic error container for errors that supports `DefaultError` renderer.
 pub struct Error {
     cause: Box<dyn WebResponseError<DefaultError>>,
@@ -35,10 +39,6 @@ impl Error {
     }
 }
 
-impl ErrorRenderer for DefaultError {
-    type Container = Error;
-}
-
 /// `Error` for any error which implements `WebResponseError<DefaultError>`
 impl<T: WebResponseError<DefaultError>> From<T> for Error {
     fn from(err: T) -> Self {
@@ -47,6 +47,8 @@ impl<T: WebResponseError<DefaultError>> From<T> for Error {
         }
     }
 }
+
+impl std::error::Error for Error {}
 
 impl crate::http::error::ResponseError for Error {
     fn error_response(&self) -> HttpResponse {

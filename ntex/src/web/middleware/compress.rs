@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 use futures::future::{ok, Ready};
 use pin_project::pin_project;
 
-use crate::http::body::MessageBody;
+use crate::http::body::{Body, ResponseBody};
 use crate::http::encoding::Encoder;
 use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
 use crate::service::{Service, Transform};
@@ -57,14 +57,13 @@ impl<Err> Default for Compress<Err> {
     }
 }
 
-impl<S, B, E> Transform<S> for Compress<E>
+impl<S, E> Transform<S> for Compress<E>
 where
-    B: MessageBody,
-    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
     type Request = WebRequest<E>;
-    type Response = WebResponse<Encoder<B>>;
+    type Response = WebResponse;
     type Error = S::Error;
     type InitError = ();
     type Transform = CompressMiddleware<S, E>;
@@ -85,16 +84,15 @@ pub struct CompressMiddleware<S, E> {
     _t: PhantomData<E>,
 }
 
-impl<S, B, E> Service for CompressMiddleware<S, E>
+impl<S, E> Service for CompressMiddleware<S, E>
 where
-    B: MessageBody,
-    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
     type Request = WebRequest<E>;
-    type Response = WebResponse<Encoder<B>>;
+    type Response = WebResponse;
     type Error = S::Error;
-    type Future = CompressResponse<S, B, E>;
+    type Future = CompressResponse<S, E>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -128,24 +126,22 @@ where
 
 #[doc(hidden)]
 #[pin_project]
-pub struct CompressResponse<S, B, E>
+pub struct CompressResponse<S, E>
 where
     S: Service,
-    B: MessageBody,
 {
     #[pin]
     fut: S::Future,
     encoding: ContentEncoding,
-    _t: PhantomData<(B, E)>,
+    _t: PhantomData<E>,
 }
 
-impl<S, B, E> Future for CompressResponse<S, B, E>
+impl<S, E> Future for CompressResponse<S, E>
 where
-    B: MessageBody,
-    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
-    type Output = Result<WebResponse<Encoder<B>>, S::Error>;
+    type Output = Result<WebResponse, S::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -158,9 +154,11 @@ where
                     *this.encoding
                 };
 
-                Poll::Ready(Ok(
-                    resp.map_body(move |head, body| Encoder::response(enc, head, body))
-                ))
+                Poll::Ready(Ok(resp.map_body(move |head, body| {
+                    ResponseBody::Other(Body::from_message(Encoder::response(
+                        enc, head, body,
+                    )))
+                })))
             }
             Err(e) => Poll::Ready(Err(e)),
         }

@@ -15,7 +15,7 @@ use futures::future::{ok, Ready};
 use regex::Regex;
 use time::OffsetDateTime;
 
-use crate::http::body::{BodySize, MessageBody, ResponseBody};
+use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
 use crate::service::{Service, Transform};
 use crate::web::dev::{WebRequest, WebResponse};
@@ -126,13 +126,12 @@ impl<Err> Default for Logger<Err> {
     }
 }
 
-impl<S, B, Err> Transform<S> for Logger<Err>
+impl<S, Err> Transform<S> for Logger<Err>
 where
-    S: Service<Request = WebRequest<Err>, Response = WebResponse<B>>,
-    B: MessageBody,
+    S: Service<Request = WebRequest<Err>, Response = WebResponse>,
 {
     type Request = WebRequest<Err>;
-    type Response = WebResponse<StreamLog<B>>;
+    type Response = WebResponse;
     type Error = S::Error;
     type InitError = ();
     type Transform = LoggerMiddleware<S, Err>;
@@ -154,15 +153,14 @@ pub struct LoggerMiddleware<S, Err> {
     _t: PhantomData<Err>,
 }
 
-impl<S, B, E> Service for LoggerMiddleware<S, E>
+impl<S, E> Service for LoggerMiddleware<S, E>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
-    B: MessageBody,
+    S: Service<Request = WebRequest<E>, Response = WebResponse>,
 {
     type Request = WebRequest<E>;
-    type Response = WebResponse<StreamLog<B>>;
+    type Response = WebResponse;
     type Error = S::Error;
-    type Future = LoggerResponse<S, B, E>;
+    type Future = LoggerResponse<S, E>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -202,24 +200,22 @@ where
 
 #[doc(hidden)]
 #[pin_project::pin_project]
-pub struct LoggerResponse<S, B, E>
+pub struct LoggerResponse<S, E>
 where
-    B: MessageBody,
     S: Service,
 {
     #[pin]
     fut: S::Future,
     time: OffsetDateTime,
     format: Option<Format>,
-    _t: PhantomData<(B, E)>,
+    _t: PhantomData<(E,)>,
 }
 
-impl<S, B, E> Future for LoggerResponse<S, B, E>
+impl<S, E> Future for LoggerResponse<S, E>
 where
-    B: MessageBody,
-    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse>,
 {
-    type Output = Result<WebResponse<StreamLog<B>>, S::Error>;
+    type Output = Result<WebResponse, S::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -239,24 +235,24 @@ where
         let format = this.format.take();
 
         Poll::Ready(Ok(res.map_body(move |_, body| {
-            ResponseBody::Body(StreamLog {
+            ResponseBody::Other(Body::from_message(StreamLog {
                 body,
                 time,
                 format,
                 size: 0,
-            })
+            }))
         })))
     }
 }
 
-pub struct StreamLog<B> {
-    body: ResponseBody<B>,
+struct StreamLog {
+    body: ResponseBody<Body>,
     format: Option<Format>,
     size: usize,
     time: OffsetDateTime,
 }
 
-impl<B> Drop for StreamLog<B> {
+impl Drop for StreamLog {
     fn drop(&mut self) {
         if let Some(ref format) = self.format {
             let render = |fmt: &mut Formatter<'_>| {
@@ -270,7 +266,7 @@ impl<B> Drop for StreamLog<B> {
     }
 }
 
-impl<B: MessageBody> MessageBody for StreamLog<B> {
+impl MessageBody for StreamLog {
     fn size(&self) -> BodySize {
         self.body.size()
     }

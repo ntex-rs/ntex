@@ -1,12 +1,10 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::future::Future;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use futures::future::{FutureExt, LocalBoxFuture};
 
-use crate::http::body::{Body, MessageBody};
 use crate::http::Extensions;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
@@ -31,7 +29,7 @@ type FnDataFactory =
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
-pub struct App<T, B, Err: ErrorRenderer = DefaultError> {
+pub struct App<T, Err: ErrorRenderer = DefaultError> {
     endpoint: T,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
@@ -42,10 +40,9 @@ pub struct App<T, B, Err: ErrorRenderer = DefaultError> {
     extensions: Extensions,
     error_renderer: Err,
     case_insensitive: bool,
-    _t: PhantomData<B>,
 }
 
-impl App<AppEntry<DefaultError>, Body, DefaultError> {
+impl App<AppEntry<DefaultError>, DefaultError> {
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
         let fref = Rc::new(RefCell::new(None));
@@ -60,12 +57,11 @@ impl App<AppEntry<DefaultError>, Body, DefaultError> {
             extensions: Extensions::new(),
             error_renderer: DefaultError,
             case_insensitive: false,
-            _t: PhantomData,
         }
     }
 }
 
-impl<Err: ErrorRenderer> App<AppEntry<Err>, Body, Err> {
+impl<Err: ErrorRenderer> App<AppEntry<Err>, Err> {
     /// Create application builder with custom error renderer.
     pub fn with(err: Err) -> Self {
         let fref = Rc::new(RefCell::new(None));
@@ -80,18 +76,16 @@ impl<Err: ErrorRenderer> App<AppEntry<Err>, Body, Err> {
             extensions: Extensions::new(),
             error_renderer: err,
             case_insensitive: false,
-            _t: PhantomData,
         }
     }
 }
 
-impl<T, B, Err> App<T, B, Err>
+impl<T, Err> App<T, Err>
 where
-    B: MessageBody,
     T: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse<B>,
+        Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     >,
@@ -372,29 +366,27 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn wrap<M, B1>(
+    pub fn wrap<M>(
         self,
         mw: M,
     ) -> App<
         impl ServiceFactory<
             Config = (),
             Request = WebRequest<Err>,
-            Response = WebResponse<B1>,
+            Response = WebResponse,
             Error = Err::Container,
             InitError = (),
         >,
-        B1,
         Err,
     >
     where
         M: Transform<
             T::Service,
             Request = WebRequest<Err>,
-            Response = WebResponse<B1>,
+            Response = WebResponse,
             Error = Err::Container,
             InitError = (),
         >,
-        B1: MessageBody,
     {
         App {
             endpoint: apply(mw, self.endpoint),
@@ -407,7 +399,6 @@ where
             extensions: self.extensions,
             error_renderer: self.error_renderer,
             case_insensitive: self.case_insensitive,
-            _t: PhantomData,
         }
     }
 
@@ -442,24 +433,22 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn wrap_fn<B1, F, R>(
+    pub fn wrap_fn<F, R>(
         self,
         mw: F,
     ) -> App<
         impl ServiceFactory<
             Config = (),
             Request = WebRequest<Err>,
-            Response = WebResponse<B1>,
+            Response = WebResponse,
             Error = Err::Container,
             InitError = (),
         >,
-        B1,
         Err,
     >
     where
-        B1: MessageBody,
         F: Fn(WebRequest<Err>, &T::Service) -> R + Clone,
-        R: Future<Output = Result<WebResponse<B1>, Err::Container>>,
+        R: Future<Output = Result<WebResponse, Err::Container>>,
     {
         App {
             endpoint: apply_fn_factory(self.endpoint, mw),
@@ -472,7 +461,6 @@ where
             extensions: self.extensions,
             error_renderer: self.error_renderer,
             case_insensitive: self.case_insensitive,
-            _t: PhantomData,
         }
     }
 
@@ -485,19 +473,18 @@ where
     }
 }
 
-impl<T, B, Err> IntoServiceFactory<AppFactory<T, B, Err>> for App<T, B, Err>
+impl<T, Err> IntoServiceFactory<AppFactory<T, Err>> for App<T, Err>
 where
-    B: MessageBody,
     T: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse<B>,
+        Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     >,
     Err: ErrorRenderer,
 {
-    fn into_factory(self) -> AppFactory<T, B, Err> {
+    fn into_factory(self) -> AppFactory<T, Err> {
         AppFactory {
             data: Rc::new(self.data),
             data_factories: Rc::new(self.data_factories),

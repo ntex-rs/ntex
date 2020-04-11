@@ -7,14 +7,14 @@ use super::error::ErrorRenderer;
 use super::httprequest::HttpRequest;
 
 /// An service http response
-pub struct WebResponse<B = Body> {
+pub struct WebResponse {
     request: HttpRequest,
-    response: Response<B>,
+    response: Response<Body>,
 }
 
-impl<B> WebResponse<B> {
+impl WebResponse {
     /// Create web response instance
-    pub fn new(request: HttpRequest, response: Response<B>) -> Self {
+    pub fn new(request: HttpRequest, response: Response<Body>) -> Self {
         WebResponse { request, response }
     }
 
@@ -51,7 +51,7 @@ impl<B> WebResponse<B> {
 
     /// Create web response
     #[inline]
-    pub fn into_response<B1>(self, response: Response<B1>) -> WebResponse<B1> {
+    pub fn into_response(self, response: Response) -> WebResponse {
         WebResponse::new(self.request, response)
     }
 
@@ -63,13 +63,13 @@ impl<B> WebResponse<B> {
 
     /// Get reference to response
     #[inline]
-    pub fn response(&self) -> &Response<B> {
+    pub fn response(&self) -> &Response<Body> {
         &self.response
     }
 
     /// Get mutable reference to response
     #[inline]
-    pub fn response_mut(&mut self) -> &mut Response<B> {
+    pub fn response_mut(&mut self) -> &mut Response<Body> {
         &mut self.response
     }
 
@@ -108,16 +108,16 @@ impl<B> WebResponse<B> {
     }
 
     /// Extract response body
-    pub fn take_body(&mut self) -> ResponseBody<B> {
+    pub fn take_body(&mut self) -> ResponseBody<Body> {
         self.response.take_body()
     }
 }
 
-impl<B> WebResponse<B> {
+impl WebResponse {
     /// Set a new body
-    pub fn map_body<F, B2>(self, f: F) -> WebResponse<B2>
+    pub fn map_body<F>(self, f: F) -> WebResponse
     where
-        F: FnOnce(&mut ResponseHead, ResponseBody<B>) -> ResponseBody<B2>,
+        F: FnOnce(&mut ResponseHead, ResponseBody<Body>) -> ResponseBody<Body>,
     {
         let response = self.response.map_body(f);
 
@@ -128,13 +128,13 @@ impl<B> WebResponse<B> {
     }
 }
 
-impl<B> Into<Response<B>> for WebResponse<B> {
-    fn into(self) -> Response<B> {
+impl Into<Response<Body>> for WebResponse {
+    fn into(self) -> Response<Body> {
         self.response
     }
 }
 
-impl<B: MessageBody> fmt::Debug for WebResponse<B> {
+impl fmt::Debug for WebResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let res = writeln!(
             f,

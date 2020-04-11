@@ -28,7 +28,7 @@ pub struct WebRequest<Err> {
 impl<Err: ErrorRenderer> WebRequest<Err> {
     /// Create web response for error
     #[inline]
-    pub fn error_response<B, E: Into<Err::Container>>(self, err: E) -> WebResponse<B> {
+    pub fn error_response<E: Into<Err::Container>>(self, err: E) -> WebResponse {
         WebResponse::from_err::<Err, E>(err, self.req)
     }
 }
@@ -78,7 +78,7 @@ impl<Err> WebRequest<Err> {
 
     /// Create web response
     #[inline]
-    pub fn into_response<B, R: Into<Response<B>>>(self, res: R) -> WebResponse<B> {
+    pub fn into_response<R: Into<Response>>(self, res: R) -> WebResponse {
         WebResponse::new(self.req, res.into())
     }
 

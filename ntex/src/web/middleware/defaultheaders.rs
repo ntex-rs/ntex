@@ -92,13 +92,13 @@ impl<E> DefaultHeaders<E> {
     }
 }
 
-impl<S, B, E> Transform<S> for DefaultHeaders<E>
+impl<S, E> Transform<S> for DefaultHeaders<E>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse>,
     S::Future: 'static,
 {
     type Request = WebRequest<E>;
-    type Response = WebResponse<B>;
+    type Response = WebResponse;
     type Error = S::Error;
     type InitError = ();
     type Transform = DefaultHeadersMiddleware<S, E>;
@@ -119,13 +119,13 @@ pub struct DefaultHeadersMiddleware<S, E> {
     _t: PhantomData<E>,
 }
 
-impl<S, B, E> Service for DefaultHeadersMiddleware<S, E>
+impl<S, E> Service for DefaultHeadersMiddleware<S, E>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse<B>>,
+    S: Service<Request = WebRequest<E>, Response = WebResponse>,
     S::Future: 'static,
 {
     type Request = WebRequest<E>;
-    type Response = WebResponse<B>;
+    type Response = WebResponse;
     type Error = S::Error;
     type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
