@@ -176,7 +176,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_default_headers() {
-        let mw = DefaultHeaders::<DefaultError>::new()
+        let mw = DefaultHeaders::new()
             .header(CONTENT_TYPE, "0001")
             .new_transform(ok_service())
             .await
@@ -193,7 +193,7 @@ mod tests {
                     HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish(),
                 ))
             };
-        let mw = DefaultHeaders::<DefaultError>::new()
+        let mw = DefaultHeaders::new()
             .header(CONTENT_TYPE, "0001")
             .new_transform(srv.into_service())
             .await
@@ -207,7 +207,7 @@ mod tests {
         let srv = |req: WebRequest<DefaultError>| {
             ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))
         };
-        let mw = DefaultHeaders::<DefaultError>::new()
+        let mw = DefaultHeaders::new()
             .content_type()
             .new_transform(srv.into_service())
             .await
