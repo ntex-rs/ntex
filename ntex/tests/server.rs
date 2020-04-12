@@ -4,7 +4,7 @@ use std::sync::{mpsc, Arc};
 use std::{net, thread, time};
 
 use bytes::Bytes;
-use futures::future::{lazy, ok};
+use futures::future::{lazy, ok, FutureExt};
 use futures::SinkExt;
 
 use ntex::codec::{BytesCodec, Framed};
@@ -175,6 +175,56 @@ fn test_configure() {
     assert!(net::TcpStream::connect(addr2).is_ok());
     assert!(net::TcpStream::connect(addr3).is_ok());
     assert_eq!(num.load(Relaxed), 1);
+    let _ = sys.stop();
+    let _ = h.join();
+}
+
+#[test]
+#[allow(unreachable_code)]
+fn test_panic_in_worker() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter2 = counter.clone();
+
+    let addr = TestServer::unused_addr();
+    let (tx, rx) = mpsc::channel();
+
+    let h = thread::spawn(move || {
+        let mut sys = ntex::rt::System::new("test");
+        let counter = counter2.clone();
+        let srv = sys.exec(move || {
+            let counter = counter.clone();
+            Server::build()
+                .workers(1)
+                .disable_signals()
+                .bind("test", addr, move || {
+                    let counter = counter.clone();
+                    fn_service(move |_| {
+                        counter.fetch_add(1, Relaxed);
+                        panic!();
+                        ok::<_, ()>(())
+                    })
+                })
+                .unwrap()
+                .start()
+        });
+        let _ = tx.send((srv.clone(), ntex::rt::System::current()));
+        sys.exec(move || ntex_rt::spawn(srv.map(|_| ())));
+        let _ = sys.run();
+    });
+    let (_, sys) = rx.recv().unwrap();
+
+    thread::sleep(time::Duration::from_millis(200));
+    assert!(net::TcpStream::connect(addr).is_ok());
+    thread::sleep(time::Duration::from_millis(100));
+    assert_eq!(counter.load(Relaxed), 1);
+
+    // first connect get dropped, because there is no workers
+    assert!(net::TcpStream::connect(addr).is_ok());
+    thread::sleep(time::Duration::from_millis(100));
+    assert!(net::TcpStream::connect(addr).is_ok());
+    thread::sleep(time::Duration::from_millis(100));
+    assert_eq!(counter.load(Relaxed), 2);
+
     let _ = sys.stop();
     let _ = h.join();
 }
