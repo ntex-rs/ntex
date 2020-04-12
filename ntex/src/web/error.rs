@@ -234,7 +234,7 @@ where
     T: fmt::Debug + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.cause, f)
+        write!(f, "web::InternalError({:?})", &self.cause)
     }
 }
 
