@@ -2,7 +2,7 @@ use std::mem;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use futures::future::{ok, LocalBoxFuture, Ready};
+use futures::future::{ready, ok, LocalBoxFuture, Ready};
 
 use crate::http::Method;
 use crate::{Service, ServiceFactory};
@@ -11,10 +11,11 @@ use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
 use super::extract::FromRequest;
 use super::guard::{self, Guard};
-use super::handler::{DefaultHandler, Handler, HandlerFn, HandlerWrapper};
+use super::handler::{Handler, HandlerFn, HandlerWrapper};
 use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
+use super::HttpResponse;
 
 /// Resource route definition
 ///
@@ -30,7 +31,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// Create new route which matches any request.
     pub fn new() -> Route<Err> {
         Route {
-            handler: Box::new(DefaultHandler::new()),
+            handler: Box::new(HandlerWrapper::new(|| ready(HttpResponse::NotFound()))),
             methods: Vec::new(),
             guards: Rc::new(Vec::new()),
         }

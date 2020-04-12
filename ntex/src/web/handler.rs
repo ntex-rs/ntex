@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures::future::{ok, FutureExt, LocalBoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use pin_project::pin_project;
 
 use super::error::ErrorRenderer;
@@ -12,7 +12,6 @@ use super::httprequest::HttpRequest;
 use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
-use super::HttpResponse;
 
 /// Async fn handler
 pub trait Handler<T, Err>: Clone + 'static
@@ -109,22 +108,6 @@ where
     }
 }
 
-impl<F, T, Err> Clone for HandlerWrapper<F, T, Err>
-where
-    F: Handler<T, Err>,
-    T: FromRequest<Err>,
-    T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
-    Err: ErrorRenderer,
-{
-    fn clone(&self) -> Self {
-        Self {
-            hnd: self.hnd.clone(),
-            _t: PhantomData,
-        }
-    }
-}
-
 #[pin_project]
 pub(super) struct HandlerWrapperResponse<F, T, Err>
 where
@@ -197,27 +180,6 @@ where
         }
 
         unreachable!();
-    }
-}
-
-pub(super) struct DefaultHandler<Err: ErrorRenderer>(PhantomData<Err>);
-
-impl<Err: ErrorRenderer> DefaultHandler<Err> {
-    pub(super) fn new() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<Err: ErrorRenderer> HandlerFn<Err> for DefaultHandler<Err> {
-    fn call(
-        &self,
-        req: WebRequest<Err>,
-    ) -> LocalBoxFuture<'static, Result<WebResponse, Err::Container>> {
-        ok(req.into_response(HttpResponse::NotFound())).boxed_local()
-    }
-
-    fn clone_handler(&self) -> Box<dyn HandlerFn<Err>> {
-        Box::new(DefaultHandler::new())
     }
 }
 
