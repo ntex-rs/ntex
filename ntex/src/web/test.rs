@@ -740,15 +740,17 @@ where
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
                     .map_err(|e| log::error!("Can not set alpn protocol: {:?}", e));
                 Connector::default()
-                    .conn_lifetime(time::Duration::from_secs(0))
+                    .lifetime(time::Duration::from_secs(0))
+                    .keep_alive(time::Duration::from_millis(3000))
                     .timeout(time::Duration::from_millis(30000))
+                    .disconnect_timeout(time::Duration::from_millis(3000))
                     .openssl(builder.build())
                     .finish()
             }
             #[cfg(not(feature = "openssl"))]
             {
                 Connector::default()
-                    .conn_lifetime(time::Duration::from_secs(0))
+                    .lifetime(time::Duration::from_secs(0))
                     .timeout(time::Duration::from_millis(30000))
                     .finish()
             }

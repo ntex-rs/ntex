@@ -39,7 +39,7 @@ async fn main() -> std::io::Result<()> {
             )
             .service(web::resource("/test1.html").to(|| async { "Test\r\n" }))
     })
-    .bind_uds("/Users/fafhrd91/uds-test")?
+    .bind_uds("/tmp/uds-test")?
     .workers(1)
     .run()
     .await

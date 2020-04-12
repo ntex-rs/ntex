@@ -207,3 +207,55 @@ async fn test_rustls() {
     thread::sleep(Duration::from_millis(100));
     let _ = sys.stop();
 }
+
+#[ntex::test]
+#[cfg(unix)]
+async fn test_uds() {
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let mut sys = ntex::rt::System::new("test");
+
+        let srv = sys.exec(|| {
+            HttpServer::new(|| {
+                App::new().service(
+                    web::resource("/")
+                        .route(web::to(|| async { HttpResponse::Ok().body("test") })),
+                )
+            })
+            .workers(1)
+            .shutdown_timeout(1)
+            .system_exit()
+            .disable_signals()
+            .bind_uds("/tmp/uds-test")
+            .unwrap()
+            .run()
+        });
+
+        let _ = tx.send((srv, ntex::rt::System::current()));
+        let _ = sys.run();
+    });
+    let (srv, sys) = rx.recv().unwrap();
+
+    use ntex::http::client;
+
+    let client = client::Client::build()
+        .connector(
+            client::Connector::default()
+                .connector(ntex::fn_service(|_| async {
+                    let stream =
+                        ntex::rt::net::UnixStream::connect("/tmp/uds-test").await?;
+                    Ok((stream, ntex::http::Protocol::Http1))
+                }))
+                .finish(),
+        )
+        .finish();
+    let response = client.get("http://localhost").send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // stop
+    let _ = srv.stop(false);
+
+    thread::sleep(Duration::from_millis(100));
+    let _ = sys.stop();
+}
