@@ -389,3 +389,39 @@ impl<'a> Iterator for Iter<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::header::CONTENT_TYPE;
+
+    #[test]
+    fn test_basics() {
+        let m = HeaderMap::default();
+        assert!(m.is_empty());
+        let mut m = HeaderMap::with_capacity(10);
+        assert!(m.is_empty());
+        assert!(m.capacity() >= 10);
+        m.reserve(20);
+        assert!(m.capacity() >= 20);
+
+        m.insert(CONTENT_TYPE, HeaderValue::from_static("text"));
+        assert!(m.contains_key(CONTENT_TYPE));
+        assert!(m.contains_key("content-type"));
+        assert!(m.contains_key("content-type".to_string()));
+        assert!(m.contains_key(&("content-type".to_string())));
+        assert_eq!(
+            *m.get_mut("content-type").unwrap(),
+            HeaderValue::from_static("text")
+        );
+        assert_eq!(
+            *m.get_mut(CONTENT_TYPE).unwrap(),
+            HeaderValue::from_static("text")
+        );
+
+        let keys: Vec<_> = m.keys().collect();
+        assert!(keys.contains(&&CONTENT_TYPE));
+        m.remove("content-type");
+        assert!(m.is_empty());
+    }
+}
