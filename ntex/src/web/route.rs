@@ -2,7 +2,7 @@ use std::mem;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use futures::future::{ready, ok, LocalBoxFuture, Ready};
+use futures::future::{ok, ready, LocalBoxFuture, Ready};
 
 use crate::http::Method;
 use crate::{Service, ServiceFactory};

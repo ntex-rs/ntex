@@ -26,53 +26,43 @@ pub struct Encoder<B> {
     fut: Option<CpuFuture<ContentEncoder, io::Error>>,
 }
 
-impl<B: MessageBody> Encoder<B> {
+impl<B: MessageBody + 'static> Encoder<B> {
     pub fn response(
         encoding: ContentEncoding,
         head: &mut ResponseHead,
         body: ResponseBody<B>,
-    ) -> ResponseBody<Encoder<B>> {
-        let can_encode = !(head.headers().contains_key(&CONTENT_ENCODING)
-            || head.status == StatusCode::SWITCHING_PROTOCOLS
-            || head.status == StatusCode::NO_CONTENT
-            || encoding == ContentEncoding::Identity
-            || encoding == ContentEncoding::Auto);
+    ) -> ResponseBody<B> {
+        let can_encode = ContentEncoder::can_encode(encoding)
+            && !(head.headers().contains_key(&CONTENT_ENCODING)
+                || head.status == StatusCode::SWITCHING_PROTOCOLS
+                || head.status == StatusCode::NO_CONTENT
+                || encoding == ContentEncoding::Identity
+                || encoding == ContentEncoding::Auto);
 
-        let body = match body {
-            ResponseBody::Other(b) => match b {
-                Body::None => return ResponseBody::Other(Body::None),
-                Body::Empty => return ResponseBody::Other(Body::Empty),
-                Body::Bytes(buf) => {
-                    if can_encode {
-                        EncoderBody::Bytes(buf)
-                    } else {
-                        return ResponseBody::Other(Body::Bytes(buf));
-                    }
-                }
-                Body::Message(stream) => EncoderBody::BoxedStream(stream),
-            },
-            ResponseBody::Body(stream) => EncoderBody::Stream(stream),
-        };
+        if !can_encode {
+            body
+        } else {
+            let body = match body {
+                ResponseBody::Other(b) => match b {
+                    Body::None => return ResponseBody::Other(Body::None),
+                    Body::Empty => return ResponseBody::Other(Body::Empty),
+                    Body::Bytes(buf) => EncoderBody::Bytes(buf),
+                    Body::Message(stream) => EncoderBody::BoxedStream(stream),
+                },
+                ResponseBody::Body(stream) => EncoderBody::Stream(stream),
+            };
 
-        if can_encode {
             // Modify response body only if encoder is not None
-            if let Some(enc) = ContentEncoder::encoder(encoding) {
-                update_head(encoding, head);
-                head.no_chunking(false);
-                return ResponseBody::Body(Encoder {
-                    body,
-                    eof: false,
-                    fut: None,
-                    encoder: Some(enc),
-                });
-            }
+            let encoder = ContentEncoder::encoder(encoding).unwrap();
+            update_head(encoding, head);
+            head.no_chunking(false);
+            ResponseBody::Other(Body::from_message(Encoder {
+                body,
+                eof: false,
+                fut: None,
+                encoder: Some(encoder),
+            }))
         }
-        ResponseBody::Body(Encoder {
-            body,
-            eof: false,
-            fut: None,
-            encoder: None,
-        })
     }
 }
 
@@ -189,6 +179,15 @@ enum ContentEncoder {
 }
 
 impl ContentEncoder {
+    fn can_encode(encoding: ContentEncoding) -> bool {
+        match encoding {
+            ContentEncoding::Deflate | ContentEncoding::Gzip | ContentEncoding::Br => {
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn encoder(encoding: ContentEncoding) -> Option<Self> {
         match encoding {
             ContentEncoding::Deflate => Some(ContentEncoder::Deflate(ZlibEncoder::new(
@@ -206,8 +205,7 @@ impl ContentEncoder {
         }
     }
 
-    #[inline]
-    pub(crate) fn take(&mut self) -> Bytes {
+    fn take(&mut self) -> Bytes {
         match *self {
             ContentEncoder::Br(ref mut encoder) => encoder.get_mut().take(),
             ContentEncoder::Deflate(ref mut encoder) => encoder.get_mut().take(),

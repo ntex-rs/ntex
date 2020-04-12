@@ -9,7 +9,6 @@ use std::task::{Context, Poll};
 use futures::future::{ok, Ready};
 use pin_project::pin_project;
 
-use crate::http::body::{Body, ResponseBody};
 use crate::http::encoding::Encoder;
 use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
 use crate::service::{Service, Transform};
@@ -154,11 +153,9 @@ where
                     *this.encoding
                 };
 
-                Poll::Ready(Ok(resp.map_body(move |head, body| {
-                    ResponseBody::Other(Body::from_message(Encoder::response(
-                        enc, head, body,
-                    )))
-                })))
+                Poll::Ready(Ok(
+                    resp.map_body(move |head, body| Encoder::response(enc, head, body))
+                ))
             }
             Err(e) => Poll::Ready(Err(e)),
         }
