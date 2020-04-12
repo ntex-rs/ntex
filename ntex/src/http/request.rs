@@ -130,7 +130,7 @@ impl<P> Request<P> {
     /// Peer socket address
     ///
     /// Peer address is actual socket address, if proxy is used in front of
-    /// actix http server, then peer address would be address of this proxy.
+    /// ntex http server, then peer address would be address of this proxy.
     #[inline]
     pub fn peer_addr(&self) -> Option<net::SocketAddr> {
         self.head().peer_addr

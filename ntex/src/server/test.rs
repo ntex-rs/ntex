@@ -10,7 +10,7 @@ use crate::server::{Server, ServerBuilder, StreamServiceFactory};
 /// Start test server
 ///
 /// `TestServer` is very simple test server that simplify process of writing
-/// integration tests cases for actix web applications.
+/// integration tests cases for ntex web applications.
 ///
 /// # Examples
 ///
@@ -74,7 +74,7 @@ where
 
     // run server in separate thread
     thread::spawn(move || {
-        let mut sys = System::new("actix-test-server");
+        let mut sys = System::new("ntex-test-server");
 
         sys.exec(|| {
             factory(Server::build())

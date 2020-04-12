@@ -286,7 +286,7 @@ pub async fn respond_to<T: Responder<DefaultError>>(
 
 /// Test `Request` builder.
 ///
-/// For unit testing, actix provides a request builder type and a simple handler runner. TestRequest implements a builder-like pattern.
+/// For unit testing, ntex provides a request builder type and a simple handler runner. TestRequest implements a builder-like pattern.
 /// You can generate various types of request via TestRequest's methods:
 ///  * `TestRequest::to_request` creates `ntex::http::Request` instance.
 ///  * `TestRequest::to_srv_request` creates `WebRequest` instance, which is used for testing middlewares and chain adapters.
@@ -540,7 +540,7 @@ impl TestRequest {
 /// Start test server with default configuration
 ///
 /// Test server is very simple server that simplify process of writing
-/// integration tests cases for actix web applications.
+/// integration tests cases for ntex web applications.
 ///
 /// # Examples
 ///
@@ -625,7 +625,7 @@ where
 
     // run server in separate thread
     thread::spawn(move || {
-        let mut sys = System::new("actix-test-server");
+        let mut sys = System::new("ntex-test-server");
 
         let cfg = cfg.clone();
         let factory = factory.clone();

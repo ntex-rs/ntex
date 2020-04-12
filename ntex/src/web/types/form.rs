@@ -70,10 +70,10 @@ use crate::web::{FromRequest, HttpRequest, Responder};
 ///
 /// // Will return a 200 response with header
 /// // `Content-Type: application/x-www-form-urlencoded`
-/// // and body "name=actix&age=123"
+/// // and body "name=ntex&age=123"
 /// fn index() -> web::types::Form<SomeForm> {
 ///     web::types::Form(SomeForm {
-///         name: "actix".into(),
+///         name: "ntex".into(),
 ///         age: 123
 ///     })
 /// }

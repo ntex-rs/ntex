@@ -809,6 +809,7 @@ async fn client_read_until_eof() {
                 .write_all(b"HTTP/1.0 200 OK\r\nconnection: close\r\n\r\nwelcome!");
         }
     });
+    ntex::rt::time::delay_for(Duration::from_millis(200)).await;
 
     // client request
     let req =

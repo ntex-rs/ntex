@@ -90,7 +90,7 @@ impl Arbiter {
     /// Returns address of newly created arbiter.
     pub fn new() -> Arbiter {
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
-        let name = format!("actix-rt:worker:{}", id);
+        let name = format!("ntex-rt:worker:{}", id);
         let sys = System::current();
         let (arb_tx, arb_rx) = unbounded();
         let arb_tx2 = arb_tx.clone();

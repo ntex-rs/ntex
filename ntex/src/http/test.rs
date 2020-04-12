@@ -187,7 +187,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 /// Start test server
 ///
 /// `TestServer` is very simple test server that simplify process of writing
-/// integration tests cases for actix web applications.
+/// integration tests cases for ntex web applications.
 ///
 /// # Examples
 ///
@@ -218,7 +218,7 @@ pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
 
     // run server in separate thread
     thread::spawn(move || {
-        let mut sys = System::new("actix-test-server");
+        let mut sys = System::new("test-server");
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 

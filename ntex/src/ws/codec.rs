@@ -21,8 +21,6 @@ pub enum Message {
     Pong(Bytes),
     /// Close message with optional reason
     Close(Option<CloseReason>),
-    /// No-op. Useful for actix-net services
-    Nop,
 }
 
 /// WebSocket frame
@@ -192,7 +190,6 @@ impl Encoder for Codec {
                     }
                 }
             },
-            Message::Nop => (),
         }
         Ok(())
     }

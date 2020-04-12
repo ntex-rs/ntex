@@ -1,6 +1,6 @@
 //! Route match guards.
 //!
-//! Guards are one of the ways how actix-web router chooses a
+//! Guards are one of the ways how ntex web router chooses a
 //! handler service. In essence it is just a function that accepts a
 //! reference to a `RequestHead` instance and returns a boolean.
 //! It is possible to add guards to *scopes*, *resources*

@@ -104,7 +104,7 @@ impl ServerBuilder {
         self
     }
 
-    /// Stop actix system.
+    /// Stop ntex system.
     pub fn system_exit(mut self) -> Self {
         self.exit = true;
         self
@@ -318,7 +318,7 @@ impl ServerBuilder {
             }
             ServerCommand::Signal(sig) => {
                 // Signals support
-                // Handle `SIGINT`, `SIGTERM`, `SIGQUIT` signals and stop actix system
+                // Handle `SIGINT`, `SIGTERM`, `SIGQUIT` signals and stop ntex system
                 match sig {
                     Signal::Int => {
                         info!("SIGINT received, exiting");

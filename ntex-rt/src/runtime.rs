@@ -44,7 +44,7 @@ impl Runtime {
     ///
     /// ```rust,ignore
     /// # use futures::{future, Future, Stream};
-    /// use actix_rt::Runtime;
+    /// use ntex_rt::Runtime;
     ///
     /// # fn dox() {
     /// // Create the runtime

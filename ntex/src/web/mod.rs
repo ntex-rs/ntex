@@ -30,7 +30,7 @@
 //! To get started navigating the API documentation you may want to
 //! consider looking at the following pages:
 //!
-//! * [App](struct.App.html): This struct represents an actix-web
+//! * [App](struct.App.html): This struct represents an ntex web
 //!   application and is used to configure routes and other common
 //!   settings.
 //!

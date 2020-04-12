@@ -23,7 +23,7 @@ use crate::web::HttpResponse;
 /// `Middleware` for logging request and response info to the terminal.
 ///
 /// `Logger` middleware uses standard log crate to log information. You should
-/// enable logger for `actix_web` package to see access log.
+/// enable logger for `ntex` package to see access log.
 /// ([`env_logger`](https://docs.rs/env_logger/*/env_logger/) or similar)
 ///
 /// ## Usage
@@ -40,7 +40,7 @@ use crate::web::HttpResponse;
 /// use ntex::web::middleware::Logger;
 ///
 /// fn main() {
-///     std::env::set_var("RUST_LOG", "actix_web=info");
+///     std::env::set_var("RUST_LOG", "ntex=info");
 ///     env_logger::init();
 ///
 ///     let app = App::new()

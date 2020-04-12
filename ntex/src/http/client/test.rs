@@ -1,4 +1,4 @@
-//! Test helpers for actix http client to use during testing.
+//! Test helpers for ntex http client to use during testing.
 use std::convert::TryFrom;
 
 use bytes::Bytes;

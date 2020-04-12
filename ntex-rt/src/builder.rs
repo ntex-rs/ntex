@@ -10,13 +10,13 @@ use super::arbiter::{Arbiter, SystemArbiter};
 use super::runtime::Runtime;
 use super::system::System;
 
-/// Builder struct for a actix runtime.
+/// Builder struct for a ntex runtime.
 ///
 /// Either use `Builder::build` to create a system and start actors.
 /// Alternatively, use `Builder::run` to start the tokio runtime and
 /// run a function in its context.
 pub struct Builder {
-    /// Name of the System. Defaults to "actix" if unset.
+    /// Name of the System. Defaults to "ntex" if unset.
     name: Cow<'static, str>,
 
     /// Whether the Arbiter will stop the whole System on uncaught panic. Defaults to false.
@@ -26,7 +26,7 @@ pub struct Builder {
 impl Builder {
     pub(super) fn new() -> Self {
         Builder {
-            name: Cow::Borrowed("actix"),
+            name: Cow::Borrowed("ntex"),
             stop_on_panic: false,
         }
     }
