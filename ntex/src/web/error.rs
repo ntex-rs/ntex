@@ -693,6 +693,59 @@ mod tests {
         let e = Error::new(UrlencodedError::UnknownLength);
         let s = format!("{:?}", e);
         assert!(s.contains("UnknownLength"));
+
+        let res = crate::http::ResponseError::error_response(&e);
+        assert_eq!(res.status(), StatusCode::LENGTH_REQUIRED);
+        assert_eq!(
+            e.as_response_error().status_code(),
+            StatusCode::LENGTH_REQUIRED
+        )
+    }
+
+    #[test]
+    fn test_other_errors() {
+        let req = TestRequest::default().to_http_request();
+
+        use crate::util::timeout::TimeoutError;
+        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+            &TimeoutError::<UrlencodedError>::Timeout,
+            &req,
+        );
+        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+
+        use crate::http::client::error::{ConnectError, SendRequestError};
+        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+            &SendRequestError::Connect(ConnectError::Timeout),
+            &req,
+        );
+        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+
+        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+            &SendRequestError::Connect(ConnectError::SslIsNotSupported),
+            &req,
+        );
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+            &SendRequestError::TunnelNotSupported,
+            &req,
+        );
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        #[cfg(feature = "cookie")]
+        {
+            let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+                &coo_kie::ParseError::EmptyName,
+                &req,
+            );
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+            &crate::http::error::ContentTypeError::ParseError,
+            &req,
+        );
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

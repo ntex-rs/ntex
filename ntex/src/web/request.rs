@@ -15,7 +15,6 @@ use super::httprequest::HttpRequest;
 use super::info::ConnectionInfo;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
-use super::types::Data;
 
 /// An service http request
 ///
@@ -195,14 +194,12 @@ impl<Err> WebRequest<Err> {
     }
 
     #[inline]
-    /// Get an application data stored with `App::data()` method during
+    /// Get an application data stored with `App::app_data()` method during
     /// application configuration.
-    pub fn app_data<T: 'static>(&self) -> Option<Data<T>> {
-        if let Some(st) = (self.req).0.app_data.get::<Data<T>>() {
-            Some(st.clone())
-        } else {
-            None
-        }
+    ///
+    /// To get data stored with `App::data()` use `web::types::Data<T>` as type.
+    pub fn app_data<T: 'static>(&self) -> Option<&T> {
+        (self.req).0.app_data.get::<T>()
     }
 
     #[inline]
@@ -286,5 +283,43 @@ impl<Err: ErrorRenderer> fmt::Debug for WebRequest<Err> {
             writeln!(f, "    {:?}: {:?}", key, val)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::http::{self, header, HttpMessage};
+    use crate::web::test::TestRequest;
+    use crate::web::HttpResponse;
+
+    #[test]
+    fn test_request() {
+        let mut req = TestRequest::default().to_srv_request();
+        assert_eq!(req.head_mut().version, http::Version::HTTP_11);
+        assert!(req.peer_addr().is_none());
+        let err = http::error::PayloadError::Overflow;
+
+        let res: HttpResponse = req.render_error(err).into();
+        assert_eq!(res.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+
+        let req = TestRequest::default().to_srv_request();
+        let err = http::error::PayloadError::Overflow;
+
+        let res: HttpResponse = req.error_response(err).into();
+        assert_eq!(res.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+
+        let mut req = TestRequest::default().to_srv_request();
+        req.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("text"),
+        );
+        req.headers_mut().remove(header::CONTENT_TYPE);
+        assert!(!req.headers().contains_key(header::CONTENT_TYPE));
+        assert!(!req.message_headers().contains_key(header::CONTENT_TYPE));
+
+        req.extensions_mut().insert("TEXT".to_string());
+        assert_eq!(req.message_extensions().get::<String>().unwrap(), "TEXT");
+        req.message_extensions_mut().remove::<String>();
+        assert!(!req.extensions().contains::<String>());
     }
 }

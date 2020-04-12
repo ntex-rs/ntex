@@ -100,6 +100,14 @@ async fn test_freeze() {
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    // send one request
+    let mut response = request.extra_header("x-test2", "222").send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
 
 #[ntex::test]
@@ -609,6 +617,19 @@ async fn test_client_brotli_encoding_large_random() {
     // frozen request
     let request = srv.post("/").freeze().unwrap();
     let mut response = request.send_body(data.clone()).await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes.len(), data.len());
+    assert_eq!(bytes, Bytes::from(data.clone()));
+
+    // extra header
+    let mut response = request
+        .extra_header("x-test2", "222")
+        .send_body(data.clone())
+        .await
+        .unwrap();
     assert!(response.status().is_success());
 
     // read response
