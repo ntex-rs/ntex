@@ -118,15 +118,16 @@ async fn test_json() {
     assert!(response.status().is_success());
 
     // same with frozen request
-    let request = srv
-        .get("/")
-        .header("x-test", "111")
-        .freeze().unwrap();
+    let request = srv.get("/").header("x-test", "111").freeze().unwrap();
 
     let response = request.send_json(&"TEST".to_string()).await.unwrap();
     assert!(response.status().is_success());
 
-    let response = request.extra_header("x-test2", "112").send_json(&"TEST".to_string()).await.unwrap();
+    let response = request
+        .extra_header("x-test2", "112")
+        .send_json(&"TEST".to_string())
+        .await
+        .unwrap();
     assert!(response.status().is_success());
 }
 
@@ -150,7 +151,11 @@ async fn test_form() {
     let response = request.send_form(&data).await.unwrap();
     assert!(response.status().is_success());
 
-    let response = request.extra_header("x-test2", "112").send_form(&data).await.unwrap();
+    let response = request
+        .extra_header("x-test2", "112")
+        .send_form(&data)
+        .await
+        .unwrap();
     assert!(response.status().is_success());
 }
 
@@ -806,8 +811,8 @@ async fn client_read_until_eof() {
     });
 
     // client request
-    let req = ntex::http::client::Client::default()
-        .get(format!("http://{}/", addr).as_str());
+    let req =
+        ntex::http::client::Client::default().get(format!("http://{}/", addr).as_str());
     let mut response = req.send().await.unwrap();
     assert!(response.status().is_success());
 
