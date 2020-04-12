@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.8] - 2020-04-xx
+## [0.1.8] - 2020-04-12
 
 * ntex::web: Fix definition of `ok_service` and `default_service`.
 
