@@ -21,9 +21,9 @@ use super::frozen::FrozenClientRequest;
 use super::sender::{PrepForSendingError, RequestSender, SendClientRequest};
 use super::ClientConfig;
 
-#[cfg(any(feature = "flate2-zlib", feature = "flate2-rust"))]
+#[cfg(feature = "compress")]
 const HTTPS_ENCODING: &str = "br, gzip, deflate";
-#[cfg(not(any(feature = "flate2-zlib", feature = "flate2-rust")))]
+#[cfg(not(feature = "compress"))]
 const HTTPS_ENCODING: &str = "br";
 
 /// An HTTP Client request builder
@@ -133,11 +133,6 @@ impl ClientRequest {
     /// Get HTTP version of this request.
     pub fn get_version(&self) -> &Version {
         &self.head.version
-    }
-
-    /// Get peer address of this request.
-    pub fn get_peer_addr(&self) -> &Option<net::SocketAddr> {
-        &self.head.peer_addr
     }
 
     #[inline]
@@ -545,7 +540,7 @@ impl ClientRequest {
             if https {
                 slf = slf.set_header_if_none(header::ACCEPT_ENCODING, HTTPS_ENCODING)
             } else {
-                #[cfg(any(feature = "flate2-zlib", feature = "flate2-rust"))]
+                #[cfg(any(feature = "compress"))]
                 {
                     slf =
                         slf.set_header_if_none(header::ACCEPT_ENCODING, "gzip, deflate")

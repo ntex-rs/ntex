@@ -75,6 +75,34 @@ async fn test_simple() {
 }
 
 #[ntex::test]
+async fn test_freeze() {
+    let srv = test::server(|| {
+        App::new().service(
+            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+        )
+    });
+
+    // prep request
+    let request = srv.get("/").header("x-test", "111").freeze().unwrap();
+
+    // send one request
+    let mut response = request.send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    // send one request
+    let mut response = request.send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+}
+
+#[ntex::test]
 async fn test_json() {
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(
@@ -87,6 +115,18 @@ async fn test_json() {
         .header("x-test", "111")
         .send_json(&"TEST".to_string());
     let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // same with frozen request
+    let request = srv
+        .get("/")
+        .header("x-test", "111")
+        .freeze().unwrap();
+
+    let response = request.send_json(&"TEST".to_string()).await.unwrap();
+    assert!(response.status().is_success());
+
+    let response = request.extra_header("x-test2", "112").send_json(&"TEST".to_string()).await.unwrap();
     assert!(response.status().is_success());
 }
 
@@ -103,6 +143,14 @@ async fn test_form() {
 
     let request = srv.get("/").header("x-test", "111").send_form(&data);
     let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // same with frozen request
+    let request = srv.get("/").header("x-test", "111").freeze().unwrap();
+    let response = request.send_form(&data).await.unwrap();
+    assert!(response.status().is_success());
+
+    let response = request.extra_header("x-test2", "112").send_form(&data).await.unwrap();
     assert!(response.status().is_success());
 }
 
@@ -551,6 +599,16 @@ async fn test_client_brotli_encoding_large_random() {
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes.len(), data.len());
+    assert_eq!(bytes, Bytes::from(data.clone()));
+
+    // frozen request
+    let request = srv.post("/").freeze().unwrap();
+    let mut response = request.send_body(data.clone()).await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes.len(), data.len());
     assert_eq!(bytes, Bytes::from(data));
 }
 
@@ -731,35 +789,32 @@ async fn test_client_cookie_handling() {
     assert_eq!(c2, cookie2);
 }
 
-// #[ntex::test]
-// fn client_read_until_eof() {
-//     let addr = test::TestServer::unused_addr();
+#[ntex::test]
+async fn client_read_until_eof() {
+    let addr = ntex::server::TestServer::unused_addr();
 
-//     thread::spawn(move || {
-//         let lst = net::TcpListener::bind(addr).unwrap();
+    std::thread::spawn(move || {
+        let lst = std::net::TcpListener::bind(addr).unwrap();
 
-//         for stream in lst.incoming() {
-//             let mut stream = stream.unwrap();
-//             let mut b = [0; 1000];
-//             let _ = stream.read(&mut b).unwrap();
-//             let _ = stream
-//                 .write_all(b"HTTP/1.1 200 OK\r\nconnection: close\r\n\r\nwelcome!");
-//         }
-//     });
+        for stream in lst.incoming() {
+            let mut stream = stream.unwrap();
+            let mut b = [0; 1000];
+            let _ = stream.read(&mut b).unwrap();
+            let _ = stream
+                .write_all(b"HTTP/1.0 200 OK\r\nconnection: close\r\n\r\nwelcome!");
+        }
+    });
 
-//     let mut sys = ntex::rt::System::new("test");
+    // client request
+    let req = ntex::http::client::Client::default()
+        .get(format!("http://{}/", addr).as_str());
+    let mut response = req.send().await.unwrap();
+    assert!(response.status().is_success());
 
-//     // client request
-//     let req = client::ClientRequest::get(format!("http://{}/", addr).as_str())
-//         .finish()
-//         .unwrap();
-//     let response = req.send().await.unwrap();
-//     assert!(response.status().is_success());
-
-//     // read response
-//     let bytes = response.body().await.unwrap();
-//     assert_eq!(bytes, Bytes::from_static(b"welcome!"));
-// }
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(b"welcome!"));
+}
 
 #[ntex::test]
 async fn client_basic_auth() {
