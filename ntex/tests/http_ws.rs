@@ -9,10 +9,10 @@ use bytes::Bytes;
 use futures::{future, Future, SinkExt, StreamExt};
 
 use ntex::codec::{AsyncRead, AsyncWrite, Framed};
-use ntex::framed::Dispatcher;
 use ntex::http::ws::handshake;
 use ntex::http::{body, h1, test, HttpService, Request, Response};
 use ntex::service::{fn_factory, Service};
+use ntex::util::framed::Dispatcher;
 use ntex::ws;
 
 struct WsService<T>(Arc<Mutex<(PhantomData<T>, Cell<bool>)>>);

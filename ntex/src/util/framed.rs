@@ -308,3 +308,33 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::{Bytes, BytesMut};
+    use futures::future::ok;
+
+    use super::*;
+    use crate::codec::{BytesCodec, Framed};
+    use crate::testing::Io;
+
+    #[ntex_rt::test]
+    async fn test_basic() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(1024);
+        client.write("GET /test HTTP/1\r\n\r\n");
+
+        let framed = Framed::new(server, BytesCodec);
+        let disp = Dispatcher::new(
+            framed,
+            crate::fn_service(|msg: BytesMut| ok::<_, ()>(msg.freeze())),
+        );
+        crate::rt::spawn(disp.map(|_| ()));
+
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
+
+        client.close().await;
+        assert!(client.is_server_dropped());
+    }
+}

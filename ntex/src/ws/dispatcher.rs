@@ -3,8 +3,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
-use crate::framed;
 use crate::service::{IntoService, Service};
+use crate::util::framed;
 
 use super::{Codec, Frame, Message};
 
@@ -44,7 +44,7 @@ where
     S::Future: 'static,
     S::Error: 'static,
 {
-    type Output = Result<(), framed::ServiceError<S::Error, Codec>>;
+    type Output = Result<(), framed::DispatcherError<S::Error, Codec>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.inner).poll(cx)

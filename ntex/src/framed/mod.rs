@@ -2,12 +2,10 @@ mod dispatcher;
 mod error;
 mod handshake;
 mod service;
-mod transport;
 
 pub use self::error::ServiceError;
 pub use self::handshake::{Handshake, HandshakeResult};
 pub use self::service::{Builder, FactoryBuilder};
-pub use self::transport::Dispatcher;
 
 #[doc(hidden)]
 pub type Connect<T, U> = Handshake<T, U>;
