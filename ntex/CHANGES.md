@@ -6,6 +6,8 @@
 
 * ntex::framed: Use framed dispatcher instead of custom one
 
+* ntex::channel: Fix mpsc::Sender close method.
+
 ## [0.1.8] - 2020-04-12
 
 * ntex::web: Fix definition of `ok_service` and `default_service`.

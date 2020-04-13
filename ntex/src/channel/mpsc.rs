@@ -58,8 +58,10 @@ impl<T> Sender<T> {
     ///
     /// This prevents any further messages from being sent on the channel while
     /// still enabling the receiver to drain messages that are buffered.
-    pub fn close(&mut self) {
-        self.shared.get_mut().has_receiver = false;
+    pub fn close(&self) {
+        let shared = unsafe { self.shared.get_mut_unchecked() };
+        shared.has_receiver = false;
+        shared.blocked_recv.wake();
     }
 }
 
