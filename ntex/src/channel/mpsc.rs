@@ -1,7 +1,7 @@
 //! A multi-producer, single-consumer, futures-aware, FIFO queue.
 use std::collections::VecDeque;
-use std::fmt;
 use std::error::Error;
+use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -149,13 +149,11 @@ impl<T> Stream for Receiver<T> {
             Poll::Ready(shared.buffer.pop_front())
         } else if let Some(msg) = shared.buffer.pop_front() {
             Poll::Ready(Some(msg))
+        } else if shared.has_receiver {
+            shared.blocked_recv.register(cx.waker());
+            Poll::Pending
         } else {
-            if shared.has_receiver {
-                shared.blocked_recv.register(cx.waker());
-                Poll::Pending
-            } else {
-                Poll::Ready(None)
-            }
+            Poll::Ready(None)
         }
     }
 }
