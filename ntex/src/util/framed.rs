@@ -183,7 +183,7 @@ enum FramedState<S: Service, U: Encoder + Decoder> {
     Error(DispatcherError<S::Error, U>),
     FlushAndStop,
     Shutdown(Option<DispatcherError<S::Error, U>>),
-    ShutdownIo(Delay),
+    ShutdownIo(Delay, Option<Result<(), DispatcherError<S::Error, U>>>),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -389,28 +389,44 @@ where
                 }
                 FramedState::Shutdown(ref mut err) => {
                     return if self.service.poll_shutdown(cx, err.is_some()).is_ready() {
-                        if let Some(err) = err.take() {
-                            Poll::Ready(Err(err))
-                        } else {
-                            let pending = self.framed.close(cx).is_pending();
-                            if self.disconnect_timeout != 0 && pending {
-                                self.state = FramedState::ShutdownIo(delay_for(
-                                    Duration::from_millis(self.disconnect_timeout),
-                                ));
-                                continue;
+                        let result = if let Some(err) = err.take() {
+                            if let DispatcherError::Service(_) = err {
+                                Err(err)
                             } else {
-                                Poll::Ready(Ok(()))
+                                // no need for io shutdown because io error occured
+                                return Poll::Ready(Err(err));
                             }
+                        } else {
+                            Ok(())
+                        };
+
+                        // frame close, closes io WR side and waits for disconnect
+                        // on read side. we need disconnect timeout, because it
+                        // could hang forever.
+                        let pending = self.framed.close(cx).is_pending();
+                        if self.disconnect_timeout != 0 && pending {
+                            self.state = FramedState::ShutdownIo(
+                                delay_for(Duration::from_millis(
+                                    self.disconnect_timeout,
+                                )),
+                                Some(result),
+                            );
+                            continue;
+                        } else {
+                            Poll::Ready(result)
                         }
                     } else {
                         Poll::Pending
-                    }
+                    };
                 }
-                FramedState::ShutdownIo(ref mut delay) => {
+                FramedState::ShutdownIo(ref mut delay, ref mut err) => {
                     if let Poll::Ready(res) = self.framed.close(cx) {
-                        return Poll::Ready(
-                            res.map_err(|e| DispatcherError::Encoder(e.into())),
-                        );
+                        return match err.take() {
+                            Some(Ok(_)) | None => Poll::Ready(
+                                res.map_err(|e| DispatcherError::Encoder(e.into())),
+                            ),
+                            Some(Err(e)) => Poll::Ready(Err(e)),
+                        };
                     } else {
                         ready!(Pin::new(delay).poll(cx));
                         return Poll::Ready(Ok(()));
