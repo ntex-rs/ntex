@@ -224,7 +224,7 @@ mod tests {
         drop(rx);
         assert!(tx.send("test").is_err());
 
-        let (mut tx, _) = channel();
+        let (tx, _) = channel();
         let tx2 = tx.clone();
         tx.close();
         assert!(tx.send("test").is_err());

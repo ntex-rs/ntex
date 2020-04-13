@@ -393,7 +393,7 @@ where
                             Poll::Ready(Err(err))
                         } else {
                             let pending = self.framed.close(cx).is_pending();
-                            if self.disconnect_timeout == 0 && pending {
+                            if self.disconnect_timeout != 0 && pending {
                                 self.state = FramedState::ShutdownIo(delay_for(
                                     Duration::from_millis(self.disconnect_timeout),
                                 ));
