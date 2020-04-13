@@ -1,11 +1,11 @@
 [package]
 name = "ntex"
-version = "0.1.8"
+version = "0.1.9"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Framework for composable network services"
 readme = "README.md"
 keywords = ["ntex", "networking", "framework", "async", "futures"]
-repository = "https://github.com/fafhrd91/ntex.git"
+repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex/"
 categories = ["network-programming", "asynchronous",
               "web-programming::http-server",

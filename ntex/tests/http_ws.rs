@@ -69,7 +69,7 @@ where
     }
 }
 
-async fn service(msg: ws::Frame) -> Result<ws::Message, io::Error> {
+async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
         ws::Frame::Ping(msg) => ws::Message::Pong(msg),
         ws::Frame::Text(text) => {
@@ -80,7 +80,7 @@ async fn service(msg: ws::Frame) -> Result<ws::Message, io::Error> {
         ws::Frame::Close(reason) => ws::Message::Close(reason),
         _ => panic!(),
     };
-    Ok(msg)
+    Ok(Some(msg))
 }
 
 #[ntex::test]

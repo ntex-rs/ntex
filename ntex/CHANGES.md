@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.9] - 2020-04-xx
+
+* ntex::util: Refcator framed dispatcher
+
+* ntex::framed: Use framed dispatcher instead of custom one
+
 ## [0.1.8] - 2020-04-12
 
 * ntex::web: Fix definition of `ok_service` and `default_service`.

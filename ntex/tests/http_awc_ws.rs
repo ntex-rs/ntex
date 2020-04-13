@@ -8,18 +8,20 @@ use ntex::codec::Framed;
 use ntex::http::test::server as test_server;
 use ntex::http::ws::handshake_response;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
+use ntex::util::framed::Dispatcher;
 use ntex::ws;
 
-async fn ws_service(req: ws::Frame) -> Result<ws::Message, io::Error> {
-    match req {
-        ws::Frame::Ping(msg) => Ok(ws::Message::Pong(msg)),
-        ws::Frame::Text(text) => Ok(ws::Message::Text(
-            String::from_utf8(Vec::from(text.as_ref())).unwrap(),
-        )),
-        ws::Frame::Binary(bin) => Ok(ws::Message::Binary(bin)),
-        ws::Frame::Close(reason) => Ok(ws::Message::Close(reason)),
-        _ => Ok(ws::Message::Close(None)),
-    }
+async fn ws_service(req: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
+    let item = match req {
+        ws::Frame::Ping(msg) => ws::Message::Pong(msg),
+        ws::Frame::Text(text) => {
+            ws::Message::Text(String::from_utf8(Vec::from(text.as_ref())).unwrap())
+        }
+        ws::Frame::Binary(bin) => ws::Message::Binary(bin),
+        ws::Frame::Close(reason) => ws::Message::Close(reason),
+        _ => ws::Message::Close(None),
+    };
+    Ok(Some(item))
 }
 
 #[ntex::test]
@@ -36,7 +38,7 @@ async fn test_simple() {
 
                     // start websocket service
                     let framed = framed.into_framed(ws::Codec::new());
-                    ws::Dispatcher::with(framed, ws_service).await
+                    Dispatcher::new(framed, ws_service).await
                 }
             })
             .finish(|_| ok::<_, io::Error>(Response::NotFound()))

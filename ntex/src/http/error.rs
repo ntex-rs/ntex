@@ -14,7 +14,6 @@ pub use futures::channel::oneshot::Canceled;
 pub use http::Error as HttpError;
 
 use crate::codec::{Decoder, Encoder};
-use crate::framed::ServiceError as FramedDispatcherError;
 use crate::util::framed::DispatcherError;
 
 use super::body::Body;
@@ -58,14 +57,6 @@ impl ResponseError for io::Error {}
 
 /// `InternalServerError` for `JsonError`
 impl ResponseError for serde_json::error::Error {}
-
-impl<E, U: Encoder + Decoder + 'static> ResponseError for FramedDispatcherError<E, U>
-where
-    E: fmt::Debug + fmt::Display + 'static,
-    <U as Encoder>::Error: fmt::Debug,
-    <U as Decoder>::Error: fmt::Debug,
-{
-}
 
 impl<E, U: Encoder + Decoder + 'static> ResponseError for DispatcherError<E, U>
 where

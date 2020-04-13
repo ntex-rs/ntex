@@ -1,16 +1,15 @@
-//! Framed transport dispatcher
-use std::fmt;
-use std::future::Future;
+//! Framed dispatcher service and related utilities
+#![allow(type_alias_bounds)]
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{fmt, mem};
 use std::time::Duration;
 
-use futures::{ready, FutureExt, Stream};
+use futures::{Future, FutureExt, Stream};
 use log::debug;
 
 use crate::channel::mpsc;
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
-use crate::rt::time::{delay_for, Delay};
 use crate::service::{IntoService, Service};
 
 type Request<U> = <U as Decoder>::Item;
@@ -71,7 +70,21 @@ where
 /// FramedTransport - is a future that reads frames from Framed object
 /// and pass then to the service.
 #[pin_project::pin_project]
-pub struct Dispatcher<S, T, U, Out>
+pub struct Dispatcher<S, T, U, In>
+where
+    S: Service<Request = Request<U>, Response = Option<Response<U>>>,
+    S::Error: 'static,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite + Unpin,
+    U: Encoder + Decoder,
+    <U as Encoder>::Item: 'static,
+<U as Encoder>::Error: std::fmt::Debug,
+    In: Stream<Item = <U as Encoder>::Item> + Unpin,
+{
+    inner: InnerDispatcher<S, T, U, In>,
+}
+
+struct InnerDispatcher<S, T, U, In>
 where
     S: Service<Request = Request<U>, Response = Option<Response<U>>>,
     S::Error: 'static,
@@ -80,9 +93,44 @@ where
     U: Encoder + Decoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
-    Out: Stream<Item = <U as Encoder>::Item> + Unpin,
+    In: Stream<Item = <U as Encoder>::Item> + Unpin,
 {
-    inner: InnerDispatcher<S, T, U, Out>,
+    service: S,
+    state: State<S, U>,
+    sink: Option<In>,
+    framed: Framed<T, U>,
+    rx: mpsc::Receiver<Result<<U as Encoder>::Item, S::Error>>,
+    disconnect_timeout: Duration,
+}
+
+enum State<S: Service, U: Encoder + Decoder> {
+    Processing,
+    Error(DispatcherError<S::Error, U>),
+    FramedError(DispatcherError<S::Error, U>),
+    FlushAndStop,
+    Stopping,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum PollResult {
+    Continue,
+    Pending,
+}
+
+impl<S: Service, U: Encoder + Decoder> State<S, U> {
+    fn take_error(&mut self) -> DispatcherError<S::Error, U> {
+        match mem::replace(self, State::Processing) {
+            State::Error(err) => err,
+            _ => panic!(),
+        }
+    }
+
+    fn take_framed_error(&mut self) -> DispatcherError<S::Error, U> {
+        match mem::replace(self, State::Processing) {
+            State::FramedError(err) => err,
+            _ => panic!(),
+        }
+    }
 }
 
 impl<S, T, U> Dispatcher<S, T, U, mpsc::Receiver<<U as Encoder>::Item>>
@@ -103,9 +151,9 @@ where
                 sink: None,
                 rx: mpsc::channel().1,
                 service: service.into_service(),
-                state: FramedState::Processing,
-                disconnect_timeout: 1000,
-            },
+                state: State::Processing,
+                disconnect_timeout: Duration::from_millis(1000),
+            }
         }
     }
 }
@@ -124,18 +172,18 @@ where
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub fn with<F: IntoService<S>>(
         framed: Framed<T, U>,
-        sink: Option<In>,
+        sink: In,
         service: F,
     ) -> Self {
         Dispatcher {
             inner: InnerDispatcher {
                 framed,
-                sink,
+                sink: Some(sink),
                 rx: mpsc::channel().1,
                 service: service.into_service(),
-                state: FramedState::Processing,
-                disconnect_timeout: 1000,
-            },
+                state: State::Processing,
+                disconnect_timeout: Duration::from_millis(1000),
+            }
         }
     }
 
@@ -148,15 +196,8 @@ where
     ///
     /// By default disconnect timeout is set to 1 seconds.
     pub fn disconnect_timeout(mut self, val: u64) -> Self {
-        self.inner.disconnect_timeout = val;
+        self.inner.disconnect_timeout = Duration::from_millis(val);
         self
-    }
-
-    pub(crate) fn poll_inner(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), DispatcherError<S::Error, U>>> {
-        self.inner.poll(cx)
     }
 }
 
@@ -178,49 +219,7 @@ where
     }
 }
 
-enum FramedState<S: Service, U: Encoder + Decoder> {
-    Processing,
-    Error(DispatcherError<S::Error, U>),
-    FlushAndStop,
-    Shutdown(Option<DispatcherError<S::Error, U>>),
-    ShutdownIo(Delay),
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-enum PollResult {
-    Continue,
-    Pending,
-}
-
-impl<S: Service, U: Encoder + Decoder> FramedState<S, U> {
-    fn take_error(&mut self) -> DispatcherError<S::Error, U> {
-        match std::mem::replace(self, FramedState::Processing) {
-            FramedState::Error(err) => err,
-            _ => panic!(),
-        }
-    }
-}
-
-struct InnerDispatcher<S, T, U, Out>
-where
-    S: Service<Request = Request<U>, Response = Option<Response<U>>>,
-    S::Error: 'static,
-    S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Encoder + Decoder,
-    <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
-    Out: Stream<Item = <U as Encoder>::Item> + Unpin,
-{
-    service: S,
-    sink: Option<Out>,
-    state: FramedState<S, U>,
-    framed: Framed<T, U>,
-    rx: mpsc::Receiver<Result<<U as Encoder>::Item, S::Error>>,
-    disconnect_timeout: u64,
-}
-
-impl<S, T, U, Out> InnerDispatcher<S, T, U, Out>
+impl<S, T, U, In> InnerDispatcher<S, T, U, In>
 where
     S: Service<Request = Request<U>, Response = Option<Response<U>>>,
     S::Error: 'static,
@@ -229,7 +228,7 @@ where
     U: Decoder + Encoder,
     <U as Encoder>::Item: 'static,
     <U as Encoder>::Error: std::fmt::Debug,
-    Out: Stream<Item = <U as Encoder>::Item> + Unpin,
+    In: Stream<Item = <U as Encoder>::Item> + Unpin,
 {
     fn poll_read(&mut self, cx: &mut Context<'_>) -> PollResult {
         loop {
@@ -238,15 +237,13 @@ where
                     let item = match self.framed.next_item(cx) {
                         Poll::Ready(Some(Ok(el))) => el,
                         Poll::Ready(Some(Err(err))) => {
-                            self.state = FramedState::Shutdown(Some(
-                                DispatcherError::Decoder(err),
-                            ));
+                            self.state =
+                                State::FramedError(DispatcherError::Decoder(err));
                             return PollResult::Continue;
                         }
                         Poll::Pending => return PollResult::Pending,
                         Poll::Ready(None) => {
-                            log::trace!("Client disconnected");
-                            self.state = FramedState::Shutdown(None);
+                            self.state = State::Stopping;
                             return PollResult::Continue;
                         }
                     };
@@ -255,7 +252,7 @@ where
                     crate::rt::spawn(self.service.call(item).map(move |item| {
                         let item = match item {
                             Ok(Some(item)) => Ok(item),
-                            Err(err) => Err(err),
+                            Err(e) => Err(e),
                             _ => return,
                         };
                         let _ = tx.send(item);
@@ -263,7 +260,7 @@ where
                 }
                 Poll::Pending => return PollResult::Pending,
                 Poll::Ready(Err(err)) => {
-                    self.state = FramedState::Error(DispatcherError::Service(err));
+                    self.state = State::Error(DispatcherError::Service(err));
                     return PollResult::Continue;
                 }
             }
@@ -277,34 +274,32 @@ where
                 match Pin::new(&mut self.rx).poll_next(cx) {
                     Poll::Ready(Some(Ok(msg))) => {
                         if let Err(err) = self.framed.write(msg) {
-                            self.state = FramedState::Shutdown(Some(
-                                DispatcherError::Encoder(err),
-                            ));
+                            self.state =
+                                State::FramedError(DispatcherError::Encoder(err));
                             return PollResult::Continue;
                         }
-                        continue;
                     }
                     Poll::Ready(Some(Err(err))) => {
-                        self.state = FramedState::Error(DispatcherError::Service(err));
+                        self.state = State::Error(DispatcherError::Service(err));
                         return PollResult::Continue;
                     }
-                    Poll::Ready(None) | Poll::Pending => {}
+                    Poll::Ready(None) | Poll::Pending => {},
                 }
 
-                if let Some(ref mut sink) = self.sink {
-                    match Pin::new(sink).poll_next(cx) {
+                if self.sink.is_some() {
+                    match Pin::new(self.sink.as_mut().unwrap()).poll_next(cx) {
                         Poll::Ready(Some(msg)) => {
                             if let Err(err) = self.framed.write(msg) {
-                                self.state = FramedState::Shutdown(Some(
+                                self.state = State::Shutdown(
                                     DispatcherError::Encoder(err),
-                                ));
+                                );
                                 return PollResult::Continue;
                             }
                             continue;
                         }
                         Poll::Ready(None) => {
                             let _ = self.sink.take();
-                            self.state = FramedState::FlushAndStop;
+                            self.state = State::FlushAndStop;
                             return PollResult::Continue;
                         }
                         Poll::Pending => (),
@@ -319,8 +314,7 @@ where
                     Poll::Ready(Ok(_)) => (),
                     Poll::Ready(Err(err)) => {
                         debug!("Error sending data: {:?}", err);
-                        self.state =
-                            FramedState::Shutdown(Some(DispatcherError::Encoder(err)));
+                        self.state = State::FramedError(DispatcherError::Encoder(err));
                         return PollResult::Continue;
                     }
                 }
@@ -328,95 +322,48 @@ where
                 break;
             }
         }
+
         PollResult::Pending
     }
 
-    pub(super) fn poll(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), DispatcherError<S::Error, U>>> {
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), DispatcherError<S::Error, U>>> {
         loop {
-            match self.state {
-                FramedState::Processing => {
-                    let read = self.poll_read(cx);
-                    let write = self.poll_write(cx);
-                    if read == PollResult::Continue || write == PollResult::Continue {
+            return match self.state {
+                State::Processing => {
+                    if self.poll_read(cx) || self.poll_write(cx) {
                         continue;
                     } else {
-                        return Poll::Pending;
+                        Poll::Pending
                     }
                 }
-                FramedState::Error(_) => {
+                State::Error(_) => {
                     // flush write buffer
                     if !self.framed.is_write_buf_empty() {
                         if let Poll::Pending = self.framed.flush(cx) {
                             return Poll::Pending;
                         }
                     }
-                    self.state = FramedState::Shutdown(Some(self.state.take_error()));
+                    Poll::Ready(Err(self.state.take_error()))
                 }
-                FramedState::FlushAndStop => {
-                    // drain service responses
-                    match Pin::new(&mut self.rx).poll_next(cx) {
-                        Poll::Ready(Some(Ok(msg))) => {
-                            if let Err(err) = self.framed.write(msg) {
-                                self.state = FramedState::Shutdown(Some(
-                                    DispatcherError::Encoder(err),
-                                ));
-                                continue;
-                            }
-                        }
-                        Poll::Ready(Some(Err(err))) => {
-                            self.state = FramedState::Shutdown(Some(err.into()));
-                            continue;
-                        }
-                        Poll::Ready(None) | Poll::Pending => (),
-                    }
-
-                    // flush io
+                State::FlushAndStop => {
                     if !self.framed.is_write_buf_empty() {
                         match self.framed.flush(cx) {
                             Poll::Ready(Err(err)) => {
                                 debug!("Error sending data: {:?}", err);
-                            }
-                            Poll::Pending => {
-                                return Poll::Pending;
-                            }
-                            Poll::Ready(_) => (),
-                        }
-                    };
-                    self.state = FramedState::Shutdown(None);
-                }
-                FramedState::Shutdown(ref mut err) => {
-                    return if self.service.poll_shutdown(cx, err.is_some()).is_ready() {
-                        if let Some(err) = err.take() {
-                            Poll::Ready(Err(err))
-                        } else {
-                            let pending = self.framed.close(cx).is_pending();
-                            if self.disconnect_timeout == 0 && pending {
-                                self.state = FramedState::ShutdownIo(delay_for(
-                                    Duration::from_millis(self.disconnect_timeout),
-                                ));
-                                continue;
-                            } else {
                                 Poll::Ready(Ok(()))
                             }
+                            Poll::Pending => Poll::Pending,
+                            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
                         }
                     } else {
-                        Poll::Pending
+                        Poll::Ready(Ok(()))
                     }
                 }
-                FramedState::ShutdownIo(ref mut delay) => {
-                    if let Poll::Ready(res) = self.framed.close(cx) {
-                        return Poll::Ready(
-                            res.map_err(|e| DispatcherError::Encoder(e.into())),
-                        );
-                    } else {
-                        ready!(Pin::new(delay).poll(cx));
-                        return Poll::Ready(Ok(()));
-                    }
+                State::FramedError(_) => {
+                    Poll::Ready(Err(self.state.take_framed_error()))
                 }
-            }
+                State::Stopping => Poll::Ready(Ok(())),
+            };
         }
     }
 }
@@ -427,9 +374,7 @@ mod tests {
     use futures::future::ok;
 
     use super::*;
-    use crate::channel::mpsc;
     use crate::codec::{BytesCodec, Framed};
-    use crate::rt::time::delay_for;
     use crate::testing::Io;
 
     #[ntex_rt::test]
@@ -441,7 +386,7 @@ mod tests {
         let framed = Framed::new(server, BytesCodec);
         let disp = Dispatcher::new(
             framed,
-            crate::fn_service(|msg: BytesMut| ok::<_, ()>(Some(msg.freeze()))),
+            crate::fn_service(|msg: BytesMut| ok::<_, ()>(msg.freeze())),
         );
         crate::rt::spawn(disp.map(|_| ()));
 
@@ -449,34 +394,6 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
         client.close().await;
-        assert!(client.is_server_dropped());
-    }
-
-    #[ntex_rt::test]
-    async fn test_sink() {
-        let (client, server) = Io::create();
-        client.remote_buffer_cap(1024);
-        client.write("GET /test HTTP/1\r\n\r\n");
-
-        let (tx, rx) = mpsc::channel();
-        let framed = Framed::new(server, BytesCodec);
-        let disp = Dispatcher::with(
-            framed,
-            Some(rx),
-            crate::fn_service(|msg: BytesMut| ok::<_, ()>(Some(msg.freeze()))),
-        )
-        .disconnect_timeout(25);
-        crate::rt::spawn(disp.map(|_| ()));
-
-        let buf = client.read().await.unwrap();
-        assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
-
-        assert!(tx.send(Bytes::from_static(b"test")).is_ok());
-        let buf = client.read().await.unwrap();
-        assert_eq!(buf, Bytes::from_static(b"test"));
-
-        drop(tx);
-        delay_for(Duration::from_millis(100)).await;
         assert!(client.is_server_dropped());
     }
 }

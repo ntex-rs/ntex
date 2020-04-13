@@ -11,10 +11,10 @@ use pin_project::project;
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
 use crate::service::{IntoService, IntoServiceFactory, Service, ServiceFactory};
+use crate::util::framed::Dispatcher;
 
-use super::dispatcher::Dispatcher;
-use super::error::ServiceError;
 use super::handshake::{Handshake, HandshakeResult};
+use super::ServiceError;
 
 type RequestItem<U> = <U as Decoder>::Item;
 type ResponseItem<U> = Option<<U as Encoder>::Item>;
@@ -487,12 +487,12 @@ where
                             "Connection handler is created, starting dispatcher"
                         );
                         Either::Left(FramedServiceImplResponseInner::Dispatcher(
-                            Dispatcher::new(
+                            Dispatcher::with(
                                 framed.take().unwrap(),
-                                handler,
                                 out.take(),
-                                *timeout,
-                            ),
+                                handler,
+                            )
+                            .disconnect_timeout(*timeout as u64),
                         ))
                     }
                     Poll::Pending => Either::Right(Poll::Pending),
@@ -500,7 +500,7 @@ where
                 }
             }
             FramedServiceImplResponseInner::Dispatcher(ref mut fut) => {
-                Either::Right(fut.poll(cx))
+                Either::Right(fut.poll_inner(cx))
             }
         }
     }
