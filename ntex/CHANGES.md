@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.9] - 2020-04-xx
+## [0.1.9] - 2020-04-13
 
 * ntex::util: Refcator framed dispatcher
 

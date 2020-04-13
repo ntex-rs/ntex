@@ -126,13 +126,13 @@ impl<T, U> Framed<T, U> {
 
     #[inline]
     /// Get read buffer.
-    pub fn read_buf_mut(&mut self) -> &mut BytesMut {
+    pub fn read_buf(&mut self) -> &mut BytesMut {
         &mut self.read_buf
     }
 
     #[inline]
     /// Get write buffer.
-    pub fn write_buf_mut(&mut self) -> &mut BytesMut {
+    pub fn write_buf(&mut self) -> &mut BytesMut {
         &mut self.write_buf
     }
 
@@ -556,6 +556,8 @@ mod tests {
         let data = Bytes::from_static(b"GET /test HTTP/1.1\r\n\r\n");
         Pin::new(&mut server).start_send(data).unwrap();
         assert_eq!(client.read_any(), b"".as_ref());
+        assert_eq!(server.read_buf(), b"".as_ref());
+        assert_eq!(server.write_buf(), b"GET /test HTTP/1.1\r\n\r\n".as_ref());
 
         assert!(lazy(|cx| Pin::new(&mut server).poll_flush(cx))
             .await
