@@ -45,7 +45,7 @@ impl<T> Unpin for Sender<T> {}
 impl<T> Sender<T> {
     /// Sends the provided message along this channel.
     pub fn send(&self, item: T) -> Result<(), SendError<T>> {
-        let shared = unsafe { self.shared.get_mut_unchecked() };
+        let shared = self.shared.get_mut();
         if !shared.has_receiver {
             return Err(SendError(item)); // receiver was dropped
         };
@@ -59,7 +59,8 @@ impl<T> Sender<T> {
     /// This prevents any further messages from being sent on the channel while
     /// still enabling the receiver to drain messages that are buffered.
     pub fn close(&self) {
-        let shared = unsafe { self.shared.get_mut_unchecked() };
+        println!("Close mpsc");
+        let shared = self.shared.get_mut();
         shared.has_receiver = false;
         shared.blocked_recv.wake();
     }
@@ -138,18 +139,24 @@ impl<T> Stream for Receiver<T> {
     type Item = T;
 
     fn poll_next(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        let shared = self.shared.get_mut();
+
         if self.shared.strong_count() == 1 {
             // All senders have been dropped, so drain the buffer and end the
             // stream.
-            Poll::Ready(self.shared.get_mut().buffer.pop_front())
-        } else if let Some(msg) = self.shared.get_mut().buffer.pop_front() {
+            Poll::Ready(shared.buffer.pop_front())
+        } else if let Some(msg) = shared.buffer.pop_front() {
             Poll::Ready(Some(msg))
         } else {
-            self.shared.get_mut().blocked_recv.register(cx.waker());
-            Poll::Pending
+            if shared.has_receiver {
+                shared.blocked_recv.register(cx.waker());
+                Poll::Pending
+            } else {
+                Poll::Ready(None)
+            }
         }
     }
 }
@@ -175,12 +182,6 @@ impl<T> fmt::Debug for SendError<T> {
 impl<T> fmt::Display for SendError<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(fmt, "send failed because receiver is gone")
-    }
-}
-
-impl<T: Any> Error for SendError<T> {
-    fn description(&self) -> &str {
-        "send failed because receiver is gone"
     }
 }
 
@@ -217,6 +218,9 @@ mod tests {
             Poll::Pending
         );
         drop(tx);
+
+        let (tx, mut rx) = channel::<String>();
+        tx.close();
         assert_eq!(rx.next().await, None);
 
         let (tx, rx) = channel();
@@ -229,5 +233,10 @@ mod tests {
         tx.close();
         assert!(tx.send("test").is_err());
         assert!(tx2.send("test").is_err());
+
+        let err = SendError("test");
+        assert!(format!("{:?}", err).contains("SendError"));
+        assert!(format!("{}", err).contains("send failed because receiver is gone"));
+        assert_eq!(err.into_inner(), "test");
     }
 }

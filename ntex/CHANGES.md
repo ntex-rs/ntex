@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.10] - 2020-04-13
+
+* ntex::channel: mpsc::Sender::close() must close receiver
+
 ## [0.1.9] - 2020-04-13
 
 * ntex::util: Refcator framed dispatcher

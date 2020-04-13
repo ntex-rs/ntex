@@ -37,12 +37,8 @@ impl<T> Cell<T> {
         unsafe { &*self.inner.as_ref().get() }
     }
 
-    pub(super) fn get_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.inner.as_ref().get() }
-    }
-
     #[allow(clippy::mut_from_ref)]
-    pub(super) unsafe fn get_mut_unchecked(&self) -> &mut T {
-        &mut *self.inner.as_ref().get()
+    pub(super) fn get_mut(&self) -> &mut T {
+        unsafe { &mut *self.inner.as_ref().get() }
     }
 }

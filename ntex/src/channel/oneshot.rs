@@ -63,7 +63,7 @@ impl<T> Sender<T> {
     /// then `Ok(())` is returned. If the receiving end was dropped before
     /// this function was called, however, then `Err` is returned with the value
     /// provided.
-    pub fn send(mut self, val: T) -> Result<(), T> {
+    pub fn send(self, val: T) -> Result<(), T> {
         if self.inner.strong_count() == 2 {
             let inner = self.inner.get_mut();
             inner.value = Some(val);
@@ -127,7 +127,7 @@ struct PoolInner<T> {
 
 impl<T> Pool<T> {
     pub fn channel(&self) -> (PSender<T>, PReceiver<T>) {
-        let token = unsafe { self.0.get_mut_unchecked() }.insert(PoolInner {
+        let token = self.0.get_mut().insert(PoolInner {
             flags: Flags::all(),
             value: None,
             waker: LocalWaker::default(),
@@ -184,7 +184,7 @@ impl<T> PSender<T> {
     /// then `Ok(())` is returned. If the receiving end was dropped before
     /// this function was called, however, then `Err` is returned with the value
     /// provided.
-    pub fn send(mut self, val: T) -> Result<(), T> {
+    pub fn send(self, val: T) -> Result<(), T> {
         let inner = unsafe { self.inner.get_mut().get_unchecked_mut(self.token) };
 
         if inner.flags.contains(Flags::RECEIVER) {

@@ -27,7 +27,7 @@ impl Condition {
 
     /// Get condition waiter
     pub fn wait(&self) -> Waiter {
-        let token = unsafe { self.0.get_mut_unchecked() }.data.insert(None);
+        let token = self.0.get_mut().data.insert(None);
         Waiter {
             token,
             inner: self.0.clone(),
@@ -59,12 +59,7 @@ pub struct Waiter {
 
 impl Waiter {
     pub fn poll_waiter(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let inner = unsafe {
-            self.inner
-                .get_mut_unchecked()
-                .data
-                .get_unchecked_mut(self.token)
-        };
+        let inner = unsafe { self.inner.get_mut().data.get_unchecked_mut(self.token) };
         if inner.is_none() {
             let waker = LocalWaker::default();
             waker.register(cx.waker());
@@ -80,7 +75,7 @@ impl Waiter {
 
 impl Clone for Waiter {
     fn clone(&self) -> Self {
-        let token = unsafe { self.inner.get_mut_unchecked() }.data.insert(None);
+        let token = self.inner.get_mut().data.insert(None);
         Waiter {
             token,
             inner: self.inner.clone(),
