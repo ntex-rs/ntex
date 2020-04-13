@@ -1,8 +1,7 @@
 //! A multi-producer, single-consumer, futures-aware, FIFO queue.
-use std::any::Any;
 use std::collections::VecDeque;
-use std::error::Error;
 use std::fmt;
+use std::error::Error;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -172,6 +171,8 @@ impl<T> Drop for Receiver<T> {
 /// Error type for sending, used when the receiving end of a channel is
 /// dropped
 pub struct SendError<T>(T);
+
+impl<T> Error for SendError<T> {}
 
 impl<T> fmt::Debug for SendError<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
