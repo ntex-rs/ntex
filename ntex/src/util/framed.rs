@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         drop(tx);
-        delay_for(Duration::from_millis(100)).await;
+        delay_for(Duration::from_millis(200)).await;
         assert!(client.is_server_dropped());
     }
 

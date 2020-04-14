@@ -220,9 +220,9 @@ fn test_panic_in_worker() {
 
     // first connect get dropped, because there is no workers
     assert!(net::TcpStream::connect(addr).is_ok());
-    thread::sleep(time::Duration::from_millis(100));
+    thread::sleep(time::Duration::from_millis(150));
     assert!(net::TcpStream::connect(addr).is_ok());
-    thread::sleep(time::Duration::from_millis(100));
+    thread::sleep(time::Duration::from_millis(150));
     assert_eq!(counter.load(Relaxed), 2);
 
     let _ = sys.stop();
