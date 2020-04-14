@@ -363,9 +363,7 @@ where
                             Poll::Ready(Err(err)) => {
                                 debug!("Error sending data: {:?}", err);
                             }
-                            Poll::Pending => {
-                                return Poll::Pending;
-                            }
+                            Poll::Pending => return Poll::Pending,
                             Poll::Ready(_) => (),
                         }
                     };
@@ -459,7 +457,10 @@ mod tests {
         let framed = Framed::new(server, BytesCodec);
         let disp = Dispatcher::new(
             framed,
-            crate::fn_service(|msg: BytesMut| ok::<_, ()>(Some(msg.freeze()))),
+            crate::fn_service(|msg: BytesMut| async move {
+                delay_for(Duration::from_millis(50)).await;
+                Ok::<_, ()>(Some(msg.freeze()))
+            }),
         );
         crate::rt::spawn(disp.map(|_| ()));
 
@@ -495,6 +496,38 @@ mod tests {
 
         drop(tx);
         delay_for(Duration::from_millis(100)).await;
+        assert!(client.is_server_dropped());
+    }
+
+    #[ntex_rt::test]
+    async fn test_err_in_service() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(0);
+        client.write("GET /test HTTP/1\r\n\r\n");
+
+        let mut framed = Framed::new(server, BytesCodec);
+        framed.write_buf().extend(b"GET /test HTTP/1\r\n\r\n");
+
+        let disp = Dispatcher::new(
+            framed,
+            crate::fn_service(|_: BytesMut| async { Err::<Option<Bytes>, _>(()) }),
+        );
+        crate::rt::spawn(disp.map(|_| ()));
+
+        let buf = client.read_any();
+        assert_eq!(buf, Bytes::from_static(b""));
+        delay_for(Duration::from_millis(25)).await;
+
+        // buffer should be flushed
+        client.remote_buffer_cap(1024);
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
+
+        // write side must be closed, dispatcher waiting for read side to close
+        assert!(client.is_closed());
+
+        // close read side
+        client.close().await;
         assert!(client.is_server_dropped());
     }
 }

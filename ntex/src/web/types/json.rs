@@ -104,7 +104,7 @@ where
     T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Json: {:?}", self.0)
+        f.debug_tuple("Json").field(&self.0).finish()
     }
 }
 
@@ -393,7 +393,7 @@ mod tests {
     use crate::http::header;
     use crate::web::test::{from_request, respond_to, TestRequest};
 
-    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    #[derive(Serialize, Deserialize, PartialEq, Debug, derive_more::Display)]
     struct MyObject {
         name: String,
     }
@@ -410,6 +410,18 @@ mod tests {
             },
             _ => false,
         }
+    }
+
+    #[test]
+    fn test_json() {
+        let mut j = Json(MyObject {
+            name: "test2".to_string(),
+        });
+        assert_eq!(j.name, "test2");
+        j.name = "test".to_string();
+        assert_eq!(j.name, "test");
+        assert!(format!("{:?}", j).contains("Json"));
+        assert!(format!("{}", j).contains("test"));
     }
 
     #[ntex_rt::test]

@@ -284,11 +284,13 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_pool() {
-        let (tx, rx) = pool().channel();
+        let p = pool();
+        let (tx, rx) = p.channel();
         tx.send("test").unwrap();
         assert_eq!(rx.await.unwrap(), "test");
 
-        let (tx, rx) = pool().channel();
+        let p2 = p.clone();
+        let (tx, rx) = p2.channel();
         assert!(!tx.is_canceled());
         drop(rx);
         assert!(tx.is_canceled());

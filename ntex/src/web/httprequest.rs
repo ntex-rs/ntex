@@ -351,6 +351,12 @@ mod tests {
             TestRequest::with_header("content-type", "text/plain").to_http_request();
         let dbg = format!("{:?}", req);
         assert!(dbg.contains("HttpRequest"));
+
+        let req = TestRequest::with_uri("/index.html?q=?").to_http_request();
+        let dbg = format!("{:?}", req);
+        assert!(dbg.contains("HttpRequest"));
+        assert!(req.peer_addr().is_none());
+        assert_eq!(req.method(), &Method::GET);
     }
 
     #[cfg(feature = "cookie")]

@@ -680,6 +680,7 @@ mod tests {
     use std::io;
 
     use super::*;
+    use crate::http::client::error::{ConnectError, SendRequestError};
     use crate::web::test::TestRequest;
     use crate::web::DefaultError;
 
@@ -707,26 +708,25 @@ mod tests {
         let req = TestRequest::default().to_http_request();
 
         use crate::util::timeout::TimeoutError;
-        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+        let resp = WebResponseError::<DefaultError>::error_response(
             &TimeoutError::<UrlencodedError>::Timeout,
             &req,
         );
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
 
-        use crate::http::client::error::{ConnectError, SendRequestError};
-        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+        let resp = WebResponseError::<DefaultError>::error_response(
             &SendRequestError::Connect(ConnectError::Timeout),
             &req,
         );
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
 
-        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+        let resp = WebResponseError::<DefaultError>::error_response(
             &SendRequestError::Connect(ConnectError::SslIsNotSupported),
             &req,
         );
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+        let resp = WebResponseError::<DefaultError>::error_response(
             &SendRequestError::TunnelNotSupported,
             &req,
         );
@@ -741,10 +741,37 @@ mod tests {
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         }
 
-        let resp: HttpResponse = WebResponseError::<DefaultError>::error_response(
+        let resp = WebResponseError::<DefaultError>::error_response(
             &crate::http::error::ContentTypeError::ParseError,
             &req,
         );
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let err = serde_urlencoded::from_str::<i32>("bad query").unwrap_err();
+        let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let err = PayloadError::Decoding;
+        let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_either_error() {
+        let req = TestRequest::default().to_http_request();
+
+        let err: either::Either<SendRequestError, PayloadError> =
+            either::Either::Left(SendRequestError::TunnelNotSupported);
+        let code = WebResponseError::<DefaultError>::status_code(&err);
+        assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
+        let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let err: either::Either<SendRequestError, PayloadError> =
+            either::Either::Right(PayloadError::Decoding);
+        let code = WebResponseError::<DefaultError>::status_code(&err);
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -842,6 +869,14 @@ mod tests {
 
     #[test]
     fn test_error_helpers() {
+        let err = ErrorBadRequest::<_, DefaultError>("err");
+        assert!(format!("{:?}", err).contains("web::InternalError"));
+
+        let err: InternalError<_, DefaultError> =
+            InternalError::from_response("err", HttpResponse::BadRequest().finish());
+        let r: HttpResponse = err.into();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+
         let r: HttpResponse = ErrorBadRequest::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 

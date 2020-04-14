@@ -462,6 +462,9 @@ where
     > {
         #[project]
         match self.project() {
+            FramedServiceImplResponseInner::Dispatcher(ref mut fut) => {
+                Either::Right(fut.poll_inner(cx))
+            }
             FramedServiceImplResponseInner::Handshake(fut, handler, timeout) => {
                 match fut.poll(cx) {
                     Poll::Ready(Ok(res)) => {
@@ -498,9 +501,6 @@ where
                     Poll::Pending => Either::Right(Poll::Pending),
                     Poll::Ready(Err(e)) => Either::Right(Poll::Ready(Err(e.into()))),
                 }
-            }
-            FramedServiceImplResponseInner::Dispatcher(ref mut fut) => {
-                Either::Right(fut.poll_inner(cx))
             }
         }
     }

@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::fmt;
 use std::future::Future;
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
@@ -53,39 +52,26 @@ impl<E: fmt::Display> fmt::Display for InOrderError<E> {
 
 /// InOrder - The service will yield responses as they become available,
 /// in the order that their originating requests were submitted to the service.
-pub struct InOrder<S> {
-    _t: PhantomData<S>,
-}
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InOrder;
 
-impl<S> InOrder<S>
-where
-    S: Service + 'static,
-    S::Response: 'static,
-    S::Future: 'static,
-    S::Error: 'static,
-{
+impl InOrder {
     pub fn new() -> Self {
-        Self { _t: PhantomData }
+        Self
     }
 
-    pub fn service(service: S) -> InOrderService<S> {
+    pub fn service<S>(service: S) -> InOrderService<S>
+    where
+        S: Service + 'static,
+        S::Response: 'static,
+        S::Future: 'static,
+        S::Error: 'static,
+    {
         InOrderService::new(service)
     }
 }
 
-impl<S> Default for InOrder<S>
-where
-    S: Service + 'static,
-    S::Response: 'static,
-    S::Future: 'static,
-    S::Error: 'static,
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<S> Transform<S> for InOrder<S>
+impl<S> Transform<S> for InOrder
 where
     S: Service + 'static,
     S::Response: 'static,
@@ -169,13 +155,7 @@ where
         }
 
         // check nested service
-        if let Poll::Pending =
-            self.service.poll_ready(cx).map_err(InOrderError::Service)?
-        {
-            Poll::Pending
-        } else {
-            Poll::Ready(Ok(()))
-        }
+        self.service.poll_ready(cx).map_err(InOrderError::Service)
     }
 
     #[inline]
@@ -262,7 +242,7 @@ mod tests {
             let rx3 = rx3;
             let tx_stop = tx_stop;
             let _ = crate::rt::System::new("test").block_on(async {
-                let srv = InOrderService::new(Srv);
+                let srv = InOrder::default().new_transform(Srv).await.unwrap();
 
                 let _ = lazy(|cx| srv.poll_ready(cx)).await;
                 let res1 = srv.call(rx1);
@@ -293,5 +273,19 @@ mod tests {
 
         let _ = rx_stop.await;
         let _ = h.join();
+    }
+
+    #[test]
+    fn test_error() {
+        #[derive(Debug, derive_more::Display)]
+        struct TestError;
+
+        let e = InOrderError::<TestError>::Disconnected;
+        assert!(format!("{:?}", e).contains("InOrderError::Disconnected"));
+        assert!(format!("{}", e).contains("InOrder service disconnected"));
+
+        let e: InOrderError<TestError> = TestError.into();
+        assert!(format!("{:?}", e).contains("InOrderError::Service(TestError)"));
+        assert!(format!("{}", e).contains("TestError"));
     }
 }

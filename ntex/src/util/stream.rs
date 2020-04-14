@@ -17,7 +17,6 @@ where
     stream: S,
     service: T,
     err_rx: mpsc::Receiver<T::Error>,
-    err_tx: mpsc::Sender<T::Error>,
 }
 
 impl<S, T> Dispatcher<S, T>
@@ -29,11 +28,9 @@ where
     where
         F: IntoService<T>,
     {
-        let (err_tx, err_rx) = mpsc::channel();
         Dispatcher {
-            err_rx,
-            err_tx,
             stream,
+            err_rx: mpsc::channel().1,
             service: service.into_service(),
         }
     }
@@ -57,7 +54,7 @@ where
             return match this.service.poll_ready(cx)? {
                 Poll::Ready(_) => match this.stream.poll_next(cx) {
                     Poll::Ready(Some(item)) => {
-                        let stop = this.err_tx.clone();
+                        let stop = this.err_rx.sender();
                         crate::rt::spawn(this.service.call(item).map(move |res| {
                             if let Err(e) = res {
                                 let _ = stop.send(e);
@@ -72,5 +69,39 @@ where
                 Poll::Pending => Poll::Pending,
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::future::ok;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use super::*;
+    use crate::channel::mpsc;
+    use crate::rt::time::delay_for;
+
+    #[ntex_rt::test]
+    async fn test_basic() {
+        let (tx, rx) = mpsc::channel();
+        let counter = Rc::new(Cell::new(0));
+        let counter2 = counter.clone();
+
+        let disp = Dispatcher::new(
+            rx,
+            crate::fn_service(move |_: ()| {
+                counter2.set(counter2.get() + 1);
+                ok::<_, ()>(())
+            }),
+        );
+        crate::rt::spawn(disp.map(|_| ()));
+
+        tx.send(()).unwrap();
+        tx.send(()).unwrap();
+        drop(tx);
+        delay_for(Duration::from_millis(10)).await;
+        assert_eq!(counter.get(), 2);
     }
 }

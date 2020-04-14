@@ -3,7 +3,6 @@
 
 use std::future::Future;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::task::{self, Context, Poll};
 
 mod and_then;
@@ -190,6 +189,11 @@ pub trait ServiceFactory {
     type Future: Future<Output = Result<Self::Service, Self::InitError>>;
 
     /// Create and return a new service value asynchronously.
+    fn create(&self, cfg: Self::Config) -> Self::Future {
+        self.new_service(cfg)
+    }
+
+    #[doc(hidden)]
     fn new_service(&self, cfg: Self::Config) -> Self::Future;
 
     #[inline]
@@ -224,7 +228,7 @@ pub trait ServiceFactory {
     }
 }
 
-impl<'a, S> Service for &'a mut S
+impl<'a, S> Service for &'a S
 where
     S: Service + 'a,
 {
@@ -298,23 +302,6 @@ where
 }
 
 impl<S> ServiceFactory for Rc<S>
-where
-    S: ServiceFactory,
-{
-    type Request = S::Request;
-    type Response = S::Response;
-    type Error = S::Error;
-    type Config = S::Config;
-    type Service = S::Service;
-    type InitError = S::InitError;
-    type Future = S::Future;
-
-    fn new_service(&self, cfg: S::Config) -> S::Future {
-        self.as_ref().new_service(cfg)
-    }
-}
-
-impl<S> ServiceFactory for Arc<S>
 where
     S: ServiceFactory,
 {

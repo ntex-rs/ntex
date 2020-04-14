@@ -58,7 +58,6 @@ impl<T> Sender<T> {
     /// This prevents any further messages from being sent on the channel while
     /// still enabling the receiver to drain messages that are buffered.
     pub fn close(&self) {
-        println!("Close mpsc");
         let shared = self.shared.get_mut();
         shared.has_receiver = false;
         shared.blocked_recv.wake();
@@ -98,6 +97,7 @@ impl<T> Sink<T> for Sender<T> {
         self: Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
+        self.close();
         Poll::Ready(Ok(()))
     }
 }
@@ -195,11 +195,14 @@ impl<T> SendError<T> {
 mod tests {
     use super::*;
     use futures::future::lazy;
-    use futures::{Stream, StreamExt};
+    use futures::{Sink, Stream, StreamExt};
 
     #[ntex_rt::test]
     async fn test_mpsc() {
         let (tx, mut rx) = channel();
+        assert!(format!("{:?}", tx).contains("Sender"));
+        assert!(format!("{:?}", rx).contains("Receiver"));
+
         tx.send("test").unwrap();
         assert_eq!(rx.next().await.unwrap(), "test");
 
@@ -237,5 +240,19 @@ mod tests {
         assert!(format!("{:?}", err).contains("SendError"));
         assert!(format!("{}", err).contains("send failed because receiver is gone"));
         assert_eq!(err.into_inner(), "test");
+    }
+
+    #[ntex_rt::test]
+    async fn test_sink() {
+        let (mut tx, mut rx) = channel();
+        lazy(|cx| {
+            assert!(Pin::new(&mut tx).poll_ready(cx).is_ready());
+            assert!(Pin::new(&mut tx).start_send("test").is_ok());
+            assert!(Pin::new(&mut tx).poll_flush(cx).is_ready());
+            assert!(Pin::new(&mut tx).poll_close(cx).is_ready());
+        })
+        .await;
+        assert_eq!(rx.next().await.unwrap(), "test");
+        assert_eq!(rx.next().await, None);
     }
 }

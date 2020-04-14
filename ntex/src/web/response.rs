@@ -90,18 +90,17 @@ impl WebResponse {
     }
 
     /// Execute closure and in case of error convert it to response.
-    pub fn checked_expr<F, E, Err>(mut self, f: F) -> Self
+    pub fn checked_expr<Err, F, E>(mut self, f: F) -> Self
     where
         F: FnOnce(&mut Self) -> Result<(), E>,
         E: Into<Err::Container>,
         Err: ErrorRenderer,
     {
-        match f(&mut self) {
-            Ok(_) => self,
-            Err(err) => {
-                let res: Response = err.into().into();
-                WebResponse::new(res, self.request)
-            }
+        if let Err(err) = f(&mut self) {
+            let res: Response = err.into().into();
+            WebResponse::new(res, self.request)
+        } else {
+            self
         }
     }
 
@@ -147,5 +146,33 @@ impl fmt::Debug for WebResponse {
         }
         let _ = writeln!(f, "  body: {:?}", self.response.body().size());
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::http::{self, StatusCode};
+    use crate::web::test::TestRequest;
+    use crate::web::{DefaultError, HttpResponse};
+
+    #[test]
+    fn test_response() {
+        let res = TestRequest::default().to_srv_response(HttpResponse::Ok().finish());
+        let res = res.into_response(HttpResponse::BadRequest().finish());
+        assert_eq!(res.response().status(), StatusCode::BAD_REQUEST);
+
+        let err = http::error::PayloadError::Overflow;
+        let res = res.error_response::<DefaultError, _>(err);
+        assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        let res = TestRequest::default().to_srv_response(HttpResponse::Ok().finish());
+        let mut res = res.checked_expr::<DefaultError, _, _>(|_| {
+            Ok::<_, http::error::PayloadError>(())
+        });
+        assert_eq!(res.response_mut().status(), StatusCode::OK);
+        let res = res.checked_expr::<DefaultError, _, _>(|_| {
+            Err(http::error::PayloadError::Overflow)
+        });
+        assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

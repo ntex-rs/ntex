@@ -163,7 +163,10 @@ impl Io {
 
     /// Read any available data
     pub fn remote_buffer_cap(&self, cap: usize) {
+        // change cap
         self.local.lock().unwrap().borrow_mut().buf_cap = cap;
+        // wake remote
+        self.remote.lock().unwrap().borrow().waker.wake();
     }
 
     /// Read any available data
@@ -268,7 +271,7 @@ impl AsyncRead for Io {
 impl AsyncWrite for Io {
     fn poll_write(
         self: Pin<&mut Self>,
-        _: &mut Context<'_>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let guard = self.remote.lock().unwrap();
@@ -284,11 +287,25 @@ impl AsyncWrite for Io {
                     ch.waker.wake();
                     Poll::Ready(Ok(cap))
                 } else {
+                    self.local
+                        .lock()
+                        .unwrap()
+                        .borrow_mut()
+                        .waker
+                        .register(cx.waker());
                     Poll::Pending
                 }
             }
             IoState::Close => Poll::Ready(Ok(0)),
-            IoState::Pending => Poll::Pending,
+            IoState::Pending => {
+                self.local
+                    .lock()
+                    .unwrap()
+                    .borrow_mut()
+                    .waker
+                    .register(cx.waker());
+                Poll::Pending
+            }
             IoState::Err(e) => Poll::Ready(Err(e)),
         }
     }

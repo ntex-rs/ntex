@@ -130,7 +130,7 @@ where
 
 impl<T: fmt::Debug> fmt::Debug for Form<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        f.debug_tuple("Form").field(&self.0).finish()
     }
 }
 
@@ -359,10 +359,24 @@ mod tests {
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::web::test::{from_request, respond_to, TestRequest};
 
-    #[derive(Deserialize, Serialize, Debug, PartialEq)]
+    #[derive(Deserialize, Serialize, Debug, PartialEq, derive_more::Display)]
+    #[display(fmt = "{}", "hello")]
     struct Info {
         hello: String,
         counter: i64,
+    }
+
+    #[test]
+    fn test_basic() {
+        let mut f = Form(Info {
+            hello: "world".into(),
+            counter: 123,
+        });
+        assert_eq!(f.hello, "world");
+        f.hello = "test".to_string();
+        assert_eq!(f.hello, "test");
+        assert!(format!("{:?}", f).contains("Form"));
+        assert!(format!("{}", f).contains("test"));
     }
 
     #[ntex_rt::test]

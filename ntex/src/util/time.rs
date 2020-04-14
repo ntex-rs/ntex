@@ -160,7 +160,16 @@ impl SystemTimeService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::future::lazy;
     use std::time::{Duration, SystemTime};
+
+    #[ntex_rt::test]
+    async fn low_res_timee() {
+        let f = LowResTime::default();
+        let srv = f.new_service(()).await.unwrap();
+        assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
+        srv.call(()).await.unwrap();
+    }
 
     /// State Under Test: Two calls of `SystemTimeService::now()` return the same value if they are done within resolution interval of `SystemTimeService`.
     ///
