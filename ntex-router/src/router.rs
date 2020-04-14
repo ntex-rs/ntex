@@ -359,4 +359,105 @@ mod tests {
         assert_eq!(*h, 11);
         assert_eq!(&path["val"], "ttt");
     }
+
+    #[test]
+    fn test_recognizer_checked() {
+        let mut router = Router::<usize, usize>::build();
+        router.path("/name", 10).2 = Some(0);
+        router.path("/name", 11).2 = Some(1);
+        router.path("/name", 12).2 = Some(2);
+        let mut router = router.finish();
+
+        let mut p = Path::new("/name");
+        assert_eq!(
+            *router
+                .recognize_checked(&mut p, |_, v| v == Some(&0))
+                .unwrap()
+                .0,
+            10
+        );
+        let mut p = Path::new("/name");
+        assert_eq!(
+            *router
+                .recognize_checked(&mut p, |_, v| v == Some(&1))
+                .unwrap()
+                .0,
+            11
+        );
+        let mut p = Path::new("/name");
+        assert_eq!(
+            *router
+                .recognize_checked(&mut p, |_, v| v == Some(&2))
+                .unwrap()
+                .0,
+            12
+        );
+        let mut p = Path::new("/name");
+        assert_eq!(
+            *router
+                .recognize_mut_checked(&mut p, |_, v| v == Some(&0))
+                .unwrap()
+                .0,
+            10
+        );
+        let mut p = Path::new("/name");
+        assert_eq!(
+            *router
+                .recognize_mut_checked(&mut p, |_, v| v == Some(&1))
+                .unwrap()
+                .0,
+            11
+        );
+        let mut p = Path::new("/name");
+        assert_eq!(
+            *router
+                .recognize_mut_checked(&mut p, |_, v| v == Some(&2))
+                .unwrap()
+                .0,
+            12
+        );
+    }
+
+    #[test]
+    fn test_recognizer_checked_insensitive() {
+        let mut router = Router::<usize, usize>::build();
+        router.case_insensitive();
+        router.path("/name", 10).2 = Some(0);
+        router.path("/name", 11).2 = Some(1);
+        router.path("/name", 12).2 = Some(2);
+        let mut router = router.finish();
+
+        let mut p = Path::new("/Name");
+        assert_eq!(
+            *router
+                .recognize_checked(&mut p, |_, v| v == Some(&0))
+                .unwrap()
+                .0,
+            10
+        );
+        let mut p = Path::new("/Name");
+        assert_eq!(
+            *router
+                .recognize_checked(&mut p, |_, v| v == Some(&1))
+                .unwrap()
+                .0,
+            11
+        );
+        let mut p = Path::new("/Name");
+        assert_eq!(
+            *router
+                .recognize_mut_checked(&mut p, |_, v| v == Some(&0))
+                .unwrap()
+                .0,
+            10
+        );
+        let mut p = Path::new("/name");
+        assert_eq!(
+            *router
+                .recognize_mut_checked(&mut p, |_, v| v == Some(&1))
+                .unwrap()
+                .0,
+            11
+        );
+    }
 }

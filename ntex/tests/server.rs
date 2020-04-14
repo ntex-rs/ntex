@@ -32,7 +32,7 @@ fn test_bind() {
     });
     let (_, sys) = rx.recv().unwrap();
 
-    thread::sleep(time::Duration::from_millis(500));
+    thread::sleep(time::Duration::from_millis(300));
     assert!(net::TcpStream::connect(addr).is_ok());
     let _ = sys.stop();
     let _ = h.join();

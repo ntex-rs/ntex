@@ -502,3 +502,52 @@ pub(crate) fn create_tcp_listener(
     builder.listen(backlog)?;
     Ok(builder.into_tcp_listener())
 }
+
+#[cfg(test)]
+mod tests {
+    use futures::future::ok;
+    use std::sync::mpsc;
+    use std::{net, thread, time};
+
+    use crate::server::{signals, Server, TestServer};
+    use crate::service::fn_service;
+
+    #[cfg(unix)]
+    #[ntex_rt::test]
+    async fn test_signals() {
+        fn start(tx: mpsc::Sender<(Server, net::SocketAddr)>) -> thread::JoinHandle<()> {
+            thread::spawn(move || {
+                let mut sys = crate::rt::System::new("test");
+                let addr = TestServer::unused_addr();
+                let srv = sys.exec(|| {
+                    crate::server::build()
+                        .workers(1)
+                        .disable_signals()
+                        .bind("test", addr, move || fn_service(|_| ok::<_, ()>(())))
+                        .unwrap()
+                        .start()
+                });
+                let _ = tx.send((srv, addr));
+                let _ = sys.run();
+            })
+        }
+
+        for sig in vec![
+            signals::Signal::Int,
+            signals::Signal::Term,
+            signals::Signal::Quit,
+        ] {
+            let (tx, rx) = mpsc::channel();
+            let h = start(tx);
+            let (srv, addr) = rx.recv().unwrap();
+
+            thread::sleep(time::Duration::from_millis(300));
+            assert!(net::TcpStream::connect(addr).is_ok());
+
+            srv.signal(sig);
+            thread::sleep(time::Duration::from_millis(300));
+            assert!(net::TcpStream::connect(addr).is_err());
+            let _ = h.join();
+        }
+    }
+}
