@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use futures::future::{FutureExt, LocalBoxFuture};
 
-use crate::http::Extensions;
+use crate::http::{Extensions, Request};
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{
@@ -13,7 +13,7 @@ use crate::service::{
 };
 
 use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
-use super::config::ServiceConfig;
+use super::config::{AppConfig, ServiceConfig};
 use super::request::WebRequest;
 use super::resource::Resource;
 use super::response::WebResponse;
@@ -410,8 +410,7 @@ where
     /// Use middleware when you need to read or modify *every* request or response in some way.
     ///
     /// ```rust
-    /// use ntex::service::Service;
-    /// use ntex::web;
+    /// use ntex::{web, Service};
     /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
     ///
     /// async fn index() -> &'static str {
@@ -470,6 +469,37 @@ where
     pub fn case_insensitive_routing(mut self) -> Self {
         self.case_insensitive = true;
         self
+    }
+
+    /// Construct service factory suitable for `http::HttpService`.
+    ///
+    /// ```rust,no_run
+    /// use ntex::{web, http, server};
+    ///
+    /// #[ntex::main]
+    /// async fn main() -> std::io::Result<()> {
+    ///     server::build().bind("http", "127.0.0.1:0", ||
+    ///         http::HttpService::build().finish(
+    ///             web::App::new()
+    ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))
+    ///                 .with_config(web::dev::AppConfig::default())
+    ///         ).tcp()
+    ///     )?
+    ///     .run()
+    ///     .await
+    /// }
+    /// ```
+    pub fn with_config(
+        self,
+        cfg: AppConfig,
+    ) -> impl ServiceFactory<
+        Config = (),
+        Request = Request,
+        Response = WebResponse,
+        Error = T::Error,
+        InitError = T::InitError,
+    > {
+        crate::map_config(self.into_factory(), move |_| cfg.clone())
     }
 }
 

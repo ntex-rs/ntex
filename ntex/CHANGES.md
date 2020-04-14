@@ -4,6 +4,8 @@
 
 * ntex::web: Allow to add multiple routes at once
 
+* ntex::web: Add `App::with_config` method, simplifies app service factory.
+
 ## [0.1.10] - 2020-04-13
 
 * ntex::channel: mpsc::Sender::close() must close receiver
