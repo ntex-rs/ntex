@@ -1,4 +1,4 @@
-//! Various helpers for Actix applications to use during testing.
+//! Various helpers for ntex applications to use during testing.
 use std::convert::TryFrom;
 use std::error::Error;
 use std::net::SocketAddr;

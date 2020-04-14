@@ -128,6 +128,7 @@ pub mod dev {
     pub use crate::web::request::WebRequest;
     pub use crate::web::response::WebResponse;
     pub use crate::web::rmap::ResourceMap;
+    pub use crate::web::route::IntoRoutes;
     pub use crate::web::service::{
         WebServiceAdapter, WebServiceConfig, WebServiceFactory,
     };

@@ -22,7 +22,7 @@ use super::handler::Handler;
 use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
-use super::route::{Route, RouteService};
+use super::route::{IntoRoutes, Route, RouteService};
 use super::types::Data;
 
 type HttpService<Err: ErrorRenderer> =
@@ -157,17 +157,24 @@ where
     /// fn main() {
     ///     let app = App::new().service(
     ///         web::resource("/container/")
-    ///              .route(web::get().to(get_handler))
-    ///              .route(web::post().to(post_handler))
-    ///              .route(web::delete().to(delete_handler))
+    ///             .route([
+    ///                 web::get().to(get_handler),
+    ///                 web::post().to(post_handler),
+    ///                 web::delete().to(delete_handler)
+    ///             ])
     ///     );
     /// }
     /// # async fn get_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
     /// # async fn post_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
     /// # async fn delete_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
     /// ```
-    pub fn route(mut self, route: Route<Err>) -> Self {
-        self.routes.push(route);
+    pub fn route<U>(mut self, route: U) -> Self
+    where
+        U: IntoRoutes<Err>,
+    {
+        for route in route.routes() {
+            self.routes.push(route);
+        }
         self
     }
 

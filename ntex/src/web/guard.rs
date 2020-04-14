@@ -4,7 +4,7 @@
 //! handler service. In essence it is just a function that accepts a
 //! reference to a `RequestHead` instance and returns a boolean.
 //! It is possible to add guards to *scopes*, *resources*
-//! and *routes*. Actix provide several guards by default, like various
+//! and *routes*. ntex provide several guards by default, like various
 //! http methods, header, etc. To become a guard, type must implement `Guard`
 //! trait. Simple functions coulds guards as well.
 //!

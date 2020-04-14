@@ -273,7 +273,7 @@ where
     }
 }
 
-/// WebServiceconfig implementation for a Vec<T>
+/// WebServiceFactory implementation for a Vec<T>
 #[allow(unused_parens)]
 impl<Err, T> WebServiceFactory<Err> for Vec<T>
 where
@@ -288,7 +288,7 @@ where
 }
 
 macro_rules! tuple_web_service({$(($n:tt, $T:ident)),+} => {
-    /// WebServiceconfig implementation for a tuple
+    /// WebServiceFactory implementation for a tuple
     #[allow(unused_parens)]
     impl<Err: ErrorRenderer, $($T: WebServiceFactory<Err> + 'static),+> WebServiceFactory<Err> for ($($T,)+) {
         fn register(self, config: &mut WebServiceConfig<Err>) {
@@ -300,7 +300,7 @@ macro_rules! tuple_web_service({$(($n:tt, $T:ident)),+} => {
 });
 
 macro_rules! array_web_service({$num:tt, $($T:ident),+} => {
-    /// WebServiceconfig implementation for a tuple
+    /// WebServiceFactory implementation for an array
     #[allow(unused_parens)]
     impl<Err, T> WebServiceFactory<Err> for [T; $num]
     where

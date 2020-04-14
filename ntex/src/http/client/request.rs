@@ -38,7 +38,7 @@ const HTTPS_ENCODING: &str = "br";
 /// async fn main() {
 ///    let response = Client::new()
 ///         .get("http://www.rust-lang.org") // <- Create request builder
-///         .header("User-Agent", "Actix-web")
+///         .header("User-Agent", "ntex::web")
 ///         .send()                          // <- Send http request
 ///         .await;
 ///

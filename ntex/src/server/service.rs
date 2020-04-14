@@ -8,7 +8,7 @@ use futures::{FutureExt, TryFutureExt};
 use log::error;
 
 use crate::rt::spawn;
-use crate::service::{Service, ServiceFactory as ActixServiceFactory};
+use crate::service::{Service, ServiceFactory};
 use crate::util::counter::CounterGuard;
 
 use super::socket::{FromStream, StdStream};
@@ -25,7 +25,7 @@ pub(super) enum ServerMessage {
 }
 
 pub trait StreamServiceFactory<Stream: FromStream>: Send + Clone + 'static {
-    type Factory: ActixServiceFactory<Config = (), Request = Stream>;
+    type Factory: ServiceFactory<Config = (), Request = Stream>;
 
     fn create(&self) -> Self::Factory;
 }
@@ -187,7 +187,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 impl<F, T, I> StreamServiceFactory<I> for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: ActixServiceFactory<Config = (), Request = I>,
+    T: ServiceFactory<Config = (), Request = I>,
     I: FromStream,
 {
     type Factory = T;

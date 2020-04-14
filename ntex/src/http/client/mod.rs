@@ -9,7 +9,7 @@
 //!    let mut client = Client::default();
 //!
 //!    let response = client.get("http://www.rust-lang.org") // <- Create request builder
-//!        .header("User-Agent", "Actix-web")
+//!        .header("User-Agent", "ntex::web")
 //!        .send()                             // <- Send http request
 //!        .await;
 //!
@@ -67,7 +67,7 @@ pub struct Connect {
 ///     let mut client = Client::default();
 ///
 ///     let res = client.get("http://www.rust-lang.org") // <- Create request builder
-///         .header("User-Agent", "Actix-web")
+///         .header("User-Agent", "ntex::web")
 ///         .send()                             // <- Send http request
 ///         .await;                             // <- send request and wait for response
 ///

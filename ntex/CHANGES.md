@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.11] - 2020-04-xx
+
+* ntex::web: Allow to add multiple routes at once
+
 ## [0.1.10] - 2020-04-13
 
 * ntex::channel: mpsc::Sender::close() must close receiver
