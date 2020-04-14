@@ -476,7 +476,7 @@ impl<'a> fmt::Display for FormatDisplay<'a> {
 
 #[cfg(test)]
 mod tests {
-    use futures::future::ok;
+    use futures::future::{lazy, ok};
 
     use super::*;
     use crate::http::{header, StatusCode};
@@ -491,19 +491,23 @@ mod tests {
                 req.into_response(
                     HttpResponse::build(StatusCode::OK)
                         .header("X-Test", "ttt")
-                        .finish(),
+                        .body("TEST"),
                 ),
             )
         };
-        let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D test");
+        let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D test")
+            .exclude("/test");
 
         let srv = Transform::new_transform(&logger, srv.into_service())
             .await
             .unwrap();
 
+        assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
+        assert!(lazy(|cx| srv.poll_shutdown(cx, true).is_ready()).await);
+
         let req = TestRequest::with_header(
             header::USER_AGENT,
-            header::HeaderValue::from_static("ACTIX-WEB"),
+            header::HeaderValue::from_static("NTEX-WEB"),
         )
         .to_srv_request();
         let _res = srv.call(req).await;
@@ -516,7 +520,7 @@ mod tests {
             header::USER_AGENT,
             header::HeaderValue::from_static("ACTIX-WEB"),
         )
-        .uri("/test/route/yeah")
+        .uri("/test/route/yeah?q=test")
         .to_srv_request();
 
         let now = OffsetDateTime::now();

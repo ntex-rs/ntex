@@ -165,7 +165,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::future::ok;
+    use futures::future::{lazy, ok};
 
     use super::*;
     use crate::http::header::CONTENT_TYPE;
@@ -181,6 +181,9 @@ mod tests {
             .new_transform(ok_service())
             .await
             .unwrap();
+
+        assert!(lazy(|cx| mw.poll_ready(cx).is_ready()).await);
+        assert!(lazy(|cx| mw.poll_shutdown(cx, true).is_ready()).await);
 
         let req = TestRequest::default().to_srv_request();
         let resp = mw.call(req).await.unwrap();
