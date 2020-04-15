@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use futures::future::{ok, Ready};
+use futures::future::{ok, Either, Ready};
 use regex::Regex;
 use time::OffsetDateTime;
 
@@ -154,7 +154,7 @@ where
     type Request = WebRequest<E>;
     type Response = WebResponse;
     type Error = S::Error;
-    type Future = LoggerResponse<S>;
+    type Future = Either<LoggerResponse<S>, S::Future>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -169,23 +169,19 @@ where
     #[inline]
     fn call(&self, req: WebRequest<E>) -> Self::Future {
         if self.inner.exclude.contains(req.path()) {
-            LoggerResponse {
-                fut: self.service.call(req),
-                format: None,
-                time: OffsetDateTime::now(),
-            }
+            Either::Right(self.service.call(req))
         } else {
-            let now = OffsetDateTime::now();
+            let time = OffsetDateTime::now();
             let mut format = self.inner.format.clone();
 
             for unit in &mut format.0 {
-                unit.render_request(now, &req);
+                unit.render_request(time, &req);
             }
-            LoggerResponse {
-                fut: self.service.call(req),
+            Either::Left(LoggerResponse {
+                time,
                 format: Some(format),
-                time: now,
-            }
+                fut: self.service.call(req),
+            })
         }
     }
 }
@@ -511,6 +507,11 @@ mod tests {
             header::HeaderValue::from_static("NTEX-WEB"),
         )
         .to_srv_request();
+        let res = srv.call(req).await.unwrap();
+        let body = test::read_body(res).await;
+        assert_eq!(body, Bytes::from_static(b"TEST"));
+
+        let req = TestRequest::with_uri("/test").to_srv_request();
         let res = srv.call(req).await.unwrap();
         let body = test::read_body(res).await;
         assert_eq!(body, Bytes::from_static(b"TEST"));
