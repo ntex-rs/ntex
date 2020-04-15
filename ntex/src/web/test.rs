@@ -1164,4 +1164,35 @@ mod tests {
         let res = app.call(req).await.unwrap();
         assert!(res.status().is_success());
     }
+
+    #[ntex_rt::test]
+    async fn test_test_methods() {
+        let srv = server(|| {
+            App::new().service(
+                web::resource("/index.html").route((
+                    web::route()
+                        .method(Method::PUT)
+                        .to(|| async { HttpResponse::Ok() }),
+                    web::route()
+                        .method(Method::PATCH)
+                        .to(|| async { HttpResponse::Ok() }),
+                    web::route()
+                        .method(Method::DELETE)
+                        .to(|| async { HttpResponse::Ok() }),
+                    web::route()
+                        .method(Method::OPTIONS)
+                        .to(|| async { HttpResponse::Ok() }),
+                )),
+            )
+        })
+        .await;
+
+        assert_eq!(srv.put().send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(srv.patch().send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(srv.delete().send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(srv.options().send().await.unwrap().status(), StatusCode::OK);
+
+        let res = srv.put().send().await.unwrap();
+        assert_eq!(srv.load_body(res).await.unwrap(), Bytes::new());
+    }
 }
