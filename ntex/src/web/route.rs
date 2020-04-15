@@ -298,24 +298,22 @@ mod tests {
     async fn test_route() {
         let mut srv = init_service(
             App::new()
-                .service(
-                    web::resource("/test")
-                        .route(web::get().to(|| async { HttpResponse::Ok() }))
-                        .route(web::put().to(|| async {
-                            Err::<HttpResponse, _>(error::ErrorBadRequest::<
-                                _,
-                                DefaultError,
-                            >("err"))
-                        }))
-                        .route(web::post().to(|| async {
-                            delay_for(Duration::from_millis(100)).await;
-                            HttpResponse::Created()
-                        }))
-                        .route(web::delete().to(|| async {
-                            delay_for(Duration::from_millis(100)).await;
-                            Err::<HttpResponse, _>(error::ErrorBadRequest("err"))
-                        })),
-                )
+                .service(web::resource("/test").route(vec![
+                    web::get().to(|| async { HttpResponse::Ok() }),
+                    web::put().to(|| async {
+                        Err::<HttpResponse, _>(
+                            error::ErrorBadRequest::<_, DefaultError>("err"),
+                        )
+                    }),
+                    web::post().to(|| async {
+                        delay_for(Duration::from_millis(100)).await;
+                        HttpResponse::Created()
+                    }),
+                    web::delete().to(|| async {
+                        delay_for(Duration::from_millis(100)).await;
+                        Err::<HttpResponse, _>(error::ErrorBadRequest("err"))
+                    }),
+                ]))
                 .service(web::resource("/json").route(web::get().to(|| async {
                     delay_for(Duration::from_millis(25)).await;
                     web::types::Json(MyObject {

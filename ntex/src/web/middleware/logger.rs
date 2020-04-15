@@ -481,7 +481,7 @@ mod tests {
     use super::*;
     use crate::http::{header, StatusCode};
     use crate::service::{IntoService, Service, Transform};
-    use crate::web::test::TestRequest;
+    use crate::web::test::{self, TestRequest};
     use crate::web::{DefaultError, Error};
 
     #[ntex_rt::test]
@@ -495,6 +495,7 @@ mod tests {
                 ),
             )
         };
+        let _logger = Logger::default();
         let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D test")
             .exclude("/test");
 
@@ -510,7 +511,9 @@ mod tests {
             header::HeaderValue::from_static("NTEX-WEB"),
         )
         .to_srv_request();
-        let _res = srv.call(req).await;
+        let res = srv.call(req).await.unwrap();
+        let body = test::read_body(res).await;
+        assert_eq!(body, Bytes::from_static(b"TEST"));
     }
 
     #[ntex_rt::test]

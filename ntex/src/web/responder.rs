@@ -352,19 +352,13 @@ impl<T: Responder<Err>, Err: ErrorRenderer> Future for CustomResponderFut<T, Err
 /// ```rust
 /// use ntex::web::{Either, HttpResponse};
 ///
-/// type RegisterResult = Either<HttpResponse, Result<HttpResponse, std::io::Error>>;
-///
-/// fn index() -> RegisterResult {
+/// fn index() -> Either<HttpResponse, &'static str> {
 ///     if is_a_variant() {
 ///         // <- choose left variant
 ///         Either::Left(HttpResponse::BadRequest().body("Bad data"))
 ///     } else {
-///         Either::Right(
-///             // <- Right variant
-///             Ok(HttpResponse::Ok()
-///                 .content_type("text/html")
-///                 .body("Hello!"))
-///         )
+///         // <- Right variant
+///         Either::Right("Hello!")
 ///     }
 /// }
 /// # fn is_a_variant() -> bool { true }
@@ -376,7 +370,7 @@ where
     B: Responder<Err>,
     Err: ErrorRenderer,
 {
-    type Error = either::Either<A::Error, B::Error>;
+    type Error = Err::Container;
     type Future = EitherFuture<A::Future, B::Future>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
@@ -416,6 +410,28 @@ pub(crate) mod tests {
         responder: T,
     ) -> impl Responder<DefaultError, Error = T::Error> {
         responder
+    }
+
+    #[ntex_rt::test]
+    async fn test_either_responder() {
+        let srv = init_service(web::App::new().service(
+            web::resource("/index.html").to(|req: HttpRequest| async move {
+                if req.query_string().is_empty() {
+                    either::Either::Left(HttpResponse::BadRequest())
+                } else {
+                    either::Either::Right("hello")
+                }
+            }),
+        ))
+        .await;
+
+        let req = TestRequest::with_uri("/index.html").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let req = TestRequest::with_uri("/index.html?query=test").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[ntex_rt::test]

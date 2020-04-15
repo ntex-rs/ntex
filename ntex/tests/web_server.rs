@@ -705,7 +705,7 @@ async fn test_brotli_encoding_large() {
 
 #[cfg(feature = "openssl")]
 #[ntex::test]
-async fn test_brotli_encoding_large_openssl() {
+async fn test_brotli_encoding_large_openssl_h1() {
     // load ssl keys
     use open_ssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
     let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
@@ -717,13 +717,68 @@ async fn test_brotli_encoding_large_openssl() {
         .unwrap();
 
     let data = STR.repeat(10);
-    let srv = test::server_with(test::config().openssl(builder.build()), move || {
-        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
-            HttpResponse::Ok()
-                .encoding(ContentEncoding::Identity)
-                .body(bytes)
-        })))
+    let srv =
+        test::server_with(test::config().openssl(builder.build()).h1(), move || {
+            App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+                HttpResponse::Ok()
+                    .encoding(ContentEncoding::Identity)
+                    .body(bytes)
+            })))
+        });
+
+    // body
+    let mut e = BrotliEncoder::new(Vec::new(), 3);
+    e.write_all(data.as_ref()).unwrap();
+    let enc = e.finish().unwrap();
+
+    // client request
+    let mut response = srv
+        .post("/")
+        .header(CONTENT_ENCODING, "br")
+        .send_body(enc)
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from(data));
+}
+
+#[cfg(feature = "openssl")]
+#[ntex::test]
+async fn test_brotli_encoding_large_openssl_h2() {
+    // load ssl keys
+    use open_ssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
+    let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+    builder
+        .set_private_key_file("./tests/key.pem", SslFiletype::PEM)
+        .unwrap();
+    builder
+        .set_certificate_chain_file("./tests/cert.pem")
+        .unwrap();
+    builder.set_alpn_select_callback(|_, protos| {
+        const H2: &[u8] = b"\x02h2";
+        const H11: &[u8] = b"\x08http/1.1";
+        if protos.windows(3).any(|window| window == H2) {
+            Ok(b"h2")
+        } else if protos.windows(9).any(|window| window == H11) {
+            Ok(b"http/1.1")
+        } else {
+            Err(AlpnError::NOACK)
+        }
     });
+    builder.set_alpn_protos(b"\x08http/1.1\x02h2").unwrap();
+
+    let data = STR.repeat(10);
+    let srv =
+        test::server_with(test::config().openssl(builder.build()).h2(), move || {
+            App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+                HttpResponse::Ok()
+                    .encoding(ContentEncoding::Identity)
+                    .body(bytes)
+            })))
+        });
 
     // body
     let mut e = BrotliEncoder::new(Vec::new(), 3);
@@ -746,7 +801,7 @@ async fn test_brotli_encoding_large_openssl() {
 
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
-async fn test_reading_deflate_encoding_large_random_rustls() {
+async fn test_reading_deflate_encoding_large_random_rustls_h1() {
     use rust_tls::internal::pemfile::{certs, pkcs8_private_keys};
     use rust_tls::{NoClientAuth, ServerConfig};
     use std::fs::File;
@@ -765,7 +820,57 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     let mut keys = pkcs8_private_keys(key_file).unwrap();
     config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
 
-    let srv = test::server_with(test::config().rustls(config), || {
+    let srv = test::server_with(test::config().rustls(config).h1(), || {
+        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+            HttpResponse::Ok()
+                .encoding(ContentEncoding::Identity)
+                .body(bytes)
+        })))
+    });
+
+    // encode data
+    let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+    e.write_all(data.as_ref()).unwrap();
+    let enc = e.finish().unwrap();
+
+    // client request
+    let req = srv
+        .post("/")
+        .timeout(Duration::from_millis(10000))
+        .header(CONTENT_ENCODING, "deflate")
+        .send_stream(TestBody::new(Bytes::from(enc), 1024));
+
+    let mut response = req.await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes.len(), data.len());
+    assert_eq!(bytes, Bytes::from(data));
+}
+
+#[cfg(all(feature = "rustls", feature = "openssl"))]
+#[ntex::test]
+async fn test_reading_deflate_encoding_large_random_rustls_h2() {
+    use rust_tls::internal::pemfile::{certs, pkcs8_private_keys};
+    use rust_tls::{NoClientAuth, ServerConfig};
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let data = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(160_000)
+        .collect::<String>();
+
+    // load ssl keys
+    let mut config = ServerConfig::new(NoClientAuth::new());
+    let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
+    let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
+    let cert_chain = certs(cert_file).unwrap();
+    let mut keys = pkcs8_private_keys(key_file).unwrap();
+    config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
+
+    let srv = test::server_with(test::config().rustls(config).h2(), || {
         App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
             HttpResponse::Ok()
                 .encoding(ContentEncoding::Identity)
