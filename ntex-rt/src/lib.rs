@@ -39,6 +39,7 @@ where
 /// # Panics
 ///
 /// This function panics if ntex system is not running.
+#[inline]
 pub fn spawn_fn<F, R>(f: F) -> tokio::task::JoinHandle<R::Output>
 where
     F: FnOnce() -> R + 'static,
