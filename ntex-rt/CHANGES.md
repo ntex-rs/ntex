@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.1] - 2020-04-15
+
+* Api cleanup
+
 ## [0.1.0] - 2020-03-31
 
 * Remove support to spawn futures with stopped runtime

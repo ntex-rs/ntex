@@ -1,10 +1,8 @@
 use std::cell::RefCell;
-use std::future::Future;
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::channel::mpsc::UnboundedSender;
-use tokio::task::LocalSet;
 
 use super::arbiter::{Arbiter, SystemCommand};
 use super::builder::{Builder, SystemRunner};
@@ -45,7 +43,7 @@ impl System {
     ///
     /// This allows to customize the runtime. See struct level docs on
     /// `Builder` for more information.
-    pub fn builder() -> Builder {
+    pub fn build() -> Builder {
         Builder::new()
     }
 
@@ -54,21 +52,7 @@ impl System {
     ///
     /// This method panics if it can not create tokio runtime
     pub fn new<T: Into<String>>(name: T) -> SystemRunner {
-        Self::builder().name(name).build()
-    }
-
-    #[allow(clippy::new_ret_no_self)]
-    /// Create new system using provided tokio Handle.
-    ///
-    /// This method panics if it can not spawn system arbiter
-    pub fn run_in_tokio<T: Into<String>>(
-        name: T,
-        local: &LocalSet,
-    ) -> impl Future<Output = io::Result<()>> {
-        Self::builder()
-            .name(name)
-            .build_async(local)
-            .run_nonblocking()
+        Self::build().name(name).finish()
     }
 
     /// Get current running system.
@@ -80,26 +64,10 @@ impl System {
     }
 
     /// Set current running system.
-    pub(super) fn is_set() -> bool {
-        CURRENT.with(|cell| cell.borrow().is_some())
-    }
-
-    /// Set current running system.
     #[doc(hidden)]
     pub fn set_current(sys: System) {
         CURRENT.with(|s| {
             *s.borrow_mut() = Some(sys);
-        })
-    }
-
-    /// Execute function with system reference.
-    pub fn with_current<F, R>(f: F) -> R
-    where
-        F: FnOnce(&System) -> R,
-    {
-        CURRENT.with(|cell| match *cell.borrow() {
-            Some(ref sys) => f(sys),
-            None => panic!("System is not running"),
         })
     }
 
@@ -140,6 +108,6 @@ impl System {
     where
         F: FnOnce() + 'static,
     {
-        Self::builder().run(f)
+        Builder::new().run(f)
     }
 }

@@ -390,7 +390,7 @@ impl ServerBuilder {
                                 }
                                 ready(())
                             }),
-                    )
+                    );
                 } else {
                     // we need to stop system if server was spawned
                     if self.exit {

@@ -1,10 +1,12 @@
 # Changes
 
-## [0.1.11] - 2020-04-xx
+## [0.1.11] - 2020-04-15
 
 * ntex::web: Allow to add multiple routes at once
 
 * ntex::web: Add `App::with_config` method, simplifies app service factory.
+
+* ntex::web: Fix error type for Either responder
 
 ## [0.1.10] - 2020-04-13
 

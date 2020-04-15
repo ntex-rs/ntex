@@ -1,4 +1,6 @@
 //! A runtime implementation that runs everything on the current thread.
+use futures::future::{self, Future, FutureExt};
+
 mod arbiter;
 mod builder;
 mod runtime;
@@ -15,21 +17,34 @@ pub use ntex_rt_macros::{rt_main as main, rt_test as test};
 #[doc(hidden)]
 pub use actix_threadpool as blocking;
 
-/// Spawns a future on the current arbiter.
+/// Spawn a future on the current thread. This does not create a new Arbiter
+/// or Arbiter address, it is simply a helper for spawning futures on the current
+/// thread.
 ///
 /// # Panics
 ///
 /// This function panics if ntex system is not running.
 #[inline]
-pub fn spawn<F>(f: F)
+pub fn spawn<F>(f: F) -> tokio::task::JoinHandle<F::Output>
 where
-    F: futures::Future<Output = ()> + 'static,
+    F: futures::Future + 'static,
 {
-    if !System::is_set() {
-        panic!("System is not running");
-    }
+    tokio::task::spawn_local(f)
+}
 
-    Arbiter::spawn(f);
+/// Executes a future on the current thread. This does not create a new Arbiter
+/// or Arbiter address, it is simply a helper for executing futures on the current
+/// thread.
+///
+/// # Panics
+///
+/// This function panics if ntex system is not running.
+pub fn spawn_fn<F, R>(f: F) -> tokio::task::JoinHandle<R::Output>
+where
+    F: FnOnce() -> R + 'static,
+    R: Future + 'static,
+{
+    tokio::task::spawn_local(future::lazy(|_| f()).flatten())
 }
 
 /// Asynchronous signal handling

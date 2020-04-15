@@ -916,7 +916,7 @@ impl TestServer {
     }
 
     pub async fn load_body<S>(
-        &mut self,
+        &self,
         mut response: ClientResponse<S>,
     ) -> Result<Bytes, PayloadError>
     where
@@ -927,7 +927,7 @@ impl TestServer {
 
     /// Connect to websocket server at a given path
     pub async fn ws_at(
-        &mut self,
+        &self,
         path: &str,
     ) -> Result<Framed<impl AsyncRead + AsyncWrite, crate::ws::Codec>, WsClientError>
     {
@@ -938,7 +938,7 @@ impl TestServer {
 
     /// Connect to a websocket server
     pub async fn ws(
-        &mut self,
+        &self,
     ) -> Result<Framed<impl AsyncRead + AsyncWrite, crate::ws::Codec>, WsClientError>
     {
         self.ws_at("/").await
@@ -1169,7 +1169,7 @@ mod tests {
     async fn test_test_methods() {
         let srv = server(|| {
             App::new().service(
-                web::resource("/index.html").route((
+                web::resource("/").route((
                     web::route()
                         .method(Method::PUT)
                         .to(|| async { HttpResponse::Ok() }),
@@ -1184,15 +1184,23 @@ mod tests {
                         .to(|| async { HttpResponse::Ok() }),
                 )),
             )
-        })
-        .await;
+        });
 
-        assert_eq!(srv.put().send().await.unwrap().status(), StatusCode::OK);
-        assert_eq!(srv.patch().send().await.unwrap().status(), StatusCode::OK);
-        assert_eq!(srv.delete().send().await.unwrap().status(), StatusCode::OK);
-        assert_eq!(srv.options().send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(srv.put("/").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(
+            srv.patch("/").send().await.unwrap().status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            srv.delete("/").send().await.unwrap().status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            srv.options("/").send().await.unwrap().status(),
+            StatusCode::OK
+        );
 
-        let res = srv.put().send().await.unwrap();
+        let res = srv.put("").send().await.unwrap();
         assert_eq!(srv.load_body(res).await.unwrap(), Bytes::new());
     }
 }

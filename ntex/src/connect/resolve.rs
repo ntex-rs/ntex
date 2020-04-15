@@ -283,7 +283,7 @@ impl Spawn for Handle {
     where
         F: Future<Output = Result<(), ProtoError>> + Send + 'static,
     {
-        crate::rt::Arbiter::spawn(future.map(|_| ()));
+        crate::rt::spawn(future.map(|_| ()));
     }
 }
 

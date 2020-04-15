@@ -978,9 +978,8 @@ mod tests {
                 stream,
                 None,
                 None,
-            )
-            .map(|_| ()),
-        )
+            ),
+        );
     }
 
     fn load(decoder: &mut ClientCodec, buf: &mut BytesMut) -> ResponseHead {

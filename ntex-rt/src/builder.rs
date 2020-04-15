@@ -49,14 +49,16 @@ impl Builder {
     /// Create new System.
     ///
     /// This method panics if it can not create tokio runtime
-    pub fn build(self) -> SystemRunner {
+    pub fn finish(self) -> SystemRunner {
         self.create_runtime(|| {})
     }
 
     /// Create new System that can run asynchronously.
+    /// This method could be used to run ntex system in existing tokio
+    /// runtime.
     ///
     /// This method panics if it cannot start the system arbiter
-    pub(super) fn build_async(self, local: &LocalSet) -> AsyncSystemRunner {
+    pub fn finish_with(self, local: &LocalSet) -> AsyncSystemRunner {
         self.create_async_runtime(local)
     }
 
@@ -115,7 +117,7 @@ impl Builder {
 }
 
 #[derive(Debug)]
-pub(super) struct AsyncSystemRunner {
+pub struct AsyncSystemRunner {
     stop: Receiver<i32>,
     system: System,
 }
@@ -123,9 +125,7 @@ pub(super) struct AsyncSystemRunner {
 impl AsyncSystemRunner {
     /// This function will start event loop and returns a future that
     /// resolves once the `System::stop()` function is called.
-    pub(super) fn run_nonblocking(
-        self,
-    ) -> impl Future<Output = Result<(), io::Error>> + Send {
+    pub fn run(self) -> impl Future<Output = Result<(), io::Error>> + Send {
         let AsyncSystemRunner { stop, .. } = self;
 
         // run loop
@@ -196,5 +196,52 @@ impl SystemRunner {
         F: FnOnce() -> R,
     {
         self.rt.block_on(lazy(|_| f()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+
+    use super::*;
+
+    #[test]
+    fn test_async() {
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let local = tokio::task::LocalSet::new();
+
+            let runner = crate::System::build()
+                .stop_on_panic(true)
+                .finish_with(&local);
+
+            tx.send(System::current()).unwrap();
+            let _ = rt.block_on(local.run_until(runner.run()));
+        });
+        let mut s = System::new("test");
+
+        let sys = rx.recv().unwrap();
+        let id = sys.id();
+        let (tx, rx) = mpsc::channel();
+        sys.arbiter().exec_fn(move || {
+            let _ = tx.send(System::current().id());
+        });
+        let id2 = rx.recv().unwrap();
+        assert_eq!(id, id2);
+
+        let id2 = s
+            .block_on(sys.arbiter().exec(|| System::current().id()))
+            .unwrap();
+        assert_eq!(id, id2);
+
+        let (tx, rx) = mpsc::channel();
+        sys.arbiter().send(Box::pin(async move {
+            let _ = tx.send(System::current().id());
+        }));
+        let id2 = rx.recv().unwrap();
+        assert_eq!(id, id2);
     }
 }
