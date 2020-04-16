@@ -214,3 +214,54 @@ fn parse(host: &str) -> (&str, Option<u16>) {
         (host, None)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn address() {
+        assert_eq!("test".host(), "test");
+        assert_eq!("test".port(), None);
+
+        let s = "test".to_string();
+        assert_eq!(s.host(), "test");
+        assert_eq!(s.port(), None);
+    }
+
+    #[test]
+    fn connect() {
+        let mut connect = Connect::new("www.rust-lang.org");
+        assert_eq!(connect.host(), "www.rust-lang.org");
+        assert_eq!(connect.port(), 0);
+        connect = connect.set_port(80);
+        assert_eq!(connect.port(), 80);
+
+        let addrs: Vec<_> = connect.addrs().collect();
+        assert!(addrs.is_empty());
+
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        connect = connect.set_addrs(vec![addr]);
+        let addrs: Vec<_> = connect.take_addrs().collect();
+        assert_eq!(addrs.len(), 1);
+        assert!(addrs.contains(&addr));
+
+        let addr2: SocketAddr = "127.0.0.1:8081".parse().unwrap();
+        connect = connect.set_addrs(vec![addr, addr2]);
+        let addrs: Vec<_> = connect.addrs().collect();
+        assert_eq!(addrs.len(), 2);
+        assert!(addrs.contains(&addr));
+        assert!(addrs.contains(&addr2));
+
+        let addrs: Vec<_> = connect.take_addrs().collect();
+        assert_eq!(addrs.len(), 2);
+        assert!(addrs.contains(&addr));
+        assert!(addrs.contains(&addr2));
+
+        let addrs: Vec<_> = connect.addrs().collect();
+        assert!(addrs.is_empty());
+
+        connect = connect.set_addrs(vec![addr]);
+        assert_eq!(format!("{}", connect), "www.rust-lang.org:80");
+    }
+}

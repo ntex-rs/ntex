@@ -381,3 +381,32 @@ impl Time for TokioTime {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures::future::lazy;
+
+    use super::*;
+
+    #[ntex_rt::test]
+    async fn resolver() {
+        let resolver = Resolver::new(AsyncResolver::from_system_conf());
+        let srv = resolver.new_service(()).await.unwrap();
+        assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
+
+        let res = srv.call(Connect::new("www.rust-lang.org")).await;
+        assert!(res.is_ok());
+
+        let res = srv.call(Connect::new("---11213")).await;
+        assert!(res.is_err());
+
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let res = srv
+            .call(Connect::new("www.rust-lang.org").set_addrs(vec![addr]))
+            .await
+            .unwrap();
+        let addrs: Vec<_> = res.addrs().collect();
+        assert_eq!(addrs.len(), 1);
+        assert!(addrs.contains(&addr));
+    }
+}
