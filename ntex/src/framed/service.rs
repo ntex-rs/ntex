@@ -5,11 +5,9 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use either::Either;
 use futures::{ready, Stream};
-use pin_project::project;
 
-use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed};
+use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use crate::service::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::util::framed::Dispatcher;
 
@@ -172,13 +170,14 @@ where
         Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
+    <C::Service as Service>::Future: 'static,
     T: ServiceFactory<
-        Config = St,
-        Request = RequestItem<Codec>,
-        Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
-    >,
+            Config = St,
+            Request = RequestItem<Codec>,
+            Response = ResponseItem<Codec>,
+            Error = C::Error,
+            InitError = C::Error,
+        > + 'static,
     <T::Service as Service>::Error: 'static,
     <T::Service as Service>::Future: 'static,
     Codec: Decoder + Encoder,
@@ -288,13 +287,14 @@ where
         Response = HandshakeResult<Io, St, Codec, Out>,
     >,
     C::Error: fmt::Debug,
+    C::Future: 'static,
     T: ServiceFactory<
-        Config = St,
-        Request = RequestItem<Codec>,
-        Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
-    >,
+            Config = St,
+            Request = RequestItem<Codec>,
+            Response = ResponseItem<Codec>,
+            Error = C::Error,
+            InitError = C::Error,
+        > + 'static,
     <T::Service as Service>::Error: 'static,
     <T::Service as Service>::Future: 'static,
     Codec: Decoder + Encoder,
@@ -305,7 +305,7 @@ where
     type Request = Io;
     type Response = ();
     type Error = ServiceError<C::Error, Codec>;
-    type Future = FramedServiceImplResponse<St, Io, Codec, Out, C, T>;
+    type Future = Pin<Box<dyn Future<Output = Result<(), Self::Error>>>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -320,188 +320,24 @@ where
     #[inline]
     fn call(&self, req: Io) -> Self::Future {
         log::trace!("Start connection handshake");
-        FramedServiceImplResponse {
-            inner: FramedServiceImplResponseInner::Handshake(
-                self.connect.call(Handshake::new(req)),
-                self.handler.clone(),
-                self.disconnect_timeout,
-            ),
-        }
-    }
-}
 
-#[pin_project::pin_project]
-pub struct FramedServiceImplResponse<St, Io, Codec, Out, C, T>
-where
-    C: Service<
-        Request = Handshake<Io, Codec>,
-        Response = HandshakeResult<Io, St, Codec, Out>,
-    >,
-    C::Error: fmt::Debug,
-    T: ServiceFactory<
-        Config = St,
-        Request = RequestItem<Codec>,
-        Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
-    >,
-    <T::Service as Service>::Error: 'static,
-    <T::Service as Service>::Future: 'static,
-    Io: AsyncRead + AsyncWrite + Unpin,
-    Codec: Encoder + Decoder,
-    <Codec as Encoder>::Item: 'static,
-    <Codec as Encoder>::Error: std::fmt::Debug,
-    Out: Stream<Item = <Codec as Encoder>::Item> + Unpin,
-{
-    #[pin]
-    inner: FramedServiceImplResponseInner<St, Io, Codec, Out, C, T>,
-}
+        let handler = self.handler.clone();
+        let timeout = self.disconnect_timeout;
+        let handshake = self.connect.call(Handshake::new(req));
 
-impl<St, Io, Codec, Out, C, T> Future
-    for FramedServiceImplResponse<St, Io, Codec, Out, C, T>
-where
-    C: Service<
-        Request = Handshake<Io, Codec>,
-        Response = HandshakeResult<Io, St, Codec, Out>,
-    >,
-    C::Error: fmt::Debug,
-    T: ServiceFactory<
-        Config = St,
-        Request = RequestItem<Codec>,
-        Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
-    >,
-    <T::Service as Service>::Error: 'static,
-    <T::Service as Service>::Future: 'static,
-    Io: AsyncRead + AsyncWrite + Unpin,
-    Codec: Encoder + Decoder,
-    <Codec as Encoder>::Item: 'static,
-    <Codec as Encoder>::Error: std::fmt::Debug,
-    Out: Stream<Item = <Codec as Encoder>::Item> + Unpin,
-{
-    type Output = Result<(), ServiceError<C::Error, Codec>>;
+        Box::pin(async move {
+            let result = handshake.await.map_err(|e| {
+                log::trace!("Connection handshake failed: {:?}", e);
+                e
+            })?;
+            log::trace!("Connection handshake succeeded");
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().project();
+            let handler = handler.new_service(result.state).await?;
+            log::trace!("Connection handler is created, starting dispatcher");
 
-        loop {
-            match this.inner.poll(cx) {
-                Either::Left(new) => {
-                    this = self.as_mut().project();
-                    this.inner.set(new)
-                }
-                Either::Right(poll) => return poll,
-            };
-        }
-    }
-}
-
-#[pin_project::pin_project]
-enum FramedServiceImplResponseInner<St, Io, Codec, Out, C, T>
-where
-    C: Service<
-        Request = Handshake<Io, Codec>,
-        Response = HandshakeResult<Io, St, Codec, Out>,
-    >,
-    C::Error: fmt::Debug,
-    T: ServiceFactory<
-        Config = St,
-        Request = RequestItem<Codec>,
-        Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
-    >,
-    <T::Service as Service>::Error: 'static,
-    <T::Service as Service>::Future: 'static,
-    Io: AsyncRead + AsyncWrite + Unpin,
-    Codec: Encoder + Decoder,
-    <Codec as Encoder>::Item: 'static,
-    <Codec as Encoder>::Error: std::fmt::Debug,
-    Out: Stream<Item = <Codec as Encoder>::Item> + Unpin,
-{
-    Handshake(#[pin] C::Future, Rc<T>, usize),
-    Handler(
-        #[pin] T::Future,
-        Option<Framed<Io, Codec>>,
-        Option<Out>,
-        usize,
-    ),
-    Dispatcher(Dispatcher<T::Service, Io, Codec, Out>),
-}
-
-impl<St, Io, Codec, Out, C, T> FramedServiceImplResponseInner<St, Io, Codec, Out, C, T>
-where
-    C: Service<
-        Request = Handshake<Io, Codec>,
-        Response = HandshakeResult<Io, St, Codec, Out>,
-    >,
-    C::Error: fmt::Debug,
-    T: ServiceFactory<
-        Config = St,
-        Request = RequestItem<Codec>,
-        Response = ResponseItem<Codec>,
-        Error = C::Error,
-        InitError = C::Error,
-    >,
-    <T::Service as Service>::Error: 'static,
-    <T::Service as Service>::Future: 'static,
-    Io: AsyncRead + AsyncWrite + Unpin,
-    Codec: Encoder + Decoder,
-    <Codec as Encoder>::Item: 'static,
-    <Codec as Encoder>::Error: std::fmt::Debug,
-    Out: Stream<Item = <Codec as Encoder>::Item> + Unpin,
-{
-    #[project]
-    fn poll(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Either<
-        FramedServiceImplResponseInner<St, Io, Codec, Out, C, T>,
-        Poll<Result<(), ServiceError<C::Error, Codec>>>,
-    > {
-        #[project]
-        match self.project() {
-            FramedServiceImplResponseInner::Dispatcher(ref mut fut) => {
-                Either::Right(fut.poll_inner(cx))
-            }
-            FramedServiceImplResponseInner::Handshake(fut, handler, timeout) => {
-                match fut.poll(cx) {
-                    Poll::Ready(Ok(res)) => {
-                        log::trace!("Connection handshake succeeded");
-                        Either::Left(FramedServiceImplResponseInner::Handler(
-                            handler.new_service(res.state),
-                            Some(res.framed),
-                            res.out,
-                            *timeout,
-                        ))
-                    }
-                    Poll::Pending => Either::Right(Poll::Pending),
-                    Poll::Ready(Err(e)) => {
-                        log::trace!("Connection handshake failed: {:?}", e);
-                        Either::Right(Poll::Ready(Err(e.into())))
-                    }
-                }
-            }
-            FramedServiceImplResponseInner::Handler(fut, framed, out, timeout) => {
-                match fut.poll(cx) {
-                    Poll::Ready(Ok(handler)) => {
-                        log::trace!(
-                            "Connection handler is created, starting dispatcher"
-                        );
-                        Either::Left(FramedServiceImplResponseInner::Dispatcher(
-                            Dispatcher::with(
-                                framed.take().unwrap(),
-                                out.take(),
-                                handler,
-                            )
-                            .disconnect_timeout(*timeout as u64),
-                        ))
-                    }
-                    Poll::Pending => Either::Right(Poll::Pending),
-                    Poll::Ready(Err(e)) => Either::Right(Poll::Ready(Err(e.into()))),
-                }
-            }
-        }
+            Dispatcher::with(result.framed, result.out, handler)
+                .disconnect_timeout(timeout as u64)
+                .await
+        })
     }
 }

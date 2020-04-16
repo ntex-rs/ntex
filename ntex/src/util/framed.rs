@@ -151,13 +151,6 @@ where
         self.inner.disconnect_timeout = val;
         self
     }
-
-    pub(crate) fn poll_inner(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), DispatcherError<S::Error, U>>> {
-        self.inner.poll(cx)
-    }
 }
 
 impl<S, T, U, In> Future for Dispatcher<S, T, U, In>
