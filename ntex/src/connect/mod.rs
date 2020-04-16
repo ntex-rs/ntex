@@ -1,5 +1,4 @@
 //! Tcp connector service
-
 mod error;
 mod message;
 mod resolve;

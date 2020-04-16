@@ -1,3 +1,4 @@
+use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -42,6 +43,17 @@ impl From<PayloadStream> for Payload {
     }
 }
 
+impl<S> fmt::Debug for Payload<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Payload::None => write!(f, "Payload::None"),
+            Payload::H1(ref pl) => write!(f, "Payload::H1({:?})", pl),
+            Payload::H2(ref pl) => write!(f, "Payload::H2({:?})", pl),
+            Payload::Stream(_) => write!(f, "Payload::Stream(..)"),
+        }
+    }
+}
+
 impl<S> Payload<S> {
     /// Takes current payload and replaces it with `None` value
     pub fn take(&mut self) -> Payload<S> {
@@ -66,5 +78,29 @@ where
             Payload::H2(ref mut pl) => Pin::new(pl).poll_next(cx),
             Payload::Stream(ref mut pl) => Pin::new(pl).poll_next(cx),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_debug() {
+        assert!(
+            format!("{:?}", Payload::<PayloadStream>::None).contains("Payload::None")
+        );
+        assert!(format!(
+            "{:?}",
+            Payload::<PayloadStream>::H1(crate::http::h1::Payload::create(false).1)
+        )
+        .contains("Payload::H1"));
+        assert!(format!(
+            "{:?}",
+            Payload::<PayloadStream>::Stream(Box::pin(
+                crate::http::h1::Payload::create(false).1
+            ))
+        )
+        .contains("Payload::Stream"));
     }
 }

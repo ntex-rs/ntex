@@ -14,6 +14,7 @@ pub use self::service::H2Service;
 use crate::http::error::PayloadError;
 
 /// H2 receive stream
+#[derive(Debug)]
 pub struct Payload {
     pl: RecvStream,
 }

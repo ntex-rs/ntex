@@ -1,11 +1,11 @@
 use std::cell::RefCell;
 use std::future::Future;
-use std::io;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
+use std::{fmt, io};
 
 use futures::future::{ok, Either, FutureExt, LocalBoxFuture, Ready};
 use futures::ready;
@@ -29,6 +29,14 @@ use super::{default_resolver, Address, Connect, ConnectError};
 pub struct Resolver<T> {
     resolver: AsyncResolver,
     _t: PhantomData<T>,
+}
+
+impl<T> fmt::Debug for Resolver<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Resolver")
+            .field("resolver", &self.resolver)
+            .finish()
+    }
 }
 
 impl<T> Resolver<T> {
@@ -167,7 +175,7 @@ impl<T: Address> Future for ResolverFuture<T> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// An asynchronous resolver for DNS.
 pub struct AsyncResolver {
     state: Rc<RefCell<AsyncResolverState>>,
@@ -215,6 +223,16 @@ enum AsyncResolverState {
     New(Option<LocalBoxFuture<'static, Result<TokioAsyncResolver, ResolveError>>>),
     Creating(Condition),
     Resolver(Box<TokioAsyncResolver>),
+}
+
+impl fmt::Debug for AsyncResolverState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AsyncResolverState::New(_) => write!(f, "AsyncResolverState::New"),
+            AsyncResolverState::Creating(_) => write!(f, "AsyncResolverState::Creating"),
+            AsyncResolverState::Resolver(_) => write!(f, "AsyncResolverState::Resolver"),
+        }
+    }
 }
 
 pub struct LookupIpFuture {
@@ -391,6 +409,7 @@ mod tests {
     #[ntex_rt::test]
     async fn resolver() {
         let resolver = Resolver::new(AsyncResolver::from_system_conf());
+        assert!(format!("{:?}", resolver).contains("Resolver"));
         let srv = resolver.new_service(()).await.unwrap();
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
 

@@ -189,7 +189,7 @@ where
 ///     );
 /// }
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FormConfig {
     limit: usize,
 }

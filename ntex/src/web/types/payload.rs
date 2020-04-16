@@ -42,6 +42,7 @@ use crate::web::{FromRequest, HttpRequest};
 ///     );
 /// }
 /// ```
+#[derive(Debug)]
 pub struct Payload(pub crate::http::Payload);
 
 impl Payload {
@@ -239,7 +240,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
     }
 }
 /// Payload configuration for request's payload.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PayloadConfig {
     limit: usize,
     mimetype: Option<Mime>,

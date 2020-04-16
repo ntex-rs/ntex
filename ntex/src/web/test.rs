@@ -771,7 +771,7 @@ where
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// Test server configuration
 pub struct TestServerConfig {
     tp: HttpVer,
@@ -779,7 +779,7 @@ pub struct TestServerConfig {
     client_timeout: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum HttpVer {
     Http1,
     Http2,
@@ -793,6 +793,18 @@ enum StreamType {
     Openssl(open_ssl::ssl::SslAcceptor),
     #[cfg(feature = "rustls")]
     Rustls(rust_tls::ServerConfig),
+}
+
+impl fmt::Debug for StreamType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StreamType::Tcp => write!(f, "StreamType::Tcp"),
+            #[cfg(feature = "openssl")]
+            StreamType::Openssl(_) => write!(f, "StreamType::Openssl"),
+            #[cfg(feature = "rustls")]
+            StreamType::Rustls(_) => write!(f, "StreamType::Rustls"),
+        }
+    }
 }
 
 impl Default for TestServerConfig {

@@ -35,6 +35,16 @@ impl fmt::Debug for SocketAddr {
     }
 }
 
+impl fmt::Debug for StdListener {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            StdListener::Tcp(ref lst) => write!(f, "{:?}", lst),
+            #[cfg(all(unix))]
+            StdListener::Uds(ref lst) => write!(f, "{:?}", lst),
+        }
+    }
+}
+
 impl fmt::Display for StdListener {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
@@ -168,5 +178,51 @@ impl FromStream for crate::rt::net::UnixStream {
             StdStream::Tcp(_) => panic!("Should not happen, bug in server impl"),
             StdStream::Uds(stream) => crate::rt::net::UnixStream::from_std(stream),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn socket_addr() {
+        use socket2::{Domain, SockAddr, Socket, Type};
+
+        let addr = SocketAddr::Tcp("127.0.0.1:8080".parse().unwrap());
+        assert_eq!(format!("{:?}", addr), "V4(127.0.0.1:8080)");
+        assert_eq!(format!("{}", addr), "127.0.0.1:8080");
+
+        let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
+        socket.set_reuse_address(true).unwrap();
+        socket.bind(&SockAddr::from(addr)).unwrap();
+        let tcp = socket.into_tcp_listener();
+        let lst = StdListener::Tcp(tcp);
+        assert!(format!("{:?}", lst).contains("TcpListener"));
+        assert!(format!("{}", lst).contains("127.0.0.1"));
+    }
+
+    #[test]
+    #[cfg(all(unix))]
+    fn uds() {
+        use std::os::unix::net::UnixListener;
+
+        let _ = std::fs::remove_file("/tmp/sock.xxxxx");
+        let socket = match UnixListener::bind("/tmp/sock.xxxxx") {
+            Ok(sock) => sock,
+            Err(e) => {
+                println!("Couldn't bind: {:?}", e);
+                return;
+            }
+        };
+        let addr = socket.local_addr().expect("Couldn't get local address");
+        let a = SocketAddr::Uds(addr);
+        assert!(format!("{:?}", a).contains("/tmp/sock.xxxxx"));
+        assert!(format!("{}", a).contains("/tmp/sock.xxxxx"));
+
+        let lst = StdListener::Uds(socket);
+        assert!(format!("{:?}", lst).contains("/tmp/sock.xxxxx"));
+        assert!(format!("{}", lst).contains("/tmp/sock.xxxxx"));
     }
 }
