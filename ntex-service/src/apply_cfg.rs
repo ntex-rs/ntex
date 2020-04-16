@@ -223,3 +223,39 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures_util::future::ok;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::{fn_service, Service};
+
+    #[ntex_rt::test]
+    async fn test_apply() {
+        let item = Rc::new(Cell::new(10usize));
+        let item2 = item.clone();
+
+        let srv = apply_cfg(
+            fn_service(move |item: usize| ok::<_, ()>(item + 1)),
+            move |_: (), srv| {
+                let id = item2.get();
+                let fut = srv.call(id);
+                let item = item2.clone();
+
+                async move {
+                    item.set(fut.await.unwrap());
+                    Ok::<_, ()>(fn_service(|id: usize| ok::<_, ()>(id * 2)))
+                }
+            },
+        )
+        .new_service(())
+        .await
+        .unwrap();
+
+        assert_eq!(srv.call(10usize).await.unwrap(), 20);
+        assert_eq!(item.get(), 11);
+    }
+}
