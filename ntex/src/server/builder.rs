@@ -532,7 +532,7 @@ mod tests {
             })
         }
 
-        for sig in vec![
+        for sig in &[
             signals::Signal::Int,
             signals::Signal::Term,
             signals::Signal::Quit,
@@ -544,7 +544,7 @@ mod tests {
             thread::sleep(time::Duration::from_millis(300));
             assert!(net::TcpStream::connect(addr).is_ok());
 
-            srv.signal(sig);
+            srv.signal(*sig);
             thread::sleep(time::Duration::from_millis(300));
             assert!(net::TcpStream::connect(addr).is_err());
             let _ = h.join();

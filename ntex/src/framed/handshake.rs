@@ -141,6 +141,7 @@ mod tests {
     use super::*;
     use crate::testing::Io;
 
+    #[allow(clippy::declare_interior_mutable_const)]
     const BLOB: Bytes = Bytes::from_static(b"GET /test HTTP/1.1\r\n\r\n");
 
     #[ntex_rt::test]

@@ -115,6 +115,7 @@ mod tests {
     use futures::future::lazy;
 
     #[ntex_rt::test]
+    #[allow(clippy::unit_cmp)]
     async fn test_condition() {
         let cond = Condition::new();
         let mut waiter = cond.wait();

@@ -679,10 +679,11 @@ mod tests {
     macro_rules! expect_parse_err {
         ($e:expr) => {{
             match MessageDecoder::<Request>::default().decode($e) {
-                Err(err) => match err {
-                    ParseError::Io(_) => unreachable!("Parse error expected"),
-                    _ => (),
-                },
+                Err(err) => {
+                    if let ParseError::Io(_) = err {
+                        unreachable!("Parse error expected")
+                    }
+                }
                 _ => unreachable!("Error expected"),
             }
         }};

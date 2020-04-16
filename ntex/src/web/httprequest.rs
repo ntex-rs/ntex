@@ -468,7 +468,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_data() {
-        let mut srv = init_service(App::new().app_data(10usize).service(
+        let srv = init_service(App::new().app_data(10usize).service(
             web::resource("/").to(|req: HttpRequest| {
                 ready(if req.app_data::<usize>().is_some() {
                     HttpResponse::Ok()
@@ -480,10 +480,10 @@ mod tests {
         .await;
 
         let req = TestRequest::default().to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let mut srv = init_service(App::new().app_data(10u32).service(
+        let srv = init_service(App::new().app_data(10u32).service(
             web::resource("/").to(|req: HttpRequest| async move {
                 if req.app_data::<usize>().is_some() {
                     HttpResponse::Ok()
@@ -495,7 +495,7 @@ mod tests {
         .await;
 
         let req = TestRequest::default().to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -516,7 +516,7 @@ mod tests {
         let tracker = Rc::new(RefCell::new(Tracker { dropped: false }));
         {
             let tracker2 = Rc::clone(&tracker);
-            let mut srv = init_service(App::new().data(10u32).service(
+            let srv = init_service(App::new().data(10u32).service(
                 web::resource("/").to(move |req: HttpRequest| {
                     req.extensions_mut().insert(Foo {
                         tracker: Rc::clone(&tracker2),
@@ -527,7 +527,7 @@ mod tests {
             .await;
 
             let req = TestRequest::default().to_request();
-            let resp = call_service(&mut srv, req).await;
+            let resp = call_service(&srv, req).await;
             assert_eq!(resp.status(), StatusCode::OK);
         }
 

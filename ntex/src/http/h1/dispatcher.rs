@@ -1130,7 +1130,7 @@ mod tests {
                 let _ = pl.next().await.unwrap().unwrap();
                 m.store(true, Ordering::Relaxed);
                 // sleep
-                delay_for(Duration::from_secs(999999)).await;
+                delay_for(Duration::from_secs(999_999)).await;
                 Ok::<_, io::Error>(Response::Ok().finish())
             }
         });
@@ -1142,11 +1142,12 @@ mod tests {
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
 
         // io should be drained only by no more than MAX_BUFFER_SIZE
-        let random_bytes: Vec<u8> = (0..1048576).map(|_| rand::random::<u8>()).collect();
+        let random_bytes: Vec<u8> =
+            (0..1_048_576).map(|_| rand::random::<u8>()).collect();
         client.write(random_bytes);
 
         delay_for(Duration::from_millis(50)).await;
-        assert!(client.remote_buffer(|buf| buf.len()) > 1048576 - MAX_BUFFER_SIZE * 3);
+        assert!(client.remote_buffer(|buf| buf.len()) > 1_048_576 - MAX_BUFFER_SIZE * 3);
         assert!(mark.load(Ordering::Relaxed));
     }
 

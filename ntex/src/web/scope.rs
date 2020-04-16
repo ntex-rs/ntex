@@ -862,7 +862,7 @@ mod tests {
 
         match resp.response().body() {
             ResponseBody::Body(Body::Bytes(ref b)) => {
-                let bytes: Bytes = b.clone().into();
+                let bytes: Bytes = b.clone();
                 assert_eq!(bytes, Bytes::from_static(b"project: project1"));
             }
             _ => panic!(),
@@ -966,7 +966,7 @@ mod tests {
 
         match resp.response().body() {
             ResponseBody::Body(Body::Bytes(ref b)) => {
-                let bytes: Bytes = b.clone().into();
+                let bytes: Bytes = b.clone();
                 assert_eq!(bytes, Bytes::from_static(b"project: project_1"));
             }
             _ => panic!(),
@@ -994,7 +994,7 @@ mod tests {
 
         match resp.response().body() {
             ResponseBody::Body(Body::Bytes(ref b)) => {
-                let bytes: Bytes = b.clone().into();
+                let bytes: Bytes = b.clone();
                 assert_eq!(bytes, Bytes::from_static(b"project: test - 1"));
             }
             _ => panic!(),
@@ -1115,7 +1115,6 @@ mod tests {
                 "/t",
                 web::get().to(|data: web::types::Data<usize>| {
                     assert_eq!(**data, 10);
-                    let _ = data.clone();
                     ready(HttpResponse::Ok())
                 }),
             ),
@@ -1137,7 +1136,6 @@ mod tests {
                         "/t",
                         web::get().to(|data: web::types::Data<usize>| {
                             assert_eq!(**data, 10);
-                            let _ = data.clone();
                             ready(HttpResponse::Ok())
                         }),
                     ),
@@ -1184,10 +1182,12 @@ mod tests {
                 s.route(
                     "/",
                     web::get().to(|req: HttpRequest| async move {
-                        HttpResponse::Ok().body(format!(
-                            "{}",
-                            req.url_for("youtube", &["xxxxxx"]).unwrap().as_str()
-                        ))
+                        HttpResponse::Ok().body(
+                            req.url_for("youtube", &["xxxxxx"])
+                                .unwrap()
+                                .as_str()
+                                .to_string(),
+                        )
                     }),
                 );
             }));

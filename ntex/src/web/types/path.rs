@@ -239,7 +239,7 @@ mod tests {
         assert_eq!((res.1).0, "name");
         assert_eq!((res.1).1, "user1");
 
-        let () = from_request::<()>(&req, &mut pl).await.unwrap();
+        from_request::<()>(&req, &mut pl).await.unwrap();
     }
 
     #[ntex_rt::test]

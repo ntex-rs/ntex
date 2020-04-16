@@ -107,7 +107,7 @@ mod tests {
     use super::apply_mask;
 
     /// A safe unoptimized mask application.
-    fn apply_mask_fallback(buf: &mut [u8], mask: &[u8; 4]) {
+    fn apply_mask_fallback(buf: &mut [u8], mask: [u8; 4]) {
         for (i, byte) in buf.iter_mut().enumerate() {
             *byte ^= mask[i & 3];
         }
@@ -126,7 +126,7 @@ mod tests {
         // Check masking with proper alignment.
         {
             let mut masked = unmasked.clone();
-            apply_mask_fallback(&mut masked, &mask);
+            apply_mask_fallback(&mut masked, mask);
 
             let mut masked_fast = unmasked.clone();
             apply_mask(&mut masked_fast, mask_u32);
@@ -137,9 +137,9 @@ mod tests {
         // Check masking without alignment.
         {
             let mut masked = unmasked.clone();
-            apply_mask_fallback(&mut masked[1..], &mask);
+            apply_mask_fallback(&mut masked[1..], mask);
 
-            let mut masked_fast = unmasked.clone();
+            let mut masked_fast = unmasked;
             apply_mask(&mut masked_fast[1..], mask_u32);
 
             assert_eq!(masked, masked_fast);

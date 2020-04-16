@@ -868,6 +868,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cognitive_complexity)]
     fn test_error_helpers() {
         let err = ErrorBadRequest::<_, DefaultError>("err");
         assert!(format!("{:?}", err).contains("web::InternalError"));

@@ -954,6 +954,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cognitive_complexity)]
     fn test_into_response() {
         let resp: Response = "test".into();
         assert_eq!(resp.status(), StatusCode::OK);

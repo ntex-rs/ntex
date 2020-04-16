@@ -18,10 +18,7 @@ where
     S: Stream<Item = Result<Bytes, PayloadError>>,
 {
     let body = stream
-        .map(|res| match res {
-            Ok(chunk) => chunk,
-            Err(_) => panic!(),
-        })
+        .map(|res| if let Ok(chunk) = res { chunk } else { panic!() })
         .fold(BytesMut::new(), move |mut body, chunk| {
             body.extend_from_slice(&chunk);
             ready(body)

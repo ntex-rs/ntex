@@ -993,7 +993,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_request_methods() {
-        let mut app = init_service(
+        let app = init_service(
             App::new().service(
                 web::resource("/index.html")
                     .route(web::put().to(|| async { HttpResponse::Ok().body("put!") }))
@@ -1013,7 +1013,7 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .to_request();
 
-        let result = read_response(&mut app, put_req).await;
+        let result = read_response(&app, put_req).await;
         assert_eq!(result, Bytes::from_static(b"put!"));
 
         let patch_req = TestRequest::patch()
@@ -1021,17 +1021,17 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .to_request();
 
-        let result = read_response(&mut app, patch_req).await;
+        let result = read_response(&app, patch_req).await;
         assert_eq!(result, Bytes::from_static(b"patch!"));
 
         let delete_req = TestRequest::delete().uri("/index.html").to_request();
-        let result = read_response(&mut app, delete_req).await;
+        let result = read_response(&app, delete_req).await;
         assert_eq!(result, Bytes::from_static(b"delete!"));
     }
 
     #[ntex_rt::test]
     async fn test_response() {
-        let mut app =
+        let app =
             init_service(App::new().service(web::resource("/index.html").route(
                 web::post().to(|| async { HttpResponse::Ok().body("welcome!") }),
             )))
@@ -1042,7 +1042,7 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .to_request();
 
-        let result = read_response(&mut app, req).await;
+        let result = read_response(&app, req).await;
         assert_eq!(result, Bytes::from_static(b"welcome!"));
     }
 
@@ -1054,7 +1054,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_response_json() {
-        let mut app = init_service(App::new().service(web::resource("/people").route(
+        let app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Json<Person>| async {
                 HttpResponse::Ok().json(&person.into_inner())
             }),
@@ -1069,13 +1069,13 @@ mod tests {
             .set_payload(payload)
             .to_request();
 
-        let result: Person = read_response_json(&mut app, req).await;
+        let result: Person = read_response_json(&app, req).await;
         assert_eq!(&result.id, "12345");
     }
 
     #[ntex_rt::test]
     async fn test_request_response_form() {
-        let mut app = init_service(App::new().service(web::resource("/people").route(
+        let app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Form<Person>| async {
                 HttpResponse::Ok().json(&person.into_inner())
             }),
@@ -1094,14 +1094,14 @@ mod tests {
 
         assert_eq!(req.content_type(), "application/x-www-form-urlencoded");
 
-        let result: Person = read_response_json(&mut app, req).await;
+        let result: Person = read_response_json(&app, req).await;
         assert_eq!(&result.id, "12345");
         assert_eq!(&result.name, "User name");
     }
 
     #[ntex_rt::test]
     async fn test_request_response_json() {
-        let mut app = init_service(App::new().service(web::resource("/people").route(
+        let app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Json<Person>| async {
                 HttpResponse::Ok().json(&person.into_inner())
             }),
@@ -1120,7 +1120,7 @@ mod tests {
 
         assert_eq!(req.content_type(), "application/json");
 
-        let result: Person = read_response_json(&mut app, req).await;
+        let result: Person = read_response_json(&app, req).await;
         assert_eq!(&result.id, "12345");
         assert_eq!(&result.name, "User name");
     }
@@ -1130,6 +1130,7 @@ mod tests {
         async fn async_with_block() -> Result<HttpResponse, Infallible> {
             let res = web::block(move || Some(4usize).ok_or("wrong")).await;
 
+            #[allow(clippy::match_wild_err_arm)]
             match res {
                 Ok(value) => Ok(HttpResponse::Ok()
                     .content_type("text/plain")

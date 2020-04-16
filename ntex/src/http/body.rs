@@ -636,6 +636,7 @@ mod tests {
     }
 
     #[ntex_rt::test]
+    #[allow(clippy::eq_op)]
     async fn test_body_eq() {
         assert!(Body::None == Body::None);
         assert!(Body::None != Body::Empty);
@@ -652,7 +653,7 @@ mod tests {
     async fn test_body_debug() {
         assert!(format!("{:?}", Body::None).contains("Body::None"));
         assert!(format!("{:?}", Body::Empty).contains("Body::Empty"));
-        assert!(format!("{:?}", Body::Bytes(Bytes::from_static(b"1"))).contains("1"));
+        assert!(format!("{:?}", Body::Bytes(Bytes::from_static(b"1"))).contains('1'));
     }
 
     #[ntex_rt::test]

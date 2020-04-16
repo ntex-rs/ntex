@@ -241,7 +241,7 @@ mod tests {
             let rx2 = rx2;
             let rx3 = rx3;
             let tx_stop = tx_stop;
-            let _ = crate::rt::System::new("test").block_on(async {
+            crate::rt::System::new("test").block_on(async {
                 let srv = InOrder::default().new_transform(Srv).await.unwrap();
 
                 let _ = lazy(|cx| srv.poll_ready(cx)).await;
@@ -250,7 +250,7 @@ mod tests {
                 let res3 = srv.call(rx3);
 
                 crate::rt::spawn(async move {
-                    let _ = poll_fn(|cx| {
+                    poll_fn(|cx| {
                         let _ = srv.poll_ready(cx);
                         Poll::<()>::Pending
                     })

@@ -62,7 +62,7 @@ async fn test_run() {
     let _ = srv.stop(false);
 
     thread::sleep(Duration::from_millis(100));
-    let _ = sys.stop();
+    sys.stop();
 }
 
 #[cfg(feature = "openssl")]
@@ -144,7 +144,7 @@ async fn test_openssl() {
     let _ = srv.stop(false);
 
     thread::sleep(Duration::from_millis(100));
-    let _ = sys.stop();
+    sys.stop();
 }
 
 #[ntex::test]
@@ -205,7 +205,7 @@ async fn test_rustls() {
     let _ = srv.stop(false);
 
     thread::sleep(Duration::from_millis(100));
-    let _ = sys.stop();
+    sys.stop();
 }
 
 #[ntex::test]
@@ -257,7 +257,7 @@ async fn test_bind_uds() {
     let _ = srv.stop(false);
 
     thread::sleep(Duration::from_millis(100));
-    let _ = sys.stop();
+    sys.stop();
 }
 
 #[ntex::test]
@@ -311,5 +311,5 @@ async fn test_listen_uds() {
     let _ = srv.stop(false);
 
     thread::sleep(Duration::from_millis(100));
-    let _ = sys.stop();
+    sys.stop();
 }

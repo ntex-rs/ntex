@@ -577,7 +577,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_middleware() {
-        let mut srv =
+        let srv =
             init_service(
                 App::new().service(
                     web::resource("/test")
@@ -591,7 +591,7 @@ mod tests {
             )
             .await;
         let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(header::CONTENT_TYPE).unwrap(),
@@ -601,7 +601,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_middleware_fn() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::resource("/test")
                     .wrap_fn(|req, srv| {
@@ -621,7 +621,7 @@ mod tests {
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(header::CONTENT_TYPE).unwrap(),
@@ -631,34 +631,34 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_to() {
-        let mut srv =
+        let srv =
             init_service(App::new().service(web::resource("/test").to(|| async {
                 delay_for(Duration::from_millis(100)).await;
                 HttpResponse::Ok()
             })))
             .await;
         let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[ntex_rt::test]
     async fn test_pattern() {
-        let mut srv = init_service(App::new().service(
+        let srv = init_service(App::new().service(
             web::resource(["/test", "/test2"]).to(|| async { HttpResponse::Ok() }),
         ))
         .await;
         let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let req = TestRequest::with_uri("/test2").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[ntex_rt::test]
     async fn test_default_resource() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new()
                 .service(
                     web::resource("/test")
@@ -670,16 +670,16 @@ mod tests {
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/test")
             .method(Method::POST)
             .to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 
-        let mut srv = init_service(
+        let srv = init_service(
             App::new().service(
                 web::resource("/test")
                     .route(web::get().to(|| async { HttpResponse::Ok() }))
@@ -691,19 +691,19 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/test")
             .method(Method::POST)
             .to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[ntex_rt::test]
     async fn test_resource_guards() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new()
                 .service(
                     web::resource("/test/{p}")
@@ -726,27 +726,27 @@ mod tests {
         let req = TestRequest::with_uri("/test/it")
             .method(Method::GET)
             .to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/test/it")
             .method(Method::PUT)
             .to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         let req = TestRequest::with_uri("/test/it")
             .method(Method::DELETE)
             .to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
     #[ntex_rt::test]
     async fn test_data() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new()
-                .data(1.0f64)
+                .data(1i32)
                 .data(1usize)
                 .app_data(web::types::Data::new('-'))
                 .service(
@@ -757,10 +757,10 @@ mod tests {
                         .to(
                             |data1: web::types::Data<usize>,
                              data2: web::types::Data<char>,
-                             data3: web::types::Data<f64>| {
+                             data3: web::types::Data<i32>| {
                                 assert_eq!(**data1, 10);
                                 assert_eq!(**data2, '*');
-                                assert_eq!(**data3, 1.0);
+                                assert_eq!(**data3, 1);
                                 ready(HttpResponse::Ok())
                             },
                         ),
@@ -769,7 +769,7 @@ mod tests {
         .await;
 
         let req = TestRequest::get().uri("/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 }

@@ -156,7 +156,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_configure_external_resource() {
-        let mut srv = init_service(
+        let srv = init_service(
             App::new()
                 .configure(|cfg| {
                     cfg.external_resource(
@@ -176,7 +176,7 @@ mod tests {
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = read_body(resp).await;
         assert_eq!(body, Bytes::from_static(b"https://youtube.com/watch/12345"));
@@ -184,7 +184,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_configure_service() {
-        let mut srv = init_service(App::new().configure(|cfg| {
+        let srv = init_service(App::new().configure(|cfg| {
             cfg.service(
                 web::resource("/test")
                     .route(web::get().to(|| async { HttpResponse::Created() })),
@@ -199,13 +199,13 @@ mod tests {
         let req = TestRequest::with_uri("/test")
             .method(Method::GET)
             .to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         let req = TestRequest::with_uri("/index.html")
             .method(Method::GET)
             .to_request();
-        let resp = call_service(&mut srv, req).await;
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 }
