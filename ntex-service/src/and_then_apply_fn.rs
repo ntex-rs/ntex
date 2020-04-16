@@ -312,15 +312,20 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_service() {
-        let srv = pipeline(ok).and_then_apply_fn(Srv, |req: &'static str, s| {
-            s.call(()).map_ok(move |res| (req, res))
-        });
+        let srv = pipeline(ok)
+            .and_then_apply_fn(Srv, |req: &'static str, s| {
+                s.call(()).map_ok(move |res| (req, res))
+            })
+            .clone();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
+
+        let res = lazy(|cx| srv.poll_shutdown(cx, false)).await;
+        assert_eq!(res, Poll::Ready(()));
     }
 
     #[ntex_rt::test]
@@ -329,7 +334,8 @@ mod tests {
             .and_then_apply_fn(
                 || ok(Srv),
                 |req: &'static str, s| s.call(()).map_ok(move |res| (req, res)),
-            );
+            )
+            .clone();
         let srv = new_srv.new_service(()).await.unwrap();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));

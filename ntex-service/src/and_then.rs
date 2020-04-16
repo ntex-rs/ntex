@@ -315,10 +315,15 @@ mod tests {
     #[ntex_rt::test]
     async fn test_poll_ready() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = pipeline(Srv1(cnt.clone())).and_then(Srv2(cnt.clone()));
+        let srv = pipeline(Srv1(cnt.clone()))
+            .and_then(Srv2(cnt.clone()))
+            .clone();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 2);
+
+        let res = lazy(|cx| srv.poll_shutdown(cx, false)).await;
+        assert_eq!(res, Poll::Ready(()));
     }
 
     #[ntex_rt::test]
@@ -331,12 +336,13 @@ mod tests {
     }
 
     #[ntex_rt::test]
-    async fn test_new_service() {
+    async fn test_factory() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
         let new_srv =
             pipeline_factory(fn_factory(move || ready(Ok::<_, ()>(Srv1(cnt2.clone())))))
-                .and_then(move || ready(Ok(Srv2(cnt.clone()))));
+                .and_then(move || ready(Ok(Srv2(cnt.clone()))))
+                .clone();
 
         let srv = new_srv.new_service(()).await.unwrap();
         let res = srv.call("srv1").await;
