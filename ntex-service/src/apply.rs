@@ -243,8 +243,8 @@ mod tests {
         let srv = pipeline(apply_fn(Srv, |req: &'static str, srv| {
             let fut = srv.call(());
             async move {
-                let res = fut.await.unwrap();
-                Ok((req, res))
+                fut.await.unwrap();
+                Ok((req, ()))
             }
         }));
 
@@ -252,7 +252,7 @@ mod tests {
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), (("srv", ())));
+        assert_eq!(res.unwrap(), ("srv", ()));
     }
 
     #[ntex_rt::test]
@@ -262,8 +262,8 @@ mod tests {
             |req: &'static str, srv| {
                 let fut = srv.call(());
                 async move {
-                    let res = fut.await.unwrap();
-                    Ok((req, res))
+                    fut.await.unwrap();
+                    Ok((req, ()))
                 }
             },
         ));
@@ -274,6 +274,6 @@ mod tests {
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), (("srv", ())));
+        assert_eq!(res.unwrap(), ("srv", ()));
     }
 }

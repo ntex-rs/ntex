@@ -327,7 +327,7 @@ mod tests {
         let srv = pipeline(Srv1(cnt.clone())).and_then(Srv2(cnt));
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), (("srv1", "srv2")));
+        assert_eq!(res.unwrap(), ("srv1", "srv2"));
     }
 
     #[ntex_rt::test]

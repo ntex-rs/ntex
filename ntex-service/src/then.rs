@@ -321,11 +321,11 @@ mod tests {
 
         let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), (("srv1", "ok")));
+        assert_eq!(res.unwrap(), ("srv1", "ok"));
 
         let res = srv.call(Err("srv")).await;
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), (("srv2", "err")));
+        assert_eq!(res.unwrap(), ("srv2", "err"));
     }
 
     #[ntex_rt::test]
@@ -337,10 +337,10 @@ mod tests {
         let srv = factory.new_service(&()).await.unwrap();
         let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), (("srv1", "ok")));
+        assert_eq!(res.unwrap(), ("srv1", "ok"));
 
         let res = srv.call(Err("srv")).await;
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), (("srv2", "err")));
+        assert_eq!(res.unwrap(), ("srv2", "err"));
     }
 }

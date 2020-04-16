@@ -305,17 +305,16 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&self, req: Self::Request) -> Self::Future {
-            ok(req)
+        fn call(&self, _: Self::Request) -> Self::Future {
+            ok(())
         }
     }
 
     #[ntex_rt::test]
     async fn test_service() {
-        let srv = pipeline(|r: &'static str| ok(r))
-            .and_then_apply_fn(Srv, |req: &'static str, s| {
-                s.call(()).map_ok(move |res| (req, res))
-            });
+        let srv = pipeline(ok).and_then_apply_fn(Srv, |req: &'static str, s| {
+            s.call(()).map_ok(move |res| (req, res))
+        });
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
@@ -326,12 +325,11 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_service_factory() {
-        let new_srv =
-            pipeline_factory(|| ok::<_, ()>(fn_service(|r: &'static str| ok(r))))
-                .and_then_apply_fn(
-                    || ok(Srv),
-                    |req: &'static str, s| s.call(()).map_ok(move |res| (req, res)),
-                );
+        let new_srv = pipeline_factory(|| ok::<_, ()>(fn_service(ok)))
+            .and_then_apply_fn(
+                || ok(Srv),
+                |req: &'static str, s| s.call(()).map_ok(move |res| (req, res)),
+            );
         let srv = new_srv.new_service(()).await.unwrap();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));

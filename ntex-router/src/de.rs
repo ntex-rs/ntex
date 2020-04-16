@@ -521,6 +521,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::let_unit_value, clippy::unit_cmp)]
     fn test_request_extract() {
         let mut path = Path::new("/name/user1/");
         path.segments = vec![
