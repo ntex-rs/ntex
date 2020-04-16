@@ -24,6 +24,7 @@ async fn test_basic() {
             delay_for(Duration::from_millis(50)).await;
             Ok(conn.codec(BytesCodec).state(State(None)))
         }))
+        .disconnect_timeout(3000)
         // echo
         .build(fn_service(|t: BytesMut| ok(Some(t.freeze()))))
     });
@@ -34,6 +35,7 @@ async fn test_basic() {
         let _ = tx.send(Bytes::from_static(b"Hello"));
         Ok(conn.codec(BytesCodec).out(rx).state(State(Some(tx))))
     }))
+    .disconnect_timeout(3000)
     .build(fn_factory_with_config(move |cfg: State| {
         let item = item.clone();
         let cfg = RefCell::new(cfg);

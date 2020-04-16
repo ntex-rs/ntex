@@ -40,7 +40,7 @@ where
 }
 
 #[pin_project::pin_project]
-pub struct HandshakeResult<Io, St, Codec: Encoder + Decoder, Out> {
+pub struct HandshakeResult<Io, St, Codec, Out> {
     pub(crate) state: St,
     pub(crate) out: Option<Out>,
     pub(crate) framed: Framed<Io, Codec>,
@@ -48,13 +48,8 @@ pub struct HandshakeResult<Io, St, Codec: Encoder + Decoder, Out> {
 
 impl<Io, St, Codec: Encoder + Decoder, Out: Unpin> HandshakeResult<Io, St, Codec, Out> {
     #[inline]
-    pub fn get_ref(&self) -> &Io {
-        self.framed.get_ref()
-    }
-
-    #[inline]
-    pub fn get_mut(&mut self) -> &mut Io {
-        self.framed.get_mut()
+    pub fn io(&mut self) -> &mut Framed<Io, Codec> {
+        &mut self.framed
     }
 
     pub fn out<U>(self, out: U) -> HandshakeResult<Io, St, Codec, U>
@@ -85,51 +80,106 @@ where
 {
     type Item = Result<<Codec as Decoder>::Item, <Codec as Decoder>::Error>;
 
+    #[inline]
     fn poll_next(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.project().framed.next_item(cx)
+        self.framed.next_item(cx)
     }
 }
 
-impl<Io, St, Codec, Out> futures::Sink<<Codec as Encoder>::Item>
+impl<Io, St, Codec, Out> futures::Sink<Codec::Item>
     for HandshakeResult<Io, St, Codec, Out>
 where
     Io: AsyncRead + AsyncWrite + Unpin,
-    Codec: Encoder + Decoder,
+    Codec: Encoder + Unpin,
+    Codec::Error: From<std::io::Error>,
 {
-    type Error = <Codec as Encoder>::Error;
+    type Error = Codec::Error;
 
+    #[inline]
     fn poll_ready(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        if self.framed.is_write_ready() {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
+        Pin::new(&mut self.framed).poll_ready(cx)
     }
 
+    #[inline]
     fn start_send(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         item: <Codec as Encoder>::Item,
     ) -> Result<(), Self::Error> {
-        self.project().framed.write(item)
+        Pin::new(&mut self.framed).start_send(item)
     }
 
+    #[inline]
     fn poll_flush(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        self.get_mut().framed.flush(cx)
+        Pin::new(&mut self.framed).poll_flush(cx)
     }
 
+    #[inline]
     fn poll_close(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        self.get_mut().framed.close(cx).map_err(|e| e.into())
+        Pin::new(&mut self.framed).poll_close(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use futures::future::lazy;
+    use futures::{Sink, StreamExt};
+    use ntex_codec::BytesCodec;
+
+    use super::*;
+    use crate::testing::Io;
+
+    const BLOB: Bytes = Bytes::from_static(b"GET /test HTTP/1.1\r\n\r\n");
+
+    #[ntex_rt::test]
+    async fn test_result() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(1024);
+        let server = Framed::new(server, BytesCodec);
+
+        let mut hnd = HandshakeResult {
+            state: (),
+            out: Some(()),
+            framed: server,
+        };
+
+        client.write(BLOB);
+        let item = hnd.next().await.unwrap().unwrap();
+        assert_eq!(item, BLOB);
+
+        assert!(lazy(|cx| Pin::new(&mut hnd).poll_ready(cx))
+            .await
+            .is_ready());
+
+        Pin::new(&mut hnd).start_send(BLOB).unwrap();
+        assert_eq!(client.read_any(), b"".as_ref());
+        assert_eq!(hnd.io().read_buf(), b"".as_ref());
+        assert_eq!(hnd.io().write_buf(), &BLOB[..]);
+
+        assert!(lazy(|cx| Pin::new(&mut hnd).poll_flush(cx))
+            .await
+            .is_ready());
+        assert_eq!(client.read_any(), &BLOB[..]);
+
+        assert!(lazy(|cx| Pin::new(&mut hnd).poll_close(cx))
+            .await
+            .is_pending());
+        client.close().await;
+        assert!(lazy(|cx| Pin::new(&mut hnd).poll_close(cx))
+            .await
+            .is_ready());
+        assert!(client.is_closed());
     }
 }
