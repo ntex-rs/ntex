@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.2] - 2020-04-17
+
+* Do not swallow unprocessed data on read errors
+
 ## [0.1.1] - 2020-04-07
 
 * Optimize io operations

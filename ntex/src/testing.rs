@@ -12,6 +12,7 @@ use crate::codec::{AsyncRead, AsyncWrite};
 use crate::rt::time::delay_for;
 
 /// Async io stream
+#[derive(Debug)]
 pub struct Io {
     tp: Type,
     state: Arc<Cell<State>>,
@@ -34,13 +35,13 @@ enum Type {
     ServerClone,
 }
 
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Debug)]
 struct State {
     client_dropped: bool,
     server_dropped: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Channel {
     buf: BytesMut,
     buf_cap: usize,
@@ -244,23 +245,18 @@ impl AsyncRead for Io {
         let mut ch = guard.borrow_mut();
         ch.waker.register(cx.waker());
 
+        if !ch.buf.is_empty() {
+            let size = std::cmp::min(ch.buf.len(), buf.len());
+            let b = ch.buf.split_to(size);
+            buf[..size].copy_from_slice(&b);
+            return Poll::Ready(Ok(size));
+        }
+
         match mem::take(&mut ch.read) {
-            IoState::Ok => {
-                if ch.buf.is_empty() {
-                    Poll::Pending
-                } else {
-                    let size = std::cmp::min(ch.buf.len(), buf.len());
-                    let b = ch.buf.split_to(size);
-                    buf[..size].copy_from_slice(&b);
-                    Poll::Ready(Ok(size))
-                }
-            }
+            IoState::Ok => Poll::Pending,
             IoState::Close => {
                 ch.read = IoState::Close;
-                let size = std::cmp::min(ch.buf.len(), buf.len());
-                let b = ch.buf.split_to(size);
-                buf[..size].copy_from_slice(&b);
-                Poll::Ready(Ok(size))
+                Poll::Ready(Ok(0))
             }
             IoState::Pending => Poll::Pending,
             IoState::Err(e) => Poll::Ready(Err(e)),
