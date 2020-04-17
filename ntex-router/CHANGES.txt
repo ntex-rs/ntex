@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.4] - 2020-04-17
+
+* Add ResourcePath impl for &T where T: ResourcePath
+
 ## [0.3.3] - 2020-04-11
 
 * Fix `/` prefix match
