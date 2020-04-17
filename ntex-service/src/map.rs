@@ -212,6 +212,7 @@ mod tests {
     use super::*;
     use crate::{IntoServiceFactory, Service, ServiceFactory};
 
+    #[derive(Clone)]
     struct Srv;
 
     impl Service for Srv {
@@ -230,23 +231,47 @@ mod tests {
     }
 
     #[ntex_rt::test]
-    async fn test_poll_ready() {
-        let srv = Srv.map(|_| "ok");
-        let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Ready(Ok(())));
-    }
-
-    #[ntex_rt::test]
-    async fn test_call() {
-        let srv = Srv.map(|_| "ok");
+    async fn test_service() {
+        let srv = Srv.map(|_| "ok").clone();
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+
+        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        assert_eq!(res, Poll::Ready(()));
     }
 
     #[ntex_rt::test]
-    async fn test_new_service() {
-        let new_srv = (|| ok::<_, ()>(Srv)).into_factory().map(|_| "ok");
+    async fn test_pipeline() {
+        let srv = crate::pipeline(Srv).map(|_| "ok").clone();
+        let res = srv.call(()).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "ok");
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+
+        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        assert_eq!(res, Poll::Ready(()));
+    }
+
+    #[ntex_rt::test]
+    async fn test_factory() {
+        let new_srv = (|| ok::<_, ()>(Srv)).into_factory().map(|_| "ok").clone();
+        let srv = new_srv.new_service(&()).await.unwrap();
+        let res = srv.call(()).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), ("ok"));
+    }
+
+    #[ntex_rt::test]
+    async fn test_pipeline_factory() {
+        let new_srv = crate::pipeline_factory((|| ok::<_, ()>(Srv)).into_factory())
+            .map(|_| "ok")
+            .clone();
         let srv = new_srv.new_service(&()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_ok());

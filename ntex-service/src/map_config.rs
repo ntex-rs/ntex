@@ -124,3 +124,36 @@ where
         self.a.new_service(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures_util::future::ok;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::{fn_service, ServiceFactory};
+
+    #[ntex_rt::test]
+    async fn test_map_config() {
+        let item = Rc::new(Cell::new(1usize));
+
+        let factory =
+            map_config(fn_service(|item: usize| ok::<_, ()>(item)), |t: usize| {
+                item.set(item.get() + t);
+                ()
+            })
+            .clone();
+
+        let _ = factory.new_service(10).await;
+        assert_eq!(item.get(), 11);
+    }
+
+    #[ntex_rt::test]
+    async fn test_unit_config() {
+        let _ = unit_config(fn_service(|item: usize| ok::<_, ()>(item)))
+            .clone()
+            .new_service(10)
+            .await;
+    }
+}

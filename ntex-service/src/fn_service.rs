@@ -454,7 +454,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_fn_service() {
-        let new_srv = fn_service(|()| ok::<_, ()>("srv"));
+        let new_srv = fn_service(|()| ok::<_, ()>("srv")).clone();
 
         let srv = new_srv.new_service(()).await.unwrap();
         let res = srv.call(()).await;
@@ -470,7 +470,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_fn_mut_service() {
-        let srv = fn_mut_service(|()| ok::<_, ()>("srv"));
+        let srv = fn_mut_service(|()| ok::<_, ()>("srv")).clone();
 
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
@@ -480,7 +480,7 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_fn_service_service() {
-        let srv = fn_service(|()| ok::<_, ()>("srv"));
+        let srv = fn_service(|()| ok::<_, ()>("srv")).clone();
 
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
@@ -492,7 +492,8 @@ mod tests {
     async fn test_fn_service_with_config() {
         let new_srv = fn_factory_with_config(|cfg: usize| {
             ok::<_, ()>(fn_service(move |()| ok::<_, ()>(("srv", cfg))))
-        });
+        })
+        .clone();
 
         let srv = new_srv.new_service(1).await.unwrap();
         let res = srv.call(()).await;

@@ -228,31 +228,6 @@ pub trait ServiceFactory {
     }
 }
 
-impl<'a, S> Service for &'a S
-where
-    S: Service + 'a,
-{
-    type Request = S::Request;
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        (**self).poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        (**self).poll_shutdown(cx, is_error)
-    }
-
-    #[inline]
-    fn call(&self, request: Self::Request) -> S::Future {
-        (**self).call(request)
-    }
-}
-
 impl<S> Service for Box<S>
 where
     S: Service + ?Sized,
