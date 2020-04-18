@@ -62,6 +62,11 @@ impl<T> Sender<T> {
         shared.has_receiver = false;
         shared.blocked_recv.wake();
     }
+
+    /// Returns whether this channel is closed without needing a context.
+    pub fn is_closed(&self) -> bool {
+        self.shared.strong_count() == 1 || !self.shared.get_ref().has_receiver
+    }
 }
 
 impl<T> Clone for Sender<T> {
@@ -124,10 +129,34 @@ pub struct Receiver<T> {
 }
 
 impl<T> Receiver<T> {
-    /// Create Sender
+    /// Create a Sender
     pub fn sender(&self) -> Sender<T> {
         Sender {
             shared: self.shared.clone(),
+        }
+    }
+
+    /// Closes the receiving half of a channel, without dropping it.
+    ///
+    /// This prevents any further messages from being sent on the channel
+    /// while still enabling the receiver to drain messages that are buffered.
+    pub fn close(&self) {
+        self.shared.get_mut().has_receiver = false;
+    }
+
+    /// Returns whether this channel is closed without needing a context.
+    pub fn is_closed(&self) -> bool {
+        self.shared.strong_count() == 1 || !self.shared.get_ref().has_receiver
+    }
+
+    /// Polls the channel to determine if it is closed.
+    pub fn poll_close(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let shared = self.shared.get_ref();
+        if self.shared.strong_count() == 1 || !shared.has_receiver {
+            Poll::Ready(())
+        } else {
+            shared.blocked_recv.register(cx.waker());
+            Poll::Pending
         }
     }
 }
@@ -254,5 +283,22 @@ mod tests {
         .await;
         assert_eq!(rx.next().await.unwrap(), "test");
         assert_eq!(rx.next().await, None);
+    }
+
+    #[ntex_rt::test]
+    async fn test_close() {
+        let (tx, rx) = channel::<()>();
+        assert!(!tx.is_closed());
+        assert!(!rx.is_closed());
+        assert!(lazy(|cx| rx.poll_close(cx)).await.is_pending());
+
+        tx.close();
+        assert!(tx.is_closed());
+        assert!(rx.is_closed());
+        assert!(lazy(|cx| rx.poll_close(cx)).await.is_ready());
+
+        let (tx, rx) = channel::<()>();
+        rx.close();
+        assert!(rx.is_closed());
     }
 }

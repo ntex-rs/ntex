@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.12] - 2020-04-18
+
+* ntex::channel: Add mpsc close checks
+
 ## [0.1.11] - 2020-04-15
 
 * ntex::web: Allow to add multiple routes at once
