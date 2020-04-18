@@ -42,12 +42,6 @@ jobs:
           path: ~/.cargo/git
           key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-index-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Cache cargo build
-        uses: actions/cache@v1
-        with:
-          path: target
-          key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-build-trimmed-${{ hashFiles('**/Cargo.lock') }}
-
       - name: Cache cargo tarpaulin
         if: matrix.version == '1.42.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
         uses: actions/cache@v1
