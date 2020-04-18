@@ -64,12 +64,10 @@ impl Waiter {
             let waker = LocalWaker::default();
             waker.register(cx.waker());
             *inner = Some(waker);
-            Poll::Pending
-        } else if inner.as_mut().unwrap().register(cx.waker()) {
-            Poll::Pending
-        } else {
-            Poll::Ready(())
+        } else if !inner.as_mut().unwrap().register(cx.waker()) {
+            return Poll::Ready(());
         }
+        Poll::Pending
     }
 }
 

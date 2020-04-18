@@ -199,13 +199,9 @@ impl<T> PSender<T> {
     /// Tests to see whether this `Sender`'s corresponding `Receiver`
     /// has gone away.
     pub fn is_canceled(&self) -> bool {
-        !unsafe {
-            self.inner
-                .get_ref()
-                .get_unchecked(self.token)
-                .flags
-                .contains(Flags::RECEIVER)
-        }
+        !unsafe { self.inner.get_ref().get_unchecked(self.token) }
+            .flags
+            .contains(Flags::RECEIVER)
     }
 }
 
