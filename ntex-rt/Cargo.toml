@@ -19,4 +19,4 @@ path = "src/lib.rs"
 ntex-rt-macros = "0.1.0"
 actix-threadpool = "0.3"
 futures = "0.3.4"
-tokio = { version = "0.2.6", default-features=false, features = ["rt-core", "rt-util", "io-driver", "tcp", "uds", "udp", "time", "signal", "stream"] }
+tokio = { version = "0.2.18", default-features=false, features = ["rt-core", "rt-util", "io-driver", "tcp", "uds", "udp", "time", "signal", "stream"] }

@@ -20,7 +20,7 @@ bitflags = "1.2.1"
 bytes = "0.5.4"
 futures-core = "0.3.4"
 futures-sink = "0.3.4"
-tokio = { version = "0.2.6", default-features=false }
+tokio = { version = "0.2.18", default-features=false }
 tokio-util = { version = "0.2.0", default-features=false, features=["codec"] }
 log = "0.4"
 

@@ -385,14 +385,14 @@ struct TokioTime;
 #[async_trait::async_trait]
 impl Time for TokioTime {
     async fn delay_for(duration: std::time::Duration) {
-        tokio::time::delay_for(duration).await
+        crate::rt::time::delay_for(duration).await
     }
 
     async fn timeout<F: 'static + Future + Send>(
         duration: std::time::Duration,
         future: F,
     ) -> Result<F::Output, std::io::Error> {
-        tokio::time::timeout(duration, future)
+        crate::rt::time::timeout(duration, future)
             .await
             .map_err(move |_| {
                 std::io::Error::new(std::io::ErrorKind::TimedOut, "future timed out")
