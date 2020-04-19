@@ -148,17 +148,6 @@ impl<T> Receiver<T> {
     pub fn is_closed(&self) -> bool {
         self.shared.strong_count() == 1 || !self.shared.get_ref().has_receiver
     }
-
-    /// Polls the channel to determine if it is closed.
-    pub fn poll_close(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let shared = self.shared.get_ref();
-        if self.shared.strong_count() == 1 || !shared.has_receiver {
-            Poll::Ready(())
-        } else {
-            shared.blocked_recv.register(cx.waker());
-            Poll::Pending
-        }
-    }
 }
 
 impl<T> Unpin for Receiver<T> {}
@@ -290,12 +279,10 @@ mod tests {
         let (tx, rx) = channel::<()>();
         assert!(!tx.is_closed());
         assert!(!rx.is_closed());
-        assert!(lazy(|cx| rx.poll_close(cx)).await.is_pending());
 
         tx.close();
         assert!(tx.is_closed());
         assert!(rx.is_closed());
-        assert!(lazy(|cx| rx.poll_close(cx)).await.is_ready());
 
         let (tx, rx) = channel::<()>();
         rx.close();
