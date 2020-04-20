@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.12] - 2020-04-xx
+## [0.1.12] - 2020-04-20
 
 * ntex::channel: Add mpsc close checks
 
