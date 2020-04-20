@@ -171,6 +171,7 @@ pub struct PReceiver<T> {
     inner: Cell<Slab<PoolInner<T>>>,
 }
 
+#[allow(clippy::mut_from_ref)]
 fn get_inner<T>(inner: &Cell<Slab<PoolInner<T>>>, token: usize) -> &mut PoolInner<T> {
     unsafe { inner.get_mut().get_unchecked_mut(token) }
 }
