@@ -1,8 +1,10 @@
 # Changes
 
-## [0.1.12] - 2020-04-18
+## [0.1.12] - 2020-04-xx
 
 * ntex::channel: Add mpsc close checks
+
+* ntex::channel: Add oneshot close checks
 
 ## [0.1.11] - 2020-04-15
 

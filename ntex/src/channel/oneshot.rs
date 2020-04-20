@@ -122,7 +122,8 @@ bitflags::bitflags! {
 struct PoolInner<T> {
     flags: Flags,
     value: Option<T>,
-    waker: LocalWaker,
+    tx_waker: LocalWaker,
+    rx_waker: LocalWaker,
 }
 
 impl<T> Pool<T> {
@@ -130,7 +131,8 @@ impl<T> Pool<T> {
         let token = self.0.get_mut().insert(PoolInner {
             flags: Flags::all(),
             value: None,
-            waker: LocalWaker::default(),
+            tx_waker: LocalWaker::default(),
+            rx_waker: LocalWaker::default(),
         });
 
         (
@@ -169,6 +171,10 @@ pub struct PReceiver<T> {
     inner: Cell<Slab<PoolInner<T>>>,
 }
 
+fn get_inner<T>(inner: &Cell<Slab<PoolInner<T>>>, token: usize) -> &mut PoolInner<T> {
+    unsafe { inner.get_mut().get_unchecked_mut(token) }
+}
+
 // The oneshots do not ever project Pin to the inner T
 impl<T> Unpin for PReceiver<T> {}
 impl<T> Unpin for PSender<T> {}
@@ -185,11 +191,10 @@ impl<T> PSender<T> {
     /// this function was called, however, then `Err` is returned with the value
     /// provided.
     pub fn send(self, val: T) -> Result<(), T> {
-        let inner = unsafe { self.inner.get_mut().get_unchecked_mut(self.token) };
-
+        let inner = get_inner(&self.inner, self.token);
         if inner.flags.contains(Flags::RECEIVER) {
             inner.value = Some(val);
-            inner.waker.wake();
+            inner.rx_waker.wake();
             Ok(())
         } else {
             Err(val)
@@ -199,17 +204,29 @@ impl<T> PSender<T> {
     /// Tests to see whether this `Sender`'s corresponding `Receiver`
     /// has gone away.
     pub fn is_canceled(&self) -> bool {
-        !unsafe { self.inner.get_ref().get_unchecked(self.token) }
+        !get_inner(&self.inner, self.token)
             .flags
             .contains(Flags::RECEIVER)
+    }
+
+    /// Polls the channel to determine if receiving path is dropped
+    pub fn poll_canceled(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let inner = get_inner(&self.inner, self.token);
+
+        if inner.flags.contains(Flags::RECEIVER) {
+            inner.tx_waker.register(cx.waker());
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
     }
 }
 
 impl<T> Drop for PSender<T> {
     fn drop(&mut self) {
-        let inner = unsafe { self.inner.get_mut().get_unchecked_mut(self.token) };
+        let inner = get_inner(&self.inner, self.token);
         if inner.flags.contains(Flags::RECEIVER) {
-            inner.waker.wake();
+            inner.rx_waker.wake();
             inner.flags.remove(Flags::SENDER);
         } else {
             self.inner.get_mut().remove(self.token);
@@ -219,8 +236,9 @@ impl<T> Drop for PSender<T> {
 
 impl<T> Drop for PReceiver<T> {
     fn drop(&mut self) {
-        let inner = unsafe { self.inner.get_mut().get_unchecked_mut(self.token) };
+        let inner = get_inner(&self.inner, self.token);
         if inner.flags.contains(Flags::SENDER) {
+            inner.tx_waker.wake();
             inner.flags.remove(Flags::RECEIVER);
         } else {
             self.inner.get_mut().remove(self.token);
@@ -233,7 +251,7 @@ impl<T> Future for PReceiver<T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let inner = unsafe { this.inner.get_mut().get_unchecked_mut(this.token) };
+        let inner = get_inner(&this.inner, this.token);
 
         // If we've got a value, then skip the logic below as we're done.
         if let Some(val) = inner.value.take() {
@@ -244,7 +262,7 @@ impl<T> Future for PReceiver<T> {
         if !inner.flags.contains(Flags::SENDER) {
             Poll::Ready(Err(Canceled))
         } else {
-            inner.waker.register(cx.waker());
+            inner.rx_waker.register(cx.waker());
             Poll::Pending
         }
     }
@@ -309,5 +327,18 @@ mod tests {
         assert_eq!(lazy(|cx| Pin::new(&mut rx).poll(cx)).await, Poll::Pending);
         drop(tx);
         assert!(rx.await.is_err());
+
+        let (mut tx, rx) = pool::<&'static str>().channel();
+        assert!(!tx.is_canceled());
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut tx).poll_canceled(cx)).await,
+            Poll::Pending
+        );
+        drop(rx);
+        assert!(tx.is_canceled());
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut tx).poll_canceled(cx)).await,
+            Poll::Ready(())
+        );
     }
 }
