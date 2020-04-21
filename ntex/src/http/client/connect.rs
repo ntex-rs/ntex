@@ -81,8 +81,6 @@ where
         body: Body,
         addr: Option<net::SocketAddr>,
     ) -> Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>>>> {
-        println!("SEND: {:?}", head);
-
         // connect to the host
         let fut = self.0.call(ClientConnect {
             uri: head.uri.clone(),
@@ -90,9 +88,7 @@ where
         });
 
         Box::pin(async move {
-            println!("1----------------------");
             let connection = fut.await?;
-            println!("2----------------------");
 
             // send request
             connection
