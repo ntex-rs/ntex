@@ -134,7 +134,7 @@ fn connect<T: Address>(address: Connect<T>) -> ConnectFut<T> {
         future::Either::Left(TcpConnectorResponse::new(req, port, addr))
     } else {
         error!("TCP connector: got unresolved address");
-        future::Either::Right(err(ConnectError::Unresolverd))
+        future::Either::Right(err(ConnectError::Unresolved))
     }
 }
 

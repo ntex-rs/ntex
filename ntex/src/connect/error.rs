@@ -18,7 +18,7 @@ pub enum ConnectError {
 
     /// Unresolved host name
     #[display(fmt = "Connector received `Connect` method with unresolved host")]
-    Unresolverd,
+    Unresolved,
 
     /// Connection io error
     #[display(fmt = "{}", _0)]

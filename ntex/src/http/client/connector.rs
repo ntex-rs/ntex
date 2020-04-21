@@ -120,7 +120,7 @@ impl Connector {
     }
 
     #[cfg(feature = "openssl")]
-    /// Use custom `SslConnector` instance.
+    /// Use openssl connector for secured connections.
     pub fn openssl(self, connector: OpensslConnector) -> Self {
         use crate::connect::openssl::OpensslConnector;
 
@@ -144,6 +144,7 @@ impl Connector {
     }
 
     #[cfg(feature = "rustls")]
+    /// Use rustls connector for secured connections.
     pub fn rustls(self, connector: Arc<ClientConfig>) -> Self {
         use crate::connect::rustls::{RustlsConnector, Session};
 
@@ -261,7 +262,7 @@ impl Connector {
                 srv,
                 self.conn_lifetime,
                 self.conn_keep_alive,
-                Some(self.disconnect_timeout),
+                self.disconnect_timeout,
                 self.limit,
             ))
         } else {
@@ -273,7 +274,7 @@ impl Connector {
                 tcp_service,
                 self.conn_lifetime,
                 self.conn_keep_alive,
-                None,
+                self.disconnect_timeout,
                 self.limit,
             ),
             ssl_pool,

@@ -112,7 +112,7 @@ pub enum ConnectError {
 
     /// Unresolved host name
     #[display(fmt = "Connector received `Connect` method with unresolved host")]
-    Unresolverd,
+    Unresolved,
 
     /// Connection io error
     #[display(fmt = "{}", _0)]
@@ -127,7 +127,7 @@ impl From<crate::connect::ConnectError> for ConnectError {
             crate::connect::ConnectError::Resolver(e) => ConnectError::Resolver(e),
             crate::connect::ConnectError::NoRecords => ConnectError::NoRecords,
             crate::connect::ConnectError::InvalidInput => panic!(),
-            crate::connect::ConnectError::Unresolverd => ConnectError::Unresolverd,
+            crate::connect::ConnectError::Unresolved => ConnectError::Unresolved,
             crate::connect::ConnectError::Io(e) => ConnectError::Io(e),
         }
     }

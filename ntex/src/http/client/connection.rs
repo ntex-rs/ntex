@@ -53,7 +53,7 @@ pub(super) trait ConnectionLifetime:
 
 #[doc(hidden)]
 /// HTTP client connection
-pub(crate) struct IoConnection<T> {
+pub(super) struct IoConnection<T> {
     io: Option<ConnectionType<T>>,
     created: time::Instant,
     pool: Option<Acquired<T>>,
@@ -72,7 +72,10 @@ where
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin> IoConnection<T> {
+impl<T> IoConnection<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
+{
     pub(super) fn new(
         io: ConnectionType<T>,
         created: time::Instant,
@@ -82,6 +85,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin> IoConnection<T> {
             pool,
             created,
             io: Some(io),
+        }
+    }
+
+    pub(super) fn release(self) {
+        if let Some(mut pool) = self.pool {
+            pool.release(Self {
+                io: self.io,
+                created: self.created,
+                pool: None,
+            });
         }
     }
 

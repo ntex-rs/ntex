@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.13] - 2020-04-21
+
+* ntex::http: Refactor client connection pool
+
 ## [0.1.12] - 2020-04-20
 
 * ntex::channel: Add mpsc close checks
