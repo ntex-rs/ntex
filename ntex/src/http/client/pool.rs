@@ -666,5 +666,8 @@ mod tests {
         delay_for(Duration::from_millis(50)).await;
         pool.1.borrow_mut().check_availibility();
         assert!(pool.1.borrow().waiters.is_empty());
+
+        assert!(lazy(|cx| pool.poll_ready(cx)).await.is_ready());
+        assert!(lazy(|cx| pool.poll_shutdown(cx, false)).await.is_ready());
     }
 }

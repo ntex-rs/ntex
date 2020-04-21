@@ -344,13 +344,13 @@ where
 
     #[inline]
     fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        let ready = self.tcp_pool.poll_shutdown(cx, is_error).is_ready();
-        let ready = if let Some(ref ssl_pool) = self.ssl_pool {
-            ssl_pool.poll_shutdown(cx, is_error).is_ready() && ready
-        } else {
-            ready
-        };
-        if ready {
+        let tcp_ready = self.tcp_pool.poll_shutdown(cx, is_error).is_ready();
+        let ssl_ready = self
+            .ssl_pool
+            .as_ref()
+            .map(|pool| pool.poll_shutdown(cx, is_error).is_ready())
+            .unwrap_or(true);
+        if tcp_ready && ssl_ready {
             Poll::Ready(())
         } else {
             Poll::Pending
