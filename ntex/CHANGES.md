@@ -1,6 +1,10 @@
 # Changes
 
+## [0.1.14] - 2020-xx-xx
+
 * ntex::http: Stop client connections pool support future
+
+* ntex::ws: Fix wrong opcode for ws text and binary continuation frames
 
 ## [0.1.13] - 2020-04-21
 

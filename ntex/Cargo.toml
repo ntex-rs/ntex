@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.1.13"
+version = "0.1.14"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -40,7 +40,7 @@ ntex-codec = "0.1.2"
 ntex-rt = "0.1.1"
 ntex-rt-macros = "0.1"
 ntex-router = "0.3.3"
-ntex-service = "0.1"
+ntex-service = "0.1.1"
 ntex-macros = "0.1"
 
 actix-threadpool = "0.3.1"

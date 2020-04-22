@@ -142,7 +142,7 @@ impl Encoder for Codec {
                         Parser::write_message(
                             dst,
                             &data[..],
-                            OpCode::Binary,
+                            OpCode::Text,
                             false,
                             !self.flags.contains(Flags::SERVER),
                         )
@@ -156,7 +156,7 @@ impl Encoder for Codec {
                         Parser::write_message(
                             dst,
                             &data[..],
-                            OpCode::Text,
+                            OpCode::Binary,
                             false,
                             !self.flags.contains(Flags::SERVER),
                         )
