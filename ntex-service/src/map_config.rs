@@ -1,6 +1,13 @@
+use std::cell::RefCell;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::task::{Context, Poll};
 
-use super::{IntoServiceFactory, ServiceFactory};
+use futures_util::ready;
+
+use super::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Adapt external config argument to a config for provided service factory
 ///
@@ -13,6 +20,28 @@ where
     F: Fn(C) -> T::Config,
 {
     MapConfig::new(factory.into_factory(), f)
+}
+
+/// Adapt external config argument to a config for provided service factory
+///
+/// This function uses service for converting config.
+pub fn map_config_service<T, M, C, U1, U2>(
+    factory: U1,
+    mapper: U2,
+) -> MapConfigService<T, M, C>
+where
+    T: ServiceFactory,
+    M: ServiceFactory<
+        Config = (),
+        Request = C,
+        Response = T::Config,
+        Error = T::InitError,
+        InitError = T::InitError,
+    >,
+    U1: IntoServiceFactory<T>,
+    U2: IntoServiceFactory<M>,
+{
+    MapConfigService::new(factory.into_factory(), mapper.into_factory())
 }
 
 /// Replace config with unit
@@ -125,6 +154,138 @@ where
     }
 }
 
+/// `map_config_service()` adapter service factory
+pub struct MapConfigService<A, M: ServiceFactory, C>(Rc<Inner<A, M, C>>);
+
+struct Inner<A, M: ServiceFactory, C> {
+    a: A,
+    m: M,
+    mapper: RefCell<Option<M::Service>>,
+    e: PhantomData<C>,
+}
+
+impl<A, M: ServiceFactory, C> Clone for MapConfigService<A, M, C> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<A, M: ServiceFactory, C> MapConfigService<A, M, C> {
+    /// Create new `MapConfigService` combinator
+    pub(crate) fn new(a: A, m: M) -> Self
+    where
+        A: ServiceFactory,
+        M: ServiceFactory<
+            Config = (),
+            Request = C,
+            Response = A::Config,
+            Error = A::InitError,
+            InitError = A::InitError,
+        >,
+    {
+        Self(Rc::new(Inner {
+            a,
+            m,
+            mapper: RefCell::new(None),
+            e: PhantomData,
+        }))
+    }
+}
+
+impl<A, M, C> ServiceFactory for MapConfigService<A, M, C>
+where
+    A: ServiceFactory,
+    M: ServiceFactory<
+        Config = (),
+        Request = C,
+        Response = A::Config,
+        Error = A::InitError,
+        InitError = A::InitError,
+    >,
+{
+    type Request = A::Request;
+    type Response = A::Response;
+    type Error = A::Error;
+
+    type Config = C;
+    type Service = A::Service;
+    type InitError = A::InitError;
+    type Future = MapConfigServiceResponse<A, M, C>;
+
+    fn new_service(&self, cfg: C) -> Self::Future {
+        let inner = self.0.clone();
+        if let Some(ref mapper) = *self.0.mapper.borrow() {
+            MapConfigServiceResponse {
+                inner,
+                config: None,
+                state: ResponseState::MapConfig(mapper.call(cfg)),
+            }
+        } else {
+            MapConfigServiceResponse {
+                inner,
+                config: Some(cfg),
+                state: ResponseState::CreateMapper(self.0.m.new_service(())),
+            }
+        }
+    }
+}
+
+#[pin_project::pin_project]
+pub struct MapConfigServiceResponse<A, M: ServiceFactory, C>
+where
+    A: ServiceFactory,
+    M: ServiceFactory,
+{
+    inner: Rc<Inner<A, M, C>>,
+    config: Option<C>,
+    #[pin]
+    state: ResponseState<A, M>,
+}
+
+#[pin_project::pin_project]
+enum ResponseState<A: ServiceFactory, M: ServiceFactory> {
+    CreateMapper(#[pin] M::Future),
+    MapConfig(#[pin] <M::Service as Service>::Future),
+    CreateService(#[pin] A::Future),
+}
+
+impl<A, M, C> Future for MapConfigServiceResponse<A, M, C>
+where
+    A: ServiceFactory,
+    M: ServiceFactory<
+        Config = (),
+        Request = C,
+        Response = A::Config,
+        Error = A::InitError,
+        InitError = A::InitError,
+    >,
+{
+    type Output = Result<A::Service, A::InitError>;
+
+    #[pin_project::project]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.as_mut().project();
+
+        #[project]
+        match this.state.as_mut().project() {
+            ResponseState::CreateMapper(fut) => {
+                let mapper = ready!(fut.poll(cx))?;
+                let fut = mapper.call(this.config.take().unwrap());
+                *this.inner.mapper.borrow_mut() = Some(mapper);
+                this.state.set(ResponseState::MapConfig(fut));
+                self.poll(cx)
+            }
+            ResponseState::MapConfig(fut) => {
+                let config = ready!(fut.poll(cx))?;
+                let fut = this.inner.a.new_service(config);
+                this.state.set(ResponseState::CreateService(fut));
+                self.poll(cx)
+            }
+            ResponseState::CreateService(fut) => fut.poll(cx),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use futures_util::future::ok;
@@ -132,7 +293,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::{fn_service, ServiceFactory};
+    use crate::{fn_factory_with_config, fn_service, ServiceFactory};
 
     #[ntex_rt::test]
     async fn test_map_config() {
@@ -155,5 +316,29 @@ mod tests {
             .clone()
             .new_service(10)
             .await;
+    }
+
+    #[ntex_rt::test]
+    async fn test_map_config_service() {
+        let item = Rc::new(Cell::new(10usize));
+        let item2 = item.clone();
+
+        let srv = map_config_service(
+            fn_factory_with_config(move |next: usize| {
+                let item = item2.clone();
+                async move {
+                    item.set(next);
+                    Ok::<_, ()>(fn_service(|id: usize| ok::<_, ()>(id * 2)))
+                }
+            }),
+            fn_service(move |item: usize| ok::<_, ()>(item + 1)),
+        )
+        .clone()
+        .new_service(10)
+        .await
+        .unwrap();
+
+        assert_eq!(srv.call(10usize).await.unwrap(), 20);
+        assert_eq!(item.get(), 11);
     }
 }

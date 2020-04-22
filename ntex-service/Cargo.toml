@@ -1,12 +1,12 @@
 [package]
 name = "ntex-service"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
-description = "Actix service"
+description = "ntex service"
 keywords = ["network", "framework", "async", "futures"]
-homepage = "https://actix.rs"
-repository = "https://github.com/actix/actix-net.git"
-documentation = "https://docs.rs/actix-service/"
+homepage = "https://ntex.rs"
+repository = "https://github.com/ntex-rs/ntex.git"
+documentation = "https://docs.rs/ntex-service/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT"
 edition = "2018"

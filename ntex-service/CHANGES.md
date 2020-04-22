@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.1] - 2020-04-22
+
+* Add `map_config_service`, replacement for `apply_cfg`
+
 ## [0.1.0] - 2020-03-31
 
 * Fork to ntex namespace
