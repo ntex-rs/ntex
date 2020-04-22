@@ -321,13 +321,17 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
+        // we are last copy
+        if Rc::strong_count(&this.inner) == 1 {
+            return Poll::Ready(());
+        }
+
         let mut inner = this.inner.as_ref().borrow_mut();
         inner.waker.register(cx.waker());
 
         // check waiters
-        while !inner.waiters.is_empty() {
-            let (key, _, tx) = inner.waiters.front().unwrap();
-            // check if waiter is still alive
+        while let Some((key, _, tx)) = inner.waiters.front() {
+            // is waiter still alive
             if tx.is_canceled() {
                 inner.waiters.pop_front();
                 continue;
@@ -338,14 +342,11 @@ where
                 Acquire::NotAvailable => break,
                 Acquire::Acquired(io, created) => {
                     let (key, _, tx) = inner.waiters.pop_front().unwrap();
-
-                    if let Err(Ok(conn)) = tx.send(Ok(IoConnection::new(
+                    let _ = tx.send(Ok(IoConnection::new(
                         io,
                         created,
                         Some(Acquired(key.clone(), Some(this.inner.clone()))),
-                    ))) {
-                        conn.release()
-                    }
+                    )));
                 }
                 Acquire::Available => {
                     let (key, connect, tx) = inner.waiters.pop_front().unwrap();

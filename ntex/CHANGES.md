@@ -1,5 +1,7 @@
 # Changes
 
+* ntex::http: Stop client connections pool support future
+
 ## [0.1.13] - 2020-04-21
 
 * ntex::http: Refactor client connection pool
