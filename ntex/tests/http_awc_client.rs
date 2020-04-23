@@ -7,11 +7,13 @@ use std::time::Duration;
 use brotli2::write::BrotliEncoder;
 use bytes::Bytes;
 use coo_kie::Cookie;
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+use flate2::{read::GzDecoder, write::GzEncoder, write::ZlibEncoder, Compression};
 use futures::future::ok;
+use futures::stream::once;
 use rand::Rng;
 
-use ntex::http::client::{error::SendRequestError, Client, Connector};
+use ntex::http::client::error::{JsonPayloadError, SendRequestError};
+use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{header, HttpMessage, HttpService};
 use ntex::service::{map_config, pipeline_factory, Service};
@@ -615,7 +617,13 @@ async fn test_client_brotli_encoding_large_random() {
     assert_eq!(bytes, Bytes::from(data.clone()));
 
     // frozen request
-    let request = srv.post("/").freeze().unwrap();
+    let request = srv
+        .post("/")
+        .timeout(Duration::from_secs(30))
+        .freeze()
+        .unwrap();
+    assert_eq!(request.get_method(), http::Method::POST);
+    assert_eq!(request.get_uri(), srv.url("/").as_str());
     let mut response = request.send_body(data.clone()).await.unwrap();
     assert!(response.status().is_success());
 
@@ -635,96 +643,89 @@ async fn test_client_brotli_encoding_large_random() {
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes.len(), data.len());
-    assert_eq!(bytes, Bytes::from(data));
+    assert_eq!(bytes, Bytes::from(data.clone()));
+
+    // client stream request
+    let mut response = srv
+        .post("/")
+        .send_stream(once(ok::<_, JsonPayloadError>(Bytes::from(data.clone()))))
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes.len(), data.len());
+    assert_eq!(bytes, Bytes::from(data.clone()));
+
+    // frozen request
+    let request = srv
+        .post("/")
+        .timeout(Duration::from_secs(30))
+        .freeze()
+        .unwrap();
+    let mut response = request
+        .send_stream(once(ok::<_, JsonPayloadError>(Bytes::from(data.clone()))))
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes.len(), data.len());
+    assert_eq!(bytes, Bytes::from(data.clone()));
 }
 
-// #[ntex::test]
-// async fn test_client_deflate_encoding() {
-//     let srv = test::TestServer::start(|app| {
-//         app.handler(|req: &HttpRequest| {
-//             req.body()
-//                 .and_then(|bytes: Bytes| {
-//                     Ok(HttpResponse::Ok()
-//                         .content_encoding(http::ContentEncoding::Br)
-//                         .body(bytes))
-//                 })
-//                 .responder()
-//         })
-//     });
+#[ntex::test]
+async fn test_client_deflate_encoding() {
+    let srv = test::server(|| {
+        App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
+            let mut e = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            e.write_all(&data).unwrap();
+            let data = e.finish().unwrap();
 
-//     // client request
-//     let request = srv
-//         .post()
-//         .content_encoding(http::ContentEncoding::Deflate)
-//         .body(STR)
-//         .unwrap();
-//     let response = srv.execute(request.send()).unwrap();
-//     assert!(response.status().is_success());
+            HttpResponse::Ok()
+                .header("content-encoding", "deflate")
+                .body(data)
+        })))
+    });
 
-//     // read response
-//     let bytes = srv.execute(response.body()).unwrap();
-//     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
-// }
+    // client request
+    let mut response = srv.post("/").send_body(STR).await.unwrap();
+    assert!(response.status().is_success());
 
-// #[ntex::test]
-// async fn test_client_deflate_encoding_large_random() {
-//     let data = rand::thread_rng()
-//         .sample_iter(&rand::distributions::Alphanumeric)
-//         .take(70_000)
-//         .collect::<String>();
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+}
 
-//     let srv = test::TestServer::start(|app| {
-//         app.handler(|req: &HttpRequest| {
-//             req.body()
-//                 .and_then(|bytes: Bytes| {
-//                     Ok(HttpResponse::Ok()
-//                         .content_encoding(http::ContentEncoding::Br)
-//                         .body(bytes))
-//                 })
-//                 .responder()
-//         })
-//     });
+#[ntex::test]
+async fn test_client_deflate_encoding_large_random() {
+    let data = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(70_000)
+        .collect::<String>();
 
-//     // client request
-//     let request = srv
-//         .post()
-//         .content_encoding(http::ContentEncoding::Deflate)
-//         .body(data.clone())
-//         .unwrap();
-//     let response = srv.execute(request.send()).unwrap();
-//     assert!(response.status().is_success());
+    let srv = test::server(|| {
+        App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
+            let mut e = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            e.write_all(&data).unwrap();
+            let data = e.finish().unwrap();
 
-//     // read response
-//     let bytes = srv.execute(response.body()).unwrap();
-//     assert_eq!(bytes, Bytes::from(data));
-// }
+            HttpResponse::Ok()
+                .header("content-encoding", "deflate")
+                .body(data)
+        })))
+    });
 
-// #[ntex::test]
-// async fn test_client_streaming_explicit() {
-//     let srv = test::TestServer::start(|app| {
-//         app.handler(|req: &HttpRequest| {
-//             req.body()
-//                 .map_err(Error::from)
-//                 .and_then(|body| {
-//                     Ok(HttpResponse::Ok()
-//                         .chunked()
-//                         .content_encoding(http::ContentEncoding::Identity)
-//                         .body(body))
-//                 })
-//                 .responder()
-//         })
-//     });
+    // client request
+    let mut response = srv.post("/").send_body(data.clone()).await.unwrap();
+    assert!(response.status().is_success());
 
-//     let body = once(Ok(Bytes::from_static(STR.as_ref())));
-
-//     let request = srv.get("/").body(Body::Streaming(Box::new(body))).unwrap();
-//     let response = srv.execute(request.send()).unwrap();
-//     assert!(response.status().is_success());
-
-//     // read response
-//     let bytes = srv.execute(response.body()).unwrap();
-//     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
-// }
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from(data));
+}
 
 // #[ntex::test]
 // async fn test_body_streaming_implicit() {
