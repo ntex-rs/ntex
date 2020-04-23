@@ -94,7 +94,7 @@ async fn test_simple() {
                 .upgrade(fn_factory(move || {
                     future::ok::<_, io::Error>(ws_service.clone())
                 }))
-                .finish(|_| future::ok::<_, io::Error>(Response::NotFound()))
+                .h1(|_| future::ok::<_, io::Error>(Response::NotFound()))
                 .tcp()
         }
     });

@@ -534,6 +534,7 @@ mod tests {
             poll_fn(|cx| "test".poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))
         );
+        assert!(poll_fn(|cx| "".poll_next_chunk(cx)).await.is_none());
     }
 
     #[ntex_rt::test]
@@ -554,6 +555,8 @@ mod tests {
                 .ok(),
             Some(Bytes::from("test"))
         );
+        assert_eq!((&b"test"[..]).size(), BodySize::Sized(4));
+        assert!(poll_fn(|cx| (&b""[..]).poll_next_chunk(cx)).await.is_none());
     }
 
     #[ntex_rt::test]
@@ -576,6 +579,9 @@ mod tests {
                 .ok(),
             Some(Bytes::from("test"))
         );
+        assert!(poll_fn(|cx| Vec::<u8>::new().poll_next_chunk(cx))
+            .await
+            .is_none());
     }
 
     #[ntex_rt::test]

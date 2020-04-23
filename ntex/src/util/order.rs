@@ -86,7 +86,7 @@ where
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(InOrderService::new(service))
+        ok(InOrder::service(service))
     }
 }
 

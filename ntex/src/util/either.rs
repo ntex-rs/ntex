@@ -66,9 +66,10 @@ where
 
     #[inline]
     fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        if self.left.poll_shutdown(cx, is_error).is_ready()
-            && self.right.poll_shutdown(cx, is_error).is_ready()
-        {
+        let left = self.left.poll_shutdown(cx, is_error).is_ready();
+        let right = self.right.poll_shutdown(cx, is_error).is_ready();
+
+        if left && right {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -179,6 +180,7 @@ mod tests {
     use super::*;
     use crate::service::{fn_factory, Service, ServiceFactory};
 
+    #[derive(Clone)]
     struct Srv1;
 
     impl Service for Srv1 {
@@ -200,6 +202,7 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct Srv2;
 
     impl Service for Srv2 {
@@ -226,7 +229,8 @@ mod tests {
         let service = EitherService {
             left: Srv1,
             right: Srv2,
-        };
+        }
+        .clone();
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
         assert!(lazy(|cx| service.poll_shutdown(cx, true)).await.is_ready());
 
@@ -239,7 +243,8 @@ mod tests {
         let factory = either(
             fn_factory(|| ok::<_, ()>(Srv1)),
             fn_factory(|| ok::<_, ()>(Srv2)),
-        );
+        )
+        .clone();
         let service = factory.new_service(&()).await.unwrap();
 
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());

@@ -228,9 +228,10 @@ mod tests {
     use super::*;
     use crate::service::{apply, fn_factory, Service, ServiceFactory};
 
+    #[derive(Clone, Debug, PartialEq)]
     struct SleepService(Duration);
 
-    #[derive(Debug, Display, PartialEq)]
+    #[derive(Clone, Debug, Display, PartialEq)]
     struct SrvError;
 
     impl Service for SleepService {
@@ -263,7 +264,7 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
 
-        let timeout = TimeoutService::new(resolution, SleepService(wait_time));
+        let timeout = TimeoutService::new(resolution, SleepService(wait_time)).clone();
         assert_eq!(timeout.call(()).await, Ok(()));
         assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
         assert!(lazy(|cx| timeout.poll_shutdown(cx, true)).await.is_ready());
@@ -297,7 +298,7 @@ mod tests {
         let wait_time = Duration::from_millis(500);
 
         let timeout = apply(
-            Timeout::new(resolution),
+            Timeout::new(resolution).clone(),
             fn_factory(|| ok::<_, ()>(SleepService(wait_time))),
         );
         let srv = timeout.new_service(&()).await.unwrap();

@@ -814,5 +814,7 @@ mod tests {
         bytes.reserve(50);
         write_content_length(5909, &mut bytes);
         assert_eq!(bytes.split().freeze(), b"\r\ncontent-length: 5909\r\n"[..]);
+        write_content_length(25999, &mut bytes);
+        assert_eq!(bytes.split().freeze(), b"\r\ncontent-length: 25999\r\n"[..]);
     }
 }

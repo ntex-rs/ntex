@@ -157,6 +157,8 @@ mod tests {
 
         let _ = res.await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        assert!(lazy(|cx| srv.poll_shutdown(cx, false)).await.is_ready());
     }
 
     #[ntex_rt::test]
