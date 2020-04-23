@@ -361,6 +361,7 @@ async fn test_connection_wait_queue() {
     });
 
     let client = Client::build()
+        .timeout(Duration::from_secs(30))
         .connector(Connector::default().limit(1).finish())
         .finish();
 
@@ -408,6 +409,7 @@ async fn test_connection_wait_queue_force_close() {
     });
 
     let client = Client::build()
+        .timeout(Duration::from_secs(30))
         .connector(Connector::default().limit(1).finish())
         .finish();
 
