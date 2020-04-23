@@ -7,9 +7,13 @@ use crate::ResourcePath;
 macro_rules! unsupported_type {
     ($trait_fn:ident, $name:expr) => {
         fn $trait_fn<V>(self, _: V) -> Result<V::Value, Self::Error>
-            where V: Visitor<'de>
+        where
+            V: Visitor<'de>,
         {
-            Err(de::value::Error::custom(concat!("unsupported type: ", $name)))
+            Err(de::value::Error::custom(concat!(
+                "unsupported type: ",
+                $name
+            )))
         }
     };
 }
@@ -17,20 +21,28 @@ macro_rules! unsupported_type {
 macro_rules! parse_single_value {
     ($trait_fn:ident, $visit_fn:ident, $tp:tt) => {
         fn $trait_fn<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-            where V: Visitor<'de>
+        where
+            V: Visitor<'de>,
         {
             if self.path.len() != 1 {
                 Err(de::value::Error::custom(
-                    format!("wrong number of parameters: {} expected 1",
-                            self.path.len()).as_str()))
+                    format!(
+                        "wrong number of parameters: {} expected 1",
+                        self.path.len()
+                    )
+                    .as_str(),
+                ))
             } else {
-                let v = self.path[0].parse().map_err(
-                    |_| de::value::Error::custom(
-                        format!("can not parse {:?} to a {}", &self.path[0], $tp)))?;
+                let v = self.path[0].parse().map_err(|_| {
+                    de::value::Error::custom(format!(
+                        "can not parse {:?} to a {}",
+                        &self.path[0], $tp
+                    ))
+                })?;
                 visitor.$visit_fn(v)
             }
         }
-    }
+    };
 }
 
 pub struct PathDeserializer<'de, T: ResourcePath> {
@@ -273,14 +285,18 @@ impl<'de> Deserializer<'de> for Key<'de> {
 macro_rules! parse_value {
     ($trait_fn:ident, $visit_fn:ident, $tp:tt) => {
         fn $trait_fn<V>(self, visitor: V) -> Result<V::Value, Self::Error>
-            where V: Visitor<'de>
+        where
+            V: Visitor<'de>,
         {
-            let v = self.value.parse().map_err(
-                |_| de::value::Error::custom(
-                    format!("can not parse {:?} to a {}", self.value, $tp)))?;
+            let v = self.value.parse().map_err(|_| {
+                de::value::Error::custom(format!(
+                    "can not parse {:?} to a {}",
+                    self.value, $tp
+                ))
+            })?;
             visitor.$visit_fn(v)
         }
-    }
+    };
 }
 
 struct Value<'de> {
