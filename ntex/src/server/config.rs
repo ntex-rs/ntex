@@ -225,7 +225,7 @@ impl ServiceRuntime {
         // let name = name.to_owned();
         if let Some(token) = self.names.get(name) {
             self.services.insert(
-                token.clone(),
+                *token,
                 Box::new(ServiceFactory {
                     inner: service.into_factory(),
                 }),
