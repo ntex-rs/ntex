@@ -222,7 +222,7 @@ fn test_panic_in_worker() {
     assert!(net::TcpStream::connect(addr).is_ok());
     thread::sleep(time::Duration::from_millis(300));
     assert!(net::TcpStream::connect(addr).is_ok());
-    thread::sleep(time::Duration::from_millis(300));
+    thread::sleep(time::Duration::from_millis(500));
     assert_eq!(counter.load(Relaxed), 2);
 
     sys.stop();

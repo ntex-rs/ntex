@@ -242,7 +242,7 @@ async fn test_connection_reuse() {
         )
     });
 
-    let client = Client::default();
+    let client = Client::build().timeout(Duration::from_secs(10)).finish();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -280,7 +280,7 @@ async fn test_connection_force_close() {
         )
     });
 
-    let client = Client::default();
+    let client = Client::build().timeout(Duration::from_secs(10)).finish();
 
     // req 1
     let request = client.get(srv.url("/")).force_close().send();
@@ -288,10 +288,7 @@ async fn test_connection_force_close() {
     assert!(response.status().is_success());
 
     // req 2
-    let req = client
-        .post(srv.url("/"))
-        .timeout(Duration::from_secs(10))
-        .force_close();
+    let req = client.post(srv.url("/")).force_close();
     let response = req.send().await.unwrap();
     assert!(response.status().is_success());
 
@@ -321,7 +318,7 @@ async fn test_connection_server_close() {
         )
     });
 
-    let client = Client::default();
+    let client = Client::build().timeout(Duration::from_secs(10)).finish();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -848,8 +845,10 @@ async fn client_read_until_eof() {
     ntex::rt::time::delay_for(Duration::from_millis(200)).await;
 
     // client request
-    let req =
-        ntex::http::client::Client::default().get(format!("http://{}/", addr).as_str());
+    let req = Client::build()
+        .timeout(Duration::from_secs(30))
+        .finish()
+        .get(format!("http://{}/", addr).as_str());
     let mut response = req.send().await.unwrap();
     assert!(response.status().is_success());
 
