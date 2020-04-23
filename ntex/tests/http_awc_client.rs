@@ -676,6 +676,18 @@ async fn test_client_brotli_encoding_large_random() {
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes.len(), data.len());
     assert_eq!(bytes, Bytes::from(data.clone()));
+
+    let mut response = request
+        .extra_header("x-test2", "222")
+        .send_stream(once(ok::<_, JsonPayloadError>(Bytes::from(data.clone()))))
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes.len(), data.len());
+    assert_eq!(bytes, Bytes::from(data.clone()));
 }
 
 #[ntex::test]

@@ -73,16 +73,18 @@ impl SendClientRequest {
     }
 }
 
-#[cfg(feature = "compress")]
 impl Future for SendClientRequest {
+    #[cfg(feature = "compress")]
     type Output =
         Result<ClientResponse<Decoder<Payload<PayloadStream>>>, SendRequestError>;
+    #[cfg(not(feature = "compress"))]
+    type Output = Result<ClientResponse, SendRequestError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
         match this {
-            SendClientRequest::Fut(send, delay, response_decompress) => {
+            SendClientRequest::Fut(send, delay, _response_decompress) => {
                 if delay.is_some() {
                     match Pin::new(delay.as_mut().unwrap()).poll(cx) {
                         Poll::Pending => (),
@@ -90,9 +92,12 @@ impl Future for SendClientRequest {
                     }
                 }
 
-                let res = futures::ready!(Pin::new(send).poll(cx)).map(|res| {
+                let res = futures::ready!(Pin::new(send).poll(cx));
+
+                #[cfg(feature = "compress")]
+                let res = res.map(|res| {
                     res.map_body(|head, payload| {
-                        if *response_decompress {
+                        if *_response_decompress {
                             Payload::Stream(Decoder::from_headers(
                                 payload,
                                 &head.headers,
@@ -107,30 +112,6 @@ impl Future for SendClientRequest {
                 });
 
                 Poll::Ready(res)
-            }
-            SendClientRequest::Err(ref mut e) => match e.take() {
-                Some(e) => Poll::Ready(Err(e)),
-                None => panic!("Attempting to call completed future"),
-            },
-        }
-    }
-}
-
-#[cfg(not(feature = "compress"))]
-impl Future for SendClientRequest {
-    type Output = Result<ClientResponse, SendRequestError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        match this {
-            SendClientRequest::Fut(send, delay, _) => {
-                if delay.is_some() {
-                    match Pin::new(delay.as_mut().unwrap()).poll(cx) {
-                        Poll::Pending => (),
-                        _ => return Poll::Ready(Err(SendRequestError::Timeout)),
-                    }
-                }
-                Pin::new(send).poll(cx)
             }
             SendClientRequest::Err(ref mut e) => match e.take() {
                 Some(e) => Poll::Ready(Err(e)),
