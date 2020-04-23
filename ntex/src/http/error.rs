@@ -4,7 +4,6 @@ use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{fmt, io};
 
-use derive_more::{Display, From};
 use http::uri::InvalidUri;
 use http::{header, StatusCode};
 
@@ -67,7 +66,7 @@ where
 }
 
 /// A set of errors that can occur during parsing HTTP streams
-#[derive(Debug, Display)]
+#[derive(Debug, Display, From)]
 pub enum ParseError {
     /// An invalid `Method`, such as `GE.T`.
     #[display(fmt = "Invalid Method specified")]
@@ -106,24 +105,6 @@ pub enum ParseError {
 }
 
 impl std::error::Error for ParseError {}
-
-impl From<io::Error> for ParseError {
-    fn from(err: io::Error) -> ParseError {
-        ParseError::Io(err)
-    }
-}
-
-impl From<InvalidUri> for ParseError {
-    fn from(err: InvalidUri) -> ParseError {
-        ParseError::Uri(err)
-    }
-}
-
-impl From<Utf8Error> for ParseError {
-    fn from(err: Utf8Error) -> ParseError {
-        ParseError::Utf8(err)
-    }
-}
 
 impl From<FromUtf8Error> for ParseError {
     fn from(err: FromUtf8Error) -> ParseError {

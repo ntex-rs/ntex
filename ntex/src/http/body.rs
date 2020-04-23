@@ -79,20 +79,6 @@ impl ResponseBody<Body> {
             ResponseBody::Other(b) => ResponseBody::Other(b),
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn bin_ref(&self) -> &[u8] {
-        match self {
-            ResponseBody::Body(ref b) => match b {
-                Body::Bytes(ref bin) => &bin,
-                _ => panic!(),
-            },
-            ResponseBody::Other(ref b) => match b {
-                Body::Bytes(ref bin) => &bin,
-                _ => panic!(),
-            },
-        }
-    }
 }
 
 impl<B> From<Body> for ResponseBody<B> {
@@ -544,6 +530,10 @@ mod tests {
             poll_fn(|cx| "test".poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))
         );
+        assert_eq!(
+            poll_fn(|cx| "test".poll_next_chunk(cx)).await.unwrap().ok(),
+            Some(Bytes::from("test"))
+        );
     }
 
     #[ntex_rt::test]
@@ -579,6 +569,13 @@ mod tests {
                 .ok(),
             Some(Bytes::from("test"))
         );
+        assert_eq!(
+            poll_fn(|cx| Vec::from("test").poll_next_chunk(cx))
+                .await
+                .unwrap()
+                .ok(),
+            Some(Bytes::from("test"))
+        );
     }
 
     #[ntex_rt::test]
@@ -592,6 +589,7 @@ mod tests {
             poll_fn(|cx| b.poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))
         );
+        assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
     #[ntex_rt::test]
@@ -605,6 +603,7 @@ mod tests {
             poll_fn(|cx| b.poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))
         );
+        assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
     #[ntex_rt::test]
@@ -620,6 +619,7 @@ mod tests {
             poll_fn(|cx| b.poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))
         );
+        assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
     #[ntex_rt::test]

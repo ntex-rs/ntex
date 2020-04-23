@@ -491,6 +491,6 @@ mod tests {
             HeaderValue::from_static("application/x-www-form-urlencoded")
         );
 
-        assert_eq!(resp.body().bin_ref(), b"hello=world&counter=123");
+        assert_eq!(resp.body().get_ref(), b"hello=world&counter=123");
     }
 }

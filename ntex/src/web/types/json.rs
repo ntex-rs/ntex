@@ -438,7 +438,7 @@ mod tests {
             header::HeaderValue::from_static("application/json")
         );
 
-        assert_eq!(resp.body().bin_ref(), b"{\"name\":\"test\"}");
+        assert_eq!(resp.body().get_ref(), b"{\"name\":\"test\"}");
     }
 
     #[ntex_rt::test]

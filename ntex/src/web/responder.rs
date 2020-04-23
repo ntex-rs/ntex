@@ -467,7 +467,7 @@ pub(crate) mod tests {
 
         let resp: HttpResponse = responder("test").respond_to(&req).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().bin_ref(), b"test");
+        assert_eq!(resp.body().get_ref(), b"test");
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("text/plain; charset=utf-8")
@@ -475,7 +475,7 @@ pub(crate) mod tests {
 
         let resp: HttpResponse = responder(&b"test"[..]).respond_to(&req).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().bin_ref(), b"test");
+        assert_eq!(resp.body().get_ref(), b"test");
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("application/octet-stream")
@@ -483,7 +483,7 @@ pub(crate) mod tests {
 
         let resp: HttpResponse = responder("test".to_string()).respond_to(&req).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().bin_ref(), b"test");
+        assert_eq!(resp.body().get_ref(), b"test");
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("text/plain; charset=utf-8")
@@ -491,7 +491,7 @@ pub(crate) mod tests {
 
         let resp: HttpResponse = responder(&"test".to_string()).respond_to(&req).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().bin_ref(), b"test");
+        assert_eq!(resp.body().get_ref(), b"test");
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("text/plain; charset=utf-8")
@@ -501,7 +501,7 @@ pub(crate) mod tests {
             .respond_to(&req)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().bin_ref(), b"test");
+        assert_eq!(resp.body().get_ref(), b"test");
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("application/octet-stream")
@@ -511,7 +511,7 @@ pub(crate) mod tests {
             .respond_to(&req)
             .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().bin_ref(), b"test");
+        assert_eq!(resp.body().get_ref(), b"test");
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("application/octet-stream")
@@ -536,7 +536,7 @@ pub(crate) mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().bin_ref(), b"test");
+        assert_eq!(resp.body().get_ref(), b"test");
         assert_eq!(
             resp.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("text/plain; charset=utf-8")
@@ -559,7 +559,7 @@ pub(crate) mod tests {
             .respond_to(&req)
             .await;
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(res.body().bin_ref(), b"test");
+        assert_eq!(res.body().get_ref(), b"test");
 
         let res = responder("test".to_string())
             .with_header("content-type", "json")
@@ -567,7 +567,7 @@ pub(crate) mod tests {
             .await;
 
         assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(res.body().bin_ref(), b"test");
+        assert_eq!(res.body().get_ref(), b"test");
         assert_eq!(
             res.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("json")
@@ -583,7 +583,7 @@ pub(crate) mod tests {
         )
         .await;
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(res.body().bin_ref(), b"test");
+        assert_eq!(res.body().get_ref(), b"test");
 
         let req = TestRequest::default().to_http_request();
         let res = CustomResponder::<_, DefaultError>::new((
@@ -594,7 +594,7 @@ pub(crate) mod tests {
         .respond_to(&req)
         .await;
         assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(res.body().bin_ref(), b"test");
+        assert_eq!(res.body().get_ref(), b"test");
         assert_eq!(
             res.headers().get(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("json")

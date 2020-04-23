@@ -24,6 +24,8 @@
 
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate derive_more;
 
 pub use ntex_rt_macros::{main, test};
 
