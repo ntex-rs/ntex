@@ -8,7 +8,6 @@ use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot;
 use futures::future::{join_all, LocalBoxFuture, MapOk};
 use futures::{Future, FutureExt, Stream, TryFutureExt};
-use log::{error, info, trace};
 
 use crate::rt::time::{delay_until, Delay, Instant};
 use crate::rt::{spawn, Arbiter};
@@ -167,61 +166,75 @@ impl Worker {
         availability: WorkerAvailability,
         shutdown_timeout: time::Duration,
     ) -> WorkerClient {
-        let (tx1, rx) = unbounded();
+        let (tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
         let avail = availability.clone();
 
-        Arbiter::new().send(
-            async move {
-                availability.set(false);
-                let mut wrk = MAX_CONNS_COUNTER.with(move |conns| Worker {
-                    rx,
-                    rx2,
-                    availability,
-                    factories,
-                    shutdown_timeout,
-                    services: Vec::new(),
-                    conns: conns.clone(),
-                    state: WorkerState::Unavailable(Vec::new()),
-                });
-
-                let mut fut: Vec<MapOk<LocalBoxFuture<'static, _>, _>> = Vec::new();
-                for (idx, factory) in wrk.factories.iter().enumerate() {
-                    fut.push(factory.create().map_ok(move |r| {
-                        r.into_iter()
-                            .map(|(t, s): (Token, _)| (idx, t, s))
-                            .collect::<Vec<_>>()
-                    }));
-                }
-
-                spawn(async move {
-                    let res = join_all(fut).await;
-                    let res: Result<Vec<_>, _> = res.into_iter().collect();
-                    match res {
-                        Ok(services) => {
-                            for item in services {
-                                for (factory, token, service) in item {
-                                    assert_eq!(token.0, wrk.services.len());
-                                    wrk.services.push(WorkerService {
-                                        factory,
-                                        service,
-                                        status: WorkerServiceStatus::Unavailable,
-                                    });
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Can not start worker: {:?}", e);
-                            Arbiter::current().stop();
-                        }
+        Arbiter::new().exec_fn(move || {
+            let _ = spawn(async move {
+                match Worker::create(rx1, rx2, factories, availability, shutdown_timeout)
+                    .await
+                {
+                    Ok(wrk) => {
+                        let _ = spawn(wrk);
                     }
-                    wrk.await
-                });
-            }
-            .boxed(),
-        );
+                    Err(e) => {
+                        error!("Can not start worker: {:?}", e);
+                        Arbiter::current().stop();
+                    }
+                }
+            });
+        });
 
         WorkerClient::new(idx, tx1, tx2, avail)
+    }
+
+    async fn create(
+        rx: UnboundedReceiver<WorkerCommand>,
+        rx2: UnboundedReceiver<StopCommand>,
+        factories: Vec<Box<dyn InternalServiceFactory>>,
+        availability: WorkerAvailability,
+        shutdown_timeout: time::Duration,
+    ) -> Result<Worker, ()> {
+        availability.set(false);
+        let mut wrk = MAX_CONNS_COUNTER.with(move |conns| Worker {
+            rx,
+            rx2,
+            availability,
+            factories,
+            shutdown_timeout,
+            services: Vec::new(),
+            conns: conns.clone(),
+            state: WorkerState::Unavailable,
+        });
+
+        let mut fut: Vec<MapOk<LocalBoxFuture<'static, _>, _>> = Vec::new();
+        for (idx, factory) in wrk.factories.iter().enumerate() {
+            fut.push(factory.create().map_ok(move |r| {
+                r.into_iter()
+                    .map(|(t, s): (Token, _)| (idx, t, s))
+                    .collect::<Vec<_>>()
+            }));
+        }
+
+        let res = join_all(fut).await;
+        let res: Result<Vec<_>, _> = res.into_iter().collect();
+        match res {
+            Ok(services) => {
+                for item in services {
+                    for (factory, token, service) in item {
+                        assert_eq!(token.0, wrk.services.len());
+                        wrk.services.push(WorkerService {
+                            factory,
+                            service,
+                            status: WorkerServiceStatus::Unavailable,
+                        });
+                    }
+                }
+                Ok(wrk)
+            }
+            Err(_) => Err(()),
+        }
     }
 
     fn shutdown(&mut self, force: bool) {
@@ -229,7 +242,7 @@ impl Worker {
             self.services.iter_mut().for_each(|srv| {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopped;
-                    crate::rt::spawn(
+                    spawn(
                         srv.service
                             .call((None, ServerMessage::ForceShutdown))
                             .map(|_| ()),
@@ -241,7 +254,7 @@ impl Worker {
             self.services.iter_mut().for_each(move |srv| {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopping;
-                    crate::rt::spawn(
+                    spawn(
                         srv.service
                             .call((None, ServerMessage::Shutdown(timeout)))
                             .map(|_| ()),
@@ -300,7 +313,7 @@ impl Worker {
 
 enum WorkerState {
     Available,
-    Unavailable(Vec<Conn>),
+    Unavailable,
     Restarting(
         usize,
         Token,
@@ -352,31 +365,15 @@ impl Future for Worker {
         }
 
         match self.state {
-            WorkerState::Unavailable(ref mut conns) => {
-                let conn = conns.pop();
+            WorkerState::Unavailable => {
                 match self.check_readiness(cx) {
                     Ok(true) => {
                         // process requests from wait queue
-                        if let Some(conn) = conn {
-                            let guard = self.conns.get();
-                            let _ = self.services[conn.token.0]
-                                .service
-                                .call((Some(guard), ServerMessage::Connect(conn.io)));
-                        } else {
-                            self.state = WorkerState::Available;
-                            self.availability.set(true);
-                        }
+                        self.state = WorkerState::Available;
+                        self.availability.set(true);
                         self.poll(cx)
                     }
-                    Ok(false) => {
-                        // push connection back to queue
-                        if let Some(conn) = conn {
-                            if let WorkerState::Unavailable(ref mut conns) = self.state {
-                                conns.push(conn);
-                            }
-                        }
-                        Poll::Pending
-                    }
+                    Ok(false) => Poll::Pending,
                     Err((token, idx)) => {
                         trace!(
                             "Service {:?} failed, restarting",
@@ -402,7 +399,8 @@ impl Future for Worker {
                                 self.factories[idx].name(token)
                             );
                             self.services[token.0].created(service);
-                            self.state = WorkerState::Unavailable(Vec::new());
+                            // service is restarted, now wait for readiness
+                            self.state = WorkerState::Unavailable;
                             return self.poll(cx);
                         }
                     }
@@ -412,9 +410,7 @@ impl Future for Worker {
                             self.factories[idx].name(token)
                         );
                     }
-                    Poll::Pending => {
-                        return Poll::Pending;
-                    }
+                    Poll::Pending => return Poll::Pending,
                 }
                 self.poll(cx)
             }
@@ -451,48 +447,192 @@ impl Future for Worker {
             }
             WorkerState::Available => {
                 loop {
+                    match self.check_readiness(cx) {
+                        Ok(true) => (),
+                        Ok(false) => {
+                            trace!("Worker is unavailable");
+                            self.availability.set(false);
+                            self.state = WorkerState::Unavailable;
+                            return self.poll(cx);
+                        }
+                        Err((token, idx)) => {
+                            trace!(
+                                "Service {:?} failed, restarting",
+                                self.factories[idx].name(token)
+                            );
+                            self.availability.set(false);
+                            self.services[token.0].status =
+                                WorkerServiceStatus::Restarting;
+                            self.state = WorkerState::Restarting(
+                                idx,
+                                token,
+                                self.factories[idx].create(),
+                            );
+                            return self.poll(cx);
+                        }
+                    }
+
                     match Pin::new(&mut self.rx).poll_next(cx) {
                         // handle incoming io stream
                         Poll::Ready(Some(WorkerCommand(msg))) => {
-                            match self.check_readiness(cx) {
-                                Ok(true) => {
-                                    let guard = self.conns.get();
-                                    let _ = self.services[msg.token.0].service.call((
-                                        Some(guard),
-                                        ServerMessage::Connect(msg.io),
-                                    ));
-                                    continue;
-                                }
-                                Ok(false) => {
-                                    trace!("Worker is unavailable");
-                                    self.availability.set(false);
-                                    self.state = WorkerState::Unavailable(vec![msg]);
-                                }
-                                Err((token, idx)) => {
-                                    trace!(
-                                        "Service {:?} failed, restarting",
-                                        self.factories[idx].name(token)
-                                    );
-                                    self.availability.set(false);
-                                    self.services[token.0].status =
-                                        WorkerServiceStatus::Restarting;
-                                    self.state = WorkerState::Restarting(
-                                        idx,
-                                        token,
-                                        self.factories[idx].create(),
-                                    );
-                                }
-                            }
-                            return self.poll(cx);
+                            let guard = self.conns.get();
+                            let _ = self.services[msg.token.0]
+                                .service
+                                .call((Some(guard), ServerMessage::Connect(msg.io)));
                         }
-                        Poll::Pending => {
-                            self.state = WorkerState::Available;
-                            return Poll::Pending;
-                        }
+                        Poll::Pending => return Poll::Pending,
                         Poll::Ready(None) => return Poll::Ready(()),
                     }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::future::{lazy, ok, Ready};
+    use futures::SinkExt;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::rt::net::TcpStream;
+    use crate::server::service::Factory;
+    use crate::service::{Service, ServiceFactory};
+
+    #[derive(Clone, Copy, Debug)]
+    enum St {
+        Fail,
+        Ready,
+        Pending,
+    }
+
+    #[derive(Clone)]
+    struct SrvFactory {
+        st: Arc<Mutex<St>>,
+        counter: Arc<Mutex<usize>>,
+    }
+
+    impl ServiceFactory for SrvFactory {
+        type Request = TcpStream;
+        type Response = ();
+        type Error = ();
+        type Service = Srv;
+        type Config = ();
+        type InitError = ();
+        type Future = Ready<Result<Srv, ()>>;
+
+        fn new_service(&self, _: ()) -> Self::Future {
+            let mut cnt = self.counter.lock().unwrap();
+            *cnt = *cnt + 1;
+            ok(Srv {
+                st: self.st.clone(),
+            })
+        }
+    }
+
+    struct Srv {
+        st: Arc<Mutex<St>>,
+    }
+
+    impl Service for Srv {
+        type Request = TcpStream;
+        type Response = ();
+        type Error = ();
+        type Future = Ready<Result<(), ()>>;
+
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            let st: St = { *self.st.lock().unwrap() };
+            match st {
+                St::Fail => {
+                    *self.st.lock().unwrap() = St::Pending;
+                    Poll::Ready(Err(()))
+                }
+                St::Ready => Poll::Ready(Ok(())),
+                St::Pending => Poll::Pending,
+            }
+        }
+
+        fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
+            match *self.st.lock().unwrap() {
+                St::Ready => Poll::Ready(()),
+                St::Fail | St::Pending => Poll::Pending,
+            }
+        }
+
+        fn call(&self, _: TcpStream) -> Self::Future {
+            ok(())
+        }
+    }
+
+    #[ntex_rt::test]
+    async fn basics() {
+        let (_tx1, rx1) = unbounded();
+        let (mut tx2, rx2) = unbounded();
+        let avail = WorkerAvailability::new(AcceptNotify::default());
+
+        let st = Arc::new(Mutex::new(St::Pending));
+        let counter = Arc::new(Mutex::new(0));
+
+        let f = SrvFactory {
+            st: st.clone(),
+            counter: counter.clone(),
+        };
+
+        let mut worker = Worker::create(
+            rx1,
+            rx2,
+            vec![Factory::create(
+                "test".to_string(),
+                Token(0),
+                move || f.clone(),
+                "127.0.0.1:8080".parse().unwrap(),
+            )],
+            avail.clone(),
+            time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(*counter.lock().unwrap(), 1);
+
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(!avail.available());
+
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(!avail.available());
+
+        *st.lock().unwrap() = St::Ready;
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(avail.available());
+
+        // restart
+        *st.lock().unwrap() = St::Fail;
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(!avail.available());
+
+        *st.lock().unwrap() = St::Fail;
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(!avail.available());
+
+        *st.lock().unwrap() = St::Ready;
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(avail.available());
+
+        // shutdown
+        let g = MAX_CONNS_COUNTER.with(|conns| conns.get());
+
+        let (tx, rx) = oneshot::channel();
+        tx2.send(StopCommand {
+            graceful: true,
+            result: tx,
+        })
+        .await
+        .unwrap();
+
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(!avail.available());
+        drop(g);
+        assert!(lazy(|cx| Pin::new(&mut worker).poll(cx)).await.is_ready());
+        let _ = rx.await;
     }
 }

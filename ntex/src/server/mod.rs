@@ -39,10 +39,10 @@ pub use self::socket::FromStream;
 
 /// Socket id token
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct Token(usize);
+pub(self) struct Token(usize);
 
 impl Token {
-    pub(crate) fn next(&mut self) -> Token {
+    pub(self) fn next(&mut self) -> Token {
         let token = Token(self.0);
         self.0 += 1;
         token
