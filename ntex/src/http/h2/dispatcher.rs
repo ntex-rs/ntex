@@ -123,12 +123,7 @@ where
                         on_connect.set(&mut req.extensions_mut());
                     }
 
-                    crate::rt::spawn(ServiceResponse::<
-                        S::Future,
-                        S::Response,
-                        S::Error,
-                        B,
-                    > {
+                    crate::rt::spawn(ServiceResponse {
                         state: ServiceResponseState::ServiceCall(
                             this.config.service.call(req),
                             Some(res),

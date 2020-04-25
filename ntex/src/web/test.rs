@@ -1000,7 +1000,7 @@ mod tests {
         let data = req.app_data::<web::types::Data<u64>>().unwrap();
         assert_eq!(*data.get_ref(), 20);
 
-        // let req = TestRequest::with_uri("/test").to_http_
+        assert_eq!(format!("{:?}", StreamType::Tcp), "StreamType::Tcp");
     }
 
     #[ntex_rt::test]
@@ -1215,5 +1215,31 @@ mod tests {
 
         let res = srv.put("").send().await.unwrap();
         assert_eq!(srv.load_body(res).await.unwrap(), Bytes::new());
+    }
+
+    #[ntex_rt::test]
+    async fn test_h2_tcp() {
+        let srv = server_with(TestServerConfig::default().h2(), || {
+            App::new().service(
+                web::resource("/").route(web::get().to(|| async { HttpResponse::Ok() })),
+            )
+        });
+
+        let client = Client::build()
+            .connector(
+                Connector::default()
+                    .secure_connector(Service::map(
+                        crate::connect::Connector::default(),
+                        |stream| (stream, crate::http::Protocol::Http2),
+                    ))
+                    .finish(),
+            )
+            .timeout(time::Duration::from_millis(30000))
+            .finish();
+
+        let url = format!("https://localhost:{}/", srv.addr.port());
+        let response = client.get(url).send().await.unwrap();
+        assert_eq!(response.version(), Version::HTTP_2);
+        assert!(response.status().is_success());
     }
 }

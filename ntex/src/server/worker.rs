@@ -605,6 +605,14 @@ mod tests {
         let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
         assert!(avail.available());
 
+        *st.lock().unwrap() = St::Pending;
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(!avail.available());
+
+        *st.lock().unwrap() = St::Ready;
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(avail.available());
+
         // restart
         *st.lock().unwrap() = St::Fail;
         let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
