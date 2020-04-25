@@ -370,3 +370,16 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::future::lazy;
+
+    #[ntex_rt::test]
+    async fn test_readiness() {
+        let conn = Connector::default().finish();
+        assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
+        assert!(lazy(|cx| conn.poll_shutdown(cx, true).is_ready()).await);
+    }
+}

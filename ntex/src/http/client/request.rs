@@ -603,6 +603,8 @@ mod tests {
         assert!(!req.headers().contains_key(header::ALLOW));
         assert!(!req.headers().contains_key(header::EXPECT));
         assert_eq!(req.head.version, Version::HTTP_2);
+        assert_eq!(req.get_version(), &Version::HTTP_2);
+        assert_eq!(req.get_method(), Method::PUT);
         let _ = req.headers_mut();
         let _ = req.send_body("");
     }

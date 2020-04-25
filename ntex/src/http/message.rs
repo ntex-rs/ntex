@@ -337,6 +337,7 @@ impl ResponseHead {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Message<T: Head> {
     head: Rc<T>,
 }
@@ -345,14 +346,6 @@ impl<T: Head> Message<T> {
     /// Get new message from the pool of objects
     pub(crate) fn new() -> Self {
         T::pool().get_message()
-    }
-}
-
-impl<T: Head> Clone for Message<T> {
-    fn clone(&self) -> Self {
-        Message {
-            head: self.head.clone(),
-        }
     }
 }
 
