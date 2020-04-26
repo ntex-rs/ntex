@@ -66,3 +66,4 @@ jobs:
           args: --all --all-features --no-fail-fast -- --nocapture
                 --skip test_panic_in_worker
                 --skip test_connection_force_close
+                --skip test_connection_server_close
