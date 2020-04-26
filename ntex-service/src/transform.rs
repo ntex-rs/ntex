@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::transform_err::TransformMapInitErr;
@@ -142,22 +141,6 @@ where
     }
 }
 
-impl<T, S> Transform<S> for Arc<T>
-where
-    T: Transform<S>,
-{
-    type Request = T::Request;
-    type Response = T::Response;
-    type Error = T::Error;
-    type InitError = T::InitError;
-    type Transform = T::Transform;
-    type Future = T::Future;
-
-    fn new_transform(&self, service: S) -> T::Future {
-        self.as_ref().new_transform(service)
-    }
-}
-
 /// `Apply` transform to new service
 pub struct ApplyTransform<T, S>(Rc<(T, S)>);
 
@@ -244,5 +227,66 @@ where
             },
             ApplyTransformFutureState::B(fut) => fut.poll(cx),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_util::future::{lazy, ok, Ready};
+
+    use super::*;
+    use crate::{fn_service, Service, ServiceFactory};
+
+    #[derive(Clone)]
+    struct Tr;
+
+    impl<S: Service> Transform<S> for Tr {
+        type Request = S::Request;
+        type Response = S::Response;
+        type Error = S::Error;
+
+        type Transform = Srv<S>;
+        type InitError = ();
+        type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+        fn new_transform(&self, service: S) -> Self::Future {
+            ok(Srv(service))
+        }
+    }
+
+    #[derive(Clone)]
+    struct Srv<S>(S);
+
+    impl<S: Service> Service for Srv<S> {
+        type Request = S::Request;
+        type Response = S::Response;
+        type Error = S::Error;
+        type Future = S::Future;
+
+        fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.0.poll_ready(cx)
+        }
+
+        fn call(&self, req: S::Request) -> Self::Future {
+            self.0.call(req)
+        }
+    }
+
+    #[ntex_rt::test]
+    async fn transform() {
+        let factory = apply(Rc::new(Tr), fn_service(|i: usize| ok::<_, ()>(i * 2)))
+            .clone()
+            .map_init_err(|_| ());
+
+        let srv = factory.new_service(()).await.unwrap();
+        let res = srv.call(10).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 20);
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+
+        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        assert_eq!(res, Poll::Ready(()));
     }
 }

@@ -597,6 +597,20 @@ mod tests {
             de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(res[0], "name".to_owned());
         assert_eq!(res[1], "32".to_owned());
+
+        #[derive(Debug, Deserialize)]
+        struct S2(());
+        let s: Result<S2, de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_ok());
+
+        let s: Result<(), de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_ok());
+
+        let s: Result<(String, ()), de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_ok());
     }
 
     #[test]
@@ -684,5 +698,14 @@ mod tests {
             de::Deserialize::deserialize(PathDeserializer::new(&path));
         assert!(s.is_err());
         assert!(format!("{:?}", s).contains("can not parse"));
+
+        #[derive(Debug, Deserialize)]
+        struct S {
+            inner: (String,),
+        }
+        let s: Result<S, de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_err());
+        assert!(format!("{:?}", s).contains("missing field `inner`"));
     }
 }

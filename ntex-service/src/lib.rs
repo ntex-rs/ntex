@@ -191,11 +191,6 @@ pub trait ServiceFactory {
     type Future: Future<Output = Result<Self::Service, Self::InitError>>;
 
     /// Create and return a new service value asynchronously.
-    fn create(&self, cfg: Self::Config) -> Self::Future {
-        self.new_service(cfg)
-    }
-
-    #[doc(hidden)]
     fn new_service(&self, cfg: Self::Config) -> Self::Future;
 
     #[inline]
