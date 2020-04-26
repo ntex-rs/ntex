@@ -93,3 +93,26 @@ where
         this.fut.poll(cx).map_err(this.f)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures_util::future::ok;
+
+    use crate::{fn_factory_with_config, fn_service, pipeline_factory, ServiceFactory};
+
+    #[ntex_rt::test]
+    async fn map_init_err() {
+        let factory = pipeline_factory(fn_factory_with_config(|err: bool| async move {
+            if err {
+                Err(())
+            } else {
+                Ok(fn_service(|i: usize| ok::<_, ()>(i * 2)))
+            }
+        }))
+        .map_init_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "err"))
+        .clone();
+
+        assert!(factory.new_service(true).await.is_err());
+        assert!(factory.new_service(false).await.is_ok());
+    }
+}
