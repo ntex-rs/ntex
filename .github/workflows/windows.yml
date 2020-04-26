@@ -32,11 +32,11 @@ jobs:
         with:
           command: generate-lockfile
 
-      - name: Cache vcpkg
-        uses: actions/cache@v1
-        with:
-          path: C:\vcpkg\installed\x64-windows\
-          key: x86_64-pc-windows-msvc-openssl
+      # - name: Cache vcpkg
+      #   uses: actions/cache@v1
+      #   with:
+      #     path: C:\vcpkg\installed\x64-windows\
+      #     key: x86_64-pc-windows-msvc-openssl
 
       - name: Cache cargo registry
         uses: actions/cache@v1

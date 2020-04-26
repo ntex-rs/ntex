@@ -121,25 +121,6 @@ pub trait HttpMessage: Sized {
     }
 }
 
-impl<'a, T> HttpMessage for &'a mut T
-where
-    T: HttpMessage,
-{
-    fn message_headers(&self) -> &HeaderMap {
-        (**self).message_headers()
-    }
-
-    /// Request's extensions container
-    fn message_extensions(&self) -> Ref<'_, Extensions> {
-        (**self).message_extensions()
-    }
-
-    /// Mutable reference to a the request's extensions container
-    fn message_extensions_mut(&self) -> RefMut<'_, Extensions> {
-        (**self).message_extensions_mut()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use encoding_rs::ISO_8859_2;
