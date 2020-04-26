@@ -184,6 +184,38 @@ async fn test_simple() {
         .is_err());
 
     framed
+        .send(ws::Message::Continuation(ws::Item::FirstBinary(
+            Bytes::from_static(b"bin"),
+        )))
+        .await
+        .unwrap();
+    let (item, mut framed) = framed.into_future().await;
+    assert_eq!(
+        item.unwrap().unwrap(),
+        ws::Frame::Continuation(ws::Item::FirstBinary(Bytes::from_static(b"bin")))
+    );
+
+    framed
+        .send(ws::Message::Continuation(ws::Item::Continue("text".into())))
+        .await
+        .unwrap();
+    let (item, mut framed) = framed.into_future().await;
+    assert_eq!(
+        item.unwrap().unwrap(),
+        ws::Frame::Continuation(ws::Item::Continue(Bytes::from_static(b"text")))
+    );
+
+    framed
+        .send(ws::Message::Continuation(ws::Item::Last("text".into())))
+        .await
+        .unwrap();
+    let (item, mut framed) = framed.into_future().await;
+    assert_eq!(
+        item.unwrap().unwrap(),
+        ws::Frame::Continuation(ws::Item::Last(Bytes::from_static(b"text")))
+    );
+
+    framed
         .send(ws::Message::Close(Some(ws::CloseCode::Normal.into())))
         .await
         .unwrap();

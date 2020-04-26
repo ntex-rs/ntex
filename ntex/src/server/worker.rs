@@ -670,6 +670,10 @@ mod tests {
         // shutdown
         let _g = MAX_CONNS_COUNTER.with(|conns| conns.get());
 
+        *st.lock().unwrap() = St::Ready;
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(avail.available());
+
         let (tx, rx) = oneshot::channel();
         tx2.send(StopCommand {
             graceful: false,

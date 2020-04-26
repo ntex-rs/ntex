@@ -202,7 +202,7 @@ impl Decoder for Codec {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         match Parser::parse(src, self.flags.contains(Flags::SERVER), self.max_size) {
             Ok(Some((finished, opcode, payload))) => {
-                // continuation is not supported
+                // handle continuation
                 if !finished {
                     return match opcode {
                         OpCode::Continue => {
