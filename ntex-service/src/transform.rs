@@ -274,9 +274,11 @@ mod tests {
 
     #[ntex_rt::test]
     async fn transform() {
-        let factory = apply(Rc::new(Tr), fn_service(|i: usize| ok::<_, ()>(i * 2)))
-            .clone()
-            .map_init_err(|_| ());
+        let factory = apply(
+            Rc::new(Tr.map_init_err(|_| ()).clone()),
+            fn_service(|i: usize| ok::<_, ()>(i * 2)),
+        )
+        .clone();
 
         let srv = factory.new_service(()).await.unwrap();
         let res = srv.call(10).await;
