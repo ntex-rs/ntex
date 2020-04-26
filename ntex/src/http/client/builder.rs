@@ -147,6 +147,18 @@ mod tests {
     use super::*;
 
     #[ntex_rt::test]
+    async fn basics() {
+        let builder = ClientBuilder::new()
+            .disable_timeout()
+            .disable_redirects()
+            .max_redirects(10)
+            .no_default_headers();
+        assert!(!builder.allow_redirects);
+        assert!(!builder.default_headers);
+        assert_eq!(builder.max_redirects, 10);
+    }
+
+    #[ntex_rt::test]
     async fn client_basic_auth() {
         let client = ClientBuilder::new().basic_auth("username", Some("password"));
         assert_eq!(

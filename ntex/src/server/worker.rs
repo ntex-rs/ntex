@@ -642,5 +642,43 @@ mod tests {
         drop(g);
         assert!(lazy(|cx| Pin::new(&mut worker).poll(cx)).await.is_ready());
         let _ = rx.await;
+
+        // force shutdown
+        let (_tx1, rx1) = unbounded();
+        let (mut tx2, rx2) = unbounded();
+        let avail = WorkerAvailability::new(AcceptNotify::default());
+        let f = SrvFactory {
+            st: st.clone(),
+            counter: counter.clone(),
+        };
+
+        let mut worker = Worker::create(
+            rx1,
+            rx2,
+            vec![Factory::create(
+                "test".to_string(),
+                Token(0),
+                move || f.clone(),
+                "127.0.0.1:8080".parse().unwrap(),
+            )],
+            avail.clone(),
+            time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+
+        // shutdown
+        let _g = MAX_CONNS_COUNTER.with(|conns| conns.get());
+
+        let (tx, rx) = oneshot::channel();
+        tx2.send(StopCommand {
+            graceful: false,
+            result: tx,
+        })
+        .await
+        .unwrap();
+
+        assert!(lazy(|cx| Pin::new(&mut worker).poll(cx)).await.is_ready());
+        let _ = rx.await;
     }
 }
