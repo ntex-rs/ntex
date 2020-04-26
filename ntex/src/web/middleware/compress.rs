@@ -35,28 +35,24 @@ use crate::web::{BodyEncoding, ErrorRenderer};
 ///         );
 /// }
 /// ```
-pub struct Compress<Err> {
+pub struct Compress {
     enc: ContentEncoding,
-    _t: PhantomData<Err>,
 }
 
-impl<Err> Compress<Err> {
+impl Compress {
     /// Create new `Compress` middleware with default encoding.
     pub fn new(encoding: ContentEncoding) -> Self {
-        Compress {
-            enc: encoding,
-            _t: PhantomData,
-        }
+        Compress { enc: encoding }
     }
 }
 
-impl<Err> Default for Compress<Err> {
+impl Default for Compress {
     fn default() -> Self {
         Compress::new(ContentEncoding::Auto)
     }
 }
 
-impl<S, E> Transform<S> for Compress<E>
+impl<S, E> Transform<S> for Compress
 where
     S: Service<Request = WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,

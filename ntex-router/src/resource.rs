@@ -715,9 +715,12 @@ mod tests {
 
     #[test]
     fn test_static_tail() {
-        let re = ResourceDef::new("/*");
+        let re = ResourceDef::new("/*".to_string());
         let tree = Tree::new(&re, 1);
-        assert_eq!(tree.find(&mut Path::new("/")), None);
+        assert_eq!(
+            tree.find(&mut Path::new(bytestring::ByteString::from_static("/"))),
+            None
+        );
         assert_eq!(tree.find(&mut Path::new("/profile")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/profile")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/2345")), Some(1));
@@ -726,7 +729,7 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/2345/sdg")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/2345/sdg")), Some(1));
 
-        let re = ResourceDef::new("/user*");
+        let re = ResourceDef::new(&("/user*".to_string()));
         let tree = Tree::new(&re, 1);
         assert_eq!(tree.find(&mut Path::new("/user/profile")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/2345")), Some(1));

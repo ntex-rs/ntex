@@ -492,7 +492,7 @@ mod tests {
             )
         };
         let _logger = Logger::default();
-        let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D test")
+        let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test")
             .exclude("/test");
 
         let srv = Transform::new_transform(&logger, srv.into_service())
@@ -510,6 +510,8 @@ mod tests {
         let res = srv.call(req).await.unwrap();
         let body = test::read_body(res).await;
         assert_eq!(body, Bytes::from_static(b"TEST"));
+        assert_eq!(body.size(), BodySize::Sized(4));
+        drop(body);
 
         let req = TestRequest::with_uri("/test").to_srv_request();
         let res = srv.call(req).await.unwrap();
