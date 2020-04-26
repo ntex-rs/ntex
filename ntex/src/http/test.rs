@@ -17,7 +17,7 @@ use crate::server::{Server, StreamServiceFactory};
 use super::client::error::WsClientError;
 use super::client::{Client, ClientRequest, ClientResponse, Connector};
 use super::error::{HttpError, PayloadError};
-use super::header::{HeaderMap, HeaderName, IntoHeaderValue};
+use super::header::{HeaderMap, HeaderName, HeaderValue};
 use super::payload::Payload;
 use super::{Method, Request, Uri, Version};
 
@@ -79,8 +79,8 @@ impl TestRequest {
     pub fn with_header<K, V>(key: K, value: V) -> TestRequest
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
     {
         TestRequest::default().header(key, value).take()
     }
@@ -107,11 +107,11 @@ impl TestRequest {
     pub fn header<K, V>(&mut self, key: K, value: V) -> &mut Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
     {
         if let Ok(key) = HeaderName::try_from(key) {
-            if let Ok(value) = value.try_into() {
+            if let Ok(value) = HeaderValue::try_from(value) {
                 parts(&mut self.0).headers.append(key, value);
                 return self;
             }
@@ -156,7 +156,6 @@ impl TestRequest {
 
         #[cfg(feature = "cookie")]
         {
-            use crate::http::header::HeaderValue;
             use percent_encoding::percent_encode;
             use std::fmt::Write as FmtWrite;
 

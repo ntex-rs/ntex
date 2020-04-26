@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::http::error::HttpError;
-use crate::http::header::{self, HeaderMap, HeaderName};
+use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::Service;
 
 use super::connect::ConnectorWrapper;
@@ -97,12 +97,12 @@ impl ClientBuilder {
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: fmt::Debug + Into<HttpError>,
-        V: header::IntoHeaderValue,
-        V::Error: fmt::Debug,
+        <HeaderValue as TryFrom<V>>::Error: fmt::Debug + Into<HttpError>,
     {
         match HeaderName::try_from(key) {
-            Ok(key) => match value.try_into() {
+            Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => {
                     self.config.headers.append(key, value);
                 }

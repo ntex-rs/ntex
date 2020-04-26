@@ -1,11 +1,5 @@
 //! Various http headers
 
-use std::convert::TryFrom;
-
-use bytes::Bytes;
-use http::Error as HttpError;
-use mime::Mime;
-
 pub use http::header::{HeaderName, HeaderValue, InvalidHeaderValue};
 
 pub(crate) mod map;
@@ -13,98 +7,6 @@ pub(crate) mod map;
 #[doc(hidden)]
 pub use self::map::GetAll;
 pub use self::map::HeaderMap;
-
-/// A trait for any object that can be Converted to a `HeaderValue`
-pub trait IntoHeaderValue: Sized {
-    /// The type returned in the event of a conversion error.
-    type Error: Into<HttpError>;
-
-    /// Try to convert value to a Header value.
-    fn try_into(self) -> Result<HeaderValue, Self::Error>;
-}
-
-impl IntoHeaderValue for HeaderValue {
-    type Error = InvalidHeaderValue;
-
-    #[inline]
-    fn try_into(self) -> Result<HeaderValue, Self::Error> {
-        Ok(self)
-    }
-}
-
-impl<'a> IntoHeaderValue for &'a str {
-    type Error = InvalidHeaderValue;
-
-    #[inline]
-    fn try_into(self) -> Result<HeaderValue, Self::Error> {
-        self.parse()
-    }
-}
-
-impl<'a> IntoHeaderValue for &'a [u8] {
-    type Error = InvalidHeaderValue;
-
-    #[inline]
-    fn try_into(self) -> Result<HeaderValue, Self::Error> {
-        HeaderValue::from_bytes(self)
-    }
-}
-
-impl IntoHeaderValue for Bytes {
-    type Error = InvalidHeaderValue;
-
-    #[inline]
-    fn try_into(self) -> Result<HeaderValue, Self::Error> {
-        HeaderValue::from_maybe_shared(self)
-    }
-}
-
-impl IntoHeaderValue for Vec<u8> {
-    type Error = InvalidHeaderValue;
-
-    #[inline]
-    fn try_into(self) -> Result<HeaderValue, Self::Error> {
-        HeaderValue::try_from(self)
-    }
-}
-
-impl IntoHeaderValue for String {
-    type Error = InvalidHeaderValue;
-
-    #[inline]
-    fn try_into(self) -> Result<HeaderValue, Self::Error> {
-        HeaderValue::try_from(self)
-    }
-}
-
-impl IntoHeaderValue for usize {
-    type Error = InvalidHeaderValue;
-
-    #[inline]
-    fn try_into(self) -> Result<HeaderValue, Self::Error> {
-        let s = format!("{}", self);
-        HeaderValue::try_from(s)
-    }
-}
-
-impl IntoHeaderValue for u64 {
-    type Error = InvalidHeaderValue;
-
-    #[inline]
-    fn try_into(self) -> Result<HeaderValue, Self::Error> {
-        let s = format!("{}", self);
-        HeaderValue::try_from(s)
-    }
-}
-
-impl IntoHeaderValue for Mime {
-    type Error = InvalidHeaderValue;
-
-    #[inline]
-    fn try_into(self) -> Result<HeaderValue, Self::Error> {
-        HeaderValue::try_from(format!("{}", self))
-    }
-}
 
 /// Represents supported types of content encodings
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -124,7 +26,7 @@ pub enum ContentEncoding {
 impl ContentEncoding {
     #[inline]
     /// Is the content compressed?
-    pub fn is_compression(self) -> bool {
+    pub fn is_compressed(self) -> bool {
         match self {
             ContentEncoding::Identity | ContentEncoding::Auto => false,
             _ => true,
@@ -201,3 +103,16 @@ pub use http::header::{
     WARNING, WWW_AUTHENTICATE, X_CONTENT_TYPE_OPTIONS, X_DNS_PREFETCH_CONTROL,
     X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoding() {
+        assert!(ContentEncoding::Br.is_compressed());
+        assert!(!ContentEncoding::Identity.is_compressed());
+        assert!(!ContentEncoding::Auto.is_compressed());
+        assert_eq!(format!("{:?}", ContentEncoding::Identity), "Identity");
+    }
+}

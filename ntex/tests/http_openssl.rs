@@ -382,7 +382,7 @@ async fn test_h2_response_http_error_handling() {
                 let broken_header = Bytes::from_static(b"\0\0\0");
                 ok::<_, io::Error>(
                     Response::Ok()
-                        .header(header::CONTENT_TYPE, broken_header)
+                        .header(header::CONTENT_TYPE, &broken_header[..])
                         .body(STR),
                 )
             }))

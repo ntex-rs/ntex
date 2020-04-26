@@ -15,7 +15,7 @@ use crate::http::body::{Body, BodyStream, MessageBody, ResponseBody};
 use crate::http::error::{HttpError, ResponseError};
 use crate::http::extensions::Extensions;
 use crate::http::header::{self};
-use crate::http::header::{HeaderMap, HeaderName, HeaderValue, IntoHeaderValue};
+use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{BoxedResponseHead, ConnectionType, ResponseHead};
 use crate::http::StatusCode;
 
@@ -325,12 +325,13 @@ impl ResponseBuilder {
     pub fn header<K, V>(&mut self, key: K, value: V) -> &mut Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         if let Some(parts) = parts(&mut self.head, &self.err) {
             match HeaderName::try_from(key) {
-                Ok(key) => match value.try_into() {
+                Ok(key) => match HeaderValue::try_from(value) {
                     Ok(value) => {
                         parts.headers.append(key, value);
                     }
@@ -357,12 +358,13 @@ impl ResponseBuilder {
     pub fn set_header<K, V>(&mut self, key: K, value: V) -> &mut Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         if let Some(parts) = parts(&mut self.head, &self.err) {
             match HeaderName::try_from(key) {
-                Ok(key) => match value.try_into() {
+                Ok(key) => match HeaderValue::try_from(value) {
                     Ok(value) => {
                         parts.headers.insert(key, value);
                     }
@@ -396,7 +398,8 @@ impl ResponseBuilder {
     #[inline]
     pub fn upgrade<V>(&mut self, value: V) -> &mut Self
     where
-        V: IntoHeaderValue,
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         if let Some(parts) = parts(&mut self.head, &self.err) {
             parts.set_connection_type(ConnectionType::Upgrade);

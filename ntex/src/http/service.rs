@@ -300,15 +300,18 @@ mod rustls {
                     .map_init_err(|_| panic!()),
             )
             .and_then(|io: TlsStream<TcpStream>| {
-                let proto = if let Some(protos) = io.get_ref().1.get_alpn_protocol() {
-                    if protos.windows(2).any(|window| window == b"h2") {
-                        Protocol::Http2
-                    } else {
-                        Protocol::Http1
-                    }
-                } else {
-                    Protocol::Http1
-                };
+                let proto = io
+                    .get_ref()
+                    .1
+                    .get_alpn_protocol()
+                    .and_then(|protos| {
+                        if protos.windows(2).any(|window| window == b"h2") {
+                            Some(Protocol::Http2)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(Protocol::Http1);
                 let peer_addr = io.get_ref().0.peer_addr().ok();
                 ok((io, proto, peer_addr))
             })

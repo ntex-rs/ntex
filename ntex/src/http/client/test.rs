@@ -7,7 +7,7 @@ use bytes::Bytes;
 use coo_kie::{Cookie, CookieJar};
 
 use crate::http::error::HttpError;
-use crate::http::header::{HeaderName, IntoHeaderValue};
+use crate::http::header::{HeaderName, HeaderValue};
 use crate::http::{h1, Payload, ResponseHead, StatusCode, Version};
 
 use super::ClientResponse;
@@ -36,8 +36,8 @@ impl TestResponse {
     pub fn with_header<K, V>(key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
     {
         Self::default().header(key, value)
     }
@@ -52,11 +52,11 @@ impl TestResponse {
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
     {
         if let Ok(key) = HeaderName::try_from(key) {
-            if let Ok(value) = value.try_into() {
+            if let Ok(value) = HeaderValue::try_from(value) {
                 self.head.headers.append(key, value);
                 return self;
             }
@@ -89,7 +89,7 @@ impl TestResponse {
             use percent_encoding::percent_encode;
             use std::fmt::Write as FmtWrite;
 
-            use crate::http::header::{self, HeaderValue};
+            use crate::http::header;
 
             let mut cookie = String::new();
             for c in self.cookies.delta() {

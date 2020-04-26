@@ -9,9 +9,7 @@ use coo_kie::{Cookie, CookieJar};
 
 use crate::codec::Framed;
 use crate::http::error::HttpError;
-use crate::http::header::{
-    self, HeaderName, HeaderValue, IntoHeaderValue, AUTHORIZATION,
-};
+use crate::http::header::{self, HeaderName, HeaderValue, AUTHORIZATION};
 use crate::http::{ConnectionType, Method, StatusCode, Uri, Version};
 use crate::http::{Payload, RequestHead};
 use crate::rt::time::timeout;
@@ -137,11 +135,12 @@ impl WebsocketsRequest {
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         match HeaderName::try_from(key) {
-            Ok(key) => match value.try_into() {
+            Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => {
                     self.head.headers.append(key, value);
                 }
@@ -156,11 +155,12 @@ impl WebsocketsRequest {
     pub fn set_header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         match HeaderName::try_from(key) {
-            Ok(key) => match value.try_into() {
+            Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => {
                     self.head.headers.insert(key, value);
                 }
@@ -175,13 +175,14 @@ impl WebsocketsRequest {
     pub fn set_header_if_none<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         match HeaderName::try_from(key) {
             Ok(key) => {
                 if !self.head.headers.contains_key(&key) {
-                    match value.try_into() {
+                    match HeaderValue::try_from(value) {
                         Ok(value) => {
                             self.head.headers.insert(key, value);
                         }

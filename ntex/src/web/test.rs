@@ -20,7 +20,7 @@ use crate::http::body::MessageBody;
 use crate::http::client::error::WsClientError;
 use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::error::{HttpError, PayloadError, ResponseError};
-use crate::http::header::{HeaderName, IntoHeaderValue, CONTENT_TYPE};
+use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{
     Extensions, HttpService, Method, Payload, Request, StatusCode, Uri, Version,
@@ -351,8 +351,8 @@ impl TestRequest {
     pub fn with_header<K, V>(key: K, value: V) -> TestRequest
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
     {
         TestRequest::default().header(key, value)
     }
@@ -404,8 +404,8 @@ impl TestRequest {
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
     {
         self.req.header(key, value);
         self

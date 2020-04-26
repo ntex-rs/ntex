@@ -13,7 +13,7 @@ use coo_kie::{Cookie, CookieJar};
 
 use crate::http::body::Body;
 use crate::http::error::HttpError;
-use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, IntoHeaderValue};
+use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{uri, ConnectionType, Method, RequestHead, Uri, Version};
 
 use super::error::{FreezeRequestError, InvalidUrl};
@@ -167,11 +167,12 @@ impl ClientRequest {
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         match HeaderName::try_from(key) {
-            Ok(key) => match value.try_into() {
+            Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => self.head.headers.append(key, value),
                 Err(e) => self.err = Some(e.into()),
             },
@@ -184,11 +185,12 @@ impl ClientRequest {
     pub fn set_header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         match HeaderName::try_from(key) {
-            Ok(key) => match value.try_into() {
+            Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => self.head.headers.insert(key, value),
                 Err(e) => self.err = Some(e.into()),
             },
@@ -201,13 +203,14 @@ impl ClientRequest {
     pub fn set_header_if_none<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         match HeaderName::try_from(key) {
             Ok(key) => {
                 if !self.head.headers.contains_key(&key) {
-                    match value.try_into() {
+                    match HeaderValue::try_from(value) {
                         Ok(value) => self.head.headers.insert(key, value),
                         Err(e) => self.err = Some(e.into()),
                     }

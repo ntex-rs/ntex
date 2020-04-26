@@ -12,7 +12,7 @@ use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::error::PayloadError;
 use crate::http::h1;
-use crate::http::header::{HeaderMap, IntoHeaderValue, HOST};
+use crate::http::header::{HeaderMap, HeaderValue, HOST};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::{Payload, PayloadStream};
 
@@ -43,7 +43,7 @@ where
                 Some(port) => write!(wrt, "{}:{}", host, port),
             };
 
-            match wrt.get_mut().split().freeze().try_into() {
+            match HeaderValue::from_maybe_shared(wrt.get_mut().split().freeze()) {
                 Ok(value) => match head {
                     RequestHeadType::Owned(ref mut head) => {
                         head.headers.insert(HOST, value)

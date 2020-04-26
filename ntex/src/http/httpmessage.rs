@@ -142,7 +142,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
     use encoding_rs::ISO_8859_2;
     use mime;
 
@@ -230,7 +229,7 @@ mod tests {
         let req = TestRequest::default()
             .header(
                 header::TRANSFER_ENCODING,
-                Bytes::from_static(b"some va\xadscc\xacas0xsdasdlue"),
+                b"some va\xadscc\xacas0xsdasdlue".as_ref(),
             )
             .finish();
         assert!(req.chunked().is_err());

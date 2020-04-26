@@ -498,7 +498,7 @@ mod tests {
     use std::io;
 
     use super::*;
-    use futures::future::poll_fn;
+    use futures::future::{ok, poll_fn};
     use futures::stream;
 
     impl Body {
@@ -675,44 +675,47 @@ mod tests {
         );
     }
 
-    mod body_stream {
-        use super::*;
+    #[ntex_rt::test]
+    async fn body_stream() {
+        let st = BodyStream::new(stream::once(ok::<_, io::Error>(Bytes::from("1"))));
+        let body: Body = st.into();
+        assert!(format!("{:?}", body).contains("Body::Message(_)"));
+        assert!(body != Body::None);
 
-        #[ntex_rt::test]
-        async fn skips_empty_chunks() {
-            let mut body = BodyStream::new(stream::iter(
-                ["1", "", "2"]
-                    .iter()
-                    .map(|&v| Ok(Bytes::from(v)) as Result<Bytes, io::Error>),
-            ));
-            assert_eq!(
-                poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
-                Some(Bytes::from("1")),
-            );
-            assert_eq!(
-                poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
-                Some(Bytes::from("2")),
-            );
-        }
+        let res = ResponseBody::new(body);
+        assert!(res.as_ref().is_some());
     }
 
-    mod sized_stream {
-        use super::*;
+    #[ntex_rt::test]
+    async fn body_skips_empty_chunks() {
+        let mut body = BodyStream::new(stream::iter(
+            ["1", "", "2"]
+                .iter()
+                .map(|&v| Ok(Bytes::from(v)) as Result<Bytes, io::Error>),
+        ));
+        assert_eq!(
+            poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
+            Some(Bytes::from("1")),
+        );
+        assert_eq!(
+            poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
+            Some(Bytes::from("2")),
+        );
+    }
 
-        #[ntex_rt::test]
-        async fn skips_empty_chunks() {
-            let mut body = SizedStream::new(
-                2,
-                stream::iter(["1", "", "2"].iter().map(|&v| Ok(Bytes::from(v)))),
-            );
-            assert_eq!(
-                poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
-                Some(Bytes::from("1")),
-            );
-            assert_eq!(
-                poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
-                Some(Bytes::from("2")),
-            );
-        }
+    #[ntex_rt::test]
+    async fn sized_skips_empty_chunks() {
+        let mut body = SizedStream::new(
+            2,
+            stream::iter(["1", "", "2"].iter().map(|&v| Ok(Bytes::from(v)))),
+        );
+        assert_eq!(
+            poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
+            Some(Bytes::from("1")),
+        );
+        assert_eq!(
+            poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
+            Some(Bytes::from("2")),
+        );
     }
 }

@@ -10,7 +10,7 @@ use futures::ready;
 use pin_project::pin_project;
 
 use crate::http::error::HttpError;
-use crate::http::header::{HeaderMap, HeaderName, IntoHeaderValue};
+use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Response, ResponseBuilder, StatusCode};
 
 use super::error::{
@@ -72,8 +72,9 @@ pub trait Responder<Err = DefaultError> {
     where
         Self: Sized,
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         CustomResponder::new(self).with_header(key, value)
     }
@@ -287,15 +288,16 @@ impl<T: Responder<Err>, Err> CustomResponder<T, Err> {
     pub fn with_header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         if self.headers.is_none() {
             self.headers = Some(HeaderMap::new());
         }
 
         match HeaderName::try_from(key) {
-            Ok(key) => match value.try_into() {
+            Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => {
                     self.headers.as_mut().unwrap().append(key, value);
                 }

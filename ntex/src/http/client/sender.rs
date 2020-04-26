@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std::error::Error;
 use std::net;
 use std::pin::Pin;
@@ -12,7 +13,7 @@ use serde::Serialize;
 
 use crate::http::body::{Body, BodyStream};
 use crate::http::error::HttpError;
-use crate::http::header::{self, HeaderMap, HeaderName, IntoHeaderValue};
+use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::RequestHead;
 use crate::rt::time::{delay_for, Delay};
 
@@ -267,12 +268,13 @@ impl RequestSender {
         value: V,
     ) -> Result<(), HttpError>
     where
-        V: IntoHeaderValue,
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         match self {
             RequestSender::Owned(head) => {
                 if !head.headers.contains_key(&key) {
-                    match value.try_into() {
+                    match HeaderValue::try_from(value) {
                         Ok(value) => head.headers.insert(key, value),
                         Err(e) => return Err(e.into()),
                     }
@@ -282,7 +284,7 @@ impl RequestSender {
                 if !head.headers.contains_key(&key)
                     && !extra_headers.iter().any(|h| h.contains_key(&key))
                 {
-                    match value.try_into() {
+                    match HeaderValue::try_from(value) {
                         Ok(v) => {
                             let h = extra_headers.get_or_insert(HeaderMap::new());
                             h.insert(key, v)

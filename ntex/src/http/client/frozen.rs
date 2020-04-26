@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::http::body::Body;
 use crate::http::error::HttpError;
-use crate::http::header::{HeaderMap, HeaderName, IntoHeaderValue};
+use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Method, RequestHead, Uri};
 
 use super::sender::{RequestSender, SendClientRequest};
@@ -113,8 +113,9 @@ impl FrozenClientRequest {
     pub fn extra_header<K, V>(&self, key: K, value: V) -> FrozenSendBuilder
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         self.extra_headers(HeaderMap::new())
             .extra_header(key, value)
@@ -141,11 +142,12 @@ impl FrozenSendBuilder {
     pub fn extra_header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
+        HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
-        V: IntoHeaderValue,
+        <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         match HeaderName::try_from(key) {
-            Ok(key) => match value.try_into() {
+            Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => self.extra_headers.insert(key, value),
                 Err(e) => self.err = Some(e.into()),
             },
