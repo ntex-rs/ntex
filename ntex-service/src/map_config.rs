@@ -287,6 +287,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::redundant_closure)]
 mod tests {
     use futures_util::future::ok;
     use std::cell::Cell;
@@ -302,7 +303,6 @@ mod tests {
         let factory =
             map_config(fn_service(|item: usize| ok::<_, ()>(item)), |t: usize| {
                 item.set(item.get() + t);
-                ()
             })
             .clone();
 

@@ -231,6 +231,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::redundant_clone)]
 mod tests {
     use futures_util::future::{lazy, ok, Ready};
 

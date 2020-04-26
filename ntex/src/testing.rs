@@ -322,6 +322,7 @@ impl AsyncWrite for Io {
 }
 
 #[cfg(test)]
+#[allow(clippy::redundant_clone)]
 mod tests {
     use super::*;
 

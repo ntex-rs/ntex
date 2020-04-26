@@ -143,7 +143,6 @@ where
 #[cfg(test)]
 mod tests {
     use encoding_rs::ISO_8859_2;
-    use mime;
 
     use super::*;
     use crate::http::test::TestRequest;

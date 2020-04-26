@@ -293,6 +293,7 @@ mod tests {
     }
 
     #[ntex_rt::test]
+    #[allow(clippy::redundant_clone)]
     async fn test_timeout_newservice() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);

@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.14] - 2020-04-xx
+## [0.1.14] - 2020-04-27
 
 * ntex::http: Stop client connections pool support future
 

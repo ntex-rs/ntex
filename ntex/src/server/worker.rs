@@ -524,7 +524,7 @@ mod tests {
 
         fn new_service(&self, _: ()) -> Self::Future {
             let mut cnt = self.counter.lock().unwrap();
-            *cnt = *cnt + 1;
+            *cnt += 1;
             ok(Srv {
                 st: self.st.clone(),
             })
@@ -566,6 +566,7 @@ mod tests {
     }
 
     #[ntex_rt::test]
+    #[allow(clippy::mutex_atomic)]
     async fn basics() {
         let (_tx1, rx1) = unbounded();
         let (mut tx2, rx2) = unbounded();

@@ -238,7 +238,6 @@ pub enum ContentTypeError {
 mod tests {
     use super::*;
     use http::{Error as HttpError, StatusCode};
-    use httparse;
     use std::io;
 
     #[test]
