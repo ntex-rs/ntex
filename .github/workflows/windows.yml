@@ -67,3 +67,8 @@ jobs:
                 --skip test_panic_in_worker
                 --skip test_connection_force_close
                 --skip test_connection_server_close
+                --skip test_freeze
+                --skip test_simple
+                --skip test_test_methods
+                --skip test_connection_wait_queue_force_close
+                --skip test_params
