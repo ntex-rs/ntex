@@ -69,3 +69,4 @@ jobs:
                 --skip test_connection_server_close
                 --skip test_freeze
                 --skip test_simple
+                --skip test_test_methods
