@@ -214,11 +214,11 @@ where
 
     fn new_service(&self, cfg: C) -> Self::Future {
         let inner = self.0.clone();
-        if let Some(ref mapper) = *self.0.mapper.borrow() {
+        if self.0.mapper.borrow().is_some() {
             MapConfigServiceResponse {
                 inner,
-                config: None,
-                state: ResponseState::MapConfig(mapper.call(cfg)),
+                config: Some(cfg),
+                state: ResponseState::MapReady,
             }
         } else {
             MapConfigServiceResponse {
@@ -245,6 +245,7 @@ where
 #[pin_project::pin_project]
 enum ResponseState<A: ServiceFactory, M: ServiceFactory> {
     CreateMapper(#[pin] M::Future),
+    MapReady,
     MapConfig(#[pin] <M::Service as Service>::Future),
     CreateService(#[pin] A::Future),
 }
@@ -270,9 +271,16 @@ where
         match this.state.as_mut().project() {
             ResponseState::CreateMapper(fut) => {
                 let mapper = ready!(fut.poll(cx))?;
-                let fut = mapper.call(this.config.take().unwrap());
                 *this.inner.mapper.borrow_mut() = Some(mapper);
+                this.state.set(ResponseState::MapReady);
+                self.poll(cx)
+            }
+            ResponseState::MapReady => {
+                let mapper = this.inner.mapper.borrow();
+                ready!(mapper.as_ref().unwrap().poll_ready(cx))?;
+                let fut = mapper.as_ref().unwrap().call(this.config.take().unwrap());
                 this.state.set(ResponseState::MapConfig(fut));
+                drop(mapper);
                 self.poll(cx)
             }
             ResponseState::MapConfig(fut) => {

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.2] - 2020-04-27
+
+* Check ready state for map_config_service
+
 ## [0.1.1] - 2020-04-22
 
 * Add `map_config_service`, replacement for `apply_cfg`
