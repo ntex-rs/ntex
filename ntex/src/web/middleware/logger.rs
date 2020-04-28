@@ -171,7 +171,7 @@ where
         if self.inner.exclude.contains(req.path()) {
             Either::Right(self.service.call(req))
         } else {
-            let time = OffsetDateTime::now();
+            let time = OffsetDateTime::now_utc();
             let mut format = self.inner.format.clone();
 
             for unit in &mut format.0 {
@@ -370,12 +370,12 @@ impl FormatText {
             FormatText::Percent => "%".fmt(fmt),
             FormatText::ResponseSize => size.fmt(fmt),
             FormatText::Time => {
-                let rt = OffsetDateTime::now() - entry_time;
+                let rt = OffsetDateTime::now_utc() - entry_time;
                 let rt = rt.as_seconds_f64();
                 fmt.write_fmt(format_args!("{:.6}", rt))
             }
             FormatText::TimeMillis => {
-                let rt = OffsetDateTime::now() - entry_time;
+                let rt = OffsetDateTime::now_utc() - entry_time;
                 let rt = (rt.whole_nanoseconds() as f64) / 1_000_000.0;
                 fmt.write_fmt(format_args!("{:.6}", rt))
             }
@@ -529,7 +529,7 @@ mod tests {
         .uri("/test/route/yeah?q=test")
         .to_srv_request();
 
-        let now = OffsetDateTime::now();
+        let now = OffsetDateTime::now_utc();
         for unit in &mut format.0 {
             unit.render_request(now, &req);
         }
@@ -559,7 +559,7 @@ mod tests {
         )
         .to_srv_request();
 
-        let now = OffsetDateTime::now();
+        let now = OffsetDateTime::now_utc();
         for unit in &mut format.0 {
             unit.render_request(now, &req);
         }
@@ -569,7 +569,7 @@ mod tests {
             unit.render_response(&resp);
         }
 
-        let entry_time = OffsetDateTime::now();
+        let entry_time = OffsetDateTime::now_utc();
         let render = |fmt: &mut Formatter<'_>| {
             for unit in &format.0 {
                 unit.render(fmt, 1024, entry_time)?;
@@ -587,7 +587,7 @@ mod tests {
         let mut format = Format::new("%t");
         let req = TestRequest::default().to_srv_request();
 
-        let now = OffsetDateTime::now();
+        let now = OffsetDateTime::now_utc();
         for unit in &mut format.0 {
             unit.render_request(now, &req);
         }
