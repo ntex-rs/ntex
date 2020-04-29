@@ -36,7 +36,7 @@ pub struct WebsocketsRequest {
 
 impl WebsocketsRequest {
     /// Create new websocket connection
-    pub(crate) fn new<U>(uri: U, config: Rc<ClientConfig>) -> Self
+    pub(super) fn new<U>(uri: U, config: Rc<ClientConfig>) -> Self
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -307,7 +307,7 @@ impl WebsocketsRequest {
         let max_size = self.max_size;
         let server_mode = self.server_mode;
 
-        let fut = self.config.connector.open_tunnel(head, self.addr);
+        let fut = self.config.connector.open_tunnel(head.into(), self.addr);
 
         // set request timeout
         let (head, framed) = if let Some(to) = self.config.timeout {

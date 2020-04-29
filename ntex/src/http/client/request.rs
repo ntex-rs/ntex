@@ -14,11 +14,13 @@ use coo_kie::{Cookie, CookieJar};
 use crate::http::body::Body;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::{uri, ConnectionType, Method, RequestHead, Uri, Version};
+use crate::http::{
+    uri, ConnectionType, Method, RequestHead, RequestHeadType, Uri, Version,
+};
 
 use super::error::{FreezeRequestError, InvalidUrl};
 use super::frozen::FrozenClientRequest;
-use super::sender::{PrepForSendingError, RequestSender, SendClientRequest};
+use super::sender::{PrepForSendingError, SendClientRequest};
 use super::ClientConfig;
 
 #[cfg(feature = "compress")]
@@ -61,7 +63,7 @@ pub struct ClientRequest {
 
 impl ClientRequest {
     /// Create new client request builder.
-    pub(crate) fn new<U>(method: Method, uri: U, config: Rc<ClientConfig>) -> Self
+    pub(super) fn new<U>(method: Method, uri: U, config: Rc<ClientConfig>) -> Self
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -218,13 +220,6 @@ impl ClientRequest {
             }
             Err(e) => self.err = Some(e.into()),
         }
-        self
-    }
-
-    /// Send headers in `Camel-Case` form.
-    #[inline]
-    pub fn camel_case(mut self) -> Self {
-        self.head.set_camel_case_headers(true);
         self
     }
 
@@ -405,7 +400,7 @@ impl ClientRequest {
             Err(e) => return e.into(),
         };
 
-        RequestSender::Owned(slf.head).send_body(
+        RequestHeadType::Owned(slf.head).send_body(
             slf.addr,
             slf.response_decompress,
             slf.timeout,
@@ -421,7 +416,7 @@ impl ClientRequest {
             Err(e) => return e.into(),
         };
 
-        RequestSender::Owned(slf.head).send_json(
+        RequestHeadType::Owned(slf.head).send_json(
             slf.addr,
             slf.response_decompress,
             slf.timeout,
@@ -439,7 +434,7 @@ impl ClientRequest {
             Err(e) => return e.into(),
         };
 
-        RequestSender::Owned(slf.head).send_form(
+        RequestHeadType::Owned(slf.head).send_form(
             slf.addr,
             slf.response_decompress,
             slf.timeout,
@@ -459,7 +454,7 @@ impl ClientRequest {
             Err(e) => return e.into(),
         };
 
-        RequestSender::Owned(slf.head).send_stream(
+        RequestHeadType::Owned(slf.head).send_stream(
             slf.addr,
             slf.response_decompress,
             slf.timeout,
@@ -475,7 +470,7 @@ impl ClientRequest {
             Err(e) => return e.into(),
         };
 
-        RequestSender::Owned(slf.head).send(
+        RequestHeadType::Owned(slf.head).send(
             slf.addr,
             slf.response_decompress,
             slf.timeout,

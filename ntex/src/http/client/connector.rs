@@ -112,13 +112,6 @@ impl Connector {
         self
     }
 
-    #[deprecated(since = "0.1.4", note = "Please use `openssl()` method instead")]
-    #[doc(hidden)]
-    #[cfg(feature = "openssl")]
-    pub fn ssl(self, connector: OpensslConnector) -> Self {
-        self.openssl(connector)
-    }
-
     #[cfg(feature = "openssl")]
     /// Use openssl connector for secured connections.
     pub fn openssl(self, connector: OpensslConnector) -> Self {

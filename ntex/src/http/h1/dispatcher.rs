@@ -698,6 +698,15 @@ where
         }
     }
 
+    fn internal_error(&mut self, msg: &'static str) {
+        error!("{}", msg);
+        self.flags.insert(Flags::DISCONNECT);
+        self.messages.push_back(DispatcherMessage::Error(
+            Response::InternalServerError().finish().drop_body(),
+        ));
+        self.error = Some(DispatchError::InternalError);
+    }
+
     fn input_decode(&mut self) -> Result<PollRead, DispatchError> {
         let mut updated = false;
         loop {
@@ -739,14 +748,9 @@ where
                             if let Some(ref mut payload) = self.payload {
                                 payload.feed_data(chunk);
                             } else {
-                                error!(
-                                    "Internal server error: unexpected payload chunk"
+                                self.internal_error(
+                                    "Internal server error: unexpected payload chunk",
                                 );
-                                self.flags.insert(Flags::DISCONNECT);
-                                self.messages.push_back(DispatcherMessage::Error(
-                                    Response::InternalServerError().finish().drop_body(),
-                                ));
-                                self.error = Some(DispatchError::InternalError);
                                 break;
                             }
                         }
@@ -754,12 +758,9 @@ where
                             if let Some(mut payload) = self.payload.take() {
                                 payload.feed_eof();
                             } else {
-                                error!("Internal server error: unexpected eof");
-                                self.flags.insert(Flags::DISCONNECT);
-                                self.messages.push_back(DispatcherMessage::Error(
-                                    Response::InternalServerError().finish().drop_body(),
-                                ));
-                                self.error = Some(DispatchError::InternalError);
+                                self.internal_error(
+                                    "Internal server error: unexpected eof",
+                                );
                                 break;
                             }
                         }

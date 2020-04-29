@@ -70,10 +70,6 @@ async fn test_simple() {
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
-
-    // camel case
-    let response = srv.post("/").camel_case().send().await.unwrap();
-    assert!(response.status().is_success());
 }
 
 #[ntex::test]

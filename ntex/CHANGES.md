@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.15] - 2020-xx-xx
+
+* ntex::http: Drop camel case headers support
+
 ## [0.1.14] - 2020-04-27
 
 * ntex::http: Stop client connections pool support future

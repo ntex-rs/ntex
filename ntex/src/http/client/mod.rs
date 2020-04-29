@@ -77,10 +77,10 @@ pub struct Connect {
 #[derive(Clone)]
 pub struct Client(Rc<ClientConfig>);
 
-pub(crate) struct ClientConfig {
-    pub(crate) connector: Box<dyn InnerConnect>,
-    pub(crate) headers: HeaderMap,
-    pub(crate) timeout: Option<Duration>,
+pub(self) struct ClientConfig {
+    pub(self) connector: Box<dyn InnerConnect>,
+    pub(self) headers: HeaderMap,
+    pub(self) timeout: Option<Duration>,
 }
 
 impl Default for Client {

@@ -42,7 +42,6 @@ where
     *req.version_mut() = Version::HTTP_2;
 
     let mut skip_len = true;
-    // let mut has_date = false;
 
     // Content length
     let _ = match length {
@@ -86,7 +85,6 @@ where
         match *key {
             CONNECTION | TRANSFER_ENCODING => continue, // http2 specific
             CONTENT_LENGTH if skip_len => continue,
-            // DATE => has_date = true,
             _ => (),
         }
         req.headers_mut().append(key, value.clone());

@@ -11,8 +11,7 @@ use crate::http::message::{ConnectionType, RequestHeadType, ResponseHead};
 use crate::http::{Method, Version};
 
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::{decoder, encoder, reserve_readbuf};
-use super::{Message, MessageType};
+use super::{decoder, encoder, reserve_readbuf, Message, MessageType};
 
 bitflags! {
     struct Flags: u8 {

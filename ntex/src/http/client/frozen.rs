@@ -11,20 +11,20 @@ use serde::Serialize;
 use crate::http::body::Body;
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
-use crate::http::{Method, RequestHead, Uri};
+use crate::http::{Method, RequestHead, RequestHeadType, Uri};
 
-use super::sender::{RequestSender, SendClientRequest};
+use super::sender::SendClientRequest;
 use super::ClientConfig;
 
 /// `FrozenClientRequest` struct represents clonable client request.
 /// It could be used to send same request multiple times.
 #[derive(Clone)]
 pub struct FrozenClientRequest {
-    pub(crate) head: Rc<RequestHead>,
-    pub(crate) addr: Option<net::SocketAddr>,
-    pub(crate) response_decompress: bool,
-    pub(crate) timeout: Option<Duration>,
-    pub(crate) config: Rc<ClientConfig>,
+    pub(super) head: Rc<RequestHead>,
+    pub(super) addr: Option<net::SocketAddr>,
+    pub(super) response_decompress: bool,
+    pub(super) timeout: Option<Duration>,
+    pub(super) config: Rc<ClientConfig>,
 }
 
 impl FrozenClientRequest {
@@ -48,7 +48,7 @@ impl FrozenClientRequest {
     where
         B: Into<Body>,
     {
-        RequestSender::Rc(self.head.clone(), None).send_body(
+        RequestHeadType::Rc(self.head.clone(), None).send_body(
             self.addr,
             self.response_decompress,
             self.timeout,
@@ -59,7 +59,7 @@ impl FrozenClientRequest {
 
     /// Send a json body.
     pub fn send_json<T: Serialize>(&self, value: &T) -> SendClientRequest {
-        RequestSender::Rc(self.head.clone(), None).send_json(
+        RequestHeadType::Rc(self.head.clone(), None).send_json(
             self.addr,
             self.response_decompress,
             self.timeout,
@@ -70,7 +70,7 @@ impl FrozenClientRequest {
 
     /// Send an urlencoded body.
     pub fn send_form<T: Serialize>(&self, value: &T) -> SendClientRequest {
-        RequestSender::Rc(self.head.clone(), None).send_form(
+        RequestHeadType::Rc(self.head.clone(), None).send_form(
             self.addr,
             self.response_decompress,
             self.timeout,
@@ -85,7 +85,7 @@ impl FrozenClientRequest {
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
         E: Error + 'static,
     {
-        RequestSender::Rc(self.head.clone(), None).send_stream(
+        RequestHeadType::Rc(self.head.clone(), None).send_stream(
             self.addr,
             self.response_decompress,
             self.timeout,
@@ -96,7 +96,7 @@ impl FrozenClientRequest {
 
     /// Send an empty body.
     pub fn send(&self) -> SendClientRequest {
-        RequestSender::Rc(self.head.clone(), None).send(
+        RequestHeadType::Rc(self.head.clone(), None).send(
             self.addr,
             self.response_decompress,
             self.timeout,
@@ -165,7 +165,7 @@ impl FrozenSendBuilder {
             return e.into();
         }
 
-        RequestSender::Rc(self.req.head, Some(self.extra_headers)).send_body(
+        RequestHeadType::Rc(self.req.head, Some(self.extra_headers)).send_body(
             self.req.addr,
             self.req.response_decompress,
             self.req.timeout,
@@ -180,7 +180,7 @@ impl FrozenSendBuilder {
             return e.into();
         }
 
-        RequestSender::Rc(self.req.head, Some(self.extra_headers)).send_json(
+        RequestHeadType::Rc(self.req.head, Some(self.extra_headers)).send_json(
             self.req.addr,
             self.req.response_decompress,
             self.req.timeout,
@@ -195,7 +195,7 @@ impl FrozenSendBuilder {
             return e.into();
         }
 
-        RequestSender::Rc(self.req.head, Some(self.extra_headers)).send_form(
+        RequestHeadType::Rc(self.req.head, Some(self.extra_headers)).send_form(
             self.req.addr,
             self.req.response_decompress,
             self.req.timeout,
@@ -214,7 +214,7 @@ impl FrozenSendBuilder {
             return e.into();
         }
 
-        RequestSender::Rc(self.req.head, Some(self.extra_headers)).send_stream(
+        RequestHeadType::Rc(self.req.head, Some(self.extra_headers)).send_stream(
             self.req.addr,
             self.req.response_decompress,
             self.req.timeout,
@@ -229,7 +229,7 @@ impl FrozenSendBuilder {
             return e.into();
         }
 
-        RequestSender::Rc(self.req.head, Some(self.extra_headers)).send(
+        RequestHeadType::Rc(self.req.head, Some(self.extra_headers)).send(
             self.req.addr,
             self.req.response_decompress,
             self.req.timeout,

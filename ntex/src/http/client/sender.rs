@@ -2,7 +2,6 @@ use std::convert::TryFrom;
 use std::error::Error;
 use std::net;
 use std::pin::Pin;
-use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -14,7 +13,7 @@ use serde::Serialize;
 use crate::http::body::{Body, BodyStream};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::RequestHead;
+use crate::http::RequestHeadType;
 use crate::rt::time::{delay_for, Delay};
 
 #[cfg(feature = "compress")]
@@ -140,14 +139,8 @@ impl From<PrepForSendingError> for SendClientRequest {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum RequestSender {
-    Owned(RequestHead),
-    Rc(Rc<RequestHead>, Option<HeaderMap>),
-}
-
-impl RequestSender {
-    pub(crate) fn send_body<B>(
+impl RequestHeadType {
+    pub(super) fn send_body<B>(
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
@@ -158,23 +151,14 @@ impl RequestSender {
     where
         B: Into<Body>,
     {
-        let fut = match self {
-            RequestSender::Owned(head) => {
-                config.connector.send_request(head, body.into(), addr)
-            }
-            RequestSender::Rc(head, extra_headers) => config
-                .connector
-                .send_request_extra(head, extra_headers, body.into(), addr),
-        };
-
         SendClientRequest::new(
-            fut,
+            config.connector.send_request(self, body.into(), addr),
             response_decompress,
             timeout.or_else(|| config.timeout),
         )
     }
 
-    pub(crate) fn send_json<T: Serialize>(
+    pub(super) fn send_json<T: Serialize>(
         mut self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
@@ -201,7 +185,7 @@ impl RequestSender {
         )
     }
 
-    pub(crate) fn send_form<T: Serialize>(
+    pub(super) fn send_form<T: Serialize>(
         mut self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
@@ -231,7 +215,7 @@ impl RequestSender {
         )
     }
 
-    pub(crate) fn send_stream<S, E>(
+    pub(super) fn send_stream<S, E>(
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
@@ -252,7 +236,7 @@ impl RequestSender {
         )
     }
 
-    pub(crate) fn send(
+    pub(super) fn send(
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
@@ -272,7 +256,7 @@ impl RequestSender {
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         match self {
-            RequestSender::Owned(head) => {
+            RequestHeadType::Owned(head) => {
                 if !head.headers.contains_key(&key) {
                     match HeaderValue::try_from(value) {
                         Ok(value) => head.headers.insert(key, value),
@@ -280,7 +264,7 @@ impl RequestSender {
                     }
                 }
             }
-            RequestSender::Rc(head, extra_headers) => {
+            RequestHeadType::Rc(head, extra_headers) => {
                 if !head.headers.contains_key(&key)
                     && !extra_headers.iter().any(|h| h.contains_key(&key))
                 {

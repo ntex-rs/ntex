@@ -1,7 +1,6 @@
 use std::io::Write;
 use std::marker::PhantomData;
 use std::ptr::copy_nonoverlapping;
-use std::slice::from_raw_parts_mut;
 use std::{cmp, io, mem, ptr, slice};
 
 use bytes::{buf::BufMutExt, BufMut, BytesMut};
@@ -33,16 +32,12 @@ impl<T: MessageType> Default for MessageEncoder<T> {
     }
 }
 
-pub(crate) trait MessageType: Sized {
+pub(super) trait MessageType: Sized {
     fn status(&self) -> Option<StatusCode>;
 
     fn headers(&self) -> &HeaderMap;
 
     fn extra_headers(&self) -> Option<&HeaderMap>;
-
-    fn camel_case(&self) -> bool {
-        false
-    }
 
     fn chunked(&self) -> bool;
 
@@ -58,7 +53,6 @@ pub(crate) trait MessageType: Sized {
     ) -> io::Result<()> {
         let chunked = self.chunked();
         let mut skip_len = length != BodySize::Stream;
-        let camel_case = self.camel_case();
 
         // Content length
         if let Some(status) = self.status() {
@@ -74,54 +68,31 @@ pub(crate) trait MessageType: Sized {
             }
         }
         match length {
+            BodySize::None => dst.put_slice(b"\r\n"),
+            BodySize::Empty => dst.put_slice(b"\r\ncontent-length: 0\r\n"),
+            BodySize::Sized(len) => write_content_length(len, dst),
+            BodySize::Sized64(len) => {
+                dst.put_slice(b"\r\ncontent-length: ");
+                write!(dst.writer(), "{}\r\n", len)?;
+            }
             BodySize::Stream => {
                 if chunked {
-                    if camel_case {
-                        dst.put_slice(b"\r\nTransfer-Encoding: chunked\r\n")
-                    } else {
-                        dst.put_slice(b"\r\ntransfer-encoding: chunked\r\n")
-                    }
+                    dst.put_slice(b"\r\ntransfer-encoding: chunked\r\n")
                 } else {
                     skip_len = false;
                     dst.put_slice(b"\r\n");
                 }
             }
-            BodySize::Empty => {
-                if camel_case {
-                    dst.put_slice(b"\r\nContent-Length: 0\r\n");
-                } else {
-                    dst.put_slice(b"\r\ncontent-length: 0\r\n");
-                }
-            }
-            BodySize::Sized(len) => write_content_length(len, dst),
-            BodySize::Sized64(len) => {
-                if camel_case {
-                    dst.put_slice(b"\r\nContent-Length: ");
-                } else {
-                    dst.put_slice(b"\r\ncontent-length: ");
-                }
-                #[allow(clippy::write_with_newline)]
-                write!(dst.writer(), "{}\r\n", len)?;
-            }
-            BodySize::None => dst.put_slice(b"\r\n"),
         }
 
         // Connection
         match ctype {
             ConnectionType::Upgrade => dst.put_slice(b"connection: upgrade\r\n"),
             ConnectionType::KeepAlive if version < Version::HTTP_11 => {
-                if camel_case {
-                    dst.put_slice(b"Connection: keep-alive\r\n")
-                } else {
-                    dst.put_slice(b"connection: keep-alive\r\n")
-                }
+                dst.put_slice(b"connection: keep-alive\r\n")
             }
             ConnectionType::Close if version >= Version::HTTP_11 => {
-                if camel_case {
-                    dst.put_slice(b"Connection: close\r\n")
-                } else {
-                    dst.put_slice(b"connection: close\r\n")
-                }
+                dst.put_slice(b"connection: close\r\n")
             }
             _ => (),
         }
@@ -166,11 +137,7 @@ pub(crate) trait MessageType: Sized {
                             remaining = dst.capacity() - dst.len();
                             buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
                         }
-                        if camel_case {
-                            write_camel_case(k, from_raw_parts_mut(buf, k_len))
-                        } else {
-                            copy_nonoverlapping(k.as_ptr(), buf, k_len)
-                        }
+                        copy_nonoverlapping(k.as_ptr(), buf, k_len);
                         buf = buf.add(k_len);
                         copy_nonoverlapping(b": ".as_ptr(), buf, 2);
                         buf = buf.add(2);
@@ -197,11 +164,7 @@ pub(crate) trait MessageType: Sized {
                                 remaining = dst.capacity() - dst.len();
                                 buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
                             }
-                            if camel_case {
-                                write_camel_case(k, from_raw_parts_mut(buf, k_len));
-                            } else {
-                                copy_nonoverlapping(k.as_ptr(), buf, k_len);
-                            }
+                            copy_nonoverlapping(k.as_ptr(), buf, k_len);
                             buf = buf.add(k_len);
                             copy_nonoverlapping(b": ".as_ptr(), buf, 2);
                             buf = buf.add(2);
@@ -268,10 +231,6 @@ impl MessageType for RequestHeadType {
 
     fn chunked(&self) -> bool {
         self.as_ref().chunked()
-    }
-
-    fn camel_case(&self) -> bool {
-        self.as_ref().camel_case_headers()
     }
 
     fn headers(&self) -> &HeaderMap {
@@ -474,34 +433,6 @@ impl TransferEncoding {
     }
 }
 
-fn write_camel_case(value: &[u8], buffer: &mut [u8]) {
-    let mut index = 0;
-    let key = value;
-    let mut key_iter = key.iter();
-
-    if let Some(c) = key_iter.next() {
-        if *c >= b'a' && *c <= b'z' {
-            buffer[index] = *c ^ b' ';
-            index += 1;
-        }
-    } else {
-        return;
-    }
-
-    while let Some(c) = key_iter.next() {
-        buffer[index] = *c;
-        index += 1;
-        if *c == b'-' {
-            if let Some(c) = key_iter.next() {
-                if *c >= b'a' && *c <= b'z' {
-                    buffer[index] = *c ^ b' ';
-                    index += 1;
-                }
-            }
-        }
-    }
-}
-
 const DEC_DIGITS_LUT: &[u8] = b"0001020304050607080910111213141516171819\
       2021222324252627282930313233343536373839\
       4041424344454647484950515253545556575859\
@@ -655,7 +586,7 @@ mod tests {
     use bytes::Bytes;
 
     use super::*;
-    use crate::http::header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+    use crate::http::header::{HeaderValue, AUTHORIZATION};
     use crate::http::RequestHead;
 
     #[test]
@@ -670,81 +601,6 @@ mod tests {
             bytes.split().freeze(),
             Bytes::from_static(b"4\r\ntest\r\n0\r\n\r\n")
         );
-    }
-
-    #[test]
-    fn test_camel_case() {
-        let mut bytes = BytesMut::with_capacity(2048);
-        let mut head = RequestHead::default();
-        head.set_camel_case_headers(true);
-        head.headers.insert(DATE, HeaderValue::from_static("date"));
-        head.headers
-            .insert(CONTENT_TYPE, HeaderValue::from_static("plain/text"));
-
-        let mut head = RequestHeadType::Owned(head);
-
-        let _ = head.encode_headers(
-            &mut bytes,
-            Version::HTTP_11,
-            BodySize::Empty,
-            ConnectionType::Close,
-            &DateService::default(),
-        );
-        let data =
-            String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
-        assert!(data.contains("Content-Length: 0\r\n"));
-        assert!(data.contains("Connection: close\r\n"));
-        assert!(data.contains("Content-Type: plain/text\r\n"));
-        assert!(data.contains("Date: date\r\n"));
-
-        let _ = head.encode_headers(
-            &mut bytes,
-            Version::HTTP_11,
-            BodySize::Stream,
-            ConnectionType::KeepAlive,
-            &DateService::default(),
-        );
-        let data =
-            String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
-        assert!(data.contains("Transfer-Encoding: chunked\r\n"));
-        assert!(data.contains("Content-Type: plain/text\r\n"));
-        assert!(data.contains("Date: date\r\n"));
-
-        let _ = head.encode_headers(
-            &mut bytes,
-            Version::HTTP_11,
-            BodySize::Sized64(100),
-            ConnectionType::KeepAlive,
-            &DateService::default(),
-        );
-        let data =
-            String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
-        assert!(data.contains("Content-Length: 100\r\n"));
-        assert!(data.contains("Content-Type: plain/text\r\n"));
-        assert!(data.contains("Date: date\r\n"));
-
-        let mut head = RequestHead::default();
-        head.set_camel_case_headers(false);
-        head.headers.insert(DATE, HeaderValue::from_static("date"));
-        head.headers
-            .insert(CONTENT_TYPE, HeaderValue::from_static("plain/text"));
-        head.headers
-            .append(CONTENT_TYPE, HeaderValue::from_static("xml"));
-
-        let mut head = RequestHeadType::Owned(head);
-        let _ = head.encode_headers(
-            &mut bytes,
-            Version::HTTP_11,
-            BodySize::Stream,
-            ConnectionType::KeepAlive,
-            &DateService::default(),
-        );
-        let data =
-            String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
-        assert!(data.contains("transfer-encoding: chunked\r\n"));
-        assert!(data.contains("content-type: xml\r\n"));
-        assert!(data.contains("content-type: plain/text\r\n"));
-        assert!(data.contains("date: date\r\n"));
     }
 
     #[test]

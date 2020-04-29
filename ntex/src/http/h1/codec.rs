@@ -200,6 +200,7 @@ mod tests {
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
         let mut codec = Codec::default();
+        assert!(format!("{:?}", codec).contains("h1::Codec"));
 
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\n\
@@ -232,5 +233,15 @@ mod tests {
         let req = item.message();
         assert_eq!(*req.method(), Method::POST);
         assert!(req.chunked().unwrap());
+
+        let mut codec = Codec::default();
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             connection: upgrade\r\n\r\n",
+        );
+        let item = codec.decode(&mut buf).unwrap().unwrap();
+        println!("{:#?}", item);
+        assert!(codec.upgrade());
+        assert!(!codec.keepalive_enabled());
     }
 }
