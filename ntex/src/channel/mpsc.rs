@@ -161,15 +161,17 @@ impl<T> Stream for Receiver<T> {
     ) -> Poll<Option<Self::Item>> {
         let shared = self.shared.get_mut();
 
-        if self.shared.strong_count() == 1 {
-            // All senders have been dropped, so drain the buffer and end the
-            // stream.
-            Poll::Ready(shared.buffer.pop_front())
-        } else if let Some(msg) = shared.buffer.pop_front() {
+        if let Some(msg) = shared.buffer.pop_front() {
             Poll::Ready(Some(msg))
         } else if shared.has_receiver {
             shared.blocked_recv.register(cx.waker());
-            Poll::Pending
+            if self.shared.strong_count() == 1 {
+                // All senders have been dropped, so drain the buffer and end the
+                // stream.
+                Poll::Ready(None)
+            } else {
+                Poll::Pending
+            }
         } else {
             Poll::Ready(None)
         }

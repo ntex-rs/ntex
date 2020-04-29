@@ -1,8 +1,12 @@
 # Changes
 
-## [0.1.15] - 2020-xx-xx
+## [0.1.15] - 2020-04-29
+
+* ntex::util: Refactor stream dispatcher
 
 * ntex::http: Drop camel case headers support
+
+* ntex::ws: Add stream and sink wrappers for ws protocol
 
 ## [0.1.14] - 2020-04-27
 

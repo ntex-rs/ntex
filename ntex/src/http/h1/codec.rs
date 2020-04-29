@@ -239,8 +239,7 @@ mod tests {
             "GET /test HTTP/1.1\r\n\
              connection: upgrade\r\n\r\n",
         );
-        let item = codec.decode(&mut buf).unwrap().unwrap();
-        println!("{:#?}", item);
+        let _item = codec.decode(&mut buf).unwrap().unwrap();
         assert!(codec.upgrade());
         assert!(!codec.keepalive_enabled());
     }

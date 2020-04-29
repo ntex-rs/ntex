@@ -11,10 +11,12 @@ mod codec;
 mod frame;
 mod mask;
 mod proto;
+mod stream;
 
 pub use self::codec::{Codec, Frame, Item, Message};
 pub use self::frame::Parser;
 pub use self::proto::{hash_key, CloseCode, CloseReason, OpCode};
+pub use self::stream::{StreamDecoder, StreamEncoder};
 
 /// Websocket protocol errors
 #[derive(Debug, Display, From)]
