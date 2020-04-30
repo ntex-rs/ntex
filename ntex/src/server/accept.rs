@@ -315,6 +315,7 @@ impl Accept {
                     }
                     Command::Stop => {
                         for (_, info) in self.sockets.iter() {
+                            trace!("Stopping socket listener: {}", info.addr);
                             let _ = self.poll.deregister(&info.sock);
                         }
                         return false;
@@ -358,12 +359,15 @@ impl Accept {
         } else if on {
             self.backpressure = true;
             for (_, info) in self.sockets.iter() {
+                trace!("Enabling backpressure for {}", info.addr);
                 let _ = self.poll.deregister(&info.sock);
             }
         }
     }
 
     fn accept_one(&mut self, mut msg: Conn) {
+        trace!("Accepting connection: {:?}", msg.io);
+
         if self.backpressure {
             while !self.workers.is_empty() {
                 match self.workers[self.next].send(msg) {
@@ -395,6 +399,7 @@ impl Accept {
                             return;
                         }
                         Err(tmp) => {
+                            trace!("Worker failed while processing connection");
                             self.srv.worker_faulted(self.workers[self.next].idx);
                             msg = tmp;
                             self.workers.swap_remove(self.next);
@@ -412,12 +417,14 @@ impl Accept {
                 self.next = (self.next + 1) % self.workers.len();
             }
             // enable backpressure
+            trace!("No available workers, enable back-pressure");
             self.backpressure(true);
             self.accept_one(msg);
         }
     }
 
     fn accept(&mut self, token: usize) {
+        trace!("Starting server accept loop");
         loop {
             let msg = if let Some(info) = self.sockets.get_mut(token) {
                 match info.sock.accept() {
