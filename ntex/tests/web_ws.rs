@@ -25,11 +25,11 @@ async fn web_ws() {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest, pl: web::types::Payload| async move {
                 ws::start::<_, _, _, web::Error>(
+                    req,
+                    pl,
                     fn_factory_with_config(|_| async {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
-                    req,
-                    pl,
                 )
                 .await
             },

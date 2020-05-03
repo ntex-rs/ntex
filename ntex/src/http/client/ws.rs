@@ -6,14 +6,19 @@ use std::{fmt, str};
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
+use futures::Stream;
 
-use crate::codec::Framed;
+use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue, AUTHORIZATION};
 use crate::http::{ConnectionType, Method, StatusCode, Uri, Version};
 use crate::http::{Payload, RequestHead};
 use crate::rt::time::timeout;
+use crate::service::{IntoService, Service};
+use crate::util::framed::{Dispatcher, DispatcherError};
 use crate::ws;
+
+pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
 
 use super::connect::BoxedSocket;
 use super::error::{InvalidUrl, SendRequestError, WsClientError};
@@ -400,6 +405,23 @@ impl fmt::Debug for WebsocketsRequest {
         }
         Ok(())
     }
+}
+
+/// Start client websockets service.
+pub async fn start<Io, T, F, Rx>(
+    framed: Framed<Io, ws::Codec>,
+    rx: Rx,
+    service: F,
+) -> Result<(), DispatcherError<T::Error, ws::Codec>>
+where
+    Io: AsyncRead + AsyncWrite + Unpin + 'static,
+    T: Service<Request = ws::Frame, Response = Option<ws::Message>>,
+    T::Error: 'static,
+    T::Future: 'static,
+    F: IntoService<T>,
+    Rx: Stream<Item = ws::Message> + Unpin + 'static,
+{
+    Dispatcher::with(framed, Some(rx), service.into_service()).await
 }
 
 #[cfg(test)]

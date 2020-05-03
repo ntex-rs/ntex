@@ -33,7 +33,7 @@ mod request;
 mod response;
 mod sender;
 mod test;
-mod ws;
+pub mod ws;
 
 pub use self::builder::ClientBuilder;
 pub use self::connect::BoxedSocket;
@@ -44,7 +44,6 @@ pub use self::request::ClientRequest;
 pub use self::response::{ClientResponse, JsonBody, MessageBody};
 pub use self::sender::SendClientRequest;
 pub use self::test::TestResponse;
-pub use self::ws::WebsocketsRequest;
 
 use crate::http::error::HttpError;
 use crate::http::{HeaderMap, Method, RequestHead, Uri};

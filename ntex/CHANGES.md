@@ -1,12 +1,14 @@
 # Changes
 
-## [0.1.15] - 2020-04-30
+## [0.1.15] - 2020-05-03
 
 * ntex::util: Refactor stream dispatcher
 
 * ntex::http: Drop camel case headers support
 
 * ntex::http: Fix upgrade service readiness check
+
+* ntex::http: Add client websockets helper
 
 * ntex::ws: Add stream and sink wrappers for ws protocol
 
