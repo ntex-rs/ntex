@@ -85,6 +85,7 @@ mod service;
 pub mod test;
 pub mod types;
 mod util;
+pub mod ws;
 
 // re-export proc macro
 pub use ntex_macros::web_connect as connect;

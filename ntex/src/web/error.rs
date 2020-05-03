@@ -868,6 +868,26 @@ mod tests {
     }
 
     #[test]
+    fn test_handshake_error() {
+        use crate::http::ws::HandshakeError;
+
+        let req = TestRequest::default().to_http_request();
+
+        let resp = HandshakeError::GetMethodRequired.error_response(&req);
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let resp = HandshakeError::NoWebsocketUpgrade.error_response(&req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp = HandshakeError::NoConnectionUpgrade.error_response(&req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp = HandshakeError::NoVersionHeader.error_response(&req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp = HandshakeError::UnsupportedVersion.error_response(&req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp = HandshakeError::BadWebsocketKey.error_response(&req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
     #[allow(clippy::cognitive_complexity)]
     fn test_error_helpers() {
         let err = ErrorBadRequest::<_, DefaultError>("err");

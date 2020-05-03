@@ -10,6 +10,7 @@ use serde_urlencoded::ser::Error as FormError;
 
 use crate::http::body::Body;
 use crate::http::helpers::Writer;
+use crate::http::ws::HandshakeError;
 use crate::http::{self, header, StatusCode};
 use crate::util::timeout::TimeoutError;
 
@@ -235,6 +236,32 @@ impl WebResponseError<DefaultError> for http::client::error::SendRequestError {
             ) => StatusCode::GATEWAY_TIMEOUT,
             http::client::error::SendRequestError::Connect(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+/// Error renderer for ws::HandshakeError
+impl WebResponseError<DefaultError> for HandshakeError {
+    fn error_response(&self, _: &HttpRequest) -> HttpResponse {
+        match *self {
+            HandshakeError::GetMethodRequired => HttpResponse::MethodNotAllowed()
+                .header(header::ALLOW, "GET")
+                .finish(),
+            HandshakeError::NoWebsocketUpgrade => HttpResponse::BadRequest()
+                .reason("No WebSocket UPGRADE header found")
+                .finish(),
+            HandshakeError::NoConnectionUpgrade => HttpResponse::BadRequest()
+                .reason("No CONNECTION upgrade")
+                .finish(),
+            HandshakeError::NoVersionHeader => HttpResponse::BadRequest()
+                .reason("Websocket version header is required")
+                .finish(),
+            HandshakeError::UnsupportedVersion => HttpResponse::BadRequest()
+                .reason("Unsupported version")
+                .finish(),
+            HandshakeError::BadWebsocketKey => HttpResponse::BadRequest()
+                .reason("Handshake error")
+                .finish(),
         }
     }
 }

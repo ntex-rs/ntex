@@ -126,9 +126,11 @@ enum DispatcherMessage {
 enum PollWrite {
     /// allowed to process next request
     AllowNext,
+    /// write buffer is full
+    Pending,
     /// waiting for response stream (app response)
     /// or write buffer is full
-    Pending,
+    PendingRespnse,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -351,22 +353,27 @@ where
                 }
                 CallProcess::Io => {
                     // service call queue is empty, we can process next request
-                    if this.inner.poll_write(cx)? == PollWrite::AllowNext {
-                        match this.inner.process_messages(CallProcess::Io)? {
-                            CallProcess::Next(st) => {
-                                this = self.as_mut().project();
-                                this.call.set(st);
-                                continue;
+                    match this.inner.poll_write(cx)? {
+                        PollWrite::AllowNext => {
+                            match this.inner.process_messages(CallProcess::Io)? {
+                                CallProcess::Next(st) => {
+                                    this = self.as_mut().project();
+                                    this.call.set(st);
+                                    continue;
+                                }
+                                CallProcess::Upgrade(fut) => {
+                                    this.upgrade.set(Some(fut));
+                                    return self.poll(cx);
+                                }
+                                CallProcess::Io => false,
+                                CallProcess::Pending => unreachable!(),
                             }
-                            CallProcess::Upgrade(fut) => {
-                                this.upgrade.set(Some(fut));
-                                return self.poll(cx);
-                            }
-                            CallProcess::Io => (),
-                            CallProcess::Pending => unreachable!(),
+                        }
+                        PollWrite::Pending => false,
+                        PollWrite::PendingRespnse => {
+                            !this.inner.flags.contains(Flags::DISCONNECT)
                         }
                     }
-                    false
                 }
                 CallProcess::Upgrade(fut) => {
                     this.upgrade.set(Some(fut));
@@ -534,7 +541,7 @@ where
         msg: Response<()>,
         body: ResponseBody<B>,
     ) -> Result<bool, DispatchError> {
-        trace!("Sending response: {:?}", msg);
+        trace!("Sending response: {:?} body: {:?}", msg, body.size());
         // we dont need to process responses if socket is disconnected
         // but we still want to handle requests with app service
         if !self.flags.contains(Flags::DISCONNECT) {
@@ -576,11 +583,13 @@ where
 
                 match stream.poll_next_chunk(cx) {
                     Poll::Ready(Some(Ok(item))) => {
+                        trace!("Got response chunk: {:?}", item.len());
                         flushed = false;
                         self.codec
                             .encode(Message::Chunk(Some(item)), &mut self.write_buf)?;
                     }
                     Poll::Ready(None) => {
+                        trace!("Response payload eof");
                         flushed = false;
                         self.codec
                             .encode(Message::Chunk(None), &mut self.write_buf)?;
@@ -597,7 +606,7 @@ where
                         if !flushed {
                             self.poll_flush(cx)?;
                         }
-                        return Ok(PollWrite::Pending);
+                        return Ok(PollWrite::PendingRespnse);
                     }
                 }
             } else {
@@ -606,7 +615,7 @@ where
                 flushed = true;
                 self.poll_flush(cx)?;
                 if self.write_buf.len() >= BUFFER_SIZE {
-                    return Ok(PollWrite::Pending);
+                    return Ok(PollWrite::PendingRespnse);
                 }
             }
         }

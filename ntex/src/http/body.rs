@@ -449,6 +449,49 @@ where
     }
 }
 
+/// Type represent streaming body.
+/// Response does not contain `content-length` header and appropriate transfer encoding is used.
+pub struct BoxedBodyStream<S> {
+    stream: S,
+}
+
+impl<S> BoxedBodyStream<S>
+where
+    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
+{
+    pub fn new(stream: S) -> Self {
+        BoxedBodyStream { stream }
+    }
+}
+
+impl<S> MessageBody for BoxedBodyStream<S>
+where
+    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
+{
+    fn size(&self) -> BodySize {
+        BodySize::Stream
+    }
+
+    /// Attempts to pull out the next value of the underlying [`Stream`].
+    ///
+    /// Empty values are skipped to prevent [`BodyStream`]'s transmission being
+    /// ended on a zero-length chunk, but rather proceed until the underlying
+    /// [`Stream`] ends.
+    fn poll_next_chunk(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+        loop {
+            return Poll::Ready(
+                match ready!(Pin::new(&mut self.stream).poll_next(cx)) {
+                    Some(Ok(ref bytes)) if bytes.is_empty() => continue,
+                    opt => opt,
+                },
+            );
+        }
+    }
+}
+
 /// Type represent streaming body. This body implementation should be used
 /// if total size of stream is known. Data get sent as is without using transfer encoding.
 pub struct SizedStream<S> {

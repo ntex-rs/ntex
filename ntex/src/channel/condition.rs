@@ -7,7 +7,7 @@ use slab::Slab;
 use super::cell::Cell;
 use crate::task::LocalWaker;
 
-/// Condition allows to notify multiple receivers at the same time
+/// Condition allows to notify multiple waiters at the same time
 pub struct Condition(Cell<Inner>);
 
 struct Inner {
@@ -21,6 +21,7 @@ impl Default for Condition {
 }
 
 impl Condition {
+    /// Coonstruct new condition instance
     pub fn new() -> Condition {
         Condition(Cell::new(Inner { data: Slab::new() }))
     }
