@@ -92,16 +92,24 @@ pub struct PayloadSender {
     inner: Weak<RefCell<Inner>>,
 }
 
+impl Drop for PayloadSender {
+    fn drop(&mut self) {
+        self.set_error(PayloadError::Incomplete(None))
+    }
+}
+
 impl PayloadSender {
     pub fn set_error(&mut self, err: PayloadError) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.borrow_mut().set_error(err)
+            shared.borrow_mut().set_error(err);
+            self.inner = Weak::new();
         }
     }
 
     pub fn feed_eof(&mut self) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.borrow_mut().feed_eof()
+            shared.borrow_mut().feed_eof();
+            self.inner = Weak::new();
         }
     }
 
@@ -157,6 +165,9 @@ impl Inner {
 
     fn feed_eof(&mut self) {
         self.eof = true;
+        if let Some(task) = self.task.take() {
+            task.wake()
+        }
     }
 
     fn feed_data(&mut self, data: Bytes) {

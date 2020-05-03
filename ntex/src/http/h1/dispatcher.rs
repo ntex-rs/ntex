@@ -71,22 +71,6 @@ where
     upgrade: Option<U::Future>,
 }
 
-#[pin_project]
-enum CallState<S: Service, X: Service> {
-    Io,
-    Expect(#[pin] X::Future),
-    Service(#[pin] S::Future),
-}
-
-impl<S: Service, X: Service> CallState<S, X> {
-    fn is_io(&self) -> bool {
-        match self {
-            CallState::Io => true,
-            _ => false,
-        }
-    }
-}
-
 struct InnerDispatcher<T, S, B, X, U>
 where
     S: Service<Request = Request>,
@@ -137,6 +121,22 @@ enum PollWrite {
 enum PollRead {
     NoUpdates,
     HasUpdates,
+}
+
+#[pin_project]
+enum CallState<S: Service, X: Service> {
+    Io,
+    Expect(#[pin] X::Future),
+    Service(#[pin] S::Future),
+}
+
+impl<S: Service, X: Service> CallState<S, X> {
+    fn is_io(&self) -> bool {
+        match self {
+            CallState::Io => true,
+            _ => false,
+        }
+    }
 }
 
 enum CallProcess<S: Service, X: Service, U: Service> {
@@ -260,7 +260,10 @@ where
         }
 
         // keep-alive book-keeping
-        this.inner.poll_keepalive(cx, this.call.is_io())?;
+        this.inner.poll_keepalive(
+            cx,
+            this.call.is_io() && this.inner.send_payload.is_none(),
+        )?;
 
         // shutdown process
         if this.inner.flags.contains(Flags::SHUTDOWN) {
@@ -666,6 +669,7 @@ where
                 match read(cx, io, buf) {
                     Poll::Pending => break,
                     Poll::Ready(Ok(n)) => {
+                        updated = true;
                         if n == 0 {
                             trace!(
                                 "Disconnected during read, buffer size {}",
@@ -673,8 +677,6 @@ where
                             );
                             self.flags.insert(Flags::DISCONNECT);
                             break;
-                        } else {
-                            updated = true;
                         }
                     }
                     Poll::Ready(Err(e)) => {
@@ -691,20 +693,22 @@ where
             }
         }
 
-        if self.read_buf.is_empty() {
+        let result = if self.read_buf.is_empty() {
             Ok(PollRead::NoUpdates)
         } else {
-            let result = self.input_decode();
+            self.input_decode()
+        };
 
-            // socket is disconnected clear read buf
-            if self.flags.contains(Flags::DISCONNECT) {
-                self.read_buf.clear();
-                if let Some(mut payload) = self.payload.take() {
-                    payload.feed_eof();
-                }
+        // socket is disconnected clear read buf
+        if self.flags.contains(Flags::DISCONNECT) {
+            self.read_buf.clear();
+            // decode operation wont run again, so we have to
+            // stop payload stream
+            if let Some(mut payload) = self.payload.take() {
+                payload.feed_eof();
             }
-            result
         }
+        result
     }
 
     fn internal_error(&mut self, msg: &'static str) {
@@ -814,9 +818,7 @@ where
         is_empty: bool,
     ) -> Result<(), DispatchError> {
         // do nothing for disconnected or upgrade socket or if keep-alive timer is disabled
-        if self.flags.intersects(Flags::DISCONNECT | Flags::UPGRADE)
-            || self.ka_timer.is_none()
-        {
+        if self.flags.contains(Flags::DISCONNECT) || self.ka_timer.is_none() {
             return Ok(());
         }
 

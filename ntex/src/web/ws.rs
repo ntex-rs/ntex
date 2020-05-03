@@ -68,7 +68,7 @@ where
     // ws handshake
     let mut res = handshake(req.head())?;
 
-    // response body stream
+    // converter wraper from ws::Message to Bytes
     let sink = ws::StreamEncoder::new(tx);
 
     // create ws service
@@ -81,7 +81,7 @@ where
             e
         });
 
-    // start websockets protocol dispatcher
+    // start websockets service dispatcher
     rt::spawn(crate::util::stream::Dispatcher::new(
         // wrap bytes stream to ws::Frame's stream
         ws::StreamDecoder::new(payload).map_err(|e| {
