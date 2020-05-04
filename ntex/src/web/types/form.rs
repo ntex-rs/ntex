@@ -366,6 +366,24 @@ mod tests {
         counter: i64,
     }
 
+    fn eq(err: UrlencodedError, other: UrlencodedError) -> bool {
+        match err {
+            UrlencodedError::Overflow { .. } => match other {
+                UrlencodedError::Overflow { .. } => true,
+                _ => false,
+            },
+            UrlencodedError::UnknownLength => match other {
+                UrlencodedError::UnknownLength => true,
+                _ => false,
+            },
+            UrlencodedError::ContentType => match other {
+                UrlencodedError::ContentType => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
     #[test]
     fn test_basic() {
         let mut f = Form(Info {
@@ -395,24 +413,14 @@ mod tests {
                 counter: 123
             }
         );
-    }
 
-    fn eq(err: UrlencodedError, other: UrlencodedError) -> bool {
-        match err {
-            UrlencodedError::Overflow { .. } => match other {
-                UrlencodedError::Overflow { .. } => true,
-                _ => false,
-            },
-            UrlencodedError::UnknownLength => match other {
-                UrlencodedError::UnknownLength => true,
-                _ => false,
-            },
-            UrlencodedError::ContentType => match other {
-                UrlencodedError::ContentType => true,
-                _ => false,
-            },
-            _ => false,
-        }
+        let (req, mut pl) =
+            TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(CONTENT_LENGTH, "xx")
+                .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+                .to_http_parts();
+        let res = from_request::<Form<Info>>(&req, &mut pl).await;
+        assert!(eq(res.err().unwrap(), UrlencodedError::UnknownLength));
     }
 
     #[ntex_rt::test]
@@ -461,6 +469,23 @@ mod tests {
         let (req, mut pl) = TestRequest::with_header(
             CONTENT_TYPE,
             "application/x-www-form-urlencoded; charset=utf-8",
+        )
+        .header(CONTENT_LENGTH, "11")
+        .set_payload(Bytes::from_static(b"hello=world&counter=123"))
+        .to_http_parts();
+
+        let info = UrlEncoded::<Info>::new(&req, &mut pl).await.unwrap();
+        assert_eq!(
+            info,
+            Info {
+                hello: "world".to_owned(),
+                counter: 123
+            }
+        );
+
+        let (req, mut pl) = TestRequest::with_header(
+            CONTENT_TYPE,
+            "application/x-www-form-urlencoded; charset=cp1251",
         )
         .header(CONTENT_LENGTH, "11")
         .set_payload(Bytes::from_static(b"hello=world&counter=123"))

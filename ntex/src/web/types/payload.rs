@@ -417,6 +417,7 @@ impl Future for HttpMessageBody {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use futures::StreamExt;
 
     use super::*;
     use crate::http::header;
@@ -441,6 +442,20 @@ mod tests {
     }
 
     #[ntex_rt::test]
+    async fn test_payload() {
+        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .set_payload(Bytes::from_static(b"hello=world"))
+            .to_http_parts();
+
+        let mut s = from_request::<Payload>(&req, &mut pl)
+            .await
+            .unwrap()
+            .into_inner();
+        let b = s.next().await.unwrap().unwrap();
+        assert_eq!(b, Bytes::from_static(b"hello=world"));
+    }
+
+    #[ntex_rt::test]
     async fn test_bytes() {
         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .set_payload(Bytes::from_static(b"hello=world"))
@@ -448,6 +463,12 @@ mod tests {
 
         let s = from_request::<Bytes>(&req, &mut pl).await.unwrap();
         assert_eq!(s, Bytes::from_static(b"hello=world"));
+
+        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .set_payload(Bytes::from_static(b"hello=world"))
+            .data(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
+            .to_http_parts();
+        assert!(from_request::<Bytes>(&req, &mut pl).await.is_err());
     }
 
     #[ntex_rt::test]
@@ -458,6 +479,19 @@ mod tests {
 
         let s = from_request::<String>(&req, &mut pl).await.unwrap();
         assert_eq!(s, "hello=world");
+
+        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .header(header::CONTENT_TYPE, "text/plain; charset=cp1251")
+            .set_payload(Bytes::from_static(b"hello=world"))
+            .to_http_parts();
+        let s = from_request::<String>(&req, &mut pl).await.unwrap();
+        assert_eq!(s, "hello=world");
+
+        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .set_payload(Bytes::from_static(b"hello=world"))
+            .data(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
+            .to_http_parts();
+        assert!(from_request::<String>(&req, &mut pl).await.is_err());
     }
 
     #[ntex_rt::test]
