@@ -656,7 +656,7 @@ where
                     buf.reserve(BUFFER_SIZE);
                 }
 
-                match read(cx, io, buf) {
+                match Pin::new(&mut *io).poll_read_buf(cx, buf) {
                     Poll::Pending => break,
                     Poll::Ready(Ok(n)) => {
                         updated = true;
@@ -903,17 +903,6 @@ where
         }
         Ok(io)
     }
-}
-
-fn read<T>(
-    cx: &mut Context<'_>,
-    io: &mut T,
-    buf: &mut BytesMut,
-) -> Poll<Result<usize, io::Error>>
-where
-    T: AsyncRead + Unpin,
-{
-    Pin::new(io).poll_read_buf(cx, buf)
 }
 
 #[cfg(test)]
