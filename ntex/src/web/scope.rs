@@ -703,6 +703,10 @@ mod tests {
         let req = TestRequest::with_uri("/app/path1").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+
+        let req = TestRequest::with_uri("/app/path10").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[ntex_rt::test]
@@ -737,9 +741,9 @@ mod tests {
         )
         .await;
 
-        // let req = TestRequest::with_uri("/app").to_request();
-        // let resp = srv.call(req).await.unwrap();
-        // assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let req = TestRequest::with_uri("/app").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = TestRequest::with_uri("/app/").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -860,12 +864,9 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        match resp.response().body() {
-            ResponseBody::Body(Body::Bytes(ref b)) => {
-                let bytes: Bytes = b.clone();
-                assert_eq!(bytes, Bytes::from_static(b"project: project1"));
-            }
-            _ => panic!(),
+        if let ResponseBody::Body(Body::Bytes(ref b)) = resp.response().body() {
+            let bytes: Bytes = b.clone();
+            assert_eq!(bytes, Bytes::from_static(b"project: project1"));
         }
 
         let req = TestRequest::with_uri("/aa-project1/path1").to_request();
@@ -964,12 +965,9 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
-        match resp.response().body() {
-            ResponseBody::Body(Body::Bytes(ref b)) => {
-                let bytes: Bytes = b.clone();
-                assert_eq!(bytes, Bytes::from_static(b"project: project_1"));
-            }
-            _ => panic!(),
+        if let ResponseBody::Body(Body::Bytes(ref b)) = resp.response().body() {
+            let bytes: Bytes = b.clone();
+            assert_eq!(bytes, Bytes::from_static(b"project: project_1"));
         }
     }
 
@@ -992,12 +990,9 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
-        match resp.response().body() {
-            ResponseBody::Body(Body::Bytes(ref b)) => {
-                let bytes: Bytes = b.clone();
-                assert_eq!(bytes, Bytes::from_static(b"project: test - 1"));
-            }
-            _ => panic!(),
+        if let ResponseBody::Body(Body::Bytes(ref b)) = resp.response().body() {
+            let bytes: Bytes = b.clone();
+            assert_eq!(bytes, Bytes::from_static(b"project: test - 1"));
         }
 
         let req = TestRequest::with_uri("/app/test/1/path2").to_request();
