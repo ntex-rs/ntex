@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::ptr::copy_nonoverlapping;
 use std::{cmp, io, mem, ptr, slice};
 
-use bytes::{buf::BufMutExt, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 
 use crate::http::body::BodySize;
 use crate::http::config::DateService;
@@ -71,10 +71,6 @@ pub(super) trait MessageType: Sized {
             BodySize::None => dst.put_slice(b"\r\n"),
             BodySize::Empty => dst.put_slice(b"\r\ncontent-length: 0\r\n"),
             BodySize::Sized(len) => write_content_length(len, dst),
-            BodySize::Sized64(len) => {
-                dst.put_slice(b"\r\ncontent-length: ");
-                write!(dst.writer(), "{}\r\n", len)?;
-            }
             BodySize::Stream => {
                 if chunked {
                     dst.put_slice(b"\r\ntransfer-encoding: chunked\r\n")
@@ -296,8 +292,7 @@ impl<T: MessageType> MessageEncoder<T> {
         if !head {
             self.te = match length {
                 BodySize::Empty => TransferEncoding::empty(),
-                BodySize::Sized(len) => TransferEncoding::length(len as u64),
-                BodySize::Sized64(len) => TransferEncoding::length(len),
+                BodySize::Sized(len) => TransferEncoding::length(len),
                 BodySize::Stream => {
                     if message.chunked() && !stream {
                         TransferEncoding::chunked()
@@ -484,7 +479,7 @@ fn write_status_line(version: Version, mut n: u16, bytes: &mut BytesMut) {
 }
 
 /// NOTE: bytes object has to contain enough space
-fn write_content_length(mut n: usize, bytes: &mut BytesMut) {
+fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
     if n < 10 {
         let mut buf: [u8; 21] = [
             b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e',
@@ -500,7 +495,7 @@ fn write_content_length(mut n: usize, bytes: &mut BytesMut) {
         let d1 = n << 1;
         unsafe {
             ptr::copy_nonoverlapping(
-                DEC_DIGITS_LUT.as_ptr().add(d1),
+                DEC_DIGITS_LUT.as_ptr().add(d1 as usize),
                 buf.as_mut_ptr().offset(18),
                 2,
             );
@@ -516,7 +511,7 @@ fn write_content_length(mut n: usize, bytes: &mut BytesMut) {
         n /= 100;
         unsafe {
             ptr::copy_nonoverlapping(
-                DEC_DIGITS_LUT.as_ptr().add(d1),
+                DEC_DIGITS_LUT.as_ptr().add(d1 as usize),
                 buf.as_mut_ptr().offset(19),
                 2,
             )
@@ -532,7 +527,7 @@ fn write_content_length(mut n: usize, bytes: &mut BytesMut) {
     }
 }
 
-unsafe fn convert_usize(mut n: usize, bytes: &mut BytesMut) {
+unsafe fn convert_usize(mut n: u64, bytes: &mut BytesMut) {
     let mut curr: isize = 39;
     let mut buf: [u8; 41] = mem::MaybeUninit::uninit().assume_init();
     buf[39] = b'\r';

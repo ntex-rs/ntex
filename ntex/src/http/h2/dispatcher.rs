@@ -193,10 +193,6 @@ where
                 CONTENT_LENGTH,
                 HeaderValue::try_from(format!("{}", len)).unwrap(),
             ),
-            BodySize::Sized64(len) => res.headers_mut().insert(
-                CONTENT_LENGTH,
-                HeaderValue::try_from(format!("{}", len)).unwrap(),
-            ),
         };
 
         // copy headers

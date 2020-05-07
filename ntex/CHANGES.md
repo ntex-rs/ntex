@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.16] - 2020-xx-xx
+
+* ntex::http: Remove redundant BodySize::Sized64
+
+* ntex::http: Do not check h1 keep-alive during response processing
+
 ## [0.1.15] - 2020-05-03
 
 * ntex::util: Refactor stream dispatcher
