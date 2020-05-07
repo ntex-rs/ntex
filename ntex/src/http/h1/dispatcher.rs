@@ -285,12 +285,13 @@ where
 
                                 // restore consumed future
                                 this = self.as_mut().project();
-                                #[project]
-                                let new_fut = match this.call.project() {
-                                    CallState::Service(fut) => fut,
-                                    _ => panic!(),
+                                fut = {
+                                    #[project]
+                                    match this.call.project() {
+                                        CallState::Service(fut) => fut,
+                                        _ => panic!(),
+                                    }
                                 };
-                                fut = new_fut;
                                 continue;
                             }
                             break CallProcess::Pending;
