@@ -31,14 +31,6 @@ impl ServiceConfig {
         }
     }
 
-    /// Set number of workers to start.
-    ///
-    /// By default server uses number of available logical cpu as workers
-    /// count.
-    pub fn workers(&mut self, num: usize) {
-        self.threads = num;
-    }
-
     /// Add new service to a server
     pub fn bind<U, N: AsRef<str>>(&mut self, name: N, addr: U) -> io::Result<&mut Self>
     where
