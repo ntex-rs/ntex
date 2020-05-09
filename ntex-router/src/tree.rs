@@ -128,9 +128,16 @@ impl Tree {
             };
             self.children.push(child);
         }
+
         // update value if key is the same
         if p == key.len() {
-            self.value.push(value);
+            match value {
+                Value::PrefixSlesh(v) => {
+                    self.children
+                        .push(Tree::child(Vec::new(), Some(Value::Prefix(v))));
+                }
+                value => self.value.push(value),
+            }
         } else {
             // insert into sub tree
             let mut child = self
@@ -316,6 +323,30 @@ impl Tree {
         R: Resource<T>,
         F: Fn(usize, &R) -> bool,
     {
+        if self.key.is_empty() {
+            if path.is_empty() {
+                for val in &self.value {
+                    let v = match val {
+                        Value::Val(v) | Value::Prefix(v) => *v,
+                        _ => continue,
+                    };
+                    if check(v, resource) {
+                        return Some((v, skip));
+                    }
+                }
+            } else {
+                for val in &self.value {
+                    let v = match val {
+                        Value::Prefix(v) => *v,
+                        _ => continue,
+                    };
+                    if check(v, resource) {
+                        return Some((v, skip));
+                    }
+                }
+            }
+            return None;
+        }
         let mut key: &[_] = &self.key;
 
         loop {

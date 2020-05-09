@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.5] - 2020-05-09
+
+* Handle non-prefix and prefix resources combinations
+
 ## [0.3.4] - 2020-04-17
 
 * Add ResourcePath impl for &T where T: ResourcePath

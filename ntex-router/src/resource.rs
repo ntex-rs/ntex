@@ -943,4 +943,19 @@ mod tests {
         assert_eq!(resource.get("id").unwrap(), "320120");
         assert_eq!(resource.get("name").unwrap(), "name");
     }
+
+    #[test]
+    fn test_recursive() {
+        let mut tree = Tree::new(&ResourceDef::new("/name"), 1);
+        tree.insert(&ResourceDef::new("/name/"), 2);
+        tree.insert(&ResourceDef::new("/name/index.html"), 3);
+        tree.insert(&ResourceDef::prefix("/"), 4);
+
+        assert_eq!(tree.find(&mut Path::new("/name")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name/")), Some(2));
+        assert_eq!(tree.find(&mut Path::new("/name/index.html")), Some(3));
+        assert_eq!(tree.find(&mut Path::new("/")), Some(4));
+        assert_eq!(tree.find(&mut Path::new("/test")), Some(4));
+        assert_eq!(tree.find(&mut Path::new("/test/index.html")), Some(4));
+    }
 }
