@@ -692,6 +692,29 @@ mod tests {
     }
 
     #[test]
+    fn test_def() {
+        let re = ResourceDef::new("/user/-{id}*");
+        assert_eq!(re, ResourceDef::from("/user/-{id}*"));
+        assert_eq!(re, ResourceDef::from("/user/-{id}*".to_string()));
+
+        let mut h = HashMap::new();
+        h.insert(re.clone(), 1);
+        assert!(h.contains_key(&re));
+
+        let seg = Segment::Static("s".to_string());
+        assert_eq!(seg, Segment::Static("s".to_string()));
+
+        let seg2 = Segment::Dynamic {
+            pattern: Regex::new("test").unwrap(),
+            names: Vec::new(),
+            len: 1,
+            tail: false,
+        };
+        assert!(seg != seg2);
+        assert_eq!(seg2, seg2);
+    }
+
+    #[test]
     fn test_parse_tail() {
         let re = ResourceDef::new("/user/-{id}*");
         let tree = Tree::new(&re, 1);
