@@ -12,7 +12,7 @@ use fxhash::FxHashMap;
 use h2::client::{handshake, Connection, SendRequest};
 use http::uri::Authority;
 
-use crate::channel::oneshot;
+use crate::channel::pool;
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::Protocol;
 use crate::rt::{
@@ -37,8 +37,8 @@ impl From<Authority> for Key {
     }
 }
 
-type Waiter<Io> = oneshot::PSender<Result<IoConnection<Io>, ConnectError>>;
-type WaiterReceiver<Io> = oneshot::PReceiver<Result<IoConnection<Io>, ConnectError>>;
+type Waiter<Io> = pool::Sender<Result<IoConnection<Io>, ConnectError>>;
+type WaiterReceiver<Io> = pool::Receiver<Result<IoConnection<Io>, ConnectError>>;
 const ZERO: Duration = Duration::from_millis(0);
 
 /// Connections pool
@@ -68,7 +68,7 @@ where
             acquired: 0,
             waiters: VecDeque::new(),
             available: FxHashMap::default(),
-            pool: oneshot::pool(),
+            pool: pool::new(),
             waker: LocalWaker::new(),
         }));
 
@@ -188,7 +188,7 @@ pub(super) struct Inner<Io> {
     available: FxHashMap<Key, VecDeque<AvailableConnection<Io>>>,
     waiters: VecDeque<(Key, Connect, Waiter<Io>)>,
     waker: LocalWaker,
-    pool: oneshot::Pool<Result<IoConnection<Io>, ConnectError>>,
+    pool: pool::Pool<Result<IoConnection<Io>, ConnectError>>,
 }
 
 impl<Io> Inner<Io> {

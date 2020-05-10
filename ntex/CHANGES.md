@@ -1,10 +1,12 @@
 # Changes
 
-## [0.1.16] - 2020-xx-xx
+## [0.1.16] - 2020-05-10
 
 * ntex::http: Remove redundant BodySize::Sized64
 
 * ntex::http: Do not check h1 keep-alive during response processing
+
+* ntex::channel: Split pooled oneshot to separate module
 
 ## [0.1.15] - 2020-05-03
 
