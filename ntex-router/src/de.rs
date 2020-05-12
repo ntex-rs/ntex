@@ -182,13 +182,13 @@ impl<'de, T: ResourcePath + 'de> Deserializer<'de> for PathDeserializer<'de, T> 
     where
         V: Visitor<'de>,
     {
-        if self.path.len() != 1 {
+        if self.path.len() < 1 {
             Err(de::value::Error::custom(
                 format!("wrong number of parameters: {} expected 1", self.path.len())
                     .as_str(),
             ))
         } else {
-            visitor.visit_str(&self.path[0])
+            visitor.visit_borrowed_str(&self.path[0])
         }
     }
 
@@ -562,6 +562,10 @@ mod tests {
         assert_eq!(s.0, "name");
         assert_eq!(s.1, "user1");
 
+        let s: &str =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(s, "name");
+
         let mut path = Path::new("/name/user1/");
         path.segments = vec![
             ("key", PathItem::Static("name")),
@@ -707,5 +711,16 @@ mod tests {
             de::Deserialize::deserialize(PathDeserializer::new(&path));
         assert!(s.is_err());
         assert!(format!("{:?}", s).contains("missing field `inner`"));
+
+        let path = Path::new("");
+        let s: Result<&str, de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_err());
+        assert!(format!("{:?}", s).contains("wrong number of parameters: 0 expected 1"));
+
+        let s: Result<TestEnum, de::value::Error> =
+            de::Deserialize::deserialize(PathDeserializer::new(&path));
+        assert!(s.is_err());
+        assert!(format!("{:?}", s).contains("expeceted at least one parameters"));
     }
 }
