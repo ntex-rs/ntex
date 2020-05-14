@@ -245,12 +245,11 @@ impl MessageType for RequestHeadType {
             "{} {} {}",
             head.method,
             head.uri.path_and_query().map(|u| u.as_str()).unwrap_or("/"),
+            // only HTTP-0.9/1.1
             match head.version {
                 Version::HTTP_09 => "HTTP/0.9",
                 Version::HTTP_10 => "HTTP/1.0",
                 Version::HTTP_11 => "HTTP/1.1",
-                Version::HTTP_2 => "HTTP/2.0",
-                Version::HTTP_3 => "HTTP/3.0",
                 _ =>
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
