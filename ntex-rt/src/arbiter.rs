@@ -368,5 +368,6 @@ mod tests {
         Arbiter::set_item("test");
         assert!(Arbiter::get_item::<&'static str, _, _>(|s| *s == "test"));
         assert!(Arbiter::get_mut_item::<&'static str, _, _>(|s| *s == "test"));
+        assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
     }
 }
