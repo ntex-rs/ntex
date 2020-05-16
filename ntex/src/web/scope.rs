@@ -1146,6 +1146,7 @@ mod tests {
     #[ntex_rt::test]
     async fn test_scope_config() {
         let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
+            s.data("teat");
             s.route("/path1", web::get().to(|| async { HttpResponse::Ok() }));
         })))
         .await;

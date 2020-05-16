@@ -367,21 +367,20 @@ mod tests {
     }
 
     fn eq(err: UrlencodedError, other: UrlencodedError) -> bool {
-        match err {
-            UrlencodedError::Overflow { .. } => match other {
-                UrlencodedError::Overflow { .. } => true,
-                _ => false,
-            },
-            UrlencodedError::UnknownLength => match other {
-                UrlencodedError::UnknownLength => true,
-                _ => false,
-            },
-            UrlencodedError::ContentType => match other {
-                UrlencodedError::ContentType => true,
-                _ => false,
-            },
-            _ => false,
+        if let UrlencodedError::Overflow { .. } = err {
+            if let UrlencodedError::Overflow { .. } = other {
+                return true;
+            }
+        } else if let UrlencodedError::UnknownLength = err {
+            if let UrlencodedError::UnknownLength = other {
+                return true;
+            }
+        } else if let UrlencodedError::ContentType = err {
+            if let UrlencodedError::ContentType = other {
+                return true;
+            }
         }
+        false
     }
 
     #[test]

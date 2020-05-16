@@ -1242,4 +1242,23 @@ mod tests {
         assert_eq!(response.version(), Version::HTTP_2);
         assert!(response.status().is_success());
     }
+
+    #[cfg(feature = "cookie")]
+    #[test]
+    fn test_response_cookies() {
+        let req = TestRequest::default()
+            .cookie(
+                coo_kie::Cookie::build("name", "value")
+                    .domain("www.rust-lang.org")
+                    .path("/test")
+                    .http_only(true)
+                    .max_age(::time::Duration::days(1))
+                    .finish(),
+            )
+            .to_http_request();
+
+        let cookies = req.cookies().unwrap();
+        assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0].name(), "name");
+    }
 }

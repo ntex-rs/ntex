@@ -399,17 +399,16 @@ mod tests {
     }
 
     fn json_eq(err: JsonPayloadError, other: JsonPayloadError) -> bool {
-        match err {
-            JsonPayloadError::Overflow => match other {
-                JsonPayloadError::Overflow => true,
-                _ => false,
-            },
-            JsonPayloadError::ContentType => match other {
-                JsonPayloadError::ContentType => true,
-                _ => false,
-            },
-            _ => false,
+        if let JsonPayloadError::Overflow = err {
+            if let JsonPayloadError::Overflow = other {
+                return true;
+            }
+        } else if let JsonPayloadError::ContentType = err {
+            if let JsonPayloadError::ContentType = other {
+                return true;
+            }
         }
+        false
     }
 
     #[test]
