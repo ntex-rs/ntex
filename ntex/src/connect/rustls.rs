@@ -81,7 +81,7 @@ impl<T: Address + 'static> Service for RustlsConnector<T> {
             trace!("SSL Handshake start for: {:?}", host);
 
             let host = DNSNameRef::try_from_ascii_str(&host)
-                .expect("rustls currently only handles hostname-based connections. See https://github.com/briansmith/webpki/issues/54");
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
             match TlsConnector::from(config).connect(host, io).await {
                 Ok(io) => {
@@ -90,11 +90,35 @@ impl<T: Address + 'static> Service for RustlsConnector<T> {
                 }
                 Err(e) => {
                     trace!("SSL Handshake error: {:?}", e);
-                    Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))
-                        .into())
+                    Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)).into())
                 }
             }
         }
         .boxed_local()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::{Service, ServiceFactory};
+
+    #[ntex_rt::test]
+    async fn test_rustls_connect() {
+        let server = crate::server::test_server(|| {
+            crate::fn_service(|_| async { Ok::<_, ()>(()) })
+        });
+
+        let mut config = ClientConfig::new();
+        config
+            .root_store
+            .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+        let factory = RustlsConnector::new(Arc::new(config)).clone();
+
+        let srv = factory.new_service(()).await.unwrap();
+        let result = srv
+            .call(Connect::new("www.rust-lang.org").set_addr(Some(server.addr())))
+            .await;
+        assert!(result.is_err());
     }
 }

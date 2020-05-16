@@ -94,3 +94,25 @@ impl<T: Address + 'static> Service for OpensslConnector<T> {
         .boxed_local()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::{Service, ServiceFactory};
+
+    #[ntex_rt::test]
+    async fn test_openssl_connect() {
+        let server = crate::server::test_server(|| {
+            crate::fn_service(|_| async { Ok::<_, ()>(()) })
+        });
+
+        let ssl = SslConnector::builder(SslMethod::tls()).unwrap();
+        let factory = OpensslConnector::new(ssl.build()).clone();
+
+        let srv = factory.new_service(()).await.unwrap();
+        let result = srv
+            .call(Connect::new("").set_addr(Some(server.addr())))
+            .await;
+        assert!(result.is_err());
+    }
+}

@@ -509,6 +509,7 @@ mod tests {
     use std::sync::mpsc;
     use std::{net, thread, time};
 
+    use super::*;
     use crate::server::{signals, Server, TestServer};
     use crate::service::fn_service;
 
@@ -549,5 +550,11 @@ mod tests {
             assert!(net::TcpStream::connect(addr).is_err());
             let _ = h.join();
         }
+    }
+
+    #[test]
+    fn test_bind_addr() {
+        let addrs: Vec<net::SocketAddr> = Vec::new();
+        assert!(bind_addr(&addrs[..], 10).is_err());
     }
 }

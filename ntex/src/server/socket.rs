@@ -209,20 +209,15 @@ mod tests {
         use std::os::unix::net::UnixListener;
 
         let _ = std::fs::remove_file("/tmp/sock.xxxxx");
-        let socket = match UnixListener::bind("/tmp/sock.xxxxx") {
-            Ok(sock) => sock,
-            Err(e) => {
-                println!("Couldn't bind: {:?}", e);
-                return;
-            }
-        };
-        let addr = socket.local_addr().expect("Couldn't get local address");
-        let a = SocketAddr::Uds(addr);
-        assert!(format!("{:?}", a).contains("/tmp/sock.xxxxx"));
-        assert!(format!("{}", a).contains("/tmp/sock.xxxxx"));
+        if let Ok(socket) = UnixListener::bind("/tmp/sock.xxxxx") {
+            let addr = socket.local_addr().expect("Couldn't get local address");
+            let a = SocketAddr::Uds(addr);
+            assert!(format!("{:?}", a).contains("/tmp/sock.xxxxx"));
+            assert!(format!("{}", a).contains("/tmp/sock.xxxxx"));
 
-        let lst = StdListener::Uds(socket);
-        assert!(format!("{:?}", lst).contains("/tmp/sock.xxxxx"));
-        assert!(format!("{}", lst).contains("/tmp/sock.xxxxx"));
+            let lst = StdListener::Uds(socket);
+            assert!(format!("{:?}", lst).contains("/tmp/sock.xxxxx"));
+            assert!(format!("{}", lst).contains("/tmp/sock.xxxxx"));
+        }
     }
 }
