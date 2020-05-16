@@ -170,7 +170,7 @@ impl Worker {
         let (tx2, rx2) = unbounded();
         let avail = availability.clone();
 
-        Arbiter::new().exec_fn(move || {
+        Arbiter::default().exec_fn(move || {
             let _ = spawn(async move {
                 match Worker::create(rx1, rx2, factories, availability, shutdown_timeout)
                     .await

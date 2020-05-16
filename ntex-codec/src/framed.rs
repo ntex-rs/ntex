@@ -569,9 +569,15 @@ mod tests {
     use crate::BytesCodec;
 
     #[ntex::test]
-    async fn test_debug() {
+    async fn test_basics() {
         let (_, server) = Io::create();
-        let server = Framed::new(server, BytesCodec);
+        let mut server = Framed::new(server, BytesCodec);
+        server.get_codec_mut();
+        server.get_ref();
+        server.get_mut();
+
+        let parts = server.into_parts();
+        let server = Framed::from_parts(FramedParts::new(parts.io, parts.codec));
         assert!(format!("{:?}", server).contains("Framed"));
     }
 
