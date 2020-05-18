@@ -212,14 +212,15 @@ where
     }
 }
 
-#[doc(hidden)]
-#[pin_project::pin_project]
-pub struct H2ServiceResponse<T, S: ServiceFactory, B> {
-    #[pin]
-    fut: S::Future,
-    cfg: Option<ServiceConfig>,
-    on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-    _t: PhantomData<(T, B)>,
+pin_project_lite::pin_project! {
+    #[doc(hidden)]
+    pub struct H2ServiceResponse<T, S: ServiceFactory, B> {
+        #[pin]
+        fut: S::Future,
+        cfg: Option<ServiceConfig>,
+        on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+        _t: PhantomData<(T, B)>,
+    }
 }
 
 impl<T, S, B> Future for H2ServiceResponse<T, S, B>

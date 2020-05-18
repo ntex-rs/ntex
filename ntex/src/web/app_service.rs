@@ -140,22 +140,20 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct AppFactoryResult<T, Err>
-where
-    T: ServiceFactory,
-{
-    endpoint: Option<T::Service>,
-    #[pin]
-    endpoint_fut: T::Future,
-    rmap: Rc<ResourceMap>,
-    config: AppConfig,
-    data: Rc<Vec<Box<dyn DataFactory>>>,
-    data_factories: Vec<Box<dyn DataFactory>>,
-    data_factories_fut: Vec<LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>,
-    case_insensitive: bool,
-    extensions: Option<Extensions>,
-    _t: PhantomData<Err>,
+pin_project_lite::pin_project! {
+    pub struct AppFactoryResult<T: ServiceFactory, Err> {
+        endpoint: Option<T::Service>,
+        #[pin]
+        endpoint_fut: T::Future,
+        rmap: Rc<ResourceMap>,
+        config: AppConfig,
+        data: Rc<Vec<Box<dyn DataFactory>>>,
+        data_factories: Vec<Box<dyn DataFactory>>,
+        data_factories_fut: Vec<LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>,
+        case_insensitive: bool,
+        extensions: Option<Extensions>,
+        _t: PhantomData<Err>,
+    }
 }
 
 impl<T, Err> Future for AppFactoryResult<T, Err>

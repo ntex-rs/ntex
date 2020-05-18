@@ -27,14 +27,15 @@ impl<E: fmt::Debug> From<ProtocolError> for StreamError<E> {
     }
 }
 
+pin_project_lite::pin_project! {
 /// Stream ws protocol decoder.
-#[pin_project::pin_project]
 pub struct StreamDecoder<S, E> {
     #[pin]
     stream: S,
     codec: Codec,
     buf: BytesMut,
     _t: PhantomData<E>,
+}
 }
 
 impl<S, E> StreamDecoder<S, E> {
@@ -81,13 +82,14 @@ where
     }
 }
 
+pin_project_lite::pin_project! {
 /// Stream ws protocol decoder.
-#[pin_project::pin_project]
 #[derive(Clone)]
 pub struct StreamEncoder<S> {
     #[pin]
     sink: S,
     codec: Rc<RefCell<Codec>>,
+}
 }
 
 impl<S> StreamEncoder<S> {

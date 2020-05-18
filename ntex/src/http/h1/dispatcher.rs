@@ -52,8 +52,8 @@ bitflags! {
     }
 }
 
+pin_project_lite::pin_project! {
 /// Dispatcher for HTTP/1.1 protocol
-#[pin_project]
 pub struct Dispatcher<T, S, B, X, U>
 where
     S: Service<Request = Request>,
@@ -69,6 +69,7 @@ where
     inner: InnerDispatcher<T, S, B, X, U>,
     #[pin]
     upgrade: Option<U::Future>,
+}
 }
 
 struct InnerDispatcher<T, S, B, X, U>

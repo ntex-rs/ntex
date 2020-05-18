@@ -119,16 +119,15 @@ where
     }
 }
 
-#[doc(hidden)]
-#[pin_project]
-pub struct CompressResponse<S, E>
-where
-    S: Service,
-{
-    #[pin]
-    fut: S::Future,
-    encoding: ContentEncoding,
-    _t: PhantomData<E>,
+pin_project_lite::pin_project! {
+    #[doc(hidden)]
+    pub struct CompressResponse<S: Service, E>
+    {
+        #[pin]
+        fut: S::Future,
+        encoding: ContentEncoding,
+        _t: PhantomData<E>,
+    }
 }
 
 impl<S, E> Future for CompressResponse<S, E>

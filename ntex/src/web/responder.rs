@@ -7,7 +7,6 @@ use std::task::{Context, Poll};
 use bytes::{Bytes, BytesMut};
 use futures::future::{ready, Either as EitherFuture, Ready};
 use futures::ready;
-use pin_project::pin_project;
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
@@ -322,12 +321,13 @@ impl<T: Responder<Err>, Err: ErrorRenderer> Responder<Err> for CustomResponder<T
     }
 }
 
-#[pin_project]
-pub struct CustomResponderFut<T: Responder<Err>, Err: ErrorRenderer> {
-    #[pin]
-    fut: T::Future,
-    status: Option<StatusCode>,
-    headers: Option<HeaderMap>,
+pin_project_lite::pin_project! {
+    pub struct CustomResponderFut<T: Responder<Err>, Err: ErrorRenderer> {
+        #[pin]
+        fut: T::Future,
+        status: Option<StatusCode>,
+        headers: Option<HeaderMap>,
+    }
 }
 
 impl<T: Responder<Err>, Err: ErrorRenderer> Future for CustomResponderFut<T, Err> {

@@ -129,15 +129,16 @@ impl<A: Clone, B: Clone> Clone for Either<A, B> {
     }
 }
 
-#[doc(hidden)]
-#[pin_project::pin_project]
-pub struct EitherResponse<A: ServiceFactory, B: ServiceFactory> {
-    left: Option<A::Service>,
-    right: Option<B::Service>,
-    #[pin]
-    left_fut: A::Future,
-    #[pin]
-    right_fut: B::Future,
+pin_project_lite::pin_project! {
+    #[doc(hidden)]
+    pub struct EitherResponse<A: ServiceFactory, B: ServiceFactory> {
+        left: Option<A::Service>,
+        right: Option<B::Service>,
+        #[pin]
+        left_fut: A::Future,
+        #[pin]
+        right_fut: B::Future,
+    }
 }
 
 impl<A, B> Future for EitherResponse<A, B>

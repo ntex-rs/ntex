@@ -6,7 +6,6 @@ use std::{fmt, mem};
 
 use bytes::{Bytes, BytesMut};
 use futures::{ready, Stream};
-use pin_project::{pin_project, project};
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 /// Body size hint
@@ -62,7 +61,6 @@ impl<T: MessageBody> MessageBody for Box<T> {
     }
 }
 
-#[pin_project]
 pub enum ResponseBody<B> {
     Body(B),
     Other(Body),
@@ -122,16 +120,14 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
     }
 }
 
-impl<B: MessageBody> Stream for ResponseBody<B> {
+impl<B: MessageBody + Unpin> Stream for ResponseBody<B> {
     type Item = Result<Bytes, Box<dyn Error>>;
 
-    #[project]
     fn poll_next(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        #[project]
-        match self.project() {
+        match self.get_mut() {
             ResponseBody::Body(ref mut body) => body.poll_next_chunk(cx),
             ResponseBody::Other(ref mut body) => body.poll_next_chunk(cx),
         }

@@ -101,12 +101,13 @@ where
     }
 }
 
-#[doc(hidden)]
-#[pin_project::pin_project]
-pub struct InFlightServiceResponse<T: Service> {
-    #[pin]
-    fut: T::Future,
-    _guard: CounterGuard,
+pin_project_lite::pin_project! {
+    #[doc(hidden)]
+    pub struct InFlightServiceResponse<T: Service> {
+        #[pin]
+        fut: T::Future,
+        _guard: CounterGuard,
+    }
 }
 
 impl<T: Service> Future for InFlightServiceResponse<T> {

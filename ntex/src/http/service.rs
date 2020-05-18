@@ -364,8 +364,8 @@ where
     }
 }
 
+pin_project_lite::pin_project! {
 #[doc(hidden)]
-#[pin_project]
 pub struct HttpServiceResponse<
     T,
     S: ServiceFactory,
@@ -384,6 +384,7 @@ pub struct HttpServiceResponse<
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     cfg: ServiceConfig,
     _t: PhantomData<(T, B)>,
+}
 }
 
 impl<T, S, B, X, U> Future for HttpServiceResponse<T, S, B, X, U>

@@ -186,16 +186,15 @@ where
     }
 }
 
-#[doc(hidden)]
-#[pin_project::pin_project]
-pub struct LoggerResponse<S>
-where
-    S: Service,
-{
-    #[pin]
-    fut: S::Future,
-    time: OffsetDateTime,
-    format: Option<Format>,
+pin_project_lite::pin_project! {
+    #[doc(hidden)]
+    pub struct LoggerResponse<S: Service>
+    {
+        #[pin]
+        fut: S::Future,
+        time: OffsetDateTime,
+        format: Option<Format>,
+    }
 }
 
 impl<S, E> Future for LoggerResponse<S>

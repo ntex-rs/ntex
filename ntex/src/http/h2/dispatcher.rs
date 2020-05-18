@@ -26,8 +26,8 @@ use crate::Service;
 
 const CHUNK_SIZE: usize = 16_384;
 
-/// Dispatcher for HTTP/2 protocol
 #[pin_project::pin_project]
+/// Dispatcher for HTTP/2 protocol
 pub struct Dispatcher<T, S: Service<Request = Request>, B: MessageBody, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
@@ -139,13 +139,14 @@ where
     }
 }
 
-#[pin_project::pin_project]
-struct ServiceResponse<F, I, E, B> {
-    #[pin]
-    state: ServiceResponseState<F, B>,
-    timer: DateService,
-    buffer: Option<Bytes>,
-    _t: PhantomData<(I, E)>,
+pin_project_lite::pin_project! {
+    struct ServiceResponse<F, I, E, B> {
+        #[pin]
+        state: ServiceResponseState<F, B>,
+        timer: DateService,
+        buffer: Option<Bytes>,
+        _t: PhantomData<(I, E)>,
+    }
 }
 
 #[pin_project::pin_project]

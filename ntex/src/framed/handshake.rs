@@ -39,11 +39,12 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct HandshakeResult<Io, St, Codec, Out> {
-    pub(crate) state: St,
-    pub(crate) out: Option<Out>,
-    pub(crate) framed: Framed<Io, Codec>,
+pin_project_lite::pin_project! {
+    pub struct HandshakeResult<Io, St, Codec, Out> {
+        pub(crate) state: St,
+        pub(crate) out: Option<Out>,
+        pub(crate) framed: Framed<Io, Codec>,
+    }
 }
 
 impl<Io, St, Codec: Encoder + Decoder, Out: Unpin> HandshakeResult<Io, St, Codec, Out> {

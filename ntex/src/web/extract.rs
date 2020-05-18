@@ -198,14 +198,13 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
         }
     }
 
-    #[doc(hidden)]
-    #[pin_project::pin_project]
+    pin_project_lite::pin_project! {
+        #[doc(hidden)]
     pub struct $fut_type<Err: ErrorRenderer, $($T: FromRequest<Err>),+>
-    where
-        $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
     {
         items: ($(Option<$T>,)+),
         $(#[pin] $T: $T::Future),+
+    }
     }
 
     impl<Err: ErrorRenderer, $($T: FromRequest<Err>),+> Future for $fut_type<Err, $($T),+>

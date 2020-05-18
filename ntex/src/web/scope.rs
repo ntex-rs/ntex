@@ -527,14 +527,15 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
     }
 }
 
+pin_project_lite::pin_project! {
 /// Create scope service
 #[doc(hidden)]
-#[pin_project::pin_project]
 pub struct ScopeFactoryResponse<Err: ErrorRenderer> {
     fut: Vec<CreateScopeServiceItem<Err>>,
     data: Option<Rc<Extensions>>,
     default: Option<HttpService<Err>>,
     default_fut: Option<LocalBoxFuture<'static, Result<HttpService<Err>, ()>>>,
+}
 }
 
 type HttpServiceFut<Err> = LocalBoxFuture<'static, Result<HttpService<Err>, ()>>;
