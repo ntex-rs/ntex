@@ -108,10 +108,10 @@ where
     type InitError = A::InitError;
     type Config = A::Config;
     type Service = EitherService<A::Service, B::Service>;
-    type Future = EitherNewService<A, B>;
+    type Future = EitherResponse<A, B>;
 
     fn new_service(&self, cfg: A::Config) -> Self::Future {
-        EitherNewService {
+        EitherResponse {
             left: None,
             right: None,
             left_fut: self.left.new_service(cfg.clone()),
@@ -131,7 +131,7 @@ impl<A: Clone, B: Clone> Clone for Either<A, B> {
 
 #[doc(hidden)]
 #[pin_project::pin_project]
-pub struct EitherNewService<A: ServiceFactory, B: ServiceFactory> {
+pub struct EitherResponse<A: ServiceFactory, B: ServiceFactory> {
     left: Option<A::Service>,
     right: Option<B::Service>,
     #[pin]
@@ -140,7 +140,7 @@ pub struct EitherNewService<A: ServiceFactory, B: ServiceFactory> {
     right_fut: B::Future,
 }
 
-impl<A, B> Future for EitherNewService<A, B>
+impl<A, B> Future for EitherResponse<A, B>
 where
     A: ServiceFactory,
     B: ServiceFactory<

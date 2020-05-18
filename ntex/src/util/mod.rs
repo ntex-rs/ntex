@@ -7,5 +7,6 @@ pub mod order;
 pub mod stream;
 pub mod time;
 pub mod timeout;
+pub mod variant;
 
 pub use self::either::either;

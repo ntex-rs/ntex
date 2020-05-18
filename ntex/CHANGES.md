@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.17] - 2020-05-18
+
+* ntex::util: Add Variant service
+
 ## [0.1.16] - 2020-05-10
 
 * ntex::http: Remove redundant BodySize::Sized64
