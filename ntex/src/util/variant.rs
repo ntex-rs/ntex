@@ -202,12 +202,13 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 
 
         #[doc(hidden)]
-        #[pin_project::pin_project]
-        pub struct ServiceFactoryResponse<A: ServiceFactory, $($T: ServiceFactory),+> {
-            pub(super) a: Option<A::Service>,
-            pub(super) items: ($(Option<$T::Service>,)+),
-            #[pin] pub(super) a_fut: A::Future,
-            $(#[pin] pub(super) $T: $T::Future),+
+        pin_project_lite::pin_project! {
+            pub struct ServiceFactoryResponse<A: ServiceFactory, $($T: ServiceFactory),+> {
+                pub(super) a: Option<A::Service>,
+                pub(super) items: ($(Option<$T::Service>,)+),
+                #[pin] pub(super) a_fut: A::Future,
+                $(#[pin] pub(super) $T: $T::Future),+
+            }
         }
 
         impl<A, $($T),+> Future for ServiceFactoryResponse<A, $($T),+>
@@ -279,3 +280,72 @@ variant_impl_add!(VariantFactory5, VariantFactory6, V6, (V2, V3, V4, V5));
 variant_impl_add!(VariantFactory6, VariantFactory7, V7, (V2, V3, V4, V5, V6));
 #[rustfmt::skip]
 variant_impl_add!(VariantFactory7, VariantFactory8, V8, (V2, V3, V4, V5, V6, V7));
+
+#[cfg(test)]
+mod tests {
+    use futures::future::{lazy, ok, Ready};
+    use std::task::{Context, Poll};
+
+    use super::*;
+    use crate::service::{fn_factory, Service, ServiceFactory};
+
+    #[derive(Clone)]
+    struct Srv1;
+
+    impl Service for Srv1 {
+        type Request = ();
+        type Response = usize;
+        type Error = ();
+        type Future = Ready<Result<usize, ()>>;
+
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
+            Poll::Ready(())
+        }
+
+        fn call(&self, _: ()) -> Self::Future {
+            ok::<_, ()>(1)
+        }
+    }
+
+    #[derive(Clone)]
+    struct Srv2;
+
+    impl Service for Srv2 {
+        type Request = ();
+        type Response = usize;
+        type Error = ();
+        type Future = Ready<Result<usize, ()>>;
+
+        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
+            Poll::Ready(())
+        }
+
+        fn call(&self, _: ()) -> Self::Future {
+            ok::<_, ()>(2)
+        }
+    }
+
+    #[ntex_rt::test]
+    async fn test_variant() {
+        let factory = variant(fn_factory(|| ok::<_, ()>(Srv1)))
+            .add(fn_factory(|| ok::<_, ()>(Srv2)))
+            .add(fn_factory(|| ok::<_, ()>(Srv2)))
+            .clone();
+        let service = factory.new_service(&()).await.clone().unwrap();
+
+        assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
+        assert!(lazy(|cx| service.poll_shutdown(cx, true)).await.is_ready());
+
+        assert_eq!(service.call(Variant3::V1(())).await, Ok(1));
+        assert_eq!(service.call(Variant3::V2(())).await, Ok(2));
+        assert_eq!(service.call(Variant3::V3(())).await, Ok(2));
+    }
+}
