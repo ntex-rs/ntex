@@ -7,7 +7,6 @@ use std::str::FromStr;
 use std::task::{Context, Poll};
 
 use futures::future::{ok, Ready};
-use pin_project::pin_project;
 
 use crate::http::encoding::Encoder;
 use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};

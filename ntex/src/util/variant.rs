@@ -23,7 +23,7 @@ where
     A::Config: Clone,
 {
     /// Convert to a Variant with two request types
-    pub fn add<B, F>(self, factory: F) -> VariantFactory2<A, B>
+    pub fn and<B, F>(self, factory: F) -> VariantFactory2<A, B>
     where
         B: ServiceFactory<
             Config = A::Config,
@@ -40,7 +40,7 @@ where
     }
 }
 
-macro_rules! variant_impl_add ({$fac1_type:ident, $fac2_type:ident, $name:ident, ($($T:ident),+)} => {
+macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident, ($($T:ident),+)} => {
 
     impl<V1, $($T),+> $fac1_type<V1, $($T),+>
         where
@@ -48,7 +48,7 @@ macro_rules! variant_impl_add ({$fac1_type:ident, $fac2_type:ident, $name:ident,
             V1::Config: Clone,
         {
             /// Convert to a Variant with more request types
-            pub fn add<$name, F>(self, factory: F) -> $fac2_type<V1, $($T,)+ $name>
+            pub fn and<$name, F>(self, factory: F) -> $fac2_type<V1, $($T,)+ $name>
             where
         $name: ServiceFactory<
             Config = V1::Config,
@@ -273,13 +273,13 @@ variant_impl!(v7, Variant7, VariantService7, VariantFactory7, (0, V2), (1, V3), 
 #[rustfmt::skip]
 variant_impl!(v8, Variant8, VariantService8, VariantFactory8, (0, V2), (1, V3), (2, V4), (3, V5), (4, V6), (5, V7), (6, V8));
 
-variant_impl_add!(VariantFactory2, VariantFactory3, V3, (V2));
-variant_impl_add!(VariantFactory3, VariantFactory4, V4, (V2, V3));
-variant_impl_add!(VariantFactory4, VariantFactory5, V5, (V2, V3, V4));
-variant_impl_add!(VariantFactory5, VariantFactory6, V6, (V2, V3, V4, V5));
-variant_impl_add!(VariantFactory6, VariantFactory7, V7, (V2, V3, V4, V5, V6));
+variant_impl_and!(VariantFactory2, VariantFactory3, V3, (V2));
+variant_impl_and!(VariantFactory3, VariantFactory4, V4, (V2, V3));
+variant_impl_and!(VariantFactory4, VariantFactory5, V5, (V2, V3, V4));
+variant_impl_and!(VariantFactory5, VariantFactory6, V6, (V2, V3, V4, V5));
+variant_impl_and!(VariantFactory6, VariantFactory7, V7, (V2, V3, V4, V5, V6));
 #[rustfmt::skip]
-variant_impl_add!(VariantFactory7, VariantFactory8, V8, (V2, V3, V4, V5, V6, V7));
+variant_impl_and!(VariantFactory7, VariantFactory8, V8, (V2, V3, V4, V5, V6, V7));
 
 #[cfg(test)]
 mod tests {
@@ -336,8 +336,8 @@ mod tests {
     #[ntex_rt::test]
     async fn test_variant() {
         let factory = variant(fn_factory(|| ok::<_, ()>(Srv1)))
-            .add(fn_factory(|| ok::<_, ()>(Srv2)))
-            .add(fn_factory(|| ok::<_, ()>(Srv2)))
+            .and(fn_factory(|| ok::<_, ()>(Srv2)))
+            .and(fn_factory(|| ok::<_, ()>(Srv2)))
             .clone();
         let service = factory.new_service(&()).await.clone().unwrap();
 
