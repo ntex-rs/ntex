@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 pub use rust_tls::Session;
 pub use tokio_rustls::{client::TlsStream, rustls::ClientConfig};
 
-use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ok, Future, FutureExt, LocalBoxFuture, Ready};
 use tokio_rustls::{self, TlsConnector};
 use webpki::DNSNameRef;
 
@@ -33,6 +33,41 @@ impl<T> RustlsConnector<T> {
         RustlsConnector {
             config,
             connector: Connector::new(resolver),
+        }
+    }
+}
+
+impl<T: Address + 'static> RustlsConnector<T> {
+    /// Resolve and connect to remote host
+    pub fn connect<U>(
+        &self,
+        message: U,
+    ) -> impl Future<Output = Result<TlsStream<TcpStream>, ConnectError>>
+    where
+        Connect<T>: From<U>,
+    {
+        let req = Connect::from(message);
+        let host = req.host().to_string();
+        let conn = self.connector.call(req);
+        let config = self.config.clone();
+
+        async move {
+            let io = conn.await?;
+            trace!("SSL Handshake start for: {:?}", host);
+
+            let host = DNSNameRef::try_from_ascii_str(&host)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+
+            match TlsConnector::from(config).connect(host, io).await {
+                Ok(io) => {
+                    trace!("SSL Handshake success: {:?}", host);
+                    Ok(io)
+                }
+                Err(e) => {
+                    trace!("SSL Handshake error: {:?}", e);
+                    Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)).into())
+                }
+            }
         }
     }
 }
@@ -72,29 +107,7 @@ impl<T: Address + 'static> Service for RustlsConnector<T> {
     }
 
     fn call(&self, req: Connect<T>) -> Self::Future {
-        let host = req.host().to_string();
-        let conn = self.connector.call(req);
-        let config = self.config.clone();
-
-        async move {
-            let io = conn.await?;
-            trace!("SSL Handshake start for: {:?}", host);
-
-            let host = DNSNameRef::try_from_ascii_str(&host)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
-
-            match TlsConnector::from(config).connect(host, io).await {
-                Ok(io) => {
-                    trace!("SSL Handshake success: {:?}", host);
-                    Ok(io)
-                }
-                Err(e) => {
-                    trace!("SSL Handshake error: {:?}", e);
-                    Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)).into())
-                }
-            }
-        }
-        .boxed_local()
+        self.connect(req).boxed_local()
     }
 }
 

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.18] - 2020-05-xx
+
+* ntex::connect: Add `connect` helper function
+
 ## [0.1.17] - 2020-05-18
 
 * ntex::util: Add Variant service

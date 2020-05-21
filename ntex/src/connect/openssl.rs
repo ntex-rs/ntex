@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::io;
 use std::task::{Context, Poll};
 
@@ -29,6 +30,42 @@ impl<T> OpensslConnector<T> {
         OpensslConnector {
             connector: Connector::new(resolver),
             openssl: connector,
+        }
+    }
+}
+
+impl<T: Address + 'static> OpensslConnector<T> {
+    /// Resolve and connect to remote host
+    pub fn connect<U>(
+        &self,
+        message: U,
+    ) -> impl Future<Output = Result<SslStream<TcpStream>, ConnectError>>
+    where
+        Connect<T>: From<U>,
+    {
+        let message = Connect::from(message);
+        let host = message.host().to_string();
+        let conn = self.connector.call(message);
+        let openssl = self.openssl.clone();
+
+        async move {
+            let io = conn.await?;
+            trace!("SSL Handshake start for: {:?}", host);
+
+            match openssl.configure() {
+                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e).into()),
+                Ok(config) => match tokio_openssl::connect(config, &host, io).await {
+                    Ok(io) => {
+                        trace!("SSL Handshake success: {:?}", host);
+                        Ok(io)
+                    }
+                    Err(e) => {
+                        trace!("SSL Handshake error: {:?}", e);
+                        Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))
+                            .into())
+                    }
+                },
+            }
         }
     }
 }
@@ -68,30 +105,7 @@ impl<T: Address + 'static> Service for OpensslConnector<T> {
     }
 
     fn call(&self, req: Connect<T>) -> Self::Future {
-        let host = req.host().to_string();
-        let conn = self.connector.call(req);
-        let openssl = self.openssl.clone();
-
-        async move {
-            let io = conn.await?;
-            trace!("SSL Handshake start for: {:?}", host);
-
-            match openssl.configure() {
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e).into()),
-                Ok(config) => match tokio_openssl::connect(config, &host, io).await {
-                    Ok(io) => {
-                        trace!("SSL Handshake success: {:?}", host);
-                        Ok(io)
-                    }
-                    Err(e) => {
-                        trace!("SSL Handshake error: {:?}", e);
-                        Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))
-                            .into())
-                    }
-                },
-            }
-        }
-        .boxed_local()
+        self.connect(req).boxed_local()
     }
 }
 

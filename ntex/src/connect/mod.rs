@@ -1,4 +1,6 @@
 //! Tcp connector service
+use std::future::Future;
+
 mod error;
 mod message;
 mod resolve;
@@ -15,7 +17,7 @@ pub use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 pub use trust_dns_resolver::error::ResolveError;
 use trust_dns_resolver::system_conf::read_system_conf;
 
-use crate::rt::Arbiter;
+use crate::rt::{net::TcpStream, Arbiter};
 
 pub use self::error::ConnectError;
 pub use self::message::{Address, Connect};
@@ -45,4 +47,16 @@ pub fn default_resolver() -> AsyncResolver {
         Arbiter::set_item(DefaultResolver(resolver.clone()));
         resolver
     }
+}
+
+/// Resolve and connect to remote host
+pub fn connect<T: Address, U>(
+    message: U,
+) -> impl Future<Output = Result<TcpStream, ConnectError>>
+where
+    Connect<T>: From<U>,
+{
+    service::ConnectServiceResponse::new(
+        Resolver::new(default_resolver()).lookup(message.into()),
+    )
 }

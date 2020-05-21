@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use either::Either;
-use futures::future::{self, err, ok, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
@@ -23,6 +23,19 @@ impl<T> Connector<T> {
         Connector {
             resolver: Resolver::new(resolver),
         }
+    }
+}
+
+impl<T: Address> Connector<T> {
+    /// Resolve and connect to remote host
+    pub fn connect<U>(
+        &self,
+        message: U,
+    ) -> impl Future<Output = Result<TcpStream, ConnectError>>
+    where
+        Connect<T>: From<U>,
+    {
+        ConnectServiceResponse::new(self.resolver.lookup(message.into()))
     }
 }
 
@@ -70,71 +83,52 @@ impl<T: Address> Service for Connector<T> {
 
     #[inline]
     fn call(&self, req: Connect<T>) -> Self::Future {
-        ConnectServiceResponse {
-            state: ConnectState::Resolve(self.resolver.lookup(req)),
-        }
+        ConnectServiceResponse::new(self.resolver.lookup(req))
     }
 }
 
 enum ConnectState<T: Address> {
     Resolve(<Resolver<T> as Service>::Future),
-    Connect(ConnectFut<T>),
+    Connect(TcpConnectorResponse<T>),
 }
 
-impl<T: Address> ConnectState<T> {
-    fn poll(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Either<Poll<Result<TcpStream, ConnectError>>, Connect<T>> {
-        match self {
-            ConnectState::Resolve(ref mut fut) => match Pin::new(fut).poll(cx) {
-                Poll::Pending => Either::Left(Poll::Pending),
-                Poll::Ready(Ok(res)) => Either::Right(res),
-                Poll::Ready(Err(err)) => Either::Left(Poll::Ready(Err(err))),
-            },
-            ConnectState::Connect(ref mut fut) => Either::Left(Pin::new(fut).poll(cx)),
-        }
-    }
-}
-
+#[doc(hidden)]
 pub struct ConnectServiceResponse<T: Address> {
     state: ConnectState<T>,
+}
+
+impl<T: Address> ConnectServiceResponse<T> {
+    pub(super) fn new(fut: <Resolver<T> as Service>::Future) -> Self {
+        ConnectServiceResponse {
+            state: ConnectState::Resolve(fut),
+        }
+    }
 }
 
 impl<T: Address> Future for ConnectServiceResponse<T> {
     type Output = Result<TcpStream, ConnectError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let res = match self.state.poll(cx) {
-            Either::Right(res) => {
-                self.state = ConnectState::Connect(connect(res));
-                self.state.poll(cx)
-            }
-            Either::Left(res) => return res,
-        };
+        match self.state {
+            ConnectState::Resolve(ref mut fut) => match Pin::new(fut).poll(cx)? {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(address) => {
+                    let port = address.port();
+                    let Connect { req, addr, .. } = address;
 
-        match res {
-            Either::Left(res) => res,
-            Either::Right(_) => panic!(),
+                    if let Some(addr) = addr {
+                        self.state = ConnectState::Connect(TcpConnectorResponse::new(
+                            req, port, addr,
+                        ));
+                        self.poll(cx)
+                    } else {
+                        error!("TCP connector: got unresolved address");
+                        Poll::Ready(Err(ConnectError::Unresolved))
+                    }
+                }
+            },
+            ConnectState::Connect(ref mut fut) => Pin::new(fut).poll(cx),
         }
-    }
-}
-
-type ConnectFut<T> =
-    future::Either<TcpConnectorResponse<T>, Ready<Result<TcpStream, ConnectError>>>;
-
-/// Connect to remote host.
-///
-/// Ip address must be resolved.
-fn connect<T: Address>(address: Connect<T>) -> ConnectFut<T> {
-    let port = address.port();
-    let Connect { req, addr, .. } = address;
-
-    if let Some(addr) = addr {
-        future::Either::Left(TcpConnectorResponse::new(req, port, addr))
-    } else {
-        error!("TCP connector: got unresolved address");
-        future::Either::Right(err(ConnectError::Unresolved))
     }
 }
 
@@ -213,5 +207,36 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
             let addr = this.addrs.as_mut().unwrap().pop_front().unwrap();
             this.stream = Some(TcpStream::connect(addr).boxed());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[ntex_rt::test]
+    async fn test_connect() {
+        let server = crate::server::test_server(|| {
+            crate::fn_service(|_| async { Ok::<_, ()>(()) })
+        });
+
+        let srv = Connector::default();
+        let result = srv.connect("").await;
+        assert!(result.is_err());
+        let result = srv.connect("localhost-111").await;
+        assert!(result.is_err());
+
+        let srv = Connector::default();
+        let result = srv.connect(format!("{}", server.addr())).await;
+        assert!(result.is_ok());
+
+        let msg = Connect::new(format!("{}", server.addr())).set_addrs(vec![
+            format!("127.0.0.1:{}", server.addr().port() - 1)
+                .parse()
+                .unwrap(),
+            server.addr(),
+        ]);
+        let result = crate::connect::connect(msg).await;
+        assert!(result.is_ok());
     }
 }
