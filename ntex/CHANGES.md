@@ -4,6 +4,8 @@
 
 * ntex::connect: Add `connect` helper function
 
+* ntex::connect: Add `Address` impl for `SocketAddr`
+
 ## [0.1.17] - 2020-05-18
 
 * ntex::util: Add Variant service

@@ -12,6 +12,11 @@ pub trait Address: Unpin {
 
     /// Port of the request
     fn port(&self) -> Option<u16>;
+
+    /// SocketAddr of the address
+    fn addr(&self) -> Option<SocketAddr> {
+        None
+    }
 }
 
 impl Address for String {
@@ -31,6 +36,20 @@ impl Address for &'static str {
 
     fn port(&self) -> Option<u16> {
         None
+    }
+}
+
+impl Address for SocketAddr {
+    fn host(&self) -> &str {
+        ""
+    }
+
+    fn port(&self) -> Option<u16> {
+        None
+    }
+
+    fn addr(&self) -> Option<SocketAddr> {
+        Some(*self)
     }
 }
 
@@ -104,24 +123,36 @@ impl<T: Address> Connect<T> {
 
     /// Preresolved addresses of the request.
     pub fn addrs(&self) -> ConnectAddrsIter<'_> {
-        let inner = match self.addr {
-            None => Either::Left(None),
-            Some(Either::Left(addr)) => Either::Left(Some(addr)),
-            Some(Either::Right(ref addrs)) => Either::Right(addrs.iter()),
-        };
+        if let Some(addr) = self.req.addr() {
+            ConnectAddrsIter {
+                inner: Either::Left(Some(addr)),
+            }
+        } else {
+            let inner = match self.addr {
+                None => Either::Left(None),
+                Some(Either::Left(addr)) => Either::Left(Some(addr)),
+                Some(Either::Right(ref addrs)) => Either::Right(addrs.iter()),
+            };
 
-        ConnectAddrsIter { inner }
+            ConnectAddrsIter { inner }
+        }
     }
 
     /// Takes preresolved addresses of the request.
     pub fn take_addrs(&mut self) -> ConnectTakeAddrsIter {
-        let inner = match self.addr.take() {
-            None => Either::Left(None),
-            Some(Either::Left(addr)) => Either::Left(Some(addr)),
-            Some(Either::Right(addrs)) => Either::Right(addrs.into_iter()),
-        };
+        if let Some(addr) = self.req.addr() {
+            ConnectTakeAddrsIter {
+                inner: Either::Left(Some(addr)),
+            }
+        } else {
+            let inner = match self.addr.take() {
+                None => Either::Left(None),
+                Some(Either::Left(addr)) => Either::Left(Some(addr)),
+                Some(Either::Right(addrs)) => Either::Right(addrs.into_iter()),
+            };
 
-        ConnectTakeAddrsIter { inner }
+            ConnectTakeAddrsIter { inner }
+        }
     }
 }
 
@@ -263,5 +294,16 @@ mod tests {
 
         connect = connect.set_addrs(vec![addr]);
         assert_eq!(format!("{}", connect), "www.rust-lang.org:80");
+
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let mut connect = Connect::new(addr);
+        assert_eq!(connect.host(), "");
+        assert_eq!(connect.port(), 0);
+        let addrs: Vec<_> = connect.addrs().collect();
+        assert_eq!(addrs.len(), 1);
+        assert!(addrs.contains(&addr));
+        let addrs: Vec<_> = connect.take_addrs().collect();
+        assert_eq!(addrs.len(), 1);
+        assert!(addrs.contains(&addr));
     }
 }
