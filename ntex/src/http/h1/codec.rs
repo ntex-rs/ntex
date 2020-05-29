@@ -100,6 +100,12 @@ impl Codec {
             MessageType::Payload
         }
     }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn set_date_header(&self, dst: &mut BytesMut) {
+        self.timer.set_date_header(dst)
+    }
 }
 
 impl Decoder for Codec {

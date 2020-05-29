@@ -231,6 +231,8 @@ impl Accept {
     }
 
     fn poll(&mut self) {
+        trace!("Starting server accept loop");
+
         // Create storage for events
         let mut events = mio::Events::with_capacity(128);
 
@@ -424,7 +426,6 @@ impl Accept {
     }
 
     fn accept(&mut self, token: usize) {
-        trace!("Starting server accept loop");
         loop {
             let msg = if let Some(info) = self.sockets.get_mut(token) {
                 match info.sock.accept() {

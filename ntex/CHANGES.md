@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.18] - 2020-05-xx
+## [0.1.18] - 2020-05-29
 
 * ntex::connect: Add `connect` helper function
 
