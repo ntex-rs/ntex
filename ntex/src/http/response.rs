@@ -13,11 +13,10 @@ use coo_kie::{Cookie, CookieJar};
 
 use crate::http::body::{Body, BodyStream, MessageBody, ResponseBody};
 use crate::http::error::{HttpError, ResponseError};
-use crate::http::extensions::Extensions;
-use crate::http::header::{self};
-use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
+use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{BoxedResponseHead, ConnectionType, ResponseHead};
 use crate::http::StatusCode;
+use crate::util::Extensions;
 
 /// An HTTP Response
 pub struct Response<B = Body> {

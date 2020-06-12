@@ -9,8 +9,8 @@ use mime::Mime;
 use coo_kie::Cookie;
 
 use super::error::{ContentTypeError, ParseError};
-use super::extensions::Extensions;
 use super::header::HeaderMap;
+use crate::util::Extensions;
 
 #[cfg(feature = "cookie")]
 struct Cookies(Vec<Cookie<'static>>);

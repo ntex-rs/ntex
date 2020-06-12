@@ -4,9 +4,9 @@ use std::rc::Rc;
 
 use bitflags::bitflags;
 
-use crate::http::extensions::Extensions;
 use crate::http::header::HeaderMap;
 use crate::http::{header, Method, StatusCode, Uri, Version};
+use crate::util::Extensions;
 
 /// Represents various types of connection
 #[derive(Copy, Clone, PartialEq, Debug)]

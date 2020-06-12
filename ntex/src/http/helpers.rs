@@ -3,7 +3,7 @@ use std::io;
 use bytes::BytesMut;
 use percent_encoding::{AsciiSet, CONTROLS};
 
-use super::extensions::Extensions;
+use crate::util::Extensions;
 
 pub(crate) struct Writer<'a>(pub(crate) &'a mut BytesMut);
 

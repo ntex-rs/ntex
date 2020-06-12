@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.19] - 2020-06-xx
+
+* ntex::framed: Deprecate `Connect` and `ConnectResult`
+
+* ntex::http: Move `Extensions` type to `ntex::util`
+
 ## [0.1.18] - 2020-05-29
 
 * ntex::connect: Add `connect` helper function

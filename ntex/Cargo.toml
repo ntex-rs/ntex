@@ -1,7 +1,7 @@
 [package]
 name = "ntex"
-version = "0.1.18"
-authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+version = "0.1.19"
+authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
 keywords = ["ntex", "networking", "framework", "async", "futures"]
@@ -62,7 +62,7 @@ mime = "0.3"
 mio = "0.6.19"
 num_cpus = "1.12"
 percent-encoding = "2.1"
-pin-project = "0.4.8"
+pin-project = "0.4.20"
 pin-project-lite = "0.1.5"
 rand = "0.7"
 regex = "1.3"
