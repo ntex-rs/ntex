@@ -7,7 +7,7 @@ use futures::future::ok;
 
 use ntex::channel::mpsc;
 use ntex::codec::BytesCodec;
-use ntex::framed::{Builder, Connect, FactoryBuilder};
+use ntex::framed::{Builder, FactoryBuilder, Handshake};
 use ntex::rt::time::delay_for;
 use ntex::server::test_server;
 use ntex::{fn_factory_with_config, fn_service, IntoService, Service};
@@ -20,7 +20,7 @@ async fn test_basic() {
     let client_item = Rc::new(Cell::new(false));
 
     let srv = test_server(move || {
-        FactoryBuilder::new(fn_service(|conn: Connect<_, _>| async move {
+        FactoryBuilder::new(fn_service(|conn: Handshake<_, _>| async move {
             delay_for(Duration::from_millis(50)).await;
             Ok(conn.codec(BytesCodec).state(State(None)))
         }))
@@ -30,7 +30,7 @@ async fn test_basic() {
     });
 
     let item = client_item.clone();
-    let client = Builder::new(fn_service(move |conn: Connect<_, _>| async move {
+    let client = Builder::new(fn_service(move |conn: Handshake<_, _>| async move {
         let (tx, rx) = mpsc::channel();
         let _ = tx.send(Bytes::from_static(b"Hello"));
         Ok(conn.codec(BytesCodec).out(rx).state(State(Some(tx))))
