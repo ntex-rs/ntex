@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.19] - 2020-06-xx
+## [0.1.19] - 2020-06-12
 
 * ntex::framed: Deprecate `Connect` and `ConnectResult`
 
