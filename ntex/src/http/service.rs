@@ -579,7 +579,7 @@ where
     state: State<T, S, B, X, U>,
 }
 
-#[pin_project]
+#[pin_project(project = StateProject)]
 enum State<T, S, B, X, U>
 where
     S: Service<Request = Request>,
@@ -618,15 +618,13 @@ where
 {
     type Output = Result<(), DispatchError>;
 
-    #[pin_project::project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
 
-        #[project]
         match this.state.project() {
-            State::H1(disp) => disp.poll(cx),
-            State::H2(ref mut disp) => Pin::new(disp).poll(cx),
-            State::H2Handshake(ref mut data) => {
+            StateProject::H1(disp) => disp.poll(cx),
+            StateProject::H2(ref mut disp) => Pin::new(disp).poll(cx),
+            StateProject::H2Handshake(ref mut data) => {
                 let conn = if let Some(ref mut item) = data {
                     match Pin::new(&mut item.0).poll(cx) {
                         Poll::Ready(Ok(conn)) => conn,

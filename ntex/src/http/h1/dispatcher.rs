@@ -8,7 +8,7 @@ use std::{fmt, io, mem, net};
 use bitflags::bitflags;
 use bytes::{Buf, BytesMut};
 use futures::ready;
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
@@ -124,7 +124,7 @@ enum PollRead {
     HasUpdates,
 }
 
-#[pin_project]
+#[pin_project(project = CallStateProject)]
 enum CallState<S: Service, X: Service> {
     Io,
     Expect(#[pin] X::Future),
@@ -239,7 +239,6 @@ where
 {
     type Output = Result<(), DispatchError>;
 
-    #[project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
@@ -260,9 +259,8 @@ where
             // process incoming stream
             this.inner.poll_read(cx)?;
 
-            #[project]
             let st = match this.call.project() {
-                CallState::Service(mut fut) => loop {
+                CallStateProject::Service(mut fut) => loop {
                     // we have to loop because of
                     // read back-pressure, check Poll::Pending processing
                     match fut.poll(cx) {
@@ -287,9 +285,8 @@ where
                                 // restore consumed future
                                 this = self.as_mut().project();
                                 fut = {
-                                    #[project]
                                     match this.call.project() {
-                                        CallState::Service(fut) => fut,
+                                        CallStateProject::Service(fut) => fut,
                                         _ => panic!(),
                                     }
                                 };
@@ -300,7 +297,7 @@ where
                     }
                 },
                 // handle EXPECT call
-                CallState::Expect(fut) => match fut.poll(cx) {
+                CallStateProject::Expect(fut) => match fut.poll(cx) {
                     Poll::Ready(result) => match result {
                         Ok(req) => {
                             this.inner
@@ -325,7 +322,7 @@ where
                         return Poll::Pending;
                     }
                 },
-                CallState::Io => CallProcess::Io,
+                CallStateProject::Io => CallProcess::Io,
             };
 
             let processing = match st {

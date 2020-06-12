@@ -177,7 +177,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
     pub mod $mod_name {
         use super::*;
 
-        #[pin_project::pin_project]
+        #[pin_project::pin_project(project = ServiceResponseProject)]
         pub enum ServiceResponse<A: Future, $($T: Future),+> {
             V1(#[pin] A),
             $($T(#[pin] $T),)+
@@ -190,12 +190,10 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         {
             type Output = A::Output;
 
-            #[pin_project::project]
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-                #[project]
                 match self.project() {
-                    ServiceResponse::V1(fut) => fut.poll(cx),
-                    $(ServiceResponse::$T(fut) => fut.poll(cx),)+
+                    ServiceResponseProject::V1(fut) => fut.poll(cx),
+                    $(ServiceResponseProject::$T(fut) => fut.poll(cx),)+
                 }
             }
         }
