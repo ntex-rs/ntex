@@ -95,7 +95,7 @@ where
     }
 }
 
-#[pin_project::pin_project]
+pin_project_lite::pin_project! {
 pub(crate) struct AndThenApplyFnFuture<A, B, F, Fut, Res, Err>
 where
     A: Service,
@@ -108,8 +108,9 @@ where
     #[pin]
     state: State<A, B, F, Fut, Res, Err>,
 }
+}
 
-#[pin_project::pin_project]
+#[pin_project::pin_project(project = StateProject)]
 enum State<A, B, F, Fut, Res, Err>
 where
     A: Service,
@@ -134,13 +135,11 @@ where
 {
     type Output = Result<Res, Err>;
 
-    #[pin_project::project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        #[project]
         match this.state.as_mut().project() {
-            State::A(fut, b) => match fut.poll(cx)? {
+            StateProject::A(fut, b) => match fut.poll(cx)? {
                 Poll::Ready(res) => {
                     let b = b.take().unwrap();
                     this.state.set(State::Empty);
@@ -151,11 +150,11 @@ where
                 }
                 Poll::Pending => Poll::Pending,
             },
-            State::B(fut) => fut.poll(cx).map(|r| {
+            StateProject::B(fut) => fut.poll(cx).map(|r| {
                 this.state.set(State::Empty);
                 r
             }),
-            State::Empty => {
+            StateProject::Empty => {
                 panic!("future must not be polled after it returned `Poll::Ready`")
             }
         }
@@ -224,12 +223,12 @@ where
     }
 }
 
-#[pin_project::pin_project]
+pin_project_lite::pin_project! {
 pub(crate) struct AndThenApplyFnFactoryResponse<A, B, F, Fut, Res, Err>
 where
     A: ServiceFactory,
     B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
-    F: Fn(A::Response, &B::Service) -> Fut + Clone,
+    F: Fn(A::Response, &B::Service) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error>,
     Err: From<B::Error>,
@@ -241,6 +240,7 @@ where
     f: F,
     a: Option<A::Service>,
     b: Option<B::Service>,
+}
 }
 
 impl<A, B, F, Fut, Res, Err> Future

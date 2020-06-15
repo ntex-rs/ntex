@@ -164,7 +164,7 @@ where
     }
 }
 
-#[pin_project::pin_project]
+pin_project_lite::pin_project! {
 pub struct ApplyServiceFactoryResponse<T, F, R, In, Out, Err>
 where
     T: ServiceFactory<Error = Err>,
@@ -175,6 +175,7 @@ where
     fut: T::Future,
     f: Option<F>,
     r: PhantomData<(In, Out)>,
+}
 }
 
 impl<T, F, R, In, Out, Err> ApplyServiceFactoryResponse<T, F, R, In, Out, Err>

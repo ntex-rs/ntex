@@ -183,7 +183,7 @@ where
     }
 }
 
-#[pin_project::pin_project]
+pin_project_lite::pin_project! {
 pub struct ApplyTransformFuture<T, S>
 where
     S: ServiceFactory,
@@ -193,8 +193,9 @@ where
     #[pin]
     state: ApplyTransformFutureState<T, S>,
 }
+}
 
-#[pin_project::pin_project]
+#[pin_project::pin_project(project = ApplyTransformFutureStateProject)]
 pub enum ApplyTransformFutureState<T, S>
 where
     S: ServiceFactory,
@@ -211,13 +212,11 @@ where
 {
     type Output = Result<T::Transform, T::InitError>;
 
-    #[pin_project::project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        #[project]
         match this.state.as_mut().project() {
-            ApplyTransformFutureState::A(fut) => match fut.poll(cx)? {
+            ApplyTransformFutureStateProject::A(fut) => match fut.poll(cx)? {
                 Poll::Ready(srv) => {
                     let fut = this.store.0.new_transform(srv);
                     this.state.set(ApplyTransformFutureState::B(fut));
@@ -225,7 +224,7 @@ where
                 }
                 Poll::Pending => Poll::Pending,
             },
-            ApplyTransformFutureState::B(fut) => fut.poll(cx),
+            ApplyTransformFutureStateProject::B(fut) => fut.poll(cx),
         }
     }
 }

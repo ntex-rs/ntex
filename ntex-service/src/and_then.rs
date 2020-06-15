@@ -68,7 +68,7 @@ where
     }
 }
 
-#[pin_project::pin_project]
+pin_project_lite::pin_project! {
 pub(crate) struct AndThenServiceResponse<A, B>
 where
     A: Service,
@@ -77,8 +77,9 @@ where
     #[pin]
     state: State<A, B>,
 }
+}
 
-#[pin_project::pin_project]
+#[pin_project::pin_project(project = StateProject)]
 enum State<A, B>
 where
     A: Service,
@@ -96,13 +97,11 @@ where
 {
     type Output = Result<B::Response, A::Error>;
 
-    #[pin_project::project]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        #[project]
         match this.state.as_mut().project() {
-            State::A(fut, b) => match fut.poll(cx)? {
+            StateProject::A(fut, b) => match fut.poll(cx)? {
                 Poll::Ready(res) => {
                     let b = b.take().unwrap();
                     this.state.set(State::Empty); // drop fut A
@@ -112,11 +111,11 @@ where
                 }
                 Poll::Pending => Poll::Pending,
             },
-            State::B(fut) => fut.poll(cx).map(|r| {
+            StateProject::B(fut) => fut.poll(cx).map(|r| {
                 this.state.set(State::Empty);
                 r
             }),
-            State::Empty => {
+            StateProject::Empty => {
                 panic!("future must not be polled after it returned `Poll::Ready`")
             }
         }
@@ -204,7 +203,7 @@ where
     }
 }
 
-#[pin_project::pin_project]
+pin_project_lite::pin_project! {
 pub(crate) struct AndThenServiceFactoryResponse<A, B>
 where
     A: ServiceFactory,
@@ -217,6 +216,7 @@ where
 
     a: Option<A::Service>,
     b: Option<B::Service>,
+}
 }
 
 impl<A, B> AndThenServiceFactoryResponse<A, B>

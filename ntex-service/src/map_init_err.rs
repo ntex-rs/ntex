@@ -60,7 +60,7 @@ where
     }
 }
 
-#[pin_project::pin_project]
+pin_project_lite::pin_project! {
 pub struct MapInitErrFuture<A, F, E>
 where
     A: ServiceFactory,
@@ -69,6 +69,7 @@ where
     f: F,
     #[pin]
     fut: A::Future,
+}
 }
 
 impl<A, F, E> MapInitErrFuture<A, F, E>

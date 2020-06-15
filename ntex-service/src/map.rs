@@ -70,7 +70,7 @@ where
     }
 }
 
-#[pin_project::pin_project]
+pin_project_lite::pin_project! {
 pub struct MapFuture<A, F, Response>
 where
     A: Service,
@@ -79,6 +79,7 @@ where
     f: F,
     #[pin]
     fut: A::Future,
+}
 }
 
 impl<A, F, Response> MapFuture<A, F, Response>
@@ -166,15 +167,16 @@ where
     }
 }
 
-#[pin_project::pin_project]
-pub struct MapServiceFuture<A, F, Res>
-where
-    A: ServiceFactory,
-    F: FnMut(A::Response) -> Res,
-{
-    #[pin]
-    fut: A::Future,
-    f: Option<F>,
+pin_project_lite::pin_project! {
+    pub struct MapServiceFuture<A, F, Res>
+    where
+        A: ServiceFactory,
+        F: FnMut(A::Response) -> Res,
+    {
+        #[pin]
+        fut: A::Future,
+        f: Option<F>,
+    }
 }
 
 impl<A, F, Res> MapServiceFuture<A, F, Res>

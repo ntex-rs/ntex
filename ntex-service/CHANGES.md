@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.3] - 2020-04-15
+
+* Upgrade pin-project
+
 ## [0.1.2] - 2020-04-27
 
 * Check ready state for map_config_service

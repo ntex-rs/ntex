@@ -64,7 +64,7 @@ where
     }
 }
 
-#[pin_project::pin_project]
+pin_project_lite::pin_project! {
 pub struct TransformMapInitErrFuture<T, S, F, E>
 where
     T: Transform<S>,
@@ -73,6 +73,7 @@ where
     #[pin]
     fut: T::Future,
     f: F,
+}
 }
 
 impl<T, S, F, E> Future for TransformMapInitErrFuture<T, S, F, E>
