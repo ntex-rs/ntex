@@ -476,7 +476,15 @@ impl Future for Worker {
                         // handle incoming io stream
                         Poll::Ready(Some(WorkerCommand(msg))) => {
                             let guard = self.conns.get();
-                            let _ = self.services[msg.token.0]
+                            let srv = &self.services[msg.token.0];
+
+                            if log::log_enabled!(log::Level::Trace) {
+                                trace!(
+                                    "Got socket for service: {:?}",
+                                    self.factories[srv.factory].name(msg.token)
+                                );
+                            }
+                            let _ = srv
                                 .service
                                 .call((Some(guard), ServerMessage::Connect(msg.io)));
                         }
