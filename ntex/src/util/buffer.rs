@@ -52,7 +52,16 @@ where
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(BufferService::new(self.buf_size, self.err.clone(), service))
+        ok(BufferService {
+            size: self.buf_size,
+            inner: Rc::new(Inner {
+                service,
+                err: self.err.clone(),
+                ready: Cell::new(false),
+                waker: LocalWaker::default(),
+                buf: RefCell::new(VecDeque::with_capacity(self.buf_size)),
+            }),
+        })
     }
 }
 
@@ -76,14 +85,15 @@ impl<S, E> BufferService<S, E>
 where
     S: Service<Error = E>,
 {
-    fn new<U>(size: usize, err: Rc<dyn Fn() -> E>, service: U) -> Self
+    pub fn new<U, F>(size: usize, err: F, service: U) -> Self
     where
         U: IntoService<S>,
+        F: Fn() -> E + 'static,
     {
         Self {
             size,
             inner: Rc::new(Inner {
-                err,
+                err: Rc::new(err),
                 ready: Cell::new(false),
                 service: service.into_service(),
                 waker: LocalWaker::default(),
