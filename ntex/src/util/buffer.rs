@@ -40,6 +40,15 @@ impl<E> Buffer<E> {
     }
 }
 
+impl<E> Clone for Buffer<E> {
+    fn clone(&self) -> Self {
+        Self {
+            buf_size: self.buf_size,
+            err: self.err.clone(),
+        }
+    }
+}
+
 impl<S, E> Transform<S> for Buffer<E>
 where
     S: Service<Error = E>,
@@ -98,6 +107,24 @@ where
                 service: service.into_service(),
                 waker: LocalWaker::default(),
                 buf: RefCell::new(VecDeque::with_capacity(size)),
+            }),
+        }
+    }
+}
+
+impl<S, E> Clone for BufferService<S, E>
+where
+    S: Service<Error = E> + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            size: self.size,
+            inner: Rc::new(Inner {
+                err: self.inner.err.clone(),
+                ready: Cell::new(false),
+                service: self.inner.service.clone(),
+                waker: LocalWaker::default(),
+                buf: RefCell::new(VecDeque::with_capacity(self.size)),
             }),
         }
     }
@@ -207,6 +234,7 @@ mod tests {
     use crate::service::{apply, fn_factory, Service, ServiceFactory};
     use futures::future::{lazy, ok, Ready};
 
+    #[derive(Clone)]
     struct TestService(Rc<Inner>);
 
     struct Inner {
@@ -245,7 +273,7 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv = BufferService::new(2, || (), TestService(inner.clone()));
+        let srv = BufferService::new(2, || (), TestService(inner.clone())).clone();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let fut1 = srv.call(());
@@ -269,6 +297,20 @@ mod tests {
 
         let _ = fut2.await;
         assert_eq!(inner.count.get(), 2);
+
+        let inner = Rc::new(Inner {
+            ready: Cell::new(true),
+            waker: LocalWaker::default(),
+            count: Cell::new(0),
+        });
+
+        let srv = BufferService::new(2, || (), TestService(inner.clone()));
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        let _ = srv.call(()).await;
+        assert_eq!(inner.count.get(), 1);
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        assert!(lazy(|cx| srv.poll_shutdown(cx, false)).await.is_ready());
     }
 
     #[ntex_rt::test]
@@ -280,7 +322,7 @@ mod tests {
         });
 
         let srv = apply(
-            Buffer::new(|| ()).buf_size(2),
+            Buffer::new(|| ()).buf_size(2).clone(),
             fn_factory(|| ok(TestService(inner.clone()))),
         );
 
