@@ -245,7 +245,7 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv = BufferService::new(2, Rc::new(|| ()), TestService(inner.clone()));
+        let srv = BufferService::new(2, || (), TestService(inner.clone()));
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let fut1 = srv.call(());
