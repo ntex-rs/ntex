@@ -1,3 +1,4 @@
+pub mod buffer;
 pub mod counter;
 pub mod either;
 mod extensions;

@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.20] - 2020-07-06
+
+* ntex::util: Add `Buffer` service
+
+* ntex::framed: Deprecate
+
 ## [0.1.19] - 2020-06-12
 
 * ntex::framed: Deprecate `Connect` and `ConnectResult`
