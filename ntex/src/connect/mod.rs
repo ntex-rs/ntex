@@ -13,7 +13,7 @@ pub mod openssl;
 #[cfg(feature = "rustls")]
 pub mod rustls;
 
-pub use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
+pub use trust_dns_resolver::config::{self, ResolverConfig, ResolverOpts};
 pub use trust_dns_resolver::error::ResolveError;
 use trust_dns_resolver::system_conf::read_system_conf;
 
