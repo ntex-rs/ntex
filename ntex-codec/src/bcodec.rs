@@ -1,4 +1,4 @@
-use bytes::{Bytes, BytesMut, Buf};
+use bytes::{Buf, Bytes, BytesMut};
 use std::io;
 
 use super::{Decoder, Encoder};

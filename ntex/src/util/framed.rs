@@ -221,6 +221,7 @@ where
                     let item = match self.framed.next_item(cx) {
                         Poll::Ready(Some(Ok(el))) => el,
                         Poll::Ready(Some(Err(err))) => {
+                            log::trace!("Framed decode error");
                             self.state = FramedState::Shutdown(Some(
                                 DispatcherError::Decoder(err),
                             ));
@@ -261,6 +262,7 @@ where
                 match Pin::new(&mut self.rx).poll_next(cx) {
                     Poll::Ready(Some(Ok(msg))) => {
                         if let Err(err) = self.framed.write(msg) {
+                            log::trace!("Framed write error: {:?}", err);
                             self.state = FramedState::Shutdown(Some(
                                 DispatcherError::Encoder(err),
                             ));
@@ -281,6 +283,7 @@ where
                     match Pin::new(sink).poll_next(cx) {
                         Poll::Ready(Some(msg)) => {
                             if let Err(err) = self.framed.write(msg) {
+                                log::trace!("Framed write error from sink: {:?}", err);
                                 self.state = FramedState::Shutdown(Some(
                                     DispatcherError::Encoder(err),
                                 ));
@@ -337,6 +340,7 @@ where
                     match Pin::new(&mut self.rx).poll_next(cx) {
                         Poll::Ready(Some(Ok(msg))) => {
                             if let Err(err) = self.framed.write(msg) {
+                                log::trace!("Framed write message error: {:?}", err);
                                 self.state = FramedState::Shutdown(Some(
                                     DispatcherError::Encoder(err),
                                 ));
@@ -344,6 +348,7 @@ where
                             }
                         }
                         Poll::Ready(Some(Err(err))) => {
+                            log::trace!("Sink poll error");
                             self.state = FramedState::Shutdown(Some(err.into()));
                             continue;
                         }
@@ -360,6 +365,7 @@ where
                             Poll::Ready(_) => (),
                         }
                     };
+                    log::trace!("Framed flushed, shutdown");
                     self.state = FramedState::Shutdown(err.take());
                 }
                 FramedState::Shutdown(ref mut err) => {
