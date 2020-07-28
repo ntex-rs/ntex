@@ -781,29 +781,26 @@ where
         }
 
         let mut updated = false;
-        let result = loop {
-            match self.codec.decode(&mut self.read_buf) {
-                Ok(Some(msg)) => {
-                    updated = true;
-                    self.flags.insert(Flags::STARTED);
+        let result = match self.codec.decode(&mut self.read_buf) {
+            Ok(Some(msg)) => {
+                updated = true;
+                self.flags.insert(Flags::STARTED);
 
-                    match msg {
-                        Message::Item(mut req) => {
-                            let pl = self.codec.message_type();
-                            req.head_mut().peer_addr = self.peer_addr;
+                match msg {
+                    Message::Item(mut req) => {
+                        let pl = self.codec.message_type();
+                        req.head_mut().peer_addr = self.peer_addr;
 
-                            // set on_connect data
-                            if let Some(ref on_connect) = self.on_connect {
-                                on_connect.set(&mut req.extensions_mut());
-                            }
+                        // set on_connect data
+                        if let Some(ref on_connect) = self.on_connect {
+                            on_connect.set(&mut req.extensions_mut());
+                        }
 
-                            // handle upgrade request
-                            if pl == MessageType::Stream && self.config.upgrade.is_some()
-                            {
-                                self.flags.insert(Flags::STOP_READING);
-                                break Some(DispatcherMessage::Upgrade(req));
-                            }
-
+                        // handle upgrade request
+                        if pl == MessageType::Stream && self.config.upgrade.is_some() {
+                            self.flags.insert(Flags::STOP_READING);
+                            Some(DispatcherMessage::Upgrade(req))
+                        } else {
                             // handle request with payload
                             if pl == MessageType::Payload || pl == MessageType::Stream {
                                 let (ps, pl) = Payload::create(false);
@@ -813,21 +810,19 @@ where
                                 self.payload = Some(ps);
                             }
 
-                            break Some(DispatcherMessage::Request(req));
-                        }
-                        Message::Chunk(_) => {
-                            break Some(self.internal_error(
-                                "Internal server error: unexpected payload chunk",
-                            ))
+                            Some(DispatcherMessage::Request(req))
                         }
                     }
+                    Message::Chunk(_) => Some(self.internal_error(
+                        "Internal server error: unexpected payload chunk",
+                    )),
                 }
-                Ok(None) => {
-                    self.flags.insert(Flags::READ_EOF);
-                    break None;
-                }
-                Err(e) => break Some(self.decode_error(e)),
             }
+            Ok(None) => {
+                self.flags.insert(Flags::READ_EOF);
+                None
+            }
+            Err(e) => Some(self.decode_error(e)),
         };
 
         if updated && self.ka_timer.is_some() {
