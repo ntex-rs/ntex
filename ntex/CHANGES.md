@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.21] - 2020-07-29
+
+* Optimize http/1 dispatcher
+
 ## [0.1.20] - 2020-07-06
 
 * ntex::util: Add `Buffer` service

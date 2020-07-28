@@ -223,7 +223,7 @@ mod tests {
         let srv = Connector::default();
         let result = srv.connect("").await;
         assert!(result.is_err());
-        let result = srv.connect("localhost-111").await;
+        let result = srv.connect("localhost:99999").await;
         assert!(result.is_err());
 
         let srv = Connector::default();
