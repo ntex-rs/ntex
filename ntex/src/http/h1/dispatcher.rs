@@ -188,7 +188,7 @@ where
             Flags::READ_EOF
         };
         if config.keep_alive_timer_enabled() {
-            flags = flags | Flags::HAS_KEEPALIVE;
+            flags |= Flags::HAS_KEEPALIVE;
         }
 
         // keep-alive timer
@@ -236,6 +236,7 @@ where
 {
     type Output = Result<(), DispatchError>;
 
+    #[allow(clippy::cognitive_complexity)]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 

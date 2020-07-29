@@ -182,7 +182,7 @@ impl<'de, T: ResourcePath + 'de> Deserializer<'de> for PathDeserializer<'de, T> 
     where
         V: Visitor<'de>,
     {
-        if self.path.len() < 1 {
+        if self.path.is_empty() {
             Err(de::value::Error::custom(
                 format!("wrong number of parameters: {} expected 1", self.path.len())
                     .as_str(),
