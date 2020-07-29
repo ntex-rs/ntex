@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -22,14 +21,13 @@ use crate::Service;
 
 use super::codec::Codec;
 use super::payload::{Payload, PayloadSender, PayloadStatus};
-use super::{Message, MessageType, MAX_BUFFER_SIZE};
+use super::{Message, MessageType};
 
 const READ_LW_BUFFER_SIZE: usize = 1024;
 const READ_HW_BUFFER_SIZE: usize = 4096;
 const WRITE_LW_BUFFER_SIZE: usize = 2048;
 const WRITE_HW_BUFFER_SIZE: usize = 8192;
 const BUFFER_SIZE: usize = 32_768;
-const LW_PIPELINED_MESSAGES: usize = 1;
 
 bitflags! {
     pub struct Flags: u16 {
@@ -92,7 +90,6 @@ where
 
     send_payload: Option<ResponseBody<B>>,
     payload: Option<PayloadSender>,
-    messages: VecDeque<DispatcherMessage>,
 
     ka_expire: Instant,
     ka_timer: Option<Delay>,
@@ -206,7 +203,6 @@ where
                 payload: None,
                 send_payload: None,
                 error: None,
-                messages: VecDeque::new(),
                 io: Some(io),
                 config,
                 codec,
@@ -631,7 +627,7 @@ where
         }
     }
 
-    /// Process one incoming requests
+    /// Read data from io stream
     fn poll_read(&mut self, cx: &mut Context<'_>) -> Result<bool, DispatchError> {
         let mut completed = false;
 
@@ -640,15 +636,12 @@ where
             .flags
             .intersects(Flags::DISCONNECT | Flags::STOP_READING)
         {
-            // limit amount of non processed requests
-            // drain messages queue until it contains just 1 message
-            // or request payload is consumed and requires more data (backpressure off)
-            if self.messages.len() > LW_PIPELINED_MESSAGES
-                || !self
-                    .payload
-                    .as_ref()
-                    .map(|info| info.need_read(cx) == PayloadStatus::Read)
-                    .unwrap_or(true)
+            // drain until request payload is consumed and requires more data (backpressure off)
+            if !self
+                .payload
+                .as_ref()
+                .map(|info| info.need_read(cx) == PayloadStatus::Read)
+                .unwrap_or(true)
             {
                 return Ok(false);
             }
@@ -663,7 +656,7 @@ where
                 buf.reserve(BUFFER_SIZE);
             }
 
-            while buf.len() < MAX_BUFFER_SIZE {
+            while buf.len() < BUFFER_SIZE {
                 match Pin::new(&mut *io).poll_read_buf(cx, buf) {
                     Poll::Pending => {
                         completed = true;
@@ -733,22 +726,16 @@ where
                             );
                             break;
                         }
-                        Message::Chunk(Some(chunk)) => {
+                        Message::Chunk(chunk) => {
                             if let Some(ref mut payload) = self.payload {
-                                payload.feed_data(chunk);
+                                if let Some(chunk) = chunk {
+                                    payload.feed_data(chunk);
+                                } else {
+                                    payload.feed_eof();
+                                }
                             } else {
                                 self.internal_error(
                                     "Internal server error: unexpected payload chunk",
-                                );
-                                break;
-                            }
-                        }
-                        Message::Chunk(None) => {
-                            if let Some(mut payload) = self.payload.take() {
-                                payload.feed_eof();
-                            } else {
-                                self.internal_error(
-                                    "Internal server error: unexpected eof",
                                 );
                                 break;
                             }
@@ -1173,7 +1160,7 @@ mod tests {
         client.write(random_bytes);
 
         delay_for(Duration::from_millis(50)).await;
-        assert!(client.remote_buffer(|buf| buf.len()) > 1_048_576 - MAX_BUFFER_SIZE * 3);
+        assert!(client.remote_buffer(|buf| buf.len()) > 1_048_576 - BUFFER_SIZE * 3);
         assert!(mark.load(Ordering::Relaxed));
     }
 
