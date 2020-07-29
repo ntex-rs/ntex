@@ -334,7 +334,7 @@ where
                 CallStateProject::Io => CallProcess::Io,
             };
 
-            let processing = match st {
+            let idle = match st {
                 CallProcess::Next(st) => {
                     // we have next call state, just proceed with it
                     this = self.as_mut().project();
@@ -345,7 +345,7 @@ where
                     // service response is in process,
                     // we just flush output and that is it
                     this.inner.poll_write(cx)?;
-                    true
+                    false
                 }
                 CallProcess::Io => {
                     // service call queue is empty, we can process next request
@@ -367,13 +367,13 @@ where
                                     this.upgrade.set(Some(fut));
                                     return self.poll(cx);
                                 }
-                                CallProcess::Io => false,
+                                CallProcess::Io => true,
                                 CallProcess::Pending => unreachable!(),
                             }
                         }
-                        PollWrite::Pending => false,
+                        PollWrite::Pending => this.inner.res_payload.is_none(),
                         PollWrite::PendingResponse => {
-                            !this.inner.flags.contains(Flags::DISCONNECT)
+                            this.inner.flags.contains(Flags::DISCONNECT)
                         }
                     }
                 }
@@ -388,13 +388,13 @@ where
                 .inner
                 .flags
                 .intersects(Flags::DISCONNECT | Flags::STOP_READING)
-                && !processing
+                && idle
             {
                 trace!("Shutdown connection (no more work) {:?}", this.inner.flags);
                 this.inner.flags.insert(Flags::SHUTDOWN);
             }
             // we dont have any parsed requests and output buffer is flushed
-            else if !processing && this.inner.write_buf.is_empty() {
+            else if idle && this.inner.write_buf.is_empty() {
                 if let Some(err) = this.inner.error.take() {
                     trace!("Dispatcher error {:?}", err);
                     return Poll::Ready(Err(err));
@@ -421,7 +421,7 @@ where
 
                 // keep-alive book-keeping
                 if this.inner.ka_timer.is_some()
-                    && this.inner.poll_keepalive(cx, processing)?
+                    && this.inner.poll_keepalive(cx, idle)?
                 {
                     this.inner.poll_shutdown(cx)
                 } else {
@@ -826,7 +826,7 @@ where
     fn poll_keepalive(
         &mut self,
         cx: &mut Context<'_>,
-        processing: bool,
+        idle: bool,
     ) -> Result<bool, DispatchError> {
         let ka_timer = self.ka_timer.as_mut().unwrap();
         // do nothing for disconnected or upgrade socket or if keep-alive timer is disabled
@@ -847,7 +847,7 @@ where
             }
         }
         // normal keep-alive, but only if we are not processing any requests
-        else if !processing {
+        else if idle {
             // keep-alive timer
             if Pin::new(&mut *ka_timer).poll(cx).is_ready() {
                 if ka_timer.deadline() >= self.ka_expire {
