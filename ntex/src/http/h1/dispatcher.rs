@@ -49,6 +49,8 @@ bitflags! {
         const UPGRADE            = 0b1000_0000;
         /// All data has been read
         const READ_EOF           = 0b0001_0000_0000;
+        /// Keep alive is enabled
+        const HAS_KEEPALIVE      = 0b0010_0000_0000;
     }
 }
 
@@ -180,11 +182,14 @@ where
         on_connect: Option<Box<dyn DataFactory>>,
     ) -> Self {
         let keepalive = config.keep_alive_enabled();
-        let flags = if keepalive {
+        let mut flags = if keepalive {
             Flags::KEEPALIVE | Flags::READ_EOF
         } else {
             Flags::READ_EOF
         };
+        if config.keep_alive_timer_enabled() {
+            flags = flags | Flags::HAS_KEEPALIVE;
+        }
 
         // keep-alive timer
         let (ka_expire, ka_timer) = if let Some(delay) = timeout {
@@ -718,20 +723,23 @@ where
         loop {
             match self.codec.decode(&mut self.read_buf) {
                 Ok(Some(msg)) => {
-                    updated = true;
                     match msg {
-                        Message::Item(_) => {
-                            self.internal_error(
-                                "Internal server error: unexpected http message",
-                            );
-                            break;
-                        }
                         Message::Chunk(chunk) => {
+                            updated = true;
                             if let Some(ref mut payload) = self.payload {
                                 if let Some(chunk) = chunk {
                                     payload.feed_data(chunk);
                                 } else {
                                     payload.feed_eof();
+
+                                    // update keep-alive timer
+                                    if self.flags.contains(Flags::HAS_KEEPALIVE) {
+                                        if let Some(expire) =
+                                            self.config.keep_alive_expire()
+                                        {
+                                            self.ka_expire = expire;
+                                        }
+                                    }
                                 }
                             } else {
                                 self.internal_error(
@@ -739,6 +747,12 @@ where
                                 );
                                 break;
                             }
+                        }
+                        Message::Item(_) => {
+                            self.internal_error(
+                                "Internal server error: unexpected http message",
+                            );
+                            break;
                         }
                     }
                 }
@@ -753,12 +767,6 @@ where
             }
         }
 
-        if updated && self.ka_timer.is_some() {
-            if let Some(expire) = self.config.keep_alive_expire() {
-                self.ka_expire = expire;
-            }
-        }
-
         Ok(updated)
     }
 
@@ -767,10 +775,8 @@ where
             return Ok(None);
         }
 
-        let mut updated = false;
         let result = match self.codec.decode(&mut self.read_buf) {
             Ok(Some(msg)) => {
-                updated = true;
                 self.flags.insert(Flags::STARTED);
 
                 match msg {
@@ -795,6 +801,11 @@ where
                                     req.replace_payload(crate::http::Payload::H1(pl));
                                 req = req1;
                                 self.payload = Some(ps);
+                            } else if self.flags.contains(Flags::HAS_KEEPALIVE) {
+                                // update keep-alive timer
+                                if let Some(expire) = self.config.keep_alive_expire() {
+                                    self.ka_expire = expire;
+                                }
                             }
 
                             Some(DispatcherMessage::Request(req))
@@ -811,12 +822,6 @@ where
             }
             Err(e) => Some(self.decode_error(e)),
         };
-
-        if updated && self.ka_timer.is_some() {
-            if let Some(expire) = self.config.keep_alive_expire() {
-                self.ka_expire = expire;
-            }
-        }
 
         Ok(result)
     }

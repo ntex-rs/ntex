@@ -151,6 +151,11 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
         }
     }
 
+    /// Return state of connection keep-alive timer
+    pub(super) fn keep_alive_timer_enabled(&self) -> bool {
+        self.keep_alive.is_some()
+    }
+
     /// Return keep-alive timer delay is configured.
     pub(super) fn keep_alive_timer(&self) -> Option<Delay> {
         if let Some(ka) = self.keep_alive {
