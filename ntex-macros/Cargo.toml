@@ -3,7 +3,7 @@ name = "ntex-macros"
 version = "0.1.0"
 description = "ntex proc macros"
 readme = "README.md"
-authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+authors = ["ntex contributors <team@ntex.rs>"]
 license = "MIT"
 edition = "2018"
 

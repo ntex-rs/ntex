@@ -1,7 +1,7 @@
 [package]
 name = "ntex-router"
 version = "0.3.5"
-authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+authors = ["ntex contributors <team@ntex.rs>"]
 description = "Path router"
 keywords = ["ntex"]
 repository = "https://github.com/ntex-rs/ntex.git"

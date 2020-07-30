@@ -1,7 +1,7 @@
 [package]
 name = "ntex-rt-macros"
 version = "0.1.0"
-authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime macros"
 repository = "https://github.com/ntex-rs/ntex"
 documentation = "https://docs.rs/ntex-rt-macros/"
