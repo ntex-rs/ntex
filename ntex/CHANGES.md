@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.22] - 2020-08-xx
+
+* Wake http client connection pool support future on drop, prevents memory leak.
+
 ## [0.1.21] - 2020-07-29
 
 * Optimize http/1 dispatcher

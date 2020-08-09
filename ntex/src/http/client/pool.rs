@@ -82,6 +82,15 @@ where
     }
 }
 
+impl<T, Io> Drop for ConnectionPool<T, Io>
+where
+    Io: 'static,
+{
+    fn drop(&mut self) {
+        self.1.borrow().waker.wake();
+    }
+}
+
 impl<T, Io> Clone for ConnectionPool<T, Io>
 where
     Io: 'static,
