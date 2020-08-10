@@ -339,16 +339,16 @@ where
     }
 }
 
+pub type ItemType<U> =
+    Result<<U as Decoder>::Item, Either<<U as Decoder>::Error, io::Error>>;
+
 impl<T, U> Framed<T, U>
 where
     T: AsyncRead + Unpin,
     U: Decoder,
 {
     /// Try to read underlying I/O stream and decode item.
-    pub fn next_item(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<U::Item, Either<U::Error, io::Error>>>> {
+    pub fn next_item(&mut self, cx: &mut Context<'_>) -> Poll<Option<ItemType<U>>> {
         let mut done_read = false;
 
         loop {
