@@ -365,6 +365,11 @@ where
                         Ok(None) => {
                             if let Some(err) = self.err.take() {
                                 Poll::Ready(Some(Err(Either::Right(err))))
+                            } else if !self.read_buf.is_empty() {
+                                Poll::Ready(Some(Err(Either::Right(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    "bytes remaining on stream",
+                                )))))
                             } else {
                                 Poll::Ready(None)
                             }
