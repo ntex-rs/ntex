@@ -1,6 +1,6 @@
 # Changes
 
-## [0.2.0] - 2020-08-xx
+## [0.2.0] - 2020-08-10
 
 * Include custom `Encoder` and `Decoder` traits
 
