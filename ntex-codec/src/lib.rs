@@ -6,13 +6,16 @@
 //!
 //! [`AsyncRead`]: #
 //! [`AsyncWrite`]: #
-// #![deny(rust_2018_idioms, warnings)]
+#![deny(rust_2018_idioms, warnings)]
 
 mod bcodec;
+mod decoder;
+mod encoder;
 mod framed;
 
 pub use self::bcodec::BytesCodec;
+pub use self::decoder::Decoder;
+pub use self::encoder::Encoder;
 pub use self::framed::{Framed, FramedParts};
 
 pub use tokio::io::{AsyncRead, AsyncWrite};
-pub use tokio_util::codec::{Decoder, Encoder};

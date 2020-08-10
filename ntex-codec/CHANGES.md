@@ -1,5 +1,11 @@
 # Changes
 
+## [0.2.0] - 2020-08-xx
+
+* Include custom `Encoder` and `Decoder` traits
+
+* Remove `From<io::Error>` constraint from `Encoder` and `Decoder` traits
+
 ## [0.1.2] - 2020-04-17
 
 * Do not swallow unprocessed data on read errors
