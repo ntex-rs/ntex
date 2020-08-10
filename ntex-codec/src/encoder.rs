@@ -6,7 +6,7 @@ pub trait Encoder {
     type Item;
 
     /// The type of encoding errors.
-    type Error;
+    type Error: std::fmt::Debug;
 
     /// Encodes a frame into the buffer provided.
     fn encode(

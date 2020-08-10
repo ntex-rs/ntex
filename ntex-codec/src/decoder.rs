@@ -10,7 +10,7 @@ pub trait Decoder {
     /// If an individual message is ill-formed but can be ignored without
     /// interfering with the processing of future messages, it may be more
     /// useful to report the failure as an `Item`.
-    type Error;
+    type Error: std::fmt::Debug;
 
     /// Attempts to decode a frame from the provided buffer of bytes.
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error>;
