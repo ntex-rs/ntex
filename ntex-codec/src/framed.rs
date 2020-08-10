@@ -457,9 +457,8 @@ impl<T, U> Sink<U::Item> for Framed<T, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     U: Encoder + Unpin,
-    U::Error: From<io::Error>,
 {
-    type Error = U::Error;
+    type Error = Either<U::Error, io::Error>;
 
     #[inline]
     fn poll_ready(
@@ -478,7 +477,7 @@ where
         mut self: Pin<&mut Self>,
         item: <U as Encoder>::Item,
     ) -> Result<(), Self::Error> {
-        self.write(item)
+        self.write(item).map_err(Either::Left)
     }
 
     #[inline]
@@ -486,7 +485,7 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        self.flush(cx).map_err(From::from)
+        self.flush(cx).map_err(Either::Right)
     }
 
     #[inline]
@@ -494,7 +493,7 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        self.close(cx).map_err(|e| e.into())
+        self.close(cx).map_err(Either::Right)
     }
 }
 
