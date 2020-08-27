@@ -121,6 +121,13 @@ impl<T: Address> Future for ConnectServiceResponse<T> {
                             req, port, addr,
                         ));
                         self.poll(cx)
+                    } else if let Some(addr) = req.addr() {
+                        self.state = ConnectState::Connect(TcpConnectorResponse::new(
+                            req,
+                            addr.port(),
+                            Either::Left(addr),
+                        ));
+                        self.poll(cx)
                     } else {
                         error!("TCP connector: got unresolved address");
                         Poll::Ready(Err(ConnectError::Unresolved))
@@ -236,6 +243,10 @@ mod tests {
                 .unwrap(),
             server.addr(),
         ]);
+        let result = crate::connect::connect(msg).await;
+        assert!(result.is_ok());
+
+        let msg = Connect::new(server.addr());
         let result = crate::connect::connect(msg).await;
         assert!(result.is_ok());
     }

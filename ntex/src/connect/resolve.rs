@@ -55,7 +55,7 @@ impl<T: Address> Resolver<T> {
         &self,
         mut req: Connect<T>,
     ) -> Either<ResolverFuture<T>, Ready<Result<Connect<T>, ConnectError>>> {
-        if req.addr.is_some() {
+        if req.addr.is_some() || req.req.addr().is_some() {
             Either::Right(ok(req))
         } else if let Ok(ip) = req.host().parse() {
             req.addr = Some(either::Either::Left(SocketAddr::new(ip, req.port())));

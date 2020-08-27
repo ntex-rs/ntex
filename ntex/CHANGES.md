@@ -6,6 +6,8 @@
 
 * Make `Counter` non clonable.
 
+* Fix `Address` trait usage for `net::SocketAddr` type
+
 ## [0.1.21] - 2020-07-29
 
 * Optimize http/1 dispatcher
