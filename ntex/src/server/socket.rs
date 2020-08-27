@@ -190,7 +190,7 @@ mod tests {
         use socket2::{Domain, SockAddr, Socket, Type};
 
         let addr = SocketAddr::Tcp("127.0.0.1:8080".parse().unwrap());
-        assert_eq!(format!("{:?}", addr), "V4(127.0.0.1:8080)");
+        assert!(format!("{:?}", addr).contains("127.0.0.1:8080"));
         assert_eq!(format!("{}", addr), "127.0.0.1:8080");
 
         let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
