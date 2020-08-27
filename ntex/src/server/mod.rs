@@ -61,15 +61,15 @@ pub fn build() -> ServerBuilder {
 ///
 /// By default max connections is set to a 256.
 pub fn max_concurrent_ssl_accept(num: usize) {
-    MAX_CONN.store(num, Ordering::Relaxed);
+    MAX_SSL_ACCEPT.store(num, Ordering::Relaxed);
 }
 
 #[allow(dead_code)]
 pub(self) const ZERO: std::time::Duration = std::time::Duration::from_millis(0);
-pub(self) static MAX_CONN: AtomicUsize = AtomicUsize::new(256);
+pub(self) static MAX_SSL_ACCEPT: AtomicUsize = AtomicUsize::new(256);
 
 thread_local! {
-    static MAX_CONN_COUNTER: Counter = Counter::new(MAX_CONN.load(Ordering::Relaxed));
+    static MAX_SSL_ACCEPT_COUNTER: Counter = Counter::new(MAX_SSL_ACCEPT.load(Ordering::Relaxed));
 }
 
 /// Ssl error combinded with service error.

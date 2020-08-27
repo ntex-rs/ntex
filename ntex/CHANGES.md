@@ -4,6 +4,8 @@
 
 * Wake http client connection pool support future on drop, prevents memory leak.
 
+* Make `Counter` non clonable.
+
 ## [0.1.21] - 2020-07-29
 
 * Optimize http/1 dispatcher

@@ -4,10 +4,9 @@ use std::task;
 
 use crate::task::LocalWaker;
 
-#[derive(Clone)]
 /// Simple counter with ability to notify task on reaching specific number
 ///
-/// Counter could be cloned, total ncount is shared across all clones.
+/// Counter could be cloned, total count is shared across all clones.
 pub struct Counter(Rc<CounterInner>);
 
 struct CounterInner {
@@ -40,6 +39,10 @@ impl Counter {
     /// Get total number of acquired counts
     pub fn total(&self) -> usize {
         self.0.count.get()
+    }
+
+    pub(crate) fn priv_clone(&self) -> Self {
+        Counter(self.0.clone())
     }
 }
 

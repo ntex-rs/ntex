@@ -204,7 +204,7 @@ impl Worker {
             factories,
             shutdown_timeout,
             services: Vec::new(),
-            conns: conns.clone(),
+            conns: conns.priv_clone(),
             state: WorkerState::Unavailable,
         });
 

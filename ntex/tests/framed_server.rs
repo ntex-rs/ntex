@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;

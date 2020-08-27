@@ -19,7 +19,7 @@ use crate::rt::time::{delay_for, Delay};
 use crate::service::{Service, ServiceFactory};
 use crate::util::counter::{Counter, CounterGuard};
 
-use super::{MAX_CONN_COUNTER, ZERO};
+use super::{MAX_SSL_ACCEPT_COUNTER, ZERO};
 
 /// Support `SSL` connections via rustls package
 ///
@@ -70,10 +70,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin> ServiceFactory for Acceptor<T> {
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        MAX_CONN_COUNTER.with(|conns| {
+        MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             ok(AcceptorService {
                 acceptor: self.config.clone().into(),
-                conns: conns.clone(),
+                conns: conns.priv_clone(),
                 timeout: self.timeout,
                 io: PhantomData,
             })
