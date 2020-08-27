@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.22] - 2020-08-xx
+## [0.1.22] - 2020-08-27
 
 * Wake http client connection pool support future on drop, prevents memory leak.
 
