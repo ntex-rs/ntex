@@ -44,6 +44,7 @@ struct Args {
     path: syn::LitStr,
     guards: Vec<Ident>,
     error: Path,
+    wrappers: Vec<syn::Type>,
 }
 
 impl Args {
@@ -51,6 +52,7 @@ impl Args {
         let mut path = None;
         let mut guards = Vec::new();
         let mut error: Option<Path> = None;
+        let mut wrappers = Vec::new();
         for arg in args {
             match arg {
                 NestedMeta::Lit(syn::Lit::Str(lit)) => match path {
@@ -83,10 +85,19 @@ impl Args {
                                 "Attribute error expects type path!",
                             ));
                         }
+                    } else if nv.path.is_ident("wrap") {
+                        if let syn::Lit::Str(lit) = nv.lit {
+                            wrappers.push(lit.parse()?);
+                        } else {
+                            return Err(syn::Error::new_spanned(
+                                nv.lit,
+                                "Attribute wrap expects type",
+                            ))
+                        }
                     } else {
                         return Err(syn::Error::new_spanned(
                             nv.path,
-                            "Unknown attribute key is specified. Allowed: guard or error",
+                            "Unknown attribute key is specified. Allowed: guard or error or wrap",
                         ));
                     }
                 }
@@ -100,6 +111,7 @@ impl Args {
             guards,
             error: error
                 .unwrap_or_else(|| syn::parse_str("ntex::web::DefaultError").unwrap()),
+            wrappers,
         })
     }
 }
@@ -146,6 +158,7 @@ impl Route {
         let extra_guards = &self.args.guards;
         let error = &self.args.error;
         let method = &self.method;
+        let wrappers = &self.args.wrappers;
 
         let stream = quote! {
             #[allow(non_camel_case_types)]
@@ -160,6 +173,7 @@ impl Route {
                         .name(#resource_name)
                         .guard(ntex::web::guard::#method())
                         #(.guard(ntex::web::guard::fn_guard(#extra_guards)))*
+                        #(.wrap(#wrappers))*
                         .to(#name);
 
                     ntex::web::dev::WebServiceFactory::register(__resource, __config)
