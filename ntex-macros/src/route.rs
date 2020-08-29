@@ -92,7 +92,7 @@ impl Args {
                             return Err(syn::Error::new_spanned(
                                 nv.lit,
                                 "Attribute wrap expects type",
-                            ))
+                            ));
                         }
                     } else {
                         return Err(syn::Error::new_spanned(
