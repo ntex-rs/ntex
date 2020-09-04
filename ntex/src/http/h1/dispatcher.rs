@@ -745,6 +745,7 @@ where
                                 payload.feed_data(chunk);
                             } else {
                                 payload.feed_eof();
+                                self.req_payload = None;
                             }
                         } else {
                             self.internal_error(
@@ -761,7 +762,6 @@ where
                     }
                 },
                 Ok(None) => {
-                    self.req_payload = None;
                     self.flags.insert(Flags::READ_EOF);
                     break;
                 }
@@ -1047,15 +1047,12 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_pipeline_with_payload() {
-        std::env::set_var("RUST_LOG", "ntex_codec=info,ntex=trace");
-        env_logger::init();
-
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
         spawn_h1(server, |mut req: Request| async move {
             let mut p = req.take_payload();
-            while let Some(b) = p.next().await {}
+            while let Some(_) = p.next().await {}
             Ok::<_, io::Error>(Response::Ok().finish())
         });
 
