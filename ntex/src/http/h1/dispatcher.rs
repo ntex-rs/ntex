@@ -761,6 +761,7 @@ where
                     }
                 },
                 Ok(None) => {
+                    self.req_payload = None;
                     self.flags.insert(Flags::READ_EOF);
                     break;
                 }
@@ -1036,6 +1037,39 @@ mod tests {
 
         let mut buf = client.read().await.unwrap();
         assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(decoder.decode(&mut buf).unwrap().is_none());
+        assert!(!client.is_server_dropped());
+
+        client.close().await;
+        assert!(client.is_server_dropped());
+    }
+
+    #[ntex_rt::test]
+    async fn test_pipeline_with_payload() {
+        std::env::set_var("RUST_LOG", "ntex_codec=info,ntex=trace");
+        env_logger::init();
+
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+        let mut decoder = ClientCodec::default();
+        spawn_h1(server, |mut req: Request| async move {
+            let mut p = req.take_payload();
+            while let Some(b) = p.next().await {}
+            Ok::<_, io::Error>(Response::Ok().finish())
+        });
+
+        client.write("GET /test HTTP/1.1\r\ncontent-length: 5\r\n\r\n");
+        delay_for(Duration::from_millis(50)).await;
+        client.write("xxxxx");
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(!client.is_server_dropped());
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+
+        let mut buf = client.read().await.unwrap();
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(decoder.decode(&mut buf).unwrap().is_none());
         assert!(!client.is_server_dropped());
