@@ -1,5 +1,7 @@
 # Changes
 
+* Drop deprecated ntex::framed mod
+
 ## [0.1.23] - 2020-09-04
 
 * Fix http1 pipeline requests with payload handling

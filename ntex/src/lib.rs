@@ -44,7 +44,3 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::*;
-
-#[doc(hidden)]
-#[deprecated(since = "0.1.20")]
-pub mod framed;
