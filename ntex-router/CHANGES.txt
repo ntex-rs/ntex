@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.6] - 2020-09-11
+
+* Allow nested prefixed resources
+
 ## [0.3.5] - 2020-05-09
 
 * Handle non-prefix and prefix resources combinations

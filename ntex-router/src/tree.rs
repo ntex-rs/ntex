@@ -361,7 +361,6 @@ impl Tree {
             } else {
                 false
             };
-
             // check segment match
             let is_match = match key[0] {
                 Segment::Static(ref pattern) => {
@@ -471,6 +470,32 @@ impl Tree {
                             }
                             Value::Prefix(v) => {
                                 if p == PathState::Slesh || p == PathState::Tail {
+                                    if !self.children.is_empty() {
+                                        let p = if path.len() != 1 {
+                                            &path[1..]
+                                        } else {
+                                            path
+                                        };
+                                        if let Some(res) = self
+                                            .children
+                                            .iter()
+                                            .map(|x| {
+                                                x.find_inner2(
+                                                    p,
+                                                    resource,
+                                                    check,
+                                                    skip,
+                                                    segments,
+                                                    insensitive,
+                                                    base_skip,
+                                                )
+                                            })
+                                            .filter_map(|x| x)
+                                            .next()
+                                        {
+                                            return Some(res);
+                                        }
+                                    }
                                     *v
                                 } else {
                                     continue;

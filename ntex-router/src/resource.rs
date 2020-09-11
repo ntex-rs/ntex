@@ -852,6 +852,20 @@ mod tests {
         assert_eq!(&resource["name"], "test2");
         assert_eq!(&resource[0], "test2");
         assert_eq!(resource.path(), "/subpath1/subpath2/index.html");
+
+        // nested
+        let mut tree = Tree::new(&ResourceDef::prefix("/prefix/{v1}/second/{v2}"), 1);
+        tree.insert(&ResourceDef::prefix("/prefix/{v1}"), 2);
+
+        let mut resource = Path::new("/prefix/1/second/2");
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(&resource["v1"], "1");
+        assert_eq!(&resource["v2"], "2");
+
+        let mut resource = Path::new("/prefix/1/second");
+        assert_eq!(tree.find(&mut resource), Some(2));
+        assert_eq!(&resource["v1"], "1");
+        assert_eq!(tree.find(&mut Path::new("/prefix/1")), Some(2));
     }
 
     #[test]
