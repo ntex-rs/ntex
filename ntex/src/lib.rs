@@ -30,13 +30,9 @@ extern crate derive_more;
 pub use ntex_rt_macros::{main, test};
 
 pub mod channel;
-pub mod codec;
 pub mod connect;
 pub mod http;
-pub mod router;
-pub mod rt;
 pub mod server;
-pub mod service;
 pub mod task;
 pub mod testing;
 pub mod util;
@@ -44,3 +40,22 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::*;
+
+pub mod codec {
+    //! Utilities for encoding and decoding frames.
+    pub use ntex_codec::*;
+}
+
+pub mod router {
+    //! Resource path matching library.
+    pub use ntex_router::*;
+}
+
+pub mod rt {
+    //! A runtime implementation that runs everything on the current thread.
+    pub use ntex_rt::*;
+}
+
+pub mod service {
+    pub use ntex_service::*;
+}
