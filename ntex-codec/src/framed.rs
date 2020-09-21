@@ -21,7 +21,7 @@ bitflags::bitflags! {
     }
 }
 
-/// A unified `Stream` and `Sink` interface to an underlying I/O object, using
+/// A unified interface to an underlying I/O object, using
 /// the `Encoder` and `Decoder` traits to encode and decode frames.
 /// `Framed` is heavily optimized for streaming io.
 pub struct Framed<T, U> {
@@ -39,19 +39,14 @@ where
     U: Decoder + Encoder,
 {
     #[inline]
-    /// Provides a `Stream` and `Sink` interface for reading and writing to this
-    /// `Io` object, using `Decode` and `Encode` to read and write the raw data.
+    /// Provides an interface for reading and writing to
+    /// `Io` object, using `Decode` and `Encode` traits of codec.
     ///
     /// Raw I/O objects work with byte sequences, but higher-level code usually
     /// wants to batch these into meaningful chunks, called "frames". This
     /// method layers framing on top of an I/O object, by using the `Codec`
     /// traits to handle encoding and decoding of messages frames. Note that
     /// the incoming and outgoing frame types may be distinct.
-    ///
-    /// This function returns a *single* object that is both `Stream` and
-    /// `Sink`; grouping this into a single object is often useful for layering
-    /// things like gzip or TLS, which require both read and write access to the
-    /// underlying object.
     pub fn new(io: T, codec: U) -> Framed<T, U> {
         Framed {
             io,
@@ -66,23 +61,7 @@ where
 
 impl<T, U> Framed<T, U> {
     #[inline]
-    /// Provides a `Stream` and `Sink` interface for reading and writing to this
-    /// `Io` object, using `Decode` and `Encode` to read and write the raw data.
-    ///
-    /// Raw I/O objects work with byte sequences, but higher-level code usually
-    /// wants to batch these into meaningful chunks, called "frames". This
-    /// method layers framing on top of an I/O object, by using the `Codec`
-    /// traits to handle encoding and decoding of messages frames. Note that
-    /// the incoming and outgoing frame types may be distinct.
-    ///
-    /// This function returns a *single* object that is both `Stream` and
-    /// `Sink`; grouping this into a single object is often useful for layering
-    /// things like gzip or TLS, which require both read and write access to the
-    /// underlying object.
-    ///
-    /// This objects takes a stream and a readbuffer and a writebuffer. These
-    /// field can be obtained from an existing `Framed` with the
-    /// `into_parts` method.
+    /// Construct `Framed` object `parts`.
     pub fn from_parts(parts: FramedParts<T, U>) -> Framed<T, U> {
         Framed {
             io: parts.io,
@@ -107,8 +86,7 @@ impl<T, U> Framed<T, U> {
     }
 
     #[inline]
-    /// Returns a reference to the underlying I/O stream wrapped by
-    /// `Frame`.
+    /// Returns a reference to the underlying I/O stream wrapped by `Framed`.
     ///
     /// Note that care should be taken to not tamper with the underlying stream
     /// of data coming in as it may corrupt the stream of frames otherwise
@@ -119,7 +97,7 @@ impl<T, U> Framed<T, U> {
 
     #[inline]
     /// Returns a mutable reference to the underlying I/O stream wrapped by
-    /// `Frame`.
+    /// `Framed`.
     ///
     /// Note that care should be taken to not tamper with the underlying stream
     /// of data coming in as it may corrupt the stream of frames otherwise
