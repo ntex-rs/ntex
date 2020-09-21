@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.7] - 2020-09-21
+
+* Fix hex conversion helper
+
 ## [0.3.6] - 2020-09-11
 
 * Allow nested prefixed resources

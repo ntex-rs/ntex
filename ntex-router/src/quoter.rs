@@ -54,7 +54,7 @@ fn from_hex(v: u8) -> Option<u8> {
         Some(v - 0x30) // ord('0') == 0x30
     } else if v >= b'A' && v <= b'F' {
         Some(v - 0x41 + 10) // ord('A') == 0x41
-    } else if v > b'a' && v <= b'f' {
+    } else if v >= b'a' && v <= b'f' {
         Some(v - 0x61 + 10) // ord('a') == 0x61
     } else {
         None
