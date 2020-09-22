@@ -1,6 +1,8 @@
 # Changes
 
-## [0.1.24] - Unreleased
+## [0.1.24] - 2020-09-22
+
+* Fix ws::stream::StreamDecoder, decodes buffer before reading from io #27
 
 * Drop deprecated ntex::framed mod
 

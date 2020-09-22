@@ -62,22 +62,31 @@ where
 
     #[inline]
     fn poll_next(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
+        let mut this = self.as_mut().project();
 
-        match ready!(this.stream.poll_next(cx)) {
-            Some(Ok(buf)) => {
-                this.buf.extend(&buf);
+        loop {
+            if !this.buf.is_empty() {
                 match this.codec.decode(&mut this.buf) {
-                    Ok(Some(item)) => Poll::Ready(Some(Ok(item))),
-                    Ok(None) => Poll::Pending,
-                    Err(err) => Poll::Ready(Some(Err(err.into()))),
+                    Ok(Some(item)) => return Poll::Ready(Some(Ok(item))),
+                    Ok(None) => (),
+                    Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 }
             }
-            Some(Err(err)) => Poll::Ready(Some(Err(StreamError::Stream(err)))),
-            None => Poll::Ready(None),
+
+            match this.stream.poll_next(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Some(Ok(buf))) => {
+                    this.buf.extend(&buf);
+                    this = self.as_mut().project();
+                }
+                Poll::Ready(Some(Err(err))) => {
+                    return Poll::Ready(Some(Err(StreamError::Stream(err))))
+                }
+                Poll::Ready(None) => return Poll::Ready(None),
+            }
         }
     }
 }
@@ -180,13 +189,21 @@ mod tests {
         let mut buf = BytesMut::new();
         let mut codec = Codec::new().client_mode();
         codec
-            .encode(Message::Text("test".to_string()), &mut buf)
+            .encode(Message::Text("test1".to_string()), &mut buf)
+            .unwrap();
+        codec
+            .encode(Message::Text("test2".to_string()), &mut buf)
             .unwrap();
 
         tx.send(Ok::<_, ()>(buf.split().freeze())).unwrap();
         let frame = StreamExt::next(&mut decoder).await.unwrap().unwrap();
         match frame {
-            Frame::Text(data) => assert_eq!(data, b"test"[..]),
+            Frame::Text(data) => assert_eq!(data, b"test1"[..]),
+            _ => panic!(),
+        }
+        let frame = StreamExt::next(&mut decoder).await.unwrap().unwrap();
+        match frame {
+            Frame::Text(data) => assert_eq!(data, b"test2"[..]),
             _ => panic!(),
         }
     }
