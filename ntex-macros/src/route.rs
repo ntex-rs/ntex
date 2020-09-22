@@ -109,6 +109,7 @@ pub struct Route {
     args: Args,
     ast: syn::ItemFn,
     method: MethodType,
+    wrappers: Vec<syn::Type>,
 }
 
 impl Route {
@@ -126,15 +127,30 @@ impl Route {
                 ),
             ));
         }
-        let ast: syn::ItemFn = syn::parse(input)?;
+        let mut ast: syn::ItemFn = syn::parse(input)?;
         let name = ast.sig.ident.clone();
         let args = Args::new(args)?;
+        // Can use enum for multiple attributes
+        let mut to_del = Vec::new();
+        // Find attributes
+        for (i, attr) in ast.attrs.iter().enumerate() {
+            if attr.path.is_ident("wrap") {
+                to_del.push(i);
+            }
+        }
+        let mut wrappers = Vec::with_capacity(to_del.len());
+        // Move attributes and parse
+        for del in to_del {
+            let attr = ast.attrs.remove(del);
+            wrappers.push(syn::parse2(attr.tokens)?);
+        }
 
         Ok(Self {
             name,
             args,
             ast,
             method,
+            wrappers,
         })
     }
 
@@ -146,6 +162,7 @@ impl Route {
         let extra_guards = &self.args.guards;
         let error = &self.args.error;
         let method = &self.method;
+        let wrappers = &self.wrappers;
 
         let stream = quote! {
             #[allow(non_camel_case_types)]
@@ -160,6 +177,7 @@ impl Route {
                         .name(#resource_name)
                         .guard(ntex::web::guard::#method())
                         #(.guard(ntex::web::guard::fn_guard(#extra_guards)))*
+                        #(.wrap(#wrappers))*
                         .to(#name);
 
                     ntex::web::dev::WebServiceFactory::register(__resource, __config)
