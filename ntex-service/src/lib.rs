@@ -11,6 +11,7 @@ mod apply;
 mod apply_cfg;
 pub mod boxed;
 mod fn_service;
+mod fn_transform;
 mod map;
 mod map_config;
 mod map_err;
@@ -24,6 +25,7 @@ pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::fn_service::{
     fn_factory, fn_factory_with_config, fn_mut_service, fn_service,
 };
+pub use self::fn_transform::fn_transform;
 pub use self::map_config::{map_config, map_config_service, unit_config};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 pub use self::transform::{apply, Transform};
