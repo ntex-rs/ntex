@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.8] - 2020-10-28
+
+* Router struct implements Clone trait
+
 ## [0.3.7] - 2020-09-21
 
 * Fix hex conversion helper

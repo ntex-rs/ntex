@@ -5,7 +5,7 @@ use super::path::PathItem;
 use super::resource::{ResourceDef, Segment};
 use super::{Resource, ResourcePath};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Tree {
     key: Vec<Segment>,
     value: Vec<Value>,

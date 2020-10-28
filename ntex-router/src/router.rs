@@ -11,6 +11,7 @@ pub struct ResourceInfo {
 }
 
 /// Resource router.
+#[derive(Clone)]
 pub struct Router<T, U = ()> {
     tree: Tree,
     resources: Vec<(ResourceDef, T, Option<U>)>,
