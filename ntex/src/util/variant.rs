@@ -38,24 +38,40 @@ where
             V2: factory.into_factory(),
         }
     }
+
+    /// Convert to a Variant with two request types
+    pub fn v2<B, F>(self, factory: F) -> VariantFactory2<A, B>
+    where
+        B: ServiceFactory<
+            Config = A::Config,
+            Response = A::Response,
+            Error = A::Error,
+            InitError = A::InitError,
+        >,
+        F: IntoServiceFactory<B>,
+    {
+        VariantFactory2 {
+            A: self.factory,
+            V2: factory.into_factory(),
+        }
+    }
 }
 
-macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident, ($($T:ident),+)} => {
+macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident, $m_name:ident, ($($T:ident),+)} => {
 
     impl<V1, $($T),+> $fac1_type<V1, $($T),+>
         where
             V1: ServiceFactory,
             V1::Config: Clone,
         {
+            #[doc(hidden)]
             /// Convert to a Variant with more request types
             pub fn and<$name, F>(self, factory: F) -> $fac2_type<V1, $($T,)+ $name>
-            where
-        $name: ServiceFactory<
-            Config = V1::Config,
-            Response = V1::Response,
-            Error = V1::Error,
-            InitError = V1::InitError,
-        >,
+            where $name: ServiceFactory<
+                    Config = V1::Config,
+                    Response = V1::Response,
+                    Error = V1::Error,
+                    InitError = V1::InitError>,
                 F: IntoServiceFactory<$name>,
             {
                 $fac2_type {
@@ -64,7 +80,23 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
                     $name: factory.into_factory(),
                 }
             }
-        }
+
+            /// Convert to a Variant with more request types
+            pub fn $m_name<$name, F>(self, factory: F) -> $fac2_type<V1, $($T,)+ $name>
+            where $name: ServiceFactory<
+                    Config = V1::Config,
+                    Response = V1::Response,
+                    Error = V1::Error,
+                    InitError = V1::InitError>,
+                F: IntoServiceFactory<$name>,
+            {
+                $fac2_type {
+                    A: self.A,
+                    $($T: self.$T,)+
+                    $name: factory.into_factory(),
+                }
+            }
+    }
 });
 
 macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, $fac_type:ident, $(($n:tt, $T:ident)),+} => {
@@ -271,13 +303,19 @@ variant_impl!(v7, Variant7, VariantService7, VariantFactory7, (0, V2), (1, V3), 
 #[rustfmt::skip]
 variant_impl!(v8, Variant8, VariantService8, VariantFactory8, (0, V2), (1, V3), (2, V4), (3, V5), (4, V6), (5, V7), (6, V8));
 
-variant_impl_and!(VariantFactory2, VariantFactory3, V3, (V2));
-variant_impl_and!(VariantFactory3, VariantFactory4, V4, (V2, V3));
-variant_impl_and!(VariantFactory4, VariantFactory5, V5, (V2, V3, V4));
-variant_impl_and!(VariantFactory5, VariantFactory6, V6, (V2, V3, V4, V5));
-variant_impl_and!(VariantFactory6, VariantFactory7, V7, (V2, V3, V4, V5, V6));
+variant_impl_and!(VariantFactory2, VariantFactory3, V3, v3, (V2));
+variant_impl_and!(VariantFactory3, VariantFactory4, V4, v4, (V2, V3));
+variant_impl_and!(VariantFactory4, VariantFactory5, V5, v5, (V2, V3, V4));
+variant_impl_and!(VariantFactory5, VariantFactory6, V6, v6, (V2, V3, V4, V5));
+variant_impl_and!(
+    VariantFactory6,
+    VariantFactory7,
+    V7,
+    v7,
+    (V2, V3, V4, V5, V6)
+);
 #[rustfmt::skip]
-variant_impl_and!(VariantFactory7, VariantFactory8, V8, (V2, V3, V4, V5, V6, V7));
+variant_impl_and!(VariantFactory7, VariantFactory8, V8, v8, (V2, V3, V4, V5, V6, V7));
 
 #[cfg(test)]
 mod tests {
