@@ -46,12 +46,7 @@ impl LocalWaker {
     ///
     /// Returns `true` if waker was registered before.
     pub fn register(&self, waker: &Waker) -> bool {
-        unsafe {
-            let w = self.waker.get();
-            let is_registered = (*w).is_some();
-            *w = Some(waker.clone());
-            is_registered
-        }
+        unsafe { self.waker.get().replace(Some(waker.clone())).is_some() }
     }
 
     #[inline]
