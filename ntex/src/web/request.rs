@@ -4,8 +4,8 @@ use std::rc::Rc;
 use std::{fmt, net};
 
 use crate::http::{
-    Extensions, HeaderMap, HttpMessage, Method, Payload, PayloadStream, RequestHead,
-    Response, Uri, Version,
+    header, Extensions, HeaderMap, HttpMessage, Method, Payload, PayloadStream,
+    RequestHead, Response, Uri, Version,
 };
 use crate::router::{Path, Resource};
 
@@ -280,7 +280,11 @@ impl<Err: ErrorRenderer> fmt::Debug for WebRequest<Err> {
         }
         writeln!(f, "  headers:")?;
         for (key, val) in self.headers().iter() {
-            writeln!(f, "    {:?}: {:?}", key, val)?;
+            if key == header::AUTHORIZATION {
+                writeln!(f, "    {:?}: <REDACTED>", key)?;
+            } else {
+                writeln!(f, "    {:?}: {:?}", key, val)?;
+            }
         }
         Ok(())
     }

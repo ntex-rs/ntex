@@ -191,7 +191,11 @@ impl<P> fmt::Debug for Request<P> {
         }
         writeln!(f, "  headers:")?;
         for (key, val) in self.headers() {
-            writeln!(f, "    {:?}: {:?}", key, val)?;
+            if key == header::AUTHORIZATION {
+                writeln!(f, "    {:?}: <REDACTED>", key)?;
+            } else {
+                writeln!(f, "    {:?}: {:?}", key, val)?;
+            }
         }
         Ok(())
     }

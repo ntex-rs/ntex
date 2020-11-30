@@ -376,7 +376,10 @@ impl ClientRequest {
     pub fn freeze(self) -> Result<FrozenClientRequest, FreezeRequestError> {
         let slf = match self.prep_for_sending() {
             Ok(slf) => slf,
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                println!("E: {:?}", e);
+                return Err(e.into());
+            }
         };
 
         let request = FrozenClientRequest {
@@ -559,7 +562,11 @@ impl fmt::Debug for ClientRequest {
         )?;
         writeln!(f, "  headers:")?;
         for (key, val) in self.head.headers.iter() {
-            writeln!(f, "    {:?}: {:?}", key, val)?;
+            if key == header::AUTHORIZATION {
+                writeln!(f, "    {:?}: <REDACTED>", key)?;
+            } else {
+                writeln!(f, "    {:?}: {:?}", key, val)?;
+            }
         }
         Ok(())
     }

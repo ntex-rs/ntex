@@ -1,8 +1,4 @@
-use std::convert::TryFrom;
-use std::error::Error;
-use std::net;
-use std::rc::Rc;
-use std::time::Duration;
+use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc, time::Duration};
 
 use bytes::Bytes;
 use futures::Stream;
@@ -10,7 +6,7 @@ use serde::Serialize;
 
 use crate::http::body::Body;
 use crate::http::error::HttpError;
-use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
+use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Method, RequestHead, RequestHeadType, Uri};
 
 use super::sender::SendClientRequest;
@@ -119,6 +115,25 @@ impl FrozenClientRequest {
     {
         self.extra_headers(HeaderMap::new())
             .extra_header(key, value)
+    }
+}
+
+impl fmt::Debug for FrozenClientRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "\nFrozenClientRequest {:?} {}:{}",
+            self.head.version, self.head.method, self.head.uri
+        )?;
+        writeln!(f, "  headers:")?;
+        for (key, val) in self.head.headers.iter() {
+            if key == header::AUTHORIZATION {
+                writeln!(f, "    {:?}: <REDACTED>", key)?;
+            } else {
+                writeln!(f, "    {:?}: {:?}", key, val)?;
+            }
+        }
+        Ok(())
     }
 }
 
