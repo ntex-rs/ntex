@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.25] - 2020-xx-xx
+## [0.1.25] - 2020-11-30
 
 * Better names for Variant service
 
