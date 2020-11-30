@@ -2,7 +2,7 @@
 
 use std::cell::UnsafeCell;
 use std::fmt;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 pub(super) struct Cell<T> {
     inner: Rc<UnsafeCell<T>>,
@@ -40,5 +40,29 @@ impl<T> Cell<T> {
     #[allow(clippy::mut_from_ref)]
     pub(super) fn get_mut(&self) -> &mut T {
         unsafe { &mut *self.inner.as_ref().get() }
+    }
+
+    pub(super) fn downgrade(&self) -> WeakCell<T> {
+        WeakCell {
+            inner: Rc::downgrade(&self.inner),
+        }
+    }
+}
+
+pub(super) struct WeakCell<T> {
+    inner: Weak<UnsafeCell<T>>,
+}
+
+impl<T> Clone for WeakCell<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<T> WeakCell<T> {
+    pub(super) fn upgrade(&self) -> Option<Cell<T>> {
+        self.inner.upgrade().map(|inner| Cell { inner })
     }
 }

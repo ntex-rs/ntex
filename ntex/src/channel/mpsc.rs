@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 
 use futures::{Sink, Stream};
 
-use super::cell::Cell;
+use super::cell::{Cell, WeakCell};
 use crate::task::LocalWaker;
 
 /// Creates a unbounded in-memory channel with buffered storage.
@@ -67,6 +67,13 @@ impl<T> Sender<T> {
     pub fn is_closed(&self) -> bool {
         self.shared.strong_count() == 1 || !self.shared.get_ref().has_receiver
     }
+
+    /// Returns downgraded sender
+    pub fn downgrade(self) -> WeakSender<T> {
+        WeakSender {
+            shared: self.shared.downgrade(),
+        }
+    }
 }
 
 impl<T> Clone for Sender<T> {
@@ -117,6 +124,18 @@ impl<T> Drop for Sender<T> {
             // Wake up receiver as its stream has ended
             shared.blocked_recv.wake();
         }
+    }
+}
+
+/// Weak sender type
+pub struct WeakSender<T> {
+    shared: WeakCell<Shared<T>>,
+}
+
+impl<T> WeakSender<T> {
+    /// Upgrade to Sender<T>
+    pub fn upgrade(&self) -> Option<Sender<T>> {
+        self.shared.upgrade().map(|shared| Sender { shared })
     }
 }
 
@@ -244,6 +263,10 @@ mod tests {
         let (tx, mut rx) = channel::<String>();
         tx.close();
         assert_eq!(rx.next().await, None);
+
+        let (tx, _rx) = channel::<String>();
+        let weak_tx = tx.downgrade();
+        assert!(weak_tx.upgrade().is_some());
 
         let (tx, rx) = channel();
         tx.send("test").unwrap();
