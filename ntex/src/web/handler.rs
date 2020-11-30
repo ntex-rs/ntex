@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::future::{FutureExt, LocalBoxFuture};
-use pin_project::pin_project;
 
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
@@ -108,23 +107,24 @@ where
     }
 }
 
-#[pin_project]
-pub(super) struct HandlerWrapperResponse<F, T, Err>
-where
-    F: Handler<T, Err>,
-    T: FromRequest<Err>,
-    T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
-    Err: ErrorRenderer,
-{
-    hnd: F,
-    #[pin]
-    from_request: Option<T::Future>,
-    #[pin]
-    handler: Option<F::Future>,
-    #[pin]
-    responder: Option<<F::Output as Responder<Err>>::Future>,
-    req: Option<HttpRequest>,
+pin_project_lite::pin_project! {
+    pub(super) struct HandlerWrapperResponse<F, T, Err>
+    where
+        F: Handler<T, Err>,
+        T: FromRequest<Err>,
+        T::Error: Into<Err::Container>,
+       <F::Output as Responder<Err>>::Error: Into<Err::Container>,
+        Err: ErrorRenderer,
+    {
+        hnd: F,
+        #[pin]
+        from_request: Option<T::Future>,
+        #[pin]
+        handler: Option<F::Future>,
+        #[pin]
+        responder: Option<<F::Output as Responder<Err>>::Future>,
+        req: Option<HttpRequest>,
+    }
 }
 
 impl<F, T, Err> Future for HandlerWrapperResponse<F, T, Err>

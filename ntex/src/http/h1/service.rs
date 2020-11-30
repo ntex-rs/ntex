@@ -286,31 +286,32 @@ where
     }
 }
 
-#[doc(hidden)]
-#[pin_project::pin_project]
-pub struct H1ServiceResponse<T, S, B, X, U>
-where
-    S: ServiceFactory<Request = Request>,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    X: ServiceFactory<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    X::InitError: fmt::Debug,
-    U: ServiceFactory<Request = (Request, Framed<T, Codec>), Response = ()>,
-    U::Error: fmt::Display,
-    U::InitError: fmt::Debug,
-{
-    #[pin]
-    fut: S::Future,
-    #[pin]
-    fut_ex: Option<X::Future>,
-    #[pin]
-    fut_upg: Option<U::Future>,
-    expect: Option<X::Service>,
-    upgrade: Option<U::Service>,
-    on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-    cfg: ServiceConfig,
-    _t: PhantomData<(T, B)>,
+pin_project_lite::pin_project! {
+    #[doc(hidden)]
+    pub struct H1ServiceResponse<T, S, B, X, U>
+    where
+        S: ServiceFactory<Request = Request>,
+        S::Error: ResponseError,
+        S::InitError: fmt::Debug,
+        X: ServiceFactory<Request = Request, Response = Request>,
+        X::Error: ResponseError,
+        X::InitError: fmt::Debug,
+        U: ServiceFactory<Request = (Request, Framed<T, Codec>), Response = ()>,
+        U::Error: fmt::Display,
+        U::InitError: fmt::Debug,
+    {
+        #[pin]
+        fut: S::Future,
+        #[pin]
+        fut_ex: Option<X::Future>,
+        #[pin]
+        fut_upg: Option<U::Future>,
+        expect: Option<X::Service>,
+        upgrade: Option<U::Service>,
+        on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+        cfg: ServiceConfig,
+        _t: PhantomData<(T, B)>,
+    }
 }
 
 impl<T, S, B, X, U> Future for H1ServiceResponse<T, S, B, X, U>
