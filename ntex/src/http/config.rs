@@ -1,6 +1,7 @@
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::fmt::Write;
+use std::ptr::copy_nonoverlapping;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -275,11 +276,23 @@ impl DateService {
 
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
-        let mut buf: [u8; 39] = [0; 39];
-        buf[..6].copy_from_slice(b"date: ");
-        self.set_date(|date| buf[6..35].copy_from_slice(&date.bytes));
-        buf[35..].copy_from_slice(b"\r\n\r\n");
-        dst.extend_from_slice(&buf);
+        const HEAD: &[u8] = b"date: ";
+        const TAIL: &[u8] = b"\r\n\r\n";
+        // date bytes len
+        const N: usize = 29;
+        const TOTAL: usize = 39;
+
+        dst.reserve(TOTAL);
+        // SAFETY: previous reserve exact size
+        unsafe {
+            let buf = dst.as_mut_ptr().add(dst.len());
+            copy_nonoverlapping(HEAD.as_ptr(), buf, HEAD.len());
+            self.set_date(|date| {
+                copy_nonoverlapping(date.bytes.as_ptr(), buf.add(HEAD.len()), N)
+            });
+            copy_nonoverlapping(TAIL.as_ptr(), buf.add(N + HEAD.len()), TAIL.len());
+            dst.set_len(dst.len() + TOTAL)
+        }
     }
 }
 
