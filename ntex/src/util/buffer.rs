@@ -145,7 +145,7 @@ where
         inner.waker.register(cx.waker());
         let mut buffer = inner.buf.borrow_mut();
 
-        if let Poll::Pending = inner.service.poll_ready(cx)? {
+        if inner.service.poll_ready(cx)?.is_pending() {
             if buffer.len() < self.size {
                 // buffer next request
                 inner.ready.set(false);
