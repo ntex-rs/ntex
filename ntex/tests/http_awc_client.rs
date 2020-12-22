@@ -540,6 +540,7 @@ async fn test_client_gzip_encoding_large_random() {
     let data = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(100_000)
+        .map(char::from)
         .collect::<String>();
 
     let srv = test::server(|| {
@@ -589,6 +590,7 @@ async fn test_client_brotli_encoding_large_random() {
     let data = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(70_000)
+        .map(char::from)
         .collect::<String>();
 
     let srv = test::server(|| {
@@ -711,6 +713,7 @@ async fn test_client_deflate_encoding_large_random() {
     let data = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(70_000)
+        .map(char::from)
         .collect::<String>();
 
     let srv = test::server(|| {

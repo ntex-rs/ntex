@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.26] - 2020-12-22
+
+* Update deps
+
+* Optimize set_date_header
+
 ## [0.1.25] - 2020-11-30
 
 * Better names for Variant service

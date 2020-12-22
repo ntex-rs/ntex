@@ -1150,6 +1150,7 @@ mod tests {
         let data = rand::thread_rng()
             .sample_iter(&rand::distributions::Alphanumeric)
             .take(70_000)
+            .map(char::from)
             .collect::<String>();
         client.write("GET /test HTTP/1.1\r\nContent-Length: ");
         client.write(data);
@@ -1215,6 +1216,7 @@ mod tests {
                 let data = rand::thread_rng()
                     .sample_iter(&rand::distributions::Alphanumeric)
                     .take(65_536)
+                    .map(char::from)
                     .collect::<String>();
                 self.0.fetch_add(data.len(), Ordering::Relaxed);
 
@@ -1270,6 +1272,7 @@ mod tests {
                     let data = rand::thread_rng()
                         .sample_iter(&rand::distributions::Alphanumeric)
                         .take(1024)
+                        .map(char::from)
                         .collect::<String>();
                     Poll::Ready(Some(Ok(Bytes::from(data))))
                 }
