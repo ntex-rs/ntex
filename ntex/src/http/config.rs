@@ -5,7 +5,7 @@ use std::ptr::copy_nonoverlapping;
 use std::rc::Rc;
 use std::time::Duration;
 
-use bytes::{BytesMut, BufMut};
+use bytes::BytesMut;
 use futures::{future, FutureExt};
 use time::OffsetDateTime;
 
@@ -292,7 +292,7 @@ impl DateService {
                 copy_nonoverlapping(date.bytes.as_ptr(), buf.add(HEAD.len()), N)
             });
             copy_nonoverlapping(TAIL.as_ptr(), buf.add(N + HEAD.len()), TAIL.len());
-            dst.advance_mut(TOTAL)
+            dst.set_len(dst.len() + TOTAL)
         }
     }
 }
