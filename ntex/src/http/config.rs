@@ -281,7 +281,6 @@ impl DateService {
         // date bytes len
         const N: usize = 29;
         const TOTAL: usize = 39;
-        assert_eq!(HEAD.len() + N + TAIL.len(), TOTAL);
 
         dst.reserve(TOTAL);
         // SAFETY: previous reserve exact size
