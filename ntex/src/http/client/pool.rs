@@ -140,11 +140,11 @@ where
                 // use existing connection
                 Acquire::Acquired(io, created) => {
                     trace!("Use existing connection for {:?}", req.uri);
-                    return Ok(IoConnection::new(
+                    Ok(IoConnection::new(
                         io,
                         created,
                         Some(Acquired(key, Some(inner))),
-                    ));
+                    ))
                 }
                 // open new tcp connection
                 Acquire::Available => {

@@ -232,7 +232,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
                     Ok(encoding
                         .decode_without_bom_handling_and_without_replacement(&body)
                         .map(|s| s.into_owned())
-                        .ok_or_else(|| PayloadError::Decoding)?)
+                        .ok_or(PayloadError::Decoding)?)
                 }
             }
             .boxed_local(),
@@ -249,9 +249,10 @@ pub struct PayloadConfig {
 impl PayloadConfig {
     /// Create `PayloadConfig` instance and set max size of payload.
     pub fn new(limit: usize) -> Self {
-        let mut cfg = Self::default();
-        cfg.limit = limit;
-        cfg
+        PayloadConfig {
+            limit,
+            ..Default::default()
+        }
     }
 
     /// Change max size of payload. By default max size is 256Kb

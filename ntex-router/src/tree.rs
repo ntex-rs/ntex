@@ -244,8 +244,8 @@ impl Tree {
                 }
             }
 
-            let path = if path.starts_with('/') {
-                &path[1..]
+            let path = if let Some(path) = path.strip_prefix('/') {
+                path
             } else {
                 base_skip -= 1;
                 path
@@ -282,8 +282,8 @@ impl Tree {
             return None;
         }
 
-        let path = if path.starts_with('/') {
-            &path[1..]
+        let path = if let Some(path) = path.strip_prefix('/') {
+            path
         } else {
             base_skip -= 1;
             path
@@ -356,11 +356,8 @@ impl Tree {
                 path.len()
             };
             let segment = T::unquote(&path[..idx]);
-            let quoted = if let Cow::Owned(_) = segment {
-                true
-            } else {
-                false
-            };
+            let quoted = matches!(segment, Cow::Owned(_));
+
             // check segment match
             let is_match = match key[0] {
                 Segment::Static(ref pattern) => {

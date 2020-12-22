@@ -130,7 +130,7 @@ impl AsyncSystemRunner {
 
         // run loop
         lazy(|_| async {
-            let res = match stop.await {
+            match stop.await {
                 Ok(code) => {
                     if code != 0 {
                         Err(io::Error::new(
@@ -142,8 +142,7 @@ impl AsyncSystemRunner {
                     }
                 }
                 Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
-            };
-            return res;
+            }
         })
         .flatten()
     }

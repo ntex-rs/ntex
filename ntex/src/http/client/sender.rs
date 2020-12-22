@@ -154,7 +154,7 @@ impl RequestHeadType {
         SendClientRequest::new(
             config.connector.send_request(self, body.into(), addr),
             response_decompress,
-            timeout.or_else(|| config.timeout),
+            timeout.or(config.timeout),
         )
     }
 

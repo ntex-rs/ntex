@@ -254,14 +254,14 @@ where
         }
 
         // process incoming bytes stream
-        let mut not_completed = !this.inner.poll_read(cx)?;
-        this.inner.decode_payload()?;
+        let mut not_completed = !this.inner.poll_read(cx);
+        this.inner.decode_payload();
 
         loop {
             // process incoming bytes stream, but only if
             // previous iteration didnt read whole buffer
             if not_completed {
-                not_completed = !this.inner.poll_read(cx)?;
+                not_completed = !this.inner.poll_read(cx);
             }
 
             let st = match this.call.project() {
@@ -286,10 +286,10 @@ where
                                 // to read more data (ie serevice future can wait for payload data)
                                 if this.inner.req_payload.is_some() && not_completed {
                                     // read more from io stream
-                                    not_completed = !this.inner.poll_read(cx)?;
+                                    not_completed = !this.inner.poll_read(cx);
 
                                     // more payload chunks has been decoded
-                                    if this.inner.decode_payload()? {
+                                    if this.inner.decode_payload() {
                                         // restore consumed future
                                         this = self.as_mut().project();
                                         fut = {
@@ -353,7 +353,7 @@ where
                     let write = if !this.inner.flags.contains(Flags::STARTED) {
                         PollWrite::AllowNext
                     } else {
-                        this.inner.decode_payload()?;
+                        this.inner.decode_payload();
                         this.inner.poll_write(cx)?
                     };
                     match write {
@@ -421,9 +421,7 @@ where
                 }
 
                 // keep-alive book-keeping
-                if this.inner.ka_timer.is_some()
-                    && this.inner.poll_keepalive(cx, idle)?
-                {
+                if this.inner.ka_timer.is_some() && this.inner.poll_keepalive(cx, idle) {
                     this.inner.poll_shutdown(cx)
                 } else {
                     Poll::Pending
@@ -648,7 +646,7 @@ where
     }
 
     /// Read data from io stream
-    fn poll_read(&mut self, cx: &mut Context<'_>) -> Result<bool, DispatchError> {
+    fn poll_read(&mut self, cx: &mut Context<'_>) -> bool {
         let mut completed = false;
 
         // read socket data into a buf
@@ -663,7 +661,7 @@ where
                 .map(|info| info.need_read(cx) == PayloadStatus::Read)
                 .unwrap_or(true)
             {
-                return Ok(false);
+                return false;
             }
 
             // read data from socket
@@ -703,7 +701,7 @@ where
             }
         }
 
-        Ok(completed)
+        completed
     }
 
     fn internal_error(&mut self, msg: &'static str) -> DispatcherMessage {
@@ -726,12 +724,12 @@ where
         DispatcherMessage::Error(Response::BadRequest().finish().drop_body())
     }
 
-    fn decode_payload(&mut self) -> Result<bool, DispatchError> {
+    fn decode_payload(&mut self) -> bool {
         if self.flags.contains(Flags::READ_EOF)
             || self.req_payload.is_none()
             || self.read_buf.is_empty()
         {
-            return Ok(false);
+            return false;
         }
 
         let mut updated = false;
@@ -772,12 +770,12 @@ where
             }
         }
 
-        Ok(updated)
+        updated
     }
 
-    fn decode_message(&mut self) -> Result<Option<DispatcherMessage>, DispatchError> {
+    fn decode_message(&mut self) -> Option<DispatcherMessage> {
         if self.flags.contains(Flags::READ_EOF) || self.read_buf.is_empty() {
-            return Ok(None);
+            return None;
         }
 
         match self.codec.decode(&mut self.read_buf) {
@@ -797,7 +795,7 @@ where
                         // handle upgrade request
                         if pl == MessageType::Stream && self.config.upgrade.is_some() {
                             self.flags.insert(Flags::STOP_READING);
-                            Ok(Some(DispatcherMessage::Upgrade(req)))
+                            Some(DispatcherMessage::Upgrade(req))
                         } else {
                             // handle request with payload
                             if pl == MessageType::Payload || pl == MessageType::Stream {
@@ -808,32 +806,28 @@ where
                                 self.req_payload = Some(ps);
                             }
 
-                            Ok(Some(DispatcherMessage::Request(req)))
+                            Some(DispatcherMessage::Request(req))
                         }
                     }
-                    Message::Chunk(_) => Ok(Some(self.internal_error(
+                    Message::Chunk(_) => Some(self.internal_error(
                         "Internal server error: unexpected payload chunk",
-                    ))),
+                    )),
                 }
             }
             Ok(None) => {
                 self.flags.insert(Flags::READ_EOF);
-                Ok(None)
+                None
             }
-            Err(e) => Ok(Some(self.decode_error(e))),
+            Err(e) => Some(self.decode_error(e)),
         }
     }
 
     /// keep-alive timer
-    fn poll_keepalive(
-        &mut self,
-        cx: &mut Context<'_>,
-        idle: bool,
-    ) -> Result<bool, DispatchError> {
+    fn poll_keepalive(&mut self, cx: &mut Context<'_>, idle: bool) -> bool {
         let ka_timer = self.ka_timer.as_mut().unwrap();
         // do nothing for disconnected or upgrade socket or if keep-alive timer is disabled
         if self.flags.contains(Flags::DISCONNECT) {
-            return Ok(false);
+            return false;
         }
         // slow request timeout
         else if !self.flags.contains(Flags::STARTED) {
@@ -845,7 +839,7 @@ where
                     ResponseBody::Other(Body::Empty),
                 );
                 self.flags.insert(Flags::STARTED | Flags::SHUTDOWN);
-                return Ok(true);
+                return true;
             }
         }
         // normal keep-alive, but only if we are not processing any requests
@@ -857,7 +851,7 @@ where
                     if self.write_buf.is_empty() {
                         trace!("Keep-alive timeout, close connection");
                         self.flags.insert(Flags::SHUTDOWN);
-                        return Ok(true);
+                        return true;
                     } else if let Some(dl) = self.config.keep_alive_expire() {
                         // extend keep-alive timer
                         ka_timer.reset(dl);
@@ -868,7 +862,7 @@ where
                 let _ = Pin::new(ka_timer).poll(cx);
             }
         }
-        Ok(false)
+        false
     }
 
     fn process_response(
@@ -888,11 +882,11 @@ where
         &mut self,
         io: CallProcess<S, X, U>,
     ) -> Result<CallProcess<S, X, U>, DispatchError> {
-        while let Some(msg) = self.decode_message()? {
+        while let Some(msg) = self.decode_message() {
             return match msg {
                 DispatcherMessage::Request(req) => {
                     if self.req_payload.is_some() {
-                        self.decode_payload()?;
+                        self.decode_payload();
                     }
 
                     // Handle `EXPECT: 100-Continue` header

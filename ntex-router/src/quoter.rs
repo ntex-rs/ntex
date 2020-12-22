@@ -50,11 +50,11 @@ pub(super) fn requote(val: &[u8]) -> Option<String> {
 
 #[inline]
 fn from_hex(v: u8) -> Option<u8> {
-    if v >= b'0' && v <= b'9' {
+    if (b'0'..=b'9').contains(&v) {
         Some(v - 0x30) // ord('0') == 0x30
-    } else if v >= b'A' && v <= b'F' {
+    } else if (b'A'..=b'F').contains(&v) {
         Some(v - 0x41 + 10) // ord('A') == 0x41
-    } else if v >= b'a' && v <= b'f' {
+    } else if (b'a'..=b'f').contains(&v) {
         Some(v - 0x61 + 10) // ord('a') == 0x61
     } else {
         None

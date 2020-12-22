@@ -18,10 +18,7 @@ pub enum BodySize {
 
 impl BodySize {
     pub fn is_eof(&self) -> bool {
-        match self {
-            BodySize::None | BodySize::Empty | BodySize::Sized(0) => true,
-            _ => false,
-        }
+        matches!(self, BodySize::None | BodySize::Empty | BodySize::Sized(0))
     }
 }
 
@@ -191,14 +188,8 @@ impl MessageBody for Body {
 impl PartialEq for Body {
     fn eq(&self, other: &Body) -> bool {
         match *self {
-            Body::None => match *other {
-                Body::None => true,
-                _ => false,
-            },
-            Body::Empty => match *other {
-                Body::Empty => true,
-                _ => false,
-            },
+            Body::None => matches!(*other, Body::None),
+            Body::Empty => matches!(*other, Body::Empty),
             Body::Bytes(ref b) => match *other {
                 Body::Bytes(ref b2) => b == b2,
                 _ => false,

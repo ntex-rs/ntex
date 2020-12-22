@@ -150,7 +150,7 @@ impl InternalServiceFactory for ConfiguredService {
                     ));
                 };
             }
-            return Ok(res);
+            Ok(res)
         }
         .boxed_local()
     }
@@ -271,13 +271,13 @@ where
     fn new_service(&self, _: ()) -> Self::Future {
         let fut = self.inner.new_service(());
         async move {
-            return match fut.await {
+            match fut.await {
                 Ok(s) => Ok(Box::new(StreamService::new(s)) as BoxedServerService),
                 Err(e) => {
                     error!("Can not construct service: {:?}", e);
                     Err(())
                 }
-            };
+            }
         }
         .boxed_local()
     }

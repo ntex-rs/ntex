@@ -32,17 +32,16 @@ enum PathElement {
 
 impl PathElement {
     fn is_str(&self) -> bool {
-        match self {
-            PathElement::Str(_) => true,
-            _ => false,
-        }
+        matches!(self, PathElement::Str(_))
     }
+
     fn into_str(self) -> String {
         match self {
             PathElement::Str(s) => s,
             _ => panic!(),
         }
     }
+
     fn as_str(&self) -> &str {
         match self {
             PathElement::Str(s) => s.as_str(),
@@ -380,10 +379,8 @@ impl ResourceDef {
         }
         if !pattern.is_empty() {
             // handle tail expression for static segment
-            if pattern.ends_with('*') {
-                let pattern =
-                    Regex::new(&format!("^{}(.+)", &pattern[..pattern.len() - 1]))
-                        .unwrap();
+            if let Some(stripped) = pattern.strip_suffix('*') {
+                let pattern = Regex::new(&format!("^{}(.+)", stripped)).unwrap();
                 pelems.push(Segment::Dynamic {
                     pattern,
                     names: Vec::new(),

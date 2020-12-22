@@ -11,7 +11,7 @@ use futures::Stream;
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue, AUTHORIZATION};
-use crate::http::{ConnectionType, Method, StatusCode, Uri, Version};
+use crate::http::{ConnectionType, StatusCode, Uri};
 use crate::http::{Payload, RequestHead};
 use crate::rt::time::timeout;
 use crate::service::{IntoService, Service};
@@ -48,8 +48,6 @@ impl WebsocketsRequest {
     {
         let mut err = None;
         let mut head = RequestHead::default();
-        head.method = Method::GET;
-        head.version = Version::HTTP_11;
 
         match Uri::try_from(uri) {
             Ok(uri) => head.uri = uri,

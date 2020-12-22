@@ -741,6 +741,7 @@ impl fmt::Debug for ResponseBuilder {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn log_error<T: Into<HttpError>>(err: T) -> Option<HttpError> {
     let e = err.into();
     error!("Error in ResponseBuilder {}", e);
