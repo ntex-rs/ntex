@@ -187,14 +187,11 @@ impl MessageBody for Body {
 
 impl PartialEq for Body {
     fn eq(&self, other: &Body) -> bool {
-        match *self {
-            Body::None => matches!(*other, Body::None),
-            Body::Empty => matches!(*other, Body::Empty),
-            Body::Bytes(ref b) => match *other {
-                Body::Bytes(ref b2) => b == b2,
-                _ => false,
-            },
-            Body::Message(_) => false,
+        match (self, other) {
+            (Body::None, Body::None) => true,
+            (Body::Empty, Body::Empty) => true,
+            (Body::Bytes(ref b), Body::Bytes(ref b2)) => b == b2,
+            _ => false,
         }
     }
 }

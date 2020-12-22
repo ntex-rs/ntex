@@ -44,7 +44,7 @@ pub struct RequestHead {
     pub headers: HeaderMap,
     pub extensions: RefCell<Extensions>,
     pub peer_addr: Option<net::SocketAddr>,
-    flags: Flags,
+    pub(super) flags: Flags,
 }
 
 impl Default for RequestHead {

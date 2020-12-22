@@ -125,7 +125,7 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
         }
     }
 
-    /// Return state of connection keep-alive funcitonality
+    /// Return state of connection keep-alive functionality
     pub(super) fn keep_alive_enabled(&self) -> bool {
         self.ka_enabled
     }

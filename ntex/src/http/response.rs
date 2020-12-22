@@ -334,9 +334,9 @@ impl ResponseBuilder {
                     Ok(value) => {
                         parts.headers.append(key, value);
                     }
-                    Err(e) => self.err = log_error(e),
+                    Err(e) => self.err = Some(log_error(e)),
                 },
-                Err(e) => self.err = log_error(e),
+                Err(e) => self.err = Some(log_error(e)),
             };
         }
         self
@@ -367,9 +367,9 @@ impl ResponseBuilder {
                     Ok(value) => {
                         parts.headers.insert(key, value);
                     }
-                    Err(e) => self.err = log_error(e),
+                    Err(e) => self.err = Some(log_error(e)),
                 },
-                Err(e) => self.err = log_error(e),
+                Err(e) => self.err = Some(log_error(e)),
             };
         }
         self
@@ -436,7 +436,7 @@ impl ResponseBuilder {
                 Ok(value) => {
                     parts.headers.insert(header::CONTENT_TYPE, value);
                 }
-                Err(e) => self.err = log_error(e),
+                Err(e) => self.err = Some(log_error(e)),
             };
         }
         self
@@ -741,11 +741,10 @@ impl fmt::Debug for ResponseBuilder {
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn log_error<T: Into<HttpError>>(err: T) -> Option<HttpError> {
+fn log_error<T: Into<HttpError>>(err: T) -> HttpError {
     let e = err.into();
     error!("Error in ResponseBuilder {}", e);
-    Some(e)
+    e
 }
 
 /// Helper converters
