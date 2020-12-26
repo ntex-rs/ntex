@@ -123,7 +123,7 @@ impl Tree {
         if p < self.key.len() {
             let child = Tree {
                 key: self.key.split_off(p),
-                value: mem::replace(&mut self.value, Vec::new()),
+                value: mem::take(&mut self.value),
                 children: mem::take(&mut self.children),
             };
             self.children.push(child);

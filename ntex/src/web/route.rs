@@ -44,7 +44,7 @@ impl<Err: ErrorRenderer> Route<Err> {
                 .push(Box::new(guard::Method(m.clone())));
         }
 
-        mem::replace(Rc::get_mut(&mut self.guards).unwrap(), Vec::new())
+        mem::take(Rc::get_mut(&mut self.guards).unwrap())
     }
 
     pub(super) fn service(&self) -> RouteService<Err> {

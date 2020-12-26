@@ -143,7 +143,7 @@ impl<P> Request<P> {
 
     /// Get request's payload
     pub fn take_payload(&mut self) -> Payload<P> {
-        std::mem::replace(&mut self.payload, Payload::None)
+        std::mem::take(&mut self.payload)
     }
 
     /// Create new Request instance

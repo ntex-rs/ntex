@@ -177,7 +177,7 @@ impl MessageBody for Body {
                 if len == 0 {
                     Poll::Ready(None)
                 } else {
-                    Poll::Ready(Some(Ok(mem::replace(bin, Bytes::new()))))
+                    Poll::Ready(Some(Ok(mem::take(bin))))
                 }
             }
             Body::Message(ref mut body) => body.poll_next_chunk(cx),
@@ -286,7 +286,7 @@ impl MessageBody for Bytes {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
-            Poll::Ready(Some(Ok(mem::replace(self, Bytes::new()))))
+            Poll::Ready(Some(Ok(mem::take(self))))
         }
     }
 }
@@ -303,7 +303,7 @@ impl MessageBody for BytesMut {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
-            Poll::Ready(Some(Ok(mem::replace(self, BytesMut::new()).freeze())))
+            Poll::Ready(Some(Ok(mem::take(self).freeze())))
         }
     }
 }
@@ -320,9 +320,7 @@ impl MessageBody for &'static str {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
-            Poll::Ready(Some(Ok(Bytes::from_static(
-                mem::replace(self, "").as_ref(),
-            ))))
+            Poll::Ready(Some(Ok(Bytes::from_static(mem::take(self).as_ref()))))
         }
     }
 }
@@ -339,7 +337,7 @@ impl MessageBody for &'static [u8] {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
-            Poll::Ready(Some(Ok(Bytes::from_static(mem::replace(self, b"")))))
+            Poll::Ready(Some(Ok(Bytes::from_static(mem::take(self)))))
         }
     }
 }
@@ -356,7 +354,7 @@ impl MessageBody for Vec<u8> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
-            Poll::Ready(Some(Ok(Bytes::from(mem::replace(self, Vec::new())))))
+            Poll::Ready(Some(Ok(Bytes::from(mem::take(self)))))
         }
     }
 }
@@ -373,9 +371,7 @@ impl MessageBody for String {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
-            Poll::Ready(Some(Ok(Bytes::from(
-                mem::replace(self, String::new()).into_bytes(),
-            ))))
+            Poll::Ready(Some(Ok(Bytes::from(mem::take(self).into_bytes()))))
         }
     }
 }
