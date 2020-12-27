@@ -279,7 +279,7 @@ impl ServerBuilder {
                 info!("Starting \"{}\" service on {}", sock.1, sock.2);
             }
             self.accept.start(
-                mem::replace(&mut self.sockets, Vec::new())
+                mem::take(&mut self.sockets)
                     .into_iter()
                     .map(|t| (t.0, t.2))
                     .collect(),
@@ -358,7 +358,7 @@ impl ServerBuilder {
 
                 // stop accept thread
                 self.accept.send(Command::Stop);
-                let notify = std::mem::replace(&mut self.notify, Vec::new());
+                let notify = std::mem::take(&mut self.notify);
 
                 // stop workers
                 if !self.workers.is_empty() && graceful {

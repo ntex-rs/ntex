@@ -103,7 +103,7 @@ impl<S> ClientResponse<S> {
 
     /// Get response's payload
     pub fn take_payload(&mut self) -> Payload<S> {
-        std::mem::replace(&mut self.payload, Payload::None)
+        std::mem::take(&mut self.payload)
     }
 
     /// Request extensions

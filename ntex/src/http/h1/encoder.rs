@@ -68,27 +68,27 @@ pub(super) trait MessageType: Sized {
             }
         }
         match length {
-            BodySize::None => dst.put_slice(b"\r\n"),
-            BodySize::Empty => dst.put_slice(b"\r\ncontent-length: 0\r\n"),
+            BodySize::None => dst.extend_from_slice(b"\r\n"),
+            BodySize::Empty => dst.extend_from_slice(b"\r\ncontent-length: 0\r\n"),
             BodySize::Sized(len) => write_content_length(len, dst),
             BodySize::Stream => {
                 if chunked {
-                    dst.put_slice(b"\r\ntransfer-encoding: chunked\r\n")
+                    dst.extend_from_slice(b"\r\ntransfer-encoding: chunked\r\n")
                 } else {
                     skip_len = false;
-                    dst.put_slice(b"\r\n");
+                    dst.extend_from_slice(b"\r\n");
                 }
             }
         }
 
         // Connection
         match ctype {
-            ConnectionType::Upgrade => dst.put_slice(b"connection: upgrade\r\n"),
+            ConnectionType::Upgrade => dst.extend_from_slice(b"connection: upgrade\r\n"),
             ConnectionType::KeepAlive if version < Version::HTTP_11 => {
-                dst.put_slice(b"connection: keep-alive\r\n")
+                dst.extend_from_slice(b"connection: keep-alive\r\n")
             }
             ConnectionType::Close if version >= Version::HTTP_11 => {
-                dst.put_slice(b"connection: close\r\n")
+                dst.extend_from_slice(b"connection: close\r\n")
             }
             _ => (),
         }
@@ -215,7 +215,7 @@ impl MessageType for Response<()> {
 
         // status line
         write_status_line(head.version, head.status.as_u16(), dst);
-        dst.put_slice(reason);
+        dst.extend_from_slice(reason);
         Ok(())
     }
 }
@@ -471,7 +471,7 @@ fn write_status_line(version: Version, mut n: u16, bytes: &mut BytesMut) {
         }
     }
 
-    bytes.put_slice(&buf);
+    bytes.extend_from_slice(&buf);
     if four {
         bytes.put_u8(b' ');
     }
@@ -485,7 +485,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
             b'n', b'g', b't', b'h', b':', b' ', b'0', b'\r', b'\n',
         ];
         buf[18] = (n as u8) + b'0';
-        bytes.put_slice(&buf);
+        bytes.extend_from_slice(&buf);
     } else if n < 100 {
         let mut buf: [u8; 22] = [
             b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e',
@@ -499,7 +499,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
                 2,
             );
         }
-        bytes.put_slice(&buf);
+        bytes.extend_from_slice(&buf);
     } else if n < 1000 {
         let mut buf: [u8; 23] = [
             b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e',
@@ -519,9 +519,9 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
         // decode last 1
         buf[18] = (n as u8) + b'0';
 
-        bytes.put_slice(&buf);
+        bytes.extend_from_slice(&buf);
     } else {
-        bytes.put_slice(b"\r\ncontent-length: ");
+        bytes.extend_from_slice(b"\r\ncontent-length: ");
         unsafe { convert_usize(n, bytes) };
     }
 }

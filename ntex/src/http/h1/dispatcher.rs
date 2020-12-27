@@ -283,7 +283,7 @@ where
                             },
                             Poll::Pending => {
                                 // if read back-pressure is enabled, we might need
-                                // to read more data (ie serevice future can wait for payload data)
+                                // to read more data (ie service future can wait for payload data)
                                 if this.inner.req_payload.is_some() && not_completed {
                                     // read more from io stream
                                     not_completed = !this.inner.poll_read(cx);
