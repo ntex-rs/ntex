@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use fxhash::FxHashMap;
+use ahash::AHashMap;
 use url::Url;
 
 use crate::router::ResourceDef;
@@ -12,7 +12,7 @@ use crate::web::httprequest::HttpRequest;
 pub struct ResourceMap {
     root: ResourceDef,
     parent: RefCell<Option<Rc<ResourceMap>>>,
-    named: FxHashMap<String, ResourceDef>,
+    named: AHashMap<String, ResourceDef>,
     patterns: Vec<(ResourceDef, Option<Rc<ResourceMap>>)>,
 }
 
@@ -21,7 +21,7 @@ impl ResourceMap {
         ResourceMap {
             root,
             parent: RefCell::new(None),
-            named: FxHashMap::default(),
+            named: AHashMap::default(),
             patterns: Vec::new(),
         }
     }

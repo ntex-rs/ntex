@@ -6,9 +6,9 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use ahash::AHashMap;
 use bytes::Bytes;
 use futures::future::{poll_fn, FutureExt, LocalBoxFuture};
-use fxhash::FxHashMap;
 use h2::client::{handshake, Connection, SendRequest};
 use http::uri::Authority;
 
@@ -67,7 +67,7 @@ where
             limit,
             acquired: 0,
             waiters: VecDeque::new(),
-            available: FxHashMap::default(),
+            available: AHashMap::default(),
             pool: pool::new(),
             waker: LocalWaker::new(),
         }));
@@ -194,7 +194,7 @@ pub(super) struct Inner<Io> {
     disconnect_timeout: Duration,
     limit: usize,
     acquired: usize,
-    available: FxHashMap<Key, VecDeque<AvailableConnection<Io>>>,
+    available: AHashMap<Key, VecDeque<AvailableConnection<Io>>>,
     waiters: VecDeque<(Key, Connect, Waiter<Io>)>,
     waker: LocalWaker,
     pool: pool::Pool<Result<IoConnection<Io>, ConnectError>>,
