@@ -8,10 +8,10 @@ use ntex::codec::Framed;
 use ntex::http::test::server as test_server;
 use ntex::http::ws::handshake_response;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
-use ntex::util::framed::Dispatcher;
+// use ntex::util::framed::Dispatcher;
 use ntex::ws;
 
-async fn ws_service(req: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
+fn ws_service(req: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
     let item = match req {
         ws::Frame::Ping(msg) => ws::Message::Pong(msg),
         ws::Frame::Text(text) => {
@@ -37,8 +37,18 @@ async fn test_simple() {
                         .await?;
 
                     // start websocket service
-                    let framed = framed.into_framed(ws::Codec::default());
-                    Dispatcher::new(framed, ws_service).await
+                    let mut framed = framed.into_framed(ws::Codec::default());
+                    loop {
+                        match framed.next().await {
+                            Some(msg) => {
+                                if let Some(res) = ws_service(msg.unwrap()).unwrap() {
+                                    framed.send(res).await.unwrap();
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    Ok::<_, io::Error>(())
                 }
             })
             .finish(|_| ok::<_, io::Error>(Response::NotFound()))

@@ -12,7 +12,7 @@ use ntex::codec::{AsyncRead, AsyncWrite, Framed};
 use ntex::http::ws::handshake;
 use ntex::http::{body, h1, test, HttpService, Request, Response};
 use ntex::service::{fn_factory, Service};
-use ntex::util::framed::Dispatcher;
+// use ntex::util::framed::Dispatcher;
 use ntex::ws;
 
 struct WsService<T>(Arc<Mutex<(PhantomData<T>, Cell<bool>)>>);
@@ -59,17 +59,27 @@ where
                 .send((res, body::BodySize::None).into())
                 .await
                 .unwrap();
+            let mut framed = framed.into_framed(ws::Codec::new());
 
-            Dispatcher::new(framed.into_framed(ws::Codec::new()), service)
-                .await
-                .map_err(|_| panic!())
+            loop {
+                match framed.next().await {
+                    Some(Ok(msg)) => {
+                        if let Some(res) = service(msg).unwrap() {
+                            framed.send(res).await.unwrap();
+                        }
+                    }
+                    Some(Err(_)) => panic!(),
+                    None => break,
+                }
+            }
+            Ok(())
         };
 
         Box::pin(fut)
     }
 }
 
-async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
+fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
         ws::Frame::Ping(msg) => ws::Message::Pong(msg),
         ws::Frame::Text(text) => {
