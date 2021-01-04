@@ -6,6 +6,8 @@
 
 * Drop ntex::util::framed
 
+* Drop ntex::util::order
+
 ## [0.1.26] - 2020-12-22
 
 * Update deps
