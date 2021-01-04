@@ -120,7 +120,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                     if b.is_empty() {
                         Poll::Ready(None)
                     } else {
-                        Poll::Ready(Some(Ok(std::mem::replace(b, Bytes::new()))))
+                        Poll::Ready(Some(Ok(std::mem::take(b))))
                     }
                 }
                 EncoderBody::Stream(ref mut b) => b.poll_next_chunk(cx),

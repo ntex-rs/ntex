@@ -19,6 +19,12 @@ pub enum Payload<S = PayloadStream> {
     Stream(S),
 }
 
+impl<S> Default for Payload<S> {
+    fn default() -> Self {
+        Payload::None
+    }
+}
+
 impl<S> From<crate::http::h1::Payload> for Payload<S> {
     fn from(v: crate::http::h1::Payload) -> Self {
         Payload::H1(v)
@@ -57,7 +63,7 @@ impl<S> fmt::Debug for Payload<S> {
 impl<S> Payload<S> {
     /// Takes current payload and replaces it with `None` value
     pub fn take(&mut self) -> Payload<S> {
-        std::mem::replace(self, Payload::None)
+        std::mem::take(self)
     }
 }
 
