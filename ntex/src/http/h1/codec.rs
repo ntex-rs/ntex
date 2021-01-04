@@ -1,5 +1,3 @@
-use std::{fmt, io};
-
 use bitflags::bitflags;
 use bytes::BytesMut;
 use http::{Method, Version};
@@ -7,7 +5,7 @@ use http::{Method, Version};
 use crate::codec::{Decoder, Encoder};
 use crate::http::body::BodySize;
 use crate::http::config::DateService;
-use crate::http::error::ParseError;
+use crate::http::error::{DecodeError, EncodeError};
 use crate::http::message::ConnectionType;
 use crate::http::request::Request;
 use crate::http::response::Response;
@@ -43,8 +41,8 @@ impl Default for Codec {
     }
 }
 
-impl fmt::Debug for Codec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for Codec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "h1::Codec({:?})", self.flags)
     }
 }
@@ -110,7 +108,7 @@ impl Codec {
 
 impl Decoder for Codec {
     type Item = Message<Request>;
-    type Error = ParseError;
+    type Error = DecodeError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if let Some(ref mut payload) = self.payload {
@@ -149,7 +147,7 @@ impl Decoder for Codec {
 
 impl Encoder for Codec {
     type Item = Message<(Response<()>, BodySize)>;
-    type Error = io::Error;
+    type Error = EncodeError;
 
     fn encode(
         &mut self,

@@ -34,7 +34,7 @@ async fn test_simple() {
                     // send handshake response
                     framed
                         .send(h1::Message::Item((res.drop_body(), BodySize::None)))
-                        .await?;
+                        .await.unwrap();
 
                     // start websocket service
                     let mut framed = framed.into_framed(ws::Codec::default());

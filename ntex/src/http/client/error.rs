@@ -1,15 +1,15 @@
 //! Http client errors
-use std::error::Error;
-use std::io;
+use std::{error::Error, io};
 
 use derive_more::{Display, From};
+use either::Either;
 use serde_json::error::Error as JsonError;
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl::{HandshakeError, SslError};
 use crate::connect::ResolveError;
 
-use crate::http::error::{HttpError, ParseError, PayloadError};
+use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
 use crate::http::header::HeaderValue;
 use crate::http::StatusCode;
 use crate::ws::ProtocolError;
@@ -164,9 +164,11 @@ pub enum SendRequestError {
     #[display(fmt = "Failed to connect to host: {}", _0)]
     Connect(ConnectError),
     /// Error sending request
-    Send(io::Error),
+    Io(io::Error),
+    /// Encoder error
+    Encode(EncodeError),
     /// Error parsing response
-    Response(ParseError),
+    Decode(DecodeError),
     /// Http error
     #[display(fmt = "{}", _0)]
     Http(HttpError),
@@ -184,6 +186,24 @@ pub enum SendRequestError {
 }
 
 impl std::error::Error for SendRequestError {}
+
+impl From<Either<EncodeError, std::io::Error>> for SendRequestError {
+    fn from(err: Either<EncodeError, std::io::Error>) -> Self {
+        match err {
+            Either::Left(err) => SendRequestError::Encode(err),
+            Either::Right(err) => SendRequestError::Io(err),
+        }
+    }
+}
+
+impl From<Either<DecodeError, std::io::Error>> for SendRequestError {
+    fn from(err: Either<DecodeError, std::io::Error>) -> Self {
+        match err {
+            Either::Left(err) => SendRequestError::Decode(err),
+            Either::Right(err) => SendRequestError::Io(err),
+        }
+    }
+}
 
 /// A set of errors that can occur during freezing a request
 #[derive(Debug, Display, From)]

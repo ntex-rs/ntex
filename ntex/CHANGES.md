@@ -4,6 +4,8 @@
 
 * Use ahash instead of fxhash
 
+* Use ntex-codec 0.2
+
 * Drop ntex::util::framed
 
 * Drop ntex::util::order

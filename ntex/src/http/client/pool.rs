@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use ahash::AHashMap;
 use bytes::Bytes;
 use futures::future::{poll_fn, FutureExt, LocalBoxFuture};
 use h2::client::{handshake, Connection, SendRequest};
@@ -21,6 +20,7 @@ use crate::rt::{
 };
 use crate::service::Service;
 use crate::task::LocalWaker;
+use crate::HashMap;
 
 use super::connection::{ConnectionType, IoConnection};
 use super::error::ConnectError;
@@ -67,7 +67,7 @@ where
             limit,
             acquired: 0,
             waiters: VecDeque::new(),
-            available: AHashMap::default(),
+            available: HashMap::default(),
             pool: pool::new(),
             waker: LocalWaker::new(),
         }));
@@ -194,7 +194,7 @@ pub(super) struct Inner<Io> {
     disconnect_timeout: Duration,
     limit: usize,
     acquired: usize,
-    available: AHashMap<Key, VecDeque<AvailableConnection<Io>>>,
+    available: HashMap<Key, VecDeque<AvailableConnection<Io>>>,
     waiters: VecDeque<(Key, Connect, Waiter<Io>)>,
     waker: LocalWaker,
     pool: pool::Pool<Result<IoConnection<Io>, ConnectError>>,

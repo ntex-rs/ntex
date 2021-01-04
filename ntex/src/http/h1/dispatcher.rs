@@ -12,7 +12,7 @@ use pin_project::pin_project;
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::config::DispatcherConfig;
-use crate::http::error::{DispatchError, ParseError, PayloadError, ResponseError};
+use crate::http::error::{DecodeError, DispatchError, PayloadError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
@@ -566,7 +566,7 @@ where
                     if let Some(mut payload) = self.req_payload.take() {
                         payload.set_error(PayloadError::Incomplete(None));
                     }
-                    DispatchError::Io(err)
+                    DispatchError::Encode(err)
                 })?;
 
             self.flags.set(Flags::KEEPALIVE, self.codec.keepalive());
@@ -711,7 +711,7 @@ where
         DispatcherMessage::Error(Response::InternalServerError().finish().drop_body())
     }
 
-    fn decode_error(&mut self, e: ParseError) -> DispatcherMessage {
+    fn decode_error(&mut self, e: DecodeError) -> DispatcherMessage {
         // error during request decoding
         if let Some(mut payload) = self.req_payload.take() {
             payload.set_error(PayloadError::EncodingCorrupted);

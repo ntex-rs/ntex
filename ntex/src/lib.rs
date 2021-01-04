@@ -59,3 +59,9 @@ pub mod rt {
 pub mod service {
     pub use ntex_service::*;
 }
+
+/// A `HashMap` using a ahash::RandomState hasher.
+pub type HashMap<K, V> = std::collections::HashMap<K, V, ahash::RandomState>;
+
+/// A `HashSet` using a ahash::RandomState hasher.
+pub type HashSet<V> = std::collections::HashSet<V, ahash::RandomState>;

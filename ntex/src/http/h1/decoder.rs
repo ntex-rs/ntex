@@ -9,7 +9,7 @@ use http::{header, Method, StatusCode, Uri, Version};
 use log::{debug, error, trace};
 
 use crate::codec::Decoder;
-use crate::http::error::ParseError;
+use crate::http::error::DecodeError;
 use crate::http::header::HeaderMap;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::request::Request;
@@ -37,7 +37,7 @@ impl<T: MessageType> Default for MessageDecoder<T> {
 
 impl<T: MessageType> Decoder for MessageDecoder<T> {
     type Item = (T, PayloadType);
-    type Error = ParseError;
+    type Error = DecodeError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         T::decode(src)
@@ -57,13 +57,13 @@ pub(super) trait MessageType: Sized {
 
     fn headers_mut(&mut self) -> &mut HeaderMap;
 
-    fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, ParseError>;
+    fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, DecodeError>;
 
     fn set_headers(
         &mut self,
         slice: &Bytes,
         raw_headers: &[HeaderIndex],
-    ) -> Result<PayloadLength, ParseError> {
+    ) -> Result<PayloadLength, DecodeError> {
         let mut ka = None;
         let mut has_upgrade = false;
         let mut expect = false;
@@ -92,11 +92,11 @@ pub(super) trait MessageType: Sized {
                                 }
                             } else {
                                 debug!("illegal Content-Length: {:?}", s);
-                                return Err(ParseError::Header);
+                                return Err(DecodeError::Header);
                             }
                         } else {
                             debug!("illegal Content-Length: {:?}", value);
-                            return Err(ParseError::Header);
+                            return Err(DecodeError::Header);
                         }
                     }
                     // transfer-encoding
@@ -104,7 +104,7 @@ pub(super) trait MessageType: Sized {
                         if let Ok(s) = value.to_str().map(|s| s.trim()) {
                             chunked = s.eq_ignore_ascii_case("chunked");
                         } else {
-                            return Err(ParseError::Header);
+                            return Err(DecodeError::Header);
                         }
                     }
                     // connection keep-alive state
@@ -185,7 +185,7 @@ impl MessageType for Request {
     }
 
     #[allow(clippy::uninit_assumed_init)]
-    fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, ParseError> {
+    fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, DecodeError> {
         // Unsafe: we read this data only after httparse parses headers into.
         // performance bump for pipeline benchmarks.
         let mut headers: [HeaderIndex; MAX_HEADERS] =
@@ -199,7 +199,7 @@ impl MessageType for Request {
             match req.parse(src)? {
                 httparse::Status::Complete(len) => {
                     let method = Method::from_bytes(req.method.unwrap().as_bytes())
-                        .map_err(|_| ParseError::Method)?;
+                        .map_err(|_| DecodeError::Method)?;
                     let uri = Uri::try_from(req.path.unwrap())?;
                     let version = if req.version.unwrap() == 1 {
                         Version::HTTP_11
@@ -213,7 +213,7 @@ impl MessageType for Request {
                 httparse::Status::Partial => {
                     if src.len() >= MAX_BUFFER_SIZE {
                         trace!("MAX_BUFFER_SIZE unprocessed data reached, closing");
-                        return Err(ParseError::TooLarge);
+                        return Err(DecodeError::TooLarge);
                     }
                     return Ok(None);
                 }
@@ -264,7 +264,7 @@ impl MessageType for ResponseHead {
     }
 
     #[allow(clippy::uninit_assumed_init)]
-    fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, ParseError> {
+    fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, DecodeError> {
         // Unsafe: we read this data only after httparse parses headers into.
         // performance bump for pipeline benchmarks.
         let mut headers: [HeaderIndex; MAX_HEADERS] =
@@ -283,7 +283,7 @@ impl MessageType for ResponseHead {
                         Version::HTTP_10
                     };
                     let status = StatusCode::from_u16(res.code.unwrap())
-                        .map_err(|_| ParseError::Status)?;
+                        .map_err(|_| DecodeError::Status)?;
                     HeaderIndex::record(src, res.headers, &mut headers);
 
                     (len, version, status, res.headers.len())
@@ -291,7 +291,7 @@ impl MessageType for ResponseHead {
                 httparse::Status::Partial => {
                     return if src.len() >= MAX_BUFFER_SIZE {
                         error!("MAX_BUFFER_SIZE unprocessed data reached, closing");
-                        Err(ParseError::TooLarge)
+                        Err(DecodeError::TooLarge)
                     } else {
                         Ok(None)
                     }
@@ -423,7 +423,7 @@ enum ChunkedState {
 
 impl Decoder for PayloadDecoder {
     type Item = PayloadItem;
-    type Error = ParseError;
+    type Error = DecodeError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         match self.kind {
@@ -497,7 +497,7 @@ impl ChunkedState {
         body: &mut BytesMut,
         size: &mut u64,
         buf: &mut Option<Bytes>,
-    ) -> Poll<Result<ChunkedState, ParseError>> {
+    ) -> Poll<Result<ChunkedState, DecodeError>> {
         use self::ChunkedState::*;
         match *self {
             Size => ChunkedState::read_size(body, size),
@@ -516,7 +516,7 @@ impl ChunkedState {
     fn read_size(
         rdr: &mut BytesMut,
         size: &mut u64,
-    ) -> Poll<Result<ChunkedState, ParseError>> {
+    ) -> Poll<Result<ChunkedState, DecodeError>> {
         let radix = 16;
         match byte!(rdr) {
             b @ b'0'..=b'9' => {
@@ -535,7 +535,7 @@ impl ChunkedState {
             b';' => return Poll::Ready(Ok(ChunkedState::Extension)),
             b'\r' => return Poll::Ready(Ok(ChunkedState::SizeLf)),
             _ => {
-                return Poll::Ready(Err(ParseError::InvalidInput(
+                return Poll::Ready(Err(DecodeError::InvalidInput(
                     "Invalid chunk size line: Invalid Size",
                 )));
             }
@@ -543,19 +543,19 @@ impl ChunkedState {
         Poll::Ready(Ok(ChunkedState::Size))
     }
 
-    fn read_size_lws(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, ParseError>> {
+    fn read_size_lws(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         trace!("read_size_lws");
         match byte!(rdr) {
             // LWS can follow the chunk size, but no more digits can come
             b'\t' | b' ' => Poll::Ready(Ok(ChunkedState::SizeLws)),
             b';' => Poll::Ready(Ok(ChunkedState::Extension)),
             b'\r' => Poll::Ready(Ok(ChunkedState::SizeLf)),
-            _ => Poll::Ready(Err(ParseError::InvalidInput(
+            _ => Poll::Ready(Err(DecodeError::InvalidInput(
                 "Invalid chunk size linear white space",
             ))),
         }
     }
-    fn read_extension(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, ParseError>> {
+    fn read_extension(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\r' => Poll::Ready(Ok(ChunkedState::SizeLf)),
             _ => Poll::Ready(Ok(ChunkedState::Extension)), // no supported extensions
@@ -564,11 +564,11 @@ impl ChunkedState {
     fn read_size_lf(
         rdr: &mut BytesMut,
         size: &mut u64,
-    ) -> Poll<Result<ChunkedState, ParseError>> {
+    ) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\n' if *size > 0 => Poll::Ready(Ok(ChunkedState::Body)),
             b'\n' if *size == 0 => Poll::Ready(Ok(ChunkedState::EndCr)),
-            _ => Poll::Ready(Err(ParseError::InvalidInput("Invalid chunk size LF"))),
+            _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk size LF"))),
         }
     }
 
@@ -576,7 +576,7 @@ impl ChunkedState {
         rdr: &mut BytesMut,
         rem: &mut u64,
         buf: &mut Option<Bytes>,
-    ) -> Poll<Result<ChunkedState, ParseError>> {
+    ) -> Poll<Result<ChunkedState, DecodeError>> {
         trace!("Chunked read, remaining={:?}", rem);
 
         let len = rdr.len() as u64;
@@ -600,28 +600,28 @@ impl ChunkedState {
         }
     }
 
-    fn read_body_cr(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, ParseError>> {
+    fn read_body_cr(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\r' => Poll::Ready(Ok(ChunkedState::BodyLf)),
-            _ => Poll::Ready(Err(ParseError::InvalidInput("Invalid chunk body CR"))),
+            _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk body CR"))),
         }
     }
-    fn read_body_lf(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, ParseError>> {
+    fn read_body_lf(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\n' => Poll::Ready(Ok(ChunkedState::Size)),
-            _ => Poll::Ready(Err(ParseError::InvalidInput("Invalid chunk body LF"))),
+            _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk body LF"))),
         }
     }
-    fn read_end_cr(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, ParseError>> {
+    fn read_end_cr(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\r' => Poll::Ready(Ok(ChunkedState::EndLf)),
-            _ => Poll::Ready(Err(ParseError::InvalidInput("Invalid chunk end CR"))),
+            _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end CR"))),
         }
     }
-    fn read_end_lf(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, ParseError>> {
+    fn read_end_lf(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\n' => Poll::Ready(Ok(ChunkedState::End)),
-            _ => Poll::Ready(Err(ParseError::InvalidInput("Invalid chunk end LF"))),
+            _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end LF"))),
         }
     }
 }
@@ -631,7 +631,7 @@ mod tests {
     use bytes::{Bytes, BytesMut};
 
     use super::*;
-    use crate::http::error::ParseError;
+    use crate::http::error::DecodeError;
     use crate::http::header::{HeaderName, SET_COOKIE};
     use crate::http::{HttpMessage, Method, Version};
 
@@ -680,7 +680,7 @@ mod tests {
         ($e:expr) => {{
             match MessageDecoder::<Request>::default().decode($e) {
                 Err(err) => {
-                    if let ParseError::Io(_) = err {
+                    if let DecodeError::Io(_) = err {
                         unreachable!("Parse error expected")
                     }
                 }

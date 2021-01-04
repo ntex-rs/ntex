@@ -1,17 +1,15 @@
-use std::io::Write;
-use std::marker::PhantomData;
-use std::ptr::copy_nonoverlapping;
-use std::{cmp, io, mem, ptr, slice};
+use std::{
+    cmp, io::Write, marker::PhantomData, mem, ptr, ptr::copy_nonoverlapping, slice,
+};
 
 use bytes::{BufMut, BytesMut};
 
-use crate::http::body::BodySize;
-use crate::http::config::DateService;
 use crate::http::header::{map, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
-use crate::http::helpers;
 use crate::http::message::{ConnectionType, RequestHeadType};
-use crate::http::response::Response;
-use crate::http::{HeaderMap, StatusCode, Version};
+use crate::http::{
+    body::BodySize, config::DateService, error::EncodeError, helpers,
+    response::Response, HeaderMap, StatusCode, Version,
+};
 
 const AVERAGE_HEADER_SIZE: usize = 30;
 
@@ -41,7 +39,7 @@ pub(super) trait MessageType: Sized {
 
     fn chunked(&self) -> bool;
 
-    fn encode_status(&mut self, dst: &mut BytesMut) -> io::Result<()>;
+    fn encode_status(&mut self, dst: &mut BytesMut) -> Result<(), EncodeError>;
 
     fn encode_headers(
         &mut self,
@@ -50,7 +48,7 @@ pub(super) trait MessageType: Sized {
         mut length: BodySize,
         ctype: ConnectionType,
         timer: &DateService,
-    ) -> io::Result<()> {
+    ) -> Result<(), EncodeError> {
         let chunked = self.chunked();
         let mut skip_len = length != BodySize::Stream;
 
@@ -208,7 +206,7 @@ impl MessageType for Response<()> {
         None
     }
 
-    fn encode_status(&mut self, dst: &mut BytesMut) -> io::Result<()> {
+    fn encode_status(&mut self, dst: &mut BytesMut) -> Result<(), EncodeError> {
         let head = self.head();
         let reason = head.reason().as_bytes();
         dst.reserve(256 + head.headers.len() * AVERAGE_HEADER_SIZE + reason.len());
@@ -237,7 +235,7 @@ impl MessageType for RequestHeadType {
         self.extra_headers()
     }
 
-    fn encode_status(&mut self, dst: &mut BytesMut) -> io::Result<()> {
+    fn encode_status(&mut self, dst: &mut BytesMut) -> Result<(), EncodeError> {
         let head = self.as_ref();
         dst.reserve(256 + head.headers.len() * AVERAGE_HEADER_SIZE);
         write!(
@@ -250,14 +248,13 @@ impl MessageType for RequestHeadType {
                 Version::HTTP_09 => "HTTP/0.9",
                 Version::HTTP_10 => "HTTP/1.0",
                 Version::HTTP_11 => "HTTP/1.1",
-                _ =>
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "unsupported version"
-                    )),
+                _ => return Err(EncodeError::Version(head.version)),
             }
         )
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        .map_err(|e| {
+            log::error!("Cannot encode version: {}", e);
+            EncodeError::Buffer
+        })
     }
 }
 
@@ -267,12 +264,12 @@ impl<T: MessageType> MessageEncoder<T> {
         &mut self,
         msg: &[u8],
         buf: &mut BytesMut,
-    ) -> io::Result<bool> {
+    ) -> Result<bool, EncodeError> {
         self.te.encode(msg, buf)
     }
 
     /// Encode eof
-    pub(super) fn encode_eof(&mut self, buf: &mut BytesMut) -> io::Result<()> {
+    pub(super) fn encode_eof(&mut self, buf: &mut BytesMut) -> Result<(), EncodeError> {
         self.te.encode_eof(buf)
     }
 
@@ -286,7 +283,7 @@ impl<T: MessageType> MessageEncoder<T> {
         length: BodySize,
         ctype: ConnectionType,
         timer: &DateService,
-    ) -> io::Result<()> {
+    ) -> Result<(), EncodeError> {
         // transfer encoding
         if !head {
             self.te = match length {
@@ -361,7 +358,11 @@ impl TransferEncoding {
 
     /// Encode message. Return `EOF` state of encoder
     #[inline]
-    pub(super) fn encode(&mut self, msg: &[u8], buf: &mut BytesMut) -> io::Result<bool> {
+    pub(super) fn encode(
+        &mut self,
+        msg: &[u8],
+        buf: &mut BytesMut,
+    ) -> Result<bool, EncodeError> {
         match self.kind {
             TransferEncodingKind::Eof => {
                 let eof = msg.is_empty();
@@ -377,8 +378,12 @@ impl TransferEncoding {
                     *eof = true;
                     buf.extend_from_slice(b"0\r\n\r\n");
                 } else {
-                    writeln!(helpers::Writer(buf), "{:X}\r", msg.len())
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    writeln!(helpers::Writer(buf), "{:X}\r", msg.len()).map_err(
+                        |e| {
+                            log::error!("Cannot encode data: {}", e);
+                            EncodeError::Buffer
+                        },
+                    )?;
 
                     buf.reserve(msg.len() + 2);
                     buf.extend_from_slice(msg);
@@ -406,12 +411,12 @@ impl TransferEncoding {
 
     /// Encode eof. Return `EOF` state of encoder
     #[inline]
-    pub(super) fn encode_eof(&mut self, buf: &mut BytesMut) -> io::Result<()> {
+    pub(super) fn encode_eof(&mut self, buf: &mut BytesMut) -> Result<(), EncodeError> {
         match self.kind {
             TransferEncodingKind::Eof => Ok(()),
             TransferEncodingKind::Length(rem) => {
                 if rem != 0 {
-                    Err(io::Error::new(io::ErrorKind::UnexpectedEof, ""))
+                    Err(EncodeError::UnexpectedEof)
                 } else {
                     Ok(())
                 }

@@ -1,12 +1,10 @@
-use std::io;
-
 use bitflags::bitflags;
 use bytes::{Bytes, BytesMut};
 
 use crate::codec::{Decoder, Encoder};
 use crate::http::body::BodySize;
 use crate::http::config::DateService;
-use crate::http::error::{ParseError, PayloadError};
+use crate::http::error::{DecodeError, EncodeError, PayloadError};
 use crate::http::message::{ConnectionType, RequestHeadType, ResponseHead};
 use crate::http::{Method, Version};
 
@@ -114,7 +112,7 @@ impl ClientPayloadCodec {
 
 impl Decoder for ClientCodec {
     type Item = ResponseHead;
-    type Error = ParseError;
+    type Error = DecodeError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         debug_assert!(!self.inner.payload.is_some(), "Payload decoder is set");
@@ -175,7 +173,7 @@ impl Decoder for ClientPayloadCodec {
 
 impl Encoder for ClientCodec {
     type Item = Message<(RequestHeadType, BodySize)>;
-    type Error = io::Error;
+    type Error = EncodeError;
 
     fn encode(
         &mut self,
