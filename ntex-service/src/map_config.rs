@@ -224,31 +224,35 @@ where
             MapConfigServiceResponse {
                 inner,
                 config: Some(cfg),
-                state: ResponseState::CreateMapper(self.0.m.new_service(())),
+                state: ResponseState::CreateMapper {
+                    fut: self.0.m.new_service(()),
+                },
             }
         }
     }
 }
 
 pin_project_lite::pin_project! {
-pub struct MapConfigServiceResponse<A, M: ServiceFactory, C>
-where
-    A: ServiceFactory,
-    M: ServiceFactory,
-{
-    inner: Rc<Inner<A, M, C>>,
-    config: Option<C>,
-    #[pin]
-    state: ResponseState<A, M>,
-}
+    pub struct MapConfigServiceResponse<A, M: ServiceFactory, C>
+    where
+        A: ServiceFactory,
+        M: ServiceFactory,
+    {
+        inner: Rc<Inner<A, M, C>>,
+        config: Option<C>,
+        #[pin]
+        state: ResponseState<A, M>,
+    }
 }
 
-#[pin_project::pin_project(project = ResponseStateProject)]
-enum ResponseState<A: ServiceFactory, M: ServiceFactory> {
-    CreateMapper(#[pin] M::Future),
-    MapReady,
-    MapConfig(#[pin] <M::Service as Service>::Future),
-    CreateService(#[pin] A::Future),
+pin_project_lite::pin_project! {
+    #[project = ResponseStateProject]
+    enum ResponseState<A: ServiceFactory, M: ServiceFactory> {
+        CreateMapper { #[pin] fut: M::Future },
+        MapReady,
+        MapConfig { #[pin] fut: <M::Service as Service>::Future },
+        CreateService { #[pin] fut: A::Future },
+    }
 }
 
 impl<A, M, C> Future for MapConfigServiceResponse<A, M, C>
@@ -268,7 +272,7 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            ResponseStateProject::CreateMapper(fut) => {
+            ResponseStateProject::CreateMapper { fut } => {
                 let mapper = ready!(fut.poll(cx))?;
                 *this.inner.mapper.borrow_mut() = Some(mapper);
                 this.state.set(ResponseState::MapReady);
@@ -278,17 +282,17 @@ where
                 let mapper = this.inner.mapper.borrow();
                 ready!(mapper.as_ref().unwrap().poll_ready(cx))?;
                 let fut = mapper.as_ref().unwrap().call(this.config.take().unwrap());
-                this.state.set(ResponseState::MapConfig(fut));
+                this.state.set(ResponseState::MapConfig { fut });
                 drop(mapper);
                 self.poll(cx)
             }
-            ResponseStateProject::MapConfig(fut) => {
+            ResponseStateProject::MapConfig { fut } => {
                 let config = ready!(fut.poll(cx))?;
                 let fut = this.inner.a.new_service(config);
-                this.state.set(ResponseState::CreateService(fut));
+                this.state.set(ResponseState::CreateService { fut });
                 self.poll(cx)
             }
-            ResponseStateProject::CreateService(fut) => fut.poll(cx),
+            ResponseStateProject::CreateService { fut } => fut.poll(cx),
         }
     }
 }

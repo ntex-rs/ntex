@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.5] - 2021-01-13
+
+* Use pin-project-lite instead of pin-project
+
 ## [0.1.4] - 2020-09-24
 
 * Add `fn_transform` fn, allows to use function as transform service

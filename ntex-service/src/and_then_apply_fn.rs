@@ -90,39 +90,44 @@ where
     fn call(&self, req: A::Request) -> Self::Future {
         let fut = self.srv.as_ref().0.call(req);
         AndThenApplyFnFuture {
-            state: State::A(fut, Some(self.srv.clone())),
+            state: State::A {
+                fut,
+                b: Some(self.srv.clone()),
+            },
         }
     }
 }
 
 pin_project_lite::pin_project! {
-pub(crate) struct AndThenApplyFnFuture<A, B, F, Fut, Res, Err>
-where
-    A: Service,
-    B: Service,
-    F: Fn(A::Response, &B) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>,
-    Err: From<A::Error>,
-    Err: From<B::Error>,
-{
-    #[pin]
-    state: State<A, B, F, Fut, Res, Err>,
-}
+    pub(crate) struct AndThenApplyFnFuture<A, B, F, Fut, Res, Err>
+    where
+        A: Service,
+        B: Service,
+        F: Fn(A::Response, &B) -> Fut,
+        Fut: Future<Output = Result<Res, Err>>,
+        Err: From<A::Error>,
+        Err: From<B::Error>,
+    {
+        #[pin]
+        state: State<A, B, F, Fut, Res, Err>,
+    }
 }
 
-#[pin_project::pin_project(project = StateProject)]
-enum State<A, B, F, Fut, Res, Err>
-where
-    A: Service,
-    B: Service,
-    F: Fn(A::Response, &B) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>,
-    Err: From<A::Error>,
-    Err: From<B::Error>,
-{
-    A(#[pin] A::Future, Option<Rc<(A, B, F)>>),
-    B(#[pin] Fut),
-    Empty,
+pin_project_lite::pin_project! {
+    #[project = StateProject]
+    enum State<A, B, F, Fut, Res, Err>
+    where
+        A: Service,
+        B: Service,
+        F: Fn(A::Response, &B) -> Fut,
+        Fut: Future<Output = Result<Res, Err>>,
+        Err: From<A::Error>,
+        Err: From<B::Error>,
+    {
+        A { #[pin] fut: A::Future, b: Option<Rc<(A, B, F)>> },
+        B { #[pin] fut: Fut },
+        Empty,
+    }
 }
 
 impl<A, B, F, Fut, Res, Err> Future for AndThenApplyFnFuture<A, B, F, Fut, Res, Err>
@@ -139,18 +144,18 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            StateProject::A(fut, b) => match fut.poll(cx)? {
+            StateProject::A { fut, b } => match fut.poll(cx)? {
                 Poll::Ready(res) => {
                     let b = b.take().unwrap();
                     this.state.set(State::Empty);
                     let b = b.as_ref();
                     let fut = (&b.2)(res, &b.1);
-                    this.state.set(State::B(fut));
+                    this.state.set(State::B { fut });
                     self.poll(cx)
                 }
                 Poll::Pending => Poll::Pending,
             },
-            StateProject::B(fut) => fut.poll(cx).map(|r| {
+            StateProject::B { fut } => fut.poll(cx).map(|r| {
                 this.state.set(State::Empty);
                 r
             }),
@@ -224,23 +229,23 @@ where
 }
 
 pin_project_lite::pin_project! {
-pub(crate) struct AndThenApplyFnFactoryResponse<A, B, F, Fut, Res, Err>
-where
-    A: ServiceFactory,
-    B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
-    F: Fn(A::Response, &B::Service) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>,
-    Err: From<A::Error>,
-    Err: From<B::Error>,
-{
-    #[pin]
-    fut_b: B::Future,
-    #[pin]
-    fut_a: A::Future,
-    f: F,
-    a: Option<A::Service>,
-    b: Option<B::Service>,
-}
+    pub(crate) struct AndThenApplyFnFactoryResponse<A, B, F, Fut, Res, Err>
+    where
+        A: ServiceFactory,
+        B: ServiceFactory<Config = A::Config, InitError = A::InitError>,
+        F: Fn(A::Response, &B::Service) -> Fut,
+        Fut: Future<Output = Result<Res, Err>>,
+        Err: From<A::Error>,
+        Err: From<B::Error>,
+    {
+        #[pin]
+        fut_b: B::Future,
+        #[pin]
+        fut_a: A::Future,
+        f: F,
+        a: Option<A::Service>,
+        b: Option<B::Service>,
+    }
 }
 
 impl<A, B, F, Fut, Res, Err> Future

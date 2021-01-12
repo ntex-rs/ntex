@@ -63,31 +63,36 @@ where
     #[inline]
     fn call(&self, req: A::Request) -> Self::Future {
         AndThenServiceResponse {
-            state: State::A(self.0.as_ref().0.call(req), Some(self.0.clone())),
+            state: State::A {
+                fut: self.0.as_ref().0.call(req),
+                b: Some(self.0.clone()),
+            },
         }
     }
 }
 
 pin_project_lite::pin_project! {
-pub(crate) struct AndThenServiceResponse<A, B>
-where
-    A: Service,
-    B: Service<Request = A::Response, Error = A::Error>,
-{
-    #[pin]
-    state: State<A, B>,
-}
+    pub(crate) struct AndThenServiceResponse<A, B>
+    where
+        A: Service,
+        B: Service<Request = A::Response, Error = A::Error>,
+    {
+        #[pin]
+        state: State<A, B>,
+    }
 }
 
-#[pin_project::pin_project(project = StateProject)]
-enum State<A, B>
-where
-    A: Service,
-    B: Service<Request = A::Response, Error = A::Error>,
-{
-    A(#[pin] A::Future, Option<Rc<(A, B)>>),
-    B(#[pin] B::Future),
-    Empty,
+pin_project_lite::pin_project! {
+    #[project = StateProject]
+    enum State<A, B>
+    where
+        A: Service,
+        B: Service<Request = A::Response, Error = A::Error>,
+    {
+        A { #[pin] fut: A::Future, b: Option<Rc<(A, B)>> },
+        B { #[pin] fut: B::Future },
+        Empty,
+    }
 }
 
 impl<A, B> Future for AndThenServiceResponse<A, B>
@@ -101,17 +106,17 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            StateProject::A(fut, b) => match fut.poll(cx)? {
+            StateProject::A { fut, b } => match fut.poll(cx)? {
                 Poll::Ready(res) => {
                     let b = b.take().unwrap();
                     this.state.set(State::Empty); // drop fut A
                     let fut = b.as_ref().1.call(res);
-                    this.state.set(State::B(fut));
+                    this.state.set(State::B { fut });
                     self.poll(cx)
                 }
                 Poll::Pending => Poll::Pending,
             },
-            StateProject::B(fut) => fut.poll(cx).map(|r| {
+            StateProject::B { fut } => fut.poll(cx).map(|r| {
                 this.state.set(State::Empty);
                 r
             }),
@@ -204,19 +209,19 @@ where
 }
 
 pin_project_lite::pin_project! {
-pub(crate) struct AndThenServiceFactoryResponse<A, B>
-where
-    A: ServiceFactory,
-    B: ServiceFactory<Request = A::Response>,
-{
-    #[pin]
-    fut_a: A::Future,
-    #[pin]
-    fut_b: B::Future,
+    pub(crate) struct AndThenServiceFactoryResponse<A, B>
+    where
+        A: ServiceFactory,
+        B: ServiceFactory<Request = A::Response>,
+    {
+        #[pin]
+        fut_a: A::Future,
+        #[pin]
+        fut_b: B::Future,
 
-    a: Option<A::Service>,
-    b: Option<B::Service>,
-}
+        a: Option<A::Service>,
+        b: Option<B::Service>,
+    }
 }
 
 impl<A, B> AndThenServiceFactoryResponse<A, B>

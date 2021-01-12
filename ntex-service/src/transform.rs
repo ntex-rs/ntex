@@ -178,31 +178,35 @@ where
     fn new_service(&self, cfg: S::Config) -> Self::Future {
         ApplyTransformFuture {
             store: self.0.clone(),
-            state: ApplyTransformFutureState::A(self.0.as_ref().1.new_service(cfg)),
+            state: ApplyTransformFutureState::A {
+                fut: self.0.as_ref().1.new_service(cfg),
+            },
         }
     }
 }
 
 pin_project_lite::pin_project! {
-pub struct ApplyTransformFuture<T, S>
-where
-    S: ServiceFactory,
-    T: Transform<S::Service, InitError = S::InitError>,
-{
-    store: Rc<(T, S)>,
-    #[pin]
-    state: ApplyTransformFutureState<T, S>,
-}
+    pub struct ApplyTransformFuture<T, S>
+    where
+        S: ServiceFactory,
+        T: Transform<S::Service, InitError = S::InitError>,
+    {
+        store: Rc<(T, S)>,
+        #[pin]
+        state: ApplyTransformFutureState<T, S>,
+    }
 }
 
-#[pin_project::pin_project(project = ApplyTransformFutureStateProject)]
-pub enum ApplyTransformFutureState<T, S>
-where
-    S: ServiceFactory,
-    T: Transform<S::Service, InitError = S::InitError>,
-{
-    A(#[pin] S::Future),
-    B(#[pin] T::Future),
+pin_project_lite::pin_project! {
+    #[project = ApplyTransformFutureStateProject]
+    pub enum ApplyTransformFutureState<T, S>
+    where
+        S: ServiceFactory,
+        T: Transform<S::Service, InitError = S::InitError>,
+    {
+        A { #[pin] fut: S::Future },
+        B { #[pin] fut: T::Future },
+    }
 }
 
 impl<T, S> Future for ApplyTransformFuture<T, S>
@@ -216,15 +220,15 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            ApplyTransformFutureStateProject::A(fut) => match fut.poll(cx)? {
+            ApplyTransformFutureStateProject::A { fut } => match fut.poll(cx)? {
                 Poll::Ready(srv) => {
                     let fut = this.store.0.new_transform(srv);
-                    this.state.set(ApplyTransformFutureState::B(fut));
+                    this.state.set(ApplyTransformFutureState::B { fut });
                     self.poll(cx)
                 }
                 Poll::Pending => Poll::Pending,
             },
-            ApplyTransformFutureStateProject::B(fut) => fut.poll(cx),
+            ApplyTransformFutureStateProject::B { fut } => fut.poll(cx),
         }
     }
 }

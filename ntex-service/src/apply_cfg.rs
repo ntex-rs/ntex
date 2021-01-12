@@ -155,38 +155,42 @@ where
         ApplyConfigServiceFactoryResponse {
             cfg: Some(cfg),
             store: self.srv.clone(),
-            state: State::A(self.srv.as_ref().0.new_service(())),
+            state: State::A {
+                fut: self.srv.as_ref().0.new_service(()),
+            },
         }
     }
 }
 
 pin_project_lite::pin_project! {
-struct ApplyConfigServiceFactoryResponse<F, C, T, R, S>
-where
-    F: Fn(C, &T::Service) -> R,
-    T: ServiceFactory<Config = ()>,
-    T::InitError: From<T::Error>,
-    R: Future<Output = Result<S, T::InitError>>,
-    S: Service,
-{
-    cfg: Option<C>,
-    store: Rc<(T, F)>,
-    #[pin]
-    state: State<T, R, S>,
-}
+    struct ApplyConfigServiceFactoryResponse<F, C, T, R, S>
+    where
+        F: Fn(C, &T::Service) -> R,
+        T: ServiceFactory<Config = ()>,
+        T::InitError: From<T::Error>,
+        R: Future<Output = Result<S, T::InitError>>,
+        S: Service,
+    {
+        cfg: Option<C>,
+        store: Rc<(T, F)>,
+        #[pin]
+        state: State<T, R, S>,
+    }
 }
 
-#[pin_project::pin_project(project = StateProject)]
-enum State<T, R, S>
-where
-    T: ServiceFactory<Config = ()>,
-    T::InitError: From<T::Error>,
-    R: Future<Output = Result<S, T::InitError>>,
-    S: Service,
-{
-    A(#[pin] T::Future),
-    B(T::Service),
-    C(#[pin] R),
+pin_project_lite::pin_project! {
+    #[project = StateProject]
+    enum State<T, R, S>
+    where
+        T: ServiceFactory<Config = ()>,
+        T::InitError: From<T::Error>,
+        R: Future<Output = Result<S, T::InitError>>,
+        S: Service,
+    {
+        A { #[pin] fut: T::Future },
+        B { srv: T::Service },
+        C { #[pin] fut: R },
+    }
 }
 
 impl<F, C, T, R, S> Future for ApplyConfigServiceFactoryResponse<F, C, T, R, S>
@@ -203,22 +207,22 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            StateProject::A(fut) => match fut.poll(cx)? {
+            StateProject::A { fut } => match fut.poll(cx)? {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(srv) => {
-                    this.state.set(State::B(srv));
+                    this.state.set(State::B { srv });
                     self.poll(cx)
                 }
             },
-            StateProject::B(srv) => match srv.poll_ready(cx)? {
+            StateProject::B { srv } => match srv.poll_ready(cx)? {
                 Poll::Ready(_) => {
                     let fut = (this.store.as_ref().1)(this.cfg.take().unwrap(), srv);
-                    this.state.set(State::C(fut));
+                    this.state.set(State::C { fut });
                     self.poll(cx)
                 }
                 Poll::Pending => Poll::Pending,
             },
-            StateProject::C(fut) => fut.poll(cx),
+            StateProject::C { fut } => fut.poll(cx),
         }
     }
 }
