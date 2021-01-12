@@ -1,7 +1,5 @@
 //! Contains `Variant` service and related types and functions.
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 
@@ -159,8 +157,8 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         #[inline]
         fn call(&self, req: Self::Request) -> Self::Future {
             match req {
-                $enum_type::V1(req) => $mod_name::ServiceResponse::V1(self.a.call(req)),
-                $($enum_type::$T(req) => $mod_name::ServiceResponse::$T(self.$T.call(req)),)+
+                $enum_type::V1(req) => $mod_name::ServiceResponse::V1 { fut: self.a.call(req) },
+                $($enum_type::$T(req) => $mod_name::ServiceResponse::$T { fut: self.$T.call(req) },)+
             }
         }
     }
@@ -209,10 +207,12 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
     pub mod $mod_name {
         use super::*;
 
-        #[pin_project::pin_project(project = ServiceResponseProject)]
-        pub enum ServiceResponse<A: Future, $($T: Future),+> {
-            V1(#[pin] A),
-            $($T(#[pin] $T),)+
+        pin_project_lite::pin_project! {
+            #[project = ServiceResponseProject]
+            pub enum ServiceResponse<A: Future, $($T: Future),+> {
+                V1{ #[pin] fut: A },
+                $($T{ #[pin] fut: $T },)+
+            }
         }
 
         impl<A, $($T),+> Future for ServiceResponse<A, $($T),+>
@@ -224,8 +224,8 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 
             fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
                 match self.project() {
-                    ServiceResponseProject::V1(fut) => fut.poll(cx),
-                    $(ServiceResponseProject::$T(fut) => fut.poll(cx),)+
+                    ServiceResponseProject::V1{fut} => fut.poll(cx),
+                    $(ServiceResponseProject::$T{fut} => fut.poll(cx),)+
                 }
             }
         }

@@ -1,13 +1,8 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
-use std::{fmt, io, mem, net};
+use std::{fmt, io, mem, net, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use bitflags::bitflags;
 use bytes::{Buf, BytesMut};
-use futures::ready;
-use pin_project::pin_project;
+use futures::{ready, Future};
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
@@ -119,11 +114,13 @@ enum PollWrite {
     PendingResponse,
 }
 
-#[pin_project(project = CallStateProject)]
-enum CallState<S: Service, X: Service> {
-    Io,
-    Expect(#[pin] X::Future),
-    Service(#[pin] S::Future),
+pin_project_lite::pin_project! {
+    #[project = CallStateProject]
+    enum CallState<S: Service, X: Service> {
+        Io,
+        Expect { #[pin] fut: X::Future },
+        Service { #[pin] fut: S::Future },
+    }
 }
 
 enum CallProcess<S: Service, X: Service, U: Service> {
@@ -265,7 +262,7 @@ where
             }
 
             let st = match this.call.project() {
-                CallStateProject::Service(mut fut) => {
+                CallStateProject::Service { mut fut } => {
                     loop {
                         // we have to loop because of read back-pressure,
                         // check Poll::Pending processing
@@ -294,7 +291,7 @@ where
                                         this = self.as_mut().project();
                                         fut = {
                                             match this.call.project() {
-                                                CallStateProject::Service(fut) => fut,
+                                                CallStateProject::Service { fut } => fut,
                                                 _ => panic!(),
                                             }
                                         };
@@ -307,15 +304,15 @@ where
                     }
                 }
                 // handle EXPECT call
-                CallStateProject::Expect(fut) => match fut.poll(cx) {
+                CallStateProject::Expect { fut } => match fut.poll(cx) {
                     Poll::Ready(result) => match result {
                         Ok(req) => {
                             this.inner
                                 .write_buf
                                 .extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
-                            CallProcess::Next(CallState::Service(
-                                this.inner.config.service.call(req),
-                            ))
+                            CallProcess::Next(CallState::Service {
+                                fut: this.inner.config.service.call(req),
+                            })
                         }
                         Err(e) => {
                             let res: Response = e.into();
@@ -891,9 +888,13 @@ where
 
                     // Handle `EXPECT: 100-Continue` header
                     Ok(CallProcess::Next(if req.head().expect() {
-                        CallState::Expect(self.config.expect.call(req))
+                        CallState::Expect {
+                            fut: self.config.expect.call(req),
+                        }
                     } else {
-                        CallState::Service(self.config.service.call(req))
+                        CallState::Service {
+                            fut: self.config.service.call(req),
+                        }
                     }))
                 }
                 // switch to upgrade handler

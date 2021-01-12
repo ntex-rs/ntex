@@ -4,6 +4,8 @@
 
 * Use ahash instead of fxhash
 
+* Use pin-project-lite instead of pin-project
+
 ## [0.1.26] - 2020-12-22
 
 * Update deps

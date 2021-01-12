@@ -1,14 +1,8 @@
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
-use std::{fmt, net};
+use std::{fmt, marker::PhantomData, net, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use bytes::Bytes;
-use futures::future::ok;
-use futures::{ready, Future};
+use futures::{future::ok, ready, Future};
 use h2::server::{self, Handshake};
-use pin_project::pin_project;
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::rt::net::TcpStream;
@@ -365,26 +359,26 @@ where
 }
 
 pin_project_lite::pin_project! {
-#[doc(hidden)]
-pub struct HttpServiceResponse<
-    T,
-    S: ServiceFactory,
-    B,
-    X: ServiceFactory,
-    U: ServiceFactory,
-> {
-    #[pin]
-    fut: S::Future,
-    #[pin]
-    fut_ex: Option<X::Future>,
-    #[pin]
-    fut_upg: Option<U::Future>,
-    expect: Option<X::Service>,
-    upgrade: Option<U::Service>,
-    on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-    cfg: ServiceConfig,
-    _t: PhantomData<(T, B)>,
-}
+    #[doc(hidden)]
+    pub struct HttpServiceResponse<
+        T,
+        S: ServiceFactory,
+        B,
+        X: ServiceFactory,
+        U: ServiceFactory,
+    > {
+        #[pin]
+        fut: S::Future,
+        #[pin]
+        fut_ex: Option<X::Future>,
+        #[pin]
+        fut_upg: Option<U::Future>,
+        expect: Option<X::Service>,
+        upgrade: Option<U::Service>,
+        on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+        cfg: ServiceConfig,
+        _t: PhantomData<(T, B)>,
+    }
 }
 
 impl<T, S, B, X, U> Future for HttpServiceResponse<T, S, B, X, U>
@@ -543,64 +537,77 @@ where
 
         match proto {
             Protocol::Http2 => HttpServiceHandlerResponse {
-                state: State::H2Handshake(Some((
-                    server::handshake(io),
-                    self.config.clone(),
-                    on_connect,
-                    peer_addr,
-                ))),
+                state: State::H2Handshake {
+                    data: Some((
+                        server::handshake(io),
+                        self.config.clone(),
+                        on_connect,
+                        peer_addr,
+                    )),
+                },
             },
             Protocol::Http1 => HttpServiceHandlerResponse {
-                state: State::H1(h1::Dispatcher::new(
-                    self.config.clone(),
-                    io,
-                    peer_addr,
-                    on_connect,
-                )),
+                state: State::H1 {
+                    fut: h1::Dispatcher::new(
+                        self.config.clone(),
+                        io,
+                        peer_addr,
+                        on_connect,
+                    ),
+                },
             },
         }
     }
 }
 
-#[pin_project]
-pub struct HttpServiceHandlerResponse<T, S, B, X, U>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-    S: Service<Request = Request>,
-    S::Error: ResponseError,
-    S::Response: Into<Response<B>> + 'static,
-    B: MessageBody + 'static,
-    X: Service<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
-    U::Error: fmt::Display,
-{
-    #[pin]
-    state: State<T, S, B, X, U>,
+pin_project_lite::pin_project! {
+    pub struct HttpServiceHandlerResponse<T, S, B, X, U>
+    where
+        T: AsyncRead,
+        T: AsyncWrite,
+        T: Unpin,
+        S: Service<Request = Request>,
+        S::Error: ResponseError,
+        S::Response: Into<Response<B>>,
+        S::Response: 'static,
+        B: MessageBody,
+        B: 'static,
+        X: Service<Request = Request, Response = Request>,
+        X::Error: ResponseError,
+        U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
+        U::Error: fmt::Display,
+    {
+        #[pin]
+        state: State<T, S, B, X, U>,
+    }
 }
 
-#[pin_project(project = StateProject)]
-enum State<T, S, B, X, U>
-where
-    S: Service<Request = Request>,
-    S::Error: ResponseError,
-    T: AsyncRead + AsyncWrite + Unpin,
-    B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
-    U::Error: fmt::Display,
-{
-    H1(#[pin] h1::Dispatcher<T, S, B, X, U>),
-    H2(Dispatcher<T, S, B, X, U>),
-    H2Handshake(
-        Option<(
-            Handshake<T, Bytes>,
-            Rc<DispatcherConfig<S, X, U>>,
-            Option<Box<dyn DataFactory>>,
-            Option<net::SocketAddr>,
-        )>,
-    ),
+pin_project_lite::pin_project! {
+    #[project = StateProject]
+    enum State<T, S, B, X, U>
+    where
+        S: Service<Request = Request>,
+        S::Error: ResponseError,
+        T: AsyncRead,
+        T: AsyncWrite,
+        T: Unpin,
+        B: MessageBody,
+        X: Service<Request = Request, Response = Request>,
+        X::Error: ResponseError,
+        U: Service<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
+        U::Error: fmt::Display,
+    {
+        H1 { #[pin] fut: h1::Dispatcher<T, S, B, X, U> },
+        H2 { fut: Dispatcher<T, S, B, X, U> },
+        H2Handshake { data:
+            Option<(
+                Handshake<T, Bytes>,
+                Rc<DispatcherConfig<S, X, U>>,
+                Option<Box<dyn DataFactory>>,
+                Option<net::SocketAddr>,
+            )>,
+        },
+    }
 }
 
 impl<T, S, B, X, U> Future for HttpServiceHandlerResponse<T, S, B, X, U>
@@ -622,9 +629,9 @@ where
         let this = self.as_mut().project();
 
         match this.state.project() {
-            StateProject::H1(disp) => disp.poll(cx),
-            StateProject::H2(ref mut disp) => Pin::new(disp).poll(cx),
-            StateProject::H2Handshake(ref mut data) => {
+            StateProject::H1 { fut } => fut.poll(cx),
+            StateProject::H2 { ref mut fut } => Pin::new(fut).poll(cx),
+            StateProject::H2Handshake { data } => {
                 let conn = if let Some(ref mut item) = data {
                     match Pin::new(&mut item.0).poll(cx) {
                         Poll::Ready(Ok(conn)) => conn,
@@ -638,9 +645,9 @@ where
                     panic!()
                 };
                 let (_, cfg, on_connect, peer_addr) = data.take().unwrap();
-                self.as_mut().project().state.set(State::H2(Dispatcher::new(
-                    cfg, conn, on_connect, None, peer_addr,
-                )));
+                self.as_mut().project().state.set(State::H2 {
+                    fut: Dispatcher::new(cfg, conn, on_connect, None, peer_addr),
+                });
                 self.poll(cx)
             }
         }

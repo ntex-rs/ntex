@@ -1,14 +1,12 @@
 //! Service that buffers incomming requests.
-
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::convert::Infallible;
-use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use futures::future::{ok, Either, Ready};
+use futures::future::{ok, Either, Future, Ready};
 use futures::ready;
 
 use crate::channel::oneshot;
@@ -179,7 +177,10 @@ where
             self.inner.buf.borrow_mut().push_back((tx, req));
 
             Either::Right(BufferServiceResponse {
-                state: State::Tx(rx, self.inner.clone()),
+                state: State::Tx {
+                    rx,
+                    inner: self.inner.clone(),
+                },
             })
         }
     }
@@ -193,10 +194,12 @@ pin_project_lite::pin_project! {
     }
 }
 
-#[pin_project::pin_project(project = StateProject)]
-enum State<S: Service<Error = E>, E> {
-    Tx(oneshot::Receiver<S::Request>, Rc<Inner<S, E>>),
-    Srv(#[pin] S::Future, Rc<Inner<S, E>>),
+pin_project_lite::pin_project! {
+    #[project = StateProject]
+    enum State<S: Service<Error = E>, E> {
+        Tx { rx: oneshot::Receiver<S::Request>, inner: Rc<Inner<S, E>> },
+        Srv { #[pin] fut: S::Future, inner: Rc<Inner<S, E>> },
+    }
 }
 
 impl<S: Service<Error = E>, E> Future for BufferServiceResponse<S, E> {
@@ -207,16 +210,19 @@ impl<S: Service<Error = E>, E> Future for BufferServiceResponse<S, E> {
 
         loop {
             match this.state.project() {
-                StateProject::Tx(rx, inner) => match Pin::new(rx).poll(cx) {
+                StateProject::Tx { rx, inner } => match Pin::new(rx).poll(cx) {
                     Poll::Ready(Ok(req)) => {
-                        let state = State::Srv(inner.service.call(req), inner.clone());
+                        let state = State::Srv {
+                            fut: inner.service.call(req),
+                            inner: inner.clone(),
+                        };
                         this = self.as_mut().project();
                         this.state.set(state);
                     }
                     Poll::Ready(Err(_)) => return Poll::Ready(Err((*inner.err)())),
                     Poll::Pending => return Poll::Pending,
                 },
-                StateProject::Srv(fut, inner) => {
+                StateProject::Srv { fut, inner } => {
                     let res = ready!(fut.poll(cx));
                     inner.waker.wake();
                     return Poll::Ready(res);

@@ -1,11 +1,7 @@
 //! Framed transport dispatcher
-use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::time::Duration;
+use std::{fmt, pin::Pin, task::Context, task::Poll, time::Duration};
 
-use futures::{ready, FutureExt, Stream};
+use futures::{ready, Future, FutureExt, Stream};
 use log::debug;
 
 use crate::channel::mpsc;
@@ -68,21 +64,26 @@ where
     }
 }
 
-/// FramedTransport - is a future that reads frames from Framed object
-/// and pass then to the service.
-#[pin_project::pin_project]
-pub struct Dispatcher<S, T, U, Out>
-where
-    S: Service<Request = Request<U>, Response = Option<Response<U>>>,
-    S::Error: 'static,
-    S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Unpin,
-    U: Encoder + Decoder,
-    <U as Encoder>::Item: 'static,
-    <U as Encoder>::Error: std::fmt::Debug,
-    Out: Stream<Item = <U as Encoder>::Item> + Unpin,
-{
-    inner: InnerDispatcher<S, T, U, Out>,
+pin_project_lite::pin_project! {
+    /// FramedTransport - is a future that reads frames from Framed object
+    /// and pass then to the service.
+    pub struct Dispatcher<S, T, U, Out>
+    where
+        S: Service<Request = Request<U>, Response = Option<Response<U>>>,
+        S::Error: 'static,
+        S::Future: 'static,
+        T: AsyncRead,
+        T: AsyncWrite,
+        T: Unpin,
+        U: Encoder,
+        U: Decoder,
+       <U as Encoder>::Item: 'static,
+       <U as Encoder>::Error: std::fmt::Debug,
+        Out: Stream<Item = <U as Encoder>::Item>,
+        Out: Unpin,
+    {
+        inner: InnerDispatcher<S, T, U, Out>,
+    }
 }
 
 impl<S, T, U> Dispatcher<S, T, U, mpsc::Receiver<<U as Encoder>::Item>>

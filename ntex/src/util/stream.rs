@@ -1,27 +1,28 @@
-use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{fmt, pin::Pin, task::Context, task::Poll};
 
-use futures::{ready, FutureExt, Sink, SinkExt, Stream};
+use futures::{ready, Future, FutureExt, Sink, SinkExt, Stream};
 
 use crate::channel::mpsc;
 use crate::service::{IntoService, Service};
 
-#[pin_project::pin_project]
-pub struct Dispatcher<R, S, T, U>
-where
-    R: 'static,
-    S: Service<Response = Option<R>> + 'static,
-    T: Stream<Item = Result<S::Request, S::Error>> + Unpin,
-    U: Sink<Result<R, S::Error>> + Unpin,
-{
-    #[pin]
-    service: S,
-    stream: T,
-    sink: Option<U>,
-    rx: mpsc::Receiver<Result<S::Response, S::Error>>,
-    shutdown: Option<bool>,
+pin_project_lite::pin_project! {
+    pub struct Dispatcher<R, S, T, U>
+    where
+        R: 'static,
+        S: Service<Response = Option<R>>,
+        S: 'static,
+        T: Stream<Item = Result<S::Request, S::Error>>,
+        T: Unpin,
+        U: Sink<Result<R, S::Error>>,
+        U: Unpin,
+    {
+        #[pin]
+        service: S,
+        stream: T,
+        sink: Option<U>,
+        rx: mpsc::Receiver<Result<S::Response, S::Error>>,
+        shutdown: Option<bool>,
+    }
 }
 
 impl<R, S, T, U> Dispatcher<R, S, T, U>

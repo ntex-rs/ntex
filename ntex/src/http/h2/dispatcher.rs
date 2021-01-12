@@ -1,10 +1,7 @@
-use std::convert::TryFrom;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::net;
-use std::pin::Pin;
-use std::rc::Rc;
 use std::task::{Context, Poll};
+use std::{
+    convert::TryFrom, future::Future, marker::PhantomData, net, pin::Pin, rc::Rc,
+};
 
 use bytes::{Bytes, BytesMut};
 use h2::server::{Connection, SendResponse};
@@ -122,10 +119,10 @@ where
                     }
 
                     crate::rt::spawn(ServiceResponse {
-                        state: ServiceResponseState::ServiceCall(
-                            this.config.service.call(req),
-                            Some(res),
-                        ),
+                        state: ServiceResponseState::ServiceCall {
+                            call: this.config.service.call(req),
+                            send: Some(res),
+                        },
                         timer: this.config.timer.clone(),
                         buffer: None,
                         _t: PhantomData,
@@ -147,10 +144,12 @@ pin_project_lite::pin_project! {
     }
 }
 
-#[pin_project::pin_project(project = ServiceResponseStateProject)]
-enum ServiceResponseState<F, B> {
-    ServiceCall(#[pin] F, Option<SendResponse<Bytes>>),
-    SendPayload(SendStream<Bytes>, ResponseBody<B>),
+pin_project_lite::pin_project! {
+    #[project = ServiceResponseStateProject]
+    enum ServiceResponseState<F, B> {
+        ServiceCall { #[pin] call: F, send: Option<SendResponse<Bytes>> },
+        SendPayload { stream: SendStream<Bytes>, body: ResponseBody<B> },
+    }
 }
 
 impl<F, I, E, B> ServiceResponse<F, I, E, B>
@@ -232,7 +231,7 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.project() {
-            ServiceResponseStateProject::ServiceCall(call, send) => {
+            ServiceResponseStateProject::ServiceCall { call, send } => {
                 match call.poll(cx) {
                     Poll::Ready(Ok(res)) => {
                         let (res, body) = res.into().replace_body(());
@@ -255,7 +254,7 @@ where
                             Poll::Ready(())
                         } else {
                             this.state
-                                .set(ServiceResponseState::SendPayload(stream, body));
+                                .set(ServiceResponseState::SendPayload { stream, body });
                             self.poll(cx)
                         }
                     }
@@ -281,16 +280,16 @@ where
                         if size.is_eof() {
                             Poll::Ready(())
                         } else {
-                            this.state.set(ServiceResponseState::SendPayload(
+                            this.state.set(ServiceResponseState::SendPayload {
                                 stream,
-                                body.into_body(),
-                            ));
+                                body: body.into_body(),
+                            });
                             self.poll(cx)
                         }
                     }
                 }
             }
-            ServiceResponseStateProject::SendPayload(stream, body) => loop {
+            ServiceResponseStateProject::SendPayload { stream, body } => loop {
                 loop {
                     if let Some(buffer) = this.buffer {
                         match stream.poll_capacity(cx) {
