@@ -1,26 +1,19 @@
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
+use std::{cell::RefCell, collections::VecDeque, pin::Pin, rc::Rc};
 
 use bytes::Bytes;
-use futures::future::{poll_fn, FutureExt, LocalBoxFuture};
-use fxhash::FxHashMap;
+use futures::future::{poll_fn, Future, FutureExt, LocalBoxFuture};
 use h2::client::{handshake, Connection, SendRequest};
 use http::uri::Authority;
 
 use crate::channel::pool;
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::Protocol;
-use crate::rt::{
-    spawn,
-    time::{delay_for, Delay},
-};
+use crate::rt::{spawn, time::delay_for, time::Delay};
 use crate::service::Service;
 use crate::task::LocalWaker;
+use crate::HashMap;
 
 use super::connection::{ConnectionType, IoConnection};
 use super::error::ConnectError;
@@ -67,7 +60,7 @@ where
             limit,
             acquired: 0,
             waiters: VecDeque::new(),
-            available: FxHashMap::default(),
+            available: HashMap::default(),
             pool: pool::new(),
             waker: LocalWaker::new(),
         }));
@@ -194,7 +187,7 @@ pub(super) struct Inner<Io> {
     disconnect_timeout: Duration,
     limit: usize,
     acquired: usize,
-    available: FxHashMap<Key, VecDeque<AvailableConnection<Io>>>,
+    available: HashMap<Key, VecDeque<AvailableConnection<Io>>>,
     waiters: VecDeque<(Key, Connect, Waiter<Io>)>,
     waker: LocalWaker,
     pool: pool::Pool<Result<IoConnection<Io>, ConnectError>>,

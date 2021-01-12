@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.27] - 2021-01-13
+
+* Use ahash instead of fxhash
+
 ## [0.1.26] - 2020-12-22
 
 * Update deps

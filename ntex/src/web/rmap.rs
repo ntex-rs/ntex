@@ -1,18 +1,17 @@
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
-use fxhash::FxHashMap;
 use url::Url;
 
 use crate::router::ResourceDef;
 use crate::web::error::UrlGenerationError;
 use crate::web::httprequest::HttpRequest;
+use crate::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct ResourceMap {
     root: ResourceDef,
     parent: RefCell<Option<Rc<ResourceMap>>>,
-    named: FxHashMap<String, ResourceDef>,
+    named: HashMap<String, ResourceDef>,
     patterns: Vec<(ResourceDef, Option<Rc<ResourceMap>>)>,
 }
 
@@ -21,7 +20,7 @@ impl ResourceMap {
         ResourceMap {
             root,
             parent: RefCell::new(None),
-            named: FxHashMap::default(),
+            named: HashMap::default(),
             patterns: Vec::new(),
         }
     }

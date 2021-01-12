@@ -2,8 +2,9 @@ use std::collections::hash_map::{self, Entry};
 use std::convert::TryFrom;
 
 use either::Either;
-use fxhash::FxHashMap;
 use http::header::{HeaderName, HeaderValue};
+
+use crate::HashMap;
 
 /// A set of HTTP headers
 ///
@@ -12,7 +13,7 @@ use http::header::{HeaderName, HeaderValue};
 /// [`HeaderName`]: struct.HeaderName.html
 #[derive(Debug, Clone)]
 pub struct HeaderMap {
-    pub(crate) inner: FxHashMap<HeaderName, Value>,
+    pub(crate) inner: HashMap<HeaderName, Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +64,7 @@ impl HeaderMap {
     /// allocate.
     pub fn new() -> Self {
         HeaderMap {
-            inner: FxHashMap::default(),
+            inner: HashMap::default(),
         }
     }
 
@@ -77,7 +78,7 @@ impl HeaderMap {
     /// More capacity than requested may be allocated.
     pub fn with_capacity(capacity: usize) -> HeaderMap {
         HeaderMap {
-            inner: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+            inner: HashMap::with_capacity_and_hasher(capacity, Default::default()),
         }
     }
 

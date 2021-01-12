@@ -59,3 +59,5 @@ pub mod rt {
 pub mod service {
     pub use ntex_service::*;
 }
+
+type HashMap<K, V> = std::collections::HashMap<K, V, ahash::RandomState>;
