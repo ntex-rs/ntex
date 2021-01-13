@@ -1,6 +1,8 @@
 # Changes
 
-## [0.1.28] - 2021-01-xx
+## [0.1.28] - 2021-01-14
+
+* Flush and close io after ws handler exit
 
 ## [0.1.27] - 2021-01-13
 
