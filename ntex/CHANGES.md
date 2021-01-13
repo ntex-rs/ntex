@@ -4,6 +4,8 @@
 
 * Flush and close io after ws handler exit
 
+* Deprecate ntex::util::order
+
 ## [0.1.27] - 2021-01-13
 
 * Use ahash instead of fxhash
