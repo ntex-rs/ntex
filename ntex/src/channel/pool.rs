@@ -33,6 +33,7 @@ struct Inner<T> {
 }
 
 impl<T> Pool<T> {
+    /// Create a new one-shot channel.
     pub fn channel(&self) -> (Sender<T>, Receiver<T>) {
         let token = self.0.get_mut().insert(Inner {
             flags: Flags::all(),

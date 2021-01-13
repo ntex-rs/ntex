@@ -1,5 +1,7 @@
 # Changes
 
+## [0.1.28] - 2021-01-xx
+
 ## [0.1.27] - 2021-01-13
 
 * Use ahash instead of fxhash

@@ -66,9 +66,9 @@ pub fn test_server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer
 }
 
 /// Start new server with server builder
-pub fn build_test_server<F>(mut factory: F) -> TestServer
+pub fn build_test_server<F>(factory: F) -> TestServer
 where
-    F: FnMut(ServerBuilder) -> ServerBuilder + Send + 'static,
+    F: FnOnce(ServerBuilder) -> ServerBuilder + Send + 'static,
 {
     let (tx, rx) = mpsc::channel();
 

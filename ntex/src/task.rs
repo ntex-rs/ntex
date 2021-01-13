@@ -1,8 +1,5 @@
 //! A synchronization primitive for task wakeup.
-use std::cell::UnsafeCell;
-use std::marker::PhantomData;
-use std::task::Waker;
-use std::{fmt, rc};
+use std::{cell::UnsafeCell, fmt, marker::PhantomData, rc, task::Waker};
 
 /// A synchronization primitive for task wakeup.
 ///
@@ -18,7 +15,7 @@ use std::{fmt, rc};
 /// differs from the usual `thread::park` pattern). It is also permitted for
 /// `wake` to be called **before** `register`. This results in a no-op.
 ///
-/// A single `AtomicWaker` may be reused for any number of calls to `register` or
+/// A single `LocalWaker` may be reused for any number of calls to `register` or
 /// `wake`.
 #[derive(Default)]
 pub struct LocalWaker {
