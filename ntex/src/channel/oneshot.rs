@@ -8,19 +8,6 @@ pub use futures::channel::oneshot::Canceled;
 use super::cell::Cell;
 use crate::task::LocalWaker;
 
-#[doc(hidden)]
-#[deprecated(since = "0.1.16", note = "Use pool::create instead")]
-pub use super::pool::new as pool;
-#[doc(hidden)]
-#[deprecated(since = "0.1.16", note = "Use pool::Pool instead")]
-pub use super::pool::Pool;
-#[doc(hidden)]
-#[deprecated(since = "0.1.16", note = "Use pool::Receiver instead")]
-pub use super::pool::Receiver as PReceiver;
-#[doc(hidden)]
-#[deprecated(since = "0.1.16", note = "Use pool::Sender instead")]
-pub use super::pool::Sender as PSender;
-
 /// Creates a new futures-aware, one-shot channel.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let inner = Cell::new(Inner {

@@ -8,6 +8,7 @@ use super::cell::Cell;
 use crate::task::LocalWaker;
 
 /// Condition allows to notify multiple waiters at the same time
+#[derive(Clone)]
 pub struct Condition(Cell<Inner>);
 
 struct Inner {
@@ -86,17 +87,7 @@ impl Future for Waiter {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        let inner = unsafe { this.inner.get_mut().data.get_unchecked_mut(this.token) };
-        if inner.is_none() {
-            let waker = LocalWaker::default();
-            waker.register(cx.waker());
-            *inner = Some(waker);
-        } else if !inner.as_mut().unwrap().register(cx.waker()) {
-            return Poll::Ready(());
-        }
-        Poll::Pending
+        self.get_mut().poll_waiter(cx)
     }
 }
 
