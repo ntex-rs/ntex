@@ -239,17 +239,10 @@ where
 
         // handle upgrade request
         if this.inner.flags.contains(Flags::UPGRADE) {
-            let result =
-                ready!(this.upgrade.as_pin_mut().unwrap().poll(cx)).map_err(|e| {
-                    error!("Upgrade handler error: {}", e);
-                    DispatchError::Upgrade
-                });
-            if result.is_err() {
-                return Poll::Ready(result);
-            }
-            this.inner.flags.remove(Flags::UPGRADE);
-            this.inner.flags.insert(Flags::SHUTDOWN);
-            return this.inner.poll_shutdown(cx);
+            return this.upgrade.as_pin_mut().unwrap().poll(cx).map_err(|e| {
+                error!("Upgrade handler error: {}", e);
+                DispatchError::Upgrade
+            });
         }
 
         // shutdown process

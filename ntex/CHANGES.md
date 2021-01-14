@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.29] - 2021-01-14
+
+* Revert http/1 disapatcher changes
+
 ## [0.1.28] - 2021-01-14
 
 * Flush and close io after ws handler exit
