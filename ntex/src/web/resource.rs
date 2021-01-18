@@ -1,11 +1,6 @@
-use std::cell::RefCell;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
-use std::{fmt, mem};
+use std::{cell::RefCell, fmt, rc::Rc, task::Context, task::Poll};
 
-use futures::future::{ok, Either, LocalBoxFuture, Ready};
+use futures::future::{ok, Either, Future, FutureExt, LocalBoxFuture, Ready};
 
 use crate::http::{Extensions, Response};
 use crate::router::{IntoPattern, ResourceDef};
@@ -445,53 +440,27 @@ impl<Err: ErrorRenderer> ServiceFactory for ResourceFactory<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = ResourceService<Err>;
-    type Future = CreateResourceService<Err>;
+    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        let default_fut = if let Some(ref default) = *self.default.borrow() {
-            Some(default.new_service(()))
-        } else {
-            None
-        };
+        let data = self.data.clone();
+        let routes = self.routes.iter().map(|route| route.service()).collect();
+        let default_fut = self.default.borrow().as_ref().map(|f| f.new_service(()));
 
-        CreateResourceService {
-            routes: self.routes.iter().map(|route| route.service()).collect(),
-            data: self.data.clone(),
-            default: None,
-            default_fut,
+        async move {
+            let default = if let Some(fut) = default_fut {
+                Some(fut.await?)
+            } else {
+                None
+            };
+
+            Ok(ResourceService {
+                routes,
+                data,
+                default,
+            })
         }
-    }
-}
-
-pub struct CreateResourceService<Err: ErrorRenderer> {
-    routes: Vec<RouteService<Err>>,
-    data: Option<Rc<Extensions>>,
-    default: Option<HttpService<Err>>,
-    default_fut: Option<LocalBoxFuture<'static, Result<HttpService<Err>, ()>>>,
-}
-
-impl<Err: ErrorRenderer> Future for CreateResourceService<Err> {
-    type Output = Result<ResourceService<Err>, ()>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut done = true;
-
-        if let Some(ref mut fut) = self.default_fut {
-            match Pin::new(fut).poll(cx)? {
-                Poll::Ready(default) => self.default = Some(default),
-                Poll::Pending => done = false,
-            }
-        }
-
-        if done {
-            Poll::Ready(Ok(ResourceService {
-                routes: mem::take(&mut self.routes),
-                data: self.data.clone(),
-                default: self.default.take(),
-            }))
-        } else {
-            Poll::Pending
-        }
+        .boxed_local()
     }
 }
 
@@ -553,7 +522,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ResourceEndpoint<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = ResourceService<Err>;
-    type Future = CreateResourceService<Err>;
+    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         self.factory.borrow_mut().as_mut().unwrap().new_service(())
