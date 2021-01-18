@@ -1,6 +1,7 @@
 //! Framed transport dispatcher
-use std::{fmt, pin::Pin, task::Context, task::Poll, time::Duration};
+use std::{fmt, io, pin::Pin, task::Context, task::Poll, time::Duration};
 
+use either::Either;
 use futures::{ready, Future, FutureExt, Stream};
 use log::debug;
 
@@ -20,11 +21,22 @@ pub enum DispatcherError<E, U: Encoder + Decoder> {
     Encoder(<U as Encoder>::Error),
     /// Decoder parse error
     Decoder(<U as Decoder>::Error),
+    /// Unexpected io error
+    IoError(io::Error),
 }
 
 impl<E, U: Encoder + Decoder> From<E> for DispatcherError<E, U> {
     fn from(err: E) -> Self {
         DispatcherError::Service(err)
+    }
+}
+
+impl<E, U: Encoder + Decoder> From<Either<E, io::Error>> for DispatcherError<E, U> {
+    fn from(err: Either<E, io::Error>) -> Self {
+        match err {
+            Either::Left(err) => DispatcherError::Service(err),
+            Either::Right(err) => DispatcherError::IoError(err),
+        }
     }
 }
 
@@ -45,6 +57,9 @@ where
             DispatcherError::Decoder(ref e) => {
                 write!(fmt, "DispatcherError::Decoder({:?})", e)
             }
+            DispatcherError::IoError(ref e) => {
+                write!(fmt, "DispatcherError::IoError({:?})", e)
+            }
         }
     }
 }
@@ -60,6 +75,7 @@ where
             DispatcherError::Service(ref e) => write!(fmt, "{}", e),
             DispatcherError::Encoder(ref e) => write!(fmt, "{:?}", e),
             DispatcherError::Decoder(ref e) => write!(fmt, "{:?}", e),
+            DispatcherError::IoError(ref e) => write!(fmt, "{}", e),
         }
     }
 }
@@ -223,9 +239,14 @@ where
                         Poll::Ready(Some(Ok(el))) => el,
                         Poll::Ready(Some(Err(err))) => {
                             log::trace!("Framed decode error");
-                            self.state = FramedState::Shutdown(Some(
-                                DispatcherError::Decoder(err),
-                            ));
+                            self.state = match err {
+                                Either::Left(err) => FramedState::Shutdown(Some(
+                                    DispatcherError::Decoder(err),
+                                )),
+                                Either::Right(err) => FramedState::Shutdown(Some(
+                                    DispatcherError::IoError(err),
+                                )),
+                            };
                             return PollResult::Continue;
                         }
                         Poll::Pending => return PollResult::Pending,
@@ -310,7 +331,7 @@ where
                     Poll::Ready(Err(err)) => {
                         debug!("Error sending data: {:?}", err);
                         self.state =
-                            FramedState::Shutdown(Some(DispatcherError::Encoder(err)));
+                            FramedState::Shutdown(Some(DispatcherError::IoError(err)));
                         return PollResult::Continue;
                     }
                 }
@@ -404,9 +425,9 @@ where
                 FramedState::ShutdownIo(ref mut delay, ref mut err) => {
                     if let Poll::Ready(res) = self.framed.close(cx) {
                         return match err.take() {
-                            Some(Ok(_)) | None => Poll::Ready(
-                                res.map_err(|e| DispatcherError::Encoder(e.into())),
-                            ),
+                            Some(Ok(_)) | None => {
+                                Poll::Ready(res.map_err(DispatcherError::IoError))
+                            }
                             Some(Err(e)) => Poll::Ready(Err(e)),
                         };
                     } else {

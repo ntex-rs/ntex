@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.1.29"
+version = "0.2.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -36,7 +36,7 @@ compress = ["flate2", "brotli2"]
 cookie = ["coo-kie", "coo-kie/percent-encode"]
 
 [dependencies]
-ntex-codec = "0.1.2"
+ntex-codec = "0.2.1"
 ntex-rt = "0.1.1"
 ntex-rt-macros = "0.1"
 ntex-router = "0.3.8"
@@ -51,7 +51,7 @@ bytestring = "0.1.5"
 derive_more = "0.99.11"
 either = "1.5.3"
 encoding_rs = "0.8.26"
-futures = "0.3.9"
+futures = "0.3.12"
 ahash = "0.6.2"
 h2 = "0.2.4"
 http = "0.2.1"
@@ -76,8 +76,8 @@ coo-kie = { version = "0.14.2", package = "cookie", optional = true }
 tokio = "0.2.6"
 
 # resolver
-trust-dns-proto = { version = "0.19.3", default-features = false }
-trust-dns-resolver = { version = "0.19.3", default-features = false, features=["system-config"] }
+trust-dns-proto = { version = "0.19.6", default-features = false }
+trust-dns-resolver = { version = "0.19.6", default-features = false, features=["system-config"] }
 async-trait = "0.1.27" # this is only for trust-dns
 
 # FIXME: Remove it and use mio own uds feature once mio 0.7 is released
@@ -98,7 +98,7 @@ brotli2 = { version="0.3.2", optional = true }
 flate2 = { version = "1.0.14", optional = true }
 
 [dev-dependencies]
-futures = "0.3.9"
+futures = "0.3.12"
 env_logger = "0.8"
 serde_derive = "1.0"
 open-ssl = { version="0.10", package = "openssl" }

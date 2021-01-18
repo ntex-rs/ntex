@@ -1,11 +1,8 @@
 //! Http related errors
-use std::io::Write;
-use std::str::Utf8Error;
-use std::string::FromUtf8Error;
-use std::{fmt, io};
+use std::{fmt, io, io::Write, str::Utf8Error, string::FromUtf8Error};
 
-use http::uri::InvalidUri;
-use http::{header, StatusCode};
+use either::Either;
+use http::{header, uri::InvalidUri, StatusCode};
 
 // re-export for convinience
 pub use actix_threadpool::BlockingError;
@@ -164,6 +161,15 @@ impl From<BlockingError<io::Error>> for PayloadError {
                 io::ErrorKind::Other,
                 "Operation is canceled",
             )),
+        }
+    }
+}
+
+impl From<Either<PayloadError, io::Error>> for PayloadError {
+    fn from(err: Either<PayloadError, io::Error>) -> Self {
+        match err {
+            Either::Left(err) => err,
+            Either::Right(err) => PayloadError::Io(err),
         }
     }
 }

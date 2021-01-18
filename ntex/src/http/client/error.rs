@@ -1,8 +1,8 @@
 //! Http client errors
-use std::error::Error;
-use std::io;
+use std::{error::Error, io};
 
 use derive_more::{Display, From};
+use either::Either;
 use serde_json::error::Error as JsonError;
 
 #[cfg(feature = "openssl")]
@@ -184,6 +184,24 @@ pub enum SendRequestError {
 }
 
 impl std::error::Error for SendRequestError {}
+
+impl From<Either<io::Error, io::Error>> for SendRequestError {
+    fn from(err: Either<io::Error, io::Error>) -> Self {
+        match err {
+            Either::Left(err) => SendRequestError::Send(err),
+            Either::Right(err) => SendRequestError::Send(err),
+        }
+    }
+}
+
+impl From<Either<ParseError, io::Error>> for SendRequestError {
+    fn from(err: Either<ParseError, io::Error>) -> Self {
+        match err {
+            Either::Left(err) => SendRequestError::Response(err),
+            Either::Right(err) => SendRequestError::Send(err),
+        }
+    }
+}
 
 /// A set of errors that can occur during freezing a request
 #[derive(Debug, Display, From)]

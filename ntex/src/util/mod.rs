@@ -12,7 +12,3 @@ pub mod variant;
 
 pub use self::either::either;
 pub use self::extensions::Extensions;
-
-#[doc(hidden)]
-#[deprecated(since = "0.1.27")]
-pub mod order;
