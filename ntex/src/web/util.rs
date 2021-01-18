@@ -287,6 +287,7 @@ where
     S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
+    S::Future: 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
 {
