@@ -6,6 +6,8 @@
 
 * Upgrade to ntex-codec 0.2
 
+* Drop deprecated ntex::util::order
+
 ## [0.1.29] - 2021-01-14
 
 * Revert http/1 disapatcher changes
