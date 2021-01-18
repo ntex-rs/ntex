@@ -92,8 +92,8 @@ where
     U: Decoder + Encoder + 'static,
     <U as Encoder>::Item: 'static,
 {
-    /// Construct new `Dispatcher` instance with outgoing messages stream.
-    pub(crate) fn with<T, F: IntoService<S>>(
+    /// Construct new `Dispatcher` instance.
+    pub fn with<T, F: IntoService<S>>(
         io: T,
         state: State<U>,
         service: F,
@@ -136,7 +136,7 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default keep-alive timeout is set to 30 seconds.
-    pub(crate) fn keepalive_timeout(mut self, timeout: u16) -> Self {
+    pub fn keepalive_timeout(mut self, timeout: u16) -> Self {
         // register keepalive timer
         let prev = self.updated + Duration::from_secs(self.keepalive_timeout as u64);
         if timeout == 0 {
@@ -159,7 +159,7 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default disconnect timeout is set to 1 seconds.
-    pub(crate) fn disconnect_timeout(self, val: u16) -> Self {
+    pub fn disconnect_timeout(self, val: u16) -> Self {
         self.state.set_disconnect_timeout(val);
         self
     }
