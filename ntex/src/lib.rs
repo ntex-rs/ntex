@@ -31,6 +31,7 @@ pub use ntex_rt_macros::{main, test};
 
 pub mod channel;
 pub mod connect;
+pub mod framed;
 pub mod http;
 pub mod server;
 pub mod task;
@@ -61,3 +62,4 @@ pub mod service {
 }
 
 type HashMap<K, V> = std::collections::HashMap<K, V, ahash::RandomState>;
+type HashSet<V> = std::collections::HashSet<V, ahash::RandomState>;
