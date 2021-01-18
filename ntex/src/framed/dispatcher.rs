@@ -180,7 +180,7 @@ where
         wake: bool,
     ) {
         self.inflight.set(self.inflight.get() - 1);
-        if let Err(err) = state.write_item(item) {
+        if let Err(err) = state.write_result(item) {
             self.error.set(Some(err.into()));
         }
 
@@ -337,7 +337,7 @@ where
                                         .poll(cx);
 
                                     if let Poll::Ready(res) = res {
-                                        if let Err(err) = this.state.write_item(res) {
+                                        if let Err(err) = this.state.write_result(res) {
                                             this.inner.error.set(Some(err.into()));
                                         }
                                         this.response.set(None);
@@ -404,7 +404,7 @@ where
                     *this.st = DispatcherState::Shutdown;
                     self.poll(cx)
                 } else {
-                    this.state.register_dispatch_task(cx.waker());
+                    this.state.dsp_register_task(cx.waker());
                     Poll::Pending
                 }
             }
@@ -576,9 +576,7 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
-        assert!(st
-            .write_item::<()>(Ok(Some(Bytes::from_static(b"test"))))
-            .is_ok());
+        assert!(st.write_item(Bytes::from_static(b"test")).is_ok());
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
@@ -603,7 +601,7 @@ mod tests {
         crate::rt::spawn(disp.map(|_| ()));
 
         state
-            .write_item::<()>(Ok(Some(Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"))))
+            .write_item(Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"))
             .unwrap();
 
         let buf = client.read_any();

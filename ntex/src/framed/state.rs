@@ -117,7 +117,8 @@ impl<U> hash::Hash for State<U> {
 }
 
 impl<U> State<U> {
-    pub(crate) fn new(codec: U) -> Self {
+    /// Create `State` instance
+    pub fn new(codec: U) -> Self {
         State(Rc::new(IoStateInner {
             flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
@@ -135,10 +136,12 @@ impl<U> State<U> {
         self.0.disconnect_timeout.get()
     }
 
+    #[inline]
     pub fn set_disconnect_timeout(&self, timeout: u16) {
         self.0.disconnect_timeout.set(timeout)
     }
 
+    #[inline]
     pub fn take_io_error(&self) -> Option<io::Error> {
         self.0.error.take()
     }
@@ -173,6 +176,15 @@ impl<U> State<U> {
     #[inline]
     pub fn is_dsp_stopped(&self) -> bool {
         self.0.flags.get().contains(Flags::DSP_STOP)
+    }
+
+    #[inline]
+    pub fn is_opened(&self) -> bool {
+        !self
+            .0
+            .flags
+            .get()
+            .intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::DSP_STOP)
     }
 
     #[inline]
@@ -221,10 +233,6 @@ impl<U> State<U> {
         flags.insert(Flags::IO_ERR);
         self.0.flags.set(flags);
         self.0.read_task.wake();
-    }
-
-    pub(super) fn register_dispatch_task(&self, waker: &Waker) {
-        self.0.dispatch_task.register(waker);
     }
 
     pub(super) fn register_read_task(&self, waker: &Waker) {
@@ -434,6 +442,7 @@ where
             .map_err(Either::Right)
     }
 
+    #[inline]
     /// Attempts to decode a frame from the read buffer.
     pub fn decode_item(
         &self,
@@ -444,8 +453,32 @@ where
             .decode(&mut self.0.read_buf.borrow_mut())
     }
 
+    #[inline]
     /// Write item to a buf and wake up io task
-    pub fn write_item<E>(
+    pub fn write_item(
+        &self,
+        item: <U as Encoder>::Item,
+    ) -> Result<(), <U as Encoder>::Error> {
+        let flags = self.0.flags.get();
+
+        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+            let mut write_buf = self.0.write_buf.borrow_mut();
+            let is_write_sleep = write_buf.is_empty();
+
+            // encode item and wake write task
+            let res = self.0.codec.borrow_mut().encode(item, &mut *write_buf);
+            if res.is_ok() && is_write_sleep {
+                self.0.write_task.wake();
+            }
+            res
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline]
+    /// Write item to a buf and wake up io task
+    pub fn write_result<E>(
         &self,
         item: Result<Option<Response<U>>, E>,
     ) -> Result<(), Either<E, <U as Encoder>::Error>> {
