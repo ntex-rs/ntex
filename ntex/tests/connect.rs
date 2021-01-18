@@ -15,7 +15,7 @@ async fn test_string() {
     let srv = test_server(|| {
         fn_service(|io: TcpStream| async {
             let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await?;
+            framed.send(Bytes::from_static(b"test")).await.unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -32,7 +32,7 @@ async fn test_rustls_string() {
     let srv = test_server(|| {
         fn_service(|io: TcpStream| async {
             let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await?;
+            framed.send(Bytes::from_static(b"test")).await.unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -48,7 +48,7 @@ async fn test_static_str() {
     let srv = test_server(|| {
         fn_service(|io: TcpStream| async {
             let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await?;
+            framed.send(Bytes::from_static(b"test")).await.unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -70,7 +70,7 @@ async fn test_new_service() {
     let srv = test_server(|| {
         fn_service(|io: TcpStream| async {
             let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await?;
+            framed.send(Bytes::from_static(b"test")).await.unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -95,7 +95,7 @@ async fn test_uri() {
     let srv = test_server(|| {
         fn_service(|io: TcpStream| async {
             let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await?;
+            framed.send(Bytes::from_static(b"test")).await.unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -116,7 +116,7 @@ async fn test_rustls_uri() {
     let srv = test_server(|| {
         fn_service(|io: TcpStream| async {
             let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await?;
+            framed.send(Bytes::from_static(b"test")).await.unwrap();
             Ok::<_, io::Error>(())
         })
     });

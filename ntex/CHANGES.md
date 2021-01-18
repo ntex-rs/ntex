@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0] - 2021-01-xx
+
+* Upgrade to ntex-codec 0.2
+
 ## [0.1.29] - 2021-01-14
 
 * Revert http/1 disapatcher changes
