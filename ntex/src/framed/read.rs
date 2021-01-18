@@ -42,9 +42,8 @@ where
             self.state.register_read_task(cx.waker());
             Poll::Pending
         } else {
-            let result = self
-                .state
-                .with_read_buf(|buf| read(&mut *self.io.borrow_mut(), buf, cx));
+            let mut io = self.io.borrow_mut();
+            let result = self.state.with_read_buf(|buf| read(&mut *io, buf, cx));
             match result {
                 Ok(updated) => {
                     self.state.update_read_task(updated, cx.waker());

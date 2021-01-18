@@ -412,7 +412,7 @@ where
             DispatcherState::Shutdown => {
                 let err = this.inner.error.take();
 
-                return if this.service.poll_shutdown(cx, err.is_some()).is_ready() {
+                if this.service.poll_shutdown(cx, err.is_some()).is_ready() {
                     log::trace!("service shutdown is completed, stop");
 
                     Poll::Ready(if let Some(DispatcherError::Service(err)) = err {
@@ -423,7 +423,7 @@ where
                 } else {
                     this.inner.error.set(err);
                     Poll::Pending
-                };
+                }
             }
         }
     }

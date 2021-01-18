@@ -426,7 +426,7 @@ where
                     if let Poll::Ready(res) = self.framed.close(cx) {
                         return match err.take() {
                             Some(Ok(_)) | None => {
-                                Poll::Ready(res.map_err(|e| DispatcherError::IoError(e)))
+                                Poll::Ready(res.map_err(DispatcherError::IoError))
                             }
                             Some(Err(e)) => Poll::Ready(Err(e)),
                         };
