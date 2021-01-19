@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.2.0"
+version = "0.2.0-b01"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -52,7 +52,7 @@ derive_more = "0.99.11"
 either = "1.5.3"
 encoding_rs = "0.8.26"
 futures = "0.3.12"
-ahash = "0.6.2"
+ahash = "0.6.3"
 h2 = "0.2.4"
 http = "0.2.1"
 httparse = "1.3"

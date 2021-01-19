@@ -1,6 +1,6 @@
 # Changes
 
-## [0.2.0] - 2021-01-xx
+## [0.2.0-b01] - 2021-01-19
 
 * Introduce ntex::framed module
 
