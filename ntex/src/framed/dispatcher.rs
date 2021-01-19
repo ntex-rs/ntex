@@ -515,46 +515,6 @@ mod tests {
     }
 
     #[ntex_rt::test]
-    async fn test_ordering() {
-        let (client, server) = Io::create();
-        client.remote_buffer_cap(1024);
-        client.write("test");
-
-        let condition = Condition::new();
-        let waiter = condition.wait();
-
-        let (disp, _) = Dispatcher::new(
-            server,
-            BytesCodec,
-            crate::fn_service(move |msg: DispatcherItem<BytesCodec>| {
-                let waiter = waiter.clone();
-                async move {
-                    waiter.await;
-                    if let DispatcherItem::Item(msg) = msg {
-                        Ok::<_, ()>(Some(msg.freeze()))
-                    } else {
-                        panic!()
-                    }
-                }
-            }),
-        );
-        crate::rt::spawn(disp.map(|_| ()));
-        delay_for(Duration::from_millis(50)).await;
-
-        client.write("test");
-        delay_for(Duration::from_millis(50)).await;
-        client.write("test");
-        delay_for(Duration::from_millis(50)).await;
-        condition.notify();
-
-        let buf = client.read().await.unwrap();
-        assert_eq!(buf, Bytes::from_static(b"testtesttest"));
-
-        client.close().await;
-        assert!(client.is_server_dropped());
-    }
-
-    #[ntex_rt::test]
     async fn test_sink() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(1024);

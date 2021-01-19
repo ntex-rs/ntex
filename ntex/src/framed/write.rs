@@ -218,7 +218,7 @@ where
     } else {
         buf.advance(written);
     }
-    if buf.len() < HW {
+    if buf.is_empty() {
         Poll::Ready(Ok(()))
     } else {
         Poll::Pending
