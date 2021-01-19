@@ -1,10 +1,6 @@
-use std::cell::RefCell;
-use std::fmt;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::{cell::RefCell, fmt, rc::Rc, task::Context, task::Poll};
 
-use futures::future::{ok, Either, Future, LocalBoxFuture, Ready};
+use futures::future::{ok, Either, Future, FutureExt, LocalBoxFuture, Ready};
 
 use crate::http::{Extensions, Response};
 use crate::router::{ResourceDef, ResourceInfo, Router};
@@ -499,111 +495,39 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = ScopeService<Err>;
-    type Future = ScopeFactoryResponse<Err>;
+    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        let default_fut = if let Some(ref default) = *self.default.borrow() {
-            Some(default.new_service(()))
-        } else {
-            None
-        };
+        let services = self.services.clone();
+        let data = self.data.clone();
+        let default_fut = self
+            .default
+            .borrow()
+            .as_ref()
+            .map(|srv| srv.new_service(()));
 
-        ScopeFactoryResponse {
-            fut: self
-                .services
-                .iter()
-                .map(|(path, service, guards)| {
-                    CreateScopeServiceItem::Future(
-                        Some(path.clone()),
-                        guards.borrow_mut().take(),
-                        service.new_service(()),
-                    )
-                })
-                .collect(),
-            default: None,
-            data: self.data.clone(),
-            default_fut,
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-/// Create scope service
-#[doc(hidden)]
-pub struct ScopeFactoryResponse<Err: ErrorRenderer> {
-    fut: Vec<CreateScopeServiceItem<Err>>,
-    data: Option<Rc<Extensions>>,
-    default: Option<HttpService<Err>>,
-    default_fut: Option<LocalBoxFuture<'static, Result<HttpService<Err>, ()>>>,
-}
-}
-
-type HttpServiceFut<Err> = LocalBoxFuture<'static, Result<HttpService<Err>, ()>>;
-
-enum CreateScopeServiceItem<Err: ErrorRenderer> {
-    Future(Option<ResourceDef>, Option<Guards>, HttpServiceFut<Err>),
-    Service(ResourceDef, Option<Guards>, HttpService<Err>),
-}
-
-impl<Err: ErrorRenderer> Future for ScopeFactoryResponse<Err> {
-    type Output = Result<ScopeService<Err>, ()>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut done = true;
-
-        if let Some(ref mut fut) = self.default_fut {
-            match Pin::new(fut).poll(cx)? {
-                Poll::Ready(default) => self.default = Some(default),
-                Poll::Pending => done = false,
+        async move {
+            // create http services
+            let mut router = Router::build();
+            for (path, factory, guards) in &mut services.iter() {
+                let service = factory.new_service(()).await?;
+                router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
             }
-        }
 
-        // poll http services
-        for item in &mut self.fut {
-            let res = match item {
-                CreateScopeServiceItem::Future(
-                    ref mut path,
-                    ref mut guards,
-                    ref mut fut,
-                ) => match Pin::new(fut).poll(cx)? {
-                    Poll::Ready(service) => {
-                        Some((path.take().unwrap(), guards.take(), service))
-                    }
-                    Poll::Pending => {
-                        done = false;
-                        None
-                    }
-                },
-                CreateScopeServiceItem::Service(_, _, _) => continue,
+            let default = if let Some(fut) = default_fut {
+                Some(fut.await?)
+            } else {
+                None
             };
 
-            if let Some((path, guards, service)) = res {
-                *item = CreateScopeServiceItem::Service(path, guards, service);
-            }
-        }
-
-        if done {
-            let router = self
-                .fut
-                .drain(..)
-                .fold(Router::build(), |mut router, item| {
-                    match item {
-                        CreateScopeServiceItem::Service(path, guards, service) => {
-                            router.rdef(path, service).2 = guards;
-                        }
-                        CreateScopeServiceItem::Future(_, _, _) => unreachable!(),
-                    }
-                    router
-                });
-            Poll::Ready(Ok(ScopeService {
-                data: self.data.clone(),
+            Ok(ScopeService {
+                data,
+                default,
                 router: router.finish(),
-                default: self.default.take(),
                 _ready: None,
-            }))
-        } else {
-            Poll::Pending
+            })
         }
+        .boxed_local()
     }
 }
 
@@ -669,7 +593,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeEndpoint<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = ScopeService<Err>;
-    type Future = ScopeFactoryResponse<Err>;
+    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         self.factory.borrow_mut().as_mut().unwrap().new_service(())

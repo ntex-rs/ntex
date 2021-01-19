@@ -89,6 +89,7 @@ where
         Error = Err::Container,
         InitError = (),
     >,
+    T::Future: 'static,
     Err: ErrorRenderer,
 {
     /// Set application data. Application data could be accessed
@@ -512,6 +513,7 @@ where
         Error = Err::Container,
         InitError = (),
     >,
+    T::Future: 'static,
     Err: ErrorRenderer,
 {
     fn into_factory(self) -> AppFactory<T, Err> {
