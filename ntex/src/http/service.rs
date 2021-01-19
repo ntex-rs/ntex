@@ -389,8 +389,8 @@ where
             let config = DispatcherConfig::new(cfg, service, expect, upgrade);
 
             Ok(HttpServiceHandler {
+                on_connect,
                 config: Rc::new(config),
-                on_connect: on_connect,
                 _t: PhantomData,
             })
         }

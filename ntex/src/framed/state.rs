@@ -13,7 +13,6 @@ use crate::task::LocalWaker;
 type Request<U> = <U as Decoder>::Item;
 type Response<U> = <U as Encoder>::Item;
 
-const LW: usize = 1024;
 const HW: usize = 8 * 1024;
 
 bitflags::bitflags! {

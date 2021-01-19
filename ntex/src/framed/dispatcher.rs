@@ -1,8 +1,8 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
 use std::{
-    cell::Cell, cell::RefCell, collections::VecDeque, fmt, future::Future, pin::Pin,
-    rc::Rc, time::Duration, time::Instant,
+    cell::Cell, cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, time::Duration,
+    time::Instant,
 };
 
 use either::Either;
@@ -58,7 +58,6 @@ enum DispatcherState {
 }
 
 pub(crate) enum DispatcherError<S, U> {
-    None,
     KeepAlive,
     Encoder(U),
     Service(S),
@@ -81,7 +80,7 @@ impl<E1, E2: fmt::Debug> DispatcherError<E1, E2> {
         match self {
             DispatcherError::KeepAlive => Some(DispatcherItem::KeepAliveTimeout),
             DispatcherError::Encoder(err) => Some(DispatcherItem::EncoderError(err)),
-            DispatcherError::None | DispatcherError::Service(_) => None,
+            DispatcherError::Service(_) => None,
         }
     }
 }
