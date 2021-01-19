@@ -1,9 +1,4 @@
-use std::cell::RefCell;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::{cell::RefCell, marker::PhantomData, rc::Rc, task::Context, task::Poll};
 
 use futures::future::{ok, FutureExt, LocalBoxFuture};
 
@@ -43,6 +38,7 @@ where
         Error = Err::Container,
         InitError = (),
     >,
+    T::Future: 'static,
     Err: ErrorRenderer,
 {
     pub(super) endpoint: T,
@@ -65,6 +61,7 @@ where
         Error = Err::Container,
         InitError = (),
     >,
+    T::Future: 'static,
     Err: ErrorRenderer,
 {
     type Config = AppConfig;
@@ -73,7 +70,7 @@ where
     type Error = T::Error;
     type InitError = T::InitError;
     type Service = AppFactoryService<T::Service, Err>;
-    type Future = AppFactoryResult<T, Err>;
+    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, config: AppConfig) -> Self::Future {
         // update resource default service
@@ -120,98 +117,41 @@ where
         let rmap = Rc::new(rmap);
         rmap.finish(rmap.clone());
 
-        AppFactoryResult {
-            endpoint: None,
-            endpoint_fut: self.endpoint.new_service(()),
-            data: self.data.clone(),
-            data_factories: Vec::new(),
-            data_factories_fut: self.data_factories.iter().map(|f| f()).collect(),
-            case_insensitive: self.case_insensitive,
-            extensions: Some(
-                self.extensions
-                    .borrow_mut()
-                    .take()
-                    .unwrap_or_else(Extensions::new),
-            ),
-            config,
-            rmap,
-            _t: PhantomData,
-        }
-    }
-}
+        let fut = self.endpoint.new_service(());
+        let data = self.data.clone();
+        let data_factories = self.data_factories.clone();
+        let mut extensions = self
+            .extensions
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(Extensions::new);
 
-pin_project_lite::pin_project! {
-    pub struct AppFactoryResult<T: ServiceFactory, Err> {
-        endpoint: Option<T::Service>,
-        #[pin]
-        endpoint_fut: T::Future,
-        rmap: Rc<ResourceMap>,
-        config: AppConfig,
-        data: Rc<Vec<Box<dyn DataFactory>>>,
-        data_factories: Vec<Box<dyn DataFactory>>,
-        data_factories_fut: Vec<LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>,
-        case_insensitive: bool,
-        extensions: Option<Extensions>,
-        _t: PhantomData<Err>,
-    }
-}
+        async move {
+            // main service
+            let service = fut.await?;
 
-impl<T, Err> Future for AppFactoryResult<T, Err>
-where
-    T: ServiceFactory<
-        Config = (),
-        Request = WebRequest<Err>,
-        Response = WebResponse,
-        Error = Err::Container,
-        InitError = (),
-    >,
-    Err: ErrorRenderer,
-{
-    type Output = Result<AppFactoryService<T::Service, Err>, ()>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-
-        // async data factories
-        let mut idx = 0;
-        while idx < this.data_factories_fut.len() {
-            match Pin::new(&mut this.data_factories_fut[idx]).poll(cx)? {
-                Poll::Ready(f) => {
-                    this.data_factories.push(f);
-                    let _ = this.data_factories_fut.remove(idx);
-                }
-                Poll::Pending => idx += 1,
-            }
-        }
-
-        if this.endpoint.is_none() {
-            if let Poll::Ready(srv) = this.endpoint_fut.poll(cx)? {
-                *this.endpoint = Some(srv);
-            }
-        }
-
-        if this.endpoint.is_some() && this.data_factories_fut.is_empty() {
             // create app data container
-            let mut data = this.extensions.take().unwrap();
-            for f in this.data.iter() {
-                f.create(&mut data);
+            for f in data.iter() {
+                f.create(&mut extensions);
             }
 
-            for f in this.data_factories.iter() {
-                f.create(&mut data);
+            // async data factories
+            for fut in data_factories.iter() {
+                if let Ok(f) = fut().await {
+                    f.create(&mut extensions);
+                }
             }
 
-            Poll::Ready(Ok(AppFactoryService {
-                service: this.endpoint.take().unwrap(),
-                rmap: this.rmap.clone(),
-                config: this.config.clone(),
-                data: Rc::new(data),
+            Ok(AppFactoryService {
+                service,
+                rmap,
+                config,
+                data: Rc::new(extensions),
                 pool: HttpRequestPool::create(),
                 _t: PhantomData,
-            }))
-        } else {
-            Poll::Pending
+            })
         }
+        .boxed_local()
     }
 }
 
@@ -309,108 +249,31 @@ impl<Err: ErrorRenderer> ServiceFactory for AppRoutingFactory<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = AppRouting<Err>;
-    type Future = AppRoutingFactoryResponse<Err>;
+    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        AppRoutingFactoryResponse {
-            fut: self
-                .services
-                .iter()
-                .map(|(path, service, guards)| {
-                    CreateAppRoutingItem::Future(
-                        Some(path.clone()),
-                        guards.borrow_mut().take(),
-                        service.new_service(()).boxed_local(),
-                    )
-                })
-                .collect(),
-            default: None,
-            default_fut: Some(self.default.new_service(())),
-            case_insensitive: self.case_insensitive,
-        }
-    }
-}
+        let services = self.services.clone();
+        let default_fut = self.default.new_service(());
 
-type HttpServiceFut<Err> = LocalBoxFuture<'static, Result<HttpService<Err>, ()>>;
-
-/// Create app service
-#[doc(hidden)]
-pub struct AppRoutingFactoryResponse<Err: ErrorRenderer> {
-    fut: Vec<CreateAppRoutingItem<Err>>,
-    default: Option<HttpService<Err>>,
-    default_fut: Option<LocalBoxFuture<'static, Result<HttpService<Err>, ()>>>,
-    case_insensitive: bool,
-}
-
-enum CreateAppRoutingItem<Err: ErrorRenderer> {
-    Future(Option<ResourceDef>, Option<Guards>, HttpServiceFut<Err>),
-    Service(ResourceDef, Option<Guards>, HttpService<Err>),
-}
-
-impl<Err: ErrorRenderer> Future for AppRoutingFactoryResponse<Err> {
-    type Output = Result<AppRouting<Err>, ()>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut done = true;
-
-        if let Some(ref mut fut) = self.default_fut {
-            match Pin::new(fut).poll(cx)? {
-                Poll::Ready(default) => self.default = Some(default),
-                Poll::Pending => done = false,
-            }
+        let mut router = Router::build();
+        if self.case_insensitive {
+            router.case_insensitive();
         }
 
-        // poll http services
-        for item in &mut self.fut {
-            let res = match item {
-                CreateAppRoutingItem::Future(
-                    ref mut path,
-                    ref mut guards,
-                    ref mut fut,
-                ) => match Pin::new(fut).poll(cx) {
-                    Poll::Ready(Ok(service)) => {
-                        Some((path.take().unwrap(), guards.take(), service))
-                    }
-                    Poll::Ready(Err(_)) => return Poll::Ready(Err(())),
-                    Poll::Pending => {
-                        done = false;
-                        None
-                    }
-                },
-                CreateAppRoutingItem::Service(_, _, _) => continue,
-            };
-
-            if let Some((path, guards, service)) = res {
-                *item = CreateAppRoutingItem::Service(path, guards, service);
-            }
-        }
-
-        if done {
-            let mut router =
-                self.fut
-                    .drain(..)
-                    .fold(Router::build(), |mut router, item| {
-                        match item {
-                            CreateAppRoutingItem::Service(path, guards, service) => {
-                                router.rdef(path, service).2 = guards;
-                            }
-                            CreateAppRoutingItem::Future(_, _, _) => unreachable!(),
-                        }
-                        router
-                    });
-
-            if self.case_insensitive {
-                router.case_insensitive();
+        async move {
+            // create http services
+            for (path, factory, guards) in &mut services.iter() {
+                let service = factory.new_service(()).await?;
+                router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
             }
 
-            Poll::Ready(Ok(AppRouting {
+            Ok(AppRouting {
                 ready: None,
                 router: router.finish(),
-                default: self.default.take(),
-            }))
-        } else {
-            Poll::Pending
+                default: Some(default_fut.await?),
+            })
         }
+        .boxed_local()
     }
 }
 
@@ -476,7 +339,7 @@ impl<Err: ErrorRenderer> ServiceFactory for AppEntry<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = AppRouting<Err>;
-    type Future = AppRoutingFactoryResponse<Err>;
+    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         self.factory.borrow_mut().as_mut().unwrap().new_service(())

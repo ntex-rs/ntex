@@ -25,7 +25,7 @@ use super::response::ClientResponse;
 use super::ClientConfig;
 
 /// `WebSocket` connection
-pub struct WebsocketsRequest {
+pub struct WsRequest {
     pub(crate) head: RequestHead,
     err: Option<HttpError>,
     origin: Option<HeaderValue>,
@@ -38,7 +38,7 @@ pub struct WebsocketsRequest {
     config: Rc<ClientConfig>,
 }
 
-impl WebsocketsRequest {
+impl WsRequest {
     /// Create new websocket connection
     pub(super) fn new<U>(uri: U, config: Rc<ClientConfig>) -> Self
     where
@@ -56,7 +56,7 @@ impl WebsocketsRequest {
             Err(e) => (Default::default(), Some(e.into())),
         };
 
-        WebsocketsRequest {
+        WsRequest {
             head,
             err,
             config,
@@ -392,7 +392,7 @@ impl WebsocketsRequest {
     }
 }
 
-impl fmt::Debug for WebsocketsRequest {
+impl fmt::Debug for WsRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,

@@ -7,6 +7,8 @@ use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use crate::framed::State;
 use crate::rt::time::{delay_for, Delay};
 
+const HW: usize = 8 * 1024;
+
 #[derive(Debug)]
 enum IoWriteState {
     Processing,
@@ -83,12 +85,16 @@ where
                 }
 
                 // flush framed instance
-                let result = this
-                    .state
-                    .with_write_buf(|buf| flush(&mut *this.io.borrow_mut(), buf, cx));
+                let (result, len) = this.state.with_write_buf(|buf| {
+                    (flush(&mut *this.io.borrow_mut(), buf, cx), buf.len())
+                });
 
                 match result {
-                    Poll::Ready(Ok(_)) | Poll::Pending => (),
+                    Poll::Ready(Ok(_)) | Poll::Pending => {
+                        if len < HW {
+                            this.state.update_write_task()
+                        }
+                    }
                     Poll::Ready(Err(err)) => {
                         log::trace!("error sending data: {:?}", err);
                         this.state.set_io_error(Some(err));

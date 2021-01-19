@@ -1,7 +1,7 @@
 use std::{fmt, marker::PhantomData, net, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use bytes::Bytes;
-use futures::{future::ok, ready, Future};
+use futures::future::{ok, Future, FutureExt, LocalBoxFuture};
 use h2::server::{self, Handshake};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
@@ -33,6 +33,7 @@ where
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
+    S::Future: 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
 {
@@ -48,6 +49,7 @@ where
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
+    S::Future: 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
 {
@@ -87,6 +89,7 @@ where
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
+    S::Future: 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody,
 {
@@ -100,6 +103,7 @@ where
         X1: ServiceFactory<Config = (), Request = Request, Response = Request>,
         X1::Error: ResponseError,
         X1::InitError: fmt::Debug,
+        X1::Future: 'static,
     {
         HttpService {
             expect,
@@ -124,6 +128,7 @@ where
         >,
         U1::Error: fmt::Display,
         U1::InitError: fmt::Debug,
+        U1::Future: 'static,
     {
         HttpService {
             upgrade,
@@ -151,11 +156,13 @@ where
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
+    S::Future: 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
     X: ServiceFactory<Config = (), Request = Request, Response = Request>,
     X::Error: ResponseError,
     X::InitError: fmt::Debug,
+    X::Future: 'static,
     <X::Service as Service>::Future: 'static,
     U: ServiceFactory<
         Config = (),
@@ -164,6 +171,7 @@ where
     >,
     U::Error: fmt::Display + ResponseError,
     U::InitError: fmt::Debug,
+    U::Future: 'static,
     <U::Service as Service>::Future: 'static,
 {
     /// Create simple tcp stream service
@@ -196,11 +204,13 @@ mod openssl {
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
+        S::Future: 'static,
         <S::Service as Service>::Future: 'static,
         B: MessageBody + 'static,
         X: ServiceFactory<Config = (), Request = Request, Response = Request>,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
+        X::Future: 'static,
         <X::Service as Service>::Future: 'static,
         U: ServiceFactory<
             Config = (),
@@ -209,6 +219,7 @@ mod openssl {
         >,
         U::Error: fmt::Display + ResponseError,
         U::InitError: fmt::Debug,
+        U::Future: 'static,
         <U::Service as Service>::Future: 'static,
     {
         /// Create openssl based service
@@ -257,12 +268,14 @@ mod rustls {
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
+        S::Future: 'static,
         S::Response: Into<Response<B>> + 'static,
         <S::Service as Service>::Future: 'static,
         B: MessageBody + 'static,
         X: ServiceFactory<Config = (), Request = Request, Response = Request>,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
+        X::Future: 'static,
         <X::Service as Service>::Future: 'static,
         U: ServiceFactory<
             Config = (),
@@ -271,6 +284,7 @@ mod rustls {
         >,
         U::Error: fmt::Display + ResponseError,
         U::InitError: fmt::Debug,
+        U::Future: 'static,
         <U::Service as Service>::Future: 'static,
     {
         /// Create openssl based service
@@ -316,16 +330,18 @@ mod rustls {
 
 impl<T, S, B, X, U> ServiceFactory for HttpService<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
+    S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
     X: ServiceFactory<Config = (), Request = Request, Response = Request>,
     X::Error: ResponseError,
     X::InitError: fmt::Debug,
+    X::Future: 'static,
     <X::Service as Service>::Future: 'static,
     U: ServiceFactory<
         Config = (),
@@ -334,6 +350,7 @@ where
     >,
     U::Error: fmt::Display + ResponseError,
     U::InitError: fmt::Debug,
+    U::Future: 'static,
     <U::Service as Service>::Future: 'static,
 {
     type Config = ();
@@ -342,107 +359,42 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = HttpServiceHandler<T, S::Service, B, X::Service, U::Service>;
-    type Future = HttpServiceResponse<T, S, B, X, U>;
+    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        HttpServiceResponse {
-            fut: self.srv.new_service(()),
-            fut_ex: Some(self.expect.new_service(())),
-            fut_upg: self.upgrade.as_ref().map(|f| f.new_service(())),
-            expect: None,
-            upgrade: None,
-            on_connect: self.on_connect.clone(),
-            cfg: self.cfg.clone(),
-            _t: PhantomData,
-        }
-    }
-}
+        let fut = self.srv.new_service(());
+        let fut_ex = self.expect.new_service(());
+        let fut_upg = self.upgrade.as_ref().map(|f| f.new_service(()));
+        let on_connect = self.on_connect.clone();
+        let cfg = self.cfg.clone();
 
-pin_project_lite::pin_project! {
-    #[doc(hidden)]
-    pub struct HttpServiceResponse<
-        T,
-        S: ServiceFactory,
-        B,
-        X: ServiceFactory,
-        U: ServiceFactory,
-    > {
-        #[pin]
-        fut: S::Future,
-        #[pin]
-        fut_ex: Option<X::Future>,
-        #[pin]
-        fut_upg: Option<U::Future>,
-        expect: Option<X::Service>,
-        upgrade: Option<U::Service>,
-        on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-        cfg: ServiceConfig,
-        _t: PhantomData<(T, B)>,
-    }
-}
+        async move {
+            let service = fut
+                .await
+                .map_err(|e| log::error!("Init http service error: {:?}", e))?;
 
-impl<T, S, B, X, U> Future for HttpServiceResponse<T, S, B, X, U>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-    S: ServiceFactory<Request = Request>,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>> + 'static,
-    <S::Service as Service>::Future: 'static,
-    B: MessageBody + 'static,
-    X: ServiceFactory<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    X::InitError: fmt::Debug,
-    <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Request = (Request, Framed<T, h1::Codec>), Response = ()>,
-    U::Error: fmt::Display,
-    U::InitError: fmt::Debug,
-    <U::Service as Service>::Future: 'static,
-{
-    type Output =
-        Result<HttpServiceHandler<T, S::Service, B, X::Service, U::Service>, ()>;
+            let expect = fut_ex
+                .await
+                .map_err(|e| log::error!("Init http service error: {:?}", e))?;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().project();
+            let upgrade = if let Some(fut) = fut_upg {
+                Some(
+                    fut.await
+                        .map_err(|e| log::error!("Init http service error: {:?}", e))?,
+                )
+            } else {
+                None
+            };
 
-        if let Some(fut) = this.fut_ex.as_pin_mut() {
-            let expect = ready!(fut
-                .poll(cx)
-                .map_err(|e| log::error!("Init http service error: {:?}", e)))?;
-            this = self.as_mut().project();
-            *this.expect = Some(expect);
-            this.fut_ex.set(None);
-        }
+            let config = DispatcherConfig::new(cfg, service, expect, upgrade);
 
-        if let Some(fut) = this.fut_upg.as_pin_mut() {
-            let upgrade = ready!(fut
-                .poll(cx)
-                .map_err(|e| log::error!("Init http service error: {:?}", e)))?;
-            this = self.as_mut().project();
-            *this.upgrade = Some(upgrade);
-            this.fut_upg.set(None);
-        }
-
-        let result = ready!(this
-            .fut
-            .poll(cx)
-            .map_err(|e| log::error!("Init http service error: {:?}", e)));
-        Poll::Ready(result.map(|service| {
-            let this = self.as_mut().project();
-            let cfg = this.cfg.clone();
-            let config = DispatcherConfig::new(
-                cfg,
-                service,
-                this.expect.take().unwrap(),
-                this.upgrade.take(),
-            );
-
-            HttpServiceHandler {
+            Ok(HttpServiceHandler {
                 config: Rc::new(config),
-                on_connect: this.on_connect.clone(),
+                on_connect: on_connect,
                 _t: PhantomData,
-            }
-        }))
+            })
+        }
+        .boxed_local()
     }
 }
 

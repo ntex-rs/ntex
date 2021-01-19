@@ -93,7 +93,7 @@ where
     <U as Encoder>::Item: 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn with<T, F: IntoService<S>>(
+    pub fn new<T, F: IntoService<S>>(
         io: T,
         state: State<U>,
         service: F,
@@ -450,7 +450,7 @@ mod tests {
         <U as Encoder>::Item: 'static,
     {
         /// Construct new `Dispatcher` instance
-        pub(crate) fn new<T, F: IntoService<S>>(
+        pub(crate) fn debug<T, F: IntoService<S>>(
             io: T,
             codec: U,
             service: F,
@@ -493,7 +493,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
-        let (disp, _) = Dispatcher::new(
+        let (disp, _) = Dispatcher::debug(
             server,
             BytesCodec,
             crate::fn_service(|msg: DispatcherItem<BytesCodec>| async move {
@@ -515,52 +515,12 @@ mod tests {
     }
 
     #[ntex_rt::test]
-    async fn test_ordering() {
-        let (client, server) = Io::create();
-        client.remote_buffer_cap(1024);
-        client.write("test");
-
-        let condition = Condition::new();
-        let waiter = condition.wait();
-
-        let (disp, _) = Dispatcher::new(
-            server,
-            BytesCodec,
-            crate::fn_service(move |msg: DispatcherItem<BytesCodec>| {
-                let waiter = waiter.clone();
-                async move {
-                    waiter.await;
-                    if let DispatcherItem::Item(msg) = msg {
-                        Ok::<_, ()>(Some(msg.freeze()))
-                    } else {
-                        panic!()
-                    }
-                }
-            }),
-        );
-        crate::rt::spawn(disp.map(|_| ()));
-        delay_for(Duration::from_millis(50)).await;
-
-        client.write("test");
-        delay_for(Duration::from_millis(50)).await;
-        client.write("test");
-        delay_for(Duration::from_millis(50)).await;
-        condition.notify();
-
-        let buf = client.read().await.unwrap();
-        assert_eq!(buf, Bytes::from_static(b"testtesttest"));
-
-        client.close().await;
-        assert!(client.is_server_dropped());
-    }
-
-    #[ntex_rt::test]
     async fn test_sink() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
-        let (disp, st) = Dispatcher::new(
+        let (disp, st) = Dispatcher::debug(
             server,
             BytesCodec,
             crate::fn_service(|msg: DispatcherItem<BytesCodec>| async move {
@@ -591,7 +551,7 @@ mod tests {
         client.remote_buffer_cap(0);
         client.write("GET /test HTTP/1\r\n\r\n");
 
-        let (disp, state) = Dispatcher::new(
+        let (disp, state) = Dispatcher::debug(
             server,
             BytesCodec,
             crate::fn_service(|_: DispatcherItem<BytesCodec>| async move {

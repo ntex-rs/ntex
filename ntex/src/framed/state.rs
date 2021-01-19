@@ -6,7 +6,7 @@ use bytes::BytesMut;
 use either::Either;
 use futures::{future::poll_fn, ready};
 
-use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
+use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::framed::write::flush;
 use crate::task::LocalWaker;
 
@@ -19,15 +19,18 @@ const HW: usize = 8 * 1024;
 bitflags::bitflags! {
     pub(crate) struct Flags: u8 {
         const DSP_STOP       = 0b0000_0001;
-        const DSP_KEEPALIVE  = 0b0000_0100;
+        const DSP_KEEPALIVE  = 0b0000_0010;
 
-        const IO_ERR         = 0b0000_1000;
-        const IO_SHUTDOWN    = 0b0001_0000;
+        const IO_ERR         = 0b0000_0100;
+        const IO_SHUTDOWN    = 0b0000_1000;
 
         /// pause io read
-        const RD_PAUSED      = 0b0010_0000;
+        const RD_PAUSED      = 0b0001_0000;
         /// new data is available
-        const RD_READY       = 0b0100_0000;
+        const RD_READY       = 0b0010_0000;
+
+        /// write buffer is full
+        const WR_NOT_READY   = 0b0100_0000;
 
         const ST_DSP_ERR     = 0b1000_0000;
     }
@@ -132,11 +135,43 @@ impl<U> State<U> {
         }))
     }
 
+    /// Create `State` from Framed
+    pub fn from_framed<Io>(framed: Framed<Io, U>) -> (Io, Self) {
+        let parts = framed.into_parts();
+
+        let state = State(Rc::new(IoStateInner {
+            flags: Cell::new(Flags::empty()),
+            error: Cell::new(None),
+            disconnect_timeout: Cell::new(1000),
+            dispatch_task: LocalWaker::new(),
+            read_task: LocalWaker::new(),
+            write_task: LocalWaker::new(),
+            codec: RefCell::new(parts.codec),
+            read_buf: RefCell::new(parts.read_buf),
+            write_buf: RefCell::new(parts.write_buf),
+        }));
+        (parts.io, state)
+    }
+
+    /// Convert state to a Framed instance
+    pub fn into_framed<Io>(self, io: Io) -> Result<Framed<Io, U>, Io> {
+        match Rc::try_unwrap(self.0) {
+            Ok(inner) => {
+                let mut parts = FramedParts::new(io, inner.codec.into_inner());
+                parts.read_buf = inner.read_buf.into_inner();
+                parts.write_buf = inner.write_buf.into_inner();
+                Ok(Framed::from_parts(parts))
+            }
+            Err(_) => Err(io),
+        }
+    }
+
     pub(super) fn disconnect_timeout(&self) -> u16 {
         self.0.disconnect_timeout.get()
     }
 
     #[inline]
+    /// Set disconnecto timeout
     pub fn set_disconnect_timeout(&self, timeout: u16) {
         self.0.disconnect_timeout.set(timeout)
     }
@@ -147,6 +182,7 @@ impl<U> State<U> {
     }
 
     #[inline]
+    /// Check if io error occured in read or write task
     pub fn is_io_err(&self) -> bool {
         self.0.flags.get().contains(Flags::IO_ERR)
     }
@@ -160,6 +196,7 @@ impl<U> State<U> {
     }
 
     #[inline]
+    /// Check if read buffer has new data
     pub fn is_read_ready(&self) -> bool {
         self.0.flags.get().contains(Flags::RD_READY)
     }
@@ -169,17 +206,25 @@ impl<U> State<U> {
     }
 
     #[inline]
+    /// Check if write buffer is ready
+    pub fn is_write_ready(&self) -> bool {
+        !self.0.flags.get().contains(Flags::WR_NOT_READY)
+    }
+
+    #[inline]
+    /// Check if keep-alive timeout occured
     pub fn is_keepalive_err(&self) -> bool {
         self.0.flags.get().contains(Flags::DSP_KEEPALIVE)
     }
 
     #[inline]
+    /// Check is dispatcher marked stopped
     pub fn is_dsp_stopped(&self) -> bool {
         self.0.flags.get().contains(Flags::DSP_STOP)
     }
 
     #[inline]
-    pub fn is_opened(&self) -> bool {
+    pub fn is_open(&self) -> bool {
         !self
             .0
             .flags
@@ -197,7 +242,7 @@ impl<U> State<U> {
     }
 
     #[inline]
-    /// Shutdown all tasks
+    /// Gracefully shutdown all tasks
     pub fn shutdown(&self) {
         let mut flags = self.0.flags.get();
         flags.insert(Flags::DSP_STOP | Flags::IO_SHUTDOWN);
@@ -208,7 +253,7 @@ impl<U> State<U> {
     }
 
     #[inline]
-    /// Shutdown read and write io tasks
+    /// Gracefully shutdown read and write io tasks
     pub fn shutdown_io(&self) {
         log::trace!("initiate io shutdown {:?}", self.0.flags.get());
         let mut flags = self.0.flags.get();
@@ -253,6 +298,15 @@ impl<U> State<U> {
         self.0.read_task.register(waker);
     }
 
+    pub(super) fn update_write_task(&self) {
+        let mut flags = self.0.flags.get();
+        if flags.contains(Flags::WR_NOT_READY) {
+            flags.remove(Flags::WR_NOT_READY);
+            self.0.flags.set(flags);
+            self.0.dispatch_task.wake();
+        }
+    }
+
     #[inline]
     /// Wake read io task if it is paused
     pub fn dsp_restart_read_task(&self) {
@@ -271,6 +325,16 @@ impl<U> State<U> {
         flags.remove(Flags::RD_READY);
         self.0.flags.set(flags);
         self.0.read_task.wake();
+        self.0.dispatch_task.register(waker);
+    }
+
+    #[inline]
+    /// Wait until write task flushes data to socket
+    pub fn dsp_flush_write_data(&self, waker: &Waker) {
+        let mut flags = self.0.flags.get();
+        flags.insert(Flags::WR_NOT_READY);
+        self.0.flags.set(flags);
+        self.0.write_task.wake();
         self.0.dispatch_task.register(waker);
     }
 
@@ -455,10 +519,12 @@ where
 
     #[inline]
     /// Write item to a buf and wake up io task
+    ///
+    /// Returns state of write buffer state, false is returned if write buffer if full.
     pub fn write_item(
         &self,
         item: <U as Encoder>::Item,
-    ) -> Result<(), <U as Encoder>::Error> {
+    ) -> Result<bool, <U as Encoder>::Error> {
         let flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
@@ -466,13 +532,18 @@ where
             let is_write_sleep = write_buf.is_empty();
 
             // encode item and wake write task
-            let res = self.0.codec.borrow_mut().encode(item, &mut *write_buf);
+            let res = self
+                .0
+                .codec
+                .borrow_mut()
+                .encode(item, &mut *write_buf)
+                .map(|_| write_buf.len() < HW);
             if res.is_ok() && is_write_sleep {
                 self.0.write_task.wake();
             }
             res
         } else {
-            Ok(())
+            Ok(true)
         }
     }
 
@@ -481,7 +552,7 @@ where
     pub fn write_result<E>(
         &self,
         item: Result<Option<Response<U>>, E>,
-    ) -> Result<(), Either<E, <U as Encoder>::Error>> {
+    ) -> Result<bool, Either<E, <U as Encoder>::Error>> {
         let mut flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::ST_DSP_ERR) {
@@ -502,7 +573,7 @@ where
                     } else if is_write_sleep {
                         self.0.write_task.wake();
                     }
-                    Ok(())
+                    Ok(write_buf.len() < HW)
                 }
                 Err(err) => {
                     flags.insert(Flags::DSP_STOP | Flags::ST_DSP_ERR);
@@ -510,10 +581,10 @@ where
                     self.0.dispatch_task.wake();
                     Err(Either::Left(err))
                 }
-                _ => Ok(()),
+                _ => Ok(true),
             }
         } else {
-            Ok(())
+            Ok(true)
         }
     }
 }

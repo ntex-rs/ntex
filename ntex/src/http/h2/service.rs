@@ -6,8 +6,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use futures::future::ok;
-use futures::ready;
+use futures::future::{ok, FutureExt, LocalBoxFuture};
 use h2::server::{self, Handshake};
 use log::error;
 
@@ -41,6 +40,7 @@ where
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>> + 'static,
+    S::Future: 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
 {
@@ -73,6 +73,7 @@ where
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>> + 'static,
+    S::Future: 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
 {
@@ -109,6 +110,7 @@ mod openssl {
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: ResponseError,
         S::Response: Into<Response<B>> + 'static,
+        S::Future: 'static,
         <S::Service as Service>::Future: 'static,
         B: MessageBody + 'static,
     {
@@ -151,6 +153,7 @@ mod rustls {
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: ResponseError,
         S::Response: Into<Response<B>> + 'static,
+        S::Future: 'static,
         <S::Service as Service>::Future: 'static,
         B: MessageBody + 'static,
     {
@@ -187,10 +190,11 @@ mod rustls {
 
 impl<T, S, B> ServiceFactory for H2Service<T, S, B>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>> + 'static,
+    S::Future: 'static,
     <S::Service as Service>::Future: 'static,
     B: MessageBody + 'static,
 {
@@ -200,54 +204,24 @@ where
     type Error = DispatchError;
     type InitError = S::InitError;
     type Service = H2ServiceHandler<T, S::Service, B>;
-    type Future = H2ServiceResponse<T, S, B>;
+    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        H2ServiceResponse {
-            fut: self.srv.new_service(()),
-            cfg: Some(self.cfg.clone()),
-            on_connect: self.on_connect.clone(),
-            _t: PhantomData,
-        }
-    }
-}
+        let fut = self.srv.new_service(());
+        let cfg = self.cfg.clone();
+        let on_connect = self.on_connect.clone();
 
-pin_project_lite::pin_project! {
-    #[doc(hidden)]
-    pub struct H2ServiceResponse<T, S: ServiceFactory, B> {
-        #[pin]
-        fut: S::Future,
-        cfg: Option<ServiceConfig>,
-        on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-        _t: PhantomData<(T, B)>,
-    }
-}
+        async move {
+            let service = fut.await?;
+            let config = Rc::new(DispatcherConfig::new(cfg, service, (), None));
 
-impl<T, S, B> Future for H2ServiceResponse<T, S, B>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-    S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError,
-    S::Response: Into<Response<B>> + 'static,
-    <S::Service as Service>::Future: 'static,
-    B: MessageBody + 'static,
-{
-    type Output = Result<H2ServiceHandler<T, S::Service, B>, S::InitError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().project();
-
-        Poll::Ready(ready!(this.fut.poll(cx)).map(|service| {
-            let this = self.as_mut().project();
-            let cfg = this.cfg.take().unwrap();
-            let config = DispatcherConfig::new(cfg, service, (), None);
-
-            H2ServiceHandler {
-                config: Rc::new(config),
-                on_connect: this.on_connect.clone(),
+            Ok(H2ServiceHandler {
+                config,
+                on_connect,
                 _t: PhantomData,
-            }
-        }))
+            })
+        }
+        .boxed_local()
     }
 }
 
