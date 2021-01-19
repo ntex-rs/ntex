@@ -93,7 +93,7 @@ where
     <U as Encoder>::Item: 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn with<T, F: IntoService<S>>(
+    pub fn new<T, F: IntoService<S>>(
         io: T,
         state: State<U>,
         service: F,
@@ -450,7 +450,7 @@ mod tests {
         <U as Encoder>::Item: 'static,
     {
         /// Construct new `Dispatcher` instance
-        pub(crate) fn new<T, F: IntoService<S>>(
+        pub(crate) fn debug<T, F: IntoService<S>>(
             io: T,
             codec: U,
             service: F,
@@ -493,7 +493,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
-        let (disp, _) = Dispatcher::new(
+        let (disp, _) = Dispatcher::debug(
             server,
             BytesCodec,
             crate::fn_service(|msg: DispatcherItem<BytesCodec>| async move {
@@ -520,7 +520,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
-        let (disp, st) = Dispatcher::new(
+        let (disp, st) = Dispatcher::debug(
             server,
             BytesCodec,
             crate::fn_service(|msg: DispatcherItem<BytesCodec>| async move {
@@ -551,7 +551,7 @@ mod tests {
         client.remote_buffer_cap(0);
         client.write("GET /test HTTP/1\r\n\r\n");
 
-        let (disp, state) = Dispatcher::new(
+        let (disp, state) = Dispatcher::debug(
             server,
             BytesCodec,
             crate::fn_service(|_: DispatcherItem<BytesCodec>| async move {

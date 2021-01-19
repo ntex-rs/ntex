@@ -197,12 +197,12 @@ impl Client {
     }
 
     /// Construct WebSockets request.
-    pub fn ws<U>(&self, url: U) -> ws::WebsocketsRequest
+    pub fn ws<U>(&self, url: U) -> ws::WsRequest
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
-        let mut req = ws::WebsocketsRequest::new(url, self.0.clone());
+        let mut req = ws::WsRequest::new(url, self.0.clone());
         for (key, value) in self.0.headers.iter() {
             req.head.headers.insert(key.clone(), value.clone());
         }

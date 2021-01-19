@@ -6,7 +6,7 @@ use bytes::BytesMut;
 use either::Either;
 use futures::{future::poll_fn, ready};
 
-use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
+use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::framed::write::flush;
 use crate::task::LocalWaker;
 
@@ -133,6 +133,37 @@ impl<U> State<U> {
             read_buf: RefCell::new(BytesMut::new()),
             write_buf: RefCell::new(BytesMut::new()),
         }))
+    }
+
+    /// Create `State` from Framed
+    pub fn from_framed<Io>(framed: Framed<Io, U>) -> (Io, Self) {
+        let parts = framed.into_parts();
+
+        let state = State(Rc::new(IoStateInner {
+            flags: Cell::new(Flags::empty()),
+            error: Cell::new(None),
+            disconnect_timeout: Cell::new(1000),
+            dispatch_task: LocalWaker::new(),
+            read_task: LocalWaker::new(),
+            write_task: LocalWaker::new(),
+            codec: RefCell::new(parts.codec),
+            read_buf: RefCell::new(parts.read_buf),
+            write_buf: RefCell::new(parts.write_buf),
+        }));
+        (parts.io, state)
+    }
+
+    /// Convert state to a Framed instance
+    pub fn into_framed<Io>(self, io: Io) -> Result<Framed<Io, U>, Io> {
+        match Rc::try_unwrap(self.0) {
+            Ok(inner) => {
+                let mut parts = FramedParts::new(io, inner.codec.into_inner());
+                parts.read_buf = inner.read_buf.into_inner();
+                parts.write_buf = inner.write_buf.into_inner();
+                Ok(Framed::from_parts(parts))
+            }
+            Err(_) => Err(io),
+        }
     }
 
     pub(super) fn disconnect_timeout(&self) -> u16 {
