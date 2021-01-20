@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.2] - 2021-01-21
+
+* Flush underlying io stream
+
 ## [0.2.1] - 2020-08-10
 
 * Require `Debug` impl for `Error`

@@ -233,41 +233,43 @@ where
         log::trace!("flushing framed transport");
 
         let len = self.write_buf.len();
-        if len == 0 {
-            return Poll::Ready(Ok(()));
-        }
-
-        let mut written = 0;
-        while written < len {
-            match Pin::new(&mut self.io).poll_write(cx, &self.write_buf[written..]) {
-                Poll::Pending => break,
-                Poll::Ready(Ok(n)) => {
-                    if n == 0 {
-                        log::trace!("Disconnected during flush, written {}", written);
+        if len != 0 {
+            let mut written = 0;
+            while written < len {
+                match Pin::new(&mut self.io).poll_write(cx, &self.write_buf[written..]) {
+                    Poll::Pending => break,
+                    Poll::Ready(Ok(n)) => {
+                        if n == 0 {
+                            log::trace!("Disconnected during flush, written {}", written);
+                            self.flags.insert(Flags::DISCONNECTED);
+                            return Poll::Ready(Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "failed to write frame to transport",
+                            )));
+                        } else {
+                            written += n
+                        }
+                    }
+                    Poll::Ready(Err(e)) => {
+                        log::trace!("Error during flush: {}", e);
                         self.flags.insert(Flags::DISCONNECTED);
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::WriteZero,
-                            "failed to write frame to transport",
-                        )));
-                    } else {
-                        written += n
+                        return Poll::Ready(Err(e));
                     }
                 }
-                Poll::Ready(Err(e)) => {
-                    log::trace!("Error during flush: {}", e);
-                    self.flags.insert(Flags::DISCONNECTED);
-                    return Poll::Ready(Err(e));
-                }
+            }
+
+            // remove written data
+            if written == len {
+                // flushed same amount as in buffer, we dont need to reallocate
+                unsafe { self.write_buf.set_len(0) }
+            } else {
+                self.write_buf.advance(written);
             }
         }
 
-        // remove written data
-        if written == len {
-            // flushed same amount as in buffer, we dont need to reallocate
-            unsafe { self.write_buf.set_len(0) }
-        } else {
-            self.write_buf.advance(written);
-        }
+        // flush
+        ready!(Pin::new(&mut self.io).poll_flush(cx))?;
+
         if self.write_buf.is_empty() {
             Poll::Ready(Ok(()))
         } else {
