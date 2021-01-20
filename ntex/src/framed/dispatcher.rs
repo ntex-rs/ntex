@@ -433,7 +433,6 @@ mod tests {
     use bytes::Bytes;
     use futures::future::FutureExt;
 
-    use crate::channel::condition::Condition;
     use crate::codec::BytesCodec;
     use crate::rt::time::delay_for;
     use crate::testing::Io;

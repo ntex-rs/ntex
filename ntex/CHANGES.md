@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-b.2] - 2021-01-20
+
+* Fix flush framed write task
+
 ## [0.2.0-b.1] - 2021-01-19
 
 * Introduce ntex::framed module
