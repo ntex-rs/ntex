@@ -367,14 +367,25 @@ impl<U> State<U> {
         self.0.dispatch_task.register(waker);
     }
 
-    pub(crate) fn with_read_buf<F, R>(&self, f: F) -> R
+    fn mark_io_error(&self) {
+        self.0.read_task.wake();
+        self.0.write_task.wake();
+        self.0.dispatch_task.wake();
+        let mut flags = self.0.flags.get();
+        flags.insert(Flags::IO_ERR | Flags::DSP_STOP);
+        self.0.flags.set(flags);
+    }
+
+    #[inline]
+    pub fn with_read_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
         f(&mut self.0.read_buf.borrow_mut())
     }
 
-    pub(crate) fn with_write_buf<F, R>(&self, f: F) -> R
+    #[inline]
+    pub fn with_write_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
@@ -448,7 +459,10 @@ where
                         continue;
                     }
                 }
-                Err(err) => Err(Either::Left(err)),
+                Err(err) => {
+                    self.mark_io_error();
+                    Err(Either::Left(err))
+                }
             };
         }
     }
@@ -479,7 +493,10 @@ where
                         continue;
                     }
                 }
-                Err(err) => Poll::Ready(Err(Either::Left(err))),
+                Err(err) => {
+                    self.mark_io_error();
+                    Poll::Ready(Err(Either::Left(err)))
+                }
             };
         }
     }
@@ -502,7 +519,10 @@ where
         let st = self.0.clone();
         poll_fn(|cx| flush(io, &mut st.write_buf.borrow_mut(), cx))
             .await
-            .map_err(Either::Right)
+            .map_err(|e| {
+                self.mark_io_error();
+                Either::Right(e)
+            })
     }
 
     #[inline]

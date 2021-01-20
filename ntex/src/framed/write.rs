@@ -48,6 +48,21 @@ where
             st: IoWriteState::Processing,
         }
     }
+
+    /// Shutdown io stream
+    pub fn shutdown(io: Rc<RefCell<T>>, state: State<U>) -> Self {
+        let disconnect_timeout = state.disconnect_timeout() as u64;
+        let st = IoWriteState::Shutdown(
+            if disconnect_timeout != 0 {
+                Some(delay_for(Duration::from_millis(disconnect_timeout)))
+            } else {
+                None
+            },
+            Shutdown::None,
+        );
+
+        Self { io, st, state }
+    }
 }
 
 impl<T, U> Future for FramedWriteTask<T, U>
@@ -96,7 +111,7 @@ where
                         }
                     }
                     Poll::Ready(Err(err)) => {
-                        log::trace!("error sending data: {:?}", err);
+                        log::trace!("error during sending data: {:?}", err);
                         this.state.set_io_error(Some(err));
                         return Poll::Ready(());
                     }
@@ -124,6 +139,9 @@ where
                                 }
                                 Poll::Ready(Err(_)) => {
                                     this.state.set_wr_shutdown_complete();
+                                    log::trace!(
+                                        "write task is closed with err during flush"
+                                    );
                                     return Poll::Ready(());
                                 }
                                 _ => (),
@@ -139,6 +157,9 @@ where
                                 }
                                 Poll::Ready(Err(_)) => {
                                     this.state.set_wr_shutdown_complete();
+                                    log::trace!(
+                                        "write task is closed with err during shutdown"
+                                    );
                                     return Poll::Ready(());
                                 }
                                 _ => (),
@@ -152,6 +173,7 @@ where
                                 match Pin::new(&mut *io).poll_read(cx, &mut buf) {
                                     Poll::Ready(Ok(0)) | Poll::Ready(Err(_)) => {
                                         this.state.set_wr_shutdown_complete();
+                                        log::trace!("write task is closed");
                                         return Poll::Ready(());
                                     }
                                     Poll::Pending => break,

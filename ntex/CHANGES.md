@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-b.3] - 2021-01-21
+
+* Allow to use framed write task for io flushing
+
 ## [0.2.0-b.2] - 2021-01-20
 
 * Fix flush framed write task

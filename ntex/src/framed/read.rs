@@ -37,6 +37,7 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if self.state.is_io_shutdown() {
+            log::trace!("read task is instructed to shutdown");
             Poll::Ready(())
         } else if self.state.is_read_paused() {
             self.state.register_read_task(cx.waker());
@@ -50,6 +51,7 @@ where
                     Poll::Pending
                 }
                 Err(err) => {
+                    log::trace!("error during reading data: {:?}", err);
                     self.state.set_io_error(err);
                     Poll::Ready(())
                 }
