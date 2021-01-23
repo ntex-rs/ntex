@@ -1,4 +1,6 @@
-use std::{cell::RefCell, future::Future, io, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{
+    cell::RefCell, future::Future, io, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
 use bytes::BytesMut;
 

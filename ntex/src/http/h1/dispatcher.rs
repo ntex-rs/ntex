@@ -115,7 +115,7 @@ where
 
         // slow-request timer
         if config.client_timeout != 0 {
-            expire = expire + Duration::from_secs(config.client_timeout);
+            expire += Duration::from_secs(config.client_timeout);
             config.timer_h1.register(expire, expire, &state);
         }
 
@@ -170,8 +170,7 @@ where
                                 Poll::Ready(result) => match result {
                                     Ok(res) => {
                                         let (res, body) = res.into().into_parts();
-                                        *this.st =
-                                            this.inner.send_response(res, body.into())
+                                        *this.st = this.inner.send_response(res, body)
                                     }
                                     Err(e) => {
                                         *this.st = this.inner.handle_error(e, false)
@@ -272,7 +271,7 @@ where
 
                     // decode incoming bytes stream
                     if this.inner.state.is_read_ready() {
-                        match this.inner.state.decode_item(&mut this.inner.codec) {
+                        match this.inner.state.decode_item(&this.inner.codec) {
                             Ok(Some((mut req, pl))) => {
                                 log::trace!("http message is received: {:?}", req);
                                 req.head_mut().peer_addr = this.inner.peer_addr;
@@ -287,7 +286,7 @@ where
                                         false
                                     }
                                     PayloadType::Stream(decoder) => {
-                                        if !this.inner.config.upgrade.is_some() {
+                                        if this.inner.config.upgrade.is_none() {
                                             let (ps, pl) = Payload::create(false);
                                             req.replace_payload(http::Payload::H1(pl));
                                             this.inner.payload = Some((decoder, ps));
@@ -478,7 +477,7 @@ where
         if !self.state.is_io_err() {
             let result = self
                 .state
-                .write_item(Message::Item((msg, body.size())), &mut self.codec)
+                .write_item(Message::Item((msg, body.size())), &self.codec)
                 .map_err(|err| {
                     if let Some(mut payload) = self.payload.take() {
                         payload.1.set_error(PayloadError::Incomplete(None));
@@ -495,13 +494,11 @@ where
                     BodySize::None | BodySize::Empty => {
                         if self.error.is_some() {
                             State::Stop
+                        } else if self.payload.is_some() {
+                            State::ReadPayload
                         } else {
-                            if self.payload.is_some() {
-                                State::ReadPayload
-                            } else {
-                                self.reset_keepalive();
-                                State::ReadRequest
-                            }
+                            self.reset_keepalive();
+                            State::ReadRequest
                         }
                     }
                     _ => State::SendPayload { body },
@@ -521,7 +518,7 @@ where
                 trace!("Got response chunk: {:?}", item.len());
                 if let Err(err) = self
                     .state
-                    .write_item(Message::Chunk(Some(item)), &mut self.codec)
+                    .write_item(Message::Chunk(Some(item)), &self.codec)
                 {
                     self.error = Some(DispatchError::Encode(err));
                     Some(State::Stop)
@@ -532,17 +529,15 @@ where
             None => {
                 trace!("Response payload eof");
                 if let Err(err) =
-                    self.state.write_item(Message::Chunk(None), &mut self.codec)
+                    self.state.write_item(Message::Chunk(None), &self.codec)
                 {
                     self.error = Some(DispatchError::Encode(err));
                     Some(State::Stop)
+                } else if self.payload.is_some() {
+                    Some(State::ReadPayload)
                 } else {
-                    if self.payload.is_some() {
-                        Some(State::ReadPayload)
-                    } else {
-                        self.reset_keepalive();
-                        Some(State::ReadRequest)
-                    }
+                    self.reset_keepalive();
+                    Some(State::ReadRequest)
                 }
             }
             Some(Err(e)) => {

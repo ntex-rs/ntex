@@ -187,7 +187,7 @@ mod tests {
         let mut decoder = StreamDecoder::new(rx);
 
         let mut buf = BytesMut::new();
-        let mut codec = Codec::new().client_mode();
+        let codec = Codec::new().client_mode();
         codec
             .encode(Message::Text("test1".to_string()), &mut buf)
             .unwrap();

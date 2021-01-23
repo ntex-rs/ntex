@@ -362,7 +362,7 @@ impl State {
     /// Attempts to decode a frame from the read buffer.
     pub fn decode_item<U>(
         &self,
-        codec: &mut U,
+        codec: &U,
     ) -> Result<Option<<U as Decoder>::Item>, <U as Decoder>::Error>
     where
         U: Decoder,
@@ -444,7 +444,7 @@ impl State {
     pub async fn send<T, U>(
         &self,
         io: &mut T,
-        codec: &mut U,
+        codec: &U,
         item: U::Item,
     ) -> Result<(), Either<U::Error, io::Error>>
     where
@@ -471,7 +471,7 @@ impl State {
     pub fn write_item<U>(
         &self,
         item: U::Item,
-        codec: &mut U,
+        codec: &U,
     ) -> Result<bool, <U as Encoder>::Error>
     where
         U: Encoder,
@@ -500,7 +500,7 @@ impl State {
     pub fn write_result<U, E>(
         &self,
         item: Result<Option<U::Item>, E>,
-        codec: &mut U,
+        codec: &U,
     ) -> Result<bool, Either<E, U::Error>>
     where
         U: Encoder,

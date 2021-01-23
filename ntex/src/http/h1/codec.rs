@@ -1,6 +1,4 @@
-#![allow(dead_code)]
-
-use std::{fmt, io};
+use std::{cell::Cell, fmt, io};
 
 use bitflags::bitflags;
 use bytes::BytesMut;
@@ -28,11 +26,11 @@ bitflags! {
 pub struct Codec {
     timer: DateService,
     decoder: decoder::MessageDecoder<Request>,
-    version: Version,
-    ctype: ConnectionType,
+    version: Cell<Version>,
+    ctype: Cell<ConnectionType>,
 
     // encoder part
-    flags: Flags,
+    flags: Cell<Flags>,
     encoder: encoder::MessageEncoder<Response<()>>,
 }
 
@@ -47,9 +45,9 @@ impl Clone for Codec {
         Codec {
             timer: self.timer.clone(),
             decoder: self.decoder.clone(),
-            version: self.version,
-            ctype: self.ctype,
-            flags: self.flags,
+            version: self.version.clone(),
+            ctype: self.ctype.clone(),
+            flags: self.flags.clone(),
             encoder: self.encoder.clone(),
         }
     }
@@ -73,11 +71,11 @@ impl Codec {
         };
 
         Codec {
-            flags,
             timer,
+            flags: Cell::new(flags),
             decoder: decoder::MessageDecoder::default(),
-            version: Version::HTTP_11,
-            ctype: ConnectionType::Close,
+            version: Cell::new(Version::HTTP_11),
+            ctype: Cell::new(ConnectionType::Close),
             encoder: encoder::MessageEncoder::default(),
         }
     }
@@ -85,19 +83,19 @@ impl Codec {
     #[inline]
     /// Check if request is upgrade
     pub fn upgrade(&self) -> bool {
-        self.ctype == ConnectionType::Upgrade
+        self.ctype.get() == ConnectionType::Upgrade
     }
 
     #[inline]
     /// Check if last response is keep-alive
     pub fn keepalive(&self) -> bool {
-        self.ctype == ConnectionType::KeepAlive
+        self.ctype.get() == ConnectionType::KeepAlive
     }
 
     #[inline]
     /// Check if keep-alive enabled on server level
     pub fn keepalive_enabled(&self) -> bool {
-        self.flags.contains(Flags::KEEPALIVE_ENABLED)
+        self.flags.get().contains(Flags::KEEPALIVE_ENABLED)
     }
 
     #[inline]
@@ -105,26 +103,34 @@ impl Codec {
     pub fn set_date_header(&self, dst: &mut BytesMut) {
         self.timer.set_date_header(dst)
     }
+
+    fn insert_flags(&self, f: Flags) {
+        let mut flags = self.flags.get();
+        flags.insert(f);
+        self.flags.set(flags);
+    }
 }
 
 impl Decoder for Codec {
     type Item = (Request, PayloadType);
     type Error = ParseError;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if let Some((req, payload)) = self.decoder.decode(src)? {
             let head = req.head();
-            self.flags.set(Flags::HEAD, head.method == Method::HEAD);
-            self.version = head.version;
-            self.ctype = head.connection_type();
-            if self.ctype == ConnectionType::KeepAlive
-                && !self.flags.contains(Flags::KEEPALIVE_ENABLED)
+            let mut flags = self.flags.get();
+            flags.set(Flags::HEAD, head.method == Method::HEAD);
+            self.flags.set(flags);
+            self.version.set(head.version);
+            self.ctype.set(head.connection_type());
+            if self.ctype.get() == ConnectionType::KeepAlive
+                && !flags.contains(Flags::KEEPALIVE_ENABLED)
             {
-                self.ctype = ConnectionType::Close
+                self.ctype.set(ConnectionType::Close)
             }
 
             if let PayloadType::Stream(_) = payload {
-                self.flags.insert(Flags::STREAM)
+                self.insert_flags(Flags::STREAM)
             }
             Ok(Some((req, payload)))
         } else {
@@ -137,36 +143,28 @@ impl Encoder for Codec {
     type Item = Message<(Response<()>, BodySize)>;
     type Error = io::Error;
 
-    fn encode(
-        &mut self,
-        item: Self::Item,
-        dst: &mut BytesMut,
-    ) -> Result<(), Self::Error> {
+    fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
             Message::Item((mut res, length)) => {
                 // set response version
-                res.head_mut().version = self.version;
+                res.head_mut().version = self.version.get();
 
                 // connection status
-                self.ctype = if let Some(ct) = res.head().ctype() {
-                    if ct == ConnectionType::KeepAlive {
-                        self.ctype
-                    } else {
-                        ct
+                if let Some(ct) = res.head().ctype() {
+                    if ct != ConnectionType::KeepAlive {
+                        self.ctype.set(ct)
                     }
-                } else {
-                    self.ctype
-                };
+                }
 
                 // encode message
                 self.encoder.encode(
                     dst,
                     &mut res,
-                    self.flags.contains(Flags::HEAD),
-                    self.flags.contains(Flags::STREAM),
-                    self.version,
+                    self.flags.get().contains(Flags::HEAD),
+                    self.flags.get().contains(Flags::STREAM),
+                    self.version.get(),
                     length,
-                    self.ctype,
+                    self.ctype.get(),
                     &self.timer,
                 )?;
                 // self.headers_size = (dst.len() - len) as u32;
@@ -191,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
-        let mut codec = Codec::default();
+        let codec = Codec::default();
         assert!(format!("{:?}", codec).contains("h1::Codec"));
 
         let mut buf = BytesMut::from(
@@ -199,7 +197,7 @@ mod tests {
              transfer-encoding: chunked\r\n\r\n",
         );
         let (req, pl) = codec.decode(&mut buf).unwrap().unwrap();
-        let mut pl = match pl {
+        let pl = match pl {
             PayloadType::Payload(pl) => pl,
             _ => panic!(),
         };
@@ -228,7 +226,7 @@ mod tests {
         assert_eq!(*req.method(), Method::POST);
         assert!(req.chunked().unwrap());
 
-        let mut codec = Codec::default();
+        let codec = Codec::default();
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\n\
              connection: upgrade\r\n\r\n",

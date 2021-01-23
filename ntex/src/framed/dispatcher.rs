@@ -9,7 +9,7 @@ use either::Either;
 use futures::FutureExt;
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
-use crate::framed::{DispatchItem, ReadTask, WriteTask, State, Timer};
+use crate::framed::{DispatchItem, ReadTask, State, Timer, WriteTask};
 use crate::service::{IntoService, Service};
 
 type Response<U> = <U as Encoder>::Item;
@@ -51,7 +51,7 @@ where
     S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
-    codec: RefCell<U>,
+    codec: U,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<usize>,
 }
@@ -141,7 +141,7 @@ where
                 keepalive_timeout,
                 st: DispatcherState::Processing,
                 shared: Rc::new(DispatcherShared {
-                    codec: RefCell::new(codec),
+                    codec,
                     error: Cell::new(None),
                     inflight: Cell::new(0),
                 }),
@@ -198,7 +198,7 @@ where
         wake: bool,
     ) {
         self.inflight.set(self.inflight.get() - 1);
-        if let Err(err) = state.write_result(item, &mut *self.codec.borrow_mut()) {
+        if let Err(err) = state.write_result(item, &self.codec) {
             self.error.set(Some(err.into()));
         }
 
@@ -309,9 +309,10 @@ where
                             } else {
                                 // decode incoming bytes stream
                                 if this.inner.state.is_read_ready() {
-                                    let item = this.inner.state.decode_item(
-                                        &mut *this.inner.shared.codec.borrow_mut(),
-                                    );
+                                    let item = this
+                                        .inner
+                                        .state
+                                        .decode_item(&this.inner.shared.codec);
                                     match item {
                                         Ok(Some(el)) => {
                                             this.inner.update_keepalive();
@@ -350,10 +351,11 @@ where
                                         .poll(cx);
 
                                     if let Poll::Ready(res) = res {
-                                        if let Err(err) = this.inner.state.write_result(
-                                            res,
-                                            &mut *this.inner.shared.codec.borrow_mut(),
-                                        ) {
+                                        if let Err(err) = this
+                                            .inner
+                                            .state
+                                            .write_result(res, &this.inner.shared.codec)
+                                        {
                                             this.inner
                                                 .shared
                                                 .error
@@ -476,13 +478,13 @@ mod tests {
             let state = State::new();
             let io = Rc::new(RefCell::new(io));
             let shared = Rc::new(DispatcherShared {
-                codec: RefCell::new(codec),
+                codec: codec,
                 error: Cell::new(None),
                 inflight: Cell::new(0),
             });
 
-            crate::rt::spawn(FramedReadTask::new(io.clone(), state.clone()));
-            crate::rt::spawn(FramedWriteTask::new(io.clone(), state.clone()));
+            crate::rt::spawn(ReadTask::new(io.clone(), state.clone()));
+            crate::rt::spawn(WriteTask::new(io.clone(), state.clone()));
 
             (
                 Dispatcher {
