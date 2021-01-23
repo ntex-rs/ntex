@@ -8,6 +8,8 @@
 
 * http: Remove generic type from `Payload`
 
+* Rename FrameReadTask/FramedWriteTask to ReadTask/WriteTask
+
 ## [0.2.0-b.3] - 2021-01-21
 
 * Allow to use framed write task for io flushing

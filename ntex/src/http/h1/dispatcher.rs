@@ -9,7 +9,7 @@ use std::{
 use bytes::Bytes;
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder};
-use crate::framed::{FramedReadTask, FramedWriteTask, State as IoState};
+use crate::framed::{ReadTask, State as IoState, WriteTask};
 use crate::service::Service;
 
 use crate::http;
@@ -36,8 +36,7 @@ bitflags::bitflags! {
 }
 
 pin_project_lite::pin_project! {
-    /// Framed dispatcher - is a future that reads frames from Framed object
-    /// and pass then to the service.
+    /// Dispatcher for HTTP/1.1 protocol
     pub struct Dispatcher<S: Service, B, X: Service, U: Service> {
         #[pin]
         call: CallState<S, X, U>,
@@ -121,8 +120,8 @@ where
         }
 
         // start support io tasks
-        crate::rt::spawn(FramedReadTask::new(io.clone(), state.clone()));
-        crate::rt::spawn(FramedWriteTask::new(io, state.clone()));
+        crate::rt::spawn(ReadTask::new(io.clone(), state.clone()));
+        crate::rt::spawn(WriteTask::new(io, state.clone()));
 
         Dispatcher {
             call: CallState::None,

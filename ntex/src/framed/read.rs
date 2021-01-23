@@ -1,6 +1,4 @@
-use std::{
-    cell::RefCell, future::Future, io, pin::Pin, rc::Rc, task::Context, task::Poll,
-};
+use std::{cell::RefCell, future::Future, io, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use bytes::BytesMut;
 
@@ -11,7 +9,7 @@ const LW: usize = 1024;
 const HW: usize = 8 * 1024;
 
 /// Read io task
-pub struct FramedReadTask<T>
+pub struct ReadTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -19,7 +17,7 @@ where
     state: State,
 }
 
-impl<T> FramedReadTask<T>
+impl<T> ReadTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -29,7 +27,7 @@ where
     }
 }
 
-impl<T> Future for FramedReadTask<T>
+impl<T> Future for ReadTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {

@@ -9,7 +9,7 @@ use either::Either;
 use futures::FutureExt;
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
-use crate::framed::{DispatchItem, FramedReadTask, FramedWriteTask, State, Timer};
+use crate::framed::{DispatchItem, ReadTask, WriteTask, State, Timer};
 use crate::service::{IntoService, Service};
 
 type Response<U> = <U as Encoder>::Item;
@@ -111,8 +111,8 @@ where
         let io = Rc::new(RefCell::new(io));
 
         // start support tasks
-        crate::rt::spawn(FramedReadTask::new(io.clone(), state.clone()));
-        crate::rt::spawn(FramedWriteTask::new(io, state.clone()));
+        crate::rt::spawn(ReadTask::new(io.clone(), state.clone()));
+        crate::rt::spawn(WriteTask::new(io, state.clone()));
 
         Self::from_state(codec, state, service, timer)
     }

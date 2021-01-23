@@ -23,7 +23,7 @@ enum Shutdown {
 }
 
 /// Write io task
-pub struct FramedWriteTask<T>
+pub struct WriteTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -32,7 +32,7 @@ where
     state: State,
 }
 
-impl<T> FramedWriteTask<T>
+impl<T> WriteTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -61,7 +61,7 @@ where
     }
 }
 
-impl<T> Future for FramedWriteTask<T>
+impl<T> Future for WriteTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
