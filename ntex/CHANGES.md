@@ -1,6 +1,6 @@
 # Changes
 
-## [0.2.0-b.4] - 2021-01-xx
+## [0.2.0-b.4] - 2021-01-23
 
 * http: Refactor h1 dispatcher
 
