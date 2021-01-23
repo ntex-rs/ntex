@@ -23,7 +23,7 @@ pub(super) struct MessageDecoder<T: MessageType>(PhantomData<T>);
 
 #[derive(Debug)]
 /// Incoming request type
-pub(super) enum PayloadType {
+pub enum PayloadType {
     None,
     Payload(PayloadDecoder),
     Stream(PayloadDecoder),
@@ -31,6 +31,12 @@ pub(super) enum PayloadType {
 
 impl<T: MessageType> Default for MessageDecoder<T> {
     fn default() -> Self {
+        MessageDecoder(PhantomData)
+    }
+}
+
+impl<T: MessageType> Clone for MessageDecoder<T> {
+    fn clone(&self) -> Self {
         MessageDecoder(PhantomData)
     }
 }
@@ -351,7 +357,7 @@ impl HeaderIndex {
 
 #[derive(Debug, Clone, PartialEq)]
 /// Http payload item
-pub(super) enum PayloadItem {
+pub enum PayloadItem {
     Chunk(Bytes),
     Eof,
 }
@@ -361,7 +367,7 @@ pub(super) enum PayloadItem {
 /// If a message body does not include a Transfer-Encoding, it *should*
 /// include a Content-Length header.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct PayloadDecoder {
+pub struct PayloadDecoder {
     kind: Kind,
 }
 

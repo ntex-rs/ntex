@@ -1,21 +1,20 @@
-use std::cell::{Ref, RefMut};
-use std::{fmt, net};
+use std::{cell::Ref, cell::RefMut, fmt, mem, net};
 
 use http::{header, Method, Uri, Version};
 
 use crate::http::header::HeaderMap;
 use crate::http::httpmessage::HttpMessage;
 use crate::http::message::{Message, RequestHead};
-use crate::http::payload::{Payload, PayloadStream};
+use crate::http::payload::Payload;
 use crate::util::Extensions;
 
 /// Request
-pub struct Request<P = PayloadStream> {
-    pub(crate) payload: Payload<P>,
+pub struct Request {
+    pub(crate) payload: Payload,
     pub(crate) head: Message<RequestHead>,
 }
 
-impl<P> HttpMessage for Request<P> {
+impl HttpMessage for Request {
     #[inline]
     fn message_headers(&self) -> &HeaderMap {
         &self.head().headers
@@ -34,7 +33,7 @@ impl<P> HttpMessage for Request<P> {
     }
 }
 
-impl From<Message<RequestHead>> for Request<PayloadStream> {
+impl From<Message<RequestHead>> for Request {
     fn from(head: Message<RequestHead>) -> Self {
         Request {
             head,
@@ -43,9 +42,9 @@ impl From<Message<RequestHead>> for Request<PayloadStream> {
     }
 }
 
-impl Request<PayloadStream> {
+impl Request {
     /// Create new Request instance
-    pub fn new() -> Request<PayloadStream> {
+    pub fn new() -> Request {
         Request {
             head: Message::new(),
             payload: Payload::None,
@@ -53,9 +52,9 @@ impl Request<PayloadStream> {
     }
 }
 
-impl<P> Request<P> {
+impl Request {
     /// Create new Request instance
-    pub fn with_payload(payload: Payload<P>) -> Request<P> {
+    pub fn with_payload(payload: Payload) -> Request {
         Request {
             payload,
             head: Message::new(),
@@ -137,25 +136,18 @@ impl<P> Request<P> {
     }
 
     /// Get request's payload
-    pub fn payload(&mut self) -> &mut Payload<P> {
+    pub fn payload(&mut self) -> &mut Payload {
         &mut self.payload
     }
 
     /// Get request's payload
-    pub fn take_payload(&mut self) -> Payload<P> {
-        std::mem::take(&mut self.payload)
+    pub fn take_payload(&mut self) -> Payload {
+        mem::take(&mut self.payload)
     }
 
-    /// Create new Request instance
-    pub fn replace_payload<P1>(self, payload: Payload<P1>) -> (Request<P1>, Payload<P>) {
-        let pl = self.payload;
-        (
-            Request {
-                payload,
-                head: self.head,
-            },
-            pl,
-        )
+    /// Replace request's payload, returns old one
+    pub fn replace_payload(&mut self, payload: Payload) -> Payload {
+        mem::replace(&mut self.payload, payload)
     }
 
     /// Request extensions
@@ -172,12 +164,12 @@ impl<P> Request<P> {
 
     #[allow(dead_code)]
     /// Split request into request head and payload
-    pub(crate) fn into_parts(self) -> (Message<RequestHead>, Payload<P>) {
+    pub(crate) fn into_parts(self) -> (Message<RequestHead>, Payload) {
         (self.head, self.payload)
     }
 }
 
-impl<P> fmt::Debug for Request<P> {
+impl fmt::Debug for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,

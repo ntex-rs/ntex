@@ -38,7 +38,7 @@ pub struct H2Service<T, S, B> {
 impl<T, S, B> H2Service<T, S, B>
 where
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>> + 'static,
     S::Future: 'static,
     <S::Service as Service>::Future: 'static,
@@ -52,7 +52,7 @@ where
         H2Service {
             on_connect: None,
             srv: service.into_factory(),
-            handshake_timeout: cfg.0.ssl_handshake_timeout,
+            handshake_timeout: (cfg.0.ssl_handshake_timeout as u64) * 1000,
             _t: PhantomData,
             cfg,
         }
@@ -71,7 +71,7 @@ where
 impl<S, B> H2Service<TcpStream, S, B>
 where
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>> + 'static,
     S::Future: 'static,
     <S::Service as Service>::Future: 'static,
@@ -108,7 +108,7 @@ mod openssl {
     impl<S, B> H2Service<SslStream<TcpStream>, S, B>
     where
         S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: ResponseError,
+        S::Error: ResponseError + 'static,
         S::Response: Into<Response<B>> + 'static,
         S::Future: 'static,
         <S::Service as Service>::Future: 'static,
@@ -151,7 +151,7 @@ mod rustls {
     impl<S, B> H2Service<TlsStream<TcpStream>, S, B>
     where
         S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: ResponseError,
+        S::Error: ResponseError + 'static,
         S::Response: Into<Response<B>> + 'static,
         S::Future: 'static,
         <S::Service as Service>::Future: 'static,
@@ -192,7 +192,7 @@ impl<T, S, B> ServiceFactory for H2Service<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin + 'static,
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>> + 'static,
     S::Future: 'static,
     <S::Service as Service>::Future: 'static,
@@ -236,7 +236,7 @@ impl<T, S, B> Service for H2ServiceHandler<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
@@ -295,7 +295,7 @@ pub struct H2ServiceHandlerResponse<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
@@ -307,7 +307,7 @@ impl<T, S, B> Future for H2ServiceHandlerResponse<T, S, B>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody,

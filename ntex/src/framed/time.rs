@@ -6,15 +6,15 @@ use crate::framed::State;
 use crate::rt::time::delay_for;
 use crate::HashSet;
 
-pub struct Timer<U>(Rc<RefCell<Inner<U>>>);
+pub struct Timer(Rc<RefCell<Inner>>);
 
-struct Inner<U> {
+struct Inner {
     resolution: Duration,
     current: Option<Instant>,
-    notifications: BTreeMap<Instant, HashSet<State<U>>>,
+    notifications: BTreeMap<Instant, HashSet<State>>,
 }
 
-impl<U> Inner<U> {
+impl Inner {
     fn new(resolution: Duration) -> Self {
         Inner {
             resolution,
@@ -23,7 +23,7 @@ impl<U> Inner<U> {
         }
     }
 
-    fn unregister(&mut self, expire: Instant, state: &State<U>) {
+    fn unregister(&mut self, expire: Instant, state: &State) {
         if let Some(ref mut states) = self.notifications.get_mut(&expire) {
             states.remove(state);
             if states.is_empty() {
@@ -33,18 +33,24 @@ impl<U> Inner<U> {
     }
 }
 
-impl<U> Clone for Timer<U> {
+impl Clone for Timer {
     fn clone(&self) -> Self {
         Timer(self.0.clone())
     }
 }
 
-impl<U: 'static> Timer<U> {
-    pub fn with(resolution: Duration) -> Timer<U> {
+impl Default for Timer {
+    fn default() -> Self {
+        Timer::with(Duration::from_secs(1))
+    }
+}
+
+impl Timer {
+    pub fn with(resolution: Duration) -> Timer {
         Timer(Rc::new(RefCell::new(Inner::new(resolution))))
     }
 
-    pub fn register(&self, expire: Instant, previous: Instant, state: &State<U>) {
+    pub fn register(&self, expire: Instant, previous: Instant, state: &State) {
         {
             let mut inner = self.0.borrow_mut();
 
@@ -59,7 +65,7 @@ impl<U: 'static> Timer<U> {
         let _ = self.now();
     }
 
-    pub fn unregister(&self, expire: Instant, state: &State<U>) {
+    pub fn unregister(&self, expire: Instant, state: &State) {
         self.0.borrow_mut().unregister(expire, state);
     }
 

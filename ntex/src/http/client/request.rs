@@ -376,10 +376,7 @@ impl ClientRequest {
     pub fn freeze(self) -> Result<FrozenClientRequest, FreezeRequestError> {
         let slf = match self.prep_for_sending() {
             Ok(slf) => slf,
-            Err(e) => {
-                println!("E: {:?}", e);
-                return Err(e.into());
-            }
+            Err(e) => return Err(e.into()),
         };
 
         let request = FrozenClientRequest {

@@ -4,41 +4,58 @@ use bytes::Bytes;
 use futures::future::ok;
 use futures::{SinkExt, StreamExt};
 
-use ntex::codec::Framed;
+use ntex::framed::{DispatchItem, Dispatcher, State};
 use ntex::http::test::server as test_server;
 use ntex::http::ws::handshake_response;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
-use ntex::util::framed::Dispatcher;
 use ntex::ws;
 
-async fn ws_service(req: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
-    let item = match req {
-        ws::Frame::Ping(msg) => ws::Message::Pong(msg),
-        ws::Frame::Text(text) => {
-            ws::Message::Text(String::from_utf8(Vec::from(text.as_ref())).unwrap())
-        }
-        ws::Frame::Binary(bin) => ws::Message::Binary(bin),
-        ws::Frame::Close(reason) => ws::Message::Close(reason),
-        _ => ws::Message::Close(None),
+async fn ws_service(
+    msg: DispatchItem<ws::Codec>,
+) -> Result<Option<ws::Message>, io::Error> {
+    println!("TEST: {:?}", msg);
+    let msg = match msg {
+        DispatchItem::Item(msg) => match msg {
+            ws::Frame::Ping(msg) => ws::Message::Pong(msg),
+            ws::Frame::Text(text) => {
+                ws::Message::Text(String::from_utf8(Vec::from(text.as_ref())).unwrap())
+            }
+            ws::Frame::Binary(bin) => ws::Message::Binary(bin),
+            ws::Frame::Close(reason) => ws::Message::Close(reason),
+            _ => ws::Message::Close(None),
+        },
+        _ => return Ok(None),
     };
-    Ok(Some(item))
+    Ok(Some(msg))
 }
 
 #[ntex::test]
 async fn test_simple() {
+    std::env::set_var("RUST_LOG", "ntex_codec=info,ntex=trace");
+    env_logger::init();
+
     let mut srv = test_server(|| {
         HttpService::build()
-            .upgrade(|(req, mut framed): (Request, Framed<_, _>)| {
+            .upgrade(|(req, state, mut codec): (Request, State, h1::Codec)| {
                 async move {
                     let res = handshake_response(req.head()).finish();
-                    // send handshake response
-                    framed
-                        .send(h1::Message::Item((res.drop_body(), BodySize::None)))
-                        .await?;
+
+                    // send handshake respone
+                    state
+                        .write_item(
+                            h1::Message::Item((res.drop_body(), BodySize::None)),
+                            &mut codec,
+                        )
+                        .unwrap();
 
                     // start websocket service
-                    let framed = framed.into_framed(ws::Codec::default());
-                    Dispatcher::new(framed, ws_service).await
+                    Dispatcher::from_state(
+                        ws::Codec::default(),
+                        state,
+                        ws_service,
+                        Default::default(),
+                    )
+                    .await
                 }
             })
             .finish(|_| ok::<_, io::Error>(Response::NotFound()))

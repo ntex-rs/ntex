@@ -5,12 +5,13 @@ use std::rc::Rc;
 
 use futures::future::{FutureExt, LocalBoxFuture};
 
-use crate::http::{Extensions, Request};
+use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, ServiceFactory, Transform,
 };
+use crate::util::Extensions;
 
 use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
 use super::config::{AppConfig, ServiceConfig};

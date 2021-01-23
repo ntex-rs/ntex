@@ -4,10 +4,10 @@ use std::rc::Rc;
 use std::{fmt, net};
 
 use crate::http::{
-    header, Extensions, HeaderMap, HttpMessage, Method, Payload, PayloadStream,
-    RequestHead, Response, Uri, Version,
+    header, HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version,
 };
 use crate::router::{Path, Resource};
+use crate::util::Extensions;
 
 use super::config::AppConfig;
 use super::error::{ErrorRenderer, WebResponseError};
@@ -204,7 +204,7 @@ impl<Err> WebRequest<Err> {
 
     #[inline]
     /// Get request's payload
-    pub fn take_payload(&mut self) -> Payload<PayloadStream> {
+    pub fn take_payload(&mut self) -> Payload {
         Rc::get_mut(&mut (self.req).0).unwrap().payload.take()
     }
 

@@ -1,10 +1,8 @@
-use std::io;
-use std::marker::PhantomData;
-use std::task::{Context, Poll};
+use std::{io, marker::PhantomData, task::Context, task::Poll};
 
 use futures::future::Ready;
 
-use crate::codec::Framed;
+use crate::framed::State;
 use crate::http::h1::Codec;
 use crate::http::request::Request;
 use crate::{Service, ServiceFactory};
@@ -13,7 +11,7 @@ pub struct UpgradeHandler<T>(PhantomData<T>);
 
 impl<T> ServiceFactory for UpgradeHandler<T> {
     type Config = ();
-    type Request = (Request, Framed<T, Codec>);
+    type Request = (Request, State, Codec);
     type Response = ();
     type Error = io::Error;
     type Service = UpgradeHandler<T>;
@@ -27,7 +25,7 @@ impl<T> ServiceFactory for UpgradeHandler<T> {
 }
 
 impl<T> Service for UpgradeHandler<T> {
-    type Request = (Request, Framed<T, Codec>);
+    type Request = (Request, State, Codec);
     type Response = ();
     type Error = io::Error;
     type Future = Ready<Result<Self::Response, Self::Error>>;

@@ -1,5 +1,13 @@
 # Changes
 
+## [0.2.0-b.4] - 2021-01-xx
+
+* http: Refactor h1 dispatcher
+
+* http: Remove generic type from `Request`
+
+* http: Remove generic type from `Payload`
+
 ## [0.2.0-b.3] - 2021-01-21
 
 * Allow to use framed write task for io flushing

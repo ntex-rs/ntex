@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{fmt, io};
 
 use bitflags::bitflags;
@@ -12,15 +14,13 @@ use crate::http::message::ConnectionType;
 use crate::http::request::Request;
 use crate::http::response::Response;
 
-use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::{decoder, encoder};
-use super::{Message, MessageType};
+use super::{decoder, decoder::PayloadType, encoder, Message};
 
 bitflags! {
     struct Flags: u8 {
         const HEAD              = 0b0000_0001;
-        const KEEPALIVE_ENABLED = 0b0000_0010;
-        const STREAM            = 0b0000_0100;
+        const STREAM            = 0b0000_0010;
+        const KEEPALIVE_ENABLED = 0b0000_0100;
     }
 }
 
@@ -28,7 +28,6 @@ bitflags! {
 pub struct Codec {
     timer: DateService,
     decoder: decoder::MessageDecoder<Request>,
-    payload: Option<PayloadDecoder>,
     version: Version,
     ctype: ConnectionType,
 
@@ -40,6 +39,19 @@ pub struct Codec {
 impl Default for Codec {
     fn default() -> Self {
         Codec::new(DateService::default(), false)
+    }
+}
+
+impl Clone for Codec {
+    fn clone(&self) -> Self {
+        Codec {
+            timer: self.timer.clone(),
+            decoder: self.decoder.clone(),
+            version: self.version,
+            ctype: self.ctype,
+            flags: self.flags,
+            encoder: self.encoder.clone(),
+        }
     }
 }
 
@@ -64,7 +76,6 @@ impl Codec {
             flags,
             timer,
             decoder: decoder::MessageDecoder::default(),
-            payload: None,
             version: Version::HTTP_11,
             ctype: ConnectionType::Close,
             encoder: encoder::MessageEncoder::default(),
@@ -90,18 +101,6 @@ impl Codec {
     }
 
     #[inline]
-    /// Check last request's message type
-    pub fn message_type(&self) -> MessageType {
-        if self.flags.contains(Flags::STREAM) {
-            MessageType::Stream
-        } else if self.payload.is_none() {
-            MessageType::None
-        } else {
-            MessageType::Payload
-        }
-    }
-
-    #[inline]
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
         self.timer.set_date_header(dst)
@@ -109,20 +108,11 @@ impl Codec {
 }
 
 impl Decoder for Codec {
-    type Item = Message<Request>;
+    type Item = (Request, PayloadType);
     type Error = ParseError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if let Some(ref mut payload) = self.payload {
-            Ok(match payload.decode(src)? {
-                Some(PayloadItem::Chunk(chunk)) => Some(Message::Chunk(Some(chunk))),
-                Some(PayloadItem::Eof) => {
-                    self.payload.take();
-                    Some(Message::Chunk(None))
-                }
-                None => None,
-            })
-        } else if let Some((req, payload)) = self.decoder.decode(src)? {
+        if let Some((req, payload)) = self.decoder.decode(src)? {
             let head = req.head();
             self.flags.set(Flags::HEAD, head.method == Method::HEAD);
             self.version = head.version;
@@ -132,15 +122,11 @@ impl Decoder for Codec {
             {
                 self.ctype = ConnectionType::Close
             }
-            match payload {
-                PayloadType::None => self.payload = None,
-                PayloadType::Payload(pl) => self.payload = Some(pl),
-                PayloadType::Stream(pl) => {
-                    self.payload = Some(pl);
-                    self.flags.insert(Flags::STREAM);
-                }
+
+            if let PayloadType::Stream(_) = payload {
+                self.flags.insert(Flags::STREAM)
             }
-            Ok(Some(Message::Item(req)))
+            Ok(Some((req, payload)))
         } else {
             Ok(None)
         }
@@ -198,10 +184,10 @@ impl Encoder for Codec {
 
 #[cfg(test)]
 mod tests {
-    use bytes::BytesMut;
+    use bytes::{Bytes, BytesMut};
 
     use super::*;
-    use crate::http::{HttpMessage, Method};
+    use crate::http::{h1::PayloadItem, HttpMessage, Method};
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
@@ -212,8 +198,11 @@ mod tests {
             "GET /test HTTP/1.1\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
-        let item = codec.decode(&mut buf).unwrap().unwrap();
-        let req = item.message();
+        let (req, pl) = codec.decode(&mut buf).unwrap().unwrap();
+        let mut pl = match pl {
+            PayloadType::Payload(pl) => pl,
+            _ => panic!(),
+        };
 
         assert_eq!(req.method(), Method::GET);
         assert!(req.chunked().unwrap());
@@ -225,18 +214,17 @@ mod tests {
                 .iter(),
         );
 
-        let msg = codec.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(msg.chunk().as_ref(), b"data");
+        let msg = pl.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(msg, PayloadItem::Chunk(Bytes::from_static(b"data")));
 
-        let msg = codec.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(msg.chunk().as_ref(), b"line");
+        let msg = pl.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(msg, PayloadItem::Chunk(Bytes::from_static(b"line")));
 
-        let msg = codec.decode(&mut buf).unwrap().unwrap();
-        assert!(msg.eof());
+        let msg = pl.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(msg, PayloadItem::Eof);
 
         // decode next message
-        let item = codec.decode(&mut buf).unwrap().unwrap();
-        let req = item.message();
+        let (req, _pl) = codec.decode(&mut buf).unwrap().unwrap();
         assert_eq!(*req.method(), Method::POST);
         assert!(req.chunked().unwrap());
 

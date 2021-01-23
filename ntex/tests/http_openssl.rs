@@ -114,7 +114,7 @@ async fn test_h2_body() -> io::Result<()> {
     let data = "HELLOWORLD".to_owned().repeat(64 * 1024);
     let mut srv = test_server(move || {
         HttpService::build()
-            .h2(|mut req: Request<_>| async move {
+            .h2(|mut req: Request| async move {
                 let body = load_body(req.take_payload())
                     .await
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
@@ -443,7 +443,7 @@ async fn test_ssl_handshake_timeout() {
 
     let srv = test_server(move || {
         HttpService::build()
-            .ssl_handshake_timeout(50)
+            .ssl_handshake_timeout(1)
             .h2(|_| ok::<_, io::Error>(Response::Ok().finish()))
             .openssl(ssl_acceptor())
             .map_err(|_| ())

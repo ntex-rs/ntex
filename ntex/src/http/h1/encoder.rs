@@ -32,6 +32,16 @@ impl<T: MessageType> Default for MessageEncoder<T> {
     }
 }
 
+impl<T: MessageType> Clone for MessageEncoder<T> {
+    fn clone(&self) -> Self {
+        MessageEncoder {
+            length: self.length,
+            te: self.te,
+            _t: PhantomData,
+        }
+    }
+}
+
 pub(super) trait MessageType: Sized {
     fn status(&self) -> Option<StatusCode>;
 
@@ -311,12 +321,12 @@ impl<T: MessageType> MessageEncoder<T> {
 }
 
 /// Encoders to handle different Transfer-Encodings.
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub(super) struct TransferEncoding {
     kind: TransferEncodingKind,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum TransferEncodingKind {
     /// An Encoder for when Transfer-Encoding includes `chunked`.
     Chunked(bool),

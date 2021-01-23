@@ -1,45 +1,44 @@
-use std::fmt;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{fmt, mem, pin::Pin, task::Context, task::Poll};
 
 use bytes::Bytes;
 use futures::Stream;
 use h2::RecvStream;
 
 use super::error::PayloadError;
+use super::{h1, h2 as h2d};
 
 /// Type represent boxed payload
 pub type PayloadStream = Pin<Box<dyn Stream<Item = Result<Bytes, PayloadError>>>>;
 
 /// Type represent streaming payload
-pub enum Payload<S = PayloadStream> {
+pub enum Payload {
     None,
-    H1(crate::http::h1::Payload),
-    H2(crate::http::h2::Payload),
-    Stream(S),
+    H1(h1::Payload),
+    H2(h2d::Payload),
+    Stream(PayloadStream),
 }
 
-impl<S> Default for Payload<S> {
+impl Default for Payload {
     fn default() -> Self {
         Payload::None
     }
 }
 
-impl<S> From<crate::http::h1::Payload> for Payload<S> {
-    fn from(v: crate::http::h1::Payload) -> Self {
+impl From<h1::Payload> for Payload {
+    fn from(v: h1::Payload) -> Self {
         Payload::H1(v)
     }
 }
 
-impl<S> From<crate::http::h2::Payload> for Payload<S> {
-    fn from(v: crate::http::h2::Payload) -> Self {
+impl From<h2d::Payload> for Payload {
+    fn from(v: h2d::Payload) -> Self {
         Payload::H2(v)
     }
 }
 
-impl<S> From<RecvStream> for Payload<S> {
+impl From<RecvStream> for Payload {
     fn from(v: RecvStream) -> Self {
-        Payload::H2(crate::http::h2::Payload::new(v))
+        Payload::H2(h2d::Payload::new(v))
     }
 }
 
@@ -49,7 +48,7 @@ impl From<PayloadStream> for Payload {
     }
 }
 
-impl<S> fmt::Debug for Payload<S> {
+impl fmt::Debug for Payload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Payload::None => write!(f, "Payload::None"),
@@ -60,17 +59,22 @@ impl<S> fmt::Debug for Payload<S> {
     }
 }
 
-impl<S> Payload<S> {
+impl Payload {
     /// Takes current payload and replaces it with `None` value
-    pub fn take(&mut self) -> Payload<S> {
-        std::mem::take(self)
+    pub fn take(&mut self) -> Self {
+        mem::take(self)
+    }
+
+    /// Create payload from stream
+    pub fn from_stream<S>(stream: S) -> Self
+    where
+        S: Stream<Item = Result<Bytes, PayloadError>> + 'static,
+    {
+        Payload::Stream(Box::pin(stream))
     }
 }
 
-impl<S> Stream for Payload<S>
-where
-    S: Stream<Item = Result<Bytes, PayloadError>> + Unpin,
-{
+impl Stream for Payload {
     type Item = Result<Bytes, PayloadError>;
 
     #[inline]
@@ -93,19 +97,12 @@ mod tests {
 
     #[test]
     fn payload_debug() {
-        assert!(
-            format!("{:?}", Payload::<PayloadStream>::None).contains("Payload::None")
-        );
+        assert!(format!("{:?}", Payload::None).contains("Payload::None"));
+        assert!(format!("{:?}", Payload::H1(h1::Payload::create(false).1))
+            .contains("Payload::H1"));
         assert!(format!(
             "{:?}",
-            Payload::<PayloadStream>::H1(crate::http::h1::Payload::create(false).1)
-        )
-        .contains("Payload::H1"));
-        assert!(format!(
-            "{:?}",
-            Payload::<PayloadStream>::Stream(Box::pin(
-                crate::http::h1::Payload::create(false).1
-            ))
+            Payload::Stream(Box::pin(h1::Payload::create(false).1))
         )
         .contains("Payload::Stream"));
     }

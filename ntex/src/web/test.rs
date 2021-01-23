@@ -1,10 +1,8 @@
 //! Various helpers for ntex applications to use during testing.
-use std::convert::TryFrom;
-use std::error::Error;
-use std::net::SocketAddr;
-use std::rc::Rc;
-use std::sync::mpsc;
-use std::{fmt, net, thread, time};
+use std::{
+    convert::TryFrom, error::Error, fmt, net, net::SocketAddr, rc::Rc, sync::mpsc,
+    thread, time,
+};
 
 use bytes::{Bytes, BytesMut};
 use futures::future::ok;
@@ -22,12 +20,11 @@ use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
-use crate::http::{
-    Extensions, HttpService, Method, Payload, Request, StatusCode, Uri, Version,
-};
+use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
 use crate::router::{Path, ResourceDef};
 use crate::rt::{time::delay_for, System};
 use crate::server::Server;
+use crate::util::Extensions;
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use crate::web::config::AppConfig;
@@ -776,7 +773,7 @@ where
 pub struct TestServerConfig {
     tp: HttpVer,
     stream: StreamType,
-    client_timeout: u64,
+    client_timeout: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -854,8 +851,8 @@ impl TestServerConfig {
         self
     }
 
-    /// Set server client timeout in milliseconds for first request.
-    pub fn client_timeout(mut self, val: u64) -> Self {
+    /// Set server client timeout in seconds for first request.
+    pub fn client_timeout(mut self, val: u16) -> Self {
         self.client_timeout = val;
         self
     }
@@ -927,13 +924,11 @@ impl TestServer {
         self.client.request(method, path.as_ref())
     }
 
-    pub async fn load_body<S>(
+    /// Load response's body
+    pub async fn load_body(
         &self,
-        mut response: ClientResponse<S>,
-    ) -> Result<Bytes, PayloadError>
-    where
-        S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
-    {
+        mut response: ClientResponse,
+    ) -> Result<Bytes, PayloadError> {
         response.body().limit(10_485_760).await
     }
 
