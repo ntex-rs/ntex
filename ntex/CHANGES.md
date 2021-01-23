@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-b.5] - 2021-01-23
+
+* accept shared ref in some methods of framed::State type
+
 ## [0.2.0-b.4] - 2021-01-23
 
 * http: Refactor h1 dispatcher

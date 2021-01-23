@@ -374,7 +374,7 @@ impl State {
     pub async fn next<T, U>(
         &self,
         io: &mut T,
-        codec: &mut U,
+        codec: &U,
     ) -> Result<Option<U::Item>, Either<U::Error, io::Error>>
     where
         T: AsyncRead + AsyncWrite + Unpin,
@@ -410,7 +410,7 @@ impl State {
     pub fn poll_next<T, U>(
         &self,
         io: &mut T,
-        codec: &mut U,
+        codec: &U,
         cx: &mut Context<'_>,
     ) -> Poll<Result<Option<U::Item>, Either<U::Error, io::Error>>>
     where
