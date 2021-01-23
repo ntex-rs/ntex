@@ -40,7 +40,7 @@ impl<T, S, B, X, U> Dispatcher<T, S, B, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
@@ -76,7 +76,7 @@ impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Service<Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
@@ -100,9 +100,7 @@ where
                     }
 
                     let (parts, body) = req.into_parts();
-                    let mut req = Request::with_payload(Payload::<
-                        crate::http::payload::PayloadStream,
-                    >::H2(
+                    let mut req = Request::with_payload(Payload::H2(
                         crate::http::h2::Payload::new(body),
                     ));
 
@@ -155,7 +153,7 @@ pin_project_lite::pin_project! {
 impl<F, I, E, B> ServiceResponse<F, I, E, B>
 where
     F: Future<Output = Result<I, E>>,
-    E: ResponseError,
+    E: ResponseError + 'static,
     I: Into<Response<B>>,
     B: MessageBody,
 {
@@ -221,7 +219,7 @@ where
 impl<F, I, E, B> Future for ServiceResponse<F, I, E, B>
 where
     F: Future<Output = Result<I, E>>,
-    E: ResponseError,
+    E: ResponseError + 'static,
     I: Into<Response<B>>,
     B: MessageBody,
 {
@@ -260,7 +258,7 @@ where
                     }
                     Poll::Pending => Poll::Pending,
                     Poll::Ready(Err(e)) => {
-                        let res: Response = e.into();
+                        let res: Response = (&e).into();
                         let (res, body) = res.replace_body(());
 
                         let mut send = send.take().unwrap();

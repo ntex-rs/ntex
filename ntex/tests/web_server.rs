@@ -1054,7 +1054,7 @@ async fn test_server_cookies() {
 async fn test_slow_request() {
     use std::net;
 
-    let srv = test::server_with(test::config().client_timeout(200), || {
+    let srv = test::server_with(test::config().client_timeout(1), || {
         App::new()
             .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
     });

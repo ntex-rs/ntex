@@ -119,8 +119,8 @@ impl PayloadSender {
         }
     }
 
-    pub(super) fn need_read(&self, cx: &mut Context<'_>) -> PayloadStatus {
-        // we check need_read only if Payload (other side) is alive,
+    pub(super) fn poll_data_required(&self, cx: &mut Context<'_>) -> PayloadStatus {
+        // we check only if Payload (other side) is alive,
         // otherwise always return true (consume payload)
         if let Some(shared) = self.inner.upgrade() {
             if shared.borrow().need_read {

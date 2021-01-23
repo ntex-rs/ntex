@@ -1,4 +1,4 @@
-use std::io;
+use std::{cell::Cell, cell::RefCell, io};
 
 use bitflags::bitflags;
 use bytes::{Bytes, BytesMut};
@@ -34,12 +34,12 @@ pub struct ClientPayloadCodec {
 struct ClientCodecInner {
     timer: DateService,
     decoder: decoder::MessageDecoder<ResponseHead>,
-    payload: Option<PayloadDecoder>,
-    version: Version,
-    ctype: ConnectionType,
+    payload: RefCell<Option<PayloadDecoder>>,
+    version: Cell<Version>,
+    ctype: Cell<ConnectionType>,
 
     // encoder part
-    flags: Flags,
+    flags: Cell<Flags>,
     encoder: encoder::MessageEncoder<RequestHeadType>,
 }
 
@@ -63,11 +63,10 @@ impl ClientCodec {
             inner: ClientCodecInner {
                 timer,
                 decoder: decoder::MessageDecoder::default(),
-                payload: None,
-                version: Version::HTTP_11,
-                ctype: ConnectionType::Close,
-
-                flags,
+                payload: RefCell::new(None),
+                version: Cell::new(Version::HTTP_11),
+                ctype: Cell::new(ConnectionType::Close),
+                flags: Cell::new(flags),
                 encoder: encoder::MessageEncoder::default(),
             },
         }
@@ -75,19 +74,19 @@ impl ClientCodec {
 
     /// Check if request is upgrade
     pub fn upgrade(&self) -> bool {
-        self.inner.ctype == ConnectionType::Upgrade
+        self.inner.ctype.get() == ConnectionType::Upgrade
     }
 
     /// Check if last response is keep-alive
     pub fn keepalive(&self) -> bool {
-        self.inner.ctype == ConnectionType::KeepAlive
+        self.inner.ctype.get() == ConnectionType::KeepAlive
     }
 
     /// Check last request's message type
     pub fn message_type(&self) -> MessageType {
-        if self.inner.flags.contains(Flags::STREAM) {
+        if self.inner.flags.get().contains(Flags::STREAM) {
             MessageType::Stream
-        } else if self.inner.payload.is_none() {
+        } else if self.inner.payload.borrow().is_none() {
             MessageType::None
         } else {
             MessageType::Payload
@@ -103,7 +102,7 @@ impl ClientCodec {
 impl ClientPayloadCodec {
     /// Check if last response is keep-alive
     pub fn keepalive(&self) -> bool {
-        self.inner.ctype == ConnectionType::KeepAlive
+        self.inner.ctype.get() == ConnectionType::KeepAlive
     }
 
     /// Transform payload codec to a message codec
@@ -116,30 +115,37 @@ impl Decoder for ClientCodec {
     type Item = ResponseHead;
     type Error = ParseError;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        debug_assert!(!self.inner.payload.is_some(), "Payload decoder is set");
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        debug_assert!(
+            !self.inner.payload.borrow().is_some(),
+            "Payload decoder is set"
+        );
 
         if let Some((req, payload)) = self.inner.decoder.decode(src)? {
             if let Some(ctype) = req.ctype() {
                 // do not use peer's keep-alive
-                self.inner.ctype = if ctype == ConnectionType::KeepAlive {
-                    self.inner.ctype
-                } else {
-                    ctype
+                if ctype != ConnectionType::KeepAlive {
+                    self.inner.ctype.set(ctype);
                 };
             }
 
-            if !self.inner.flags.contains(Flags::HEAD) {
+            if !self.inner.flags.get().contains(Flags::HEAD) {
                 match payload {
-                    PayloadType::None => self.inner.payload = None,
-                    PayloadType::Payload(pl) => self.inner.payload = Some(pl),
+                    PayloadType::None => {
+                        self.inner.payload.borrow_mut().take();
+                    }
+                    PayloadType::Payload(pl) => {
+                        *self.inner.payload.borrow_mut() = Some(pl)
+                    }
                     PayloadType::Stream(pl) => {
-                        self.inner.payload = Some(pl);
-                        self.inner.flags.insert(Flags::STREAM);
+                        *self.inner.payload.borrow_mut() = Some(pl);
+                        let mut flags = self.inner.flags.get();
+                        flags.insert(Flags::STREAM);
+                        self.inner.flags.set(flags);
                     }
                 }
             } else {
-                self.inner.payload = None;
+                self.inner.payload.borrow_mut().take();
             }
             reserve_readbuf(src);
             Ok(Some(req))
@@ -153,19 +159,27 @@ impl Decoder for ClientPayloadCodec {
     type Item = Option<Bytes>;
     type Error = PayloadError;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         debug_assert!(
-            self.inner.payload.is_some(),
+            self.inner.payload.borrow().is_some(),
             "Payload decoder is not specified"
         );
 
-        Ok(match self.inner.payload.as_mut().unwrap().decode(src)? {
+        let item = self
+            .inner
+            .payload
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .decode(src)?;
+
+        Ok(match item {
             Some(PayloadItem::Chunk(chunk)) => {
                 reserve_readbuf(src);
                 Some(Some(chunk))
             }
             Some(PayloadItem::Eof) => {
-                self.inner.payload.take();
+                self.inner.payload.borrow_mut().take();
                 Some(None)
             }
             None => None,
@@ -177,23 +191,19 @@ impl Encoder for ClientCodec {
     type Item = Message<(RequestHeadType, BodySize)>;
     type Error = io::Error;
 
-    fn encode(
-        &mut self,
-        item: Self::Item,
-        dst: &mut BytesMut,
-    ) -> Result<(), Self::Error> {
+    fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
             Message::Item((mut head, length)) => {
-                let inner = &mut self.inner;
-                inner.version = head.as_ref().version;
-                inner
-                    .flags
-                    .set(Flags::HEAD, head.as_ref().method == Method::HEAD);
+                let inner = &self.inner;
+                inner.version.set(head.as_ref().version);
+                let mut flags = inner.flags.get();
+                flags.set(Flags::HEAD, head.as_ref().method == Method::HEAD);
+                inner.flags.set(flags);
 
                 // connection status
-                inner.ctype = match head.as_ref().connection_type() {
+                inner.ctype.set(match head.as_ref().connection_type() {
                     ConnectionType::KeepAlive => {
-                        if inner.flags.contains(Flags::KEEPALIVE_ENABLED) {
+                        if inner.flags.get().contains(Flags::KEEPALIVE_ENABLED) {
                             ConnectionType::KeepAlive
                         } else {
                             ConnectionType::Close
@@ -201,16 +211,16 @@ impl Encoder for ClientCodec {
                     }
                     ConnectionType::Upgrade => ConnectionType::Upgrade,
                     ConnectionType::Close => ConnectionType::Close,
-                };
+                });
 
                 inner.encoder.encode(
                     dst,
                     &mut head,
                     false,
                     false,
-                    inner.version,
+                    inner.version.get(),
                     length,
-                    inner.ctype,
+                    inner.ctype.get(),
                     &inner.timer,
                 )?;
             }

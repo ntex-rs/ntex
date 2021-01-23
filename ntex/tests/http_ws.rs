@@ -1,47 +1,39 @@
-use std::cell::Cell;
-use std::io;
-use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::{cell::Cell, io, pin::Pin};
 
 use bytes::Bytes;
 use futures::{future, Future, SinkExt, StreamExt};
 
-use ntex::codec::{AsyncRead, AsyncWrite, Framed};
-use ntex::http::ws::handshake;
-use ntex::http::{body, h1, test, HttpService, Request, Response};
+use ntex::framed::{DispatchItem, Dispatcher, State, Timer};
+use ntex::http::{body, h1, test, ws::handshake, HttpService, Request, Response};
 use ntex::service::{fn_factory, Service};
-use ntex::util::framed::Dispatcher;
 use ntex::ws;
 
-struct WsService<T>(Arc<Mutex<(PhantomData<T>, Cell<bool>)>>);
+struct WsService(Arc<Mutex<Cell<bool>>>);
 
-impl<T> WsService<T> {
+impl WsService {
     fn new() -> Self {
-        WsService(Arc::new(Mutex::new((PhantomData, Cell::new(false)))))
+        WsService(Arc::new(Mutex::new(Cell::new(false))))
     }
 
     fn set_polled(&self) {
-        *self.0.lock().unwrap().1.get_mut() = true;
+        *self.0.lock().unwrap().get_mut() = true;
     }
 
     fn was_polled(&self) -> bool {
-        self.0.lock().unwrap().1.get()
+        self.0.lock().unwrap().get()
     }
 }
 
-impl<T> Clone for WsService<T> {
+impl Clone for WsService {
     fn clone(&self) -> Self {
         WsService(self.0.clone())
     }
 }
 
-impl<T> Service for WsService<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
-{
-    type Request = (Request, Framed<T, h1::Codec>);
+impl Service for WsService {
+    type Request = (Request, State, h1::Codec);
     type Response = ();
     type Error = io::Error;
     type Future = Pin<Box<dyn Future<Output = Result<(), io::Error>>>>;
@@ -51,16 +43,15 @@ where
         Poll::Ready(Ok(()))
     }
 
-    fn call(&self, (req, mut framed): Self::Request) -> Self::Future {
+    fn call(&self, (req, state, mut codec): Self::Request) -> Self::Future {
         let fut = async move {
             let res = handshake(req.head()).unwrap().message_body(());
 
-            framed
-                .send((res, body::BodySize::None).into())
-                .await
+            state
+                .write_item((res, body::BodySize::None).into(), &mut codec)
                 .unwrap();
 
-            Dispatcher::new(framed.into_framed(ws::Codec::new()), service)
+            Dispatcher::from_state(ws::Codec::new(), state, service, Timer::default())
                 .await
                 .map_err(|_| panic!())
         };
@@ -69,16 +60,21 @@ where
     }
 }
 
-async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
+async fn service(
+    msg: DispatchItem<ws::Codec>,
+) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
-        ws::Frame::Ping(msg) => ws::Message::Pong(msg),
-        ws::Frame::Text(text) => {
-            ws::Message::Text(String::from_utf8_lossy(&text).to_string())
-        }
-        ws::Frame::Binary(bin) => ws::Message::Binary(bin),
-        ws::Frame::Continuation(item) => ws::Message::Continuation(item),
-        ws::Frame::Close(reason) => ws::Message::Close(reason),
-        _ => panic!(),
+        DispatchItem::Item(msg) => match msg {
+            ws::Frame::Ping(msg) => ws::Message::Pong(msg),
+            ws::Frame::Text(text) => {
+                ws::Message::Text(String::from_utf8_lossy(&text).to_string())
+            }
+            ws::Frame::Binary(bin) => ws::Message::Binary(bin),
+            ws::Frame::Continuation(item) => ws::Message::Continuation(item),
+            ws::Frame::Close(reason) => ws::Message::Close(reason),
+            _ => panic!(),
+        },
+        _ => return Ok(None),
     };
     Ok(Some(msg))
 }

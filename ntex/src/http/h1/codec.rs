@@ -1,4 +1,4 @@
-use std::{fmt, io};
+use std::{cell::Cell, fmt, io};
 
 use bitflags::bitflags;
 use bytes::BytesMut;
@@ -12,15 +12,13 @@ use crate::http::message::ConnectionType;
 use crate::http::request::Request;
 use crate::http::response::Response;
 
-use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::{decoder, encoder};
-use super::{Message, MessageType};
+use super::{decoder, decoder::PayloadType, encoder, Message};
 
 bitflags! {
     struct Flags: u8 {
         const HEAD              = 0b0000_0001;
-        const KEEPALIVE_ENABLED = 0b0000_0010;
-        const STREAM            = 0b0000_0100;
+        const STREAM            = 0b0000_0010;
+        const KEEPALIVE_ENABLED = 0b0000_0100;
     }
 }
 
@@ -28,18 +26,30 @@ bitflags! {
 pub struct Codec {
     timer: DateService,
     decoder: decoder::MessageDecoder<Request>,
-    payload: Option<PayloadDecoder>,
-    version: Version,
-    ctype: ConnectionType,
+    version: Cell<Version>,
+    ctype: Cell<ConnectionType>,
 
     // encoder part
-    flags: Flags,
+    flags: Cell<Flags>,
     encoder: encoder::MessageEncoder<Response<()>>,
 }
 
 impl Default for Codec {
     fn default() -> Self {
         Codec::new(DateService::default(), false)
+    }
+}
+
+impl Clone for Codec {
+    fn clone(&self) -> Self {
+        Codec {
+            timer: self.timer.clone(),
+            decoder: self.decoder.clone(),
+            version: self.version.clone(),
+            ctype: self.ctype.clone(),
+            flags: self.flags.clone(),
+            encoder: self.encoder.clone(),
+        }
     }
 }
 
@@ -61,12 +71,11 @@ impl Codec {
         };
 
         Codec {
-            flags,
             timer,
+            flags: Cell::new(flags),
             decoder: decoder::MessageDecoder::default(),
-            payload: None,
-            version: Version::HTTP_11,
-            ctype: ConnectionType::Close,
+            version: Cell::new(Version::HTTP_11),
+            ctype: Cell::new(ConnectionType::Close),
             encoder: encoder::MessageEncoder::default(),
         }
     }
@@ -74,31 +83,19 @@ impl Codec {
     #[inline]
     /// Check if request is upgrade
     pub fn upgrade(&self) -> bool {
-        self.ctype == ConnectionType::Upgrade
+        self.ctype.get() == ConnectionType::Upgrade
     }
 
     #[inline]
     /// Check if last response is keep-alive
     pub fn keepalive(&self) -> bool {
-        self.ctype == ConnectionType::KeepAlive
+        self.ctype.get() == ConnectionType::KeepAlive
     }
 
     #[inline]
     /// Check if keep-alive enabled on server level
     pub fn keepalive_enabled(&self) -> bool {
-        self.flags.contains(Flags::KEEPALIVE_ENABLED)
-    }
-
-    #[inline]
-    /// Check last request's message type
-    pub fn message_type(&self) -> MessageType {
-        if self.flags.contains(Flags::STREAM) {
-            MessageType::Stream
-        } else if self.payload.is_none() {
-            MessageType::None
-        } else {
-            MessageType::Payload
-        }
+        self.flags.get().contains(Flags::KEEPALIVE_ENABLED)
     }
 
     #[inline]
@@ -106,41 +103,36 @@ impl Codec {
     pub fn set_date_header(&self, dst: &mut BytesMut) {
         self.timer.set_date_header(dst)
     }
+
+    fn insert_flags(&self, f: Flags) {
+        let mut flags = self.flags.get();
+        flags.insert(f);
+        self.flags.set(flags);
+    }
 }
 
 impl Decoder for Codec {
-    type Item = Message<Request>;
+    type Item = (Request, PayloadType);
     type Error = ParseError;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if let Some(ref mut payload) = self.payload {
-            Ok(match payload.decode(src)? {
-                Some(PayloadItem::Chunk(chunk)) => Some(Message::Chunk(Some(chunk))),
-                Some(PayloadItem::Eof) => {
-                    self.payload.take();
-                    Some(Message::Chunk(None))
-                }
-                None => None,
-            })
-        } else if let Some((req, payload)) = self.decoder.decode(src)? {
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        if let Some((req, payload)) = self.decoder.decode(src)? {
             let head = req.head();
-            self.flags.set(Flags::HEAD, head.method == Method::HEAD);
-            self.version = head.version;
-            self.ctype = head.connection_type();
-            if self.ctype == ConnectionType::KeepAlive
-                && !self.flags.contains(Flags::KEEPALIVE_ENABLED)
+            let mut flags = self.flags.get();
+            flags.set(Flags::HEAD, head.method == Method::HEAD);
+            self.flags.set(flags);
+            self.version.set(head.version);
+            self.ctype.set(head.connection_type());
+            if self.ctype.get() == ConnectionType::KeepAlive
+                && !flags.contains(Flags::KEEPALIVE_ENABLED)
             {
-                self.ctype = ConnectionType::Close
+                self.ctype.set(ConnectionType::Close)
             }
-            match payload {
-                PayloadType::None => self.payload = None,
-                PayloadType::Payload(pl) => self.payload = Some(pl),
-                PayloadType::Stream(pl) => {
-                    self.payload = Some(pl);
-                    self.flags.insert(Flags::STREAM);
-                }
+
+            if let PayloadType::Stream(_) = payload {
+                self.insert_flags(Flags::STREAM)
             }
-            Ok(Some(Message::Item(req)))
+            Ok(Some((req, payload)))
         } else {
             Ok(None)
         }
@@ -151,36 +143,28 @@ impl Encoder for Codec {
     type Item = Message<(Response<()>, BodySize)>;
     type Error = io::Error;
 
-    fn encode(
-        &mut self,
-        item: Self::Item,
-        dst: &mut BytesMut,
-    ) -> Result<(), Self::Error> {
+    fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
             Message::Item((mut res, length)) => {
                 // set response version
-                res.head_mut().version = self.version;
+                res.head_mut().version = self.version.get();
 
                 // connection status
-                self.ctype = if let Some(ct) = res.head().ctype() {
-                    if ct == ConnectionType::KeepAlive {
-                        self.ctype
-                    } else {
-                        ct
+                if let Some(ct) = res.head().ctype() {
+                    if ct != ConnectionType::KeepAlive {
+                        self.ctype.set(ct)
                     }
-                } else {
-                    self.ctype
-                };
+                }
 
                 // encode message
                 self.encoder.encode(
                     dst,
                     &mut res,
-                    self.flags.contains(Flags::HEAD),
-                    self.flags.contains(Flags::STREAM),
-                    self.version,
+                    self.flags.get().contains(Flags::HEAD),
+                    self.flags.get().contains(Flags::STREAM),
+                    self.version.get(),
                     length,
-                    self.ctype,
+                    self.ctype.get(),
                     &self.timer,
                 )?;
                 // self.headers_size = (dst.len() - len) as u32;
@@ -198,22 +182,25 @@ impl Encoder for Codec {
 
 #[cfg(test)]
 mod tests {
-    use bytes::BytesMut;
+    use bytes::{Bytes, BytesMut};
 
     use super::*;
-    use crate::http::{HttpMessage, Method};
+    use crate::http::{h1::PayloadItem, HttpMessage, Method};
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
-        let mut codec = Codec::default();
+        let codec = Codec::default();
         assert!(format!("{:?}", codec).contains("h1::Codec"));
 
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
-        let item = codec.decode(&mut buf).unwrap().unwrap();
-        let req = item.message();
+        let (req, pl) = codec.decode(&mut buf).unwrap().unwrap();
+        let pl = match pl {
+            PayloadType::Payload(pl) => pl,
+            _ => panic!(),
+        };
 
         assert_eq!(req.method(), Method::GET);
         assert!(req.chunked().unwrap());
@@ -225,22 +212,21 @@ mod tests {
                 .iter(),
         );
 
-        let msg = codec.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(msg.chunk().as_ref(), b"data");
+        let msg = pl.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(msg, PayloadItem::Chunk(Bytes::from_static(b"data")));
 
-        let msg = codec.decode(&mut buf).unwrap().unwrap();
-        assert_eq!(msg.chunk().as_ref(), b"line");
+        let msg = pl.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(msg, PayloadItem::Chunk(Bytes::from_static(b"line")));
 
-        let msg = codec.decode(&mut buf).unwrap().unwrap();
-        assert!(msg.eof());
+        let msg = pl.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(msg, PayloadItem::Eof);
 
         // decode next message
-        let item = codec.decode(&mut buf).unwrap().unwrap();
-        let req = item.message();
+        let (req, _pl) = codec.decode(&mut buf).unwrap().unwrap();
         assert_eq!(*req.method(), Method::POST);
         assert!(req.chunked().unwrap());
 
-        let mut codec = Codec::default();
+        let codec = Codec::default();
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\n\
              connection: upgrade\r\n\r\n",

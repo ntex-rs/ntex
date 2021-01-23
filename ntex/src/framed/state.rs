@@ -1,6 +1,6 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll, Waker};
-use std::{cell::Cell, cell::RefCell, fmt, hash, io, mem, pin::Pin, rc::Rc};
+use std::{cell::Cell, cell::RefCell, hash, io, mem, pin::Pin, rc::Rc};
 
 use bytes::BytesMut;
 use either::Either;
@@ -10,13 +10,10 @@ use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts}
 use crate::framed::write::flush;
 use crate::task::LocalWaker;
 
-type Request<U> = <U as Decoder>::Item;
-type Response<U> = <U as Encoder>::Item;
-
 const HW: usize = 8 * 1024;
 
 bitflags::bitflags! {
-    pub(crate) struct Flags: u8 {
+    pub struct Flags: u8 {
         const DSP_STOP       = 0b0000_0001;
         const DSP_KEEPALIVE  = 0b0000_0010;
 
@@ -35,49 +32,9 @@ bitflags::bitflags! {
     }
 }
 
-/// Framed transport item
-pub enum DispatcherItem<U: Encoder + Decoder> {
-    Item(Request<U>),
-    /// Keep alive timeout
-    KeepAliveTimeout,
-    /// Decoder parse error
-    DecoderError(<U as Decoder>::Error),
-    /// Encoder parse error
-    EncoderError(<U as Encoder>::Error),
-    /// Unexpected io error
-    IoError(io::Error),
-}
+pub struct State(Rc<IoStateInner>);
 
-impl<U> fmt::Debug for DispatcherItem<U>
-where
-    U: Encoder + Decoder,
-    <U as Decoder>::Item: fmt::Debug,
-{
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            DispatcherItem::Item(ref item) => {
-                write!(fmt, "DispatcherItem::Item({:?})", item)
-            }
-            DispatcherItem::KeepAliveTimeout => {
-                write!(fmt, "DispatcherItem::KeepAliveTimeout")
-            }
-            DispatcherItem::EncoderError(ref e) => {
-                write!(fmt, "DispatcherItem::EncoderError({:?})", e)
-            }
-            DispatcherItem::DecoderError(ref e) => {
-                write!(fmt, "DispatcherItem::DecoderError({:?})", e)
-            }
-            DispatcherItem::IoError(ref e) => {
-                write!(fmt, "DispatcherItem::IoError({:?})", e)
-            }
-        }
-    }
-}
-
-pub struct State<U>(Rc<IoStateInner<U>>);
-
-pub(crate) struct IoStateInner<U> {
-    codec: RefCell<U>,
+pub(crate) struct IoStateInner {
     flags: Cell<Flags>,
     error: Cell<Option<io::Error>>,
     disconnect_timeout: Cell<u16>,
@@ -88,39 +45,29 @@ pub(crate) struct IoStateInner<U> {
     write_buf: RefCell<BytesMut>,
 }
 
-impl<U> State<U> {
-    pub(crate) fn keepalive_timeout(&self) {
-        let state = self.0.as_ref();
-        let mut flags = state.flags.get();
-        flags.insert(Flags::DSP_STOP | Flags::DSP_KEEPALIVE);
-        state.flags.set(flags);
-        state.dispatch_task.wake();
-    }
-}
-
-impl<U> Clone for State<U> {
+impl Clone for State {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<U> Eq for State<U> {}
+impl Eq for State {}
 
-impl<U> PartialEq for State<U> {
+impl PartialEq for State {
     fn eq(&self, other: &Self) -> bool {
         Rc::as_ptr(&self.0) == Rc::as_ptr(&other.0)
     }
 }
 
-impl<U> hash::Hash for State<U> {
+impl hash::Hash for State {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         Rc::as_ptr(&self.0).hash(state);
     }
 }
 
-impl<U> State<U> {
+impl State {
     /// Create `State` instance
-    pub fn new(codec: U) -> Self {
+    pub fn new() -> Self {
         State(Rc::new(IoStateInner {
             flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
@@ -128,14 +75,13 @@ impl<U> State<U> {
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            codec: RefCell::new(codec),
             read_buf: RefCell::new(BytesMut::new()),
             write_buf: RefCell::new(BytesMut::new()),
         }))
     }
 
     /// Create `State` from Framed
-    pub fn from_framed<Io>(framed: Framed<Io, U>) -> (Io, Self) {
+    pub fn from_framed<Io, U>(framed: Framed<Io, U>) -> (Io, U, Self) {
         let parts = framed.into_parts();
 
         let state = State(Rc::new(IoStateInner {
@@ -145,28 +91,36 @@ impl<U> State<U> {
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            codec: RefCell::new(parts.codec),
             read_buf: RefCell::new(parts.read_buf),
             write_buf: RefCell::new(parts.write_buf),
         }));
-        (parts.io, state)
+        (parts.io, parts.codec, state)
     }
 
     /// Convert state to a Framed instance
-    pub fn into_framed<Io>(self, io: Io) -> Result<Framed<Io, U>, Io> {
-        match Rc::try_unwrap(self.0) {
-            Ok(inner) => {
-                let mut parts = FramedParts::new(io, inner.codec.into_inner());
-                parts.read_buf = inner.read_buf.into_inner();
-                parts.write_buf = inner.write_buf.into_inner();
-                Ok(Framed::from_parts(parts))
-            }
-            Err(_) => Err(io),
-        }
+    pub fn into_framed<Io, U>(self, io: Io, codec: U) -> Framed<Io, U> {
+        let mut parts = FramedParts::new(io, codec);
+        parts.read_buf = mem::take(&mut self.0.read_buf.borrow_mut());
+        parts.write_buf = mem::take(&mut self.0.write_buf.borrow_mut());
+        Framed::from_parts(parts)
+    }
+
+    pub(crate) fn keepalive_timeout(&self) {
+        let state = self.0.as_ref();
+        let mut flags = state.flags.get();
+        flags.insert(Flags::DSP_KEEPALIVE);
+        state.flags.set(flags);
+        state.dispatch_task.wake();
     }
 
     pub(super) fn disconnect_timeout(&self) -> u16 {
         self.0.disconnect_timeout.get()
+    }
+
+    #[inline]
+    /// Get current state flags
+    pub fn flags(&self) -> Flags {
+        self.0.flags.get()
     }
 
     #[inline]
@@ -212,8 +166,16 @@ impl<U> State<U> {
 
     #[inline]
     /// Check if keep-alive timeout occured
-    pub fn is_keepalive_err(&self) -> bool {
+    pub fn is_keepalive(&self) -> bool {
         self.0.flags.get().contains(Flags::DSP_KEEPALIVE)
+    }
+
+    #[inline]
+    /// Reset keep-alive error
+    pub fn reset_keepalive(&self) {
+        let mut flags = self.0.flags.get();
+        flags.remove(Flags::DSP_KEEPALIVE);
+        self.0.flags.set(flags);
     }
 
     #[inline]
@@ -377,6 +339,7 @@ impl<U> State<U> {
     }
 
     #[inline]
+    /// Get mut access to read buffer
     pub fn with_read_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -385,6 +348,7 @@ impl<U> State<U> {
     }
 
     #[inline]
+    /// Get mut access to write buffer
     pub fn with_write_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
@@ -393,56 +357,31 @@ impl<U> State<U> {
     }
 }
 
-impl<U> State<U>
-where
-    U: Encoder + Decoder,
-{
+impl State {
     #[inline]
-    /// Consume the `IoState`, returning `IoState` with different codec.
-    pub fn map_codec<F, U2>(self, f: F) -> State<U2>
+    /// Attempts to decode a frame from the read buffer.
+    pub fn decode_item<U>(
+        &self,
+        codec: &U,
+    ) -> Result<Option<<U as Decoder>::Item>, <U as Decoder>::Error>
     where
-        F: Fn(&U) -> U2,
-        U2: Encoder + Decoder,
+        U: Decoder,
     {
-        let st = self.0.as_ref();
-        let codec = f(&st.codec.borrow());
-
-        State(Rc::new(IoStateInner {
-            codec: RefCell::new(codec),
-            flags: Cell::new(st.flags.get()),
-            error: Cell::new(st.error.take()),
-            disconnect_timeout: Cell::new(st.disconnect_timeout.get()),
-            dispatch_task: LocalWaker::new(),
-            read_task: LocalWaker::new(),
-            write_task: LocalWaker::new(),
-            read_buf: RefCell::new(mem::take(&mut st.read_buf.borrow_mut())),
-            write_buf: RefCell::new(mem::take(&mut st.write_buf.borrow_mut())),
-        }))
+        codec.decode(&mut self.0.read_buf.borrow_mut())
     }
 
     #[inline]
-    pub fn with_codec<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut U) -> R,
-    {
-        f(&mut *self.0.codec.borrow_mut())
-    }
-
-    #[inline]
-    pub async fn next<T>(
+    pub async fn next<T, U>(
         &self,
         io: &mut T,
-    ) -> Result<Option<<U as Decoder>::Item>, Either<<U as Decoder>::Error, io::Error>>
+        codec: &mut U,
+    ) -> Result<Option<U::Item>, Either<U::Error, io::Error>>
     where
         T: AsyncRead + AsyncWrite + Unpin,
+        U: Decoder,
     {
         loop {
-            let item = {
-                self.0
-                    .codec
-                    .borrow_mut()
-                    .decode(&mut self.0.read_buf.borrow_mut())
-            };
+            let item = codec.decode(&mut self.0.read_buf.borrow_mut());
             return match item {
                 Ok(Some(el)) => Ok(Some(el)),
                 Ok(None) => {
@@ -468,18 +407,17 @@ where
     }
 
     #[inline]
-    pub fn poll_next<T>(
+    pub fn poll_next<T, U>(
         &self,
         io: &mut T,
+        codec: &mut U,
         cx: &mut Context<'_>,
-    ) -> Poll<
-        Result<Option<<U as Decoder>::Item>, Either<<U as Decoder>::Error, io::Error>>,
-    >
+    ) -> Poll<Result<Option<U::Item>, Either<U::Error, io::Error>>>
     where
         T: AsyncRead + AsyncWrite + Unpin,
+        U: Decoder,
     {
         let mut buf = self.0.read_buf.borrow_mut();
-        let mut codec = self.0.codec.borrow_mut();
 
         loop {
             return match codec.decode(&mut buf) {
@@ -502,17 +440,18 @@ where
     }
 
     #[inline]
-    pub async fn send<T>(
+    /// Encode item, send to a peer and flush
+    pub async fn send<T, U>(
         &self,
         io: &mut T,
-        item: <U as Encoder>::Item,
-    ) -> Result<(), Either<<U as Encoder>::Error, io::Error>>
+        codec: &U,
+        item: U::Item,
+    ) -> Result<(), Either<U::Error, io::Error>>
     where
         T: AsyncRead + AsyncWrite + Unpin,
+        U: Encoder,
     {
-        self.0
-            .codec
-            .borrow_mut()
+        codec
             .encode(item, &mut self.0.write_buf.borrow_mut())
             .map_err(Either::Left)?;
 
@@ -526,24 +465,17 @@ where
     }
 
     #[inline]
-    /// Attempts to decode a frame from the read buffer.
-    pub fn decode_item(
-        &self,
-    ) -> Result<Option<<U as Decoder>::Item>, <U as Decoder>::Error> {
-        self.0
-            .codec
-            .borrow_mut()
-            .decode(&mut self.0.read_buf.borrow_mut())
-    }
-
-    #[inline]
     /// Write item to a buf and wake up io task
     ///
     /// Returns state of write buffer state, false is returned if write buffer if full.
-    pub fn write_item(
+    pub fn write_item<U>(
         &self,
-        item: <U as Encoder>::Item,
-    ) -> Result<bool, <U as Encoder>::Error> {
+        item: U::Item,
+        codec: &U,
+    ) -> Result<bool, <U as Encoder>::Error>
+    where
+        U: Encoder,
+    {
         let flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
@@ -551,10 +483,7 @@ where
             let is_write_sleep = write_buf.is_empty();
 
             // encode item and wake write task
-            let res = self
-                .0
-                .codec
-                .borrow_mut()
+            let res = codec
                 .encode(item, &mut *write_buf)
                 .map(|_| write_buf.len() < HW);
             if res.is_ok() && is_write_sleep {
@@ -568,10 +497,14 @@ where
 
     #[inline]
     /// Write item to a buf and wake up io task
-    pub fn write_result<E>(
+    pub fn write_result<U, E>(
         &self,
-        item: Result<Option<Response<U>>, E>,
-    ) -> Result<bool, Either<E, <U as Encoder>::Error>> {
+        item: Result<Option<U::Item>, E>,
+        codec: &U,
+    ) -> Result<bool, Either<E, U::Error>>
+    where
+        U: Encoder,
+    {
         let mut flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::ST_DSP_ERR) {
@@ -581,9 +514,7 @@ where
                     let is_write_sleep = write_buf.is_empty();
 
                     // encode item
-                    if let Err(err) =
-                        self.0.codec.borrow_mut().encode(item, &mut write_buf)
-                    {
+                    if let Err(err) = codec.encode(item, &mut write_buf) {
                         log::trace!("Codec encoder error: {:?}", err);
                         flags.insert(Flags::DSP_STOP | Flags::ST_DSP_ERR);
                         self.0.flags.set(flags);

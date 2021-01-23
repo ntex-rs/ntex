@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
-use crate::http::Extensions;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::{boxed, IntoServiceFactory, ServiceFactory};
+use crate::util::Extensions;
 
 use super::config::AppConfig;
 use super::dev::insert_slesh;

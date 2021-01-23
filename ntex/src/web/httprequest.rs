@@ -5,10 +5,10 @@ use std::{fmt, net};
 use futures::future::{ok, Ready};
 
 use crate::http::{
-    Extensions, HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri,
-    Version,
+    HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
 };
 use crate::router::Path;
+use crate::util::Extensions;
 
 use super::config::AppConfig;
 use super::error::{ErrorRenderer, UrlGenerationError};

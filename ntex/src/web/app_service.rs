@@ -2,9 +2,10 @@ use std::{cell::RefCell, marker::PhantomData, rc::Rc, task::Context, task::Poll}
 
 use futures::future::{ok, FutureExt, LocalBoxFuture};
 
-use crate::http::{Extensions, Request, Response};
+use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
+use crate::util::Extensions;
 use crate::{fn_service, Service, ServiceFactory};
 
 use super::config::AppConfig;

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0] - 2021-01-23
+
+* Make Encoder and Decoder methods immutable
+
 ## [0.2.2] - 2021-01-21
 
 * Flush underlying io stream

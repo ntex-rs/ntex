@@ -1,4 +1,5 @@
 use bytes::BytesMut;
+use std::rc::Rc;
 
 /// Trait of helper objects to write out messages as bytes.
 pub trait Encoder {
@@ -9,9 +10,17 @@ pub trait Encoder {
     type Error: std::fmt::Debug;
 
     /// Encodes a frame into the buffer provided.
-    fn encode(
-        &mut self,
-        item: Self::Item,
-        dst: &mut BytesMut,
-    ) -> Result<(), Self::Error>;
+    fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error>;
+}
+
+impl<T> Encoder for Rc<T>
+where
+    T: Encoder,
+{
+    type Item = T::Item;
+    type Error = T::Error;
+
+    fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        (**self).encode(item, dst)
+    }
 }

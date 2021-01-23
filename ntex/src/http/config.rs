@@ -1,14 +1,12 @@
-use std::cell::UnsafeCell;
-use std::fmt;
-use std::fmt::Write;
-use std::ptr::copy_nonoverlapping;
-use std::rc::Rc;
-use std::time::Duration;
+use std::{
+    cell::UnsafeCell, fmt, fmt::Write, ptr::copy_nonoverlapping, rc::Rc, time::Duration,
+};
 
 use bytes::BytesMut;
 use futures::{future, FutureExt};
 use time::OffsetDateTime;
 
+use crate::framed::Timer;
 use crate::rt::time::{delay_for, delay_until, Delay, Instant};
 
 // "Sun, 06 Nov 1994 08:49:37 GMT".len()
@@ -45,12 +43,13 @@ impl From<Option<usize>> for KeepAlive {
 pub struct ServiceConfig(pub(super) Rc<Inner>);
 
 pub(super) struct Inner {
-    pub(super) keep_alive: Option<Duration>,
+    pub(super) keep_alive: u64,
     pub(super) client_timeout: u64,
     pub(super) client_disconnect: u64,
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
     pub(super) ssl_handshake_timeout: u64,
+    pub(super) timer_h1: Timer,
 }
 
 impl Clone for ServiceConfig {
@@ -79,9 +78,9 @@ impl ServiceConfig {
             KeepAlive::Disabled => (0, false),
         };
         let keep_alive = if ka_enabled && keep_alive > 0 {
-            Some(Duration::from_secs(keep_alive))
+            keep_alive
         } else {
-            None
+            0
         };
 
         ServiceConfig(Rc::new(Inner {
@@ -91,6 +90,7 @@ impl ServiceConfig {
             client_disconnect,
             ssl_handshake_timeout,
             timer: DateService::new(),
+            timer_h1: Timer::default(),
         }))
     }
 }
@@ -99,11 +99,12 @@ pub(super) struct DispatcherConfig<S, X, U> {
     pub(super) service: S,
     pub(super) expect: X,
     pub(super) upgrade: Option<U>,
-    pub(super) keep_alive: Option<Duration>,
+    pub(super) keep_alive: u64,
     pub(super) client_timeout: u64,
     pub(super) client_disconnect: u64,
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
+    pub(super) timer_h1: Timer,
 }
 
 impl<S, X, U> DispatcherConfig<S, X, U> {
@@ -122,6 +123,7 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
             client_disconnect: cfg.0.client_disconnect,
             ka_enabled: cfg.0.ka_enabled,
             timer: cfg.0.timer.clone(),
+            timer_h1: cfg.0.timer_h1.clone(),
         }
     }
 
@@ -130,37 +132,12 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
         self.ka_enabled
     }
 
-    /// Client timeout for first request.
-    pub(super) fn client_timer(&self) -> Option<Delay> {
-        let delay_time = self.client_timeout;
-        if delay_time != 0 {
-            Some(delay_until(
-                self.timer.now() + Duration::from_millis(delay_time),
-            ))
-        } else {
-            None
-        }
-    }
-
-    /// Client disconnect timer
-    pub(super) fn client_disconnect_timer(&self) -> Option<Instant> {
-        let delay = self.client_disconnect;
-        if delay != 0 {
-            Some(self.timer.now() + Duration::from_millis(delay))
-        } else {
-            None
-        }
-    }
-
-    /// Return state of connection keep-alive timer
-    pub(super) fn keep_alive_timer_enabled(&self) -> bool {
-        self.keep_alive.is_some()
-    }
-
     /// Return keep-alive timer delay is configured.
     pub(super) fn keep_alive_timer(&self) -> Option<Delay> {
-        if let Some(ka) = self.keep_alive {
-            Some(delay_until(self.timer.now() + ka))
+        if self.keep_alive != 0 {
+            Some(delay_until(
+                self.timer.now() + Duration::from_secs(self.keep_alive),
+            ))
         } else {
             None
         }
@@ -168,8 +145,8 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
 
     /// Keep-alive expire time
     pub(super) fn keep_alive_expire(&self) -> Option<Instant> {
-        if let Some(ka) = self.keep_alive {
-            Some(self.timer.now() + ka)
+        if self.keep_alive != 0 {
+            Some(self.timer.now() + Duration::from_secs(self.keep_alive))
         } else {
             None
         }

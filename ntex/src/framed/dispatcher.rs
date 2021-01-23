@@ -9,7 +9,7 @@ use either::Either;
 use futures::FutureExt;
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
-use crate::framed::{DispatcherItem, FramedReadTask, FramedWriteTask, State, Timer};
+use crate::framed::{DispatchItem, ReadTask, State, Timer, WriteTask};
 use crate::service::{IntoService, Service};
 
 type Response<U> = <U as Encoder>::Item;
@@ -19,7 +19,7 @@ pin_project_lite::pin_project! {
     /// and pass then to the service.
     pub struct Dispatcher<S, U>
     where
-        S: Service<Request = DispatcherItem<U>, Response = Option<Response<U>>>,
+        S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
         S::Error: 'static,
         S::Future: 'static,
         U: Encoder,
@@ -27,12 +27,7 @@ pin_project_lite::pin_project! {
        <U as Encoder>::Item: 'static,
     {
         service: S,
-        state: State<U>,
-        inner: Rc<DispatcherInner<S, U>>,
-        st: DispatcherState,
-        timer: Timer<U>,
-        updated: Instant,
-        keepalive_timeout: u16,
+        inner: DispatcherInner<S, U>,
         #[pin]
         response: Option<S::Future>,
     }
@@ -40,12 +35,23 @@ pin_project_lite::pin_project! {
 
 struct DispatcherInner<S, U>
 where
-    S: Service<Request = DispatcherItem<U>, Response = Option<Response<U>>>,
-    S::Error: 'static,
-    S::Future: 'static,
+    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
     U: Encoder + Decoder,
-    <U as Encoder>::Item: 'static,
 {
+    st: DispatcherState,
+    state: State,
+    timer: Timer,
+    updated: Instant,
+    keepalive_timeout: u16,
+    shared: Rc<DispatcherShared<S, U>>,
+}
+
+struct DispatcherShared<S, U>
+where
+    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
+    U: Encoder + Decoder,
+{
+    codec: U,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<usize>,
 }
@@ -73,13 +79,13 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
 }
 
 impl<E1, E2: fmt::Debug> DispatcherError<E1, E2> {
-    fn convert<U>(self) -> Option<DispatcherItem<U>>
+    fn convert<U>(self) -> Option<DispatchItem<U>>
     where
         U: Encoder<Error = E2> + Decoder,
     {
         match self {
-            DispatcherError::KeepAlive => Some(DispatcherItem::KeepAliveTimeout),
-            DispatcherError::Encoder(err) => Some(DispatcherItem::EncoderError(err)),
+            DispatcherError::KeepAlive => Some(DispatchItem::KeepAliveTimeout),
+            DispatcherError::Encoder(err) => Some(DispatchItem::EncoderError(err)),
             DispatcherError::Service(_) => None,
         }
     }
@@ -87,46 +93,59 @@ impl<E1, E2: fmt::Debug> DispatcherError<E1, E2> {
 
 impl<S, U> Dispatcher<S, U>
 where
-    S: Service<Request = DispatcherItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
     <U as Encoder>::Item: 'static,
 {
     /// Construct new `Dispatcher` instance.
     pub fn new<T, F: IntoService<S>>(
         io: T,
-        state: State<U>,
+        codec: U,
+        state: State,
         service: F,
-        timer: Timer<U>,
+        timer: Timer,
     ) -> Self
     where
         T: AsyncRead + AsyncWrite + Unpin + 'static,
     {
+        let io = Rc::new(RefCell::new(io));
+
+        // start support tasks
+        crate::rt::spawn(ReadTask::new(io.clone(), state.clone()));
+        crate::rt::spawn(WriteTask::new(io, state.clone()));
+
+        Self::from_state(codec, state, service, timer)
+    }
+
+    /// Construct new `Dispatcher` instance.
+    pub fn from_state<F: IntoService<S>>(
+        codec: U,
+        state: State,
+        service: F,
+        timer: Timer,
+    ) -> Self {
         let updated = timer.now();
         let keepalive_timeout: u16 = 30;
-        let io = Rc::new(RefCell::new(io));
 
         // register keepalive timer
         let expire = updated + Duration::from_secs(keepalive_timeout as u64);
         timer.register(expire, expire, &state);
 
-        // start support tasks
-        crate::rt::spawn(FramedReadTask::new(io.clone(), state.clone()));
-        crate::rt::spawn(FramedWriteTask::new(io, state.clone()));
-
-        let inner = Rc::new(DispatcherInner {
-            error: Cell::new(None),
-            inflight: Cell::new(0),
-        });
-
         Dispatcher {
-            st: DispatcherState::Processing,
             service: service.into_service(),
             response: None,
-            state,
-            inner,
-            timer,
-            updated,
-            keepalive_timeout,
+            inner: DispatcherInner {
+                state,
+                timer,
+                updated,
+                keepalive_timeout,
+                st: DispatcherState::Processing,
+                shared: Rc::new(DispatcherShared {
+                    codec,
+                    error: Cell::new(None),
+                    inflight: Cell::new(0),
+                }),
+            },
         }
     }
 
@@ -137,15 +156,15 @@ where
     /// By default keep-alive timeout is set to 30 seconds.
     pub fn keepalive_timeout(mut self, timeout: u16) -> Self {
         // register keepalive timer
-        let prev = self.updated + Duration::from_secs(self.keepalive_timeout as u64);
+        let prev = self.inner.updated
+            + Duration::from_secs(self.inner.keepalive_timeout as u64);
         if timeout == 0 {
-            self.timer.unregister(prev, &self.state);
+            self.inner.timer.unregister(prev, &self.inner.state);
         } else {
-            let expire = self.updated + Duration::from_secs(timeout as u64);
-            self.timer.register(expire, prev, &self.state);
+            let expire = self.inner.updated + Duration::from_secs(timeout as u64);
+            self.inner.timer.register(expire, prev, &self.inner.state);
         }
-
-        self.keepalive_timeout = timeout;
+        self.inner.keepalive_timeout = timeout;
 
         self
     }
@@ -159,14 +178,14 @@ where
     ///
     /// By default disconnect timeout is set to 1 seconds.
     pub fn disconnect_timeout(self, val: u16) -> Self {
-        self.state.set_disconnect_timeout(val);
+        self.inner.state.set_disconnect_timeout(val);
         self
     }
 }
 
-impl<S, U> DispatcherInner<S, U>
+impl<S, U> DispatcherShared<S, U>
 where
-    S: Service<Request = DispatcherItem<U>, Response = Option<Response<U>>>,
+    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
     S::Error: 'static,
     S::Future: 'static,
     U: Encoder + Decoder,
@@ -175,11 +194,11 @@ where
     fn handle_result(
         &self,
         item: Result<S::Response, S::Error>,
-        state: &State<U>,
+        state: &State,
         wake: bool,
     ) {
         self.inflight.set(self.inflight.get() - 1);
-        if let Err(err) = state.write_result(item) {
+        if let Err(err) = state.write_result(item, &self.codec) {
             self.error.set(Some(err.into()));
         }
 
@@ -189,9 +208,60 @@ where
     }
 }
 
+impl<S, U> DispatcherInner<S, U>
+where
+    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
+    U: Decoder + Encoder,
+{
+    fn take_error(&self) -> Option<DispatchItem<U>> {
+        // check for errors
+        self.shared
+            .error
+            .take()
+            .and_then(|err| err.convert())
+            .or_else(|| self.state.take_io_error().map(DispatchItem::IoError))
+    }
+
+    /// check keepalive timeout
+    fn check_keepalive(&self) {
+        if self.state.is_keepalive() {
+            log::trace!("keepalive timeout");
+            if let Some(err) = self.shared.error.take() {
+                self.shared.error.set(Some(err));
+            } else {
+                self.shared.error.set(Some(DispatcherError::KeepAlive));
+            }
+            self.state.dsp_mark_stopped();
+        }
+    }
+
+    /// update keep-alive timer
+    fn update_keepalive(&mut self) {
+        if self.keepalive_timeout != 0 {
+            let updated = self.timer.now();
+            if updated != self.updated {
+                let ka = Duration::from_secs(self.keepalive_timeout as u64);
+                self.timer
+                    .register(updated + ka, self.updated + ka, &self.state);
+                self.updated = updated;
+            }
+        }
+    }
+
+    /// unregister keep-alive timer
+    fn unregister_keepalive(&self) {
+        if self.keepalive_timeout != 0 {
+            self.timer.unregister(
+                self.updated + Duration::from_secs(self.keepalive_timeout as u64),
+                &self.state,
+            );
+        }
+    }
+}
+
 impl<S, U> Future for Dispatcher<S, U>
 where
-    S: Service<Request = DispatcherItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
     <U as Encoder>::Item: 'static,
 {
@@ -200,125 +270,70 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
-        // log::trace!("IO-DISP poll :{:?}:", this.st);
-
         // handle service response future
         if let Some(fut) = this.response.as_mut().as_pin_mut() {
             match fut.poll(cx) {
                 Poll::Pending => (),
                 Poll::Ready(item) => {
-                    this.inner.handle_result(item, this.state, false);
+                    this.inner
+                        .shared
+                        .handle_result(item, &this.inner.state, false);
                     this.response.set(None);
                 }
             }
         }
 
-        match this.st {
+        match this.inner.st {
             DispatcherState::Processing => {
                 loop {
-                    // log::trace!("IO-DISP state :{:?}:", this.state.get_flags());
-
                     match this.service.poll_ready(cx) {
                         Poll::Ready(Ok(_)) => {
                             let mut retry = false;
 
                             // service is ready, wake io read task
-                            this.state.dsp_restart_read_task();
+                            this.inner.state.dsp_restart_read_task();
 
-                            let item = if this.state.is_dsp_stopped() {
+                            // check keepalive timeout
+                            this.inner.check_keepalive();
+
+                            let item = if this.inner.state.is_dsp_stopped() {
                                 log::trace!("dispatcher is instructed to stop");
-                                // check keepalive timeout
-                                if this.state.is_keepalive_err() {
-                                    if let Some(err) = this.inner.error.take() {
-                                        this.inner.error.set(Some(err));
-                                    } else {
-                                        this.inner
-                                            .error
-                                            .set(Some(DispatcherError::KeepAlive));
-                                    }
-                                } else if *this.keepalive_timeout != 0 {
-                                    // unregister keep-alive timer
-                                    this.timer.unregister(
-                                        *this.updated
-                                            + Duration::from_secs(
-                                                *this.keepalive_timeout as u64,
-                                            ),
-                                        this.state,
-                                    );
-                                }
+
+                                // unregister keep-alive timer
+                                this.inner.unregister_keepalive();
 
                                 // check for errors
-                                let item = this
-                                    .inner
-                                    .error
-                                    .take()
-                                    .and_then(|err| err.convert())
-                                    .or_else(|| {
-                                        this.state
-                                            .take_io_error()
-                                            .map(DispatcherItem::IoError)
-                                    });
-                                *this.st = DispatcherState::Stop;
                                 retry = true;
-
-                                item
+                                this.inner.st = DispatcherState::Stop;
+                                this.inner.take_error()
                             } else {
                                 // decode incoming bytes stream
-
-                                if this.state.is_read_ready() {
-                                    // this.state.with_read_buf(|buf| {
-                                    //     log::trace!(
-                                    //         "attempt to decode frame, buffer size is {:?}",
-                                    //         buf
-                                    //     );
-                                    // });
-
-                                    match this.state.decode_item() {
+                                if this.inner.state.is_read_ready() {
+                                    let item = this
+                                        .inner
+                                        .state
+                                        .decode_item(&this.inner.shared.codec);
+                                    match item {
                                         Ok(Some(el)) => {
-                                            // update keep-alive timer
-                                            if *this.keepalive_timeout != 0 {
-                                                let updated = this.timer.now();
-                                                if updated != *this.updated {
-                                                    let ka = Duration::from_secs(
-                                                        *this.keepalive_timeout as u64,
-                                                    );
-                                                    this.timer.register(
-                                                        updated + ka,
-                                                        *this.updated + ka,
-                                                        this.state,
-                                                    );
-                                                    *this.updated = updated;
-                                                }
-                                            }
-
-                                            Some(DispatcherItem::Item(el))
+                                            this.inner.update_keepalive();
+                                            Some(DispatchItem::Item(el))
                                         }
                                         Ok(None) => {
-                                            // log::trace!("not enough data to decode next frame, register dispatch task");
-                                            this.state.dsp_read_more_data(cx.waker());
+                                            log::trace!("not enough data to decode next frame, register dispatch task");
+                                            this.inner
+                                                .state
+                                                .dsp_read_more_data(cx.waker());
                                             return Poll::Pending;
                                         }
                                         Err(err) => {
                                             retry = true;
-                                            *this.st = DispatcherState::Stop;
-
-                                            // unregister keep-alive timer
-                                            if *this.keepalive_timeout != 0 {
-                                                this.timer.unregister(
-                                                    *this.updated
-                                                        + Duration::from_secs(
-                                                            *this.keepalive_timeout
-                                                                as u64,
-                                                        ),
-                                                    this.state,
-                                                );
-                                            }
-
-                                            Some(DispatcherItem::DecoderError(err))
+                                            this.inner.st = DispatcherState::Stop;
+                                            this.inner.unregister_keepalive();
+                                            Some(DispatchItem::DecoderError(err))
                                         }
                                     }
                                 } else {
-                                    this.state.dsp_register_task(cx.waker());
+                                    this.inner.state.dsp_register_task(cx.waker());
                                     return Poll::Pending;
                                 }
                             };
@@ -336,24 +351,33 @@ where
                                         .poll(cx);
 
                                     if let Poll::Ready(res) = res {
-                                        if let Err(err) = this.state.write_result(res) {
-                                            this.inner.error.set(Some(err.into()));
+                                        if let Err(err) = this
+                                            .inner
+                                            .state
+                                            .write_result(res, &this.inner.shared.codec)
+                                        {
+                                            this.inner
+                                                .shared
+                                                .error
+                                                .set(Some(err.into()));
                                         }
                                         this.response.set(None);
                                     } else {
                                         this.inner
+                                            .shared
                                             .inflight
-                                            .set(this.inner.inflight.get() + 1);
+                                            .set(this.inner.shared.inflight.get() + 1);
                                     }
                                 } else {
                                     this.inner
+                                        .shared
                                         .inflight
-                                        .set(this.inner.inflight.get() + 1);
-                                    let st = this.state.clone();
-                                    let inner = this.inner.clone();
+                                        .set(this.inner.shared.inflight.get() + 1);
+                                    let st = this.inner.state.clone();
+                                    let shared = this.inner.shared.clone();
                                     crate::rt::spawn(this.service.call(item).map(
                                         move |item| {
-                                            inner.handle_result(item, &st, true);
+                                            shared.handle_result(item, &st, true);
                                         },
                                     ));
                                 }
@@ -367,27 +391,19 @@ where
                         Poll::Pending => {
                             // pause io read task
                             log::trace!("service is not ready, register dispatch task");
-                            this.state.dsp_service_not_ready(cx.waker());
+                            this.inner.state.dsp_service_not_ready(cx.waker());
                             return Poll::Pending;
                         }
                         Poll::Ready(Err(err)) => {
+                            // handle service readiness error
                             log::trace!("service readiness check failed, stopping");
-                            // service readiness error
-                            *this.st = DispatcherState::Stop;
-                            this.state.dsp_mark_stopped();
-                            this.inner.error.set(Some(DispatcherError::Service(err)));
-
-                            // unregister keep-alive timer
-                            if *this.keepalive_timeout != 0 {
-                                this.timer.unregister(
-                                    *this.updated
-                                        + Duration::from_secs(
-                                            *this.keepalive_timeout as u64,
-                                        ),
-                                    this.state,
-                                );
-                            }
-
+                            this.inner.st = DispatcherState::Stop;
+                            this.inner.state.dsp_mark_stopped();
+                            this.inner
+                                .shared
+                                .error
+                                .set(Some(DispatcherError::Service(err)));
+                            this.inner.unregister_keepalive();
                             return self.poll(cx);
                         }
                     }
@@ -398,18 +414,18 @@ where
                 // service may relay on poll_ready for response results
                 let _ = this.service.poll_ready(cx);
 
-                if this.inner.inflight.get() == 0 {
-                    this.state.shutdown_io();
-                    *this.st = DispatcherState::Shutdown;
+                if this.inner.shared.inflight.get() == 0 {
+                    this.inner.state.shutdown_io();
+                    this.inner.st = DispatcherState::Shutdown;
                     self.poll(cx)
                 } else {
-                    this.state.dsp_register_task(cx.waker());
+                    this.inner.state.dsp_register_task(cx.waker());
                     Poll::Pending
                 }
             }
             // shutdown service
             DispatcherState::Shutdown => {
-                let err = this.inner.error.take();
+                let err = this.inner.shared.error.take();
 
                 if this.service.poll_shutdown(cx, err.is_some()).is_ready() {
                     log::trace!("service shutdown is completed, stop");
@@ -420,7 +436,7 @@ where
                         Ok(())
                     })
                 } else {
-                    this.inner.error.set(err);
+                    this.inner.shared.error.set(err);
                     Poll::Pending
                 }
             }
@@ -441,7 +457,7 @@ mod tests {
 
     impl<S, U> Dispatcher<S, U>
     where
-        S: Service<Request = DispatcherItem<U>, Response = Option<Response<U>>>,
+        S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
         S::Error: 'static,
         S::Future: 'static,
         U: Decoder + Encoder + 'static,
@@ -452,33 +468,36 @@ mod tests {
             io: T,
             codec: U,
             service: F,
-        ) -> (Self, State<U>)
+        ) -> (Self, State)
         where
             T: AsyncRead + AsyncWrite + Unpin + 'static,
         {
-            let timer = Timer::with(Duration::from_secs(1));
+            let timer = Timer::default();
             let keepalive_timeout = 30;
             let updated = timer.now();
-            let state = State::new(codec);
+            let state = State::new();
             let io = Rc::new(RefCell::new(io));
-            let inner = Rc::new(DispatcherInner {
+            let shared = Rc::new(DispatcherShared {
+                codec: codec,
                 error: Cell::new(None),
                 inflight: Cell::new(0),
             });
 
-            crate::rt::spawn(FramedReadTask::new(io.clone(), state.clone()));
-            crate::rt::spawn(FramedWriteTask::new(io.clone(), state.clone()));
+            crate::rt::spawn(ReadTask::new(io.clone(), state.clone()));
+            crate::rt::spawn(WriteTask::new(io.clone(), state.clone()));
 
             (
                 Dispatcher {
                     service: service.into_service(),
-                    state: state.clone(),
-                    st: DispatcherState::Processing,
                     response: None,
-                    timer,
-                    updated,
-                    keepalive_timeout,
-                    inner,
+                    inner: DispatcherInner {
+                        shared,
+                        timer,
+                        updated,
+                        keepalive_timeout,
+                        state: state.clone(),
+                        st: DispatcherState::Processing,
+                    },
                 },
                 state,
             )
@@ -494,9 +513,9 @@ mod tests {
         let (disp, _) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::fn_service(|msg: DispatcherItem<BytesCodec>| async move {
+            crate::fn_service(|msg: DispatchItem<BytesCodec>| async move {
                 delay_for(Duration::from_millis(50)).await;
-                if let DispatcherItem::Item(msg) = msg {
+                if let DispatchItem::Item(msg) = msg {
                     Ok::<_, ()>(Some(msg.freeze()))
                 } else {
                     panic!()
@@ -521,8 +540,8 @@ mod tests {
         let (disp, st) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::fn_service(|msg: DispatcherItem<BytesCodec>| async move {
-                if let DispatcherItem::Item(msg) = msg {
+            crate::fn_service(|msg: DispatchItem<BytesCodec>| async move {
+                if let DispatchItem::Item(msg) = msg {
                     Ok::<_, ()>(Some(msg.freeze()))
                 } else {
                     panic!()
@@ -534,7 +553,9 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
-        assert!(st.write_item(Bytes::from_static(b"test")).is_ok());
+        assert!(st
+            .write_item(Bytes::from_static(b"test"), &mut BytesCodec)
+            .is_ok());
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
@@ -552,14 +573,17 @@ mod tests {
         let (disp, state) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::fn_service(|_: DispatcherItem<BytesCodec>| async move {
+            crate::fn_service(|_: DispatchItem<BytesCodec>| async move {
                 Err::<Option<Bytes>, _>(())
             }),
         );
         crate::rt::spawn(disp.map(|_| ()));
 
         state
-            .write_item(Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"))
+            .write_item(
+                Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"),
+                &mut BytesCodec,
+            )
             .unwrap();
 
         let buf = client.read_any();

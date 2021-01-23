@@ -1,9 +1,9 @@
-use std::ops::Deref;
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use futures::future::{err, ok, Ready};
 
-use crate::http::{Extensions, Payload};
+use crate::http::Payload;
+use crate::util::Extensions;
 use crate::web::error::{DataExtractorError, ErrorRenderer};
 use crate::web::extract::FromRequest;
 use crate::web::httprequest::HttpRequest;

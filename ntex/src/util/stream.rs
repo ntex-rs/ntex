@@ -189,7 +189,7 @@ mod tests {
         crate::rt::spawn(disp.map(|_| ()));
 
         let mut buf = BytesMut::new();
-        let mut codec = ws::Codec::new().client_mode();
+        let codec = ws::Codec::new().client_mode();
         codec
             .encode(ws::Message::Text("test".to_string()), &mut buf)
             .unwrap();

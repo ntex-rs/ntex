@@ -1,8 +1,6 @@
-use std::fmt;
-use std::marker::PhantomData;
-use std::rc::Rc;
+use std::{error::Error, fmt, marker::PhantomData, rc::Rc};
 
-use crate::codec::Framed;
+use crate::framed::State;
 use crate::http::body::MessageBody;
 use crate::http::config::{KeepAlive, ServiceConfig};
 use crate::http::error::ResponseError;
@@ -34,9 +32,9 @@ impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
     pub fn new() -> Self {
         HttpServiceBuilder {
             keep_alive: KeepAlive::Timeout(5),
-            client_timeout: 3000,
-            client_disconnect: 3000,
-            handshake_timeout: 5000,
+            client_timeout: 3,
+            client_disconnect: 3,
+            handshake_timeout: 5,
             expect: ExpectHandler,
             upgrade: None,
             on_connect: None,
@@ -53,12 +51,12 @@ where
     S::Future: 'static,
     <S::Service as Service>::Future: 'static,
     X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-    X::Error: ResponseError,
+    X::Error: ResponseError + 'static,
     X::InitError: fmt::Debug,
     X::Future: 'static,
     <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, Framed<T, Codec>), Response = ()>,
-    U::Error: fmt::Display,
+    U: ServiceFactory<Config = (), Request = (Request, State, Codec), Response = ()>,
+    U::Error: fmt::Display + Error + 'static,
     U::InitError: fmt::Debug,
     U::Future: 'static,
     <U::Service as Service>::Future: 'static,
@@ -71,7 +69,7 @@ where
         self
     }
 
-    /// Set server client timeout in milliseconds for first request.
+    /// Set server client timeout in seconds for first request.
     ///
     /// Defines a timeout for reading client request header. If a client does not transmit
     /// the entire set headers within this time, the request is terminated with
@@ -80,8 +78,8 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default client timeout is set to 3 seconds.
-    pub fn client_timeout(mut self, val: u64) -> Self {
-        self.client_timeout = val;
+    pub fn client_timeout(mut self, val: u16) -> Self {
+        self.client_timeout = val as u64;
         self
     }
 
@@ -93,19 +91,19 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default disconnect timeout is set to 3 seconds.
-    pub fn disconnect_timeout(mut self, val: u64) -> Self {
-        self.client_disconnect = val;
+    pub fn disconnect_timeout(mut self, val: u16) -> Self {
+        self.client_disconnect = val as u64;
         self
     }
 
-    /// Set server ssl handshake timeout in milliseconds.
+    /// Set server ssl handshake timeout in seconds.
     ///
     /// Defines a timeout for connection ssl handshake negotiation.
     /// To disable timeout set value to 0.
     ///
     /// By default handshake timeout is set to 5 seconds.
-    pub fn ssl_handshake_timeout(mut self, val: u64) -> Self {
-        self.handshake_timeout = val;
+    pub fn ssl_handshake_timeout(mut self, val: u16) -> Self {
+        self.handshake_timeout = val as u64;
         self
     }
 
@@ -118,7 +116,7 @@ where
     where
         F: IntoServiceFactory<X1>,
         X1: ServiceFactory<Config = (), Request = Request, Response = Request>,
-        X1::Error: ResponseError,
+        X1::Error: ResponseError + 'static,
         X1::InitError: fmt::Debug,
         X1::Future: 'static,
         <X1::Service as Service>::Future: 'static,
@@ -144,10 +142,10 @@ where
         F: IntoServiceFactory<U1>,
         U1: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<T, Codec>),
+            Request = (Request, State, Codec),
             Response = (),
         >,
-        U1::Error: fmt::Display,
+        U1::Error: fmt::Display + Error + 'static,
         U1::InitError: fmt::Debug,
         U1::Future: 'static,
         <U1::Service as Service>::Future: 'static,

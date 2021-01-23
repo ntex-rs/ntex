@@ -2,12 +2,13 @@ use std::{cell::RefCell, fmt, rc::Rc, task::Context, task::Poll};
 
 use futures::future::{ok, Either, Future, FutureExt, LocalBoxFuture, Ready};
 
-use crate::http::{Extensions, Response};
+use crate::http::Response;
 use crate::router::{ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
 };
+use crate::util::Extensions;
 
 use super::config::ServiceConfig;
 use super::dev::{WebServiceConfig, WebServiceFactory};

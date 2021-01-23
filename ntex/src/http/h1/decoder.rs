@@ -1,12 +1,10 @@
-use std::convert::TryFrom;
-use std::marker::PhantomData;
-use std::mem::MaybeUninit;
-use std::task::Poll;
+use std::{
+    cell::Cell, convert::TryFrom, marker::PhantomData, mem::MaybeUninit, task::Poll,
+};
 
 use bytes::{Buf, Bytes, BytesMut};
 use http::header::{HeaderName, HeaderValue};
 use http::{header, Method, StatusCode, Uri, Version};
-use log::{debug, error, trace};
 
 use crate::codec::Decoder;
 use crate::http::error::ParseError;
@@ -23,7 +21,7 @@ pub(super) struct MessageDecoder<T: MessageType>(PhantomData<T>);
 
 #[derive(Debug)]
 /// Incoming request type
-pub(super) enum PayloadType {
+pub enum PayloadType {
     None,
     Payload(PayloadDecoder),
     Stream(PayloadDecoder),
@@ -35,11 +33,17 @@ impl<T: MessageType> Default for MessageDecoder<T> {
     }
 }
 
+impl<T: MessageType> Clone for MessageDecoder<T> {
+    fn clone(&self) -> Self {
+        MessageDecoder(PhantomData)
+    }
+}
+
 impl<T: MessageType> Decoder for MessageDecoder<T> {
     type Item = (T, PayloadType);
     type Error = ParseError;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         T::decode(src)
     }
 }
@@ -91,11 +95,11 @@ pub(super) trait MessageType: Sized {
                                     content_length = Some(len);
                                 }
                             } else {
-                                debug!("illegal Content-Length: {:?}", s);
+                                log::debug!("illegal Content-Length: {:?}", s);
                                 return Err(ParseError::Header);
                             }
                         } else {
-                            debug!("illegal Content-Length: {:?}", value);
+                            log::debug!("illegal Content-Length: {:?}", value);
                             return Err(ParseError::Header);
                         }
                     }
@@ -290,7 +294,7 @@ impl MessageType for ResponseHead {
                 }
                 httparse::Status::Partial => {
                     return if src.len() >= MAX_BUFFER_SIZE {
-                        error!("MAX_BUFFER_SIZE unprocessed data reached, closing");
+                        log::error!("MAX_BUFFER_SIZE unprocessed data reached, closing");
                         Err(ParseError::TooLarge)
                     } else {
                         Ok(None)
@@ -351,7 +355,7 @@ impl HeaderIndex {
 
 #[derive(Debug, Clone, PartialEq)]
 /// Http payload item
-pub(super) enum PayloadItem {
+pub enum PayloadItem {
     Chunk(Bytes),
     Eof,
 }
@@ -361,29 +365,31 @@ pub(super) enum PayloadItem {
 /// If a message body does not include a Transfer-Encoding, it *should*
 /// include a Content-Length header.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct PayloadDecoder {
-    kind: Kind,
+pub struct PayloadDecoder {
+    kind: Cell<Kind>,
 }
 
 impl PayloadDecoder {
     pub(super) fn length(x: u64) -> PayloadDecoder {
         PayloadDecoder {
-            kind: Kind::Length(x),
+            kind: Cell::new(Kind::Length(x)),
         }
     }
 
     pub(super) fn chunked() -> PayloadDecoder {
         PayloadDecoder {
-            kind: Kind::Chunked(ChunkedState::Size, 0),
+            kind: Cell::new(Kind::Chunked(ChunkedState::Size, 0)),
         }
     }
 
     pub(super) fn eof() -> PayloadDecoder {
-        PayloadDecoder { kind: Kind::Eof }
+        PayloadDecoder {
+            kind: Cell::new(Kind::Eof),
+        }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 enum Kind {
     /// A Reader used when a Content-Length header is passed with a positive
     /// integer.
@@ -407,7 +413,7 @@ enum Kind {
     Eof,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 enum ChunkedState {
     Size,
     SizeLws,
@@ -425,8 +431,10 @@ impl Decoder for PayloadDecoder {
     type Item = PayloadItem;
     type Error = ParseError;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        match self.kind {
+    fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        let mut kind = self.kind.get();
+
+        match kind {
             Kind::Length(ref mut remaining) => {
                 if *remaining == 0 {
                     Ok(Some(PayloadItem::Eof))
@@ -443,30 +451,35 @@ impl Decoder for PayloadDecoder {
                         buf = src.split_to(*remaining as usize).freeze();
                         *remaining = 0;
                     };
-                    trace!("Length read: {}", buf.len());
+                    self.kind.set(kind);
+                    log::trace!("Length read: {}", buf.len());
                     Ok(Some(PayloadItem::Chunk(buf)))
                 }
             }
             Kind::Chunked(ref mut state, ref mut size) => {
-                loop {
+                let result = loop {
                     let mut buf = None;
                     // advances the chunked state
                     *state = match state.step(src, size, &mut buf) {
-                        Poll::Pending => return Ok(None),
+                        Poll::Pending => break Ok(None),
                         Poll::Ready(Ok(state)) => state,
-                        Poll::Ready(Err(e)) => return Err(e),
+                        Poll::Ready(Err(e)) => break Err(e),
                     };
+
                     if *state == ChunkedState::End {
-                        trace!("End of chunked stream");
-                        return Ok(Some(PayloadItem::Eof));
+                        log::trace!("End of chunked stream");
+                        break Ok(Some(PayloadItem::Eof));
                     }
+
                     if let Some(buf) = buf {
-                        return Ok(Some(PayloadItem::Chunk(buf)));
+                        break Ok(Some(PayloadItem::Chunk(buf)));
                     }
                     if src.is_empty() {
-                        return Ok(None);
+                        break Ok(None);
                     }
-                }
+                };
+                self.kind.set(kind);
+                result
             }
             Kind::Eof => {
                 if src.is_empty() {
@@ -544,7 +557,7 @@ impl ChunkedState {
     }
 
     fn read_size_lws(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, ParseError>> {
-        trace!("read_size_lws");
+        log::trace!("read_size_lws");
         match byte!(rdr) {
             // LWS can follow the chunk size, but no more digits can come
             b'\t' | b' ' => Poll::Ready(Ok(ChunkedState::SizeLws)),
@@ -577,7 +590,7 @@ impl ChunkedState {
         rem: &mut u64,
         buf: &mut Option<Bytes>,
     ) -> Poll<Result<ChunkedState, ParseError>> {
-        trace!("Chunked read, remaining={:?}", rem);
+        log::trace!("Chunked read, remaining={:?}", rem);
 
         let len = rdr.len() as u64;
         if len == 0 {
@@ -693,7 +706,7 @@ mod tests {
     fn test_parse() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n\r\n");
 
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         match reader.decode(&mut buf) {
             Ok(Some((req, _))) => {
                 assert_eq!(req.version(), Version::HTTP_11);
@@ -708,7 +721,7 @@ mod tests {
     fn test_parse_partial() {
         let mut buf = BytesMut::from("PUT /test HTTP/1");
 
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         assert!(reader.decode(&mut buf).unwrap().is_none());
 
         buf.extend(b".1\r\n\r\n");
@@ -722,7 +735,7 @@ mod tests {
     fn test_parse_post() {
         let mut buf = BytesMut::from("POST /test2 HTTP/1.0\r\n\r\n");
 
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.version(), Version::HTTP_10);
         assert_eq!(*req.method(), Method::POST);
@@ -734,9 +747,9 @@ mod tests {
         let mut buf =
             BytesMut::from("GET /test HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody");
 
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
-        let mut pl = pl.unwrap();
+        let pl = pl.unwrap();
         assert_eq!(req.version(), Version::HTTP_11);
         assert_eq!(*req.method(), Method::GET);
         assert_eq!(req.path(), "/test");
@@ -751,9 +764,9 @@ mod tests {
         let mut buf =
             BytesMut::from("\r\nGET /test HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody");
 
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
-        let mut pl = pl.unwrap();
+        let pl = pl.unwrap();
         assert_eq!(req.version(), Version::HTTP_11);
         assert_eq!(*req.method(), Method::GET);
         assert_eq!(req.path(), "/test");
@@ -766,7 +779,7 @@ mod tests {
     #[test]
     fn test_parse_partial_eof() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n");
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         assert!(reader.decode(&mut buf).unwrap().is_none());
 
         buf.extend(b"\r\n");
@@ -780,7 +793,7 @@ mod tests {
     fn test_headers_split_field() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n");
 
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         assert! { reader.decode(&mut buf).unwrap().is_none() }
 
         buf.extend(b"t");
@@ -810,7 +823,7 @@ mod tests {
              Set-Cookie: c1=cookie1\r\n\
              Set-Cookie: c2=cookie2\r\n\r\n",
         );
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
 
         let val: Vec<_> = req
@@ -1037,7 +1050,7 @@ mod tests {
              upgrade: websocket\r\n\r\n\
              some raw data",
         );
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.head().connection_type(), ConnectionType::Upgrade);
         assert!(req.upgrade());
@@ -1086,9 +1099,9 @@ mod tests {
             "GET /test HTTP/1.1\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
-        let mut pl = pl.unwrap();
+        let pl = pl.unwrap();
         assert!(req.chunked().unwrap());
 
         buf.extend(b"4\r\ndata\r\n4\r\nline\r\n0\r\n\r\n");
@@ -1109,9 +1122,9 @@ mod tests {
             "GET /test HTTP/1.1\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
-        let mut pl = pl.unwrap();
+        let pl = pl.unwrap();
         assert!(req.chunked().unwrap());
 
         buf.extend(
@@ -1140,9 +1153,9 @@ mod tests {
              transfer-encoding: chunked\r\n\r\n",
         );
 
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
-        let mut pl = pl.unwrap();
+        let pl = pl.unwrap();
         assert!(req.chunked().unwrap());
 
         buf.extend(b"4\r\n1111\r\n");
@@ -1185,9 +1198,9 @@ mod tests {
               transfer-encoding: chunked\r\n\r\n"[..],
         );
 
-        let mut reader = MessageDecoder::<Request>::default();
+        let reader = MessageDecoder::<Request>::default();
         let (msg, pl) = reader.decode(&mut buf).unwrap().unwrap();
-        let mut pl = pl.unwrap();
+        let pl = pl.unwrap();
         assert!(msg.chunked().unwrap());
 
         buf.extend(b"4;test\r\ndata\r\n4\r\nline\r\n0\r\n\r\n"); // test: test\r\n\r\n")
@@ -1203,9 +1216,9 @@ mod tests {
     fn test_response_http10_read_until_eof() {
         let mut buf = BytesMut::from(&"HTTP/1.0 200 Ok\r\n\r\ntest data"[..]);
 
-        let mut reader = MessageDecoder::<ResponseHead>::default();
+        let reader = MessageDecoder::<ResponseHead>::default();
         let (_msg, pl) = reader.decode(&mut buf).unwrap().unwrap();
-        let mut pl = pl.unwrap();
+        let pl = pl.unwrap();
 
         let chunk = pl.decode(&mut buf).unwrap().unwrap();
         assert_eq!(chunk, PayloadItem::Chunk(Bytes::from_static(b"test data")));

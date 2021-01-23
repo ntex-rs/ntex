@@ -24,9 +24,9 @@ use super::config::AppConfig;
 struct Config {
     host: Option<String>,
     keep_alive: KeepAlive,
-    client_timeout: u64,
-    client_disconnect: u64,
-    handshake_timeout: u64,
+    client_timeout: u16,
+    client_disconnect: u16,
+    handshake_timeout: u16,
 }
 
 /// An HTTP Server.
@@ -148,7 +148,7 @@ where
         self
     }
 
-    /// Set server client timeout in milliseconds for first request.
+    /// Set server client timeout in seconds for first request.
     ///
     /// Defines a timeout for reading client request header. If a client does not transmit
     /// the entire set headers within this time, the request is terminated with
@@ -157,12 +157,12 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default client timeout is set to 5 seconds.
-    pub fn client_timeout(self, val: u64) -> Self {
+    pub fn client_timeout(self, val: u16) -> Self {
         self.config.lock().unwrap().client_timeout = val;
         self
     }
 
-    /// Set server connection disconnect timeout in milliseconds.
+    /// Set server connection disconnect timeout in seconds.
     ///
     /// Defines a timeout for shutdown connection. If a shutdown procedure does not complete
     /// within this time, the request is dropped.
@@ -170,18 +170,18 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default client timeout is set to 5 seconds.
-    pub fn disconnect_timeout(self, val: u64) -> Self {
+    pub fn disconnect_timeout(self, val: u16) -> Self {
         self.config.lock().unwrap().client_disconnect = val;
         self
     }
 
-    /// Set server ssl handshake timeout in milliseconds.
+    /// Set server ssl handshake timeout in seconds.
     ///
     /// Defines a timeout for connection ssl handshake negotiation.
     /// To disable timeout set value to 0.
     ///
     /// By default handshake timeout is set to 5 seconds.
-    pub fn ssl_handshake_timeout(self, val: u64) -> Self {
+    pub fn ssl_handshake_timeout(self, val: u16) -> Self {
         self.config.lock().unwrap().handshake_timeout = val;
         self
     }

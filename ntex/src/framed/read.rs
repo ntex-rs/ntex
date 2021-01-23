@@ -11,25 +11,25 @@ const LW: usize = 1024;
 const HW: usize = 8 * 1024;
 
 /// Read io task
-pub struct FramedReadTask<T, U>
+pub struct ReadTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     io: Rc<RefCell<T>>,
-    state: State<U>,
+    state: State,
 }
 
-impl<T, U> FramedReadTask<T, U>
+impl<T> ReadTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     /// Create new read io task
-    pub fn new(io: Rc<RefCell<T>>, state: State<U>) -> Self {
+    pub fn new(io: Rc<RefCell<T>>, state: State) -> Self {
         Self { io, state }
     }
 }
 
-impl<T, U> Future for FramedReadTask<T, U>
+impl<T> Future for ReadTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {

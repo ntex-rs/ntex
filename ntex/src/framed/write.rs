@@ -3,7 +3,7 @@ use std::{cell::RefCell, future::Future, io, pin::Pin, rc::Rc, time::Duration};
 
 use bytes::{Buf, BytesMut};
 
-use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
+use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::State;
 use crate::rt::time::{delay_for, Delay};
 
@@ -23,25 +23,21 @@ enum Shutdown {
 }
 
 /// Write io task
-pub struct FramedWriteTask<T, U>
+pub struct WriteTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
-    U: Encoder + Decoder,
-    <U as Encoder>::Item: 'static,
 {
     st: IoWriteState,
     io: Rc<RefCell<T>>,
-    state: State<U>,
+    state: State,
 }
 
-impl<T, U> FramedWriteTask<T, U>
+impl<T> WriteTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
-    U: Encoder + Decoder,
-    <U as Encoder>::Item: 'static,
 {
     /// Create new write io task
-    pub fn new(io: Rc<RefCell<T>>, state: State<U>) -> Self {
+    pub fn new(io: Rc<RefCell<T>>, state: State) -> Self {
         Self {
             io,
             state,
@@ -50,7 +46,7 @@ where
     }
 
     /// Shutdown io stream
-    pub fn shutdown(io: Rc<RefCell<T>>, state: State<U>) -> Self {
+    pub fn shutdown(io: Rc<RefCell<T>>, state: State) -> Self {
         let disconnect_timeout = state.disconnect_timeout() as u64;
         let st = IoWriteState::Shutdown(
             if disconnect_timeout != 0 {
@@ -65,11 +61,9 @@ where
     }
 }
 
-impl<T, U> Future for FramedWriteTask<T, U>
+impl<T> Future for WriteTask<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
-    U: Encoder + Decoder,
-    <U as Encoder>::Item: 'static,
 {
     type Output = ();
 
@@ -204,8 +198,8 @@ pub(super) fn flush<T>(
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    // log::trace!("flushing framed transport: {}", len);
     let len = buf.len();
+    log::trace!("flushing framed transport: {}", len);
 
     if len != 0 {
         let mut written = 0;

@@ -1,11 +1,7 @@
 //! Test helpers to use during testing.
-use std::convert::TryFrom;
-use std::str::FromStr;
-use std::sync::mpsc;
-use std::{io, net, thread, time};
+use std::{convert::TryFrom, io, net, str::FromStr, sync::mpsc, thread, time};
 
 use bytes::Bytes;
-use futures::Stream;
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
@@ -316,13 +312,11 @@ impl TestServer {
             .request(method, self.surl(path.as_ref()).as_str())
     }
 
-    pub async fn load_body<S>(
+    /// Load response's body
+    pub async fn load_body(
         &mut self,
-        mut response: ClientResponse<S>,
-    ) -> Result<Bytes, PayloadError>
-    where
-        S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
-    {
+        mut response: ClientResponse,
+    ) -> Result<Bytes, PayloadError> {
         response.body().limit(10_485_760).await
     }
 

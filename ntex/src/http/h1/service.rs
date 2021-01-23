@@ -1,11 +1,11 @@
-use std::marker::PhantomData;
-use std::rc::Rc;
-use std::task::{Context, Poll};
-use std::{fmt, net};
+use std::{
+    error::Error, fmt, marker::PhantomData, net, rc::Rc, task::Context, task::Poll,
+};
 
 use futures::future::{ok, FutureExt, LocalBoxFuture};
 
-use crate::codec::{AsyncRead, AsyncWrite, Framed};
+use crate::codec::{AsyncRead, AsyncWrite};
+use crate::framed::State as IoState;
 use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
@@ -34,7 +34,7 @@ pub struct H1Service<T, S, B, X = ExpectHandler, U = UpgradeHandler<T>> {
 impl<T, S, B> H1Service<T, S, B>
 where
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
@@ -59,21 +59,17 @@ where
 impl<S, B, X, U> H1Service<TcpStream, S, B, X, U>
 where
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     S::Future: 'static,
     B: MessageBody,
     X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-    X::Error: ResponseError,
+    X::Error: ResponseError + 'static,
     X::InitError: fmt::Debug,
     X::Future: 'static,
-    U: ServiceFactory<
-        Config = (),
-        Request = (Request, Framed<TcpStream, Codec>),
-        Response = (),
-    >,
-    U::Error: fmt::Display + ResponseError,
+    U: ServiceFactory<Config = (), Request = (Request, IoState, Codec), Response = ()>,
+    U::Error: fmt::Display + Error + 'static,
     U::InitError: fmt::Debug,
     U::Future: 'static,
 {
@@ -105,21 +101,21 @@ mod openssl {
     impl<S, B, X, U> H1Service<SslStream<TcpStream>, S, B, X, U>
     where
         S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: ResponseError,
+        S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         S::Future: 'static,
         B: MessageBody,
         X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-        X::Error: ResponseError,
+        X::Error: ResponseError + 'static,
         X::InitError: fmt::Debug,
         X::Future: 'static,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<SslStream<TcpStream>, Codec>),
+            Request = (Request, IoState, Codec),
             Response = (),
         >,
-        U::Error: fmt::Display + ResponseError,
+        U::Error: fmt::Display + Error + 'static,
         U::InitError: fmt::Debug,
         U::Future: 'static,
     {
@@ -136,7 +132,7 @@ mod openssl {
         > {
             pipeline_factory(
                 Acceptor::new(acceptor)
-                    .timeout(self.handshake_timeout)
+                    .timeout((self.handshake_timeout as u64) * 1000)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
@@ -159,21 +155,21 @@ mod rustls {
     impl<S, B, X, U> H1Service<TlsStream<TcpStream>, S, B, X, U>
     where
         S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: ResponseError,
+        S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         S::Future: 'static,
         B: MessageBody,
         X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-        X::Error: ResponseError,
+        X::Error: ResponseError + 'static,
         X::InitError: fmt::Debug,
         X::Future: 'static,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, Framed<TlsStream<TcpStream>, Codec>),
+            Request = (Request, IoState, Codec),
             Response = (),
         >,
-        U::Error: fmt::Display + ResponseError,
+        U::Error: fmt::Display + Error + 'static,
         U::InitError: fmt::Debug,
         U::Future: 'static,
     {
@@ -190,7 +186,7 @@ mod rustls {
         > {
             pipeline_factory(
                 Acceptor::new(config)
-                    .timeout(self.handshake_timeout)
+                    .timeout((self.handshake_timeout as u64) * 1000)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
@@ -206,7 +202,7 @@ mod rustls {
 impl<T, S, B, X, U> H1Service<T, S, B, X, U>
 where
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
     S::Future: 'static,
@@ -215,7 +211,7 @@ where
     pub fn expect<X1>(self, expect: X1) -> H1Service<T, S, B, X1, U>
     where
         X1: ServiceFactory<Request = Request, Response = Request>,
-        X1::Error: ResponseError,
+        X1::Error: ResponseError + 'static,
         X1::InitError: fmt::Debug,
         X1::Future: 'static,
     {
@@ -232,8 +228,8 @@ where
 
     pub fn upgrade<U1>(self, upgrade: Option<U1>) -> H1Service<T, S, B, X, U1>
     where
-        U1: ServiceFactory<Request = (Request, Framed<T, Codec>), Response = ()>,
-        U1::Error: fmt::Display,
+        U1: ServiceFactory<Request = (Request, IoState, Codec), Response = ()>,
+        U1::Error: fmt::Display + Error + 'static,
         U1::InitError: fmt::Debug,
         U1::Future: 'static,
     {
@@ -262,17 +258,17 @@ impl<T, S, B, X, U> ServiceFactory for H1Service<T, S, B, X, U>
 where
     T: AsyncRead + AsyncWrite + Unpin + 'static,
     S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
     S::Future: 'static,
     B: MessageBody,
     X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-    X::Error: ResponseError,
+    X::Error: ResponseError + 'static,
     X::InitError: fmt::Debug,
     X::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, Framed<T, Codec>), Response = ()>,
-    U::Error: fmt::Display + ResponseError,
+    U: ServiceFactory<Config = (), Request = (Request, IoState, Codec), Response = ()>,
+    U::Error: fmt::Display + Error + 'static,
     U::InitError: fmt::Debug,
     U::Future: 'static,
 {
@@ -328,20 +324,20 @@ pub struct H1ServiceHandler<T, S: Service, B, X: Service, U: Service> {
 
 impl<T, S, B, X, U> Service for H1ServiceHandler<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
     S: Service<Request = Request>,
-    S::Error: ResponseError,
+    S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
-    X::Error: ResponseError,
-    U: Service<Request = (Request, Framed<T, Codec>), Response = ()>,
-    U::Error: fmt::Display + ResponseError,
+    X::Error: ResponseError + 'static,
+    U: Service<Request = (Request, IoState, Codec), Response = ()>,
+    U::Error: fmt::Display + Error + 'static,
 {
     type Request = (T, Option<net::SocketAddr>);
     type Response = ();
     type Error = DispatchError;
-    type Future = Dispatcher<T, S, B, X, U>;
+    type Future = Dispatcher<S, B, X, U>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let cfg = self.config.as_ref();
@@ -369,7 +365,7 @@ where
             upg.poll_ready(cx)
                 .map_err(|e| {
                     log::error!("Http service readiness error: {:?}", e);
-                    DispatchError::Service(Box::new(e))
+                    DispatchError::Upgrade(Box::new(e))
                 })?
                 .is_ready()
                 && ready
@@ -407,6 +403,6 @@ where
             None
         };
 
-        Dispatcher::new(self.config.clone(), io, addr, on_connect)
+        Dispatcher::new(io, self.config.clone(), addr, on_connect)
     }
 }

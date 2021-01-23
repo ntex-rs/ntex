@@ -1,8 +1,6 @@
 use std::cell::{Ref, RefMut};
-use std::fmt;
-use std::marker::PhantomData;
-use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{fmt, marker::PhantomData, mem, pin::Pin};
 
 use bytes::{Bytes, BytesMut};
 use futures::{ready, Future, Stream};
@@ -13,18 +11,19 @@ use coo_kie::{Cookie, ParseError as CookieParseError};
 
 use crate::http::error::PayloadError;
 use crate::http::header::CONTENT_LENGTH;
-use crate::http::{Extensions, HttpMessage, Payload, PayloadStream, ResponseHead};
 use crate::http::{HeaderMap, StatusCode, Version};
+use crate::http::{HttpMessage, Payload, ResponseHead};
+use crate::util::Extensions;
 
 use super::error::JsonPayloadError;
 
 /// Client Response
-pub struct ClientResponse<S = PayloadStream> {
+pub struct ClientResponse {
     pub(crate) head: ResponseHead,
-    pub(crate) payload: Payload<S>,
+    pub(crate) payload: Payload,
 }
 
-impl<S> HttpMessage for ClientResponse<S> {
+impl HttpMessage for ClientResponse {
     fn message_headers(&self) -> &HeaderMap {
         &self.head.headers
     }
@@ -59,9 +58,9 @@ impl<S> HttpMessage for ClientResponse<S> {
     }
 }
 
-impl<S> ClientResponse<S> {
+impl ClientResponse {
     /// Create new Request instance
-    pub(crate) fn new(head: ResponseHead, payload: Payload<S>) -> Self {
+    pub(crate) fn new(head: ResponseHead, payload: Payload) -> Self {
         ClientResponse { head, payload }
     }
 
@@ -89,21 +88,13 @@ impl<S> ClientResponse<S> {
     }
 
     /// Set a body and return previous body value
-    pub fn map_body<F, U>(mut self, f: F) -> ClientResponse<U>
-    where
-        F: FnOnce(&mut ResponseHead, Payload<S>) -> Payload<U>,
-    {
-        let payload = f(&mut self.head, self.payload);
-
-        ClientResponse {
-            payload,
-            head: self.head,
-        }
+    pub fn set_payload(&mut self, payload: Payload) {
+        self.payload = payload;
     }
 
     /// Get response's payload
-    pub fn take_payload(&mut self) -> Payload<S> {
-        std::mem::take(&mut self.payload)
+    pub fn take_payload(&mut self) -> Payload {
+        mem::take(&mut self.payload)
     }
 
     /// Request extensions
@@ -119,12 +110,9 @@ impl<S> ClientResponse<S> {
     }
 }
 
-impl<S> ClientResponse<S>
-where
-    S: Stream<Item = Result<Bytes, PayloadError>>,
-{
+impl ClientResponse {
     /// Loads http response's body.
-    pub fn body(&mut self) -> MessageBody<S> {
+    pub fn body(&mut self) -> MessageBody {
         MessageBody::new(self)
     }
 
@@ -135,15 +123,12 @@ where
     ///
     /// * content type is not `application/json`
     /// * content length is greater than 256k
-    pub fn json<T: DeserializeOwned>(&mut self) -> JsonBody<S, T> {
+    pub fn json<T: DeserializeOwned>(&mut self) -> JsonBody<T> {
         JsonBody::new(self)
     }
 }
 
-impl<S> Stream for ClientResponse<S>
-where
-    S: Stream<Item = Result<Bytes, PayloadError>> + Unpin,
-{
+impl Stream for ClientResponse {
     type Item = Result<Bytes, PayloadError>;
 
     fn poll_next(
@@ -154,7 +139,7 @@ where
     }
 }
 
-impl<S> fmt::Debug for ClientResponse<S> {
+impl fmt::Debug for ClientResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\nClientResponse {:?} {}", self.version(), self.status(),)?;
         writeln!(f, "  headers:")?;
@@ -166,18 +151,15 @@ impl<S> fmt::Debug for ClientResponse<S> {
 }
 
 /// Future that resolves to a complete http message body.
-pub struct MessageBody<S> {
+pub struct MessageBody {
     length: Option<usize>,
     err: Option<PayloadError>,
-    fut: Option<ReadBody<S>>,
+    fut: Option<ReadBody>,
 }
 
-impl<S> MessageBody<S>
-where
-    S: Stream<Item = Result<Bytes, PayloadError>>,
-{
+impl MessageBody {
     /// Create `MessageBody` for request.
-    pub fn new(res: &mut ClientResponse<S>) -> MessageBody<S> {
+    pub fn new(res: &mut ClientResponse) -> MessageBody {
         let mut len = None;
         if let Some(l) = res.headers().get(&CONTENT_LENGTH) {
             if let Ok(s) = l.to_str() {
@@ -215,10 +197,7 @@ where
     }
 }
 
-impl<S> Future for MessageBody<S>
-where
-    S: Stream<Item = Result<Bytes, PayloadError>> + Unpin,
-{
+impl Future for MessageBody {
     type Output = Result<Bytes, PayloadError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -244,20 +223,19 @@ where
 ///
 /// * content type is not `application/json`
 /// * content length is greater than 64k
-pub struct JsonBody<S, U> {
+pub struct JsonBody<U> {
     length: Option<usize>,
     err: Option<JsonPayloadError>,
-    fut: Option<ReadBody<S>>,
+    fut: Option<ReadBody>,
     _t: PhantomData<U>,
 }
 
-impl<S, U> JsonBody<S, U>
+impl<U> JsonBody<U>
 where
-    S: Stream<Item = Result<Bytes, PayloadError>>,
     U: DeserializeOwned,
 {
     /// Create `JsonBody` for request.
-    pub fn new(req: &mut ClientResponse<S>) -> Self {
+    pub fn new(req: &mut ClientResponse) -> Self {
         // check content-type
         let json = if let Ok(Some(mime)) = req.mime_type() {
             mime.subtype() == mime::JSON || mime.suffix() == Some(mime::JSON)
@@ -299,16 +277,10 @@ where
     }
 }
 
-impl<T, U> Unpin for JsonBody<T, U>
-where
-    T: Stream<Item = Result<Bytes, PayloadError>> + Unpin,
-    U: DeserializeOwned,
-{
-}
+impl<U> Unpin for JsonBody<U> where U: DeserializeOwned {}
 
-impl<T, U> Future for JsonBody<T, U>
+impl<U> Future for JsonBody<U>
 where
-    T: Stream<Item = Result<Bytes, PayloadError>> + Unpin,
     U: DeserializeOwned,
 {
     type Output = Result<U, JsonPayloadError>;
@@ -331,14 +303,14 @@ where
     }
 }
 
-struct ReadBody<S> {
-    stream: Payload<S>,
+struct ReadBody {
+    stream: Payload,
     buf: BytesMut,
     limit: usize,
 }
 
-impl<S> ReadBody<S> {
-    fn new(stream: Payload<S>, limit: usize) -> Self {
+impl ReadBody {
+    fn new(stream: Payload, limit: usize) -> Self {
         Self {
             stream,
             buf: BytesMut::with_capacity(std::cmp::min(limit, 32768)),
@@ -347,10 +319,7 @@ impl<S> ReadBody<S> {
     }
 }
 
-impl<S> Future for ReadBody<S>
-where
-    S: Stream<Item = Result<Bytes, PayloadError>> + Unpin,
-{
+impl Future for ReadBody {
     type Output = Result<Bytes, PayloadError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -432,7 +401,7 @@ mod tests {
     #[ntex_rt::test]
     async fn test_json_body() {
         let mut req = TestResponse::default().finish();
-        let json = JsonBody::<_, MyObject>::new(&mut req).await;
+        let json = JsonBody::<MyObject>::new(&mut req).await;
         assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
 
         let mut req = TestResponse::default()
@@ -441,7 +410,7 @@ mod tests {
                 header::HeaderValue::from_static("application/text"),
             )
             .finish();
-        let json = JsonBody::<_, MyObject>::new(&mut req).await;
+        let json = JsonBody::<MyObject>::new(&mut req).await;
         assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
 
         let mut req = TestResponse::default()
@@ -455,7 +424,7 @@ mod tests {
             )
             .finish();
 
-        let json = JsonBody::<_, MyObject>::new(&mut req).limit(100).await;
+        let json = JsonBody::<MyObject>::new(&mut req).limit(100).await;
         assert!(json_eq(
             json.err().unwrap(),
             JsonPayloadError::Payload(PayloadError::Overflow)
@@ -473,7 +442,7 @@ mod tests {
             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
             .finish();
 
-        let json = JsonBody::<_, MyObject>::new(&mut req).await;
+        let json = JsonBody::<MyObject>::new(&mut req).await;
         assert_eq!(
             json.ok().unwrap(),
             MyObject {

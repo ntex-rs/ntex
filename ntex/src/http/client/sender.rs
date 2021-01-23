@@ -19,9 +19,7 @@ use crate::rt::time::{delay_for, Delay};
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
 #[cfg(feature = "compress")]
-use crate::http::header::ContentEncoding;
-#[cfg(feature = "compress")]
-use crate::http::{Payload, PayloadStream};
+use crate::http::Payload;
 
 use super::error::{FreezeRequestError, InvalidUrl, SendRequestError};
 use super::response::ClientResponse;
@@ -74,10 +72,6 @@ impl SendClientRequest {
 }
 
 impl Future for SendClientRequest {
-    #[cfg(feature = "compress")]
-    type Output =
-        Result<ClientResponse<Decoder<Payload<PayloadStream>>>, SendRequestError>;
-    #[cfg(not(feature = "compress"))]
     type Output = Result<ClientResponse, SendRequestError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -95,20 +89,15 @@ impl Future for SendClientRequest {
                 let res = futures::ready!(Pin::new(send).poll(cx));
 
                 #[cfg(feature = "compress")]
-                let res = res.map(|res| {
-                    res.map_body(|head, payload| {
-                        if *_response_decompress {
-                            Payload::Stream(Decoder::from_headers(
-                                payload,
-                                &head.headers,
-                            ))
-                        } else {
-                            Payload::Stream(Decoder::new(
-                                payload,
-                                ContentEncoding::Identity,
-                            ))
-                        }
-                    })
+                let res = res.map(|mut res| {
+                    if *_response_decompress {
+                        let payload = res.take_payload();
+                        res.set_payload(Payload::from_stream(Decoder::from_headers(
+                            payload,
+                            &res.head.headers,
+                        )))
+                    }
+                    res
                 });
 
                 Poll::Ready(res)

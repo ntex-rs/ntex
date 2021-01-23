@@ -178,7 +178,7 @@ async fn test_chunked_payload() {
 async fn test_slow_request() {
     let srv = test_server(|| {
         HttpService::build()
-            .client_timeout(100)
+            .client_timeout(1)
             .finish(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
             .tcp()
     });

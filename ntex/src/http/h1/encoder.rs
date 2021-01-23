@@ -1,7 +1,6 @@
 use std::io::Write;
 use std::marker::PhantomData;
-use std::ptr::copy_nonoverlapping;
-use std::{cmp, io, mem, ptr, slice};
+use std::{cell::Cell, cmp, io, mem, ptr, ptr::copy_nonoverlapping, slice};
 
 use bytes::{BufMut, BytesMut};
 
@@ -18,7 +17,7 @@ const AVERAGE_HEADER_SIZE: usize = 30;
 #[derive(Debug)]
 pub(super) struct MessageEncoder<T: MessageType> {
     pub(super) length: BodySize,
-    pub(super) te: TransferEncoding,
+    pub(super) te: Cell<TransferEncoding>,
     _t: PhantomData<T>,
 }
 
@@ -26,7 +25,17 @@ impl<T: MessageType> Default for MessageEncoder<T> {
     fn default() -> Self {
         MessageEncoder {
             length: BodySize::None,
-            te: TransferEncoding::empty(),
+            te: Cell::new(TransferEncoding::empty()),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<T: MessageType> Clone for MessageEncoder<T> {
+    fn clone(&self) -> Self {
+        MessageEncoder {
+            length: self.length,
+            te: self.te.clone(),
             _t: PhantomData,
         }
     }
@@ -41,10 +50,10 @@ pub(super) trait MessageType: Sized {
 
     fn chunked(&self) -> bool;
 
-    fn encode_status(&mut self, dst: &mut BytesMut) -> io::Result<()>;
+    fn encode_status(&self, dst: &mut BytesMut) -> io::Result<()>;
 
     fn encode_headers(
-        &mut self,
+        &self,
         dst: &mut BytesMut,
         version: Version,
         mut length: BodySize,
@@ -208,7 +217,7 @@ impl MessageType for Response<()> {
         None
     }
 
-    fn encode_status(&mut self, dst: &mut BytesMut) -> io::Result<()> {
+    fn encode_status(&self, dst: &mut BytesMut) -> io::Result<()> {
         let head = self.head();
         let reason = head.reason().as_bytes();
         dst.reserve(256 + head.headers.len() * AVERAGE_HEADER_SIZE + reason.len());
@@ -237,7 +246,7 @@ impl MessageType for RequestHeadType {
         self.extra_headers()
     }
 
-    fn encode_status(&mut self, dst: &mut BytesMut) -> io::Result<()> {
+    fn encode_status(&self, dst: &mut BytesMut) -> io::Result<()> {
         let head = self.as_ref();
         dst.reserve(256 + head.headers.len() * AVERAGE_HEADER_SIZE);
         write!(
@@ -264,20 +273,26 @@ impl MessageType for RequestHeadType {
 impl<T: MessageType> MessageEncoder<T> {
     /// Encode message
     pub(super) fn encode_chunk(
-        &mut self,
+        &self,
         msg: &[u8],
         buf: &mut BytesMut,
     ) -> io::Result<bool> {
-        self.te.encode(msg, buf)
+        let mut te = self.te.get();
+        let result = te.encode(msg, buf);
+        self.te.set(te);
+        result
     }
 
     /// Encode eof
-    pub(super) fn encode_eof(&mut self, buf: &mut BytesMut) -> io::Result<()> {
-        self.te.encode_eof(buf)
+    pub(super) fn encode_eof(&self, buf: &mut BytesMut) -> io::Result<()> {
+        let mut te = self.te.get();
+        let result = te.encode_eof(buf);
+        self.te.set(te);
+        result
     }
 
     pub(super) fn encode(
-        &mut self,
+        &self,
         dst: &mut BytesMut,
         message: &mut T,
         head: bool,
@@ -289,7 +304,7 @@ impl<T: MessageType> MessageEncoder<T> {
     ) -> io::Result<()> {
         // transfer encoding
         if !head {
-            self.te = match length {
+            self.te.set(match length {
                 BodySize::Empty => TransferEncoding::empty(),
                 BodySize::Sized(len) => TransferEncoding::length(len),
                 BodySize::Stream => {
@@ -300,9 +315,9 @@ impl<T: MessageType> MessageEncoder<T> {
                     }
                 }
                 BodySize::None => TransferEncoding::empty(),
-            };
+            });
         } else {
-            self.te = TransferEncoding::empty();
+            self.te.set(TransferEncoding::empty());
         }
 
         message.encode_status(dst)?;
@@ -311,12 +326,12 @@ impl<T: MessageType> MessageEncoder<T> {
 }
 
 /// Encoders to handle different Transfer-Encodings.
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub(super) struct TransferEncoding {
     kind: TransferEncodingKind,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum TransferEncodingKind {
     /// An Encoder for when Transfer-Encoding includes `chunked`.
     Chunked(bool),
@@ -368,14 +383,15 @@ impl TransferEncoding {
                 buf.extend_from_slice(msg);
                 Ok(eof)
             }
-            TransferEncodingKind::Chunked(ref mut eof) => {
-                if *eof {
+            TransferEncodingKind::Chunked(eof) => {
+                if eof {
                     return Ok(true);
                 }
 
-                if msg.is_empty() {
-                    *eof = true;
+                let result = if msg.is_empty() {
                     buf.extend_from_slice(b"0\r\n\r\n");
+                    self.kind = TransferEncodingKind::Chunked(true);
+                    true
                 } else {
                     writeln!(helpers::Writer(buf), "{:X}\r", msg.len())
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
@@ -383,20 +399,22 @@ impl TransferEncoding {
                     buf.reserve(msg.len() + 2);
                     buf.extend_from_slice(msg);
                     buf.extend_from_slice(b"\r\n");
-                }
-                Ok(*eof)
+                    false
+                };
+                Ok(result)
             }
-            TransferEncodingKind::Length(ref mut remaining) => {
-                if *remaining > 0 {
+            TransferEncodingKind::Length(mut remaining) => {
+                if remaining > 0 {
                     if msg.is_empty() {
-                        return Ok(*remaining == 0);
+                        return Ok(remaining == 0);
                     }
-                    let len = cmp::min(*remaining, msg.len() as u64);
+                    let len = cmp::min(remaining, msg.len() as u64);
 
                     buf.extend_from_slice(&msg[..len as usize]);
 
-                    *remaining -= len as u64;
-                    Ok(*remaining == 0)
+                    remaining -= len as u64;
+                    self.kind = TransferEncodingKind::Length(remaining);
+                    Ok(remaining == 0)
                 } else {
                     Ok(true)
                 }
@@ -416,10 +434,10 @@ impl TransferEncoding {
                     Ok(())
                 }
             }
-            TransferEncodingKind::Chunked(ref mut eof) => {
-                if !*eof {
-                    *eof = true;
+            TransferEncodingKind::Chunked(eof) => {
+                if !eof {
                     buf.extend_from_slice(b"0\r\n\r\n");
+                    self.kind = TransferEncodingKind::Chunked(true);
                 }
                 Ok(())
             }
@@ -614,7 +632,7 @@ mod tests {
         );
         extra_headers.insert(DATE, HeaderValue::from_static("date"));
 
-        let mut head = RequestHeadType::Rc(Rc::new(head), Some(extra_headers));
+        let head = RequestHeadType::Rc(Rc::new(head), Some(extra_headers));
 
         let _ = head.encode_headers(
             &mut bytes,

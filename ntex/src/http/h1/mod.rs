@@ -13,6 +13,7 @@ mod upgrade;
 
 pub use self::client::{ClientCodec, ClientPayloadCodec};
 pub use self::codec::Codec;
+pub use self::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 pub use self::expect::ExpectHandler;
 pub use self::payload::Payload;
 pub use self::service::{H1Service, H1ServiceHandler};
@@ -52,35 +53,5 @@ pub(crate) fn reserve_readbuf(src: &mut BytesMut) {
     let cap = src.capacity();
     if cap < LW {
         src.reserve(HW - cap);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::http::request::Request;
-
-    impl Message<Request> {
-        pub fn message(self) -> Request {
-            match self {
-                Message::Item(req) => req,
-                _ => panic!("error"),
-            }
-        }
-
-        pub fn chunk(self) -> Bytes {
-            match self {
-                Message::Chunk(Some(data)) => data,
-                _ => panic!("error"),
-            }
-        }
-
-        pub fn eof(self) -> bool {
-            match self {
-                Message::Chunk(None) => true,
-                Message::Chunk(Some(_)) => false,
-                _ => panic!("error"),
-            }
-        }
     }
 }

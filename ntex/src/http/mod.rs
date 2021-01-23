@@ -45,7 +45,3 @@ pub enum Protocol {
     Http1,
     Http2,
 }
-
-#[doc(hidden)]
-#[deprecated(since = "0.1.19", note = "Use ntex::util::Extensions instead")]
-pub use crate::util::Extensions;
