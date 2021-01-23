@@ -165,26 +165,25 @@ impl Decoder for ClientPayloadCodec {
             "Payload decoder is not specified"
         );
 
-        Ok(
-            match self
-                .inner
-                .payload
-                .borrow_mut()
-                .as_mut()
-                .unwrap()
-                .decode(src)?
-            {
-                Some(PayloadItem::Chunk(chunk)) => {
-                    reserve_readbuf(src);
-                    Some(Some(chunk))
-                }
-                Some(PayloadItem::Eof) => {
-                    self.inner.payload.borrow_mut().take();
-                    Some(None)
-                }
-                None => None,
-            },
-        )
+        let item = self
+            .inner
+            .payload
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .decode(src)?;
+
+        Ok(match item {
+            Some(PayloadItem::Chunk(chunk)) => {
+                reserve_readbuf(src);
+                Some(Some(chunk))
+            }
+            Some(PayloadItem::Eof) => {
+                self.inner.payload.borrow_mut().take();
+                Some(None)
+            }
+            None => None,
+        })
     }
 }
 
