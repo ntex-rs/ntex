@@ -85,6 +85,9 @@ async fn test_expect_continue() {
 
 #[ntex::test]
 async fn test_expect_continue_h1() {
+    std::env::set_var("RUST_LOG", "ntex_codec=info,ntex=trace");
+    env_logger::init();
+
     let srv = test_server(|| {
         HttpService::build()
             .expect(fn_service(|req: Request| {
@@ -115,7 +118,9 @@ async fn test_expect_continue_h1() {
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream.write_all(b"GET /test?yes= HTTP/1.1\r\nexpect: 100-continue\r\n\r\n");
     let mut data = String::new();
+    println!("1-------------------");
     let _ = stream.read_to_string(&mut data);
+    println!("2-------------------");
     assert!(data.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\n"));
 }
 

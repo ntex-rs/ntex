@@ -1,21 +1,20 @@
 //! Framed transport dispatcher
-use std::error::Error;
 use std::task::{Context, Poll};
 use std::{
-    cell::RefCell, fmt, future::Future, marker::PhantomData, net, pin::Pin, rc::Rc,
-    time::Duration, time::Instant,
+    cell::RefCell, error::Error, fmt, marker::PhantomData, net, pin::Pin, rc::Rc, time,
 };
 
 use bytes::Bytes;
+use futures::Future;
 
-use crate::codec::{AsyncRead, AsyncWrite, Decoder};
+use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::{ReadTask, State as IoState, WriteTask};
 use crate::service::Service;
 
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::config::DispatcherConfig;
-use crate::http::error::{DispatchError, PayloadError, ResponseError};
+use crate::http::error::{DispatchError, ParseError, PayloadError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
@@ -37,11 +36,11 @@ bitflags::bitflags! {
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
-    pub struct Dispatcher<S: Service, B, X: Service, U: Service> {
+    pub struct Dispatcher<T, S: Service, B, X: Service, U: Service> {
         #[pin]
         call: CallState<S, X, U>,
         st: State<B>,
-        inner: DispatcherInner<S, B, X, U>,
+        inner: DispatcherInner<T, S, B, X, U>,
     }
 }
 
@@ -50,6 +49,7 @@ enum State<B> {
     ReadRequest,
     ReadPayload,
     SendPayload { body: ResponseBody<B> },
+    Upgrade(Option<Request>),
     Stop,
 }
 
@@ -63,12 +63,13 @@ pin_project_lite::pin_project! {
     }
 }
 
-struct DispatcherInner<S, B, X, U> {
+struct DispatcherInner<T, S, B, X, U> {
+    io: Option<Rc<RefCell<T>>>,
     flags: Flags,
     codec: Codec,
     config: Rc<DispatcherConfig<S, X, U>>,
     state: IoState,
-    expire: Instant,
+    expire: time::Instant,
     error: Option<DispatchError>,
     payload: Option<(PayloadDecoder, PayloadSender)>,
     peer_addr: Option<net::SocketAddr>,
@@ -77,34 +78,38 @@ struct DispatcherInner<S, B, X, U> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum PollPayloadStatus {
+enum ReadPayloadStatus {
     Done,
     Updated,
     Pending,
     Dropped,
 }
 
-impl<S, B, X, U> Dispatcher<S, B, X, U>
+enum WritePayloadStatus<B> {
+    Next(State<B>),
+    Pause,
+    Continue,
+}
+
+impl<T, S, B, X, U> Dispatcher<T, S, B, X, U>
 where
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
     S: Service<Request = Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: ResponseError,
-    U: Service<Request = (Request, IoState, Codec), Response = ()>,
+    U: Service<Request = (Request, T, IoState, Codec), Response = ()>,
     U::Error: Error + fmt::Display,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
-    pub(in crate::http) fn new<T>(
+    pub(in crate::http) fn new(
         io: T,
         config: Rc<DispatcherConfig<S, X, U>>,
         peer_addr: Option<net::SocketAddr>,
         on_connect_data: Option<Box<dyn DataFactory>>,
-    ) -> Self
-    where
-        T: AsyncRead + AsyncWrite + Unpin + 'static,
-    {
+    ) -> Self {
         let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
 
         let state = IoState::new();
@@ -115,18 +120,19 @@ where
 
         // slow-request timer
         if config.client_timeout != 0 {
-            expire += Duration::from_secs(config.client_timeout);
+            expire += time::Duration::from_secs(config.client_timeout);
             config.timer_h1.register(expire, expire, &state);
         }
 
         // start support io tasks
         crate::rt::spawn(ReadTask::new(io.clone(), state.clone()));
-        crate::rt::spawn(WriteTask::new(io, state.clone()));
+        crate::rt::spawn(WriteTask::new(io.clone(), state.clone()));
 
         Dispatcher {
             call: CallState::None,
             st: State::ReadRequest,
             inner: DispatcherInner {
+                io: Some(io),
                 flags: Flags::empty(),
                 error: None,
                 payload: None,
@@ -142,15 +148,16 @@ where
     }
 }
 
-impl<S, B, X, U> Future for Dispatcher<S, B, X, U>
+impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
 where
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
     S: Service<Request = Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, IoState, Codec), Response = ()>,
+    U: Service<Request = (Request, T, IoState, Codec), Response = ()>,
     U::Error: Error + fmt::Display + 'static,
 {
     type Output = Result<(), DispatchError>;
@@ -180,7 +187,7 @@ where
                                     // we might need to read more data into a request payload
                                     // (ie service future can wait for payload data)
                                     if this.inner.poll_read_payload(cx)
-                                        != PollPayloadStatus::Updated
+                                        != ReadPayloadStatus::Updated
                                     {
                                         return Poll::Pending;
                                     }
@@ -197,26 +204,15 @@ where
                                             b"HTTP/1.1 100 Continue\r\n\r\n",
                                         )
                                     });
-                                    Some(if this.inner.flags.contains(Flags::UPGRADE) {
-                                        // Handle UPGRADE request
-                                        CallState::Upgrade {
-                                            fut: this
-                                                .inner
-                                                .config
-                                                .upgrade
-                                                .as_ref()
-                                                .unwrap()
-                                                .call((
-                                                    req,
-                                                    this.inner.state.clone(),
-                                                    this.inner.codec.clone(),
-                                                )),
-                                        }
+                                    if this.inner.flags.contains(Flags::UPGRADE) {
+                                        this.inner.state.dsp_stop_io(cx.waker());
+                                        *this.st = State::Upgrade(Some(req));
+                                        return Poll::Pending;
                                     } else {
-                                        CallState::Service {
+                                        Some(CallState::Service {
                                             fut: this.inner.config.service.call(req),
-                                        }
-                                    })
+                                        })
+                                    }
                                 }
                                 Err(e) => {
                                     *this.st = this.inner.handle_error(e, true);
@@ -273,7 +269,11 @@ where
                     if this.inner.state.is_read_ready() {
                         match this.inner.state.decode_item(&this.inner.codec) {
                             Ok(Some((mut req, pl))) => {
-                                log::trace!("http message is received: {:?}", req);
+                                log::trace!(
+                                    "http message is received: {:?} and payload {:?}",
+                                    req,
+                                    pl
+                                );
                                 req.head_mut().peer_addr = this.inner.peer_addr;
 
                                 // configure request payload
@@ -313,48 +313,46 @@ where
                                     on_connect.set(&mut req.extensions_mut());
                                 }
 
-                                // call service
-                                *this.st = State::Call;
-                                this.call.set(if req.head().expect() {
+                                if req.head().expect() {
+                                    // call service
+                                    *this.st = State::Call;
                                     // Handle `EXPECT: 100-Continue` header
-                                    CallState::Expect {
+                                    this.call.set(CallState::Expect {
                                         fut: this.inner.config.expect.call(req),
-                                    }
+                                    });
                                 } else if upgrade {
-                                    log::trace!("initate upgrade handling");
+                                    log::trace!("prep io for upgrade handler");
                                     // Handle UPGRADE request
-                                    CallState::Upgrade {
-                                        fut: this
-                                            .inner
-                                            .config
-                                            .upgrade
-                                            .as_ref()
-                                            .unwrap()
-                                            .call((
-                                                req,
-                                                this.inner.state.clone(),
-                                                this.inner.codec.clone(),
-                                            )),
-                                    }
+                                    this.inner.state.dsp_stop_io(cx.waker());
+                                    *this.st = State::Upgrade(Some(req));
+                                    return Poll::Pending;
                                 } else {
                                     // Handle normal requests
-                                    CallState::Service {
+                                    *this.st = State::Call;
+                                    this.call.set(CallState::Service {
                                         fut: this.inner.config.service.call(req),
-                                    }
-                                });
+                                    });
+                                }
                             }
                             Ok(None) => {
-                                // if connection is not keep-alive then disconnect
+                                log::trace!("not enough data to decode next frame, register dispatch task");
+
+                                // if io error occured or connection is not keep-alive
+                                // then disconnect
                                 if this.inner.flags.contains(Flags::STARTED)
-                                    && !this.inner.flags.contains(Flags::KEEPALIVE)
+                                    && (!this.inner.flags.contains(Flags::KEEPALIVE)
+                                        || !this.inner.codec.keepalive_enabled()
+                                        || this.inner.state.is_io_err())
                                 {
                                     *this.st = State::Stop;
+                                    this.inner.state.dsp_mark_stopped();
                                     continue;
                                 }
                                 this.inner.state.dsp_read_more_data(cx.waker());
                                 return Poll::Pending;
                             }
                             Err(err) => {
+                                log::trace!("malformed request: {:?}", err);
                                 // Malformed requests, respond with 400
                                 let (res, body) =
                                     Response::BadRequest().finish().into_parts();
@@ -379,30 +377,69 @@ where
                 // consume request's payload
                 State::ReadPayload => loop {
                     match this.inner.poll_read_payload(cx) {
-                        PollPayloadStatus::Updated => continue,
-                        PollPayloadStatus::Pending => return Poll::Pending,
-                        PollPayloadStatus::Done => {
+                        ReadPayloadStatus::Updated => continue,
+                        ReadPayloadStatus::Pending => return Poll::Pending,
+                        ReadPayloadStatus::Done => {
                             *this.st = {
                                 this.inner.reset_keepalive();
                                 State::ReadRequest
                             }
                         }
-                        PollPayloadStatus::Dropped => *this.st = State::Stop,
+                        ReadPayloadStatus::Dropped => *this.st = State::Stop,
                     }
                     break;
                 },
                 // send response body
                 State::SendPayload { ref mut body } => {
-                    this.inner.poll_read_payload(cx);
+                    if this.inner.state.is_io_err() {
+                        *this.st = State::Stop;
+                    } else {
+                        this.inner.poll_read_payload(cx);
 
-                    match body.poll_next_chunk(cx) {
-                        Poll::Ready(item) => {
-                            if let Some(st) = this.inner.send_payload(item) {
-                                *this.st = st;
-                            }
+                        match body.poll_next_chunk(cx) {
+                            Poll::Ready(item) => match this.inner.send_payload(item) {
+                                WritePayloadStatus::Next(st) => {
+                                    *this.st = st;
+                                }
+                                WritePayloadStatus::Pause => {
+                                    this.inner.state.dsp_flush_write_data(cx.waker());
+                                    return Poll::Pending;
+                                }
+                                WritePayloadStatus::Continue => (),
+                            },
+                            Poll::Pending => return Poll::Pending,
                         }
-                        Poll::Pending => return Poll::Pending,
                     }
+                }
+                // stop io tasks and call upgrade service
+                State::Upgrade(ref mut req) => {
+                    // check if all io tasks have been stopped
+                    let io = if Rc::strong_count(this.inner.io.as_ref().unwrap()) == 1 {
+                        if let Ok(io) = Rc::try_unwrap(this.inner.io.take().unwrap()) {
+                            io.into_inner()
+                        } else {
+                            return Poll::Ready(Err(DispatchError::InternalError));
+                        }
+                    } else {
+                        // wait next task stop
+                        this.inner.state.dsp_register_task(cx.waker());
+                        return Poll::Pending;
+                    };
+                    log::trace!("initate upgrade handling");
+
+                    let req = req.take().unwrap();
+                    *this.st = State::Call;
+                    this.inner.state.reset_io_stop();
+
+                    // Handle UPGRADE request
+                    this.call.set(CallState::Upgrade {
+                        fut: this.inner.config.upgrade.as_ref().unwrap().call((
+                            req,
+                            io,
+                            this.inner.state.clone(),
+                            this.inner.codec.clone(),
+                        )),
+                    });
                 }
                 // prepare to shutdown
                 State::Stop => {
@@ -426,7 +463,7 @@ where
     }
 }
 
-impl<S, B, X, U> DispatcherInner<S, B, X, U>
+impl<T, S, B, X, U> DispatcherInner<T, S, B, X, U>
 where
     S: Service<Request = Request>,
     S::Error: ResponseError + 'static,
@@ -442,8 +479,8 @@ where
     fn reset_keepalive(&mut self) {
         // re-register keep-alive
         if self.flags.contains(Flags::KEEPALIVE) {
-            let expire =
-                self.config.timer_h1.now() + Duration::from_secs(self.config.keep_alive);
+            let expire = self.config.timer_h1.now()
+                + time::Duration::from_secs(self.config.keep_alive);
             self.config
                 .timer_h1
                 .register(expire, self.expire, &self.state);
@@ -512,18 +549,25 @@ where
     fn send_payload(
         &mut self,
         item: Option<Result<Bytes, Box<dyn Error>>>,
-    ) -> Option<State<B>> {
+    ) -> WritePayloadStatus<B> {
         match item {
             Some(Ok(item)) => {
                 trace!("Got response chunk: {:?}", item.len());
-                if let Err(err) = self
+                match self
                     .state
                     .write_item(Message::Chunk(Some(item)), &self.codec)
                 {
-                    self.error = Some(DispatchError::Encode(err));
-                    Some(State::Stop)
-                } else {
-                    None
+                    Err(err) => {
+                        self.error = Some(DispatchError::Encode(err));
+                        WritePayloadStatus::Next(State::Stop)
+                    }
+                    Ok(has_space) => {
+                        if has_space {
+                            WritePayloadStatus::Continue
+                        } else {
+                            WritePayloadStatus::Pause
+                        }
+                    }
                 }
             }
             None => {
@@ -532,24 +576,24 @@ where
                     self.state.write_item(Message::Chunk(None), &self.codec)
                 {
                     self.error = Some(DispatchError::Encode(err));
-                    Some(State::Stop)
+                    WritePayloadStatus::Next(State::Stop)
                 } else if self.payload.is_some() {
-                    Some(State::ReadPayload)
+                    WritePayloadStatus::Next(State::ReadPayload)
                 } else {
                     self.reset_keepalive();
-                    Some(State::ReadRequest)
+                    WritePayloadStatus::Next(State::ReadRequest)
                 }
             }
             Some(Err(e)) => {
                 trace!("Error during response body poll: {:?}", e);
                 self.error = Some(DispatchError::ResponsePayload(e));
-                Some(State::Stop)
+                WritePayloadStatus::Next(State::Stop)
             }
         }
     }
 
     /// Process request's payload
-    fn poll_read_payload(&mut self, cx: &mut Context<'_>) -> PollPayloadStatus {
+    fn poll_read_payload(&mut self, cx: &mut Context<'_>) -> ReadPayloadStatus {
         // check if payload data is required
         if let Some(ref mut payload) = self.payload {
             match payload.1.poll_data_required(cx) {
@@ -557,7 +601,7 @@ where
                     // read request payload
                     let mut updated = false;
                     loop {
-                        let item = self.state.with_read_buf(|buf| payload.0.decode(buf));
+                        let item = self.state.decode_item(&payload.0);
                         match item {
                             Ok(Some(PayloadItem::Chunk(chunk))) => {
                                 updated = true;
@@ -567,40 +611,434 @@ where
                                 payload.1.feed_eof();
                                 self.payload = None;
                                 if !updated {
-                                    return PollPayloadStatus::Done;
+                                    return ReadPayloadStatus::Done;
                                 }
                                 break;
                             }
                             Ok(None) => {
-                                self.state.dsp_read_more_data(cx.waker());
-                                break;
+                                if self.state.is_io_err() {
+                                    payload.1.set_error(PayloadError::EncodingCorrupted);
+                                    self.payload = None;
+                                    self.error = Some(ParseError::Incomplete.into());
+                                    return ReadPayloadStatus::Dropped;
+                                } else {
+                                    self.state.dsp_read_more_data(cx.waker());
+                                    break;
+                                }
                             }
                             Err(e) => {
                                 payload.1.set_error(PayloadError::EncodingCorrupted);
                                 self.payload = None;
                                 self.error = Some(DispatchError::Parse(e));
-                                return PollPayloadStatus::Dropped;
+                                return ReadPayloadStatus::Dropped;
                             }
                         }
                     }
                     if updated {
-                        PollPayloadStatus::Updated
+                        ReadPayloadStatus::Updated
                     } else {
-                        PollPayloadStatus::Pending
+                        ReadPayloadStatus::Pending
                     }
                 }
-                PayloadStatus::Pause => PollPayloadStatus::Pending,
+                PayloadStatus::Pause => ReadPayloadStatus::Pending,
                 PayloadStatus::Dropped => {
                     // service call is not interested in payload
                     // wait until future completes and then close
                     // connection
                     self.payload = None;
                     self.error = Some(DispatchError::PayloadIsNotConsumed);
-                    PollPayloadStatus::Dropped
+                    ReadPayloadStatus::Dropped
                 }
             }
         } else {
-            PollPayloadStatus::Done
+            ReadPayloadStatus::Done
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::{io, sync::Arc};
+
+    use bytes::{Bytes, BytesMut};
+    use futures::future::{lazy, ok, FutureExt};
+    use futures::StreamExt;
+    use rand::Rng;
+
+    use super::*;
+    use crate::codec::Decoder;
+    use crate::http::config::{DispatcherConfig, ServiceConfig};
+    use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
+    use crate::http::{body, Request, ResponseHead, StatusCode};
+    use crate::rt::time::delay_for;
+    use crate::service::IntoService;
+    use crate::testing::Io;
+
+    const BUFFER_SIZE: usize = 32_768;
+
+    /// Create http/1 dispatcher.
+    pub(crate) fn h1<F, S, B>(
+        stream: Io,
+        service: F,
+    ) -> Dispatcher<Io, S, B, ExpectHandler, UpgradeHandler<Io>>
+    where
+        F: IntoService<S>,
+        S: Service<Request = Request>,
+        S::Error: ResponseError + 'static,
+        S::Response: Into<Response<B>>,
+        B: MessageBody,
+    {
+        Dispatcher::new(
+            stream,
+            Rc::new(DispatcherConfig::new(
+                ServiceConfig::default(),
+                service.into_service(),
+                ExpectHandler,
+                None,
+            )),
+            None,
+            None,
+        )
+    }
+
+    pub(crate) fn spawn_h1<F, S, B>(stream: Io, service: F)
+    where
+        F: IntoService<S>,
+        S: Service<Request = Request> + 'static,
+        S::Error: ResponseError,
+        S::Response: Into<Response<B>>,
+        B: MessageBody + 'static,
+    {
+        crate::rt::spawn(
+            Dispatcher::<Io, S, B, ExpectHandler, UpgradeHandler<Io>>::new(
+                stream,
+                Rc::new(DispatcherConfig::new(
+                    ServiceConfig::default(),
+                    service.into_service(),
+                    ExpectHandler,
+                    None,
+                )),
+                None,
+                None,
+            ),
+        );
+    }
+
+    fn load(decoder: &mut ClientCodec, buf: &mut BytesMut) -> ResponseHead {
+        decoder.decode(buf).unwrap().unwrap()
+    }
+
+    #[ntex_rt::test]
+    async fn test_req_parse_err() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(1024);
+        client.write("GET /test HTTP/1\r\n\r\n");
+
+        let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
+        delay_for(time::Duration::from_millis(50)).await;
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        assert!(!h1.inner.state.is_open());
+        delay_for(time::Duration::from_millis(50)).await;
+
+        client
+            .local_buffer(|buf| assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n"));
+
+        client.close().await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        // assert!(h1.inner.flags.contains(Flags::SHUTDOWN_IO));
+        assert!(h1.inner.state.is_io_err());
+    }
+
+    #[ntex_rt::test]
+    async fn test_pipeline() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+        let mut decoder = ClientCodec::default();
+        spawn_h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(!client.is_server_dropped());
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(decoder.decode(&mut buf).unwrap().is_none());
+        assert!(!client.is_server_dropped());
+
+        client.close().await;
+        assert!(client.is_server_dropped());
+    }
+
+    #[ntex_rt::test]
+    async fn test_pipeline_with_payload() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+        let mut decoder = ClientCodec::default();
+        spawn_h1(server, |mut req: Request| async move {
+            let mut p = req.take_payload();
+            while let Some(_) = p.next().await {}
+            Ok::<_, io::Error>(Response::Ok().finish())
+        });
+
+        client.write("GET /test HTTP/1.1\r\ncontent-length: 5\r\n\r\n");
+        delay_for(time::Duration::from_millis(50)).await;
+        client.write("xxxxx");
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(!client.is_server_dropped());
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(decoder.decode(&mut buf).unwrap().is_none());
+        assert!(!client.is_server_dropped());
+
+        client.close().await;
+        assert!(client.is_server_dropped());
+    }
+
+    #[ntex_rt::test]
+    async fn test_pipeline_with_delay() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+        let mut decoder = ClientCodec::default();
+        spawn_h1(server, |_| async {
+            delay_for(time::Duration::from_millis(100)).await;
+            Ok::<_, io::Error>(Response::Ok().finish())
+        });
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(!client.is_server_dropped());
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        delay_for(time::Duration::from_millis(50)).await;
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(decoder.decode(&mut buf).unwrap().is_none());
+        assert!(!client.is_server_dropped());
+
+        buf.extend(client.read().await.unwrap());
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(decoder.decode(&mut buf).unwrap().is_none());
+        assert!(!client.is_server_dropped());
+
+        client.close().await;
+        assert!(client.is_server_dropped());
+    }
+
+    #[ntex_rt::test]
+    /// if socket is disconnected, h1 dispatcher does not process any data
+    // /// h1 dispatcher still processes all incoming requests
+    // /// but it does not write any data to socket
+    async fn test_write_disconnected() {
+        let num = Arc::new(AtomicUsize::new(0));
+        let num2 = num.clone();
+
+        let (client, server) = Io::create();
+        spawn_h1(server, move |_| {
+            num2.fetch_add(1, Ordering::Relaxed);
+            ok::<_, io::Error>(Response::Ok().finish())
+        });
+
+        client.remote_buffer_cap(1024);
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.close().await;
+        assert!(client.is_server_dropped());
+        assert!(client.read_any().is_empty());
+
+        // only first request get handled
+        assert_eq!(num.load(Ordering::Relaxed), 0);
+    }
+
+    #[ntex_rt::test]
+    async fn test_read_large_message() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+
+        let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
+        let mut decoder = ClientCodec::default();
+
+        let data = rand::thread_rng()
+            .sample_iter(&rand::distributions::Alphanumeric)
+            .take(70_000)
+            .map(char::from)
+            .collect::<String>();
+        client.write("GET /test HTTP/1.1\r\nContent-Length: ");
+        client.write(data);
+        delay_for(time::Duration::from_millis(50)).await;
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        delay_for(time::Duration::from_millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        assert!(!h1.inner.state.is_open());
+
+        let mut buf = client.read().await.unwrap();
+        assert_eq!(load(&mut decoder, &mut buf).status, StatusCode::BAD_REQUEST);
+    }
+
+    #[ntex_rt::test]
+    async fn test_read_backpressure() {
+        let mark = Arc::new(AtomicBool::new(false));
+        let mark2 = mark.clone();
+
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+        spawn_h1(server, move |mut req: Request| {
+            let m = mark2.clone();
+            async move {
+                // read one chunk
+                let mut pl = req.take_payload();
+                let _ = pl.next().await.unwrap().unwrap();
+                m.store(true, Ordering::Relaxed);
+                // sleep
+                delay_for(time::Duration::from_secs(999_999)).await;
+                Ok::<_, io::Error>(Response::Ok().finish())
+            }
+        });
+
+        client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
+        delay_for(time::Duration::from_millis(50)).await;
+
+        // buf must be consumed
+        assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
+
+        // io should be drained only by no more than MAX_BUFFER_SIZE
+        let random_bytes: Vec<u8> =
+            (0..1_048_576).map(|_| rand::random::<u8>()).collect();
+        client.write(random_bytes);
+
+        delay_for(time::Duration::from_millis(50)).await;
+        assert!(client.remote_buffer(|buf| buf.len()) > 1_048_576 - BUFFER_SIZE * 3);
+        assert!(mark.load(Ordering::Relaxed));
+    }
+
+    #[ntex_rt::test]
+    async fn test_write_backpressure() {
+        std::env::set_var("RUST_LOG", "ntex_codec=info,ntex=trace");
+        env_logger::init();
+
+        let num = Arc::new(AtomicUsize::new(0));
+        let num2 = num.clone();
+
+        struct Stream(Arc<AtomicUsize>);
+
+        impl body::MessageBody for Stream {
+            fn size(&self) -> body::BodySize {
+                body::BodySize::Stream
+            }
+            fn poll_next_chunk(
+                &mut self,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<Bytes, Box<dyn std::error::Error>>>> {
+                let data = rand::thread_rng()
+                    .sample_iter(&rand::distributions::Alphanumeric)
+                    .take(65_536)
+                    .map(char::from)
+                    .collect::<String>();
+                self.0.fetch_add(data.len(), Ordering::Relaxed);
+
+                Poll::Ready(Some(Ok(Bytes::from(data))))
+            }
+        }
+
+        let (client, server) = Io::create();
+        let mut h1 = h1(server, move |_| {
+            let n = num2.clone();
+            async move { Ok::<_, io::Error>(Response::Ok().message_body(Stream(n.clone()))) }
+            .boxed_local()
+        });
+        let state = h1.inner.state.clone();
+
+        // do not allow to write to socket
+        client.remote_buffer_cap(0);
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        delay_for(time::Duration::from_millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        // buf must be consumed
+        assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
+
+        // amount of generated data
+        assert_eq!(num.load(Ordering::Relaxed), 65_536);
+
+        // response message + chunking encoding
+        assert_eq!(state.with_write_buf(|buf| buf.len()), 65629);
+
+        client.remote_buffer_cap(65536);
+        delay_for(time::Duration::from_millis(50)).await;
+        assert_eq!(state.with_write_buf(|buf| buf.len()), 93);
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+        assert_eq!(num.load(Ordering::Relaxed), 65_536 * 2);
+    }
+
+    #[ntex_rt::test]
+    async fn test_disconnect_during_response_body_pending() {
+        struct Stream(bool);
+
+        impl body::MessageBody for Stream {
+            fn size(&self) -> body::BodySize {
+                body::BodySize::Sized(2048)
+            }
+            fn poll_next_chunk(
+                &mut self,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<Bytes, Box<dyn std::error::Error>>>> {
+                if self.0 {
+                    Poll::Pending
+                } else {
+                    self.0 = true;
+                    let data = rand::thread_rng()
+                        .sample_iter(&rand::distributions::Alphanumeric)
+                        .take(1024)
+                        .map(char::from)
+                        .collect::<String>();
+                    Poll::Ready(Some(Ok(Bytes::from(data))))
+                }
+            }
+        }
+
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+        let mut h1 = h1(server, |_| {
+            ok::<_, io::Error>(Response::Ok().message_body(Stream(false)))
+        });
+
+        client.write("GET /test HTTP/1.1\r\n\r\n");
+        delay_for(time::Duration::from_millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        // http message must be consumed
+        assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
+
+        let mut decoder = ClientCodec::default();
+        let mut buf = client.read().await.unwrap();
+        assert!(load(&mut decoder, &mut buf).status.is_success());
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
+
+        client.close().await;
+        delay_for(time::Duration::from_millis(50)).await;
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
     }
 }

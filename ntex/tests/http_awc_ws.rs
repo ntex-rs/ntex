@@ -8,12 +8,12 @@ use ntex::framed::{DispatchItem, Dispatcher, State};
 use ntex::http::test::server as test_server;
 use ntex::http::ws::handshake_response;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
+use ntex::rt::net::TcpStream;
 use ntex::ws;
 
 async fn ws_service(
     msg: DispatchItem<ws::Codec>,
 ) -> Result<Option<ws::Message>, io::Error> {
-    println!("TEST: {:?}", msg);
     let msg = match msg {
         DispatchItem::Item(msg) => match msg {
             ws::Frame::Ping(msg) => ws::Message::Pong(msg),
@@ -31,33 +31,33 @@ async fn ws_service(
 
 #[ntex::test]
 async fn test_simple() {
-    std::env::set_var("RUST_LOG", "ntex_codec=info,ntex=trace");
-    env_logger::init();
-
     let mut srv = test_server(|| {
         HttpService::build()
-            .upgrade(|(req, state, mut codec): (Request, State, h1::Codec)| {
-                async move {
-                    let res = handshake_response(req.head()).finish();
+            .upgrade(
+                |(req, io, state, mut codec): (Request, TcpStream, State, h1::Codec)| {
+                    async move {
+                        let res = handshake_response(req.head()).finish();
 
-                    // send handshake respone
-                    state
-                        .write_item(
-                            h1::Message::Item((res.drop_body(), BodySize::None)),
-                            &mut codec,
+                        // send handshake respone
+                        state
+                            .write_item(
+                                h1::Message::Item((res.drop_body(), BodySize::None)),
+                                &mut codec,
+                            )
+                            .unwrap();
+
+                        // start websocket service
+                        Dispatcher::new(
+                            io,
+                            ws::Codec::default(),
+                            state,
+                            ws_service,
+                            Default::default(),
                         )
-                        .unwrap();
-
-                    // start websocket service
-                    Dispatcher::from_state(
-                        ws::Codec::default(),
-                        state,
-                        ws_service,
-                        Default::default(),
-                    )
-                    .await
-                }
-            })
+                        .await
+                    }
+                },
+            )
             .finish(|_| ok::<_, io::Error>(Response::NotFound()))
             .tcp()
     });

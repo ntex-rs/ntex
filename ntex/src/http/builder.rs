@@ -55,7 +55,7 @@ where
     X::InitError: fmt::Debug,
     X::Future: 'static,
     <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, State, Codec), Response = ()>,
+    U: ServiceFactory<Config = (), Request = (Request, T, State, Codec), Response = ()>,
     U::Error: fmt::Display + Error + 'static,
     U::InitError: fmt::Debug,
     U::Future: 'static,
@@ -142,7 +142,7 @@ where
         F: IntoServiceFactory<U1>,
         U1: ServiceFactory<
             Config = (),
-            Request = (Request, State, Codec),
+            Request = (Request, T, State, Codec),
             Response = (),
         >,
         U1::Error: fmt::Display + Error + 'static,

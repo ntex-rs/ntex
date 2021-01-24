@@ -11,7 +11,7 @@ pub struct UpgradeHandler<T>(PhantomData<T>);
 
 impl<T> ServiceFactory for UpgradeHandler<T> {
     type Config = ();
-    type Request = (Request, State, Codec);
+    type Request = (Request, T, State, Codec);
     type Response = ();
     type Error = io::Error;
     type Service = UpgradeHandler<T>;
@@ -25,7 +25,7 @@ impl<T> ServiceFactory for UpgradeHandler<T> {
 }
 
 impl<T> Service for UpgradeHandler<T> {
-    type Request = (Request, State, Codec);
+    type Request = (Request, T, State, Codec);
     type Response = ();
     type Error = io::Error;
     type Future = Ready<Result<Self::Response, Self::Error>>;

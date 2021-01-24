@@ -13,22 +13,26 @@ use crate::task::LocalWaker;
 const HW: usize = 8 * 1024;
 
 bitflags::bitflags! {
-    pub struct Flags: u8 {
+    pub struct Flags: u16 {
         const DSP_STOP       = 0b0000_0001;
         const DSP_KEEPALIVE  = 0b0000_0010;
 
+        /// io error occured
         const IO_ERR         = 0b0000_0100;
-        const IO_SHUTDOWN    = 0b0000_1000;
+        /// stop io tasks
+        const IO_STOP        = 0b0000_1000;
+        /// shutdown io tasks
+        const IO_SHUTDOWN    = 0b0001_0000;
 
         /// pause io read
-        const RD_PAUSED      = 0b0001_0000;
+        const RD_PAUSED      = 0b0010_0000;
         /// new data is available
-        const RD_READY       = 0b0010_0000;
+        const RD_READY       = 0b0100_0000;
 
         /// write buffer is full
-        const WR_NOT_READY   = 0b0100_0000;
+        const WR_NOT_READY   = 0b1000_0000;
 
-        const ST_DSP_ERR     = 0b1000_0000;
+        const ST_DSP_ERR    = 0b10000_0000;
     }
 }
 
@@ -146,6 +150,11 @@ impl State {
             .flags
             .get()
             .intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN)
+    }
+
+    #[inline]
+    pub fn is_io_stop(&self) -> bool {
+        self.0.flags.get().contains(Flags::IO_STOP)
     }
 
     #[inline]
@@ -318,6 +327,17 @@ impl State {
     }
 
     #[inline]
+    /// Stop io tasks
+    pub fn dsp_stop_io(&self, waker: &Waker) {
+        let mut flags = self.0.flags.get();
+        flags.insert(Flags::IO_STOP);
+        self.0.flags.set(flags);
+        self.0.read_task.wake();
+        self.0.write_task.wake();
+        self.0.dispatch_task.register(waker);
+    }
+
+    #[inline]
     /// Wake dispatcher
     pub fn dsp_wake_task(&self) {
         self.0.dispatch_task.wake();
@@ -327,6 +347,14 @@ impl State {
     /// Register dispatcher task
     pub fn dsp_register_task(&self, waker: &Waker) {
         self.0.dispatch_task.register(waker);
+    }
+
+    #[inline]
+    /// Reset io stop flags
+    pub fn reset_io_stop(&self) {
+        let mut flags = self.0.flags.get();
+        flags.remove(Flags::IO_STOP);
+        self.0.flags.set(flags);
     }
 
     fn mark_io_error(&self) {

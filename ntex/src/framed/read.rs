@@ -39,6 +39,9 @@ where
         if self.state.is_io_shutdown() {
             log::trace!("read task is instructed to shutdown");
             Poll::Ready(())
+        } else if self.state.is_io_stop() {
+            self.state.dsp_wake_task();
+            Poll::Ready(())
         } else if self.state.is_read_paused() {
             self.state.register_read_task(cx.waker());
             Poll::Pending

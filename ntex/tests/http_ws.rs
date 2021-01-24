@@ -1,20 +1,21 @@
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::{cell::Cell, io, pin::Pin};
+use std::{cell::Cell, io, marker::PhantomData, pin::Pin};
 
 use bytes::Bytes;
 use futures::{future, Future, SinkExt, StreamExt};
 
+use ntex::codec::{AsyncRead, AsyncWrite};
 use ntex::framed::{DispatchItem, Dispatcher, State, Timer};
 use ntex::http::{body, h1, test, ws::handshake, HttpService, Request, Response};
 use ntex::service::{fn_factory, Service};
 use ntex::ws;
 
-struct WsService(Arc<Mutex<Cell<bool>>>);
+struct WsService<T>(Arc<Mutex<Cell<bool>>>, PhantomData<T>);
 
-impl WsService {
+impl<T> WsService<T> {
     fn new() -> Self {
-        WsService(Arc::new(Mutex::new(Cell::new(false))))
+        WsService(Arc::new(Mutex::new(Cell::new(false))), PhantomData)
     }
 
     fn set_polled(&self) {
@@ -26,14 +27,17 @@ impl WsService {
     }
 }
 
-impl Clone for WsService {
+impl<T> Clone for WsService<T> {
     fn clone(&self) -> Self {
-        WsService(self.0.clone())
+        WsService(self.0.clone(), PhantomData)
     }
 }
 
-impl Service for WsService {
-    type Request = (Request, State, h1::Codec);
+impl<T> Service for WsService<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
+{
+    type Request = (Request, T, State, h1::Codec);
     type Response = ();
     type Error = io::Error;
     type Future = Pin<Box<dyn Future<Output = Result<(), io::Error>>>>;
@@ -43,7 +47,7 @@ impl Service for WsService {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&self, (req, state, mut codec): Self::Request) -> Self::Future {
+    fn call(&self, (req, io, state, mut codec): Self::Request) -> Self::Future {
         let fut = async move {
             let res = handshake(req.head()).unwrap().message_body(());
 
@@ -51,7 +55,7 @@ impl Service for WsService {
                 .write_item((res, body::BodySize::None).into(), &mut codec)
                 .unwrap();
 
-            Dispatcher::from_state(ws::Codec::new(), state, service, Timer::default())
+            Dispatcher::new(io, ws::Codec::new(), state, service, Timer::default())
                 .await
                 .map_err(|_| panic!())
         };

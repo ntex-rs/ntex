@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-b.6] - 2021-01-24
+
+* http: Pass io stream to upgrade handler
+
 ## [0.2.0-b.5] - 2021-01-23
 
 * accept shared ref in some methods of framed::State type

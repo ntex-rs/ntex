@@ -68,7 +68,11 @@ where
     X::Error: ResponseError + 'static,
     X::InitError: fmt::Debug,
     X::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, IoState, Codec), Response = ()>,
+    U: ServiceFactory<
+        Config = (),
+        Request = (Request, TcpStream, IoState, Codec),
+        Response = (),
+    >,
     U::Error: fmt::Display + Error + 'static,
     U::InitError: fmt::Debug,
     U::Future: 'static,
@@ -112,7 +116,7 @@ mod openssl {
         X::Future: 'static,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, IoState, Codec),
+            Request = (Request, SslStream<TcpStream>, IoState, Codec),
             Response = (),
         >,
         U::Error: fmt::Display + Error + 'static,
@@ -166,7 +170,7 @@ mod rustls {
         X::Future: 'static,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, IoState, Codec),
+            Request = (Request, TlsStream<TcpStream>, IoState, Codec),
             Response = (),
         >,
         U::Error: fmt::Display + Error + 'static,
@@ -228,7 +232,7 @@ where
 
     pub fn upgrade<U1>(self, upgrade: Option<U1>) -> H1Service<T, S, B, X, U1>
     where
-        U1: ServiceFactory<Request = (Request, IoState, Codec), Response = ()>,
+        U1: ServiceFactory<Request = (Request, T, IoState, Codec), Response = ()>,
         U1::Error: fmt::Display + Error + 'static,
         U1::InitError: fmt::Debug,
         U1::Future: 'static,
@@ -267,7 +271,11 @@ where
     X::Error: ResponseError + 'static,
     X::InitError: fmt::Debug,
     X::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, IoState, Codec), Response = ()>,
+    U: ServiceFactory<
+        Config = (),
+        Request = (Request, T, IoState, Codec),
+        Response = (),
+    >,
     U::Error: fmt::Display + Error + 'static,
     U::InitError: fmt::Debug,
     U::Future: 'static,
@@ -331,13 +339,13 @@ where
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, IoState, Codec), Response = ()>,
+    U: Service<Request = (Request, T, IoState, Codec), Response = ()>,
     U::Error: fmt::Display + Error + 'static,
 {
     type Request = (T, Option<net::SocketAddr>);
     type Response = ();
     type Error = DispatchError;
-    type Future = Dispatcher<S, B, X, U>;
+    type Future = Dispatcher<T, S, B, X, U>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let cfg = self.config.as_ref();

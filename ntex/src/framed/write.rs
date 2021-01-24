@@ -74,6 +74,9 @@ where
         if this.state.is_io_err() {
             log::trace!("write io is closed");
             return Poll::Ready(());
+        } else if this.state.is_io_stop() {
+            self.state.dsp_wake_task();
+            return Poll::Ready(());
         }
 
         match this.st {
@@ -224,7 +227,7 @@ where
                 }
             }
         }
-        // log::trace!("flushed {} bytes", written);
+        log::trace!("flushed {} bytes", written);
 
         // remove written data
         if written == len {

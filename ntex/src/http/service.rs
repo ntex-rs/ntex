@@ -126,7 +126,7 @@ where
     where
         U1: ServiceFactory<
             Config = (),
-            Request = (Request, State, h1::Codec),
+            Request = (Request, T, State, h1::Codec),
             Response = (),
         >,
         U1::Error: fmt::Display + error::Error + 'static,
@@ -167,7 +167,11 @@ where
     X::InitError: fmt::Debug,
     X::Future: 'static,
     <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, State, h1::Codec), Response = ()>,
+    U: ServiceFactory<
+        Config = (),
+        Request = (Request, TcpStream, State, h1::Codec),
+        Response = (),
+    >,
     U::Error: fmt::Display + error::Error + 'static,
     U::InitError: fmt::Debug,
     U::Future: 'static,
@@ -213,7 +217,7 @@ mod openssl {
         <X::Service as Service>::Future: 'static,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, State, h1::Codec),
+            Request = (Request, SslStream<TcpStream>, State, h1::Codec),
             Response = (),
         >,
         U::Error: fmt::Display + error::Error + 'static,
@@ -278,7 +282,7 @@ mod rustls {
         <X::Service as Service>::Future: 'static,
         U: ServiceFactory<
             Config = (),
-            Request = (Request, State, h1::Codec),
+            Request = (Request, TlsStream<TcpStream>, State, h1::Codec),
             Response = (),
         >,
         U::Error: fmt::Display + error::Error + 'static,
@@ -342,7 +346,11 @@ where
     X::InitError: fmt::Debug,
     X::Future: 'static,
     <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, State, h1::Codec), Response = ()>,
+    U: ServiceFactory<
+        Config = (),
+        Request = (Request, T, State, h1::Codec),
+        Response = (),
+    >,
     U::Error: fmt::Display + error::Error + 'static,
     U::InitError: fmt::Debug,
     U::Future: 'static,
@@ -410,7 +418,7 @@ where
     B: MessageBody + 'static,
     X: Service<Request = Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, State, h1::Codec), Response = ()>,
+    U: Service<Request = (Request, T, State, h1::Codec), Response = ()>,
     U::Error: fmt::Display + error::Error + 'static,
 {
     type Request = (T, Protocol, Option<net::SocketAddr>);
@@ -513,6 +521,7 @@ pin_project_lite::pin_project! {
         T: AsyncRead,
         T: AsyncWrite,
         T: Unpin,
+        T: 'static,
         S: Service<Request = Request>,
         S::Error: ResponseError,
         S::Error: 'static,
@@ -523,7 +532,7 @@ pin_project_lite::pin_project! {
         X: Service<Request = Request, Response = Request>,
         X::Error: ResponseError,
         X::Error: 'static,
-        U: Service<Request = (Request, State, h1::Codec), Response = ()>,
+        U: Service<Request = (Request, T, State, h1::Codec), Response = ()>,
         U::Error: fmt::Display,
         U::Error: error::Error,
         U::Error: 'static,
@@ -543,16 +552,17 @@ pin_project_lite::pin_project! {
         T: AsyncRead,
         T: AsyncWrite,
         T: Unpin,
+        T: 'static,
         B: MessageBody,
         X: Service<Request = Request, Response = Request>,
         X::Error: ResponseError,
         X::Error: 'static,
-        U: Service<Request = (Request, State, h1::Codec), Response = ()>,
+        U: Service<Request = (Request, T, State, h1::Codec), Response = ()>,
         U::Error: fmt::Display,
         U::Error: error::Error,
         U::Error: 'static,
     {
-        H1 { #[pin] fut: h1::Dispatcher<S, B, X, U> },
+        H1 { #[pin] fut: h1::Dispatcher<T, S, B, X, U> },
         H2 { fut: Dispatcher<T, S, B, X, U> },
         H2Handshake { data:
             Option<(
@@ -567,7 +577,7 @@ pin_project_lite::pin_project! {
 
 impl<T, S, B, X, U> Future for HttpServiceHandlerResponse<T, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
     S: Service<Request = Request>,
     S::Error: ResponseError + 'static,
     S::Future: 'static,
@@ -575,7 +585,7 @@ where
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, State, h1::Codec), Response = ()>,
+    U: Service<Request = (Request, T, State, h1::Codec), Response = ()>,
     U::Error: fmt::Display + error::Error + 'static,
 {
     type Output = Result<(), DispatchError>;
