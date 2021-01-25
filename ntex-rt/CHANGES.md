@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.2] - 2021-01-25
+
+* Replace actix-threadpool with tokio's task utils
+
 ## [0.1.1] - 2020-04-15
 
 * Api cleanup

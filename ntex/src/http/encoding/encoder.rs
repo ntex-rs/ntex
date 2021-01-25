@@ -5,7 +5,6 @@ use std::io::{self, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_threadpool::{run, BlockingError, CpuFuture};
 use brotli2::write::BrotliEncoder;
 use bytes::Bytes;
 use flate2::write::{GzEncoder, ZlibEncoder};
@@ -14,6 +13,7 @@ use futures::ready;
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::{ContentEncoding, HeaderValue, CONTENT_ENCODING};
 use crate::http::{ResponseHead, StatusCode};
+use crate::rt::task::{spawn_blocking, JoinHandle};
 
 use super::Writer;
 
@@ -23,7 +23,7 @@ pub struct Encoder<B> {
     eof: bool,
     body: EncoderBody<B>,
     encoder: Option<ContentEncoder>,
-    fut: Option<CpuFuture<ContentEncoder, io::Error>>,
+    fut: Option<JoinHandle<Result<ContentEncoder, io::Error>>>,
 }
 
 impl<B: MessageBody + 'static> Encoder<B> {
@@ -96,15 +96,13 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
 
             if let Some(ref mut fut) = self.fut {
                 let mut encoder = match ready!(Pin::new(fut).poll(cx)) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        let e = match e {
-                            BlockingError::Error(e) => e,
-                            BlockingError::Canceled => {
-                                io::Error::new(io::ErrorKind::Other, "Canceled")
-                            }
-                        };
-                        return Poll::Ready(Some(Err(Box::new(e))));
+                    Ok(Ok(item)) => item,
+                    Ok(Err(e)) => return Poll::Ready(Some(Err(Box::new(e)))),
+                    Err(_) => {
+                        return Poll::Ready(Some(Err(Box::new(io::Error::new(
+                            io::ErrorKind::Other,
+                            "Canceled",
+                        )))));
                     }
                 };
                 let chunk = encoder.take();
@@ -137,7 +135,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                                 return Poll::Ready(Some(Ok(chunk)));
                             }
                         } else {
-                            self.fut = Some(run(move || {
+                            self.fut = Some(spawn_blocking(move || {
                                 encoder.write(&chunk)?;
                                 Ok(encoder)
                             }));

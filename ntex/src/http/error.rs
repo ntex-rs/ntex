@@ -5,12 +5,12 @@ use either::Either;
 use http::{header, uri::InvalidUri, StatusCode};
 
 // re-export for convinience
-pub use actix_threadpool::BlockingError;
 pub use futures::channel::oneshot::Canceled;
 pub use http::Error as HttpError;
 
 use crate::http::body::Body;
 use crate::http::response::Response;
+use crate::rt::task::JoinError;
 
 /// Error that can be converted to `Response`
 pub trait ResponseError: fmt::Display + fmt::Debug {
@@ -148,18 +148,6 @@ pub enum PayloadError {
 
 impl std::error::Error for PayloadError {}
 
-impl From<BlockingError<io::Error>> for PayloadError {
-    fn from(err: BlockingError<io::Error>) -> Self {
-        match err {
-            BlockingError::Error(e) => PayloadError::Io(e),
-            BlockingError::Canceled => PayloadError::Io(io::Error::new(
-                io::ErrorKind::Other,
-                "Operation is canceled",
-            )),
-        }
-    }
-}
-
 impl From<Either<PayloadError, io::Error>> for PayloadError {
     fn from(err: Either<PayloadError, io::Error>) -> Self {
         match err {
@@ -243,6 +231,38 @@ pub enum ContentTypeError {
     /// Content-Type is expected
     #[display(fmt = "Content-Type is expected")]
     Expected,
+}
+
+/// Blocking operation execution error
+#[derive(Debug, Display)]
+pub enum BlockingError<E: fmt::Debug> {
+    #[display(fmt = "{:?}", _0)]
+    Error(E),
+    #[display(fmt = "Thread pool is gone")]
+    Canceled,
+}
+
+impl<E: fmt::Debug> std::error::Error for BlockingError<E> {}
+
+impl From<JoinError> for PayloadError {
+    fn from(_: JoinError) -> Self {
+        PayloadError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "Operation is canceled",
+        ))
+    }
+}
+
+impl From<BlockingError<io::Error>> for PayloadError {
+    fn from(err: BlockingError<io::Error>) -> Self {
+        match err {
+            BlockingError::Error(e) => PayloadError::Io(e),
+            BlockingError::Canceled => PayloadError::Io(io::Error::new(
+                io::ErrorKind::Other,
+                "Operation is canceled",
+            )),
+        }
+    }
 }
 
 #[cfg(test)]

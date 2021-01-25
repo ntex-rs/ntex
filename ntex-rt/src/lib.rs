@@ -14,9 +14,6 @@ pub use self::system::System;
 #[cfg(not(test))] // Work around for rust-lang/rust#62127
 pub use ntex_rt_macros::{rt_main as main, rt_test as test};
 
-#[doc(hidden)]
-pub use actix_threadpool as blocking;
-
 /// Spawn a future on the current thread. This does not create a new Arbiter
 /// or Arbiter address, it is simply a helper for spawning futures on the current
 /// thread.
@@ -25,7 +22,7 @@ pub use actix_threadpool as blocking;
 ///
 /// This function panics if ntex system is not running.
 #[inline]
-pub fn spawn<F>(f: F) -> tokio::task::JoinHandle<F::Output>
+pub fn spawn<F>(f: F) -> self::task::JoinHandle<F::Output>
 where
     F: futures::Future + 'static,
 {
@@ -77,4 +74,9 @@ pub mod time {
     pub use tokio::time::{delay_for, delay_until, Delay};
     pub use tokio::time::{interval, interval_at, Interval};
     pub use tokio::time::{timeout, Timeout};
+}
+
+/// Task management.
+pub mod task {
+    pub use tokio::task::{spawn_blocking, yield_now, JoinError, JoinHandle};
 }

@@ -3,7 +3,6 @@ use std::io::{self, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use actix_threadpool::{run, CpuFuture};
 use brotli2::write::BrotliDecoder;
 use bytes::Bytes;
 use flate2::write::{GzDecoder, ZlibDecoder};
@@ -12,6 +11,7 @@ use futures::{ready, Stream};
 use super::Writer;
 use crate::http::error::PayloadError;
 use crate::http::header::{ContentEncoding, HeaderMap, CONTENT_ENCODING};
+use crate::rt::task::{spawn_blocking, JoinHandle};
 
 const INPLACE: usize = 2049;
 
@@ -19,7 +19,7 @@ pub struct Decoder<S> {
     decoder: Option<ContentDecoder>,
     stream: S,
     eof: bool,
-    fut: Option<CpuFuture<(Option<Bytes>, ContentDecoder), io::Error>>,
+    fut: Option<JoinHandle<Result<(Option<Bytes>, ContentDecoder), io::Error>>>,
 }
 
 impl<S> Decoder<S>
@@ -80,7 +80,8 @@ where
         loop {
             if let Some(ref mut fut) = self.fut {
                 let (chunk, decoder) = match ready!(Pin::new(fut).poll(cx)) {
-                    Ok(item) => item,
+                    Ok(Ok(item)) => item,
+                    Ok(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
                     Err(e) => return Poll::Ready(Some(Err(e.into()))),
                 };
                 self.decoder = Some(decoder);
@@ -105,7 +106,7 @@ where
                                 return Poll::Ready(Some(Ok(chunk)));
                             }
                         } else {
-                            self.fut = Some(run(move || {
+                            self.fut = Some(spawn_blocking(move || {
                                 let chunk = decoder.feed_data(chunk)?;
                                 Ok((chunk, decoder))
                             }));

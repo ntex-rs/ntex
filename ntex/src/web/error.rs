@@ -7,7 +7,6 @@ use std::marker::PhantomData;
 use bytes::BytesMut;
 use derive_more::{Display, From};
 
-pub use actix_threadpool::BlockingError;
 pub use futures::channel::oneshot::Canceled;
 pub use http::Error as HttpError;
 pub use serde_json::error::Error as JsonError;

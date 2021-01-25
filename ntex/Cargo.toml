@@ -37,13 +37,12 @@ cookie = ["coo-kie", "coo-kie/percent-encode"]
 
 [dependencies]
 ntex-codec = "0.3.0-b.1"
-ntex-rt = "0.1.1"
+ntex-rt = "0.1.2"
 ntex-rt-macros = "0.1"
 ntex-router = "0.3.8"
 ntex-service = "0.1.5"
 ntex-macros = "0.1"
 
-actix-threadpool = "0.3.3"
 base64 = "0.13"
 bitflags = "1.2.1"
 bytes = "0.5.6"
@@ -73,7 +72,7 @@ socket2 = "0.3.12"
 url = "2.1"
 time = { version = "0.2.11", default-features = false, features = ["std"] }
 coo-kie = { version = "0.14.2", package = "cookie", optional = true }
-tokio = "0.2.6"
+tokio = "=0.2.6"
 
 # resolver
 trust-dns-proto = { version = "0.19.6", default-features = false }
@@ -106,4 +105,4 @@ rust-tls = { version = "0.19.0", package="rustls", features = ["dangerous_config
 webpki = "0.21.2"
 
 [patch.crates-io]
-ntex = { path = "../ntex-codec" }
+ntex-rt = { path = "../ntex-rt" }

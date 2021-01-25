@@ -6,6 +6,8 @@
 
 * Refactor framed disaptcher write back-pressure support
 
+* Replace actix-threadpool with tokio utils
+
 ## [0.2.0-b.6] - 2021-01-24
 
 * http: Pass io stream to upgrade handler
