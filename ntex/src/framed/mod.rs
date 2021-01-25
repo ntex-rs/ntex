@@ -17,6 +17,10 @@ use crate::codec::{Decoder, Encoder};
 /// Framed transport item
 pub enum DispatchItem<U: Encoder + Decoder> {
     Item(<U as Decoder>::Item),
+    /// Write back-pressure enabled
+    WBackPressureEnabled,
+    /// Write back-pressure disabled
+    WBackPressureDisabled,
     /// Keep alive timeout
     KeepAliveTimeout,
     /// Decoder parse error
@@ -37,6 +41,12 @@ where
             DispatchItem::Item(ref item) => {
                 write!(fmt, "DispatchItem::Item({:?})", item)
             }
+            DispatchItem::WBackPressureEnabled => {
+                write!(fmt, "DispatchItem::WBackPressureEnabled")
+            }
+            DispatchItem::WBackPressureDisabled => {
+                write!(fmt, "DispatchItem::WBackPressureDisabled")
+            }
             DispatchItem::KeepAliveTimeout => {
                 write!(fmt, "DispatchItem::KeepAliveTimeout")
             }
@@ -50,5 +60,30 @@ where
                 write!(fmt, "DispatchItem::IoError({:?})", e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::BytesCodec;
+
+    #[test]
+    fn test_fmt() {
+        type T = DispatchItem<BytesCodec>;
+
+        let err = T::EncoderError(io::Error::new(io::ErrorKind::Other, "err"));
+        assert!(format!("{:?}", err).contains("DispatchItem::Encoder"));
+        let err = T::DecoderError(io::Error::new(io::ErrorKind::Other, "err"));
+        assert!(format!("{:?}", err).contains("DispatchItem::Decoder"));
+        let err = T::IoError(io::Error::new(io::ErrorKind::Other, "err"));
+        assert!(format!("{:?}", err).contains("DispatchItem::IoError"));
+
+        assert!(format!("{:?}", T::WBackPressureEnabled)
+            .contains("DispatchItem::WBackPressureEnabled"));
+        assert!(format!("{:?}", T::WBackPressureDisabled)
+            .contains("DispatchItem::WBackPressureDisabled"));
+        assert!(format!("{:?}", T::KeepAliveTimeout)
+            .contains("DispatchItem::KeepAliveTimeout"));
     }
 }

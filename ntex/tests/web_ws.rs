@@ -1,6 +1,7 @@
 use std::io;
 
 use bytes::Bytes;
+use bytestring::ByteString;
 use futures::{SinkExt, StreamExt};
 
 use ntex::service::{fn_factory_with_config, fn_service};
@@ -10,7 +11,7 @@ async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
         ws::Frame::Ping(msg) => ws::Message::Pong(msg),
         ws::Frame::Text(text) => {
-            ws::Message::Text(String::from_utf8_lossy(&text).to_string())
+            ws::Message::Text(String::from_utf8_lossy(&text).as_ref().into())
         }
         ws::Frame::Binary(bin) => ws::Message::Binary(bin),
         ws::Frame::Close(reason) => ws::Message::Close(reason),
@@ -39,7 +40,7 @@ async fn web_ws() {
     // client service
     let mut framed = srv.ws().await.unwrap();
     framed
-        .send(ws::Message::Text("text".to_string()))
+        .send(ws::Message::Text(ByteString::from_static("text")))
         .await
         .unwrap();
     let item = framed.next().await.unwrap().unwrap();

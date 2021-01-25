@@ -10,29 +10,31 @@ use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts}
 use crate::framed::write::flush;
 use crate::task::LocalWaker;
 
-const HW: usize = 8 * 1024;
+const HW: usize = 16 * 1024;
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
-        const DSP_STOP       = 0b0000_0001;
-        const DSP_KEEPALIVE  = 0b0000_0010;
+        const DSP_STOP       = 0b0000_0000_0001;
+        const DSP_KEEPALIVE  = 0b0000_0000_0010;
 
         /// io error occured
-        const IO_ERR         = 0b0000_0100;
+        const IO_ERR         = 0b0000_0000_0100;
         /// stop io tasks
-        const IO_STOP        = 0b0000_1000;
+        const IO_STOP        = 0b0000_0000_1000;
         /// shutdown io tasks
-        const IO_SHUTDOWN    = 0b0001_0000;
+        const IO_SHUTDOWN    = 0b0000_0001_0000;
 
         /// pause io read
-        const RD_PAUSED      = 0b0010_0000;
+        const RD_PAUSED      = 0b0000_0010_0000;
         /// new data is available
-        const RD_READY       = 0b0100_0000;
+        const RD_READY       = 0b0000_0100_0000;
 
+        /// write task is ready
+        const WR_READY       = 0b0001_0000_0000;
         /// write buffer is full
-        const WR_NOT_READY   = 0b1000_0000;
+        const WR_NOT_READY   = 0b0010_0000_0000;
 
-        const ST_DSP_ERR    = 0b10000_0000;
+        const ST_DSP_ERR    = 0b0001_0000_0000_0000;
     }
 }
 
@@ -163,14 +165,43 @@ impl State {
         self.0.flags.get().contains(Flags::RD_READY)
     }
 
+    /// read task must be paused if service is not ready (RD_PAUSED)
     pub(super) fn is_read_paused(&self) -> bool {
-        self.0.flags.get().contains(Flags::RD_PAUSED)
+        self.0.flags.get().intersects(Flags::RD_PAUSED)
     }
 
     #[inline]
-    /// Check if write buffer is ready
-    pub fn is_write_ready(&self) -> bool {
-        !self.0.flags.get().contains(Flags::WR_NOT_READY)
+    /// Check if write back-pressure is disabled
+    pub fn is_write_backpressure_disabled(&self) -> bool {
+        let mut flags = self.0.flags.get();
+        if flags.contains(Flags::WR_READY) {
+            flags.remove(Flags::WR_READY);
+            self.0.flags.set(flags);
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    /// Check if write back-pressure is enabled
+    pub fn is_write_backpressure_enabled(&self) -> bool {
+        let mut flags = self.0.flags.get();
+        if flags.contains(Flags::WR_READY) {
+            flags.remove(Flags::WR_READY);
+            self.0.flags.set(flags);
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    /// Enable write back-persurre
+    pub fn enable_write_backpressure(&self) {
+        let mut flags = self.0.flags.get();
+        flags.insert(Flags::WR_NOT_READY);
+        self.0.flags.set(flags);
     }
 
     #[inline]
@@ -272,6 +303,7 @@ impl State {
         let mut flags = self.0.flags.get();
         if flags.contains(Flags::WR_NOT_READY) {
             flags.remove(Flags::WR_NOT_READY);
+            flags.insert(Flags::WR_READY);
             self.0.flags.set(flags);
             self.0.dispatch_task.wake();
         }
@@ -299,15 +331,23 @@ impl State {
     }
 
     #[inline]
+    /// Check if write buff is full
+    pub fn is_write_buf_full(&self) -> bool {
+        self.0.write_buf.borrow().len() >= HW
+    }
+
+    #[inline]
     /// Wait until write task flushes data to socket
-    pub fn dsp_flush_write_data(&self, waker: &Waker) {
+    ///
+    /// Write task must be waken up separately.
+    pub fn dsp_enable_write_backpressure(&self, waker: &Waker) {
         let mut flags = self.0.flags.get();
         flags.insert(Flags::WR_NOT_READY);
         self.0.flags.set(flags);
-        self.0.write_task.wake();
         self.0.dispatch_task.register(waker);
     }
 
+    #[doc(hidden)]
     #[inline]
     /// Mark dispatcher as stopped
     pub fn dsp_mark_stopped(&self) {

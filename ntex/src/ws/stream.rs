@@ -176,6 +176,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use bytestring::ByteString;
     use futures::{SinkExt, StreamExt};
 
     use super::*;
@@ -189,10 +190,10 @@ mod tests {
         let mut buf = BytesMut::new();
         let codec = Codec::new().client_mode();
         codec
-            .encode(Message::Text("test1".to_string()), &mut buf)
+            .encode(Message::Text(ByteString::from_static("test1")), &mut buf)
             .unwrap();
         codec
-            .encode(Message::Text("test2".to_string()), &mut buf)
+            .encode(Message::Text(ByteString::from_static("test2")), &mut buf)
             .unwrap();
 
         tx.send(Ok::<_, ()>(buf.split().freeze())).unwrap();
@@ -214,7 +215,7 @@ mod tests {
         let mut encoder = StreamEncoder::new(tx);
 
         encoder
-            .send(Ok::<_, ()>(Message::Text("test".to_string())))
+            .send(Ok::<_, ()>(Message::Text(ByteString::from_static("test"))))
             .await
             .unwrap();
         encoder.flush().await.unwrap();

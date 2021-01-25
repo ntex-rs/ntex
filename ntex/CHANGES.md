@@ -1,5 +1,11 @@
 # Changes
 
+## [0.2.0-b.7] - 2021-01-25
+
+* Fix error handling for framed disaptcher
+
+* Refactor framed disaptcher write back-pressure support
+
 ## [0.2.0-b.6] - 2021-01-24
 
 * http: Pass io stream to upgrade handler

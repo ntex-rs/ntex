@@ -940,7 +940,7 @@ impl TestServer {
     {
         let url = self.url(path);
         let connect = self.client.ws(url).connect();
-        connect.await.map(|(_, framed)| framed)
+        connect.await.map(|ws| ws.into_inner().1)
     }
 
     /// Connect to a websocket server

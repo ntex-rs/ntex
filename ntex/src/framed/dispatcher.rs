@@ -1,12 +1,9 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{
-    cell::Cell, cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, time::Duration,
-    time::Instant,
-};
+use std::{cell::Cell, cell::RefCell, pin::Pin, rc::Rc, time::Duration, time::Instant};
 
 use either::Either;
-use futures::FutureExt;
+use futures::{ready, Future, FutureExt};
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use crate::framed::{DispatchItem, ReadTask, State, Timer, WriteTask};
@@ -29,7 +26,7 @@ pin_project_lite::pin_project! {
         service: S,
         inner: DispatcherInner<S, U>,
         #[pin]
-        response: Option<S::Future>,
+        fut: Option<S::Future>,
     }
 }
 
@@ -38,11 +35,12 @@ where
     S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
-    st: DispatcherState,
+    st: Cell<DispatcherState>,
     state: State,
     timer: Timer,
-    updated: Instant,
-    keepalive_timeout: u16,
+    ka_timeout: u16,
+    ka_updated: Cell<Instant>,
+    error: Cell<Option<S::Error>>,
     shared: Rc<DispatcherShared<S, U>>,
 }
 
@@ -59,14 +57,22 @@ where
 #[derive(Copy, Clone, Debug)]
 enum DispatcherState {
     Processing,
+    WrEnabled,
+    WrWaitReady,
     Stop,
     Shutdown,
 }
 
-pub(crate) enum DispatcherError<S, U> {
+enum DispatcherError<S, U> {
     KeepAlive,
     Encoder(U),
     Service(S),
+}
+
+enum PollService<U: Encoder + Decoder> {
+    Item(DispatchItem<U>),
+    ServiceError,
+    Ready,
 }
 
 impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
@@ -74,19 +80,6 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
         match err {
             Either::Left(err) => DispatcherError::Service(err),
             Either::Right(err) => DispatcherError::Encoder(err),
-        }
-    }
-}
-
-impl<E1, E2: fmt::Debug> DispatcherError<E1, E2> {
-    fn convert<U>(self) -> Option<DispatchItem<U>>
-    where
-        U: Encoder<Error = E2> + Decoder,
-    {
-        match self {
-            DispatcherError::KeepAlive => Some(DispatchItem::KeepAliveTimeout),
-            DispatcherError::Encoder(err) => Some(DispatchItem::EncoderError(err)),
-            DispatcherError::Service(_) => None,
         }
     }
 }
@@ -125,21 +118,22 @@ where
         timer: Timer,
     ) -> Self {
         let updated = timer.now();
-        let keepalive_timeout: u16 = 30;
+        let ka_timeout: u16 = 30;
 
         // register keepalive timer
-        let expire = updated + Duration::from_secs(keepalive_timeout as u64);
+        let expire = updated + Duration::from_secs(ka_timeout as u64);
         timer.register(expire, expire, &state);
 
         Dispatcher {
             service: service.into_service(),
-            response: None,
+            fut: None,
             inner: DispatcherInner {
                 state,
                 timer,
-                updated,
-                keepalive_timeout,
-                st: DispatcherState::Processing,
+                ka_timeout,
+                ka_updated: Cell::new(updated),
+                error: Cell::new(None),
+                st: Cell::new(DispatcherState::Processing),
                 shared: Rc::new(DispatcherShared {
                     codec,
                     error: Cell::new(None),
@@ -156,15 +150,15 @@ where
     /// By default keep-alive timeout is set to 30 seconds.
     pub fn keepalive_timeout(mut self, timeout: u16) -> Self {
         // register keepalive timer
-        let prev = self.inner.updated
-            + Duration::from_secs(self.inner.keepalive_timeout as u64);
+        let prev = self.inner.ka_updated.get() + self.inner.ka();
         if timeout == 0 {
             self.inner.timer.unregister(prev, &self.inner.state);
         } else {
-            let expire = self.inner.updated + Duration::from_secs(timeout as u64);
+            let expire =
+                self.inner.ka_updated.get() + Duration::from_secs(timeout as u64);
             self.inner.timer.register(expire, prev, &self.inner.state);
         }
-        self.inner.keepalive_timeout = timeout;
+        self.inner.ka_timeout = timeout;
 
         self
     }
@@ -191,71 +185,14 @@ where
     U: Encoder + Decoder,
     <U as Encoder>::Item: 'static,
 {
-    fn handle_result(
-        &self,
-        item: Result<S::Response, S::Error>,
-        state: &State,
-        wake: bool,
-    ) {
+    fn handle_result(&self, item: Result<S::Response, S::Error>, state: &State) {
         self.inflight.set(self.inflight.get() - 1);
-        if let Err(err) = state.write_result(item, &self.codec) {
-            self.error.set(Some(err.into()));
+        match state.write_result(item, &self.codec) {
+            Ok(true) => (),
+            Ok(false) => state.enable_write_backpressure(),
+            Err(err) => self.error.set(Some(err.into())),
         }
-
-        if wake {
-            state.dsp_wake_task()
-        }
-    }
-}
-
-impl<S, U> DispatcherInner<S, U>
-where
-    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
-    U: Decoder + Encoder,
-{
-    fn take_error(&self) -> Option<DispatchItem<U>> {
-        // check for errors
-        self.shared
-            .error
-            .take()
-            .and_then(|err| err.convert())
-            .or_else(|| self.state.take_io_error().map(DispatchItem::IoError))
-    }
-
-    /// check keepalive timeout
-    fn check_keepalive(&self) {
-        if self.state.is_keepalive() {
-            log::trace!("keepalive timeout");
-            if let Some(err) = self.shared.error.take() {
-                self.shared.error.set(Some(err));
-            } else {
-                self.shared.error.set(Some(DispatcherError::KeepAlive));
-            }
-            self.state.dsp_mark_stopped();
-        }
-    }
-
-    /// update keep-alive timer
-    fn update_keepalive(&mut self) {
-        if self.keepalive_timeout != 0 {
-            let updated = self.timer.now();
-            if updated != self.updated {
-                let ka = Duration::from_secs(self.keepalive_timeout as u64);
-                self.timer
-                    .register(updated + ka, self.updated + ka, &self.state);
-                self.updated = updated;
-            }
-        }
-    }
-
-    /// unregister keep-alive timer
-    fn unregister_keepalive(&self) {
-        if self.keepalive_timeout != 0 {
-            self.timer.unregister(
-                self.updated + Duration::from_secs(self.keepalive_timeout as u64),
-                &self.state,
-            );
-        }
+        state.dsp_wake_task();
     }
 }
 
@@ -269,177 +206,307 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
+        let slf = &this.inner;
+        let state = &slf.state;
 
         // handle service response future
-        if let Some(fut) = this.response.as_mut().as_pin_mut() {
+        if let Some(fut) = this.fut.as_mut().as_pin_mut() {
             match fut.poll(cx) {
                 Poll::Pending => (),
                 Poll::Ready(item) => {
-                    this.inner
-                        .shared
-                        .handle_result(item, &this.inner.state, false);
-                    this.response.set(None);
+                    this.fut.set(None);
+                    slf.shared.inflight.set(slf.shared.inflight.get() - 1);
+                    let _ = slf.handle_result(item, cx);
                 }
             }
         }
 
-        match this.inner.st {
-            DispatcherState::Processing => {
-                loop {
-                    match this.service.poll_ready(cx) {
-                        Poll::Ready(Ok(_)) => {
-                            let mut retry = false;
+        loop {
+            match slf.st.get() {
+                DispatcherState::WrEnabled => {
+                    let item = match ready!(slf.poll_service(&this.service, cx)) {
+                        PollService::Ready => {
+                            slf.st.set(DispatcherState::WrWaitReady);
+                            DispatchItem::WBackPressureEnabled
+                        }
+                        PollService::Item(item) => item,
+                        PollService::ServiceError => continue,
+                    };
 
-                            // service is ready, wake io read task
-                            this.inner.state.dsp_restart_read_task();
-
-                            // check keepalive timeout
-                            this.inner.check_keepalive();
-
-                            let item = if this.inner.state.is_dsp_stopped() {
-                                log::trace!("dispatcher is instructed to stop");
-
-                                // unregister keep-alive timer
-                                this.inner.unregister_keepalive();
-
-                                // check for errors
-                                retry = true;
-                                this.inner.st = DispatcherState::Stop;
-                                this.inner.take_error()
-                            } else {
-                                // decode incoming bytes stream
-                                if this.inner.state.is_read_ready() {
-                                    let item = this
-                                        .inner
-                                        .state
-                                        .decode_item(&this.inner.shared.codec);
-                                    match item {
-                                        Ok(Some(el)) => {
-                                            this.inner.update_keepalive();
-                                            Some(DispatchItem::Item(el))
-                                        }
-                                        Ok(None) => {
-                                            log::trace!("not enough data to decode next frame, register dispatch task");
-                                            this.inner
-                                                .state
-                                                .dsp_read_more_data(cx.waker());
-                                            return Poll::Pending;
-                                        }
-                                        Err(err) => {
-                                            retry = true;
-                                            this.inner.st = DispatcherState::Stop;
-                                            this.inner.unregister_keepalive();
-                                            Some(DispatchItem::DecoderError(err))
-                                        }
-                                    }
-                                } else {
-                                    this.inner.state.dsp_register_task(cx.waker());
-                                    return Poll::Pending;
-                                }
-                            };
-
-                            // call service
-                            if let Some(item) = item {
-                                // optimize first call
-                                if this.response.is_none() {
-                                    this.response.set(Some(this.service.call(item)));
-                                    let res = this
-                                        .response
-                                        .as_mut()
-                                        .as_pin_mut()
-                                        .unwrap()
-                                        .poll(cx);
-
-                                    if let Poll::Ready(res) = res {
-                                        if let Err(err) = this
-                                            .inner
-                                            .state
-                                            .write_result(res, &this.inner.shared.codec)
-                                        {
-                                            this.inner
-                                                .shared
-                                                .error
-                                                .set(Some(err.into()));
-                                        }
-                                        this.response.set(None);
-                                    } else {
-                                        this.inner
-                                            .shared
-                                            .inflight
-                                            .set(this.inner.shared.inflight.get() + 1);
-                                    }
-                                } else {
-                                    this.inner
-                                        .shared
-                                        .inflight
-                                        .set(this.inner.shared.inflight.get() + 1);
-                                    let st = this.inner.state.clone();
-                                    let shared = this.inner.shared.clone();
-                                    crate::rt::spawn(this.service.call(item).map(
-                                        move |item| {
-                                            shared.handle_result(item, &st, true);
-                                        },
-                                    ));
-                                }
+                    // call service
+                    if this.fut.is_none() {
+                        // optimize first service call
+                        this.fut.set(Some(this.service.call(item)));
+                        match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
+                            Poll::Ready(res) => {
+                                this.fut.set(None);
+                                ready!(slf.handle_result(res, cx));
                             }
-
-                            // run again
-                            if retry {
-                                return self.poll(cx);
+                            Poll::Pending => {
+                                slf.shared.inflight.set(slf.shared.inflight.get() + 1)
                             }
                         }
-                        Poll::Pending => {
-                            // pause io read task
-                            log::trace!("service is not ready, register dispatch task");
-                            this.inner.state.dsp_service_not_ready(cx.waker());
-                            return Poll::Pending;
-                        }
-                        Poll::Ready(Err(err)) => {
-                            // handle service readiness error
-                            log::trace!("service readiness check failed, stopping");
-                            this.inner.st = DispatcherState::Stop;
-                            this.inner.state.dsp_mark_stopped();
-                            this.inner
-                                .shared
-                                .error
-                                .set(Some(DispatcherError::Service(err)));
-                            this.inner.unregister_keepalive();
-                            return self.poll(cx);
-                        }
+                    } else {
+                        slf.spawn_service_call(this.service.call(item));
                     }
                 }
-            }
-            // drain service responses
-            DispatcherState::Stop => {
-                // service may relay on poll_ready for response results
-                let _ = this.service.poll_ready(cx);
+                DispatcherState::WrWaitReady => {
+                    let item = match ready!(slf.poll_service(&this.service, cx)) {
+                        PollService::Ready => {
+                            if state.is_write_backpressure_disabled() {
+                                slf.st.set(DispatcherState::Processing);
+                                DispatchItem::WBackPressureDisabled
+                            } else {
+                                return Poll::Pending;
+                            }
+                        }
+                        PollService::Item(item) => item,
+                        PollService::ServiceError => continue,
+                    };
 
-                if this.inner.shared.inflight.get() == 0 {
-                    this.inner.state.shutdown_io();
-                    this.inner.st = DispatcherState::Shutdown;
-                    self.poll(cx)
-                } else {
-                    this.inner.state.dsp_register_task(cx.waker());
-                    Poll::Pending
-                }
-            }
-            // shutdown service
-            DispatcherState::Shutdown => {
-                let err = this.inner.shared.error.take();
-
-                if this.service.poll_shutdown(cx, err.is_some()).is_ready() {
-                    log::trace!("service shutdown is completed, stop");
-
-                    Poll::Ready(if let Some(DispatcherError::Service(err)) = err {
-                        Err(err)
+                    // call service
+                    if this.fut.is_none() {
+                        // optimize first service call
+                        this.fut.set(Some(this.service.call(item)));
+                        match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
+                            Poll::Ready(res) => {
+                                this.fut.set(None);
+                                ready!(slf.handle_result(res, cx));
+                            }
+                            Poll::Pending => {
+                                slf.shared.inflight.set(slf.shared.inflight.get() + 1)
+                            }
+                        }
                     } else {
-                        Ok(())
-                    })
-                } else {
-                    this.inner.shared.error.set(err);
-                    Poll::Pending
+                        slf.spawn_service_call(this.service.call(item));
+                    }
+                }
+                DispatcherState::Processing => {
+                    let item = match ready!(slf.poll_service(&this.service, cx)) {
+                        PollService::Ready => {
+                            if state.is_write_backpressure_enabled() {
+                                // instruct write task to notify dispatcher when data is flushed
+                                state.dsp_enable_write_backpressure(cx.waker());
+                                slf.st.set(DispatcherState::WrWaitReady);
+                                DispatchItem::WBackPressureEnabled
+                            } else if state.is_read_ready() {
+                                // decode incoming bytes if buffer is ready
+                                match state.decode_item(&slf.shared.codec) {
+                                    Ok(Some(el)) => {
+                                        slf.update_keepalive();
+                                        DispatchItem::Item(el)
+                                    }
+                                    Ok(None) => {
+                                        log::trace!("not enough data to decode next frame, register dispatch task");
+                                        state.dsp_read_more_data(cx.waker());
+                                        return Poll::Pending;
+                                    }
+                                    Err(err) => {
+                                        slf.st.set(DispatcherState::Stop);
+                                        slf.unregister_keepalive();
+                                        DispatchItem::DecoderError(err)
+                                    }
+                                }
+                            } else {
+                                // no new events
+                                state.dsp_register_task(cx.waker());
+                                return Poll::Pending;
+                            }
+                        }
+                        PollService::Item(item) => item,
+                        PollService::ServiceError => continue,
+                    };
+
+                    // call service
+                    if this.fut.is_none() {
+                        // optimize first service call
+                        this.fut.set(Some(this.service.call(item)));
+                        match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
+                            Poll::Ready(res) => {
+                                this.fut.set(None);
+                                ready!(slf.handle_result(res, cx));
+                            }
+                            Poll::Pending => {
+                                slf.shared.inflight.set(slf.shared.inflight.get() + 1)
+                            }
+                        }
+                    } else {
+                        slf.spawn_service_call(this.service.call(item));
+                    }
+                }
+                // drain service responses
+                DispatcherState::Stop => {
+                    // service may relay on poll_ready for response results
+                    let _ = this.service.poll_ready(cx);
+
+                    if slf.shared.inflight.get() == 0 {
+                        slf.st.set(DispatcherState::Shutdown);
+                        state.shutdown_io();
+                    } else {
+                        state.dsp_register_task(cx.waker());
+                        return Poll::Pending;
+                    }
+                }
+                // shutdown service
+                DispatcherState::Shutdown => {
+                    let err = slf.error.take();
+
+                    return if this.service.poll_shutdown(cx, err.is_some()).is_ready() {
+                        log::trace!("service shutdown is completed, stop");
+
+                        Poll::Ready(if let Some(err) = err {
+                            Err(err)
+                        } else {
+                            Ok(())
+                        })
+                    } else {
+                        slf.error.set(err);
+                        Poll::Pending
+                    };
                 }
             }
+        }
+    }
+}
+
+impl<S, U> DispatcherInner<S, U>
+where
+    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    U: Decoder + Encoder + 'static,
+{
+    /// spawn service call
+    fn spawn_service_call(&self, fut: S::Future) {
+        self.shared.inflight.set(self.shared.inflight.get() + 1);
+
+        let st = self.state.clone();
+        let shared = self.shared.clone();
+        crate::rt::spawn(fut.map(move |item| shared.handle_result(item, &st)));
+    }
+
+    fn handle_result(
+        &self,
+        item: Result<Option<<U as Encoder>::Item>, S::Error>,
+        cx: &mut Context<'_>,
+    ) -> Poll<()> {
+        match self.state.write_result(item, &self.shared.codec) {
+            Ok(true) => (),
+            Ok(false) => {
+                // instruct write task to notify dispatcher when data is flushed
+                self.state.dsp_enable_write_backpressure(cx.waker());
+                self.st.set(DispatcherState::WrEnabled);
+                return Poll::Pending;
+            }
+            Err(Either::Left(err)) => {
+                self.error.set(Some(err));
+            }
+            Err(Either::Right(err)) => {
+                self.shared.error.set(Some(DispatcherError::Encoder(err)))
+            }
+        }
+        Poll::Ready(())
+    }
+
+    fn poll_service(&self, srv: &S, cx: &mut Context<'_>) -> Poll<PollService<U>> {
+        match srv.poll_ready(cx) {
+            Poll::Ready(Ok(_)) => {
+                // service is ready, wake io read task
+                self.state.dsp_restart_read_task();
+
+                // check keepalive timeout
+                self.check_keepalive();
+
+                // check for errors
+                Poll::Ready(if let Some(err) = self.shared.error.take() {
+                    log::trace!("error occured, stopping dispatcher");
+                    self.unregister_keepalive();
+                    self.st.set(DispatcherState::Stop);
+
+                    match err {
+                        DispatcherError::KeepAlive => {
+                            PollService::Item(DispatchItem::KeepAliveTimeout)
+                        }
+                        DispatcherError::Encoder(err) => {
+                            PollService::Item(DispatchItem::EncoderError(err))
+                        }
+                        DispatcherError::Service(err) => {
+                            self.error.set(Some(err));
+                            PollService::ServiceError
+                        }
+                    }
+                } else if self.state.is_dsp_stopped() {
+                    log::trace!("dispatcher is instructed to stop");
+
+                    self.unregister_keepalive();
+                    self.st.set(DispatcherState::Stop);
+
+                    // get io error
+                    if let Some(err) = self.state.take_io_error() {
+                        PollService::Item(DispatchItem::IoError(err))
+                    } else {
+                        PollService::ServiceError
+                    }
+                } else {
+                    PollService::Ready
+                })
+            }
+            // pause io read task
+            Poll::Pending => {
+                log::trace!("service is not ready, register dispatch task");
+                self.state.dsp_service_not_ready(cx.waker());
+                Poll::Pending
+            }
+            // handle service readiness error
+            Poll::Ready(Err(err)) => {
+                log::trace!("service readiness check failed, stopping");
+                self.st.set(DispatcherState::Stop);
+                self.error.set(Some(err));
+                self.unregister_keepalive();
+                Poll::Ready(PollService::ServiceError)
+            }
+        }
+    }
+
+    fn ka(&self) -> Duration {
+        Duration::from_secs(self.ka_timeout as u64)
+    }
+
+    fn ka_enabled(&self) -> bool {
+        self.ka_timeout > 0
+    }
+
+    /// check keepalive timeout
+    fn check_keepalive(&self) {
+        if self.state.is_keepalive() {
+            log::trace!("keepalive timeout");
+            if let Some(err) = self.shared.error.take() {
+                self.shared.error.set(Some(err));
+            } else {
+                self.shared.error.set(Some(DispatcherError::KeepAlive));
+            }
+        }
+    }
+
+    /// update keep-alive timer
+    fn update_keepalive(&self) {
+        if self.ka_enabled() {
+            let updated = self.timer.now();
+            if updated != self.ka_updated.get() {
+                let ka = self.ka();
+                self.timer.register(
+                    updated + ka,
+                    self.ka_updated.get() + ka,
+                    &self.state,
+                );
+                self.ka_updated.set(updated);
+            }
+        }
+    }
+
+    /// unregister keep-alive timer
+    fn unregister_keepalive(&self) {
+        if self.ka_enabled() {
+            self.timer
+                .unregister(self.ka_updated.get() + self.ka(), &self.state);
         }
     }
 }
@@ -473,8 +540,8 @@ mod tests {
             T: AsyncRead + AsyncWrite + Unpin + 'static,
         {
             let timer = Timer::default();
-            let keepalive_timeout = 30;
-            let updated = timer.now();
+            let ka_timeout = 30;
+            let ka_updated = timer.now();
             let state = State::new();
             let io = Rc::new(RefCell::new(io));
             let shared = Rc::new(DispatcherShared {
@@ -489,14 +556,15 @@ mod tests {
             (
                 Dispatcher {
                     service: service.into_service(),
-                    response: None,
+                    fut: None,
                     inner: DispatcherInner {
                         shared,
                         timer,
-                        updated,
-                        keepalive_timeout,
+                        ka_timeout,
+                        ka_updated: Cell::new(ka_updated),
                         state: state.clone(),
-                        st: DispatcherState::Processing,
+                        error: Cell::new(None),
+                        st: Cell::new(DispatcherState::Processing),
                     },
                 },
                 state,
