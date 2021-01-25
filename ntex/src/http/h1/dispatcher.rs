@@ -937,9 +937,6 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_write_backpressure() {
-        std::env::set_var("RUST_LOG", "ntex_codec=info,ntex=trace");
-        env_logger::init();
-
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
 
