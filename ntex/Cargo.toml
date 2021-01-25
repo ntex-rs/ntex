@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.2.0-b.7"
+version = "0.2.0-b.8"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -72,7 +72,7 @@ socket2 = "0.3.12"
 url = "2.1"
 time = { version = "0.2.11", default-features = false, features = ["std"] }
 coo-kie = { version = "0.14.2", package = "cookie", optional = true }
-tokio = "=0.2.6"
+tokio = "0.2.6"
 
 # resolver
 trust-dns-proto = { version = "0.19.6", default-features = false }
