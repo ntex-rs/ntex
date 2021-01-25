@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use std::{cell::Cell, cell::RefCell, pin::Pin, rc::Rc, time::Duration, time::Instant};
 
 use either::Either;
-use futures::{Future, FutureExt};
+use futures::{ready, Future, FutureExt};
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use crate::framed::{DispatchItem, ReadTask, State, Timer, WriteTask};
@@ -57,8 +57,8 @@ where
 #[derive(Copy, Clone, Debug)]
 enum DispatcherState {
     Processing,
-    //WrEnable,
-    //WrEnabled,
+    WrEnabled,
+    WrWaitReady,
     Stop,
     Shutdown,
 }
@@ -72,7 +72,6 @@ enum DispatcherError<S, U> {
 enum PollService<U: Encoder + Decoder> {
     Item(DispatchItem<U>),
     ServiceError,
-    Pending,
     Ready,
 }
 
@@ -186,20 +185,14 @@ where
     U: Encoder + Decoder,
     <U as Encoder>::Item: 'static,
 {
-    fn handle_result(
-        &self,
-        item: Result<S::Response, S::Error>,
-        state: &State,
-        wake: bool,
-    ) {
+    fn handle_result(&self, item: Result<S::Response, S::Error>, state: &State) {
         self.inflight.set(self.inflight.get() - 1);
-        if let Err(err) = state.write_result(item, &self.codec) {
-            self.error.set(Some(err.into()));
+        match state.write_result(item, &self.codec) {
+            Ok(true) => (),
+            Ok(false) => state.enable_write_backpressure(),
+            Err(err) => self.error.set(Some(err.into())),
         }
-
-        if wake {
-            state.dsp_wake_task()
-        }
+        state.dsp_wake_task();
     }
 }
 
@@ -221,18 +214,82 @@ where
             match fut.poll(cx) {
                 Poll::Pending => (),
                 Poll::Ready(item) => {
-                    slf.shared.handle_result(item, state, false);
                     this.fut.set(None);
+                    slf.shared.inflight.set(slf.shared.inflight.get() - 1);
+                    let _ = slf.handle_result(item, cx);
                 }
             }
         }
 
         loop {
             match slf.st.get() {
-                DispatcherState::Processing => {
-                    let item = match slf.poll_service(&this.service, cx) {
+                DispatcherState::WrEnabled => {
+                    let item = match ready!(slf.poll_service(&this.service, cx)) {
                         PollService::Ready => {
-                            if state.is_read_ready() {
+                            slf.st.set(DispatcherState::WrWaitReady);
+                            DispatchItem::WBackPressureEnabled
+                        }
+                        PollService::Item(item) => item,
+                        PollService::ServiceError => continue,
+                    };
+
+                    // call service
+                    if this.fut.is_none() {
+                        // optimize first service call
+                        this.fut.set(Some(this.service.call(item)));
+                        match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
+                            Poll::Ready(res) => {
+                                this.fut.set(None);
+                                ready!(slf.handle_result(res, cx));
+                            }
+                            Poll::Pending => {
+                                slf.shared.inflight.set(slf.shared.inflight.get() + 1)
+                            }
+                        }
+                    } else {
+                        slf.spawn_service_call(this.service.call(item));
+                    }
+                }
+                DispatcherState::WrWaitReady => {
+                    let item = match ready!(slf.poll_service(&this.service, cx)) {
+                        PollService::Ready => {
+                            if state.is_write_backpressure_disabled() {
+                                slf.st.set(DispatcherState::Processing);
+                                DispatchItem::WBackPressureDisabled
+                            } else {
+                                return Poll::Pending;
+                            }
+                        }
+                        PollService::Item(item) => item,
+                        PollService::ServiceError => continue,
+                    };
+
+                    // call service
+                    if this.fut.is_none() {
+                        // optimize first service call
+                        this.fut.set(Some(this.service.call(item)));
+                        match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
+                            Poll::Ready(res) => {
+                                this.fut.set(None);
+                                ready!(slf.handle_result(res, cx));
+                            }
+                            Poll::Pending => {
+                                slf.shared.inflight.set(slf.shared.inflight.get() + 1)
+                            }
+                        }
+                    } else {
+                        slf.spawn_service_call(this.service.call(item));
+                    }
+                }
+                DispatcherState::Processing => {
+                    let item = match ready!(slf.poll_service(&this.service, cx)) {
+                        PollService::Ready => {
+                            if state.is_write_backpressure_enabled() {
+                                // instruct write task to notify dispatcher when data is flushed
+                                state.dsp_enable_write_backpressure(cx.waker());
+                                slf.st.set(DispatcherState::WrWaitReady);
+                                DispatchItem::WBackPressureEnabled
+                            } else if state.is_read_ready() {
                                 // decode incoming bytes if buffer is ready
                                 match state.decode_item(&slf.shared.codec) {
                                     Ok(Some(el)) => {
@@ -258,7 +315,6 @@ where
                         }
                         PollService::Item(item) => item,
                         PollService::ServiceError => continue,
-                        PollService::Pending => return Poll::Pending,
                     };
 
                     // call service
@@ -267,25 +323,15 @@ where
                         this.fut.set(Some(this.service.call(item)));
                         match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
                             Poll::Ready(res) => {
-                                let _ =
-                                    state.write_result(res, &slf.shared.codec).map_err(
-                                        |err| slf.shared.error.set(Some(err.into())),
-                                    );
                                 this.fut.set(None);
+                                ready!(slf.handle_result(res, cx));
                             }
                             Poll::Pending => {
                                 slf.shared.inflight.set(slf.shared.inflight.get() + 1)
                             }
                         }
                     } else {
-                        // spawn service call
-                        slf.shared.inflight.set(slf.shared.inflight.get() + 1);
-
-                        let st = state.clone();
-                        let shared = slf.shared.clone();
-                        crate::rt::spawn(this.service.call(item).map(move |item| {
-                            shared.handle_result(item, &st, true);
-                        }));
+                        slf.spawn_service_call(this.service.call(item));
                     }
                 }
                 // drain service responses
@@ -325,10 +371,42 @@ where
 
 impl<S, U> DispatcherInner<S, U>
 where
-    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
-    U: Decoder + Encoder,
+    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    U: Decoder + Encoder + 'static,
 {
-    fn poll_service(&self, srv: &S, cx: &mut Context<'_>) -> PollService<U> {
+    /// spawn service call
+    fn spawn_service_call(&self, fut: S::Future) {
+        self.shared.inflight.set(self.shared.inflight.get() + 1);
+
+        let st = self.state.clone();
+        let shared = self.shared.clone();
+        crate::rt::spawn(fut.map(move |item| shared.handle_result(item, &st)));
+    }
+
+    fn handle_result(
+        &self,
+        item: Result<Option<<U as Encoder>::Item>, S::Error>,
+        cx: &mut Context<'_>,
+    ) -> Poll<()> {
+        match self.state.write_result(item, &self.shared.codec) {
+            Ok(true) => (),
+            Ok(false) => {
+                // instruct write task to notify dispatcher when data is flushed
+                self.state.dsp_enable_write_backpressure(cx.waker());
+                self.st.set(DispatcherState::WrEnabled);
+                return Poll::Pending;
+            }
+            Err(Either::Left(err)) => {
+                self.error.set(Some(err));
+            }
+            Err(Either::Right(err)) => {
+                self.shared.error.set(Some(DispatcherError::Encoder(err)))
+            }
+        }
+        Poll::Ready(())
+    }
+
+    fn poll_service(&self, srv: &S, cx: &mut Context<'_>) -> Poll<PollService<U>> {
         match srv.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
                 // service is ready, wake io read task
@@ -338,7 +416,7 @@ where
                 self.check_keepalive();
 
                 // check for errors
-                if let Some(err) = self.shared.error.take() {
+                Poll::Ready(if let Some(err) = self.shared.error.take() {
                     log::trace!("error occured, stopping dispatcher");
                     self.unregister_keepalive();
                     self.st.set(DispatcherState::Stop);
@@ -369,13 +447,13 @@ where
                     }
                 } else {
                     PollService::Ready
-                }
+                })
             }
             // pause io read task
             Poll::Pending => {
                 log::trace!("service is not ready, register dispatch task");
                 self.state.dsp_service_not_ready(cx.waker());
-                PollService::Pending
+                Poll::Pending
             }
             // handle service readiness error
             Poll::Ready(Err(err)) => {
@@ -383,7 +461,7 @@ where
                 self.st.set(DispatcherState::Stop);
                 self.error.set(Some(err));
                 self.unregister_keepalive();
-                PollService::ServiceError
+                Poll::Ready(PollService::ServiceError)
             }
         }
     }
@@ -463,7 +541,7 @@ mod tests {
         {
             let timer = Timer::default();
             let ka_timeout = 30;
-            let updated = timer.now();
+            let ka_updated = timer.now();
             let state = State::new();
             let io = Rc::new(RefCell::new(io));
             let shared = Rc::new(DispatcherShared {
@@ -478,14 +556,15 @@ mod tests {
             (
                 Dispatcher {
                     service: service.into_service(),
-                    response: None,
+                    fut: None,
                     inner: DispatcherInner {
                         shared,
                         timer,
-                        updated,
                         ka_timeout,
+                        ka_updated: Cell::new(ka_updated),
                         state: state.clone(),
-                        st: DispatcherState::Processing,
+                        error: Cell::new(None),
+                        st: Cell::new(DispatcherState::Processing),
                     },
                 },
                 state,

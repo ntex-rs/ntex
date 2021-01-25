@@ -7,7 +7,7 @@ use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::State;
 use crate::rt::time::{delay_for, Delay};
 
-const HW: usize = 8 * 1024;
+const HW: usize = 16 * 1024;
 
 #[derive(Debug)]
 enum IoWriteState {

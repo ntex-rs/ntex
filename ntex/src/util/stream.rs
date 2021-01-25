@@ -156,11 +156,9 @@ where
 #[cfg(test)]
 mod tests {
     use bytes::BytesMut;
-    use futures::future::ok;
-    use futures::StreamExt;
-    use std::cell::Cell;
-    use std::rc::Rc;
-    use std::time::Duration;
+    use bytestring::ByteString;
+    use futures::{future::ok, StreamExt};
+    use std::{cell::Cell, rc::Rc, time::Duration};
 
     use super::*;
     use crate::channel::mpsc;
@@ -183,7 +181,7 @@ mod tests {
             encoder,
             crate::fn_service(move |_| {
                 counter2.set(counter2.get() + 1);
-                ok(Some(ws::Message::Text("test".to_string())))
+                ok(Some(ws::Message::Text(ByteString::from_static("test"))))
             }),
         );
         crate::rt::spawn(disp.map(|_| ()));
@@ -191,7 +189,7 @@ mod tests {
         let mut buf = BytesMut::new();
         let codec = ws::Codec::new().client_mode();
         codec
-            .encode(ws::Message::Text("test".to_string()), &mut buf)
+            .encode(ws::Message::Text(ByteString::from_static("test")), &mut buf)
             .unwrap();
         tx.send(Ok::<_, ()>(buf.split().freeze())).unwrap();
 

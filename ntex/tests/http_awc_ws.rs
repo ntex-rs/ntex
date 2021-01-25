@@ -1,8 +1,8 @@
 use std::io;
 
 use bytes::Bytes;
-use futures::future::ok;
-use futures::{SinkExt, StreamExt};
+use bytestring::ByteString;
+use futures::{future::ok, SinkExt, StreamExt};
 
 use ntex::framed::{DispatchItem, Dispatcher, State};
 use ntex::http::test::server as test_server;
@@ -17,9 +17,9 @@ async fn ws_service(
     let msg = match msg {
         DispatchItem::Item(msg) => match msg {
             ws::Frame::Ping(msg) => ws::Message::Pong(msg),
-            ws::Frame::Text(text) => {
-                ws::Message::Text(String::from_utf8(Vec::from(text.as_ref())).unwrap())
-            }
+            ws::Frame::Text(text) => ws::Message::Text(
+                String::from_utf8(Vec::from(text.as_ref())).unwrap().into(),
+            ),
             ws::Frame::Binary(bin) => ws::Message::Binary(bin),
             ws::Frame::Close(reason) => ws::Message::Close(reason),
             _ => ws::Message::Close(None),
@@ -65,7 +65,7 @@ async fn test_simple() {
     // client service
     let mut framed = srv.ws().await.unwrap();
     framed
-        .send(ws::Message::Text("text".to_string()))
+        .send(ws::Message::Text(ByteString::from_static("text")))
         .await
         .unwrap();
     let item = framed.next().await.unwrap().unwrap();

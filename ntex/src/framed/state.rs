@@ -10,7 +10,7 @@ use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts}
 use crate::framed::write::flush;
 use crate::task::LocalWaker;
 
-const HW: usize = 8 * 1024;
+const HW: usize = 16 * 1024;
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -172,7 +172,7 @@ impl State {
 
     #[inline]
     /// Check if write back-pressure is disabled
-    pub fn is_write_bp_disabled(&self) -> bool {
+    pub fn is_write_backpressure_disabled(&self) -> bool {
         let mut flags = self.0.flags.get();
         if flags.contains(Flags::WR_READY) {
             flags.remove(Flags::WR_READY);
@@ -181,6 +181,27 @@ impl State {
         } else {
             false
         }
+    }
+
+    #[inline]
+    /// Check if write back-pressure is enabled
+    pub fn is_write_backpressure_enabled(&self) -> bool {
+        let mut flags = self.0.flags.get();
+        if flags.contains(Flags::WR_READY) {
+            flags.remove(Flags::WR_READY);
+            self.0.flags.set(flags);
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    /// Enable write back-persurre
+    pub fn enable_write_backpressure(&self) {
+        let mut flags = self.0.flags.get();
+        flags.insert(Flags::WR_NOT_READY);
+        self.0.flags.set(flags);
     }
 
     #[inline]
@@ -310,10 +331,16 @@ impl State {
     }
 
     #[inline]
+    /// Check if write buff is full
+    pub fn is_write_buf_full(&self) -> bool {
+        self.0.write_buf.borrow().len() >= HW
+    }
+
+    #[inline]
     /// Wait until write task flushes data to socket
     ///
     /// Write task must be waken up separately.
-    pub fn dsp_flush_write_data(&self, waker: &Waker) {
+    pub fn dsp_enable_write_backpressure(&self, waker: &Waker) {
         let mut flags = self.0.flags.get();
         flags.insert(Flags::WR_NOT_READY);
         self.0.flags.set(flags);

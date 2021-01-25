@@ -1,20 +1,17 @@
 //! Websockets client
-use std::convert::TryFrom;
-use std::net::SocketAddr;
-use std::rc::Rc;
-use std::{fmt, str};
+use std::{convert::TryFrom, fmt, net::SocketAddr, rc::Rc, str};
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
-use futures::Stream;
+use futures::future::{err, ok, Either};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
+use crate::framed::{DispatchItem, Dispatcher, State};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue, AUTHORIZATION};
 use crate::http::{ConnectionType, Payload, RequestHead, StatusCode, Uri};
 use crate::rt::time::timeout;
-use crate::service::{IntoService, Service};
-use crate::util::framed::{Dispatcher, DispatcherError};
+use crate::service::{apply_fn, IntoService, Service};
 use crate::ws;
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
@@ -221,9 +218,7 @@ impl WsRequest {
     }
 
     /// Complete request construction and connect to a websockets server.
-    pub async fn connect(
-        mut self,
-    ) -> Result<(ClientResponse, Framed<BoxedSocket, ws::Codec>), WsClientError> {
+    pub async fn connect(mut self) -> Result<WsConnection, WsClientError> {
         if let Some(e) = self.err.take() {
             return Err(WsClientError::from(e));
         }
@@ -378,8 +373,8 @@ impl WsRequest {
             return Err(WsClientError::MissingWebSocketAcceptHeader);
         };
 
-        // response and ws framed
-        Ok((
+        // response and ws io
+        Ok(WsConnection::new(
             ClientResponse::new(head, Payload::None),
             framed.map_codec(|_| {
                 if server_mode {
@@ -407,21 +402,70 @@ impl fmt::Debug for WsRequest {
     }
 }
 
-/// Start client websockets service.
-pub async fn start<Io, T, F, Rx>(
-    framed: Framed<Io, ws::Codec>,
-    rx: Rx,
-    service: F,
-) -> Result<(), DispatcherError<T::Error, ws::Codec>>
+pub struct WsConnection<Io = BoxedSocket> {
+    io: Io,
+    state: State,
+    codec: ws::Codec,
+    res: ClientResponse,
+}
+
+impl<Io> WsConnection<Io>
 where
     Io: AsyncRead + AsyncWrite + Unpin + 'static,
-    T: Service<Request = ws::Frame, Response = Option<ws::Message>>,
-    T::Error: 'static,
-    T::Future: 'static,
-    F: IntoService<T>,
-    Rx: Stream<Item = ws::Message> + Unpin + 'static,
 {
-    Dispatcher::with(framed, Some(rx), service.into_service()).await
+    fn new(res: ClientResponse, framed: Framed<Io, ws::Codec>) -> Self {
+        let (io, codec, state) = State::from_framed(framed);
+
+        Self {
+            io,
+            codec,
+            state,
+            res,
+        }
+    }
+
+    /// Get ws sink
+    pub fn sink(&self) -> ws::WsSink {
+        ws::WsSink::new(self.state.clone(), self.codec.clone())
+    }
+
+    /// Get reference to response
+    pub fn response(&self) -> &ClientResponse {
+        &self.res
+    }
+
+    /// Start client websockets service.
+    pub async fn start<T, F, Rx>(self, service: F) -> Result<(), ws::WsError<T::Error>>
+    where
+        T: Service<Request = ws::Frame, Response = Option<ws::Message>> + 'static,
+        F: IntoService<T>,
+    {
+        let service = apply_fn(
+            service.into_service().map_err(ws::WsError::Service),
+            |req, srv| match req {
+                DispatchItem::Item(item) => Either::Left(srv.call(item)),
+                DispatchItem::WBackPressureEnabled
+                | DispatchItem::WBackPressureDisabled => Either::Right(ok(None)),
+                DispatchItem::KeepAliveTimeout => {
+                    Either::Right(err(ws::WsError::KeepAlive))
+                }
+                DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
+                    Either::Right(err(ws::WsError::Protocol(e)))
+                }
+                DispatchItem::IoError(e) => Either::Right(err(ws::WsError::Io(e))),
+            },
+        );
+
+        Dispatcher::new(self.io, self.codec, self.state, service, Default::default())
+            .await
+    }
+
+    /// Consumes the `WsConnection`, returning it'as underlying I/O framed object
+    /// and response.
+    pub fn into_inner(self) -> (ClientResponse, Framed<Io, ws::Codec>) {
+        let framed = self.state.into_framed(self.io, self.codec);
+        (self.res, framed)
+    }
 }
 
 #[cfg(test)]

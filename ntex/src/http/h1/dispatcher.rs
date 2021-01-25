@@ -402,7 +402,9 @@ where
                                     *this.st = st;
                                 }
                                 WritePayloadStatus::Pause => {
-                                    this.inner.state.dsp_flush_write_data(cx.waker());
+                                    this.inner
+                                        .state
+                                        .dsp_enable_write_backpressure(cx.waker());
                                     return Poll::Pending;
                                 }
                                 WritePayloadStatus::Continue => (),

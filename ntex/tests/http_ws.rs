@@ -3,6 +3,7 @@ use std::task::{Context, Poll};
 use std::{cell::Cell, io, marker::PhantomData, pin::Pin};
 
 use bytes::Bytes;
+use bytestring::ByteString;
 use futures::{future, Future, SinkExt, StreamExt};
 
 use ntex::codec::{AsyncRead, AsyncWrite};
@@ -71,7 +72,7 @@ async fn service(
         DispatchItem::Item(msg) => match msg {
             ws::Frame::Ping(msg) => ws::Message::Pong(msg),
             ws::Frame::Text(text) => {
-                ws::Message::Text(String::from_utf8_lossy(&text).to_string())
+                ws::Message::Text(String::from_utf8_lossy(&text).as_ref().into())
             }
             ws::Frame::Binary(bin) => ws::Message::Binary(bin),
             ws::Frame::Continuation(item) => ws::Message::Continuation(item),
@@ -102,7 +103,7 @@ async fn test_simple() {
     // client service
     let mut framed = srv.ws().await.unwrap();
     framed
-        .send(ws::Message::Text("text".to_string()))
+        .send(ws::Message::Text(ByteString::from_static("text")))
         .await
         .unwrap();
     let (item, mut framed) = framed.into_future().await;

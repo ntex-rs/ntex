@@ -65,25 +65,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-
     use super::*;
     use crate::codec::BytesCodec;
 
     #[test]
     fn test_fmt() {
-        #[derive(Debug, Display)]
-        type T = DispatchError<BytesCodec>;
+        type T = DispatchItem<BytesCodec>;
 
-        let err = T::Encoder(io::Error::new(io::ErrorKind::Other, "err"));
-        assert!(format!("{:?}", err).contains("DispatcherError::Encoder"));
-        assert!(format!("{}", err).contains("Custom"));
-        let err = T::Decoder(io::Error::new(io::ErrorKind::Other, "err"));
-        assert!(format!("{}", err).contains("Custom"));
-        assert!(format!("{:?}", err).contains("DispatcherError::Decoder"));
+        let err = T::EncoderError(io::Error::new(io::ErrorKind::Other, "err"));
+        assert!(format!("{:?}", err).contains("DispatchItem::Encoder"));
+        let err = T::DecoderError(io::Error::new(io::ErrorKind::Other, "err"));
+        assert!(format!("{:?}", err).contains("DispatchItem::Decoder"));
         let err = T::IoError(io::Error::new(io::ErrorKind::Other, "err"));
-        assert!(format!("{}", err).contains("Custom"));
-        assert!(format!("{:?}", err).contains("DispatcherError::IoError"));
+        assert!(format!("{:?}", err).contains("DispatchItem::IoError"));
 
         assert!(format!("{:?}", T::WBackPressureEnabled)
             .contains("DispatchItem::WBackPressureEnabled"));

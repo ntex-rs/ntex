@@ -11,12 +11,23 @@ mod codec;
 mod frame;
 mod mask;
 mod proto;
+mod sink;
 mod stream;
 
 pub use self::codec::{Codec, Frame, Item, Message};
 pub use self::frame::Parser;
 pub use self::proto::{hash_key, CloseCode, CloseReason, OpCode};
+pub use self::sink::WsSink;
 pub use self::stream::{StreamDecoder, StreamEncoder};
+
+/// Websocket service errors
+#[derive(Debug, Display)]
+pub enum WsError<E> {
+    Service(E),
+    KeepAlive,
+    Protocol(ProtocolError),
+    Io(io::Error),
+}
 
 /// Websocket protocol errors
 #[derive(Debug, Display, From)]
@@ -48,7 +59,4 @@ pub enum ProtocolError {
     /// Unknown continuation fragment
     #[display(fmt = "Unknown continuation fragment.")]
     ContinuationFragment(OpCode),
-    /// Io error
-    #[display(fmt = "io error: {}", _0)]
-    Io(io::Error),
 }

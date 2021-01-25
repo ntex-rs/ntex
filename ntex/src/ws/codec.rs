@@ -1,4 +1,5 @@
 use bytes::{Bytes, BytesMut};
+use bytestring::ByteString;
 use std::cell::Cell;
 
 use crate::codec::{Decoder, Encoder};
@@ -11,7 +12,7 @@ use super::ProtocolError;
 #[derive(Debug, PartialEq)]
 pub enum Message {
     /// Text message
-    Text(String),
+    Text(ByteString),
     /// Binary message
     Binary(Bytes),
     /// Continuation
@@ -60,7 +61,7 @@ pub struct Codec {
 bitflags::bitflags! {
     struct Flags: u8 {
         const SERVER         = 0b0000_0001;
-        const CONTINUATION   = 0b0000_0010;
+        const R_CONTINUATION = 0b0000_0010;
         const W_CONTINUATION = 0b0000_0100;
     }
 }
@@ -222,7 +223,7 @@ impl Decoder for Codec {
                 if !finished {
                     return match opcode {
                         OpCode::Continue => {
-                            if self.flags.get().contains(Flags::CONTINUATION) {
+                            if self.flags.get().contains(Flags::R_CONTINUATION) {
                                 Ok(Some(Frame::Continuation(Item::Continue(
                                     payload
                                         .map(|pl| pl.freeze())
@@ -233,8 +234,8 @@ impl Decoder for Codec {
                             }
                         }
                         OpCode::Binary => {
-                            if !self.flags.get().contains(Flags::CONTINUATION) {
-                                self.insert_flags(Flags::CONTINUATION);
+                            if !self.flags.get().contains(Flags::R_CONTINUATION) {
+                                self.insert_flags(Flags::R_CONTINUATION);
                                 Ok(Some(Frame::Continuation(Item::FirstBinary(
                                     payload
                                         .map(|pl| pl.freeze())
@@ -245,8 +246,8 @@ impl Decoder for Codec {
                             }
                         }
                         OpCode::Text => {
-                            if !self.flags.get().contains(Flags::CONTINUATION) {
-                                self.insert_flags(Flags::CONTINUATION);
+                            if !self.flags.get().contains(Flags::R_CONTINUATION) {
+                                self.insert_flags(Flags::R_CONTINUATION);
                                 Ok(Some(Frame::Continuation(Item::FirstText(
                                     payload
                                         .map(|pl| pl.freeze())
@@ -265,8 +266,8 @@ impl Decoder for Codec {
 
                 match opcode {
                     OpCode::Continue => {
-                        if self.flags.get().contains(Flags::CONTINUATION) {
-                            self.remove_flags(Flags::CONTINUATION);
+                        if self.flags.get().contains(Flags::R_CONTINUATION) {
+                            self.remove_flags(Flags::R_CONTINUATION);
                             Ok(Some(Frame::Continuation(Item::Last(
                                 payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
                             ))))
