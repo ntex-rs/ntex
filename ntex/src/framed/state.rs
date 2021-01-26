@@ -160,6 +160,12 @@ impl State {
     }
 
     #[inline]
+    /// Check if write buff is full
+    pub fn is_write_buf_full(&self) -> bool {
+        self.0.write_buf.borrow().len() >= HW
+    }
+
+    #[inline]
     /// Check if read buffer has new data
     pub fn is_read_ready(&self) -> bool {
         self.0.flags.get().contains(Flags::RD_READY)
@@ -321,6 +327,12 @@ impl State {
     }
 
     #[inline]
+    /// Wake write io task
+    pub fn dsp_restart_write_task(&self) {
+        self.0.write_task.wake();
+    }
+
+    #[inline]
     /// Wake read io task if it is not ready
     pub fn dsp_read_more_data(&self, waker: &Waker) {
         let mut flags = self.0.flags.get();
@@ -328,12 +340,6 @@ impl State {
         self.0.flags.set(flags);
         self.0.read_task.wake();
         self.0.dispatch_task.register(waker);
-    }
-
-    #[inline]
-    /// Check if write buff is full
-    pub fn is_write_buf_full(&self) -> bool {
-        self.0.write_buf.borrow().len() >= HW
     }
 
     #[inline]
