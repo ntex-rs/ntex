@@ -129,6 +129,18 @@ impl State {
         self.0.disconnect_timeout.get()
     }
 
+    fn insert_flags(&self, f: Flags) {
+        let mut flags = self.0.flags.get();
+        flags.insert(f);
+        self.0.flags.set(flags);
+    }
+
+    fn remove_flags(&self, f: Flags) {
+        let mut flags = self.0.flags.get();
+        flags.remove(f);
+        self.0.flags.set(flags);
+    }
+
     #[inline]
     /// Get current state flags
     pub fn flags(&self) -> Flags {
@@ -218,18 +230,14 @@ impl State {
     /// Enable write back-persurre
     pub fn enable_write_backpressure(&self) {
         log::trace!("enable write back-pressure");
-        let mut flags = self.0.flags.get();
-        flags.insert(Flags::WR_NOT_READY);
-        self.0.flags.set(flags);
+        self.insert_flags(Flags::WR_NOT_READY)
     }
 
     #[inline]
     /// Enable read back-persurre
     pub(crate) fn enable_read_backpressure(&self) {
         log::trace!("enable read back-pressure");
-        let mut flags = self.0.flags.get();
-        flags.insert(Flags::RD_BUF_FULL);
-        self.0.flags.set(flags);
+        self.insert_flags(Flags::RD_BUF_FULL)
     }
 
     #[inline]
@@ -241,9 +249,7 @@ impl State {
     #[inline]
     /// Reset keep-alive error
     pub fn reset_keepalive(&self) {
-        let mut flags = self.0.flags.get();
-        flags.remove(Flags::DSP_KEEPALIVE);
-        self.0.flags.set(flags);
+        self.remove_flags(Flags::DSP_KEEPALIVE)
     }
 
     #[inline]
@@ -264,9 +270,7 @@ impl State {
     #[inline]
     /// Initiate close connection procedure
     pub fn close(&self) {
-        let mut flags = self.0.flags.get();
-        flags.insert(Flags::DSP_STOP);
-        self.0.flags.set(flags);
+        self.insert_flags(Flags::DSP_STOP);
         self.0.dispatch_task.wake();
     }
 
@@ -274,9 +278,7 @@ impl State {
     /// Gracefully shutdown all tasks
     pub fn shutdown(&self) {
         log::trace!("shutdown framed state");
-        let mut flags = self.0.flags.get();
-        flags.insert(Flags::DSP_STOP | Flags::IO_SHUTDOWN);
-        self.0.flags.set(flags);
+        self.insert_flags(Flags::DSP_STOP | Flags::IO_SHUTDOWN);
         self.0.read_task.wake();
         self.0.write_task.wake();
         self.0.dispatch_task.wake();
@@ -285,31 +287,26 @@ impl State {
     #[inline]
     /// Gracefully shutdown read and write io tasks
     pub fn shutdown_io(&self) {
-        let mut flags = self.0.flags.get();
+        let flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
             log::trace!("initiate io shutdown {:?}", flags);
-            flags.insert(Flags::IO_SHUTDOWN);
-            self.0.flags.set(flags);
+            self.insert_flags(Flags::IO_SHUTDOWN);
             self.0.read_task.wake();
             self.0.write_task.wake();
         }
     }
 
     pub(crate) fn set_io_error(&self, err: Option<io::Error>) {
-        let mut flags = self.0.flags.get();
         self.0.error.set(err);
         self.0.read_task.wake();
         self.0.write_task.wake();
         self.0.dispatch_task.wake();
-        flags.insert(Flags::IO_ERR | Flags::DSP_STOP);
-        self.0.flags.set(flags);
+        self.insert_flags(Flags::IO_ERR | Flags::DSP_STOP);
     }
 
     pub(super) fn set_wr_shutdown_complete(&self) {
-        let mut flags = self.0.flags.get();
-        flags.insert(Flags::IO_ERR);
-        self.0.flags.set(flags);
+        self.insert_flags(Flags::IO_ERR);
         self.0.read_task.wake();
     }
 
@@ -323,9 +320,7 @@ impl State {
 
     pub(super) fn update_read_task(&self, updated: bool, waker: &Waker) {
         if updated {
-            let mut flags = self.0.flags.get();
-            flags.insert(Flags::RD_READY);
-            self.0.flags.set(flags);
+            self.insert_flags(Flags::RD_READY);
             self.0.dispatch_task.wake();
         }
         self.0.read_task.register(waker);
@@ -344,10 +339,9 @@ impl State {
     #[inline]
     /// Wake read io task if it is paused
     pub fn dsp_restart_read_task(&self) {
-        let mut flags = self.0.flags.get();
+        let flags = self.0.flags.get();
         if flags.contains(Flags::RD_PAUSED) {
-            flags.remove(Flags::RD_PAUSED);
-            self.0.flags.set(flags);
+            self.remove_flags(Flags::RD_PAUSED);
             self.0.read_task.wake();
         }
     }
@@ -380,9 +374,7 @@ impl State {
     ///
     /// Write task must be waken up separately.
     pub fn dsp_enable_write_backpressure(&self, waker: &Waker) {
-        let mut flags = self.0.flags.get();
-        flags.insert(Flags::WR_NOT_READY);
-        self.0.flags.set(flags);
+        self.insert_flags(Flags::WR_NOT_READY);
         self.0.dispatch_task.register(waker);
     }
 
@@ -390,27 +382,21 @@ impl State {
     #[inline]
     /// Mark dispatcher as stopped
     pub fn dsp_mark_stopped(&self) {
-        let mut flags = self.0.flags.get();
-        flags.insert(Flags::DSP_STOP);
-        self.0.flags.set(flags);
+        self.insert_flags(Flags::DSP_STOP);
     }
 
     #[inline]
     /// Service is not ready, register dispatch task and
     /// pause read io task
     pub fn dsp_service_not_ready(&self, waker: &Waker) {
-        let mut flags = self.0.flags.get();
-        flags.insert(Flags::RD_PAUSED);
-        self.0.flags.set(flags);
+        self.insert_flags(Flags::RD_PAUSED);
         self.0.dispatch_task.register(waker);
     }
 
     #[inline]
     /// Stop io tasks
     pub fn dsp_stop_io(&self, waker: &Waker) {
-        let mut flags = self.0.flags.get();
-        flags.insert(Flags::IO_STOP);
-        self.0.flags.set(flags);
+        self.insert_flags(Flags::IO_STOP);
         self.0.read_task.wake();
         self.0.write_task.wake();
         self.0.dispatch_task.register(waker);
@@ -431,18 +417,14 @@ impl State {
     #[inline]
     /// Reset io stop flags
     pub fn reset_io_stop(&self) {
-        let mut flags = self.0.flags.get();
-        flags.remove(Flags::IO_STOP);
-        self.0.flags.set(flags);
+        self.remove_flags(Flags::IO_STOP);
     }
 
     fn mark_io_error(&self) {
+        self.insert_flags(Flags::IO_ERR | Flags::DSP_STOP);
         self.0.read_task.wake();
         self.0.write_task.wake();
         self.0.dispatch_task.wake();
-        let mut flags = self.0.flags.get();
-        flags.insert(Flags::IO_ERR | Flags::DSP_STOP);
-        self.0.flags.set(flags);
     }
 
     #[inline]
@@ -611,7 +593,7 @@ impl State {
     where
         U: Encoder,
     {
-        let mut flags = self.0.flags.get();
+        let flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::ST_DSP_ERR) {
             match item {
@@ -622,8 +604,7 @@ impl State {
                     // encode item
                     if let Err(err) = codec.encode(item, &mut write_buf) {
                         log::trace!("Codec encoder error: {:?}", err);
-                        flags.insert(Flags::DSP_STOP | Flags::ST_DSP_ERR);
-                        self.0.flags.set(flags);
+                        self.insert_flags(Flags::DSP_STOP | Flags::ST_DSP_ERR);
                         self.0.dispatch_task.wake();
                         return Err(Either::Right(err));
                     } else if is_write_sleep {
@@ -632,8 +613,7 @@ impl State {
                     Ok(write_buf.len() < HW)
                 }
                 Err(err) => {
-                    flags.insert(Flags::DSP_STOP | Flags::ST_DSP_ERR);
-                    self.0.flags.set(flags);
+                    self.insert_flags(Flags::DSP_STOP | Flags::ST_DSP_ERR);
                     self.0.dispatch_task.wake();
                     Err(Either::Left(err))
                 }
