@@ -1,12 +1,8 @@
-use std::collections::VecDeque;
-use std::future::Future;
-use std::io;
-use std::net::SocketAddr;
-use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{collections::VecDeque, io, net::SocketAddr, pin::Pin};
 
 use either::Either;
-use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ok, Future, FutureExt, LocalBoxFuture, Ready};
 
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};

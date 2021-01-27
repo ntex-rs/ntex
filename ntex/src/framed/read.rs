@@ -49,7 +49,12 @@ where
             let mut io = self.io.borrow_mut();
             let result = self.state.with_read_buf(|buf| read(&mut *io, buf, cx));
             match result {
-                Ok(updated) => {
+                Ok(None) => {
+                    self.state.enable_read_backpressure();
+                    self.state.update_read_task(true, cx.waker());
+                    Poll::Pending
+                }
+                Ok(Some(updated)) => {
                     self.state.update_read_task(updated, cx.waker());
                     Poll::Pending
                 }
@@ -67,7 +72,7 @@ pub(super) fn read<T>(
     io: &mut T,
     buf: &mut BytesMut,
     cx: &mut Context<'_>,
-) -> Result<bool, Option<io::Error>>
+) -> Result<Option<bool>, Option<io::Error>>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -87,12 +92,12 @@ where
                     log::trace!("io stream is disconnected");
                     return Err(None);
                 } else {
-                    updated = true;
-
                     if buf.len() > HW {
                         log::trace!("buffer is too large {}, pause", buf.len());
-                        break;
+                        return Ok(None);
                     }
+
+                    updated = true;
                 }
             }
             Poll::Ready(Err(err)) => {
@@ -102,5 +107,5 @@ where
         }
     }
 
-    Ok(updated)
+    Ok(Some(updated))
 }
