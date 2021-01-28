@@ -74,3 +74,4 @@ jobs:
                 --skip test_params
                 --skip test_body
                 --skip test_form
+                --skip test_json
