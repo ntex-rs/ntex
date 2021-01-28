@@ -1,6 +1,12 @@
 # Changes
 
-* Allow to wake up write io task
+## [0.2.0-b.10] - 2021-01-28
+
+* framed: Allow to wake up write io task
+
+* framed: Prevent uneeded read task wakeups
+
+* framed: Cleanup State impl
 
 ## [0.2.0-b.7] - 2021-01-25
 

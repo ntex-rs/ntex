@@ -51,7 +51,7 @@ derive_more = "0.99.11"
 either = "1.6.1"
 encoding_rs = "0.8.26"
 futures = "0.3.12"
-ahash = "0.6.3"
+ahash = "0.7.0"
 h2 = "0.2.4"
 http = "0.2.1"
 httparse = "1.3"
@@ -97,7 +97,6 @@ brotli2 = { version="0.3.2", optional = true }
 flate2 = { version = "1.0.14", optional = true }
 
 [dev-dependencies]
-futures = "0.3.12"
 env_logger = "0.8"
 serde_derive = "1.0"
 open-ssl = { version="0.10", package = "openssl" }

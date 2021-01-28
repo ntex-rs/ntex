@@ -349,7 +349,18 @@ impl State {
     #[inline]
     /// Wake write io task
     pub fn dsp_restart_write_task(&self) {
-        self.0.write_task.wake();
+        // if write buffer is empty then write task is asleep
+        // otherwise write task is active
+        if self.0.write_buf.borrow().is_empty() {
+            self.0.write_task.wake();
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    /// Wake write io task
+    pub fn dsp_flush_write_data(&self, _: &Waker) {
+        self.dsp_restart_write_task()
     }
 
     #[inline]

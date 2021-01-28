@@ -73,3 +73,4 @@ jobs:
                 --skip test_connection_wait_queue_force_close
                 --skip test_params
                 --skip test_body
+                --skip test_form
