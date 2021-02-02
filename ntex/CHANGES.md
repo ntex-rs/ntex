@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-b.11] - 2021-02-02
+
+* framed: fix wake write method dsp_restart_write_task
+
 ## [0.2.0-b.10] - 2021-01-28
 
 * framed: Allow to wake up write io task
