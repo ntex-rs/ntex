@@ -111,9 +111,7 @@ where
         on_connect_data: Option<Box<dyn DataFactory>>,
     ) -> Self {
         let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
-
-        let state = IoState::new();
-        state.set_disconnect_timeout(config.client_disconnect as u16);
+        let state = IoState::new().disconnect_timeout(config.client_disconnect as u16);
 
         let mut expire = config.timer_h1.now();
         let io = Rc::new(RefCell::new(io));
@@ -171,8 +169,6 @@ where
                     let next = match this.call.project() {
                         // handle SERVICE call
                         CallStateProject::Service { fut } => {
-                            // we have to loop because of read back-pressure,
-                            // check Poll::Pending processing
                             match fut.poll(cx) {
                                 Poll::Ready(result) => match result {
                                     Ok(res) => {
@@ -314,15 +310,14 @@ where
                                 }
 
                                 if req.head().expect() {
-                                    // call service
+                                    // Handle normal requests with EXPECT: 100-Continue` header
                                     *this.st = State::Call;
-                                    // Handle `EXPECT: 100-Continue` header
                                     this.call.set(CallState::Expect {
                                         fut: this.inner.config.expect.call(req),
                                     });
                                 } else if upgrade {
-                                    log::trace!("prep io for upgrade handler");
                                     // Handle UPGRADE request
+                                    log::trace!("prep io for upgrade handler");
                                     this.inner.state.dsp_stop_io(cx.waker());
                                     *this.st = State::Upgrade(Some(req));
                                     return Poll::Pending;
@@ -352,8 +347,8 @@ where
                                 return Poll::Pending;
                             }
                             Err(err) => {
-                                log::trace!("malformed request: {:?}", err);
                                 // Malformed requests, respond with 400
+                                log::trace!("malformed request: {:?}", err);
                                 let (res, body) =
                                     Response::BadRequest().finish().into_parts();
                                 this.inner.error = Some(DispatchError::Parse(err));
@@ -480,14 +475,16 @@ where
 
     fn reset_keepalive(&mut self) {
         // re-register keep-alive
-        if self.flags.contains(Flags::KEEPALIVE) {
-            let expire = self.config.timer_h1.now()
-                + time::Duration::from_secs(self.config.keep_alive);
-            self.config
-                .timer_h1
-                .register(expire, self.expire, &self.state);
-            self.expire = expire;
-            self.state.reset_keepalive();
+        if self.flags.contains(Flags::KEEPALIVE) && self.config.keep_alive.as_secs() != 0
+        {
+            let expire = self.config.timer_h1.now() + self.config.keep_alive;
+            if expire != self.expire {
+                self.config
+                    .timer_h1
+                    .register(expire, self.expire, &self.state);
+                self.expire = expire;
+                self.state.reset_keepalive();
+            }
         }
     }
 

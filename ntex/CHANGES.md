@@ -2,6 +2,8 @@
 
 ## [0.2.0-b.12] - 2021-02-18
 
+* http: Fix KeepAlive::Os support for h1 dispatcher
+
 * Handle EINTR in server accept loop
 
 * Fix double registation for accept back-pressure

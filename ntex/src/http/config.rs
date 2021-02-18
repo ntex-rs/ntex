@@ -99,7 +99,7 @@ pub(super) struct DispatcherConfig<S, X, U> {
     pub(super) service: S,
     pub(super) expect: X,
     pub(super) upgrade: Option<U>,
-    pub(super) keep_alive: u64,
+    pub(super) keep_alive: Duration,
     pub(super) client_timeout: u64,
     pub(super) client_disconnect: u64,
     pub(super) ka_enabled: bool,
@@ -118,7 +118,7 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
             service,
             expect,
             upgrade,
-            keep_alive: cfg.0.keep_alive,
+            keep_alive: Duration::from_secs(cfg.0.keep_alive),
             client_timeout: cfg.0.client_timeout,
             client_disconnect: cfg.0.client_disconnect,
             ka_enabled: cfg.0.ka_enabled,
@@ -134,10 +134,8 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
 
     /// Return keep-alive timer delay is configured.
     pub(super) fn keep_alive_timer(&self) -> Option<Delay> {
-        if self.keep_alive != 0 {
-            Some(delay_until(
-                self.timer.now() + Duration::from_secs(self.keep_alive),
-            ))
+        if self.keep_alive.as_secs() != 0 {
+            Some(delay_until(self.timer.now() + self.keep_alive))
         } else {
             None
         }
@@ -145,8 +143,8 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
 
     /// Keep-alive expire time
     pub(super) fn keep_alive_expire(&self) -> Option<Instant> {
-        if self.keep_alive != 0 {
-            Some(self.timer.now() + Duration::from_secs(self.keep_alive))
+        if self.keep_alive.as_secs() != 0 {
+            Some(self.timer.now() + self.keep_alive)
         } else {
             None
         }
