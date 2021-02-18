@@ -346,6 +346,10 @@ impl Accept {
             if !on {
                 self.backpressure = false;
                 for (token, info) in self.sockets.iter() {
+                    if info.timeout.is_some() {
+                        // socket will re-register itself after timeout
+                        continue;
+                    }
                     if let Err(err) = self.poll.register(
                         &info.sock,
                         mio::Token(token + DELTA),
@@ -361,8 +365,10 @@ impl Accept {
         } else if on {
             self.backpressure = true;
             for (_, info) in self.sockets.iter() {
-                trace!("Enabling backpressure for {}", info.addr);
-                let _ = self.poll.deregister(&info.sock);
+                if info.timeout.is_none() {
+                    trace!("Enabling backpressure for {}", info.addr);
+                    let _ = self.poll.deregister(&info.sock);
+                }
             }
         }
     }

@@ -47,7 +47,7 @@ where
 
     /// Shutdown io stream
     pub fn shutdown(io: Rc<RefCell<T>>, state: State) -> Self {
-        let disconnect_timeout = state.disconnect_timeout() as u64;
+        let disconnect_timeout = state.get_disconnect_timeout() as u64;
         let st = IoWriteState::Shutdown(
             if disconnect_timeout != 0 {
                 Some(delay_for(Duration::from_millis(disconnect_timeout)))
@@ -84,7 +84,7 @@ where
                 if this.state.is_io_shutdown() {
                     log::trace!("write task is instructed to shutdown");
 
-                    let disconnect_timeout = this.state.disconnect_timeout() as u64;
+                    let disconnect_timeout = this.state.get_disconnect_timeout() as u64;
                     this.st = IoWriteState::Shutdown(
                         if disconnect_timeout != 0 {
                             Some(delay_for(Duration::from_millis(disconnect_timeout)))
@@ -202,11 +202,11 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     let len = buf.len();
-    log::trace!("flushing framed transport: {}", len);
 
     if len != 0 {
-        let mut written = 0;
+        // log::trace!("flushing framed transport: {}", len);
 
+        let mut written = 0;
         while written < len {
             match Pin::new(&mut *io).poll_write(cx, &buf[written..]) {
                 Poll::Pending => break,
@@ -227,7 +227,7 @@ where
                 }
             }
         }
-        log::trace!("flushed {} bytes", written);
+        // log::trace!("flushed {} bytes", written);
 
         // remove written data
         if written == len {

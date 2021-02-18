@@ -3,6 +3,7 @@ target/
 guide/build/
 /gh-pages
 cobertura.xml
+.DS_Store
 
 *.so
 *.out

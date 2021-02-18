@@ -125,7 +125,7 @@ impl State {
         state.dispatch_task.wake();
     }
 
-    pub(super) fn disconnect_timeout(&self) -> u16 {
+    pub(super) fn get_disconnect_timeout(&self) -> u16 {
         self.0.disconnect_timeout.get()
     }
 
@@ -145,6 +145,13 @@ impl State {
     /// Get current state flags
     pub fn flags(&self) -> Flags {
         self.0.flags.get()
+    }
+
+    #[inline]
+    /// Set disconnecto timeout
+    pub fn disconnect_timeout(self, timeout: u16) -> Self {
+        self.0.disconnect_timeout.set(timeout);
+        self
     }
 
     #[inline]

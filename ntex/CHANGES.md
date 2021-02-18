@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-b.12] - 2021-02-18
+
+* Fix double registation for accept back-pressure
+
 ## [0.2.0-b.11] - 2021-02-02
 
 * framed: fix wake write method dsp_restart_write_task

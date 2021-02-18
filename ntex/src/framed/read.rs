@@ -59,7 +59,6 @@ where
                     Poll::Pending
                 }
                 Err(err) => {
-                    log::trace!("error during reading data: {:?}", err);
                     self.state.set_io_error(err);
                     Poll::Ready(())
                 }
