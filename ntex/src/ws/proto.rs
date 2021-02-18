@@ -35,9 +35,9 @@ impl fmt::Display for OpCode {
     }
 }
 
-impl Into<u8> for OpCode {
-    fn into(self) -> u8 {
-        match self {
+impl From<OpCode> for u8 {
+    fn from(code: OpCode) -> u8 {
+        match code {
             Continue => 0,
             Text => 1,
             Binary => 2,
@@ -132,9 +132,9 @@ pub enum CloseCode {
     Other(u16),
 }
 
-impl Into<u16> for CloseCode {
-    fn into(self) -> u16 {
-        match self {
+impl From<CloseCode> for u16 {
+    fn from(code: CloseCode) -> u16 {
+        match code {
             Normal => 1000,
             Away => 1001,
             Protocol => 1002,

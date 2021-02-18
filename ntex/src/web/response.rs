@@ -125,9 +125,9 @@ impl WebResponse {
     }
 }
 
-impl Into<Response<Body>> for WebResponse {
-    fn into(self) -> Response<Body> {
-        self.response
+impl From<WebResponse> for Response<Body> {
+    fn from(res: WebResponse) -> Response<Body> {
+        res.response
     }
 }
 

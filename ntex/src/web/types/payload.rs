@@ -156,7 +156,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
 
         let limit = cfg.limit;
         let fut = HttpMessageBody::new(req, payload).limit(limit);
-        Either::Left(async move { Ok(fut.await?) }.boxed_local())
+        Either::Left(async move { fut.await }.boxed_local())
     }
 }
 
