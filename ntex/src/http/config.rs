@@ -1,6 +1,4 @@
-use std::{
-    cell::UnsafeCell, fmt, fmt::Write, ptr::copy_nonoverlapping, rc::Rc, time::Duration,
-};
+use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time::Duration};
 
 use bytes::BytesMut;
 use futures::{future, FutureExt};
@@ -8,9 +6,6 @@ use time::OffsetDateTime;
 
 use crate::framed::Timer;
 use crate::rt::time::{delay_for, delay_until, Delay, Instant};
-
-// "Sun, 06 Nov 1994 08:49:37 GMT".len()
-const DATE_VALUE_LENGTH: usize = 29;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 /// Server keep-alive setting
@@ -155,40 +150,13 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
     }
 }
 
-#[derive(Copy, Clone)]
-pub(super) struct Date {
-    pub(super) bytes: [u8; DATE_VALUE_LENGTH],
-    pos: usize,
-}
-
-impl Date {
-    fn new() -> Date {
-        let mut date = Date {
-            bytes: [0; DATE_VALUE_LENGTH],
-            pos: 0,
-        };
-        date.update();
-        date
-    }
-    fn update(&mut self) {
-        self.pos = 0;
-        write!(
-            self,
-            "{}",
-            OffsetDateTime::now_utc().format("%a, %d %b %Y %H:%M:%S GMT")
-        )
-        .unwrap();
-    }
-}
-
-impl fmt::Write for Date {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        let len = s.len();
-        self.bytes[self.pos..self.pos + len].copy_from_slice(s.as_bytes());
-        self.pos += len;
-        Ok(())
-    }
-}
+// "Sun, 06 Nov 1994 08:49:37 GMT".len()
+const DATE_VALUE_LENGTH_HDR: usize = 39;
+const DATE_VALUE_DEFAULT: [u8; DATE_VALUE_LENGTH_HDR] = [
+    b'd', b'a', b't', b'e', b':', b' ', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0',
+    b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0',
+    b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'\r', b'\n', b'\r', b'\n',
+];
 
 #[derive(Clone)]
 pub struct DateService(Rc<DateServiceInner>);
@@ -200,24 +168,32 @@ impl Default for DateService {
 }
 
 struct DateServiceInner {
-    current: UnsafeCell<Option<(Date, Instant)>>,
+    current: Cell<bool>,
+    current_time: Cell<Instant>,
+    current_date: Cell<[u8; DATE_VALUE_LENGTH_HDR]>,
 }
 
 impl DateServiceInner {
     fn new() -> Self {
         DateServiceInner {
-            current: UnsafeCell::new(None),
+            current: Cell::new(false),
+            current_time: Cell::new(Instant::now()),
+            current_date: Cell::new(DATE_VALUE_DEFAULT),
         }
     }
 
     fn reset(&self) {
-        unsafe { (&mut *self.current.get()).take() };
+        self.current.set(false);
     }
 
     fn update(&self) {
-        let now = Instant::now();
-        let date = Date::new();
-        *(unsafe { &mut *self.current.get() }) = Some((date, now));
+        self.current.set(true);
+        self.current_time.set(Instant::now());
+
+        let mut bytes = DATE_VALUE_DEFAULT;
+        let dt = OffsetDateTime::now_utc().format("%a, %d %b %Y %H:%M:%S GMT");
+        bytes[6..35].copy_from_slice(dt.as_ref());
+        self.current_date.set(bytes);
     }
 }
 
@@ -227,7 +203,7 @@ impl DateService {
     }
 
     fn check_date(&self) {
-        if unsafe { (&*self.0.current.get()).is_none() } {
+        if !self.0.current.get() {
             self.0.update();
 
             // periodic date update
@@ -241,32 +217,27 @@ impl DateService {
 
     fn now(&self) -> Instant {
         self.check_date();
-        unsafe { (&*self.0.current.get()).as_ref().unwrap().1 }
+        self.0.current_time.get()
     }
 
-    pub(super) fn set_date<F: FnMut(&Date)>(&self, mut f: F) {
+    pub(super) fn set_date<F: FnMut(&[u8])>(&self, mut f: F) {
         self.check_date();
-        f(&unsafe { (&*self.0.current.get()).as_ref().unwrap().0 })
+        let date = self.0.current_date.get();
+        f(&date[6..35])
     }
 
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
-        const HEAD: &[u8] = b"date: ";
-        const TAIL: &[u8] = b"\r\n\r\n";
-        // date bytes len
-        const N: usize = 29;
-        const TOTAL: usize = 39;
-
-        dst.reserve(TOTAL);
-        // SAFETY: previous reserve exact size
+        // SAFETY: reserves exact size
+        let len = dst.len();
+        dst.reserve(DATE_VALUE_LENGTH_HDR);
         unsafe {
-            let buf = dst.as_mut_ptr().add(dst.len());
-            copy_nonoverlapping(HEAD.as_ptr(), buf, HEAD.len());
-            self.set_date(|date| {
-                copy_nonoverlapping(date.bytes.as_ptr(), buf.add(HEAD.len()), N)
-            });
-            copy_nonoverlapping(TAIL.as_ptr(), buf.add(N + HEAD.len()), TAIL.len());
-            dst.set_len(dst.len() + TOTAL)
+            copy_nonoverlapping(
+                self.0.current_date.as_ptr().cast(),
+                dst.as_mut_ptr().add(len),
+                DATE_VALUE_LENGTH_HDR,
+            );
+            dst.set_len(len + DATE_VALUE_LENGTH_HDR)
         }
     }
 }
@@ -275,17 +246,12 @@ impl DateService {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_date_len() {
-        assert_eq!(DATE_VALUE_LENGTH, "Sun, 06 Nov 1994 08:49:37 GMT".len());
-    }
-
     #[ntex_rt::test]
     async fn test_date() {
         let date = DateService::default();
-        let mut buf1 = BytesMut::with_capacity(DATE_VALUE_LENGTH + 10);
+        let mut buf1 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
         date.set_date_header(&mut buf1);
-        let mut buf2 = BytesMut::with_capacity(DATE_VALUE_LENGTH + 10);
+        let mut buf2 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
         date.set_date_header(&mut buf2);
         assert_eq!(buf1, buf2);
     }

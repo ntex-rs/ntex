@@ -1,5 +1,5 @@
 //! A synchronization primitive for task wakeup.
-use std::{cell::UnsafeCell, fmt, marker::PhantomData, rc, task::Waker};
+use std::{cell::Cell, fmt, marker::PhantomData, rc, task::Waker};
 
 /// A synchronization primitive for task wakeup.
 ///
@@ -19,7 +19,7 @@ use std::{cell::UnsafeCell, fmt, marker::PhantomData, rc, task::Waker};
 /// `wake`.
 #[derive(Default)]
 pub struct LocalWaker {
-    pub(crate) waker: UnsafeCell<Option<Waker>>,
+    waker: Cell<Option<Waker>>,
     _t: PhantomData<rc::Rc<()>>,
 }
 
@@ -27,15 +27,9 @@ impl LocalWaker {
     /// Create an `LocalWaker`.
     pub fn new() -> Self {
         LocalWaker {
-            waker: UnsafeCell::new(None),
+            waker: Cell::new(None),
             _t: PhantomData,
         }
-    }
-
-    #[inline]
-    /// Check if waker has been registered.
-    pub fn is_registered(&self) -> bool {
-        unsafe { (*self.waker.get()).is_some() }
     }
 
     #[inline]
@@ -43,7 +37,7 @@ impl LocalWaker {
     ///
     /// Returns `true` if waker was registered before.
     pub fn register(&self, waker: &Waker) -> bool {
-        unsafe { self.waker.get().replace(Some(waker.clone())).is_some() }
+        self.waker.replace(Some(waker.clone())).is_some()
     }
 
     #[inline]
@@ -60,7 +54,7 @@ impl LocalWaker {
     ///
     /// If a waker has not been registered, this returns `None`.
     pub fn take(&self) -> Option<Waker> {
-        unsafe { (*self.waker.get()).take() }
+        self.waker.take()
     }
 }
 

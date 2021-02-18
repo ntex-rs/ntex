@@ -231,7 +231,7 @@ where
 
         // remove written data
         if written == len {
-            // flushed same amount as in buffer, we dont need to reallocate
+            // SAFETY: flushed same amount as in buffer, we dont need to reallocate
             unsafe { buf.set_len(0) }
         } else {
             buf.advance(written);

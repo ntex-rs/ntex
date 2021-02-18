@@ -205,8 +205,7 @@ where
         // set date header
         if !has_date {
             let mut bytes = BytesMut::with_capacity(29);
-            self.timer
-                .set_date(|date| bytes.extend_from_slice(&date.bytes));
+            self.timer.set_date(|date| bytes.extend_from_slice(date));
             res.headers_mut().insert(DATE, unsafe {
                 HeaderValue::from_maybe_shared_unchecked(bytes.freeze())
             });
