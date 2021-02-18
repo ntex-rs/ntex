@@ -237,8 +237,15 @@ impl Accept {
         let mut events = mio::Events::with_capacity(128);
 
         loop {
-            if let Err(err) = self.poll.poll(&mut events, None) {
-                panic!("Poll error: {}", err);
+            if let Err(e) = self.poll.poll(&mut events, None) {
+                match e.kind() {
+                    std::io::ErrorKind::Interrupted => {
+                        continue;
+                    }
+                    _ => {
+                        panic!("Poll error: {}", e);
+                    }
+                }
             }
 
             for event in events.iter() {
