@@ -154,6 +154,11 @@ impl<T: Address> Connect<T> {
             ConnectTakeAddrsIter { inner }
         }
     }
+
+    /// Return reference to inner type
+    pub fn get_ref(&self) -> &T {
+        &self.req
+    }
 }
 
 impl<T: Address> From<T> for Connect<T> {
@@ -265,6 +270,7 @@ mod tests {
         let mut connect = Connect::new("www.rust-lang.org");
         assert_eq!(connect.host(), "www.rust-lang.org");
         assert_eq!(connect.port(), 0);
+        assert_eq!(*connect.get_ref(), "www.rust-lang.org");
         connect = connect.set_port(80);
         assert_eq!(connect.port(), 80);
 

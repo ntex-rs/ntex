@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-b.14] - 2021-02-20
+
+* connect: Allow to access to inner type of Connect
+
 ## [0.2.0-b.13] - 2021-02-20
 
 * http: Refactor date service

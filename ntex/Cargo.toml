@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.2.0-b.13"
+version = "0.2.0-b.14"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -36,7 +36,7 @@ compress = ["flate2", "brotli2"]
 cookie = ["coo-kie", "coo-kie/percent-encode"]
 
 [dependencies]
-ntex-codec = "0.3.0-b.1"
+ntex-codec = "0.3.0"
 ntex-rt = "0.1.2"
 ntex-rt-macros = "0.1"
 ntex-router = "0.3.8"
