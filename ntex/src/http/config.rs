@@ -150,7 +150,6 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
     }
 }
 
-// "Sun, 06 Nov 1994 08:49:37 GMT".len()
 const DATE_VALUE_LENGTH_HDR: usize = 39;
 const DATE_VALUE_DEFAULT: [u8; DATE_VALUE_LENGTH_HDR] = [
     b'd', b'a', b't', b'e', b':', b' ', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0',

@@ -47,15 +47,9 @@ where
             Poll::Pending
         } else {
             let mut io = self.io.borrow_mut();
-            let result = self.state.with_read_buf(|buf| read(&mut *io, buf, cx));
-            match result {
-                Ok(None) => {
-                    self.state.enable_read_backpressure();
-                    self.state.update_read_task(true, cx.waker());
-                    Poll::Pending
-                }
-                Ok(Some(updated)) => {
-                    self.state.update_read_task(updated, cx.waker());
+            match self.state.with_read_buf(|buf| read(&mut *io, buf, cx)) {
+                Ok(res) => {
+                    self.state.update_read_task(res, cx.waker());
                     Poll::Pending
                 }
                 Err(err) => {
@@ -67,11 +61,18 @@ where
     }
 }
 
+#[derive(Copy, Clone)]
+pub(super) enum ReadResult {
+    Pending,
+    Updated,
+    BackPressure,
+}
+
 pub(super) fn read<T>(
     io: &mut T,
     buf: &mut BytesMut,
     cx: &mut Context<'_>,
-) -> Result<Option<bool>, Option<io::Error>>
+) -> Result<ReadResult, Option<io::Error>>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
@@ -82,7 +83,7 @@ where
     }
 
     // read all data from socket
-    let mut updated = false;
+    let mut result = ReadResult::Pending;
     loop {
         match Pin::new(&mut *io).poll_read_buf(cx, buf) {
             Poll::Pending => break,
@@ -93,10 +94,10 @@ where
                 } else {
                     if buf.len() > HW {
                         log::trace!("buffer is too large {}, pause", buf.len());
-                        return Ok(None);
+                        return Ok(ReadResult::BackPressure);
                     }
 
-                    updated = true;
+                    result = ReadResult::Updated;
                 }
             }
             Poll::Ready(Err(err)) => {
@@ -106,5 +107,5 @@ where
         }
     }
 
-    Ok(Some(updated))
+    Ok(result)
 }

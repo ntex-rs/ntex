@@ -7,6 +7,7 @@ use either::Either;
 use futures::{future::poll_fn, ready};
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
+use crate::framed::read::ReadResult;
 use crate::framed::write::flush;
 use crate::task::LocalWaker;
 
@@ -241,13 +242,6 @@ impl State {
     }
 
     #[inline]
-    /// Enable read back-persurre
-    pub(crate) fn enable_read_backpressure(&self) {
-        log::trace!("enable read back-pressure");
-        self.insert_flags(Flags::RD_BUF_FULL)
-    }
-
-    #[inline]
     /// Check if keep-alive timeout occured
     pub fn is_keepalive(&self) -> bool {
         self.0.flags.get().contains(Flags::DSP_KEEPALIVE)
@@ -325,10 +319,18 @@ impl State {
         self.0.write_task.register(waker);
     }
 
-    pub(super) fn update_read_task(&self, updated: bool, waker: &Waker) {
-        if updated {
-            self.insert_flags(Flags::RD_READY);
-            self.0.dispatch_task.wake();
+    pub(super) fn update_read_task(&self, result: ReadResult, waker: &Waker) {
+        match result {
+            ReadResult::Updated => {
+                self.insert_flags(Flags::RD_READY);
+                self.0.dispatch_task.wake();
+            }
+            ReadResult::BackPressure => {
+                log::trace!("enable read back-pressure");
+                self.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
+                self.0.dispatch_task.wake();
+            }
+            ReadResult::Pending => {}
         }
         self.0.read_task.register(waker);
     }

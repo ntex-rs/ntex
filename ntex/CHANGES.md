@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-b.13] - 2021-02-20
+
+* http: Refactor date service
+
 ## [0.2.0-b.12] - 2021-02-18
 
 * http: Fix KeepAlive::Os support for h1 dispatcher
