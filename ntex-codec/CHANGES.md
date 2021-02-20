@@ -1,6 +1,6 @@
 # Changes
 
-## [0.3.0] - 2021-01-23
+## [0.3.0] - 2021-02-20
 
 * Make Encoder and Decoder methods immutable
 
