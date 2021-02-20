@@ -4,6 +4,8 @@
 
 * http: Refactor date service
 
+* server: Rename ServerBulder::system_exit to stop_runtime
+
 ## [0.2.0-b.12] - 2021-02-18
 
 * http: Fix KeepAlive::Os support for h1 dispatcher

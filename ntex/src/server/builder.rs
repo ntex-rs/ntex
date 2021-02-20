@@ -104,13 +104,17 @@ impl ServerBuilder {
         self
     }
 
-    /// Stop ntex system.
-    pub fn system_exit(mut self) -> Self {
+    /// Stop ntex runtime when server get dropped.
+    ///
+    /// By default "stop runtime" is disabled.
+    pub fn stop_runtime(mut self) -> Self {
         self.exit = true;
         self
     }
 
-    /// Disable signal handling
+    /// Disable signal handling.
+    ///
+    /// By default signal handling is enabled.
     pub fn disable_signals(mut self) -> Self {
         self.no_signals = true;
         self

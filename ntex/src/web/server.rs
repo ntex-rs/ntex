@@ -198,13 +198,17 @@ where
         self
     }
 
-    /// Stop ntex system.
-    pub fn system_exit(mut self) -> Self {
-        self.builder = self.builder.system_exit();
+    /// Stop ntex runtime when server get dropped.
+    ///
+    /// By default "stop runtime" is disabled.
+    pub fn stop_runtime(mut self) -> Self {
+        self.builder = self.builder.stop_runtime();
         self
     }
 
-    /// Disable signal handling
+    /// Disable signal handling.
+    ///
+    /// By default signal handling is enabled.
     pub fn disable_signals(mut self) -> Self {
         self.builder = self.builder.disable_signals();
         self

@@ -21,7 +21,7 @@ use super::Token;
 pub(super) struct WorkerCommand(Conn);
 
 /// Stop worker message. Returns `true` on successful shutdown
-/// and `false` if some connections still alive.
+/// and `false` if some connections are still alive.
 pub(super) struct StopCommand {
     graceful: bool,
     result: oneshot::Sender<bool>,

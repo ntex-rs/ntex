@@ -31,7 +31,7 @@ impl ServiceConfig {
         }
     }
 
-    /// Add new service to a server
+    /// Add new service to the server.
     pub fn bind<U, N: AsRef<str>>(&mut self, name: N, addr: U) -> io::Result<&mut Self>
     where
         U: net::ToSocketAddrs,
@@ -45,7 +45,7 @@ impl ServiceConfig {
         Ok(self)
     }
 
-    /// Add new service to a server
+    /// Add new service to the server.
     pub fn listen<N: AsRef<str>>(
         &mut self,
         name: N,
@@ -58,8 +58,10 @@ impl ServiceConfig {
         self
     }
 
-    /// Register service configuration function. This function get called
-    /// during worker runtime configuration. It get executed in worker thread.
+    /// Register service configuration function.
+    ///
+    /// This function get called during worker runtime configuration.
+    /// It get executed in the worker thread.
     pub fn apply<F>(&mut self, f: F) -> io::Result<()>
     where
         F: Fn(&mut ServiceRuntime) + Send + Clone + 'static,
