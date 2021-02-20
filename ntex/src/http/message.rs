@@ -33,7 +33,9 @@ bitflags! {
 pub(crate) trait Head: Default + 'static {
     fn clear(&mut self);
 
-    fn pool() -> &'static MessagePool<Self>;
+    fn with_pool<F, R>(f: F) -> R
+    where
+        F: FnOnce(&MessagePool<Self>) -> R;
 }
 
 #[derive(Debug)]
@@ -68,8 +70,11 @@ impl Head for RequestHead {
         self.extensions.borrow_mut().clear();
     }
 
-    fn pool() -> &'static MessagePool<Self> {
-        REQUEST_POOL.with(|p| *p)
+    fn with_pool<F, R>(f: F) -> R
+    where
+        F: FnOnce(&MessagePool<Self>) -> R,
+    {
+        REQUEST_POOL.with(|p| f(p))
     }
 }
 
@@ -327,7 +332,7 @@ pub(crate) struct Message<T: Head> {
 impl<T: Head> Message<T> {
     /// Get new message from the pool of objects
     pub(crate) fn new() -> Self {
-        T::pool().get_message()
+        T::with_pool(|p| p.get_message())
     }
 }
 
@@ -348,7 +353,7 @@ impl<T: Head> std::ops::DerefMut for Message<T> {
 impl<T: Head> Drop for Message<T> {
     fn drop(&mut self) {
         if Rc::strong_count(&self.head) == 1 {
-            T::pool().release(self.head.clone());
+            T::with_pool(|p| p.release(self.head.clone()));
         }
     }
 }
@@ -395,18 +400,17 @@ pub(crate) struct MessagePool<T: Head>(RefCell<Vec<Rc<T>>>);
 /// Request's objects pool
 pub(super) struct BoxedResponsePool(RefCell<Vec<Box<ResponseHead>>>);
 
-thread_local!(static REQUEST_POOL: &'static MessagePool<RequestHead> = MessagePool::<RequestHead>::create());
-thread_local!(static RESPONSE_POOL: &'static BoxedResponsePool = BoxedResponsePool::create());
+thread_local!(static REQUEST_POOL: MessagePool<RequestHead> = MessagePool::<RequestHead>::create());
+thread_local!(static RESPONSE_POOL: BoxedResponsePool = BoxedResponsePool::create());
 
 impl<T: Head> MessagePool<T> {
-    fn create() -> &'static MessagePool<T> {
-        let pool = MessagePool(RefCell::new(Vec::with_capacity(128)));
-        Box::leak(Box::new(pool))
+    fn create() -> MessagePool<T> {
+        MessagePool(RefCell::new(Vec::with_capacity(128)))
     }
 
     /// Get message from the pool
     #[inline]
-    fn get_message(&'static self) -> Message<T> {
+    fn get_message(&self) -> Message<T> {
         if let Some(mut msg) = self.0.borrow_mut().pop() {
             if let Some(r) = Rc::get_mut(&mut msg) {
                 r.clear();
@@ -430,14 +434,13 @@ impl<T: Head> MessagePool<T> {
 }
 
 impl BoxedResponsePool {
-    fn create() -> &'static BoxedResponsePool {
-        let pool = BoxedResponsePool(RefCell::new(Vec::with_capacity(128)));
-        Box::leak(Box::new(pool))
+    fn create() -> BoxedResponsePool {
+        BoxedResponsePool(RefCell::new(Vec::with_capacity(128)))
     }
 
     /// Get message from the pool
     #[inline]
-    fn get_message(&'static self, status: StatusCode) -> BoxedResponseHead {
+    fn get_message(&self, status: StatusCode) -> BoxedResponseHead {
         if let Some(mut head) = self.0.borrow_mut().pop() {
             head.reason = None;
             head.status = status;

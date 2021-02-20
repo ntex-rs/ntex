@@ -4,6 +4,8 @@
 
 * http: Refactor date service
 
+* http: Do not leak request/response pools
+
 * server: Rename ServerBulder::system_exit to stop_runtime
 
 * util: Drop Either service, use Variant instead
