@@ -263,8 +263,7 @@ where
 
             // remove written data
             if written == len {
-                // flushed same amount as in buffer, we dont need to reallocate
-                unsafe { self.write_buf.set_len(0) }
+                self.write_buf.clear()
             } else {
                 self.write_buf.advance(written);
             }

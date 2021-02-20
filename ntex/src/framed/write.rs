@@ -117,9 +117,8 @@ where
                 Poll::Pending
             }
             IoWriteState::Shutdown(ref mut delay, ref mut st) => {
-                // close io, closes WRITE side and wait for disconnect
-                // on read side. we have to use disconnect timeout, otherwise it
-                // could hang forever.
+                // close WRITE side and wait for disconnect on read side.
+                // use disconnect timeout, otherwise it could hang forever.
                 loop {
                     match st {
                         Shutdown::None => {
@@ -128,7 +127,6 @@ where
                             let result = this
                                 .state
                                 .with_write_buf(|buf| flush(&mut *io, buf, cx));
-
                             match result {
                                 Poll::Ready(Ok(_)) => {
                                     *st = Shutdown::Flushed;
@@ -170,7 +168,7 @@ where
                                 match Pin::new(&mut *io).poll_read(cx, &mut buf) {
                                     Poll::Ready(Ok(0)) | Poll::Ready(Err(_)) => {
                                         this.state.set_wr_shutdown_complete();
-                                        log::trace!("write task is closed");
+                                        log::trace!("write task is stopped");
                                         return Poll::Ready(());
                                     }
                                     Poll::Pending => break,
@@ -180,11 +178,12 @@ where
                         }
                     }
 
+                    // disconnect timeout
                     if let Some(ref mut delay) = delay {
                         futures::ready!(Pin::new(delay).poll(cx));
                     }
                     this.state.set_wr_shutdown_complete();
-                    log::trace!("write task is closed after delay");
+                    log::trace!("write task is stopped after delay");
                     return Poll::Ready(());
                 }
             }
@@ -231,8 +230,7 @@ where
 
         // remove written data
         if written == len {
-            // SAFETY: flushed same amount as in buffer, we dont need to reallocate
-            unsafe { buf.set_len(0) }
+            buf.clear()
         } else {
             buf.advance(written);
         }
