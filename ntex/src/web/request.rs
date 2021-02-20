@@ -60,7 +60,7 @@ impl<Err> WebRequest<Err> {
         mut req: HttpRequest,
         pl: Payload,
     ) -> Result<Self, (HttpRequest, Payload)> {
-        if Rc::strong_count(&req.0) == 1 && Rc::weak_count(&req.0) == 0 {
+        if Rc::strong_count(&req.0) == 1 {
             Rc::get_mut(&mut req.0).unwrap().payload = pl;
             Ok(WebRequest::new(req))
         } else {
@@ -74,7 +74,7 @@ impl<Err> WebRequest<Err> {
     /// can be re-constructed only if rc's strong pointers count eq 1 and
     /// weak pointers count is 0.
     pub fn from_request(req: HttpRequest) -> Result<Self, HttpRequest> {
-        if Rc::strong_count(&req.0) == 1 && Rc::weak_count(&req.0) == 0 {
+        if Rc::strong_count(&req.0) == 1 {
             Ok(WebRequest::new(req))
         } else {
             Err(req)

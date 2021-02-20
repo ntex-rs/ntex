@@ -165,18 +165,14 @@ impl Inner {
 
     fn feed_eof(&mut self) {
         self.eof = true;
-        if let Some(task) = self.task.take() {
-            task.wake()
-        }
+        self.task.wake()
     }
 
     fn feed_data(&mut self, data: Bytes) {
         self.len += data.len();
         self.items.push_back(data);
         self.need_read = self.len < MAX_BUFFER_SIZE;
-        if let Some(task) = self.task.take() {
-            task.wake()
-        }
+        self.task.wake();
     }
 
     fn readany(
