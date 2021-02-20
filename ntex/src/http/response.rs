@@ -14,14 +14,14 @@ use coo_kie::{Cookie, CookieJar};
 use crate::http::body::{Body, BodyStream, MessageBody, ResponseBody};
 use crate::http::error::{HttpError, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::message::{BoxedResponseHead, ConnectionType, ResponseHead};
+use crate::http::message::{ConnectionType, Message, ResponseHead};
 use crate::http::StatusCode;
 use crate::util::Extensions;
 
 /// An HTTP Response
 pub struct Response<B = Body> {
-    head: BoxedResponseHead,
     body: ResponseBody<B>,
+    head: Message<ResponseHead>,
 }
 
 impl Response<Body> {
@@ -41,7 +41,7 @@ impl Response<Body> {
     #[inline]
     pub fn new(status: StatusCode) -> Response {
         Response {
-            head: BoxedResponseHead::new(status),
+            head: Message::with_status(status),
             body: ResponseBody::Body(Body::Empty),
         }
     }
@@ -64,7 +64,7 @@ impl<B> Response<B> {
     #[inline]
     pub fn with_body(status: StatusCode, body: B) -> Response<B> {
         Response {
-            head: BoxedResponseHead::new(status),
+            head: Message::with_status(status),
             body: ResponseBody::Body(body),
         }
     }
@@ -282,7 +282,7 @@ impl<'a> Iterator for CookieIter<'a> {
 /// This type can be used to construct an instance of `Response` through a
 /// builder-like pattern.
 pub struct ResponseBuilder {
-    head: Option<BoxedResponseHead>,
+    head: Option<Message<ResponseHead>>,
     err: Option<HttpError>,
     #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
@@ -293,7 +293,7 @@ impl ResponseBuilder {
     /// Create response builder
     pub fn new(status: StatusCode) -> Self {
         ResponseBuilder {
-            head: Some(BoxedResponseHead::new(status)),
+            head: Some(Message::with_status(status)),
             err: None,
             #[cfg(feature = "cookie")]
             cookies: None,
@@ -635,7 +635,7 @@ impl ResponseBuilder {
 
 #[inline]
 fn parts<'a>(
-    parts: &'a mut Option<BoxedResponseHead>,
+    parts: &'a mut Option<Message<ResponseHead>>,
     err: &Option<HttpError>,
 ) -> Option<&'a mut ResponseHead> {
     if err.is_some() {
@@ -680,7 +680,7 @@ impl<B> From<Response<B>> for ResponseBuilder {
 /// Convert `ResponseHead` to a `ResponseBuilder`
 impl<'a> From<&'a ResponseHead> for ResponseBuilder {
     fn from(head: &'a ResponseHead) -> ResponseBuilder {
-        let mut msg = BoxedResponseHead::new(head.status);
+        let mut msg = Message::with_status(head.status);
         msg.version = head.version;
         msg.reason = head.reason;
         for (k, v) in &head.headers {

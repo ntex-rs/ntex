@@ -67,7 +67,7 @@ impl Head for RequestHead {
     fn clear(&mut self) {
         self.flags = Flags::empty();
         self.headers.clear();
-        self.extensions.borrow_mut().clear();
+        self.extensions.get_mut().clear();
     }
 
     fn with_pool<F, R>(f: F) -> R
@@ -324,7 +324,27 @@ impl ResponseHead {
     }
 }
 
-#[derive(Clone)]
+impl Default for ResponseHead {
+    fn default() -> Self {
+        Self::new(Default::default())
+    }
+}
+
+impl Head for ResponseHead {
+    fn clear(&mut self) {
+        self.reason = None;
+        self.headers.clear();
+        self.flags = Flags::empty();
+    }
+
+    fn with_pool<F, R>(f: F) -> R
+    where
+        F: FnOnce(&MessagePool<Self>) -> R,
+    {
+        RESPONSE_POOL.with(|p| f(p))
+    }
+}
+
 pub(crate) struct Message<T: Head> {
     head: Rc<T>,
 }
@@ -333,6 +353,15 @@ impl<T: Head> Message<T> {
     /// Get new message from the pool of objects
     pub(crate) fn new() -> Self {
         T::with_pool(|p| p.get_message())
+    }
+}
+
+impl Message<ResponseHead> {
+    /// Get new message from the pool of objects
+    pub(crate) fn with_status(status: StatusCode) -> Self {
+        let mut msg = RESPONSE_POOL.with(|p| p.get_message());
+        msg.status = status;
+        msg
     }
 }
 
@@ -352,42 +381,7 @@ impl<T: Head> std::ops::DerefMut for Message<T> {
 
 impl<T: Head> Drop for Message<T> {
     fn drop(&mut self) {
-        if Rc::strong_count(&self.head) == 1 {
-            T::with_pool(|p| p.release(self.head.clone()));
-        }
-    }
-}
-
-pub(crate) struct BoxedResponseHead {
-    head: Option<Box<ResponseHead>>,
-}
-
-impl BoxedResponseHead {
-    /// Get new message from the pool of objects
-    pub(crate) fn new(status: StatusCode) -> Self {
-        RESPONSE_POOL.with(|p| p.get_message(status))
-    }
-}
-
-impl std::ops::Deref for BoxedResponseHead {
-    type Target = ResponseHead;
-
-    fn deref(&self) -> &Self::Target {
-        self.head.as_ref().unwrap()
-    }
-}
-
-impl std::ops::DerefMut for BoxedResponseHead {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.head.as_mut().unwrap()
-    }
-}
-
-impl Drop for BoxedResponseHead {
-    fn drop(&mut self) {
-        if let Some(head) = self.head.take() {
-            RESPONSE_POOL.with(move |p| p.release(head))
-        }
+        T::with_pool(|p| p.release(self.head.clone()));
     }
 }
 
@@ -395,13 +389,8 @@ impl Drop for BoxedResponseHead {
 /// Request's objects pool
 pub(crate) struct MessagePool<T: Head>(RefCell<Vec<Rc<T>>>);
 
-#[doc(hidden)]
-#[allow(clippy::vec_box)]
-/// Request's objects pool
-pub(super) struct BoxedResponsePool(RefCell<Vec<Box<ResponseHead>>>);
-
 thread_local!(static REQUEST_POOL: MessagePool<RequestHead> = MessagePool::<RequestHead>::create());
-thread_local!(static RESPONSE_POOL: BoxedResponsePool = BoxedResponsePool::create());
+thread_local!(static RESPONSE_POOL: MessagePool<ResponseHead> = MessagePool::<ResponseHead>::create());
 
 impl<T: Head> MessagePool<T> {
     fn create() -> MessagePool<T> {
@@ -428,38 +417,6 @@ impl<T: Head> MessagePool<T> {
     fn release(&self, msg: Rc<T>) {
         let v = &mut self.0.borrow_mut();
         if v.len() < 128 {
-            v.push(msg);
-        }
-    }
-}
-
-impl BoxedResponsePool {
-    fn create() -> BoxedResponsePool {
-        BoxedResponsePool(RefCell::new(Vec::with_capacity(128)))
-    }
-
-    /// Get message from the pool
-    #[inline]
-    fn get_message(&self, status: StatusCode) -> BoxedResponseHead {
-        if let Some(mut head) = self.0.borrow_mut().pop() {
-            head.reason = None;
-            head.status = status;
-            head.headers.clear();
-            head.flags = Flags::empty();
-            BoxedResponseHead { head: Some(head) }
-        } else {
-            BoxedResponseHead {
-                head: Some(Box::new(ResponseHead::new(status))),
-            }
-        }
-    }
-
-    #[inline]
-    /// Release request instance
-    fn release(&self, msg: Box<ResponseHead>) {
-        let v = &mut self.0.borrow_mut();
-        if v.len() < 128 {
-            msg.extensions.borrow_mut().clear();
             v.push(msg);
         }
     }
