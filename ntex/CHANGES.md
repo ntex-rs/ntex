@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0] - 2021-02-21
+
+* 0.2 release
+
 ## [0.2.0-b.14] - 2021-02-20
 
 * connect: Allow to access to inner type of Connect
