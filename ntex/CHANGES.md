@@ -6,6 +6,8 @@
 
 * http: Add ClientResponse::header() method
 
+* framed: Refactor write back-pressure support
+
 ## [0.2.0] - 2021-02-21
 
 * 0.2 release

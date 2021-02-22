@@ -103,9 +103,7 @@ where
 
                 match result {
                     Poll::Ready(Ok(_)) | Poll::Pending => {
-                        if len < HW {
-                            this.state.update_write_task()
-                        }
+                        this.state.update_write_task(len < HW)
                     }
                     Poll::Ready(Err(err)) => {
                         log::trace!("error during sending data: {:?}", err);

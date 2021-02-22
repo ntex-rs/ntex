@@ -33,12 +33,10 @@ bitflags::bitflags! {
         /// read buffer is full
         const RD_BUF_FULL    = 0b0000_1000_0000;
 
-        /// write task is ready
-        const WR_READY       = 0b0001_0000_0000;
         /// write buffer is full
-        const WR_NOT_READY   = 0b0010_0000_0000;
+        const WR_BACKPRESSURE = 0b0000_0001_0000_0000;
 
-        const ST_DSP_ERR    = 0b0001_0000_0000_0000;
+        const ST_DSP_ERR      = 0b0001_0000_0000_0000;
     }
 }
 
@@ -205,40 +203,20 @@ impl State {
 
     /// read task must be paused if service is not ready (RD_PAUSED)
     pub(super) fn is_read_paused(&self) -> bool {
-        self.0.flags.get().intersects(Flags::RD_PAUSED)
+        self.0.flags.get().contains(Flags::RD_PAUSED)
     }
 
     #[inline]
-    /// Check if write back-pressure is disabled
-    pub fn is_write_backpressure_disabled(&self) -> bool {
-        let mut flags = self.0.flags.get();
-        if flags.contains(Flags::WR_READY) {
-            flags.remove(Flags::WR_READY);
-            self.0.flags.set(flags);
-            true
-        } else {
-            false
-        }
-    }
-
-    #[inline]
-    /// Check if write back-pressure is enabled
-    pub fn is_write_backpressure_enabled(&self) -> bool {
-        let mut flags = self.0.flags.get();
-        if flags.contains(Flags::WR_READY) {
-            flags.remove(Flags::WR_READY);
-            self.0.flags.set(flags);
-            true
-        } else {
-            false
-        }
+    /// Check if write task is ready
+    pub fn is_write_ready(&self) -> bool {
+        !self.0.flags.get().contains(Flags::WR_BACKPRESSURE)
     }
 
     #[inline]
     /// Enable write back-persurre
     pub fn enable_write_backpressure(&self) {
         log::trace!("enable write back-pressure");
-        self.insert_flags(Flags::WR_NOT_READY)
+        self.insert_flags(Flags::WR_BACKPRESSURE);
     }
 
     #[inline]
@@ -335,13 +313,16 @@ impl State {
         self.0.read_task.register(waker);
     }
 
-    pub(super) fn update_write_task(&self) {
-        let mut flags = self.0.flags.get();
-        if flags.contains(Flags::WR_NOT_READY) {
-            flags.remove(Flags::WR_NOT_READY);
-            flags.insert(Flags::WR_READY);
-            self.0.flags.set(flags);
-            self.0.dispatch_task.wake();
+    pub(super) fn update_write_task(&self, ready: bool) {
+        if ready {
+            let mut flags = self.0.flags.get();
+            if flags.contains(Flags::WR_BACKPRESSURE) {
+                flags.remove(Flags::WR_BACKPRESSURE);
+                self.0.flags.set(flags);
+                self.0.dispatch_task.wake();
+            }
+        } else {
+            self.insert_flags(Flags::WR_BACKPRESSURE);
         }
     }
 
@@ -383,7 +364,7 @@ impl State {
     ///
     /// Write task must be waken up separately.
     pub fn dsp_enable_write_backpressure(&self, waker: &Waker) {
-        self.insert_flags(Flags::WR_NOT_READY);
+        self.insert_flags(Flags::WR_BACKPRESSURE);
         self.0.dispatch_task.register(waker);
     }
 
