@@ -706,7 +706,6 @@ mod tests {
 
     #[ntex_rt::test]
     async fn test_keepalive() {
-        env_logger::init();
         let (client, server) = Io::create();
         // do not allow to write to socket
         client.remote_buffer_cap(1024);
@@ -735,7 +734,7 @@ mod tests {
                 }
             }),
         );
-        crate::rt::spawn(disp.map(|_| ()));
+        crate::rt::spawn(disp.keepalive_timeout(0).keepalive_timeout(1).map(|_| ()));
 
         let state = state.disconnect_timeout(1);
 

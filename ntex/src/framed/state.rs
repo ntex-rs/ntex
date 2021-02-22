@@ -614,3 +614,81 @@ impl State {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+
+    use crate::codec::BytesCodec;
+    use crate::testing::Io;
+
+    use super::*;
+
+    const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
+    const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
+
+    #[ntex_rt::test]
+    async fn test_utils() {
+        let (client, mut server) = Io::create();
+        client.remote_buffer_cap(1024);
+        client.write(TEXT);
+
+        let state = State::new();
+        assert!(!state.is_read_buf_full());
+        assert!(!state.is_write_buf_full());
+
+        let msg = state.next(&mut server, &BytesCodec).await.unwrap().unwrap();
+        assert_eq!(msg, Bytes::from_static(BIN));
+
+        let res =
+            poll_fn(|cx| Poll::Ready(state.poll_next(&mut server, &BytesCodec, cx)))
+                .await;
+        assert!(res.is_pending());
+        client.write(TEXT);
+        let res =
+            poll_fn(|cx| Poll::Ready(state.poll_next(&mut server, &BytesCodec, cx)))
+                .await;
+        if let Poll::Ready(msg) = res {
+            assert_eq!(msg.unwrap().unwrap(), Bytes::from_static(BIN));
+        }
+
+        client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
+        let msg = state.next(&mut server, &BytesCodec).await;
+        assert!(msg.is_err());
+        state.flags().contains(Flags::IO_ERR);
+        state.flags().contains(Flags::DSP_STOP);
+        state.remove_flags(Flags::IO_ERR | Flags::DSP_STOP);
+
+        client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
+        let res =
+            poll_fn(|cx| Poll::Ready(state.poll_next(&mut server, &BytesCodec, cx)))
+                .await;
+        if let Poll::Ready(msg) = res {
+            assert!(msg.is_err());
+            state.flags().contains(Flags::IO_ERR);
+            state.flags().contains(Flags::DSP_STOP);
+            state.remove_flags(Flags::IO_ERR | Flags::DSP_STOP);
+        }
+
+        state
+            .send(&mut server, &BytesCodec, Bytes::from_static(b"test"))
+            .await
+            .unwrap();
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"test"));
+
+        client.write_error(io::Error::new(io::ErrorKind::Other, "err"));
+        let res = state
+            .send(&mut server, &BytesCodec, Bytes::from_static(b"test"))
+            .await;
+        assert!(res.is_err());
+        state.flags().contains(Flags::IO_ERR);
+        state.flags().contains(Flags::DSP_STOP);
+        state.remove_flags(Flags::IO_ERR | Flags::DSP_STOP);
+
+        state.remove_flags(Flags::IO_ERR | Flags::DSP_STOP);
+        state.shutdown();
+        state.flags().contains(Flags::DSP_STOP);
+        state.flags().contains(Flags::IO_SHUTDOWN);
+    }
+}

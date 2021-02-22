@@ -123,6 +123,11 @@ impl Io {
         self.remote.lock().unwrap().borrow_mut().read = IoState::Err(err);
     }
 
+    /// Set write error on remote side
+    pub fn write_error(&self, err: io::Error) {
+        self.local.lock().unwrap().borrow_mut().write = IoState::Err(err);
+    }
+
     /// Access read buffer.
     pub fn local_buffer<F, R>(&self, f: F) -> R
     where
