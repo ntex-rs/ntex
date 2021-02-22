@@ -181,10 +181,6 @@ impl DateServiceInner {
         }
     }
 
-    fn reset(&self) {
-        self.current.set(false);
-    }
-
     fn update(&self) {
         self.current.set(true);
         self.current_time.set(Instant::now());
@@ -208,7 +204,7 @@ impl DateService {
             // periodic date update
             let s = self.clone();
             crate::rt::spawn(delay_for(Duration::from_millis(500)).then(move |_| {
-                s.0.reset();
+                s.0.current.set(false);
                 future::ready(())
             }));
         }
@@ -227,6 +223,8 @@ impl DateService {
 
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
+        self.check_date();
+
         // SAFETY: reserves exact size
         let len = dst.len();
         dst.reserve(DATE_VALUE_LENGTH_HDR);

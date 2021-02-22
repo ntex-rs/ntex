@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use coo_kie::{Cookie, ParseError as CookieParseError};
 
 use crate::http::error::PayloadError;
-use crate::http::header::CONTENT_LENGTH;
+use crate::http::header::{AsName, HeaderValue, CONTENT_LENGTH};
 use crate::http::{HeaderMap, StatusCode, Version};
 use crate::http::{HttpMessage, Payload, ResponseHead};
 use crate::util::Extensions;
@@ -79,6 +79,12 @@ impl ClientResponse {
     #[inline]
     pub fn status(&self) -> StatusCode {
         self.head().status
+    }
+
+    #[inline]
+    /// Returns a reference to the header value.
+    pub fn header<N: AsName>(&self, name: N) -> Option<&HeaderValue> {
+        self.head().headers.get(name)
     }
 
     #[inline]

@@ -1,5 +1,11 @@
 # Changes
 
+## [0.2.1] - 2021-02-22
+
+* http: Fix http date header update task
+
+* http: Add ClientResponse::header() method
+
 ## [0.2.0] - 2021-02-21
 
 * 0.2 release

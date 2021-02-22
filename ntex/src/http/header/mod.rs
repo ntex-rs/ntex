@@ -4,9 +4,9 @@ pub use http::header::{HeaderName, HeaderValue, InvalidHeaderValue};
 
 pub(crate) mod map;
 
-#[doc(hidden)]
-pub use self::map::GetAll;
 pub use self::map::HeaderMap;
+#[doc(hidden)]
+pub use self::map::{AsName, GetAll};
 
 /// Represents supported types of content encodings
 #[derive(Copy, Clone, PartialEq, Debug)]

@@ -58,9 +58,9 @@ pub use self::apply_cfg::{apply_cfg, apply_cfg_factory};
 ///      type Error = MyError;
 ///      type Future = Pin<Box<Future<Output=Result<Self::Response, Self::Error>>>;
 ///
-///      fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> { ... }
+///      fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> { ... }
 ///
-///      fn call(&mut self, req: Self::Request) -> Self::Future { ... }
+///      fn call(&self, req: Self::Request) -> Self::Future { ... }
 /// }
 /// ```
 ///

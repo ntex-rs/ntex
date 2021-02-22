@@ -50,6 +50,10 @@ async fn test_h1_2() {
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
     assert!(response.status().is_success());
+
+    // check date
+    let hdr = response.header(header::DATE).unwrap();
+    assert!(!hdr.to_str().unwrap().starts_with("000"));
 }
 
 #[ntex::test]
