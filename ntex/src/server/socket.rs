@@ -5,13 +5,13 @@ use crate::rt::net::TcpStream;
 
 pub(crate) enum Listener {
     Tcp(mio::net::TcpListener),
-    #[cfg(all(unix))]
+    #[cfg(unix)]
     Uds(mio::net::UnixListener),
 }
 
 pub(crate) enum SocketAddr {
     Tcp(net::SocketAddr),
-    #[cfg(all(unix))]
+    #[cfg(unix)]
     Uds(mio::net::SocketAddr),
 }
 
@@ -19,7 +19,7 @@ impl fmt::Display for SocketAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             SocketAddr::Tcp(ref addr) => write!(f, "{}", addr),
-            #[cfg(all(unix))]
+            #[cfg(unix)]
             SocketAddr::Uds(ref addr) => write!(f, "{:?}", addr),
         }
     }
@@ -29,7 +29,7 @@ impl fmt::Debug for SocketAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             SocketAddr::Tcp(ref addr) => write!(f, "{:?}", addr),
-            #[cfg(all(unix))]
+            #[cfg(unix)]
             SocketAddr::Uds(ref addr) => write!(f, "{:?}", addr),
         }
     }
@@ -39,7 +39,7 @@ impl fmt::Debug for Listener {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Listener::Tcp(ref lst) => write!(f, "{:?}", lst),
-            #[cfg(all(unix))]
+            #[cfg(unix)]
             Listener::Uds(ref lst) => write!(f, "{:?}", lst),
         }
     }
@@ -49,7 +49,7 @@ impl fmt::Display for Listener {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Listener::Tcp(ref lst) => write!(f, "{}", lst.local_addr().ok().unwrap()),
-            #[cfg(all(unix))]
+            #[cfg(unix)]
             Listener::Uds(ref lst) => {
                 write!(f, "{:?}", lst.local_addr().ok().unwrap())
             }
@@ -63,6 +63,7 @@ impl Listener {
         Listener::Tcp(mio::net::TcpListener::from_std(lst))
     }
 
+    #[cfg(unix)]
     pub(super) fn from_uds(lst: std::os::unix::net::UnixListener) -> Self {
         let _ = lst.set_nonblocking(true);
         Listener::Uds(mio::net::UnixListener::from_std(lst))
@@ -71,7 +72,7 @@ impl Listener {
     pub(crate) fn local_addr(&self) -> SocketAddr {
         match self {
             Listener::Tcp(lst) => SocketAddr::Tcp(lst.local_addr().unwrap()),
-            #[cfg(all(unix))]
+            #[cfg(unix)]
             Listener::Uds(lst) => SocketAddr::Uds(lst.local_addr().unwrap()),
         }
     }
@@ -81,7 +82,7 @@ impl Listener {
             Listener::Tcp(ref lst) => lst.accept().map(|(stream, addr)| {
                 Some((Stream::Tcp(stream), SocketAddr::Tcp(addr)))
             }),
-            #[cfg(all(unix))]
+            #[cfg(unix)]
             Listener::Uds(ref lst) => lst.accept().map(|(stream, addr)| {
                 Some((Stream::Uds(stream), SocketAddr::Uds(addr)))
             }),
@@ -99,7 +100,7 @@ impl mio::event::Source for Listener {
     ) -> io::Result<()> {
         match *self {
             Listener::Tcp(ref mut lst) => lst.register(poll, token, interest),
-            #[cfg(all(unix))]
+            #[cfg(unix)]
             Listener::Uds(ref mut lst) => lst.register(poll, token, interest),
         }
     }
@@ -113,7 +114,7 @@ impl mio::event::Source for Listener {
     ) -> io::Result<()> {
         match *self {
             Listener::Tcp(ref mut lst) => lst.reregister(poll, token, interest),
-            #[cfg(all(unix))]
+            #[cfg(unix)]
             Listener::Uds(ref mut lst) => lst.reregister(poll, token, interest),
         }
     }
@@ -122,7 +123,7 @@ impl mio::event::Source for Listener {
     fn deregister(&mut self, poll: &mio::Registry) -> io::Result<()> {
         match *self {
             Listener::Tcp(ref mut lst) => lst.deregister(poll),
-            #[cfg(all(unix))]
+            #[cfg(unix)]
             Listener::Uds(ref mut lst) => {
                 let res = lst.deregister(poll);
 

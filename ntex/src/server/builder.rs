@@ -512,10 +512,6 @@ pub(crate) fn create_tcp_listener(
 
 #[cfg(test)]
 mod tests {
-    use futures::future::ok;
-    use std::sync::mpsc;
-    use std::{net, thread, time};
-
     use super::*;
     use crate::server::{signals, Server, TestServer};
     use crate::service::fn_service;
@@ -523,6 +519,10 @@ mod tests {
     #[cfg(unix)]
     #[ntex_rt::test]
     async fn test_signals() {
+        use futures::future::ok;
+        use std::sync::mpsc;
+        use std::{net, thread, time};
+
         fn start(tx: mpsc::Sender<(Server, net::SocketAddr)>) -> thread::JoinHandle<()> {
             thread::spawn(move || {
                 let mut sys = crate::rt::System::new("test");

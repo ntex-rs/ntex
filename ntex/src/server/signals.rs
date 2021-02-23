@@ -30,13 +30,8 @@ impl Signals {
         {
             Signals {
                 srv,
-                signal: crate::rt::signal::ctrl_c()
-                    .map(|res| match res {
-                        Ok(_) => Some(((), ())),
-                        Err(_) => None,
-                    })
-                    .boxed_local(),
-            };
+                signal: crate::rt::signal::ctrl_c().boxed_local(),
+            }
         }
 
         #[cfg(unix)]
@@ -90,7 +85,7 @@ impl Future for Signals {
             for sig in sigs {
                 self.srv.signal(sig);
             }
+            Poll::Pending
         }
-        Poll::Pending
     }
 }
