@@ -11,13 +11,13 @@ use crate::rt::spawn;
 use crate::service::{Service, ServiceFactory};
 use crate::util::counter::CounterGuard;
 
-use super::socket::{FromStream, StdStream};
+use super::socket::{FromStream, Stream};
 use super::Token;
 
 /// Server message
 pub(super) enum ServerMessage {
     /// New stream
-    Connect(StdStream),
+    Connect(Stream),
     /// Gracefull shutdown
     Shutdown(Duration),
     /// Force shutdown

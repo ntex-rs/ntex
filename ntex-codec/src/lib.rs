@@ -18,4 +18,4 @@ pub use self::decoder::Decoder;
 pub use self::encoder::Encoder;
 pub use self::framed::{Framed, FramedParts};
 
-pub use tokio::io::{AsyncRead, AsyncWrite};
+pub use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};

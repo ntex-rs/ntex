@@ -19,7 +19,7 @@ use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfiguredService, ServiceConfig};
 use super::service::{Factory, InternalServiceFactory, StreamServiceFactory};
 use super::signals::{Signal, Signals};
-use super::socket::StdListener;
+use super::socket::Listener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use super::{Server, ServerCommand, Token};
 
@@ -30,7 +30,7 @@ pub struct ServerBuilder {
     backlog: i32,
     workers: Vec<(usize, WorkerClient)>,
     services: Vec<Box<dyn InternalServiceFactory>>,
-    sockets: Vec<(Token, String, StdListener)>,
+    sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
     exit: bool,
     shutdown_timeout: Duration,
@@ -150,7 +150,11 @@ impl ServerBuilder {
             for (name, lst) in cfg.services {
                 let token = self.token.next();
                 srv.stream(token, name.clone(), lst.local_addr()?);
-                self.sockets.push((token, name, StdListener::Tcp(lst)));
+                self.sockets.push((
+                    token,
+                    name,
+                    Listener::Tcp(mio::net::TcpListener::from_std(lst)),
+                ));
             }
             self.services.push(Box::new(srv));
         }
@@ -180,8 +184,11 @@ impl ServerBuilder {
                 factory.clone(),
                 lst.local_addr()?,
             ));
-            self.sockets
-                .push((token, name.as_ref().to_string(), StdListener::Tcp(lst)));
+            self.sockets.push((
+                token,
+                name.as_ref().to_string(),
+                Listener::Tcp(mio::net::TcpListener::from_std(lst)),
+            ));
         }
         Ok(self)
     }
@@ -231,8 +238,11 @@ impl ServerBuilder {
             factory,
             addr,
         ));
-        self.sockets
-            .push((token, name.as_ref().to_string(), StdListener::Uds(lst)));
+        self.sockets.push((
+            token,
+            name.as_ref().to_string(),
+            Listener::Uds(mio::net::UnixListener::from_std(lst)),
+        ));
         Ok(self)
     }
 
@@ -253,8 +263,11 @@ impl ServerBuilder {
             factory,
             lst.local_addr()?,
         ));
-        self.sockets
-            .push((token, name.as_ref().to_string(), StdListener::Tcp(lst)));
+        self.sockets.push((
+            token,
+            name.as_ref().to_string(),
+            Listener::Tcp(mio::net::TcpListener::from_std(lst)),
+        ));
         Ok(self)
     }
 
@@ -273,7 +286,7 @@ impl ServerBuilder {
             // start workers
             let mut workers = Vec::new();
             for idx in 0..self.threads {
-                let worker = self.start_worker(idx, self.accept.get_notify());
+                let worker = self.start_worker(idx, self.accept.notify());
                 workers.push(worker.clone());
                 self.workers.push((idx, worker));
             }
@@ -438,7 +451,7 @@ impl ServerBuilder {
                         break;
                     }
 
-                    let worker = self.start_worker(new_idx, self.accept.get_notify());
+                    let worker = self.start_worker(new_idx, self.accept.notify());
                     self.workers.push((new_idx, worker.clone()));
                     self.accept.send(Command::Worker(worker));
                 }

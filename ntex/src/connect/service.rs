@@ -7,7 +7,7 @@ use futures::future::{ok, Future, FutureExt, LocalBoxFuture, Ready};
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
 
-use super::{Address, AsyncResolver, Connect, ConnectError, Resolver};
+use super::{Address, Connect, ConnectError, DnsResolver, Resolver};
 
 pub struct Connector<T> {
     resolver: Resolver<T>,
@@ -15,7 +15,7 @@ pub struct Connector<T> {
 
 impl<T> Connector<T> {
     /// Construct new connect service with custom dns resolver
-    pub fn new(resolver: AsyncResolver) -> Self {
+    pub fn new(resolver: DnsResolver) -> Self {
         Connector {
             resolver: Resolver::new(resolver),
         }
@@ -31,7 +31,7 @@ impl<T: Address> Connector<T> {
     where
         Connect<T>: From<U>,
     {
-        ConnectServiceResponse::new(self.resolver.lookup(message.into()))
+        ConnectServiceResponse::new(self.resolver.call(message.into()))
     }
 }
 
@@ -79,7 +79,7 @@ impl<T: Address> Service for Connector<T> {
 
     #[inline]
     fn call(&self, req: Connect<T>) -> Self::Future {
-        ConnectServiceResponse::new(self.resolver.lookup(req))
+        ConnectServiceResponse::new(self.resolver.call(req))
     }
 }
 

@@ -18,10 +18,9 @@ impl Runtime {
     #[allow(clippy::new_ret_no_self)]
     /// Returns a new runtime initialized with default configuration values.
     pub fn new() -> io::Result<Runtime> {
-        let rt = runtime::Builder::new()
+        let rt = runtime::Builder::new_current_thread()
             .enable_io()
             .enable_time()
-            .basic_scheduler()
             .build()?;
 
         Ok(Runtime {

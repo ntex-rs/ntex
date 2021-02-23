@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -17,5 +17,5 @@ path = "src/lib.rs"
 
 [dependencies]
 ntex-rt-macros = "0.1.0"
-futures = "0.3.12"
-tokio = { version = "0.2.6", default-features=false, features = ["rt-core", "rt-util", "io-driver", "blocking", "tcp", "uds", "udp", "time", "signal", "stream"] }
+futures = "0.3.13"
+tokio = { version = "1", default-features=false, features = ["rt", "net", "time", "signal"] }

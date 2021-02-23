@@ -1,14 +1,9 @@
-use std::io::Write;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{io, mem, time};
+use std::{io, io::Write, pin::Pin, task::Context, task::Poll, time};
 
-use bytes::buf::BufMutExt;
-use bytes::{Bytes, BytesMut};
-use futures::future::poll_fn;
-use futures::{SinkExt, Stream, StreamExt};
+use bytes::{BufMut, Bytes, BytesMut};
+use futures::{future::poll_fn, SinkExt, Stream, StreamExt};
 
-use crate::codec::{AsyncRead, AsyncWrite, Framed};
+use crate::codec::{AsyncRead, AsyncWrite, Framed, ReadBuf};
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::error::PayloadError;
 use crate::http::h1;
@@ -199,18 +194,11 @@ where
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRead for H1Connection<T> {
-    unsafe fn prepare_uninitialized_buffer(
-        &self,
-        buf: &mut [mem::MaybeUninit<u8>],
-    ) -> bool {
-        self.io.as_ref().unwrap().prepare_uninitialized_buffer(buf)
-    }
-
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         Pin::new(&mut self.io.as_mut().unwrap()).poll_read(cx, buf)
     }
 }

@@ -154,7 +154,7 @@ where
         } else {
             Either::Left(TimeoutServiceResponse {
                 fut: self.service.call(request),
-                sleep: delay_for(self.timeout),
+                sleep: Box::pin(delay_for(self.timeout)),
             })
         }
     }
@@ -167,7 +167,7 @@ pin_project_lite::pin_project! {
 pub struct TimeoutServiceResponse<T: Service> {
     #[pin]
     fut: T::Future,
-    sleep: Delay,
+    sleep: Pin<Box<Delay>>,
 }
 }
 

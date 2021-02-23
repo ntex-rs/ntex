@@ -12,7 +12,7 @@ use webpki::DNSNameRef;
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
 
-use super::{Address, AsyncResolver, Connect, ConnectError, Connector};
+use super::{Address, Connect, ConnectError, Connector, DnsResolver};
 
 /// Rustls connector factory
 pub struct RustlsConnector<T> {
@@ -29,7 +29,7 @@ impl<T> RustlsConnector<T> {
     }
 
     /// Construct new connect service with custom dns resolver
-    pub fn with_resolver(config: Arc<ClientConfig>, resolver: AsyncResolver) -> Self {
+    pub fn with_resolver(config: Arc<ClientConfig>, resolver: DnsResolver) -> Self {
         RustlsConnector {
             config,
             connector: Connector::new(resolver),

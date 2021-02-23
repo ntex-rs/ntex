@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use std::{fmt, io};
 
-pub use open_ssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
+pub use open_ssl::ssl::{AlpnError, Ssl, SslAcceptor, SslAcceptorBuilder};
 pub use tokio_openssl::SslStream;
 
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
@@ -107,20 +107,22 @@ where
 
     #[inline]
     fn call(&self, req: Self::Request) -> Self::Future {
-        let acc = self.acceptor.clone();
+        let ssl = Ssl::new(self.acceptor.context())
+            .expect("Provided SSL acceptor was invalid.");
         AcceptorServiceResponse {
             _guard: self.conns.get(),
             delay: if self.timeout == ZERO {
                 None
             } else {
-                Some(delay_for(self.timeout))
+                Some(Box::pin(delay_for(self.timeout)))
             },
             fut: async move {
-                let acc = acc;
-                tokio_openssl::accept(&acc, req).await.map_err(|e| {
+                let mut io = SslStream::new(ssl, req)?;
+                Pin::new(&mut io).accept().await.map_err(|e| {
                     let e: Box<dyn Error> = Box::new(e);
                     e
-                })
+                })?;
+                Ok(io)
             }
             .boxed_local(),
         }
@@ -132,7 +134,7 @@ where
     T: AsyncRead + AsyncWrite,
 {
     fut: LocalBoxFuture<'static, Result<SslStream<T>, Box<dyn Error>>>,
-    delay: Option<Delay>,
+    delay: Option<Pin<Box<Delay>>>,
     _guard: CounterGuard,
 }
 

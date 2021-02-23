@@ -132,7 +132,7 @@ impl Arbiter {
     }
 
     /// Send a future to the Arbiter's thread, and spawn it.
-    pub fn send<F>(&self, future: F)
+    pub fn spawn<F>(&self, future: F)
     where
         F: Future<Output = ()> + Send + Unpin + 'static,
     {
