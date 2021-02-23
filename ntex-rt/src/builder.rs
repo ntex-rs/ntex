@@ -210,7 +210,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
             let local = tokio::task::LocalSet::new();
 
             let runner = crate::System::build()
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(id, id2);
 
         let (tx, rx) = mpsc::channel();
-        sys.arbiter().send(Box::pin(async move {
+        sys.arbiter().spawn(Box::pin(async move {
             let _ = tx.send(System::current().id());
         }));
         let id2 = rx.recv().unwrap();
