@@ -260,6 +260,7 @@ where
                     }
                 }
             }
+            log::trace!("flushed {} bytes", written);
 
             // remove written data
             if written == len {

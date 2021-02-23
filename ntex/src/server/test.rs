@@ -1,6 +1,5 @@
 //! Test server
-use std::sync::mpsc;
-use std::{io, net, thread};
+use std::{io, net, sync::mpsc, thread};
 
 use socket2::{Domain, SockAddr, Socket, Type};
 
@@ -107,8 +106,8 @@ impl TestServer {
     }
 
     /// Connect to server, return TcpStream
-    pub fn connect(&self) -> std::io::Result<TcpStream> {
-        TcpStream::from_std(net::TcpStream::connect(self.addr)?)
+    pub async fn connect(&self) -> io::Result<TcpStream> {
+        TcpStream::connect(self.addr).await
     }
 
     /// Stop http server
