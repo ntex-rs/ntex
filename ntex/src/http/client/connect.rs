@@ -1,9 +1,6 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{fmt, io, mem, net};
+use std::{fmt, future::Future, io, net, pin::Pin, task::Context, task::Poll};
 
-use crate::codec::{AsyncRead, AsyncWrite, Framed};
+use crate::codec::{AsyncRead, AsyncWrite, Framed, ReadBuf};
 use crate::http::body::Body;
 use crate::http::h1::ClientCodec;
 use crate::http::{RequestHeadType, ResponseHead};
@@ -133,18 +130,11 @@ impl fmt::Debug for BoxedSocket {
 }
 
 impl AsyncRead for BoxedSocket {
-    unsafe fn prepare_uninitialized_buffer(
-        &self,
-        buf: &mut [mem::MaybeUninit<u8>],
-    ) -> bool {
-        self.0.as_read().prepare_uninitialized_buffer(buf)
-    }
-
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         Pin::new(self.get_mut().0.as_read_mut()).poll_read(cx, buf)
     }
 }

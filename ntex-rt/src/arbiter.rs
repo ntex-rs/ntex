@@ -93,7 +93,7 @@ impl Arbiter {
         let handle = thread::Builder::new()
             .name(name.clone())
             .spawn(move || {
-                let mut rt = Runtime::new().expect("Can not create Runtime");
+                let rt = Runtime::new().expect("Can not create Runtime");
                 let arb = Arbiter::with_sender(arb_tx);
 
                 let (stop, stop_rx) = channel();
@@ -132,7 +132,7 @@ impl Arbiter {
     }
 
     /// Send a future to the Arbiter's thread, and spawn it.
-    pub fn send<F>(&self, future: F)
+    pub fn spawn<F>(&self, future: F)
     where
         F: Future<Output = ()> + Send + Unpin + 'static,
     {

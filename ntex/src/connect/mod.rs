@@ -14,23 +14,23 @@ pub mod openssl;
 pub mod rustls;
 
 pub use trust_dns_resolver::config::{self, ResolverConfig, ResolverOpts};
-pub use trust_dns_resolver::error::ResolveError;
 use trust_dns_resolver::system_conf::read_system_conf;
+pub use trust_dns_resolver::{error::ResolveError, TokioAsyncResolver as DnsResolver};
 
 use crate::rt::{net::TcpStream, Arbiter};
 
 pub use self::error::ConnectError;
 pub use self::message::{Address, Connect};
-pub use self::resolve::{AsyncResolver, Resolver};
+pub use self::resolve::Resolver;
 pub use self::service::Connector;
 
-pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> AsyncResolver {
-    AsyncResolver::new(cfg, opts)
+pub fn start_resolver(cfg: ResolverConfig, opts: ResolverOpts) -> DnsResolver {
+    DnsResolver::tokio(cfg, opts).unwrap()
 }
 
-struct DefaultResolver(AsyncResolver);
+struct DefaultResolver(DnsResolver);
 
-pub fn default_resolver() -> AsyncResolver {
+pub fn default_resolver() -> DnsResolver {
     if Arbiter::contains_item::<DefaultResolver>() {
         Arbiter::get_item(|item: &DefaultResolver| item.0.clone())
     } else {
@@ -42,7 +42,7 @@ pub fn default_resolver() -> AsyncResolver {
             }
         };
 
-        let resolver = AsyncResolver::new(cfg, opts);
+        let resolver = DnsResolver::tokio(cfg, opts).unwrap();
 
         Arbiter::set_item(DefaultResolver(resolver.clone()));
         resolver
@@ -50,13 +50,12 @@ pub fn default_resolver() -> AsyncResolver {
 }
 
 /// Resolve and connect to remote host
-pub fn connect<T: Address, U>(
-    message: U,
-) -> impl Future<Output = Result<TcpStream, ConnectError>>
+pub fn connect<T, U>(message: U) -> impl Future<Output = Result<TcpStream, ConnectError>>
 where
+    T: Address + 'static,
     Connect<T>: From<U>,
 {
-    service::ConnectServiceResponse::new(
+    service::ConnectServiceResponse::new(Box::pin(
         Resolver::new(default_resolver()).lookup(message.into()),
-    )
+    ))
 }

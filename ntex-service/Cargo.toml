@@ -16,8 +16,8 @@ name = "ntex_service"
 path = "src/lib.rs"
 
 [dependencies]
-futures-util = "0.3.9"
+futures-util = "0.3.13"
 pin-project-lite = "0.2.4"
 
 [dev-dependencies]
-ntex-rt = "0.1"
+ntex-rt = "0.2"

@@ -19,7 +19,7 @@ use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfiguredService, ServiceConfig};
 use super::service::{Factory, InternalServiceFactory, StreamServiceFactory};
 use super::signals::{Signal, Signals};
-use super::socket::StdListener;
+use super::socket::Listener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use super::{Server, ServerCommand, Token};
 
@@ -30,7 +30,7 @@ pub struct ServerBuilder {
     backlog: i32,
     workers: Vec<(usize, WorkerClient)>,
     services: Vec<Box<dyn InternalServiceFactory>>,
-    sockets: Vec<(Token, String, StdListener)>,
+    sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
     exit: bool,
     shutdown_timeout: Duration,
@@ -150,7 +150,7 @@ impl ServerBuilder {
             for (name, lst) in cfg.services {
                 let token = self.token.next();
                 srv.stream(token, name.clone(), lst.local_addr()?);
-                self.sockets.push((token, name, StdListener::Tcp(lst)));
+                self.sockets.push((token, name, Listener::from_tcp(lst)));
             }
             self.services.push(Box::new(srv));
         }
@@ -180,8 +180,11 @@ impl ServerBuilder {
                 factory.clone(),
                 lst.local_addr()?,
             ));
-            self.sockets
-                .push((token, name.as_ref().to_string(), StdListener::Tcp(lst)));
+            self.sockets.push((
+                token,
+                name.as_ref().to_string(),
+                Listener::from_tcp(lst),
+            ));
         }
         Ok(self)
     }
@@ -232,7 +235,7 @@ impl ServerBuilder {
             addr,
         ));
         self.sockets
-            .push((token, name.as_ref().to_string(), StdListener::Uds(lst)));
+            .push((token, name.as_ref().to_string(), Listener::from_uds(lst)));
         Ok(self)
     }
 
@@ -254,7 +257,7 @@ impl ServerBuilder {
             lst.local_addr()?,
         ));
         self.sockets
-            .push((token, name.as_ref().to_string(), StdListener::Tcp(lst)));
+            .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
         Ok(self)
     }
 
@@ -273,7 +276,7 @@ impl ServerBuilder {
             // start workers
             let mut workers = Vec::new();
             for idx in 0..self.threads {
-                let worker = self.start_worker(idx, self.accept.get_notify());
+                let worker = self.start_worker(idx, self.accept.notify());
                 workers.push(worker.clone());
                 self.workers.push((idx, worker));
             }
@@ -438,7 +441,7 @@ impl ServerBuilder {
                         break;
                     }
 
-                    let worker = self.start_worker(new_idx, self.accept.get_notify());
+                    let worker = self.start_worker(new_idx, self.accept.notify());
                     self.workers.push((new_idx, worker.clone()));
                     self.accept.send(Command::Worker(worker));
                 }
@@ -509,10 +512,6 @@ pub(crate) fn create_tcp_listener(
 
 #[cfg(test)]
 mod tests {
-    use futures::future::ok;
-    use std::sync::mpsc;
-    use std::{net, thread, time};
-
     use super::*;
     use crate::server::{signals, Server, TestServer};
     use crate::service::fn_service;
@@ -520,6 +519,10 @@ mod tests {
     #[cfg(unix)]
     #[ntex_rt::test]
     async fn test_signals() {
+        use futures::future::ok;
+        use std::sync::mpsc;
+        use std::{net, thread, time};
+
         fn start(tx: mpsc::Sender<(Server, net::SocketAddr)>) -> thread::JoinHandle<()> {
             thread::spawn(move || {
                 let mut sys = crate::rt::System::new("test");
@@ -546,11 +549,11 @@ mod tests {
             let h = start(tx);
             let (srv, addr) = rx.recv().unwrap();
 
-            thread::sleep(time::Duration::from_millis(300));
+            crate::rt::time::sleep(time::Duration::from_millis(300)).await;
             assert!(net::TcpStream::connect(addr).is_ok());
 
             srv.signal(*sig);
-            thread::sleep(time::Duration::from_millis(300));
+            crate::rt::time::sleep(time::Duration::from_millis(300)).await;
             assert!(net::TcpStream::connect(addr).is_err());
             let _ = h.join();
         }

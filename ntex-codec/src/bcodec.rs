@@ -1,4 +1,4 @@
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use std::io;
 
 use super::{Decoder, Encoder};
@@ -15,7 +15,7 @@ impl Encoder for BytesCodec {
 
     #[inline]
     fn encode(&self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        dst.extend_from_slice(item.bytes());
+        dst.extend_from_slice(&item[..]);
         Ok(())
     }
 }

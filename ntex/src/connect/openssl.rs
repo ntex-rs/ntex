@@ -1,15 +1,13 @@
-use std::future::Future;
-use std::io;
-use std::task::{Context, Poll};
+use std::{io, pin::Pin, task::Context, task::Poll};
 
-use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
-pub use open_ssl::ssl::{Error as SslError, SslConnector, SslMethod};
-pub use tokio_openssl::{HandshakeError, SslStream};
+use futures::future::{ok, Future, FutureExt, LocalBoxFuture, Ready};
+pub use open_ssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
+pub use tokio_openssl::SslStream;
 
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
 
-use super::{Address, AsyncResolver, Connect, ConnectError, Connector};
+use super::{Address, Connect, ConnectError, Connector, DnsResolver};
 
 pub struct OpensslConnector<T> {
     connector: Connector<T>,
@@ -26,7 +24,7 @@ impl<T> OpensslConnector<T> {
     }
 
     /// Construct new connect service with custom dns resolver
-    pub fn with_resolver(connector: SslConnector, resolver: AsyncResolver) -> Self {
+    pub fn with_resolver(connector: SslConnector, resolver: DnsResolver) -> Self {
         OpensslConnector {
             connector: Connector::new(resolver),
             openssl: connector,
@@ -54,17 +52,24 @@ impl<T: Address + 'static> OpensslConnector<T> {
 
             match openssl.configure() {
                 Err(e) => Err(io::Error::new(io::ErrorKind::Other, e).into()),
-                Ok(config) => match tokio_openssl::connect(config, &host, io).await {
-                    Ok(io) => {
-                        trace!("SSL Handshake success: {:?}", host);
-                        Ok(io)
+                Ok(config) => {
+                    let config = config
+                        .into_ssl(&host)
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    let mut io = SslStream::new(config, io)
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    match Pin::new(&mut io).connect().await {
+                        Ok(_) => {
+                            trace!("SSL Handshake success: {:?}", host);
+                            Ok(io)
+                        }
+                        Err(e) => {
+                            trace!("SSL Handshake error: {:?}", e);
+                            Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))
+                                .into())
+                        }
                     }
-                    Err(e) => {
-                        trace!("SSL Handshake error: {:?}", e);
-                        Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))
-                            .into())
-                    }
-                },
+                }
             }
         }
     }

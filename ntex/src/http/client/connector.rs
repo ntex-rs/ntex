@@ -48,7 +48,7 @@ pub struct Connector {
     connector: BoxedConnector,
     ssl_connector: Option<BoxedConnector>,
     #[allow(dead_code)]
-    resolver: connect::AsyncResolver,
+    resolver: connect::DnsResolver,
 }
 
 trait Io: AsyncRead + AsyncWrite + Unpin {}
@@ -61,7 +61,7 @@ impl Default for Connector {
 }
 
 impl Connector {
-    pub fn new(resolver: connect::AsyncResolver) -> Connector {
+    pub fn new(resolver: connect::DnsResolver) -> Connector {
         let conn = Connector {
             connector: boxed::service(
                 TcpConnector::new(resolver.clone())

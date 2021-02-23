@@ -98,7 +98,7 @@ impl Builder {
         let (stop_tx, stop) = channel();
         let (sys_sender, sys_receiver) = unbounded();
 
-        let mut rt = Runtime::new().unwrap();
+        let rt = Runtime::new().unwrap();
 
         // system arbiter
         let system = System::construct(
@@ -161,7 +161,7 @@ impl SystemRunner {
     /// This function will start event loop and will finish once the
     /// `System::stop()` function is called.
     pub fn run(self) -> io::Result<()> {
-        let SystemRunner { mut rt, stop, .. } = self;
+        let SystemRunner { rt, stop, .. } = self;
 
         // run loop
         match rt.block_on(stop) {
@@ -210,7 +210,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
             let local = tokio::task::LocalSet::new();
 
             let runner = crate::System::build()
@@ -237,7 +239,7 @@ mod tests {
         assert_eq!(id, id2);
 
         let (tx, rx) = mpsc::channel();
-        sys.arbiter().send(Box::pin(async move {
+        sys.arbiter().spawn(Box::pin(async move {
             let _ = tx.send(System::current().id());
         }));
         let id2 = rx.recv().unwrap();

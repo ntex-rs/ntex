@@ -85,7 +85,7 @@ pub struct KeepAliveService<R, E, F> {
 }
 
 struct Inner {
-    delay: Delay,
+    delay: Pin<Box<Delay>>,
     expire: Instant,
 }
 
@@ -101,7 +101,7 @@ where
             time,
             inner: RefCell::new(Inner {
                 expire,
-                delay: delay_until(expire),
+                delay: Box::pin(delay_until(expire)),
             }),
             _t: PhantomData,
         }
@@ -127,7 +127,7 @@ where
                     Poll::Ready(Err((self.f)()))
                 } else {
                     let expire = inner.expire;
-                    inner.delay.reset(expire);
+                    inner.delay.as_mut().reset(expire);
                     let _ = Pin::new(&mut inner.delay).poll(cx);
                     Poll::Ready(Ok(()))
                 }

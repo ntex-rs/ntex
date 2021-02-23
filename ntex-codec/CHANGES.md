@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0] - 2021-02-23
+
+* Migrate to tokio 1.x
+
 ## [0.3.0] - 2021-02-20
 
 * Make Encoder and Decoder methods immutable

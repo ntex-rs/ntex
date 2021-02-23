@@ -3,16 +3,16 @@ use std::{cell::RefCell, future::Future, io, pin::Pin, rc::Rc, time::Duration};
 
 use bytes::{Buf, BytesMut};
 
-use crate::codec::{AsyncRead, AsyncWrite};
+use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::framed::State;
-use crate::rt::time::{delay_for, Delay};
+use crate::rt::time::{sleep, Sleep};
 
 const HW: usize = 16 * 1024;
 
 #[derive(Debug)]
 enum IoWriteState {
     Processing,
-    Shutdown(Option<Delay>, Shutdown),
+    Shutdown(Option<Pin<Box<Sleep>>>, Shutdown),
 }
 
 #[derive(Debug)]
@@ -50,7 +50,7 @@ where
         let disconnect_timeout = state.get_disconnect_timeout() as u64;
         let st = IoWriteState::Shutdown(
             if disconnect_timeout != 0 {
-                Some(delay_for(Duration::from_millis(disconnect_timeout)))
+                Some(Box::pin(sleep(Duration::from_millis(disconnect_timeout))))
             } else {
                 None
             },
@@ -87,7 +87,9 @@ where
                     let disconnect_timeout = this.state.get_disconnect_timeout() as u64;
                     this.st = IoWriteState::Shutdown(
                         if disconnect_timeout != 0 {
-                            Some(delay_for(Duration::from_millis(disconnect_timeout)))
+                            Some(Box::pin(sleep(Duration::from_millis(
+                                disconnect_timeout,
+                            ))))
                         } else {
                             None
                         },
@@ -161,10 +163,13 @@ where
                         Shutdown::Shutdown => {
                             // read until 0 or err
                             let mut buf = [0u8; 512];
+                            let mut read_buf = ReadBuf::new(&mut buf);
                             let mut io = this.io.borrow_mut();
                             loop {
-                                match Pin::new(&mut *io).poll_read(cx, &mut buf) {
-                                    Poll::Ready(Ok(0)) | Poll::Ready(Err(_)) => {
+                                match Pin::new(&mut *io).poll_read(cx, &mut read_buf) {
+                                    Poll::Ready(Err(_)) | Poll::Ready(Ok(_))
+                                        if read_buf.filled().is_empty() =>
+                                    {
                                         this.state.set_wr_shutdown_complete();
                                         log::trace!("write task is stopped");
                                         return Poll::Ready(());

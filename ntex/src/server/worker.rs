@@ -1,25 +1,25 @@
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time;
+use std::{pin::Pin, sync::Arc, time};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot;
 use futures::future::{join_all, LocalBoxFuture, MapOk};
-use futures::{Future, FutureExt, Stream, TryFutureExt};
+use futures::{Future, FutureExt, Stream as StdStream, TryFutureExt};
 
 use crate::rt::time::{delay_until, Delay, Instant};
 use crate::rt::{spawn, Arbiter};
 use crate::util::counter::Counter;
 
-use super::accept::AcceptNotify;
+use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
-use super::socket::{SocketAddr, StdStream};
+use super::socket::{SocketAddr, Stream};
 use super::Token;
 
+#[derive(Debug)]
 pub(super) struct WorkerCommand(Conn);
 
+#[derive(Debug)]
 /// Stop worker message. Returns `true` on successful shutdown
 /// and `false` if some connections are still alive.
 pub(super) struct StopCommand {
@@ -29,7 +29,7 @@ pub(super) struct StopCommand {
 
 #[derive(Debug)]
 pub(super) struct Conn {
-    pub(super) io: StdStream,
+    pub(super) io: Stream,
     pub(super) token: Token,
     pub(super) peer: Option<SocketAddr>,
 }
@@ -55,7 +55,7 @@ thread_local! {
         Counter::new(MAX_CONNS.load(Ordering::Relaxed));
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct WorkerClient {
     pub(super) idx: usize,
     tx1: UnboundedSender<WorkerCommand>,
@@ -95,7 +95,7 @@ impl WorkerClient {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(super) struct WorkerAvailability {
     notify: AcceptNotify,
     available: Arc<AtomicBool>,
@@ -116,7 +116,7 @@ impl WorkerAvailability {
     pub(super) fn set(&self, val: bool) {
         let old = self.available.swap(val, Ordering::Release);
         if !old && val {
-            self.notify.notify()
+            self.notify.send(Command::WorkerAvailable)
         }
     }
 }
@@ -578,7 +578,11 @@ mod tests {
     async fn basics() {
         let (_tx1, rx1) = unbounded();
         let (mut tx2, rx2) = unbounded();
-        let avail = WorkerAvailability::new(AcceptNotify::default());
+        let (sync_tx, _sync_rx) = std::sync::mpsc::channel();
+        let poll = mio::Poll::new().unwrap();
+        let waker = Arc::new(mio::Waker::new(poll.registry(), mio::Token(1)).unwrap());
+        let avail =
+            WorkerAvailability::new(AcceptNotify::new(waker.clone(), sync_tx.clone()));
 
         let st = Arc::new(Mutex::new(St::Pending));
         let counter = Arc::new(Mutex::new(0));
@@ -655,7 +659,7 @@ mod tests {
         // force shutdown
         let (_tx1, rx1) = unbounded();
         let (mut tx2, rx2) = unbounded();
-        let avail = WorkerAvailability::new(AcceptNotify::default());
+        let avail = WorkerAvailability::new(AcceptNotify::new(waker, sync_tx.clone()));
         let f = SrvFactory {
             st: st.clone(),
             counter: counter.clone(),

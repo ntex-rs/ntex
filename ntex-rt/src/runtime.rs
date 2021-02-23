@@ -18,10 +18,9 @@ impl Runtime {
     #[allow(clippy::new_ret_no_self)]
     /// Returns a new runtime initialized with default configuration values.
     pub fn new() -> io::Result<Runtime> {
-        let rt = runtime::Builder::new()
+        let rt = runtime::Builder::new_current_thread()
             .enable_io()
             .enable_time()
-            .basic_scheduler()
             .build()?;
 
         Ok(Runtime {
@@ -86,10 +85,10 @@ impl Runtime {
     ///
     /// The caller is responsible for ensuring that other spawned futures
     /// complete execution by calling `block_on` or `run`.
-    pub fn block_on<F>(&mut self, f: F) -> F::Output
+    pub fn block_on<F>(&self, f: F) -> F::Output
     where
         F: Future,
     {
-        self.local.block_on(&mut self.rt, f)
+        self.local.block_on(&self.rt, f)
     }
 }

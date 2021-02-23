@@ -8,7 +8,7 @@ use bytes::BytesMut;
 use futures::future::poll_fn;
 use futures::task::AtomicWaker;
 
-use crate::codec::{AsyncRead, AsyncWrite};
+use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::rt::time::delay_for;
 
 /// Async io stream
@@ -244,24 +244,24 @@ impl AsyncRead for Io {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         let guard = self.local.lock().unwrap();
         let mut ch = guard.borrow_mut();
         ch.waker.register(cx.waker());
 
         if !ch.buf.is_empty() {
-            let size = std::cmp::min(ch.buf.len(), buf.len());
+            let size = std::cmp::min(ch.buf.len(), buf.capacity());
             let b = ch.buf.split_to(size);
-            buf[..size].copy_from_slice(&b);
-            return Poll::Ready(Ok(size));
+            buf.put_slice(&b);
+            return Poll::Ready(Ok(()));
         }
 
         match mem::take(&mut ch.read) {
             IoState::Ok => Poll::Pending,
             IoState::Close => {
                 ch.read = IoState::Close;
-                Poll::Ready(Ok(0))
+                Poll::Ready(Ok(()))
             }
             IoState::Pending => Poll::Pending,
             IoState::Err(e) => Poll::Ready(Err(e)),

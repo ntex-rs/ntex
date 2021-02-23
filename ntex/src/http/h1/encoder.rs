@@ -116,7 +116,7 @@ pub(super) trait MessageType: Sized {
         let mut pos = 0;
         let mut has_date = false;
         let mut remaining = dst.capacity() - dst.len();
-        let mut buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
+        let mut buf = dst.chunk_mut().as_mut_ptr() as *mut u8;
         for (key, value) in headers {
             match *key {
                 CONNECTION => continue,
@@ -140,7 +140,7 @@ pub(super) trait MessageType: Sized {
                             pos = 0;
                             dst.reserve(len * 2);
                             remaining = dst.capacity() - dst.len();
-                            buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
+                            buf = dst.chunk_mut().as_mut_ptr() as *mut u8;
                         }
                         copy_nonoverlapping(k.as_ptr(), buf, k_len);
                         buf = buf.add(k_len);
@@ -167,7 +167,7 @@ pub(super) trait MessageType: Sized {
                                 pos = 0;
                                 dst.reserve(len * 2);
                                 remaining = dst.capacity() - dst.len();
-                                buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
+                                buf = dst.chunk_mut().as_mut_ptr() as *mut u8;
                             }
                             copy_nonoverlapping(k.as_ptr(), buf, k_len);
                             buf = buf.add(k_len);

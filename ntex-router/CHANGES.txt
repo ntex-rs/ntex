@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0] - 2021-02-23
+
+* Upgrade to bytestring 1.0
+
 ## [0.3.8] - 2020-10-28
 
 * Router struct implements Clone trait

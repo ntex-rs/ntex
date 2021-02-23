@@ -1,13 +1,7 @@
-use std::error::Error;
-use std::future::Future;
-use std::io;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::{error::Error, io, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
-use futures::future::{ok, Ready};
+use futures::future::{ok, Future, Ready};
 use tokio_rustls::{Accept, TlsAcceptor};
 
 pub use rust_tls::{ServerConfig, Session};
@@ -15,7 +9,7 @@ pub use tokio_rustls::server::TlsStream;
 pub use webpki_roots::TLS_SERVER_ROOTS;
 
 use crate::codec::{AsyncRead, AsyncWrite};
-use crate::rt::time::{delay_for, Delay};
+use crate::rt::time::{sleep, Sleep};
 use crate::service::{Service, ServiceFactory};
 use crate::util::counter::{Counter, CounterGuard};
 
@@ -112,7 +106,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {
             delay: if self.timeout == ZERO {
                 None
             } else {
-                Some(delay_for(self.timeout))
+                Some(Box::pin(sleep(self.timeout)))
             },
         }
     }
@@ -123,7 +117,7 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     fut: Accept<T>,
-    delay: Option<Delay>,
+    delay: Option<Pin<Box<Sleep>>>,
     _guard: CounterGuard,
 }
 

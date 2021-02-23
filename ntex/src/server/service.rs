@@ -11,13 +11,13 @@ use crate::rt::spawn;
 use crate::service::{Service, ServiceFactory};
 use crate::util::counter::CounterGuard;
 
-use super::socket::{FromStream, StdStream};
+use super::socket::{FromStream, Stream};
 use super::Token;
 
 /// Server message
 pub(super) enum ServerMessage {
     /// New stream
-    Connect(StdStream),
+    Connect(Stream),
     /// Gracefull shutdown
     Shutdown(Duration),
     /// Force shutdown
@@ -84,7 +84,7 @@ where
     fn call(&self, (guard, req): (Option<CounterGuard>, ServerMessage)) -> Self::Future {
         match req {
             ServerMessage::Connect(stream) => {
-                let stream = FromStream::from_stdstream(stream).map_err(|e| {
+                let stream = FromStream::from_stream(stream).map_err(|e| {
                     error!("Can not convert to an async tcp stream: {}", e);
                 });
 

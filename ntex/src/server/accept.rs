@@ -1,6 +1,4 @@
-use std::sync::mpsc as sync_mpsc;
-use std::time::Duration;
-use std::{io, thread};
+use std::{io, sync::mpsc as sync_mpsc, sync::Arc, thread, time::Duration};
 
 use log::{error, info};
 use slab::Slab;
@@ -8,94 +6,89 @@ use slab::Slab;
 use crate::rt::time::{delay_until, Instant};
 use crate::rt::System;
 
-use super::socket::{SocketAddr, SocketListener, StdListener};
+use super::socket::{Listener, SocketAddr};
 use super::worker::{Conn, WorkerClient};
 use super::{Server, Token};
 
+const DELTA: usize = 100;
+const NOTIFY: mio::Token = mio::Token(0);
+
+#[derive(Debug)]
 pub(super) enum Command {
     Pause,
     Resume,
     Stop,
     Worker(WorkerClient),
+    Timer,
+    WorkerAvailable,
 }
 
 struct ServerSocketInfo {
     addr: SocketAddr,
     token: Token,
-    sock: SocketListener,
+    sock: Listener,
     timeout: Option<Instant>,
 }
 
-#[derive(Clone)]
-pub(super) struct AcceptNotify(mio::SetReadiness);
+#[derive(Debug, Clone)]
+pub(super) struct AcceptNotify(Arc<mio::Waker>, sync_mpsc::Sender<Command>);
 
 impl AcceptNotify {
-    pub(super) fn new(ready: mio::SetReadiness) -> Self {
-        AcceptNotify(ready)
+    pub(super) fn new(waker: Arc<mio::Waker>, tx: sync_mpsc::Sender<Command>) -> Self {
+        AcceptNotify(waker, tx)
     }
 
-    pub(super) fn notify(&self) {
-        let _ = self.0.set_readiness(mio::Ready::readable());
-    }
-}
-
-impl Default for AcceptNotify {
-    fn default() -> Self {
-        AcceptNotify::new(mio::Registration::new2().1)
+    pub(super) fn send(&self, cmd: Command) {
+        let _ = self.1.send(cmd);
+        let _ = self.0.wake();
     }
 }
 
 pub(super) struct AcceptLoop {
-    cmd_reg: Option<mio::Registration>,
-    cmd_ready: mio::SetReadiness,
-    notify_reg: Option<mio::Registration>,
-    notify_ready: mio::SetReadiness,
-    tx: sync_mpsc::Sender<Command>,
-    rx: Option<sync_mpsc::Receiver<Command>>,
-    srv: Option<Server>,
+    notify: AcceptNotify,
+    inner: Option<(sync_mpsc::Receiver<Command>, mio::Poll, Server)>,
 }
 
 impl AcceptLoop {
     pub(super) fn new(srv: Server) -> AcceptLoop {
+        // Create a poll instance
+        let poll = mio::Poll::new()
+            .map_err(|e| panic!("Can not create mio::Poll {}", e))
+            .unwrap();
+
         let (tx, rx) = sync_mpsc::channel();
-        let (cmd_reg, cmd_ready) = mio::Registration::new2();
-        let (notify_reg, notify_ready) = mio::Registration::new2();
+        let waker = Arc::new(
+            mio::Waker::new(poll.registry(), NOTIFY)
+                .map_err(|e| panic!("Can not create mio::Waker {}", e))
+                .unwrap(),
+        );
+        let notify = AcceptNotify::new(waker, tx);
 
         AcceptLoop {
-            tx,
-            cmd_ready,
-            cmd_reg: Some(cmd_reg),
-            notify_ready,
-            notify_reg: Some(notify_reg),
-            rx: Some(rx),
-            srv: Some(srv),
+            notify,
+            inner: Some((rx, poll, srv)),
         }
     }
 
     pub(super) fn send(&self, msg: Command) {
-        let _ = self.tx.send(msg);
-        let _ = self.cmd_ready.set_readiness(mio::Ready::readable());
+        self.notify.send(msg)
     }
 
-    pub(super) fn get_notify(&self) -> AcceptNotify {
-        AcceptNotify::new(self.notify_ready.clone())
+    pub(super) fn notify(&self) -> AcceptNotify {
+        self.notify.clone()
     }
 
     pub(super) fn start(
         &mut self,
-        socks: Vec<(Token, StdListener)>,
+        socks: Vec<(Token, Listener)>,
         workers: Vec<WorkerClient>,
     ) {
-        let srv = self.srv.take().expect("Can not re-use AcceptInfo");
+        let (rx, poll, srv) = self
+            .inner
+            .take()
+            .expect("AcceptLoop cannot be used multiple times");
 
-        Accept::start(
-            self.rx.take().expect("Can not re-use AcceptInfo"),
-            self.cmd_reg.take().expect("Can not re-use AcceptInfo"),
-            self.notify_reg.take().expect("Can not re-use AcceptInfo"),
-            socks,
-            srv,
-            workers,
-        );
+        Accept::start(rx, poll, socks, srv, workers, self.notify.clone());
     }
 }
 
@@ -105,15 +98,10 @@ struct Accept {
     sockets: Slab<ServerSocketInfo>,
     workers: Vec<WorkerClient>,
     srv: Server,
-    timer: (mio::Registration, mio::SetReadiness),
+    notify: AcceptNotify,
     next: usize,
     backpressure: bool,
 }
-
-const DELTA: usize = 100;
-const CMD: mio::Token = mio::Token(0);
-const TIMER: mio::Token = mio::Token(1);
-const NOTIFY: mio::Token = mio::Token(2);
 
 /// This function defines errors that are per-connection. Which basically
 /// means that if we get this error from `accept()` system call it means
@@ -129,14 +117,13 @@ fn connection_error(e: &io::Error) -> bool {
 }
 
 impl Accept {
-    #![allow(clippy::too_many_arguments)]
     fn start(
         rx: sync_mpsc::Receiver<Command>,
-        cmd_reg: mio::Registration,
-        notify_reg: mio::Registration,
-        socks: Vec<(Token, StdListener)>,
+        poll: mio::Poll,
+        socks: Vec<(Token, Listener)>,
         srv: Server,
         workers: Vec<WorkerClient>,
+        notify: AcceptNotify,
     ) {
         let sys = System::current();
 
@@ -145,77 +132,40 @@ impl Accept {
             .name("ntex-server accept loop".to_owned())
             .spawn(move || {
                 System::set_current(sys);
-                let mut accept = Accept::new(rx, socks, workers, srv);
-
-                // Start listening for incoming commands
-                if let Err(err) = accept.poll.register(
-                    &cmd_reg,
-                    CMD,
-                    mio::Ready::readable(),
-                    mio::PollOpt::edge(),
-                ) {
-                    panic!("Can not register Registration: {}", err);
-                }
-
-                // Start listening for notify updates
-                if let Err(err) = accept.poll.register(
-                    &notify_reg,
-                    NOTIFY,
-                    mio::Ready::readable(),
-                    mio::PollOpt::edge(),
-                ) {
-                    panic!("Can not register Registration: {}", err);
-                }
-
-                accept.poll();
+                Accept::new(rx, poll, socks, workers, srv, notify).poll()
             });
     }
 
     fn new(
         rx: sync_mpsc::Receiver<Command>,
-        socks: Vec<(Token, StdListener)>,
+        poll: mio::Poll,
+        socks: Vec<(Token, Listener)>,
         workers: Vec<WorkerClient>,
         srv: Server,
+        notify: AcceptNotify,
     ) -> Accept {
-        // Create a poll instance
-        let poll = match mio::Poll::new() {
-            Ok(poll) => poll,
-            Err(err) => panic!("Can not create mio::Poll: {}", err),
-        };
-
         // Start accept
         let mut sockets = Slab::new();
-        for (hnd_token, lst) in socks.into_iter() {
+        for (hnd_token, mut lst) in socks.into_iter() {
             let addr = lst.local_addr();
-
-            let server = lst.into_listener();
             let entry = sockets.vacant_entry();
             let token = entry.key();
 
             // Start listening for incoming connections
-            if let Err(err) = poll.register(
-                &server,
+            if let Err(err) = poll.registry().register(
+                &mut lst,
                 mio::Token(token + DELTA),
-                mio::Ready::readable(),
-                mio::PollOpt::edge(),
+                mio::Interest::READABLE,
             ) {
                 panic!("Can not register io: {}", err);
             }
 
             entry.insert(ServerSocketInfo {
                 addr,
+                sock: lst,
                 token: hnd_token,
-                sock: server,
                 timeout: None,
             });
-        }
-
-        // Timer
-        let (tm, tmr) = mio::Registration::new2();
-        if let Err(err) =
-            poll.register(&tm, TIMER, mio::Ready::readable(), mio::PollOpt::edge())
-        {
-            panic!("Can not register Registration: {}", err);
         }
 
         Accept {
@@ -223,9 +173,9 @@ impl Accept {
             rx,
             sockets,
             workers,
+            notify,
             srv,
             next: 0,
-            timer: (tm, tmr),
             backpressure: false,
         }
     }
@@ -251,13 +201,11 @@ impl Accept {
             for event in events.iter() {
                 let token = event.token();
                 match token {
-                    CMD => {
+                    NOTIFY => {
                         if !self.process_cmd() {
                             return;
                         }
                     }
-                    TIMER => self.process_timer(),
-                    NOTIFY => self.backpressure(false),
                     _ => {
                         let token = usize::from(token);
                         if token < DELTA {
@@ -275,11 +223,10 @@ impl Accept {
         for (token, info) in self.sockets.iter_mut() {
             if let Some(inst) = info.timeout.take() {
                 if now > inst {
-                    if let Err(err) = self.poll.register(
-                        &info.sock,
+                    if let Err(err) = self.poll.registry().register(
+                        &mut info.sock,
                         mio::Token(token + DELTA),
-                        mio::Ready::readable(),
-                        mio::PollOpt::edge(),
+                        mio::Interest::READABLE,
                     ) {
                         error!("Can not register server socket {}", err);
                     } else {
@@ -298,7 +245,9 @@ impl Accept {
                 Ok(cmd) => match cmd {
                     Command::Pause => {
                         for (_, info) in self.sockets.iter_mut() {
-                            if let Err(err) = self.poll.deregister(&info.sock) {
+                            if let Err(err) =
+                                self.poll.registry().deregister(&mut info.sock)
+                            {
                                 error!("Can not deregister server socket {}", err);
                             } else {
                                 info!("Paused accepting connections on {}", info.addr);
@@ -306,12 +255,11 @@ impl Accept {
                         }
                     }
                     Command::Resume => {
-                        for (token, info) in self.sockets.iter() {
-                            if let Err(err) = self.poll.register(
-                                &info.sock,
+                        for (token, info) in self.sockets.iter_mut() {
+                            if let Err(err) = self.poll.registry().register(
+                                &mut info.sock,
                                 mio::Token(token + DELTA),
-                                mio::Ready::readable(),
-                                mio::PollOpt::edge(),
+                                mio::Interest::READABLE,
                             ) {
                                 error!("Can not resume socket accept process: {}", err);
                             } else {
@@ -323,9 +271,9 @@ impl Accept {
                         }
                     }
                     Command::Stop => {
-                        for (_, info) in self.sockets.iter() {
+                        for (_, info) in self.sockets.iter_mut() {
                             trace!("Stopping socket listener: {}", info.addr);
-                            let _ = self.poll.deregister(&info.sock);
+                            let _ = self.poll.registry().deregister(&mut info.sock);
                         }
                         return false;
                     }
@@ -333,12 +281,18 @@ impl Accept {
                         self.backpressure(false);
                         self.workers.push(worker);
                     }
+                    Command::Timer => {
+                        self.process_timer();
+                    }
+                    Command::WorkerAvailable => {
+                        self.backpressure(false);
+                    }
                 },
                 Err(err) => match err {
                     sync_mpsc::TryRecvError::Empty => break,
                     sync_mpsc::TryRecvError::Disconnected => {
-                        for (_, info) in self.sockets.iter() {
-                            let _ = self.poll.deregister(&info.sock);
+                        for (_, info) in self.sockets.iter_mut() {
+                            let _ = self.poll.registry().deregister(&mut info.sock);
                         }
                         return false;
                     }
@@ -352,16 +306,15 @@ impl Accept {
         if self.backpressure {
             if !on {
                 self.backpressure = false;
-                for (token, info) in self.sockets.iter() {
+                for (token, info) in self.sockets.iter_mut() {
                     if info.timeout.is_some() {
                         // socket will re-register itself after timeout
                         continue;
                     }
-                    if let Err(err) = self.poll.register(
-                        &info.sock,
+                    if let Err(err) = self.poll.registry().register(
+                        &mut info.sock,
                         mio::Token(token + DELTA),
-                        mio::Ready::readable(),
-                        mio::PollOpt::edge(),
+                        mio::Interest::READABLE,
                     ) {
                         error!("Can not resume socket accept process: {}", err);
                     } else {
@@ -371,10 +324,10 @@ impl Accept {
             }
         } else if on {
             self.backpressure = true;
-            for (_, info) in self.sockets.iter() {
+            for (_, info) in self.sockets.iter_mut() {
                 if info.timeout.is_none() {
                     trace!("Enabling backpressure for {}", info.addr);
-                    let _ = self.poll.deregister(&info.sock);
+                    let _ = self.poll.registry().deregister(&mut info.sock);
                 }
             }
         }
@@ -452,18 +405,19 @@ impl Accept {
                     Err(ref e) if connection_error(e) => continue,
                     Err(e) => {
                         error!("Error accepting connection: {}", e);
-                        if let Err(err) = self.poll.deregister(&info.sock) {
+                        if let Err(err) = self.poll.registry().deregister(&mut info.sock)
+                        {
                             error!("Can not deregister server socket {}", err);
                         }
 
                         // sleep after error
                         info.timeout = Some(Instant::now() + Duration::from_millis(500));
 
-                        let r = self.timer.1.clone();
-                        System::current().arbiter().send(Box::pin(async move {
+                        let notify = self.notify.clone();
+                        System::current().arbiter().spawn(Box::pin(async move {
                             delay_until(Instant::now() + Duration::from_millis(510))
                                 .await;
-                            let _ = r.set_readiness(mio::Ready::readable());
+                            notify.send(Command::Timer);
                         }));
                         return;
                     }

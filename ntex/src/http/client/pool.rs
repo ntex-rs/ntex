@@ -8,7 +8,7 @@ use h2::client::{handshake, Connection, SendRequest};
 use http::uri::Authority;
 
 use crate::channel::pool;
-use crate::codec::{AsyncRead, AsyncWrite};
+use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::http::Protocol;
 use crate::rt::{spawn, time::delay_for, time::Delay};
 use crate::service::Service;
@@ -255,10 +255,11 @@ where
                 } else {
                     let mut io = conn.io;
                     let mut buf = [0; 2];
+                    let mut read_buf = ReadBuf::new(&mut buf);
                     if let ConnectionType::H1(ref mut s) = io {
-                        match Pin::new(s).poll_read(cx, &mut buf) {
+                        match Pin::new(s).poll_read(cx, &mut read_buf) {
                             Poll::Pending => (),
-                            Poll::Ready(Ok(n)) if n > 0 => {
+                            Poll::Ready(Ok(_)) if !read_buf.filled().is_empty() => {
                                 if let ConnectionType::H1(io) = io {
                                     CloseConnection::spawn(io, self.disconnect_timeout);
                                 }
@@ -368,7 +369,7 @@ where
 
 struct CloseConnection<T> {
     io: T,
-    timeout: Option<Delay>,
+    timeout: Option<Pin<Box<Delay>>>,
     shutdown: bool,
 }
 
@@ -378,7 +379,7 @@ where
 {
     fn spawn(io: T, timeout: Duration) {
         let timeout = if timeout != ZERO {
-            Some(delay_for(timeout))
+            Some(Box::pin(delay_for(timeout)))
         } else {
             None
         };
@@ -412,12 +413,13 @@ where
                 Poll::Ready(_) => (),
                 Poll::Pending => {
                     let mut buf = [0u8; 512];
+                    let mut read_buf = ReadBuf::new(&mut buf);
                     loop {
-                        match Pin::new(&mut this.io).poll_read(cx, &mut buf) {
+                        match Pin::new(&mut this.io).poll_read(cx, &mut read_buf) {
                             Poll::Pending => return Poll::Pending,
                             Poll::Ready(Err(_)) => return Poll::Ready(()),
-                            Poll::Ready(Ok(n)) => {
-                                if n == 0 {
+                            Poll::Ready(Ok(_)) => {
+                                if read_buf.filled().is_empty() {
                                     return Poll::Ready(());
                                 }
                                 continue;

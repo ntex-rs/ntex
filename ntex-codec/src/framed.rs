@@ -306,9 +306,10 @@ where
 
             // read until 0 or err
             let mut buf = [0u8; 512];
+            let mut read_buf = tokio::io::ReadBuf::new(&mut buf);
             loop {
-                match ready!(Pin::new(&mut self.io).poll_read(cx, &mut buf)) {
-                    Err(_) | Ok(0) => {
+                match ready!(Pin::new(&mut self.io).poll_read(cx, &mut read_buf)) {
+                    Err(_) | Ok(_) if read_buf.filled().is_empty() => {
                         break;
                     }
                     _ => (),
@@ -387,7 +388,11 @@ where
                 if remaining < LW {
                     self.read_buf.reserve(HW - remaining)
                 }
-                match Pin::new(&mut self.io).poll_read_buf(cx, &mut self.read_buf) {
+                match crate::poll_read_buf(
+                    Pin::new(&mut self.io),
+                    cx,
+                    &mut self.read_buf,
+                ) {
                     Poll::Pending => {
                         if updated {
                             done_read = true;

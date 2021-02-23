@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0-b.1] - 2021-02-22
+
+* Migrate to tokio 1.x
+
 ## [0.2.1] - 2021-02-22
 
 * http: Fix http date header update task

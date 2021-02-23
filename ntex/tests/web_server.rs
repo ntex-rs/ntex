@@ -18,6 +18,7 @@ use ntex::http::header::{
     TRANSFER_ENCODING,
 };
 use ntex::http::{Method, StatusCode};
+use ntex::rt::time::{sleep, Sleep};
 
 use ntex::web::middleware::Compress;
 use ntex::web::{
@@ -49,7 +50,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 struct TestBody {
     data: Bytes,
     chunk_size: usize,
-    delay: ntex::rt::time::Delay,
+    delay: Pin<Box<Sleep>>,
 }
 
 impl TestBody {
@@ -57,7 +58,7 @@ impl TestBody {
         TestBody {
             data,
             chunk_size,
-            delay: ntex::rt::time::delay_for(std::time::Duration::from_millis(10)),
+            delay: Box::pin(sleep(std::time::Duration::from_millis(10))),
         }
     }
 }
@@ -71,7 +72,7 @@ impl futures::Stream for TestBody {
     ) -> Poll<Option<Self::Item>> {
         ready!(Pin::new(&mut self.delay).poll(cx));
 
-        self.delay = ntex::rt::time::delay_for(std::time::Duration::from_millis(10));
+        self.delay = Box::pin(sleep(std::time::Duration::from_millis(10)));
         let chunk_size = std::cmp::min(self.chunk_size, self.data.len());
         let chunk = self.data.split_to(chunk_size);
         if chunk.is_empty() {

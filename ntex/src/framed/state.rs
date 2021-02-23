@@ -466,8 +466,11 @@ impl State {
                 Ok(None) => {
                     let st = self.0.clone();
                     let n = poll_fn(|cx| {
-                        Pin::new(&mut *io)
-                            .poll_read_buf(cx, &mut *st.read_buf.borrow_mut())
+                        crate::codec::poll_read_buf(
+                            Pin::new(&mut *io),
+                            cx,
+                            &mut *st.read_buf.borrow_mut(),
+                        )
                     })
                     .await
                     .map_err(Either::Right)?;
@@ -502,8 +505,12 @@ impl State {
             return match codec.decode(&mut buf) {
                 Ok(Some(el)) => Poll::Ready(Ok(Some(el))),
                 Ok(None) => {
-                    let n = ready!(Pin::new(&mut *io).poll_read_buf(cx, &mut *buf))
-                        .map_err(Either::Right)?;
+                    let n = ready!(crate::codec::poll_read_buf(
+                        Pin::new(&mut *io),
+                        cx,
+                        &mut *buf
+                    ))
+                    .map_err(Either::Right)?;
                     if n == 0 {
                         Poll::Ready(Ok(None))
                     } else {

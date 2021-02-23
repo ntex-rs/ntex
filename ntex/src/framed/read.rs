@@ -61,7 +61,7 @@ where
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub(super) enum ReadResult {
     Pending,
     Updated,
@@ -85,7 +85,7 @@ where
     // read all data from socket
     let mut result = ReadResult::Pending;
     loop {
-        match Pin::new(&mut *io).poll_read_buf(cx, buf) {
+        match crate::codec::poll_read_buf(Pin::new(&mut *io), cx, buf) {
             Poll::Pending => break,
             Poll::Ready(Ok(n)) => {
                 if n == 0 {
