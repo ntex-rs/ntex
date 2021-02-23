@@ -210,7 +210,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
             let local = tokio::task::LocalSet::new();
 
             let runner = crate::System::build()
