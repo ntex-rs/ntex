@@ -259,7 +259,7 @@ where
                     if let ConnectionType::H1(ref mut s) = io {
                         match Pin::new(s).poll_read(cx, &mut read_buf) {
                             Poll::Pending => (),
-                            Poll::Ready(Ok(_)) if read_buf.filled().len() > 0 => {
+                            Poll::Ready(Ok(_)) if !read_buf.filled().is_empty() => {
                                 if let ConnectionType::H1(io) = io {
                                     CloseConnection::spawn(io, self.disconnect_timeout);
                                 }

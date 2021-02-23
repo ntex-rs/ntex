@@ -16,8 +16,10 @@ use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
 use super::socket::{SocketAddr, Stream};
 use super::Token;
 
+#[derive(Debug)]
 pub(super) struct WorkerCommand(Conn);
 
+#[derive(Debug)]
 /// Stop worker message. Returns `true` on successful shutdown
 /// and `false` if some connections are still alive.
 pub(super) struct StopCommand {
@@ -53,7 +55,7 @@ thread_local! {
         Counter::new(MAX_CONNS.load(Ordering::Relaxed));
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct WorkerClient {
     pub(super) idx: usize,
     tx1: UnboundedSender<WorkerCommand>,
@@ -93,7 +95,7 @@ impl WorkerClient {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(super) struct WorkerAvailability {
     notify: AcceptNotify,
     available: Arc<AtomicBool>,

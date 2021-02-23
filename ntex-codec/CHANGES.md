@@ -2,7 +2,7 @@
 
 ## [0.4.0] - 2021-02-23
 
-* Upgrade to tokio 1.x
+* Migrate to tokio 1.x
 
 ## [0.3.0] - 2021-02-20
 

@@ -388,7 +388,7 @@ where
                 if remaining < LW {
                     self.read_buf.reserve(HW - remaining)
                 }
-                match tokio_util::io::poll_read_buf(
+                match crate::poll_read_buf(
                     Pin::new(&mut self.io),
                     cx,
                     &mut self.read_buf,

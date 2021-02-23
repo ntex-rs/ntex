@@ -150,11 +150,7 @@ impl ServerBuilder {
             for (name, lst) in cfg.services {
                 let token = self.token.next();
                 srv.stream(token, name.clone(), lst.local_addr()?);
-                self.sockets.push((
-                    token,
-                    name,
-                    Listener::Tcp(mio::net::TcpListener::from_std(lst)),
-                ));
+                self.sockets.push((token, name, Listener::from_tcp(lst)));
             }
             self.services.push(Box::new(srv));
         }
@@ -187,7 +183,7 @@ impl ServerBuilder {
             self.sockets.push((
                 token,
                 name.as_ref().to_string(),
-                Listener::Tcp(mio::net::TcpListener::from_std(lst)),
+                Listener::from_tcp(lst),
             ));
         }
         Ok(self)
@@ -238,11 +234,8 @@ impl ServerBuilder {
             factory,
             addr,
         ));
-        self.sockets.push((
-            token,
-            name.as_ref().to_string(),
-            Listener::Uds(mio::net::UnixListener::from_std(lst)),
-        ));
+        self.sockets
+            .push((token, name.as_ref().to_string(), Listener::from_uds(lst)));
         Ok(self)
     }
 
@@ -263,11 +256,8 @@ impl ServerBuilder {
             factory,
             lst.local_addr()?,
         ));
-        self.sockets.push((
-            token,
-            name.as_ref().to_string(),
-            Listener::Tcp(mio::net::TcpListener::from_std(lst)),
-        ));
+        self.sockets
+            .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
         Ok(self)
     }
 
@@ -559,11 +549,11 @@ mod tests {
             let h = start(tx);
             let (srv, addr) = rx.recv().unwrap();
 
-            thread::sleep(time::Duration::from_millis(300));
+            crate::rt::time::sleep(time::Duration::from_millis(300)).await;
             assert!(net::TcpStream::connect(addr).is_ok());
 
             srv.signal(*sig);
-            thread::sleep(time::Duration::from_millis(300));
+            crate::rt::time::sleep(time::Duration::from_millis(300)).await;
             assert!(net::TcpStream::connect(addr).is_err());
             let _ = h.join();
         }

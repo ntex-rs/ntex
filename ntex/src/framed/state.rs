@@ -466,7 +466,7 @@ impl State {
                 Ok(None) => {
                     let st = self.0.clone();
                     let n = poll_fn(|cx| {
-                        tokio_util::io::poll_read_buf(
+                        crate::codec::poll_read_buf(
                             Pin::new(&mut *io),
                             cx,
                             &mut *st.read_buf.borrow_mut(),
@@ -505,7 +505,7 @@ impl State {
             return match codec.decode(&mut buf) {
                 Ok(Some(el)) => Poll::Ready(Ok(Some(el))),
                 Ok(None) => {
-                    let n = ready!(tokio_util::io::poll_read_buf(
+                    let n = ready!(crate::codec::poll_read_buf(
                         Pin::new(&mut *io),
                         cx,
                         &mut *buf

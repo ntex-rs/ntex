@@ -58,6 +58,16 @@ impl fmt::Display for Listener {
 }
 
 impl Listener {
+    pub(super) fn from_tcp(lst: net::TcpListener) -> Self {
+        let _ = lst.set_nonblocking(true);
+        Listener::Tcp(mio::net::TcpListener::from_std(lst))
+    }
+
+    pub(super) fn from_uds(lst: std::os::unix::net::UnixListener) -> Self {
+        let _ = lst.set_nonblocking(true);
+        Listener::Uds(mio::net::UnixListener::from_std(lst))
+    }
+
     pub(crate) fn local_addr(&self) -> SocketAddr {
         match self {
             Listener::Tcp(lst) => SocketAddr::Tcp(lst.local_addr().unwrap()),
@@ -136,17 +146,19 @@ pub enum Stream {
 }
 
 pub trait FromStream: AsyncRead + AsyncWrite + Sized {
-    fn from_stdstream(sock: Stream) -> io::Result<Self>;
+    fn from_stream(stream: Stream) -> io::Result<Self>;
 }
 
 #[cfg(unix)]
 impl FromStream for TcpStream {
-    fn from_stdstream(sock: Stream) -> io::Result<Self> {
+    fn from_stream(sock: Stream) -> io::Result<Self> {
         match sock {
             Stream::Tcp(stream) => {
                 use std::os::unix::io::{FromRawFd, IntoRawFd};
                 let fd = IntoRawFd::into_raw_fd(stream);
-                TcpStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) })
+                let sock: std::net::TcpStream = unsafe { FromRawFd::from_raw_fd(fd) };
+                let _ = sock.set_nonblocking(true);
+                TcpStream::from_std(sock)
             }
             #[cfg(unix)]
             Stream::Uds(_) => {
@@ -158,12 +170,15 @@ impl FromStream for TcpStream {
 
 #[cfg(windows)]
 impl FromStream for TcpStream {
-    fn from_stdstream(sock: Stream) -> io::Result<Self> {
+    fn from_stream(sock: Stream) -> io::Result<Self> {
         match sock {
             Stream::Tcp(stream) => {
                 use std::os::windows::io::{FromRawSocket, IntoRawSocket};
                 let fd = IntoRawSocket::into_raw_socket(stream);
-                TcpStream::from_std(unsafe { FromRawSocket::from_raw_socket(fd) })
+                let sock: std::net::TcpStream =
+                    unsafe { FromRawSocket::from_raw_socket(fd) };
+                let _ = sock.set_nonblocking(true);
+                TcpStream::from_std(sock)
             }
             #[cfg(unix)]
             Stream::Uds(_) => {
@@ -175,15 +190,16 @@ impl FromStream for TcpStream {
 
 #[cfg(unix)]
 impl FromStream for crate::rt::net::UnixStream {
-    fn from_stdstream(sock: Stream) -> io::Result<Self> {
+    fn from_stream(sock: Stream) -> io::Result<Self> {
         match sock {
             Stream::Tcp(_) => panic!("Should not happen, bug in server impl"),
             Stream::Uds(stream) => {
                 use std::os::unix::io::{FromRawFd, IntoRawFd};
                 let fd = IntoRawFd::into_raw_fd(stream);
-                crate::rt::net::UnixStream::from_std(unsafe {
-                    FromRawFd::from_raw_fd(fd)
-                })
+                let sock: std::os::unix::net::UnixStream =
+                    unsafe { FromRawFd::from_raw_fd(fd) };
+                let _ = sock.set_nonblocking(true);
+                crate::rt::net::UnixStream::from_std(sock)
             }
         }
     }

@@ -73,7 +73,6 @@ url = "2.1"
 coo-kie = { version = "0.14.2", package = "cookie", optional = true }
 time = { version = "0.2.15", default-features = false, features = ["std"] }
 tokio = { version = "1", default-features=false }
-tokio-util = { version = "0.6", default-features=false, features=["io"] }
 
 # resolver
 trust-dns-proto = { version = "0.20.0", default-features = false }

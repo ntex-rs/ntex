@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0] - 2021-02-23
+
+* Migrate to tokio 1.x
+
 ## [0.1.2] - 2021-01-25
 
 * Replace actix-threadpool with tokio's task utils

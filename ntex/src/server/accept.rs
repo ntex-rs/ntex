@@ -13,6 +13,7 @@ use super::{Server, Token};
 const DELTA: usize = 100;
 const NOTIFY: mio::Token = mio::Token(0);
 
+#[derive(Debug)]
 pub(super) enum Command {
     Pause,
     Resume,
@@ -29,7 +30,7 @@ struct ServerSocketInfo {
     timeout: Option<Instant>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(super) struct AcceptNotify(Arc<mio::Waker>, sync_mpsc::Sender<Command>);
 
 impl AcceptNotify {
@@ -145,14 +146,14 @@ impl Accept {
     ) -> Accept {
         // Start accept
         let mut sockets = Slab::new();
-        for (hnd_token, mut server) in socks.into_iter() {
-            let addr = server.local_addr();
+        for (hnd_token, mut lst) in socks.into_iter() {
+            let addr = lst.local_addr();
             let entry = sockets.vacant_entry();
             let token = entry.key();
 
             // Start listening for incoming connections
             if let Err(err) = poll.registry().register(
-                &mut server,
+                &mut lst,
                 mio::Token(token + DELTA),
                 mio::Interest::READABLE,
             ) {
@@ -161,8 +162,8 @@ impl Accept {
 
             entry.insert(ServerSocketInfo {
                 addr,
+                sock: lst,
                 token: hnd_token,
-                sock: server,
                 timeout: None,
             });
         }
