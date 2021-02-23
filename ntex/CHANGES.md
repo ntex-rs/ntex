@@ -1,10 +1,10 @@
 # Changes
 
-## [0.3.0-b.2] - 2021-02-24
+## [0.3.1] - 2021-02-24
 
 * server: Make TestServer::connect() async
 
-## [0.3.0-b.1] - 2021-02-24
+## [0.3.0] - 2021-02-24
 
 * Migrate to tokio 1.x
 
