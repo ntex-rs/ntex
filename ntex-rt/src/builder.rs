@@ -98,7 +98,7 @@ impl Builder {
         let (stop_tx, stop) = channel();
         let (sys_sender, sys_receiver) = unbounded();
 
-        let mut rt = Runtime::new().unwrap();
+        let rt = Runtime::new().unwrap();
 
         // system arbiter
         let system = System::construct(
@@ -161,7 +161,7 @@ impl SystemRunner {
     /// This function will start event loop and will finish once the
     /// `System::stop()` function is called.
     pub fn run(self) -> io::Result<()> {
-        let SystemRunner { mut rt, stop, .. } = self;
+        let SystemRunner { rt, stop, .. } = self;
 
         // run loop
         match rt.block_on(stop) {

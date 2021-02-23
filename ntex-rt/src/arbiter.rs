@@ -93,7 +93,7 @@ impl Arbiter {
         let handle = thread::Builder::new()
             .name(name.clone())
             .spawn(move || {
-                let mut rt = Runtime::new().expect("Can not create Runtime");
+                let rt = Runtime::new().expect("Can not create Runtime");
                 let arb = Arbiter::with_sender(arb_tx);
 
                 let (stop, stop_rx) = channel();

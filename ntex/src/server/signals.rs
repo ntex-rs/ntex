@@ -19,7 +19,7 @@ pub(crate) enum Signal {
 pub(super) struct Signals {
     srv: Server,
     #[cfg(not(unix))]
-    signal: futures::future::LocalBoxFuture<'static, std::io::Result<()>>,
+    signal: Pin<Box<dyn Future<Output = std::io::Result<()>>>>,
     #[cfg(unix)]
     signals: Vec<(Signal, crate::rt::signal::unix::Signal)>,
 }
@@ -30,7 +30,7 @@ impl Signals {
         {
             Signals {
                 srv,
-                signal: crate::rt::signal::ctrl_c().boxed_local(),
+                signal: Box::pin(crate::rt::signal::ctrl_c()),
             }
         }
 
