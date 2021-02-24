@@ -3,7 +3,7 @@ use std::{io, sync::mpsc as sync_mpsc, sync::Arc, thread, time::Duration};
 use log::{error, info};
 use slab::Slab;
 
-use crate::rt::time::{delay_until, Instant};
+use crate::rt::time::{sleep_until, Instant};
 use crate::rt::System;
 
 use super::socket::{Listener, SocketAddr};
@@ -415,7 +415,7 @@ impl Accept {
 
                         let notify = self.notify.clone();
                         System::current().arbiter().spawn(Box::pin(async move {
-                            delay_until(Instant::now() + Duration::from_millis(510))
+                            sleep_until(Instant::now() + Duration::from_millis(510))
                                 .await;
                             notify.send(Command::Timer);
                         }));

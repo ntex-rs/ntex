@@ -285,7 +285,7 @@ mod tests {
     use serde_derive::Serialize;
 
     use crate::http::{Method, StatusCode};
-    use crate::rt::time::delay_for;
+    use crate::rt::time::sleep;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, error, App, DefaultError, HttpResponse};
 
@@ -306,16 +306,16 @@ mod tests {
                         )
                     }),
                     web::post().to(|| async {
-                        delay_for(Duration::from_millis(100)).await;
+                        sleep(Duration::from_millis(100)).await;
                         HttpResponse::Created()
                     }),
                     web::delete().to(|| async {
-                        delay_for(Duration::from_millis(100)).await;
+                        sleep(Duration::from_millis(100)).await;
                         Err::<HttpResponse, _>(error::ErrorBadRequest("err"))
                     }),
                 ]))
                 .service(web::resource("/json").route(web::get().to(|| async {
-                    delay_for(Duration::from_millis(25)).await;
+                    sleep(Duration::from_millis(25)).await;
                     web::types::Json(MyObject {
                         name: "test".to_string(),
                     })

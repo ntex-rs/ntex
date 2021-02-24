@@ -106,29 +106,34 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {
             delay: if self.timeout == ZERO {
                 None
             } else {
-                Some(Box::pin(sleep(self.timeout)))
+                Some(sleep(self.timeout))
             },
         }
     }
 }
 
-pub struct AcceptorServiceFut<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    fut: Accept<T>,
-    delay: Option<Pin<Box<Sleep>>>,
-    _guard: CounterGuard,
+pin_project_lite::pin_project! {
+    pub struct AcceptorServiceFut<T>
+    where
+        T: AsyncRead,
+        T: AsyncWrite,
+        T: Unpin,
+    {
+        fut: Accept<T>,
+        #[pin]
+        delay: Option<Sleep>,
+        _guard: CounterGuard,
+    }
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Future for AcceptorServiceFut<T> {
     type Output = Result<TlsStream<T>, Box<dyn Error>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
+        let mut this = self.project();
 
-        if let Some(ref mut delay) = this.delay {
-            match Pin::new(delay).poll(cx) {
+        if let Some(delay) = this.delay.as_pin_mut() {
+            match delay.poll(cx) {
                 Poll::Pending => (),
                 Poll::Ready(_) => {
                     return Poll::Ready(Err(Box::new(io::Error::new(

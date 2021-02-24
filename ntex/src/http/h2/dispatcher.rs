@@ -18,7 +18,7 @@ use crate::http::message::ResponseHead;
 use crate::http::payload::Payload;
 use crate::http::request::Request;
 use crate::http::response::Response;
-use crate::rt::time::{Delay, Instant};
+use crate::rt::time::{Instant, Sleep};
 use crate::Service;
 
 const CHUNK_SIZE: usize = 16_384;
@@ -31,7 +31,7 @@ pin_project_lite::pin_project! {
         on_connect: Option<Box<dyn DataFactory>>,
         peer_addr: Option<net::SocketAddr>,
         ka_expire: Instant,
-        ka_timer: Option<Delay>,
+        ka_timer: Option<Sleep>,
         _t: PhantomData<B>,
     }
 }
@@ -48,7 +48,7 @@ where
         config: Rc<DispatcherConfig<S, X, U>>,
         connection: Connection<T, Bytes>,
         on_connect: Option<Box<dyn DataFactory>>,
-        timeout: Option<Delay>,
+        timeout: Option<Sleep>,
         peer_addr: Option<net::SocketAddr>,
     ) -> Self {
         // keep-alive timer

@@ -11,7 +11,7 @@ use ntex::http::test::server as test_server;
 use ntex::http::{
     body, header, HttpService, KeepAlive, Method, Request, Response, StatusCode,
 };
-use ntex::rt::time::delay_for;
+use ntex::rt::time::sleep;
 use ntex::service::fn_service;
 use ntex::web::error;
 
@@ -92,7 +92,7 @@ async fn test_expect_continue_h1() {
     let srv = test_server(|| {
         HttpService::build()
             .expect(fn_service(|req: Request| {
-                delay_for(Duration::from_millis(20)).then(move |_| {
+                sleep(Duration::from_millis(20)).then(move |_| {
                     if req.head().uri.query() == Some("yes=") {
                         ok(req)
                     } else {

@@ -7,7 +7,7 @@ use futures::channel::oneshot;
 use futures::future::{join_all, LocalBoxFuture, MapOk};
 use futures::{Future, FutureExt, Stream as StdStream, TryFutureExt};
 
-use crate::rt::time::{delay_until, Delay, Instant};
+use crate::rt::time::{sleep_until, Instant, Sleep};
 use crate::rt::{spawn, Arbiter};
 use crate::util::counter::Counter;
 
@@ -320,8 +320,8 @@ enum WorkerState {
         Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>,
     ),
     Shutdown(
-        Pin<Box<Delay>>,
-        Pin<Box<Delay>>,
+        Pin<Box<Sleep>>,
+        Pin<Box<Sleep>>,
         Option<oneshot::Sender<bool>>,
     ),
 }
@@ -346,10 +346,10 @@ impl Future for Worker {
                 if num != 0 {
                     info!("Graceful worker shutdown, {} connections", num);
                     self.state = WorkerState::Shutdown(
-                        Box::pin(delay_until(
+                        Box::pin(sleep_until(
                             Instant::now() + time::Duration::from_secs(1),
                         )),
-                        Box::pin(delay_until(Instant::now() + self.shutdown_timeout)),
+                        Box::pin(sleep_until(Instant::now() + self.shutdown_timeout)),
                         Some(result),
                     );
                 } else {
@@ -437,7 +437,7 @@ impl Future for Worker {
                 match t1.as_mut().poll(cx) {
                     Poll::Pending => (),
                     Poll::Ready(_) => {
-                        *t1 = Box::pin(delay_until(
+                        *t1 = Box::pin(sleep_until(
                             Instant::now() + time::Duration::from_secs(1),
                         ));
                         let _ = t1.as_mut().poll(cx);

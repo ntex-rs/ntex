@@ -22,7 +22,7 @@ use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
 use crate::router::{Path, ResourceDef};
-use crate::rt::{time::delay_for, System};
+use crate::rt::{time::sleep, System};
 use crate::server::Server;
 use crate::util::Extensions;
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
@@ -955,7 +955,7 @@ impl TestServer {
     pub async fn stop(self) {
         self.server.stop(true).await;
         self.system.stop();
-        delay_for(time::Duration::from_millis(100)).await;
+        sleep(time::Duration::from_millis(100)).await;
     }
 }
 

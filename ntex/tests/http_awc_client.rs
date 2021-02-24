@@ -169,7 +169,7 @@ async fn test_form() {
 async fn test_timeout() {
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
-            ntex::rt::time::delay_for(Duration::from_millis(200)).await;
+            ntex::rt::time::sleep(Duration::from_millis(200)).await;
             HttpResponse::Ok().body(STR)
         })))
     });
@@ -198,7 +198,7 @@ async fn test_timeout() {
 async fn test_timeout_override() {
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
-            ntex::rt::time::delay_for(Duration::from_millis(200)).await;
+            ntex::rt::time::sleep(Duration::from_millis(200)).await;
             HttpResponse::Ok().body(STR)
         })))
     });
@@ -841,7 +841,7 @@ async fn client_read_until_eof() {
                 .write_all(b"HTTP/1.0 200 OK\r\nconnection: close\r\n\r\nwelcome!");
         }
     });
-    ntex::rt::time::delay_for(Duration::from_millis(300)).await;
+    ntex::rt::time::sleep(Duration::from_millis(300)).await;
 
     // client request
     let req = Client::build()

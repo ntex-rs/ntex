@@ -9,7 +9,7 @@ use http::uri::Authority;
 use crate::channel::pool;
 use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::http::Protocol;
-use crate::rt::{spawn, time::delay_for, time::Delay};
+use crate::rt::{spawn, time::sleep, time::Sleep};
 use crate::service::Service;
 use crate::task::LocalWaker;
 use crate::util::{Bytes, HashMap};
@@ -366,10 +366,13 @@ where
     }
 }
 
-struct CloseConnection<T> {
-    io: T,
-    timeout: Option<Pin<Box<Delay>>>,
-    shutdown: bool,
+pin_project_lite::pin_project! {
+    struct CloseConnection<T> {
+        io: T,
+        #[pin]
+        timeout: Option<Sleep>,
+        shutdown: bool,
+    }
 }
 
 impl<T> CloseConnection<T>
@@ -378,7 +381,7 @@ where
 {
     fn spawn(io: T, timeout: Duration) {
         let timeout = if timeout != ZERO {
-            Some(Box::pin(delay_for(timeout)))
+            Some(sleep(timeout))
         } else {
             None
         };
@@ -397,18 +400,18 @@ where
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let this = self.get_mut();
+        let mut this = self.project();
 
         // shutdown WRITE side
         match Pin::new(&mut this.io).poll_shutdown(cx) {
-            Poll::Ready(Ok(())) => this.shutdown = true,
+            Poll::Ready(Ok(())) => *this.shutdown = true,
             Poll::Pending => return Poll::Pending,
             Poll::Ready(Err(_)) => return Poll::Ready(()),
         }
 
         // read until 0 or err
-        if let Some(ref mut timeout) = this.timeout {
-            match Pin::new(timeout).poll(cx) {
+        if let Some(timeout) = this.timeout.as_pin_mut() {
+            match timeout.poll(cx) {
                 Poll::Ready(_) => (),
                 Poll::Pending => {
                     let mut buf = [0u8; 512];
@@ -609,7 +612,7 @@ mod tests {
     use super::*;
     use crate::http::client::Connection;
     use crate::http::Uri;
-    use crate::rt::time::delay_for;
+    use crate::rt::time::sleep;
     use crate::service::fn_service;
     use crate::testing::Io;
 
@@ -667,7 +670,7 @@ mod tests {
         let mut fut = pool.call(req.clone());
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
         drop(fut);
-        delay_for(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50)).await;
         pool.1.borrow_mut().check_availibility();
         assert!(pool.1.borrow().waiters.is_empty());
 

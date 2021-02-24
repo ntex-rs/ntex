@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use futures::future::{ok, Ready};
 
-use crate::rt::time::{delay_until, Delay, Instant};
+use crate::rt::time::{sleep_until, Instant, Sleep};
 use crate::{Service, ServiceFactory};
 
 use super::time::{LowResTime, LowResTimeService};
@@ -85,7 +85,7 @@ pub struct KeepAliveService<R, E, F> {
 }
 
 struct Inner {
-    delay: Pin<Box<Delay>>,
+    delay: Pin<Box<Sleep>>,
     expire: Instant,
 }
 
@@ -101,7 +101,7 @@ where
             time,
             inner: RefCell::new(Inner {
                 expire,
-                delay: Box::pin(delay_until(expire)),
+                delay: Box::pin(sleep_until(expire)),
             }),
             _t: PhantomData,
         }
@@ -147,7 +147,7 @@ mod tests {
     use futures::future::lazy;
 
     use super::*;
-    use crate::rt::time::delay_for;
+    use crate::rt::time::sleep;
     use crate::service::{Service, ServiceFactory};
 
     #[derive(Debug, PartialEq)]
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(service.call(1usize).await, Ok(1usize));
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
 
-        delay_for(Duration::from_millis(500)).await;
+        sleep(Duration::from_millis(500)).await;
         assert_eq!(
             lazy(|cx| service.poll_ready(cx)).await,
             Poll::Ready(Err(TestErr))

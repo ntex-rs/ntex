@@ -12,7 +12,7 @@ pub use tokio_openssl::SslStream;
 use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
 
 use crate::codec::{AsyncRead, AsyncWrite};
-use crate::rt::time::{delay_for, Delay};
+use crate::rt::time::{sleep, Sleep};
 use crate::service::{Service, ServiceFactory};
 use crate::util::counter::{Counter, CounterGuard};
 
@@ -114,7 +114,7 @@ where
             delay: if self.timeout == ZERO {
                 None
             } else {
-                Some(Box::pin(delay_for(self.timeout)))
+                Some(sleep(self.timeout))
             },
             fut: async move {
                 let mut io = SslStream::new(ssl, req)?;
@@ -129,21 +129,27 @@ where
     }
 }
 
-pub struct AcceptorServiceResponse<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    fut: LocalBoxFuture<'static, Result<SslStream<T>, Box<dyn Error>>>,
-    delay: Option<Pin<Box<Delay>>>,
-    _guard: CounterGuard,
+pin_project_lite::pin_project! {
+    pub struct AcceptorServiceResponse<T>
+    where
+        T: AsyncRead,
+        T: AsyncWrite,
+    {
+        fut: LocalBoxFuture<'static, Result<SslStream<T>, Box<dyn Error>>>,
+        #[pin]
+        delay: Option<Sleep>,
+        _guard: CounterGuard,
+    }
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Future for AcceptorServiceResponse<T> {
     type Output = Result<SslStream<T>, Box<dyn Error>>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(ref mut delay) = self.delay {
-            match Pin::new(delay).poll(cx) {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
+
+        if let Some(delay) = this.delay.as_pin_mut() {
+            match delay.poll(cx) {
                 Poll::Pending => (),
                 Poll::Ready(_) => {
                     return Poll::Ready(Err(Box::new(io::Error::new(
@@ -154,7 +160,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Future for AcceptorServiceResponse<T> {
             }
         }
 
-        let io = futures::ready!(Pin::new(&mut self.fut).poll(cx))?;
+        let io = futures::ready!(Pin::new(&mut this.fut).poll(cx))?;
         Poll::Ready(Ok(io))
     }
 }

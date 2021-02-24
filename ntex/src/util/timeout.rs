@@ -10,7 +10,7 @@ use std::{fmt, time};
 
 use futures::future::{ok, Either, Ready};
 
-use crate::rt::time::{delay_for, Delay};
+use crate::rt::time::{sleep, Sleep};
 use crate::service::{IntoService, Service, Transform};
 
 const ZERO: time::Duration = time::Duration::from_millis(0);
@@ -154,21 +154,21 @@ where
         } else {
             Either::Left(TimeoutServiceResponse {
                 fut: self.service.call(request),
-                sleep: Box::pin(delay_for(self.timeout)),
+                sleep: Box::pin(sleep(self.timeout)),
             })
         }
     }
 }
 
 pin_project_lite::pin_project! {
-/// `TimeoutService` response future
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct TimeoutServiceResponse<T: Service> {
-    #[pin]
-    fut: T::Future,
-    sleep: Pin<Box<Delay>>,
-}
+    /// `TimeoutService` response future
+    #[doc(hidden)]
+    #[derive(Debug)]
+    pub struct TimeoutServiceResponse<T: Service> {
+        #[pin]
+        fut: T::Future,
+        sleep: Pin<Box<Sleep>>,
+    }
 }
 
 impl<T> Future for TimeoutServiceResponse<T>
@@ -255,7 +255,7 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            crate::rt::time::delay_for(self.0)
+            crate::rt::time::sleep(self.0)
                 .then(|_| ok::<_, SrvError>(()))
                 .boxed_local()
         }

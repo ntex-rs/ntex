@@ -9,7 +9,7 @@ use futures::future::poll_fn;
 use futures::task::AtomicWaker;
 
 use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
-use crate::rt::time::delay_for;
+use crate::rt::time::sleep;
 
 /// Async io stream
 #[derive(Debug)]
@@ -156,7 +156,7 @@ impl Io {
             remote.read = IoState::Close;
             remote.waker.wake();
         }
-        delay_for(time::Duration::from_millis(35)).await;
+        sleep(time::Duration::from_millis(35)).await;
     }
 
     /// Add extra data to the remote buffer and notify reader

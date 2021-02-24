@@ -140,7 +140,7 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            crate::rt::time::delay_for(self.0)
+            crate::rt::time::sleep(self.0)
                 .then(|_| ok::<_, ()>(()))
                 .boxed_local()
         }

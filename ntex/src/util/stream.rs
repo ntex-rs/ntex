@@ -163,7 +163,7 @@ mod tests {
     use super::*;
     use crate::channel::mpsc;
     use crate::codec::Encoder;
-    use crate::rt::time::delay_for;
+    use crate::rt::time::sleep;
     use crate::ws;
 
     #[crate::rt_test]
@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(data, b"\x81\x04test".as_ref());
 
         drop(tx);
-        delay_for(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
         assert!(rx.next().await.is_none());
 
         assert_eq!(counter.get(), 1);

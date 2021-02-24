@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Duration, time::In
 use futures::future::{ready, FutureExt};
 
 use crate::framed::State;
-use crate::rt::time::delay_for;
+use crate::rt::time::sleep;
 use crate::util::HashSet;
 
 pub struct Timer(Rc<RefCell<Inner>>);
@@ -84,7 +84,7 @@ impl Timer {
                 b.resolution
             };
 
-            crate::rt::spawn(delay_for(interval).then(move |_| {
+            crate::rt::spawn(sleep(interval).then(move |_| {
                 let empty = {
                     let mut i = inner.borrow_mut();
                     let now = i.current.take().unwrap_or_else(Instant::now);

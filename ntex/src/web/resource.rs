@@ -538,7 +538,7 @@ mod tests {
 
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
-    use crate::rt::time::delay_for;
+    use crate::rt::time::sleep;
     use crate::web::middleware::DefaultHeaders;
     use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, TestRequest};
@@ -603,7 +603,7 @@ mod tests {
     async fn test_to() {
         let srv =
             init_service(App::new().service(web::resource("/test").to(|| async {
-                delay_for(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
                 HttpResponse::Ok()
             })))
             .await;

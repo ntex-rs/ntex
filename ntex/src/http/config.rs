@@ -5,7 +5,7 @@ use futures::{future, FutureExt};
 use time::OffsetDateTime;
 
 use crate::framed::Timer;
-use crate::rt::time::{delay_for, delay_until, Delay, Instant};
+use crate::rt::time::{sleep, sleep_until, Instant, Sleep};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 /// Server keep-alive setting
@@ -127,10 +127,10 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
         self.ka_enabled
     }
 
-    /// Return keep-alive timer delay is configured.
-    pub(super) fn keep_alive_timer(&self) -> Option<Delay> {
+    /// Return keep-alive timer Sleep is configured.
+    pub(super) fn keep_alive_timer(&self) -> Option<Sleep> {
         if self.keep_alive.as_secs() != 0 {
-            Some(delay_until(self.timer.now() + self.keep_alive))
+            Some(sleep_until(self.timer.now() + self.keep_alive))
         } else {
             None
         }
@@ -203,7 +203,7 @@ impl DateService {
 
             // periodic date update
             let s = self.clone();
-            crate::rt::spawn(delay_for(Duration::from_millis(500)).then(move |_| {
+            crate::rt::spawn(sleep(Duration::from_millis(500)).then(move |_| {
                 s.0.current.set(false);
                 future::ready(())
             }));

@@ -12,7 +12,7 @@ use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::rt::net::TcpStream;
-use crate::rt::time::{delay_until, Instant};
+use crate::rt::time::{sleep_until, Instant};
 use crate::rt::{spawn, System};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
@@ -385,7 +385,7 @@ impl ServerBuilder {
                                 if exit {
                                     spawn(
                                         async {
-                                            delay_until(
+                                            sleep_until(
                                                 Instant::now()
                                                     + Duration::from_millis(300),
                                             )
@@ -402,7 +402,7 @@ impl ServerBuilder {
                     // we need to stop system if server was spawned
                     if self.exit {
                         spawn(
-                            delay_until(Instant::now() + Duration::from_millis(300))
+                            sleep_until(Instant::now() + Duration::from_millis(300))
                                 .then(|_| {
                                     System::current().stop();
                                     ready(())
