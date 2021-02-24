@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use crate::{fn_factory_with_config, fn_service, ServiceFactory};
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_map_config() {
         let item = Rc::new(Cell::new(1usize));
 
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(item.get(), 11);
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_unit_config() {
         let _ = unit_config(fn_service(|item: usize| ok::<_, ()>(item)))
             .clone()
@@ -329,7 +329,7 @@ mod tests {
             .await;
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_map_config_service() {
         let item = Rc::new(Cell::new(10usize));
         let item2 = item.clone();

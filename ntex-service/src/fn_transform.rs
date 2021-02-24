@@ -92,7 +92,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn transform() {
         let srv =
             fn_transform::<Srv, _, _, _, _, _>(|i: usize, srv: &_| srv.call(i + 1))

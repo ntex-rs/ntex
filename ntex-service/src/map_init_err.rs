@@ -101,7 +101,7 @@ mod tests {
 
     use crate::{fn_factory_with_config, fn_service, pipeline_factory, ServiceFactory};
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn map_init_err() {
         let factory = pipeline_factory(fn_factory_with_config(|err: bool| async move {
             if err {

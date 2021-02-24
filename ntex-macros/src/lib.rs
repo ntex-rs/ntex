@@ -216,7 +216,7 @@ pub fn rt_main(_: TokenStream, item: TokenStream) -> TokenStream {
     (quote! {
         #(#attrs)*
         #vis #sig {
-            ntex_rt::System::new(stringify!(#name))
+            ntex::rt::System::new(stringify!(#name))
                 .block_on(async move { #body })
         }
     })
@@ -262,7 +262,7 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             #(#attrs)*
             fn #name() #ret {
-                ntex_rt::System::new("test")
+                ntex::rt::System::new("test")
                     .block_on(async { #body })
             }
         }
@@ -271,7 +271,7 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
             #[test]
             #(#attrs)*
             fn #name() #ret {
-                ntex_rt::System::new("test")
+                ntex::rt::System::new("test")
                     .block_on(async { #body })
             }
         }

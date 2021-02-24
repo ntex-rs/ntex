@@ -40,7 +40,7 @@ ntex-codec = "0.4.0"
 ntex-rt = "0.2.1"
 ntex-router = "0.4.0"
 ntex-service = "0.1.5"
-ntex-macros = "0.1.1"
+ntex-macros = "0.1.2"
 
 base64 = "0.13"
 bitflags = "1.2.1"

@@ -315,7 +315,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_service() {
         let srv = pipeline(ok)
             .and_then_apply_fn(Srv, |req: &'static str, s| {
@@ -333,7 +333,7 @@ mod tests {
         assert_eq!(res, Poll::Ready(()));
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_service_factory() {
         let new_srv = pipeline_factory(|| ok::<_, ()>(fn_service(ok)))
             .and_then_apply_fn(

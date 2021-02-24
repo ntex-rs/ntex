@@ -48,7 +48,7 @@ where
 ///     }
 /// }
 ///
-/// #[ntex_rt::main]
+/// #[ntex::main]
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory that produces `div` services
 ///     let factory = fn_factory(|| {
@@ -90,7 +90,7 @@ where
 /// use ntex_service::{fn_factory_with_config, fn_service, Service, ServiceFactory};
 /// use futures_util::future::ok;
 ///
-/// #[ntex_rt::main]
+/// #[ntex::main]
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory. factory uses config argument for
 ///     // services it generates.
@@ -452,7 +452,7 @@ mod tests {
     use super::*;
     use crate::{Service, ServiceFactory};
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_fn_service() {
         let new_srv = fn_service(|()| ok::<_, ()>("srv")).clone();
 
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(res.unwrap(), "srv");
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_fn_mut_service() {
         let srv = fn_mut_service(|()| ok::<_, ()>("srv")).clone();
 
@@ -478,7 +478,7 @@ mod tests {
         assert_eq!(res.unwrap(), "srv");
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_fn_service_service() {
         let srv = fn_service(|()| ok::<_, ()>("srv")).clone();
 
@@ -488,7 +488,7 @@ mod tests {
         assert_eq!(res.unwrap(), "srv");
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_fn_service_with_config() {
         let new_srv = fn_factory_with_config(|cfg: usize| {
             ok::<_, ()>(fn_service(move |()| ok::<_, ()>(("srv", cfg))))

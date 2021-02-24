@@ -236,7 +236,7 @@ mod tests {
     use super::*;
     use crate::{fn_service, Service};
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_apply() {
         let item = Rc::new(Cell::new(10usize));
         let item2 = item.clone();
@@ -263,7 +263,7 @@ mod tests {
         assert_eq!(item.get(), 11);
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_apply_factory() {
         let item = Rc::new(Cell::new(10usize));
         let item2 = item.clone();

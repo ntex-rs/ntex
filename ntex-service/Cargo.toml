@@ -20,4 +20,4 @@ futures-util = "0.3.13"
 pin-project-lite = "0.2.4"
 
 [dev-dependencies]
-ntex-rt = "0.2"
+ntex = "0.3.1"

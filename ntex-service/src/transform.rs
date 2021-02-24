@@ -276,7 +276,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn transform() {
         let factory = apply(
             Rc::new(Tr.map_init_err(|_| ()).clone()),

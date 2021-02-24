@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.2] - 2021-02-25
+
+* Export runtime from ntex crate
+
 ## [0.1.1] - 2021-02-25
 
 * Move `main` and `test` macros from rt macros

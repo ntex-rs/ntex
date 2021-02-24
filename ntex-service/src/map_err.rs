@@ -233,7 +233,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_poll_ready() {
         let srv = Srv.map_err(|_| "error");
         let res = lazy(|cx| srv.poll_ready(cx)).await;
@@ -243,7 +243,7 @@ mod tests {
         assert_eq!(res, Poll::Ready(()));
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_service() {
         let srv = Srv.map_err(|_| "error").clone();
         let res = srv.call(()).await;
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(res.err().unwrap(), "error");
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_pipeline() {
         let srv = crate::pipeline(Srv).map_err(|_| "error").clone();
         let res = srv.call(()).await;
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(res.err().unwrap(), "error");
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_factory() {
         let new_srv = (|| ok::<_, ()>(Srv))
             .into_factory()
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(res.err().unwrap(), "error");
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_pipeline_factory() {
         let new_srv = crate::pipeline_factory((|| ok::<_, ()>(Srv)).into_factory())
             .map_err(|_| "error")

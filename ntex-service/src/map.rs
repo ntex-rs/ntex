@@ -232,7 +232,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_service() {
         let srv = Srv.map(|_| "ok").clone();
         let res = srv.call(()).await;
@@ -246,7 +246,7 @@ mod tests {
         assert_eq!(res, Poll::Ready(()));
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_pipeline() {
         let srv = crate::pipeline(Srv).map(|_| "ok").clone();
         let res = srv.call(()).await;
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(res, Poll::Ready(()));
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_factory() {
         let new_srv = (|| ok::<_, ()>(Srv)).into_factory().map(|_| "ok").clone();
         let srv = new_srv.new_service(&()).await.unwrap();
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(res.unwrap(), ("ok"));
     }
 
-    #[ntex_rt::test]
+    #[ntex::test]
     async fn test_pipeline_factory() {
         let new_srv = crate::pipeline_factory((|| ok::<_, ()>(Srv)).into_factory())
             .map(|_| "ok")
