@@ -119,7 +119,7 @@ mod tests {
     use super::*;
     use crate::service::{Service, ServiceFactory};
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_openssl_connect() {
         let server = crate::server::test_server(|| {
             crate::fn_service(|_| async { Ok::<_, ()>(()) })

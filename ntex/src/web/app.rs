@@ -546,7 +546,7 @@ mod tests {
     use crate::web::{self, DefaultError, HttpRequest, HttpResponse};
     use crate::Service;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_default_resource() {
         let srv = init_service(
             App::new()
@@ -592,7 +592,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_data_factory() {
         let srv = init_service(
             App::new().data_factory(|| ok::<_, ()>(10usize)).service(
@@ -617,7 +617,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_extension() {
         let srv = init_service(App::new().app_data(10usize).service(
             web::resource("/").to(|req: HttpRequest| async move {
@@ -631,7 +631,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_wrap() {
         let srv = init_service(
             App::new()
@@ -651,7 +651,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_router_wrap() {
         let srv = init_service(
             App::new()
@@ -671,7 +671,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_wrap_fn() {
         let srv = init_service(
             App::new()
@@ -698,7 +698,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_router_wrap_fn() {
         let srv = init_service(
             App::new()
@@ -725,7 +725,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_case_insensitive_router() {
         let srv = init_service(
             App::new()
@@ -742,7 +742,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_external_resource() {
         let srv = init_service(
             App::new()

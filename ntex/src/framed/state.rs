@@ -634,7 +634,7 @@ mod tests {
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_utils() {
         let (client, mut server) = Io::create();
         client.remote_buffer_cap(1024);

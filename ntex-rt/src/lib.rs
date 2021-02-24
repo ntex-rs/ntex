@@ -11,9 +11,6 @@ pub use self::builder::{Builder, SystemRunner};
 pub use self::runtime::Runtime;
 pub use self::system::System;
 
-#[cfg(not(test))] // Work around for rust-lang/rust#62127
-pub use ntex_rt_macros::{rt_main as main, rt_test as test};
-
 /// Spawn a future on the current thread. This does not create a new Arbiter
 /// or Arbiter address, it is simply a helper for spawning futures on the current
 /// thread.

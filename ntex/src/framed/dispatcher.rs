@@ -540,7 +540,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_basic() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(1024);
@@ -567,7 +567,7 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_sink() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(1024);
@@ -600,7 +600,7 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_err_in_service() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(0);
@@ -639,7 +639,7 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_write_backpressure() {
         let (client, server) = Io::create();
         // do not allow to write to socket
@@ -704,7 +704,7 @@ mod tests {
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1, 2]);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_keepalive() {
         let (client, server) = Io::create();
         // do not allow to write to socket

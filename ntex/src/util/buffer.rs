@@ -271,7 +271,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_transform() {
         let inner = Rc::new(Inner {
             ready: Cell::new(false),
@@ -319,7 +319,7 @@ mod tests {
         assert!(lazy(|cx| srv.poll_shutdown(cx, false)).await.is_ready());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_newtransform() {
         let inner = Rc::new(Inner {
             ready: Cell::new(false),

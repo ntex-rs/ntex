@@ -146,7 +146,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_transform() {
         let wait_time = Duration::from_millis(50);
 
@@ -162,7 +162,7 @@ mod tests {
         assert!(lazy(|cx| srv.poll_shutdown(cx, false)).await.is_ready());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_newtransform() {
         let wait_time = Duration::from_millis(50);
 

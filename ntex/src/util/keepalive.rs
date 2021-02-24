@@ -153,7 +153,7 @@ mod tests {
     #[derive(Debug, PartialEq)]
     struct TestErr;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_ka() {
         let factory = KeepAlive::new(
             Duration::from_millis(100),

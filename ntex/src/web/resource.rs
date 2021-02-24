@@ -545,7 +545,7 @@ mod tests {
     use crate::web::{self, guard, App, DefaultError, HttpResponse};
     use crate::Service;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_middleware() {
         let srv =
             init_service(
@@ -569,7 +569,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_middleware_fn() {
         let srv = init_service(
             App::new().service(
@@ -599,7 +599,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_to() {
         let srv =
             init_service(App::new().service(web::resource("/test").to(|| async {
@@ -612,7 +612,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_pattern() {
         let srv = init_service(App::new().service(
             web::resource(["/test", "/test2"]).to(|| async { HttpResponse::Ok() }),
@@ -626,7 +626,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_default_resource() {
         let srv = init_service(
             App::new()
@@ -671,7 +671,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_resource_guards() {
         let srv = init_service(
             App::new()
@@ -712,7 +712,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_data() {
         let srv = init_service(
             App::new()

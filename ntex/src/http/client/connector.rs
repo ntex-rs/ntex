@@ -369,7 +369,7 @@ mod tests {
     use super::*;
     use futures::future::lazy;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_readiness() {
         let conn = Connector::default().finish();
         assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);

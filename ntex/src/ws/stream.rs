@@ -182,7 +182,7 @@ mod tests {
     use super::*;
     use crate::channel::mpsc;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_decoder() {
         let (tx, rx) = mpsc::channel();
         let mut decoder = StreamDecoder::new(rx);
@@ -209,7 +209,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_encoder() {
         let (tx, mut rx) = mpsc::channel();
         let mut encoder = StreamEncoder::new(tx);

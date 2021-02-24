@@ -424,7 +424,7 @@ mod tests {
     use crate::http::header;
     use crate::web::test::{from_request, TestRequest};
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_payload_config() {
         let req = TestRequest::default().to_http_request();
         let cfg = PayloadConfig::default().mimetype(mime::APPLICATION_JSON);
@@ -442,7 +442,7 @@ mod tests {
         assert!(cfg.check_mimetype(&req).is_ok());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_payload() {
         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .set_payload(Bytes::from_static(b"hello=world"))
@@ -456,7 +456,7 @@ mod tests {
         assert_eq!(b, Bytes::from_static(b"hello=world"));
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_bytes() {
         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .set_payload(Bytes::from_static(b"hello=world"))
@@ -472,7 +472,7 @@ mod tests {
         assert!(from_request::<Bytes>(&req, &mut pl).await.is_err());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_string() {
         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .set_payload(Bytes::from_static(b"hello=world"))
@@ -495,7 +495,7 @@ mod tests {
         assert!(from_request::<String>(&req, &mut pl).await.is_err());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_message_body() {
         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "xxxx")
             .to_srv_request()

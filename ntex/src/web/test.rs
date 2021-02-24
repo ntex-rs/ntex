@@ -975,7 +975,7 @@ mod tests {
     use crate::http::HttpMessage;
     use crate::web::{self, App, HttpResponse};
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_basics() {
         let req = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
             .version(Version::HTTP_2)
@@ -998,7 +998,7 @@ mod tests {
         assert_eq!(format!("{:?}", StreamType::Tcp), "StreamType::Tcp");
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_request_methods() {
         let app = init_service(
             App::new().service(
@@ -1036,7 +1036,7 @@ mod tests {
         assert_eq!(result, Bytes::from_static(b"delete!"));
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_response() {
         let app =
             init_service(App::new().service(web::resource("/index.html").route(
@@ -1059,7 +1059,7 @@ mod tests {
         name: String,
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_response_json() {
         let app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Json<Person>| async {
@@ -1080,7 +1080,7 @@ mod tests {
         assert_eq!(&result.id, "12345");
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_request_response_form() {
         let app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Form<Person>| async {
@@ -1106,7 +1106,7 @@ mod tests {
         assert_eq!(&result.name, "User name");
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_request_response_json() {
         let app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::types::Json<Person>| async {
@@ -1132,7 +1132,7 @@ mod tests {
         assert_eq!(&result.name, "User name");
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_async_with_block() {
         async fn async_with_block() -> Result<HttpResponse, Infallible> {
             let res = web::block(move || Some(4usize).ok_or("wrong")).await;
@@ -1156,7 +1156,7 @@ mod tests {
         assert!(res.status().is_success());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_server_data() {
         async fn handler(data: web::types::Data<usize>) -> crate::http::ResponseBuilder {
             assert_eq!(**data, 10);
@@ -1173,7 +1173,7 @@ mod tests {
         assert!(res.status().is_success());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_test_methods() {
         let srv = server(|| {
             App::new().service(
@@ -1212,7 +1212,7 @@ mod tests {
         assert_eq!(srv.load_body(res).await.unwrap(), Bytes::new());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_h2_tcp() {
         let srv = server_with(TestServerConfig::default().h2(), || {
             App::new().service(

@@ -356,7 +356,7 @@ mod tests {
     use crate::http::client::test::TestResponse;
     use crate::http::header;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_body() {
         let mut req = TestResponse::with_header(header::CONTENT_LENGTH, "xxxx").finish();
         match req.body().await.err().unwrap() {
@@ -404,7 +404,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_json_body() {
         let mut req = TestResponse::default().finish();
         let json = JsonBody::<MyObject>::new(&mut req).await;

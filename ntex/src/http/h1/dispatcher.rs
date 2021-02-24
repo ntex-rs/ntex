@@ -728,7 +728,7 @@ mod tests {
         decoder.decode(buf).unwrap().unwrap()
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_req_parse_err() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(1024);
@@ -750,7 +750,7 @@ mod tests {
         assert!(h1.inner.state.is_io_err());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_pipeline() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
@@ -776,7 +776,7 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_pipeline_with_payload() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
@@ -806,7 +806,7 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_pipeline_with_delay() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
@@ -844,7 +844,7 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     /// if socket is disconnected, h1 dispatcher does not process any data
     // /// h1 dispatcher still processes all incoming requests
     // /// but it does not write any data to socket
@@ -870,7 +870,7 @@ mod tests {
         assert_eq!(num.load(Ordering::Relaxed), 0);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_read_large_message() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
@@ -896,7 +896,7 @@ mod tests {
         assert_eq!(load(&mut decoder, &mut buf).status, StatusCode::BAD_REQUEST);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_read_backpressure() {
         let mark = Arc::new(AtomicBool::new(false));
         let mark2 = mark.clone();
@@ -932,7 +932,7 @@ mod tests {
         assert!(mark.load(Ordering::Relaxed));
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_write_backpressure() {
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
@@ -989,7 +989,7 @@ mod tests {
         assert_eq!(num.load(Ordering::Relaxed), 65_536 * 2);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_disconnect_during_response_body_pending() {
         struct Stream(bool);
 

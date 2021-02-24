@@ -199,7 +199,7 @@ mod tests {
         value: u32,
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_extract_path_single() {
         let mut router = Router::<usize>::build();
         router.path("/{value}/", 10).0.set_id(0);
@@ -213,7 +213,7 @@ mod tests {
         assert!(from_request::<Path<MyStruct>>(&req, &mut pl).await.is_err());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_tuple_extract() {
         let mut router = Router::<usize>::build();
         router.path("/{key}/{value}/", 10).0.set_id(0);
@@ -242,7 +242,7 @@ mod tests {
         from_request::<()>(&req, &mut pl).await.unwrap();
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_request_extract() {
         let mut router = Router::<usize>::build();
         router.path("/{key}/{value}/", 10).0.set_id(0);

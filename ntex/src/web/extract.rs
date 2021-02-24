@@ -272,7 +272,7 @@ mod tests {
         hello: String,
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_option() {
         let (req, mut pl) = TestRequest::with_header(
             header::CONTENT_TYPE,
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(r, None);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_result() {
         let (req, mut pl) = TestRequest::with_header(
             header::CONTENT_TYPE,

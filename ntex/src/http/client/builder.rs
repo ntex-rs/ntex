@@ -146,7 +146,7 @@ impl ClientBuilder {
 mod tests {
     use super::*;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn basics() {
         let builder = ClientBuilder::new()
             .disable_timeout()
@@ -158,7 +158,7 @@ mod tests {
         assert_eq!(builder.max_redirects, 10);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn client_basic_auth() {
         let client = ClientBuilder::new().basic_auth("username", Some("password"));
         assert_eq!(
@@ -185,7 +185,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn client_bearer_auth() {
         let client = ClientBuilder::new().bearer_auth("someS3cr3tAutht0k3n");
         assert_eq!(

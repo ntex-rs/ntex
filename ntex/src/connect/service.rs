@@ -217,7 +217,7 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
 mod tests {
     use super::*;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_connect() {
         let server = crate::server::test_server(|| {
             crate::fn_service(|_| async { Ok::<_, ()>(()) })

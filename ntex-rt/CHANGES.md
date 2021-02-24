@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.1] - 2021-02-25
+
+* Drop macros
+
 ## [0.2.0] - 2021-02-23
 
 * Migrate to tokio 1.x

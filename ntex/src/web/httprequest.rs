@@ -466,7 +466,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_data() {
         let srv = init_service(App::new().app_data(10usize).service(
             web::resource("/").to(|req: HttpRequest| {
@@ -499,7 +499,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_extensions_dropped() {
         struct Tracker {
             dropped: bool,

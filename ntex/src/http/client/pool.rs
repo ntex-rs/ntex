@@ -613,7 +613,7 @@ mod tests {
     use crate::service::fn_service;
     use crate::testing::Io;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_basics() {
         let store = Rc::new(RefCell::new(Vec::new()));
         let store2 = store.clone();

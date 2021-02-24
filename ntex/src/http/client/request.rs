@@ -574,7 +574,7 @@ mod tests {
     use super::*;
     use crate::http::client::Client;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_debug() {
         let request = Client::new().get("/").header("x-test", "111");
         let repr = format!("{:?}", request);
@@ -582,7 +582,7 @@ mod tests {
         assert!(repr.contains("x-test"));
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_basics() {
         let mut req = Client::new()
             .put("/")
@@ -611,7 +611,7 @@ mod tests {
         let _ = req.send_body("");
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_client_header() {
         let req = Client::build()
             .header(header::CONTENT_TYPE, "111")
@@ -629,7 +629,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_client_header_override() {
         let req = Client::build()
             .header(header::CONTENT_TYPE, "111")
@@ -648,7 +648,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn client_basic_auth() {
         let req = Client::new()
             .get("/")
@@ -675,7 +675,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn client_bearer_auth() {
         let req = Client::new().get("/").bearer_auth("someS3cr3tAutht0k3n");
         assert_eq!(
@@ -689,7 +689,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn client_query() {
         let req = Client::new()
             .get("/")

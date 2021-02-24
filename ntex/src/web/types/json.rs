@@ -423,7 +423,7 @@ mod tests {
         assert!(format!("{}", j).contains("test"));
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_responder() {
         let req = TestRequest::default().to_http_request();
 
@@ -440,7 +440,7 @@ mod tests {
         assert_eq!(resp.body().get_ref(), b"{\"name\":\"test\"}");
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_extract() {
         let (req, mut pl) = TestRequest::default()
             .header(
@@ -481,7 +481,7 @@ mod tests {
             .contains("Json payload size is bigger than allowed"));
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_json_body() {
         let (req, mut pl) = TestRequest::default().to_http_parts();
         let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
@@ -533,7 +533,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_with_json_and_bad_content_type() {
         let (req, mut pl) = TestRequest::with_header(
             header::CONTENT_TYPE,
@@ -551,7 +551,7 @@ mod tests {
         assert!(s.is_err())
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_with_json_and_good_custom_content_type() {
         let (req, mut pl) = TestRequest::with_header(
             header::CONTENT_TYPE,
@@ -571,7 +571,7 @@ mod tests {
         assert!(s.is_ok())
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_with_json_and_bad_custom_content_type() {
         let (req, mut pl) = TestRequest::with_header(
             header::CONTENT_TYPE,

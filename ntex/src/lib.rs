@@ -27,7 +27,11 @@ extern crate log;
 #[macro_use]
 extern crate derive_more;
 
-pub use ntex_rt_macros::{main, test};
+#[cfg(not(test))] // Work around for rust-lang/rust#62127
+pub use ntex_macros::{rt_main as main, rt_test as test};
+
+#[cfg(test)]
+pub(crate) use ntex_macros::rt_test;
 
 pub mod channel;
 pub mod connect;

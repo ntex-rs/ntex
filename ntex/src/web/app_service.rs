@@ -364,7 +364,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_drop_data() {
         let data = Arc::new(AtomicBool::new(false));
 

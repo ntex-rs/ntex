@@ -4,6 +4,8 @@
 
 * Re-export various types
 
+* Use `main` and `test` proc macro from ntex-macros
+
 ## [0.3.1] - 2021-02-24
 
 * server: Make TestServer::connect() async

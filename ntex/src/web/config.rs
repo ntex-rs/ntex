@@ -136,7 +136,7 @@ mod tests {
     use crate::web::{self, App, HttpRequest, HttpResponse};
     use crate::Service;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_configure_data() {
         let cfg = |cfg: &mut ServiceConfig<_>| {
             cfg.data(10usize);
@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_configure_external_resource() {
         let srv = init_service(
             App::new()
@@ -182,7 +182,7 @@ mod tests {
         assert_eq!(body, Bytes::from_static(b"https://youtube.com/watch/12345"));
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_configure_service() {
         let srv = init_service(App::new().configure(|cfg| {
             cfg.service(

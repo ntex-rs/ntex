@@ -369,7 +369,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_variant() {
         let factory = variant(fn_factory(|| ok::<_, ()>(Srv1)))
             .and(fn_factory(|| ok::<_, ()>(Srv2)))

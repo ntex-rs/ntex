@@ -396,7 +396,7 @@ mod tests {
         assert!(format!("{}", f).contains("test"));
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_form() {
         let (req, mut pl) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -422,7 +422,7 @@ mod tests {
         assert!(eq(res.err().unwrap(), UrlencodedError::UnknownLength));
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_urlencoded_error() {
         let (req, mut pl) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -448,7 +448,7 @@ mod tests {
         assert!(eq(info.err().unwrap(), UrlencodedError::ContentType));
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_urlencoded() {
         let (req, mut pl) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -500,7 +500,7 @@ mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_responder() {
         let req = TestRequest::default().to_http_request();
 

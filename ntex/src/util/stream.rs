@@ -166,7 +166,7 @@ mod tests {
     use crate::rt::time::delay_for;
     use crate::ws;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_basic() {
         let counter = Rc::new(Cell::new(0));
         let counter2 = counter.clone();

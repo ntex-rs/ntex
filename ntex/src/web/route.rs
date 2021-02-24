@@ -294,7 +294,7 @@ mod tests {
         name: String,
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_route() {
         let srv = init_service(
             App::new()

@@ -139,7 +139,7 @@ mod tests {
     use crate::web::{self, App, HttpResponse};
     use crate::Service;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_data_extractor() {
         let srv = init_service(App::new().data("TEST".to_string()).service(
             web::resource("/").to(|data: web::types::Data<String>| async move {
@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_app_data_extractor() {
         let srv = init_service(
             App::new().app_data(Data::new(10usize)).service(
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_route_data_extractor() {
         let srv =
             init_service(App::new().service(web::resource("/").data(10usize).route(
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_override_data() {
         let srv = init_service(App::new().data(1usize).service(
             web::resource("/").data(10usize).route(web::get().to(
@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_data_drop() {
         struct TestData(Arc<AtomicUsize>);
 

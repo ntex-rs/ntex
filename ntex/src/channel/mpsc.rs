@@ -236,7 +236,7 @@ mod tests {
     use futures::future::lazy;
     use futures::{Sink, Stream, StreamExt};
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_mpsc() {
         let (tx, mut rx) = channel();
         assert!(format!("{:?}", tx).contains("Sender"));
@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(err.into_inner(), "test");
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_sink() {
         let (mut tx, mut rx) = channel();
         lazy(|cx| {
@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(rx.next().await, None);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_close() {
         let (tx, rx) = channel::<()>();
         assert!(!tx.is_closed());

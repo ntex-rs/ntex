@@ -243,7 +243,7 @@ impl DateService {
 mod tests {
     use super::*;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_date() {
         let date = DateService::default();
         let mut buf1 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);

@@ -331,7 +331,7 @@ impl AsyncWrite for Io {
 mod tests {
     use super::*;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn basic() {
         let (client, server) = Io::create();
         assert_eq!(client.tp, Type::Client);

@@ -573,7 +573,7 @@ mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     #[allow(clippy::mutex_atomic)]
     async fn basics() {
         let (_tx1, rx1) = unbounded();

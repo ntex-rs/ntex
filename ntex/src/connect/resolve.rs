@@ -141,7 +141,7 @@ mod tests {
 
     use super::*;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn resolver() {
         let resolver = Resolver::new(DnsResolver::tokio_from_system_conf().unwrap());
         assert!(format!("{:?}", resolver).contains("Resolver"));

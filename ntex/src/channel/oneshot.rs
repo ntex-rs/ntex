@@ -107,7 +107,7 @@ mod tests {
     use super::*;
     use futures::future::lazy;
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_oneshot() {
         let (tx, rx) = channel();
         tx.send("test").unwrap();

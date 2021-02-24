@@ -4,7 +4,6 @@ members = [
   "ntex-codec",
   "ntex-router",
   "ntex-rt",
-  "ntex-rt-macros",
   "ntex-service",
   "ntex-macros",
 ]
@@ -15,5 +14,4 @@ ntex-codec = { path = "ntex-codec" }
 ntex-router = { path = "ntex-router" }
 ntex-rt = { path = "ntex-rt" }
 ntex-service = { path = "ntex-service" }
-# ntex-macros = { path = "ntex-macros" }
-# ntex-rt-macros = { path = "ntex-rt-macros" }
+ntex-macros = { path = "ntex-macros" }

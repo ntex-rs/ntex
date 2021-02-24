@@ -394,7 +394,7 @@ mod tests {
         assert!(WebRequest::<DefaultError>::from_request(r).is_err());
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_service() {
         let srv = init_service(App::new().service(
             web::service("/test").name("test").finish(
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_multi() {
         let srv = init_service(App::new().service([
             web::resource("/test1").to(|| async { HttpResponse::Ok() }),

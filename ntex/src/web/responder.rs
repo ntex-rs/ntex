@@ -414,7 +414,7 @@ pub(crate) mod tests {
         responder
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_either_responder() {
         let srv = init_service(web::App::new().service(
             web::resource("/index.html").to(|req: HttpRequest| async move {
@@ -436,7 +436,7 @@ pub(crate) mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_option_responder() {
         let srv = init_service(
             web::App::new()
@@ -463,7 +463,7 @@ pub(crate) mod tests {
         }
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_responder() {
         let req = TestRequest::default().to_http_request();
 
@@ -527,7 +527,7 @@ pub(crate) mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_result_responder() {
         let req = TestRequest::default().to_http_request();
 
@@ -553,7 +553,7 @@ pub(crate) mod tests {
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_custom_responder() {
         let req = TestRequest::default().to_http_request();
         let res = responder("test".to_string())
@@ -576,7 +576,7 @@ pub(crate) mod tests {
         );
     }
 
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_tuple_responder_with_status_code() {
         let req = TestRequest::default().to_http_request();
         let res = Responder::<DefaultError>::respond_to(

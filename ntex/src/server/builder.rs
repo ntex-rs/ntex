@@ -517,7 +517,7 @@ mod tests {
     use crate::service::fn_service;
 
     #[cfg(unix)]
-    #[ntex_rt::test]
+    #[crate::rt_test]
     async fn test_signals() {
         use futures::future::ok;
         use std::sync::mpsc;
