@@ -1,5 +1,4 @@
 //! Request logging middleware
-use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::env;
 use std::error::Error;
@@ -17,6 +16,7 @@ use time::OffsetDateTime;
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
 use crate::service::{Service, Transform};
+use crate::util::HashSet;
 use crate::web::dev::{WebRequest, WebResponse};
 use crate::web::HttpResponse;
 
@@ -91,7 +91,7 @@ impl Logger {
         Logger {
             inner: Rc::new(Inner {
                 format: Format::new(format),
-                exclude: HashSet::new(),
+                exclude: HashSet::default(),
             }),
         }
     }
@@ -116,7 +116,7 @@ impl Default for Logger {
         Logger {
             inner: Rc::new(Inner {
                 format: Format::default(),
-                exclude: HashSet::new(),
+                exclude: HashSet::default(),
             }),
         }
     }

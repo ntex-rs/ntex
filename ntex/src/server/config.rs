@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::{fmt, io, net};
 
 use futures::future::{ok, Future, FutureExt, LocalBoxFuture};
@@ -6,7 +5,7 @@ use log::error;
 
 use crate::rt::net::TcpStream;
 use crate::service;
-use crate::util::counter::CounterGuard;
+use crate::util::{counter::CounterGuard, HashMap};
 
 use super::builder::bind_addr;
 use super::service::{
@@ -82,8 +81,8 @@ impl ConfiguredService {
     pub(super) fn new(rt: Box<dyn ServiceRuntimeConfiguration>) -> Self {
         ConfiguredService {
             rt,
-            names: HashMap::new(),
-            topics: HashMap::new(),
+            names: HashMap::default(),
+            topics: HashMap::default(),
             services: Vec::new(),
         }
     }
@@ -191,7 +190,7 @@ impl ServiceRuntime {
     fn new(names: HashMap<String, Token>) -> Self {
         ServiceRuntime {
             names,
-            services: HashMap::new(),
+            services: HashMap::default(),
             onstart: Vec::new(),
         }
     }

@@ -1,10 +1,9 @@
 use std::collections::hash_map::{self, Entry};
 use std::convert::TryFrom;
 
-use either::Either;
 use http::header::{HeaderName, HeaderValue};
 
-use crate::HashMap;
+use crate::util::{Either, HashMap};
 
 /// A set of HTTP headers
 ///

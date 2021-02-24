@@ -2,7 +2,6 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, collections::VecDeque, pin::Pin, rc::Rc};
 
-use bytes::Bytes;
 use futures::future::{poll_fn, Future, FutureExt, LocalBoxFuture};
 use h2::client::{handshake, Connection, SendRequest};
 use http::uri::Authority;
@@ -13,7 +12,7 @@ use crate::http::Protocol;
 use crate::rt::{spawn, time::delay_for, time::Delay};
 use crate::service::Service;
 use crate::task::LocalWaker;
-use crate::HashMap;
+use crate::util::{Bytes, HashMap};
 
 use super::connection::{ConnectionType, IoConnection};
 use super::error::ConnectError;

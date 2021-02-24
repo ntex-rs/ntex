@@ -3,9 +3,9 @@ use std::{cell::RefCell, rc::Rc};
 use url::Url;
 
 use crate::router::ResourceDef;
+use crate::util::HashMap;
 use crate::web::error::UrlGenerationError;
 use crate::web::httprequest::HttpRequest;
-use crate::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct ResourceMap {

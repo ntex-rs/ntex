@@ -4,7 +4,7 @@ use futures::future::{ready, FutureExt};
 
 use crate::framed::State;
 use crate::rt::time::delay_for;
-use crate::HashSet;
+use crate::util::HashSet;
 
 pub struct Timer(Rc<RefCell<Inner>>);
 

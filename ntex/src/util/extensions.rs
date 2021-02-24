@@ -3,7 +3,7 @@ use std::{any::Any, any::TypeId, fmt};
 #[derive(Default)]
 /// A type map of request extensions.
 pub struct Extensions {
-    map: crate::HashMap<TypeId, Box<dyn Any>>,
+    map: crate::util::HashMap<TypeId, Box<dyn Any>>,
 }
 
 impl Extensions {
@@ -11,7 +11,7 @@ impl Extensions {
     #[inline]
     pub fn new() -> Extensions {
         Extensions {
-            map: crate::HashMap::default(),
+            map: Default::default(),
         }
     }
 
