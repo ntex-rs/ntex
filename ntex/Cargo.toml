@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.3.2"
+version = "0.3.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -45,7 +45,7 @@ ntex-macros = "0.1.3"
 base64 = "0.13"
 bitflags = "1.2.1"
 bytes = "1.0"
-bytestring = "1.0"
+bytestring = { version = "1.0", features = ["serde"] }
 derive_more = "0.99.11"
 either = "1.6.1"
 encoding_rs = "0.8.26"
