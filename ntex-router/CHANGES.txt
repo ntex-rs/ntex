@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.1] - 2021-02-26
+
+* Fix: partial matches keep garbage in segments
+
 ## [0.4.0] - 2021-02-23
 
 * Upgrade to bytestring 1.0

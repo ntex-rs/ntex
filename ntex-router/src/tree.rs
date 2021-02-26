@@ -255,7 +255,7 @@ impl Tree {
                 .children
                 .iter()
                 .map(|x| {
-                    x.find_inner2(
+                    x.find_inner_wrapped(
                         path,
                         resource,
                         check,
@@ -289,7 +289,7 @@ impl Tree {
             path
         };
 
-        if let Some((val, skip)) = self.find_inner2(
+        if let Some((val, skip)) = self.find_inner_wrapped(
             path,
             resource,
             check,
@@ -305,6 +305,38 @@ impl Tree {
         } else {
             None
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn find_inner_wrapped<T, R, F>(
+        &self,
+        path: &str,
+        resource: &R,
+        check: &F,
+        skip: usize,
+        segments: &mut Vec<(&'static str, PathItem)>,
+        insensitive: bool,
+        base_skip: isize,
+    ) -> Option<(usize, usize)>
+    where
+        T: ResourcePath,
+        R: Resource<T>,
+        F: Fn(usize, &R) -> bool,
+    {
+        let len = segments.len();
+        let res = self.find_inner2(
+            path,
+            resource,
+            check,
+            skip,
+            segments,
+            insensitive,
+            base_skip,
+        );
+        if res.is_none() {
+            segments.truncate(len);
+        }
+        res
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -477,7 +509,7 @@ impl Tree {
                                             .children
                                             .iter()
                                             .map(|x| {
-                                                x.find_inner2(
+                                                x.find_inner_wrapped(
                                                     p,
                                                     resource,
                                                     check,
@@ -517,7 +549,7 @@ impl Tree {
                         .children
                         .iter()
                         .map(|x| {
-                            x.find_inner2(
+                            x.find_inner_wrapped(
                                 path,
                                 resource,
                                 check,

@@ -992,4 +992,18 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/test")), Some(4));
         assert_eq!(tree.find(&mut Path::new("/test/index.html")), Some(4));
     }
+
+    #[test]
+    fn test_with_some_match() {
+        let mut tree = Tree::new(&ResourceDef::new("/p/{tp}/{id}/{r}"), 1);
+        tree.insert(&ResourceDef::new("/p/ih/{tp}/d/{id}/sid/{r}/r/{s}"), 3);
+
+        let mut p = Path::new("/p/ih/def/d/abc/sid/5bddc58f/r/srv");
+        assert_eq!(tree.find(&mut p), Some(3));
+        assert_eq!(p.get("tp"), Some("def"));
+        assert_eq!(p.get("id"), Some("abc"));
+        assert_eq!(p.get("r"), Some("5bddc58f"));
+        assert_eq!(p.get("s"), Some("srv"));
+        assert_eq!(p.len(), 4);
+    }
 }

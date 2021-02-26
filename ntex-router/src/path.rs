@@ -170,6 +170,7 @@ impl<T: ResourcePath> Path<T> {
     }
 }
 
+/// Iterator to items in parameter container
 #[derive(Debug)]
 pub struct PathIter<'a, T> {
     idx: usize,
