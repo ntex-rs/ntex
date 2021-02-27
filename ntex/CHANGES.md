@@ -8,6 +8,8 @@
 
 * Update ntex-router v0.4.1
 
+* Update cookie v0.15.0
+
 ## [0.3.2] - 2021-02-25
 
 * Re-export various types

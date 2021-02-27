@@ -484,6 +484,11 @@ where
     }
 
     fn call(&self, (io, proto, peer_addr): Self::Request) -> Self::Future {
+        log::trace!(
+            "New http connection protocol {:?} peer address {:?}",
+            proto,
+            peer_addr
+        );
         let on_connect = if let Some(ref on_connect) = self.on_connect {
             Some(on_connect(&io))
         } else {

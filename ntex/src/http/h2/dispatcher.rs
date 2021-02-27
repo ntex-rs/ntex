@@ -92,6 +92,8 @@ where
                 Poll::Ready(None) => return Poll::Ready(Ok(())),
                 Poll::Ready(Some(Err(err))) => return Poll::Ready(Err(err.into())),
                 Poll::Ready(Some(Ok((req, res)))) => {
+                    trace!("h2 message is received: {:?}", req);
+
                     // update keep-alive expire
                     if this.ka_timer.is_some() {
                         if let Some(expire) = this.config.keep_alive_expire() {

@@ -260,6 +260,8 @@ where
     }
 
     fn call(&self, (io, addr): Self::Request) -> Self::Future {
+        trace!("New http2 connection, peer address: {:?}", addr);
+
         let on_connect = if let Some(ref on_connect) = self.on_connect {
             Some(on_connect(&io))
         } else {
@@ -324,6 +326,7 @@ where
                 ref mut handshake,
             ) => match Pin::new(handshake).poll(cx) {
                 Poll::Ready(Ok(conn)) => {
+                    trace!("H2 handshake completed");
                     self.state = State::Incoming(Dispatcher::new(
                         config.clone(),
                         conn,
