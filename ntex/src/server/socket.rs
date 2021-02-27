@@ -157,9 +157,7 @@ impl FromStream for TcpStream {
             Stream::Tcp(stream) => {
                 use std::os::unix::io::{FromRawFd, IntoRawFd};
                 let fd = IntoRawFd::into_raw_fd(stream);
-                let sock: std::net::TcpStream = unsafe { FromRawFd::from_raw_fd(fd) };
-                let _ = sock.set_nonblocking(true);
-                TcpStream::from_std(sock)
+                TcpStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) })
             }
             #[cfg(unix)]
             Stream::Uds(_) => {
@@ -176,10 +174,7 @@ impl FromStream for TcpStream {
             Stream::Tcp(stream) => {
                 use std::os::windows::io::{FromRawSocket, IntoRawSocket};
                 let fd = IntoRawSocket::into_raw_socket(stream);
-                let sock: std::net::TcpStream =
-                    unsafe { FromRawSocket::from_raw_socket(fd) };
-                let _ = sock.set_nonblocking(true);
-                TcpStream::from_std(sock)
+                TcpStream::from_std(unsafe { FromRawSocket::from_raw_socket(fd) })
             }
             #[cfg(unix)]
             Stream::Uds(_) => {
@@ -197,10 +192,9 @@ impl FromStream for crate::rt::net::UnixStream {
             Stream::Uds(stream) => {
                 use std::os::unix::io::{FromRawFd, IntoRawFd};
                 let fd = IntoRawFd::into_raw_fd(stream);
-                let sock: std::os::unix::net::UnixStream =
-                    unsafe { FromRawFd::from_raw_fd(fd) };
-                let _ = sock.set_nonblocking(true);
-                crate::rt::net::UnixStream::from_std(sock)
+                crate::rt::net::UnixStream::from_std(unsafe {
+                    FromRawFd::from_raw_fd(fd)
+                })
             }
         }
     }

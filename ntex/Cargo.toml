@@ -38,7 +38,7 @@ cookie = ["coo-kie", "coo-kie/percent-encode"]
 [dependencies]
 ntex-codec = "0.4.0"
 ntex-rt = "0.2.1"
-ntex-router = "0.4.0"
+ntex-router = "0.4.1"
 ntex-service = "0.1.5"
 ntex-macros = "0.1.3"
 
@@ -50,7 +50,7 @@ derive_more = "0.99.11"
 either = "1.6.1"
 encoding_rs = "0.8.26"
 futures = "0.3.13"
-ahash = "0.7.0"
+ahash = "0.7.1"
 h2 = "0.3"
 http = "0.2.1"
 httparse = "1.3"

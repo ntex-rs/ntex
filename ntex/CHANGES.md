@@ -1,5 +1,13 @@
 # Changes
 
+## [0.3.3] - 2021-02-27
+
+* Remove unneeded set_nonblocking() call from server accept loop
+
+* Do not set `reuse_address` for tcp listener on window os
+
+* Update ntex-router v0.4.1
+
 ## [0.3.2] - 2021-02-25
 
 * Re-export various types

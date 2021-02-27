@@ -504,7 +504,13 @@ pub(crate) fn create_tcp_listener(
         net::SocketAddr::V4(_) => Socket::new(Domain::ipv4(), Type::stream(), None)?,
         net::SocketAddr::V6(_) => Socket::new(Domain::ipv6(), Type::stream(), None)?,
     };
+
+    // On Windows, this allows rebinding sockets which are actively in use,
+    // which allows “socket hijacking”, so we explicitly don't set it here.
+    // https://docs.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse
+    #[cfg(not(windows))]
     builder.set_reuse_address(true)?;
+
     builder.bind(&SockAddr::from(addr))?;
     builder.listen(backlog)?;
     Ok(builder.into_tcp_listener())
