@@ -170,6 +170,16 @@ impl<T: Address> TcpConnectorResponse<T> {
             },
         }
     }
+
+    fn can_continue(&self, err: &io::Error) -> bool {
+        trace!(
+            "TCP connector - failed to connect to connecting to {:?} port: {} err: {:?}",
+            self.req.as_ref().unwrap().host(),
+            self.port,
+            err
+        );
+        !(self.addrs.is_none() || self.addrs.as_ref().unwrap().is_empty())
+    }
 }
 
 impl<T: Address> Future for TcpConnectorResponse<T> {
@@ -183,6 +193,12 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
             if let Some(new) = this.stream.as_mut() {
                 match new.as_mut().poll(cx) {
                     Poll::Ready(Ok(sock)) => {
+                        if let Err(err) = sock.set_nodelay(true) {
+                            if !this.can_continue(&err) {
+                                return Poll::Ready(Err(err.into()));
+                            }
+                        }
+
                         let req = this.req.take().unwrap();
                         trace!(
                             "TCP connector - successfully connected to connecting to {:?} - {:?}",
@@ -192,14 +208,7 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
                     }
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(Err(err)) => {
-                        trace!(
-                            "TCP connector - failed to connect to connecting to {:?} port: {}",
-                            this.req.as_ref().unwrap().host(),
-                            this.port,
-                        );
-                        if this.addrs.is_none()
-                            || this.addrs.as_ref().unwrap().is_empty()
-                        {
+                        if !this.can_continue(&err) {
                             return Poll::Ready(Err(err.into()));
                         }
                     }

@@ -6,6 +6,8 @@
 
 * Do not set `reuse_address` for tcp listener on window os
 
+* Set nodelay to accept/connect sockets
+
 * Update ntex-router v0.4.1
 
 * Update cookie v0.15.0
