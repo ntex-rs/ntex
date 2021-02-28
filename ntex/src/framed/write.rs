@@ -105,16 +105,15 @@ where
 
                 match result {
                     Poll::Ready(Ok(_)) | Poll::Pending => {
-                        this.state.update_write_task(len < HW)
+                        this.state.update_write_task(len < HW, cx.waker());
+                        Poll::Pending
                     }
                     Poll::Ready(Err(err)) => {
                         log::trace!("error during sending data: {:?}", err);
                         this.state.set_io_error(Some(err));
-                        return Poll::Ready(());
+                        Poll::Ready(())
                     }
                 }
-                this.state.register_write_task(cx.waker());
-                Poll::Pending
             }
             IoWriteState::Shutdown(ref mut delay, ref mut st) => {
                 // close WRITE side and wait for disconnect on read side.

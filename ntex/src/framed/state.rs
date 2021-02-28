@@ -293,10 +293,6 @@ impl State {
         self.0.read_task.register(waker);
     }
 
-    pub(super) fn register_write_task(&self, waker: &Waker) {
-        self.0.write_task.register(waker);
-    }
-
     pub(super) fn update_read_task(&self, result: ReadResult, waker: &Waker) {
         match result {
             ReadResult::Updated => {
@@ -313,7 +309,7 @@ impl State {
         self.0.read_task.register(waker);
     }
 
-    pub(super) fn update_write_task(&self, ready: bool) {
+    pub(super) fn update_write_task(&self, ready: bool, waker: &Waker) {
         if ready {
             let mut flags = self.0.flags.get();
             if flags.contains(Flags::WR_BACKPRESSURE) {
@@ -324,6 +320,7 @@ impl State {
         } else {
             self.insert_flags(Flags::WR_BACKPRESSURE);
         }
+        self.0.write_task.register(waker);
     }
 
     #[inline]
@@ -600,7 +597,7 @@ impl State {
 
                     // encode item
                     if let Err(err) = codec.encode(item, &mut write_buf) {
-                        log::trace!("Codec encoder error: {:?}", err);
+                        log::trace!("Encoder error: {:?}", err);
                         self.insert_flags(Flags::DSP_STOP | Flags::ST_DSP_ERR);
                         self.0.dispatch_task.wake();
                         return Err(Either::Right(err));
