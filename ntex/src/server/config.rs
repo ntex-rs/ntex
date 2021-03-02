@@ -1,6 +1,6 @@
-use std::{fmt, io, net};
+use std::{cell::RefCell, fmt, io, marker::PhantomData, mem, net, rc::Rc};
 
-use futures::future::{ok, Future, FutureExt, LocalBoxFuture};
+use futures::future::{ok, Future, FutureExt, LocalBoxFuture, Ready};
 use log::error;
 
 use crate::rt::net::TcpStream;
@@ -15,7 +15,7 @@ use super::Token;
 
 pub struct ServiceConfig {
     pub(super) services: Vec<(String, net::TcpListener)>,
-    pub(super) apply: Option<Box<dyn ServiceRuntimeConfiguration>>,
+    pub(super) apply: Option<Box<dyn ServiceRuntimeConfiguration + Send>>,
     pub(super) threads: usize,
     pub(super) backlog: i32,
 }
@@ -51,7 +51,7 @@ impl ServiceConfig {
         lst: net::TcpListener,
     ) -> &mut Self {
         if self.apply.is_none() {
-            self.apply = Some(Box::new(not_configured));
+            let _ = self.apply(not_configured);
         }
         self.services.push((name.as_ref().to_string(), lst));
         self
@@ -65,20 +65,38 @@ impl ServiceConfig {
     where
         F: Fn(&mut ServiceRuntime) + Send + Clone + 'static,
     {
-        self.apply = Some(Box::new(f));
+        self.apply_async::<_, Ready<Result<(), &'static str>>, &'static str>(
+            move |mut rt| {
+                f(&mut rt);
+                ok(())
+            },
+        )
+    }
+
+    /// Register async service configuration function.
+    ///
+    /// This function get called during worker runtime configuration.
+    /// It get executed in the worker thread.
+    pub fn apply_async<F, R, E>(&mut self, f: F) -> io::Result<()>
+    where
+        F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
+        R: Future<Output = Result<(), E>> + 'static,
+        E: fmt::Display + 'static,
+    {
+        self.apply = Some(Box::new(ConfigWrapper { f, _t: PhantomData }));
         Ok(())
     }
 }
 
 pub(super) struct ConfiguredService {
-    rt: Box<dyn ServiceRuntimeConfiguration>,
+    rt: Box<dyn ServiceRuntimeConfiguration + Send>,
     names: HashMap<Token, (String, net::SocketAddr)>,
     topics: HashMap<String, Token>,
     services: Vec<Token>,
 }
 
 impl ConfiguredService {
-    pub(super) fn new(rt: Box<dyn ServiceRuntimeConfiguration>) -> Self {
+    pub(super) fn new(rt: Box<dyn ServiceRuntimeConfiguration + Send>) -> Self {
         ConfiguredService {
             rt,
             names: HashMap::default(),
@@ -112,17 +130,19 @@ impl InternalServiceFactory for ConfiguredService {
         &self,
     ) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         // configure services
-        let mut rt = ServiceRuntime::new(self.topics.clone());
-        self.rt.configure(&mut rt);
-        rt.validate();
+        let rt = ServiceRuntime::new(self.topics.clone());
+        let cfg_fut = self.rt.configure(ServiceRuntime(rt.0.clone()));
         let mut names = self.names.clone();
         let tokens = self.services.clone();
 
         // construct services
         async move {
-            let mut services = rt.services;
+            cfg_fut.await?;
+            rt.validate();
+
+            let mut services = mem::take(&mut rt.0.borrow_mut().services);
             // TODO: Proper error handling here
-            for f in rt.onstart.into_iter() {
+            for f in mem::take(&mut rt.0.borrow_mut().onstart).into_iter() {
                 f.await;
             }
             let mut res = vec![];
@@ -157,22 +177,40 @@ impl InternalServiceFactory for ConfiguredService {
     }
 }
 
-pub(super) trait ServiceRuntimeConfiguration: Send {
-    fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration>;
+pub(super) trait ServiceRuntimeConfiguration {
+    fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration + Send>;
 
-    fn configure(&self, rt: &mut ServiceRuntime);
+    fn configure(&self, rt: ServiceRuntime) -> LocalBoxFuture<'static, Result<(), ()>>;
 }
 
-impl<F> ServiceRuntimeConfiguration for F
+struct ConfigWrapper<F, R, E> {
+    f: F,
+    _t: PhantomData<(R, E)>,
+}
+
+// SAFETY: R and E are used in worker thread only
+unsafe impl<F: Send, R, E> Send for ConfigWrapper<F, R, E> {}
+
+impl<F, R, E> ServiceRuntimeConfiguration for ConfigWrapper<F, R, E>
 where
-    F: Fn(&mut ServiceRuntime) + Send + Clone + 'static,
+    F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
+    R: Future<Output = Result<(), E>> + 'static,
+    E: fmt::Display + 'static,
 {
-    fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration> {
-        Box::new(self.clone())
+    fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration + Send> {
+        Box::new(ConfigWrapper {
+            f: self.f.clone(),
+            _t: PhantomData,
+        })
     }
 
-    fn configure(&self, rt: &mut ServiceRuntime) {
-        (self)(rt)
+    fn configure(&self, rt: ServiceRuntime) -> LocalBoxFuture<'static, Result<(), ()>> {
+        let f = self.f.clone();
+        Box::pin(async move {
+            (f)(rt).await.map_err(|e| {
+                error!("Cannot configure service: {}", e);
+            })
+        })
     }
 }
 
@@ -180,7 +218,9 @@ fn not_configured(_: &mut ServiceRuntime) {
     error!("Service is not configured");
 }
 
-pub struct ServiceRuntime {
+pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
+
+struct ServiceRuntimeInner {
     names: HashMap<String, Token>,
     services: HashMap<Token, BoxedNewService>,
     onstart: Vec<LocalBoxFuture<'static, ()>>,
@@ -188,16 +228,17 @@ pub struct ServiceRuntime {
 
 impl ServiceRuntime {
     fn new(names: HashMap<String, Token>) -> Self {
-        ServiceRuntime {
+        ServiceRuntime(Rc::new(RefCell::new(ServiceRuntimeInner {
             names,
             services: HashMap::default(),
             onstart: Vec::new(),
-        }
+        })))
     }
 
     fn validate(&self) {
-        for (name, token) in &self.names {
-            if !self.services.contains_key(&token) {
+        let inner = self.0.as_ref().borrow();
+        for (name, token) in &inner.names {
+            if !inner.services.contains_key(&token) {
                 error!("Service {:?} is not configured", name);
             }
         }
@@ -207,7 +248,7 @@ impl ServiceRuntime {
     ///
     /// Name of the service must be registered during configuration stage with
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
-    pub fn service<T, F>(&mut self, name: &str, service: F)
+    pub fn service<T, F>(&self, name: &str, service: F)
     where
         F: service::IntoServiceFactory<T>,
         T: service::ServiceFactory<Config = (), Request = TcpStream> + 'static,
@@ -215,10 +256,11 @@ impl ServiceRuntime {
         T::Service: 'static,
         T::InitError: fmt::Debug,
     {
-        // let name = name.to_owned();
-        if let Some(token) = self.names.get(name) {
-            self.services.insert(
-                *token,
+        let mut inner = self.0.borrow_mut();
+        if let Some(token) = inner.names.get(name) {
+            let token = *token;
+            inner.services.insert(
+                token,
                 Box::new(ServiceFactory {
                     inner: service.into_factory(),
                 }),
@@ -229,11 +271,11 @@ impl ServiceRuntime {
     }
 
     /// Execute future before services initialization.
-    pub fn on_start<F>(&mut self, fut: F)
+    pub fn on_start<F>(&self, fut: F)
     where
         F: Future<Output = ()> + 'static,
     {
-        self.onstart.push(fut.boxed_local())
+        self.0.borrow_mut().onstart.push(fut.boxed_local())
     }
 }
 

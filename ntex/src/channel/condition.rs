@@ -60,7 +60,7 @@ pub struct Waiter {
 }
 
 impl Waiter {
-    pub fn poll_waiter(&self, cx: &mut Context<'_>) -> Poll<()> {
+    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
         let inner = unsafe { self.inner.get_mut().data.get_unchecked_mut(self.token) };
         if inner.is_none() {
             let waker = LocalWaker::default();
@@ -70,6 +70,11 @@ impl Waiter {
             return Poll::Ready(());
         }
         Poll::Pending
+    }
+
+    #[doc(hidden)]
+    pub fn poll_waiter(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.poll_ready(cx)
     }
 }
 

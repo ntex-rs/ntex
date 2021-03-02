@@ -1,7 +1,6 @@
-use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{mpsc, Arc};
-use std::{net, thread, time};
+use std::{io, io::Read, net, thread, time};
 
 use bytes::Bytes;
 use futures::future::{lazy, ok, FutureExt};
@@ -159,6 +158,59 @@ fn test_configure() {
                             rt.on_start(lazy(move |_| {
                                 let _ = num.fetch_add(1, Relaxed);
                             }))
+                        })
+                })
+                .unwrap()
+                .workers(1)
+                .start()
+        });
+        let _ = tx.send((srv, ntex::rt::System::current()));
+        let _ = sys.run();
+    });
+    let (_, sys) = rx.recv().unwrap();
+    thread::sleep(time::Duration::from_millis(500));
+
+    assert!(net::TcpStream::connect(addr1).is_ok());
+    assert!(net::TcpStream::connect(addr2).is_ok());
+    assert!(net::TcpStream::connect(addr3).is_ok());
+    assert_eq!(num.load(Relaxed), 1);
+    sys.stop();
+    let _ = h.join();
+}
+
+#[test]
+fn test_configure_async() {
+    let addr1 = TestServer::unused_addr();
+    let addr2 = TestServer::unused_addr();
+    let addr3 = TestServer::unused_addr();
+    let (tx, rx) = mpsc::channel();
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let h = thread::spawn(move || {
+        let num = num2.clone();
+        let mut sys = ntex::rt::System::new("test");
+        let srv = sys.exec(|| {
+            Server::build()
+                .disable_signals()
+                .configure(move |cfg| {
+                    let num = num.clone();
+                    let lst = net::TcpListener::bind(addr3).unwrap();
+                    cfg.bind("addr1", addr1)
+                        .unwrap()
+                        .bind("addr2", addr2)
+                        .unwrap()
+                        .listen("addr3", lst)
+                        .apply_async(move |rt| {
+                            let num = num.clone();
+                            async move {
+                                rt.service("addr1", fn_service(|_| ok::<_, ()>(())));
+                                rt.service("addr3", fn_service(|_| ok::<_, ()>(())));
+                                rt.on_start(lazy(move |_| {
+                                    let _ = num.fetch_add(1, Relaxed);
+                                }));
+                                Ok::<_, io::Error>(())
+                            }
                         })
                 })
                 .unwrap()

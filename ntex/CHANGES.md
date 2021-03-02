@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.4] - 2021-03-02
+
+* Allow to use async fn for server configuration
+
 ## [0.3.3] - 2021-02-27
 
 * Remove unneeded set_nonblocking() call from server accept loop
