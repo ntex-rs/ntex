@@ -188,7 +188,7 @@ struct ConfigWrapper<F, R, E> {
     _t: PhantomData<(R, E)>,
 }
 
-// SAFETY: R and E are used in worker thread only
+// SAFETY: we dont store R or E in ConfigWrapper
 unsafe impl<F: Send, R, E> Send for ConfigWrapper<F, R, E> {}
 
 impl<F, R, E> ServiceRuntimeConfiguration for ConfigWrapper<F, R, E>
