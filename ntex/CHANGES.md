@@ -1,8 +1,10 @@
 # Changes
 
-## [0.3.5] - 2021-03-xx
+## [0.3.5] - 2021-03-04
 
 * framed: add high/low watermark for read/write buffers
+
+* framed: write task could panic if receives more that 512 bytes during shutdown
 
 * http/web: add high/low watermark for read/write buffers
 

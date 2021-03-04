@@ -881,6 +881,7 @@ mod tests {
         client.remote_buffer_cap(4096);
 
         let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
+        h1.inner.state.set_read_high_watermark(16 * 1024);
         let mut decoder = ClientCodec::default();
 
         let data = rand::thread_rng()

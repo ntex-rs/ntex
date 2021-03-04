@@ -145,9 +145,9 @@ where
                         Shutdown::Shutdown => {
                             // read until 0 or err
                             let mut buf = [0u8; 512];
-                            let mut read_buf = ReadBuf::new(&mut buf);
                             let mut io = this.io.borrow_mut();
                             loop {
+                                let mut read_buf = ReadBuf::new(&mut buf);
                                 match Pin::new(&mut *io).poll_read(cx, &mut read_buf) {
                                     Poll::Ready(Err(_)) | Poll::Ready(Ok(_))
                                         if read_buf.filled().is_empty() =>

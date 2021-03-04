@@ -251,7 +251,7 @@ impl AsyncRead for Io {
         ch.waker.register(cx.waker());
 
         if !ch.buf.is_empty() {
-            let size = std::cmp::min(ch.buf.len(), buf.capacity());
+            let size = std::cmp::min(ch.buf.len(), buf.remaining());
             let b = ch.buf.split_to(size);
             buf.put_slice(&b);
             return Poll::Ready(Ok(()));

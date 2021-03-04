@@ -396,13 +396,13 @@ impl State {
     pub fn dsp_read_more_data(&self, waker: &Waker) {
         let mut flags = self.0.flags.get();
         flags.remove(Flags::RD_READY);
-        self.0.dispatch_task.register(waker);
         if flags.contains(Flags::RD_BUF_FULL) {
             log::trace!("read back-pressure is enabled, wake io task");
             flags.remove(Flags::RD_BUF_FULL);
             self.0.read_task.wake();
         }
         self.0.flags.set(flags);
+        self.0.dispatch_task.register(waker);
     }
 
     #[inline]
