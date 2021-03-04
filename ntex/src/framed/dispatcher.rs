@@ -613,18 +613,13 @@ mod tests {
                 Err::<Option<Bytes>, _>(())
             }),
         );
-        crate::rt::spawn(disp.map(|_| ()));
-
         state
             .write_item(
                 Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"),
                 &mut BytesCodec,
             )
             .unwrap();
-
-        let buf = client.read_any();
-        assert_eq!(buf, Bytes::from_static(b""));
-        sleep(Duration::from_millis(25)).await;
+        crate::rt::spawn(disp.map(|_| ()));
 
         // buffer should be flushed
         client.remote_buffer_cap(1024);
@@ -677,6 +672,7 @@ mod tests {
                 }
             }),
         );
+        state.set_write_high_watermark(16 * 1024);
         crate::rt::spawn(disp.map(|_| ()));
 
         let buf = client.read_any();

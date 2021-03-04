@@ -1,13 +1,9 @@
 use std::task::{Context, Poll};
-use std::{cell::RefCell, future::Future, io, pin::Pin, rc::Rc, time::Duration};
-
-use bytes::{Buf, BytesMut};
+use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc, time::Duration};
 
 use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::framed::State;
 use crate::rt::time::{sleep, Sleep};
-
-const HW: usize = 16 * 1024;
 
 #[derive(Debug)]
 enum IoWriteState {
@@ -99,20 +95,9 @@ where
                 }
 
                 // flush framed instance
-                let (result, len) = this.state.with_write_buf(|buf| {
-                    (flush(&mut *this.io.borrow_mut(), buf, cx), buf.len())
-                });
-
-                match result {
-                    Poll::Ready(Ok(_)) | Poll::Pending => {
-                        this.state.update_write_task(len < HW, cx.waker());
-                        Poll::Pending
-                    }
-                    Poll::Ready(Err(err)) => {
-                        log::trace!("error during sending data: {:?}", err);
-                        this.state.set_io_error(Some(err));
-                        Poll::Ready(())
-                    }
+                match this.state.flush_io(&mut *this.io.borrow_mut(), cx) {
+                    Poll::Pending | Poll::Ready(true) => Poll::Pending,
+                    Poll::Ready(false) => Poll::Ready(()),
                 }
             }
             IoWriteState::Shutdown(ref mut delay, ref mut st) => {
@@ -122,16 +107,14 @@ where
                     match st {
                         Shutdown::None => {
                             // flush write buffer
-                            let mut io = this.io.borrow_mut();
-                            let result = this
-                                .state
-                                .with_write_buf(|buf| flush(&mut *io, buf, cx));
+                            let result =
+                                this.state.flush_io(&mut *this.io.borrow_mut(), cx);
                             match result {
-                                Poll::Ready(Ok(_)) => {
+                                Poll::Ready(true) => {
                                     *st = Shutdown::Flushed;
                                     continue;
                                 }
-                                Poll::Ready(Err(_)) => {
+                                Poll::Ready(false) => {
                                     this.state.set_wr_shutdown_complete();
                                     log::trace!(
                                         "write task is closed with err during flush"
@@ -190,60 +173,5 @@ where
                 }
             }
         }
-    }
-}
-
-/// Flush write buffer to underlying I/O stream.
-pub(super) fn flush<T>(
-    io: &mut T,
-    buf: &mut BytesMut,
-    cx: &mut Context<'_>,
-) -> Poll<io::Result<()>>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    let len = buf.len();
-
-    if len != 0 {
-        // log::trace!("flushing framed transport: {}", len);
-
-        let mut written = 0;
-        while written < len {
-            match Pin::new(&mut *io).poll_write(cx, &buf[written..]) {
-                Poll::Pending => break,
-                Poll::Ready(Ok(n)) => {
-                    if n == 0 {
-                        log::trace!("Disconnected during flush, written {}", written);
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::WriteZero,
-                            "failed to write frame to transport",
-                        )));
-                    } else {
-                        written += n
-                    }
-                }
-                Poll::Ready(Err(e)) => {
-                    log::trace!("Error during flush: {}", e);
-                    return Poll::Ready(Err(e));
-                }
-            }
-        }
-        // log::trace!("flushed {} bytes", written);
-
-        // remove written data
-        if written == len {
-            buf.clear()
-        } else {
-            buf.advance(written);
-        }
-    }
-
-    // flush
-    futures::ready!(Pin::new(&mut *io).poll_flush(cx))?;
-
-    if buf.is_empty() {
-        Poll::Ready(Ok(()))
-    } else {
-        Poll::Pending
     }
 }
