@@ -111,7 +111,12 @@ where
         on_connect_data: Option<Box<dyn DataFactory>>,
     ) -> Self {
         let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
-        let state = IoState::new().disconnect_timeout(config.client_disconnect as u16);
+        let state = IoState::with_params(
+            config.read_hw,
+            config.write_hw,
+            config.lw,
+            config.client_disconnect as u16,
+        );
 
         let mut expire = config.timer_h1.now();
         let io = Rc::new(RefCell::new(io));

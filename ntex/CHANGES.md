@@ -4,6 +4,8 @@
 
 * framed: add high/low watermark for read/write buffers
 
+* http/web: add high/low watermark for read/write buffers
+
 ## [0.3.4] - 2021-03-02
 
 * Allow to use async fn for server configuration

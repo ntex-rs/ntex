@@ -21,6 +21,9 @@ pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
     client_timeout: u64,
     client_disconnect: u64,
     handshake_timeout: u64,
+    lw: u16,
+    read_hw: u16,
+    write_hw: u16,
     expect: X,
     upgrade: Option<U>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
@@ -35,6 +38,9 @@ impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
             client_timeout: 3,
             client_disconnect: 3,
             handshake_timeout: 5,
+            lw: 1024,
+            read_hw: 8 * 1024,
+            write_hw: 8 * 1024,
             expect: ExpectHandler,
             upgrade: None,
             on_connect: None,
@@ -107,6 +113,34 @@ where
         self
     }
 
+    #[inline]
+    /// Set read buffer high water mark size
+    ///
+    /// By default read hw is 8kb
+    pub fn read_high_watermark(mut self, hw: u16) -> Self {
+        self.read_hw = hw;
+        self
+    }
+
+    #[inline]
+    /// Set write buffer high watermark size
+    ///
+    /// By default write hw is 8kb
+    pub fn write_high_watermark(mut self, hw: u16) -> Self {
+        self.write_hw = hw;
+        self
+    }
+
+    #[inline]
+    /// Set buffer low watermark size
+    ///
+    /// Low watermark is the same for read and write buffers.
+    /// By default low watermark value is 1kb.
+    pub fn low_watermark(mut self, lw: u16) -> Self {
+        self.lw = lw;
+        self
+    }
+
     /// Provide service for `EXPECT: 100-Continue` support.
     ///
     /// Service get called with request that contains `EXPECT` header.
@@ -129,6 +163,9 @@ where
             expect: expect.into_factory(),
             upgrade: self.upgrade,
             on_connect: self.on_connect,
+            lw: self.lw,
+            read_hw: self.read_hw,
+            write_hw: self.write_hw,
             _t: PhantomData,
         }
     }
@@ -158,6 +195,9 @@ where
             expect: self.expect,
             upgrade: Some(upgrade.into_factory()),
             on_connect: self.on_connect,
+            lw: self.lw,
+            read_hw: self.read_hw,
+            write_hw: self.write_hw,
             _t: PhantomData,
         }
     }
@@ -190,6 +230,9 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
+            self.lw,
+            self.read_hw,
+            self.write_hw,
         );
         H1Service::with_config(cfg, service.into_factory())
             .expect(self.expect)
@@ -212,6 +255,9 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
+            self.lw,
+            self.read_hw,
+            self.write_hw,
         );
         H2Service::with_config(cfg, service.into_factory()).on_connect(self.on_connect)
     }
@@ -232,6 +278,9 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
+            self.lw,
+            self.read_hw,
+            self.write_hw,
         );
         HttpService::with_config(cfg, service.into_factory())
             .expect(self.expect)

@@ -27,6 +27,9 @@ struct Config {
     client_timeout: u16,
     client_disconnect: u16,
     handshake_timeout: u16,
+    lw: u16,
+    read_hw: u16,
+    write_hw: u16,
 }
 
 /// An HTTP Server.
@@ -86,6 +89,9 @@ where
                 client_timeout: 5000,
                 client_disconnect: 5000,
                 handshake_timeout: 5000,
+                lw: 1024,
+                read_hw: 8 * 1024,
+                write_hw: 8 * 1024,
             })),
             backlog: 1024,
             builder: ServerBuilder::default(),
@@ -226,6 +232,34 @@ where
         self
     }
 
+    #[inline]
+    /// Set read buffer high water mark size
+    ///
+    /// By default read hw is 8kb
+    pub fn read_high_watermark(self, hw: u16) -> Self {
+        self.config.lock().unwrap().read_hw = hw;
+        self
+    }
+
+    #[inline]
+    /// Set write buffer high watermark size
+    ///
+    /// By default write hw is 8kb
+    pub fn write_high_watermark(self, hw: u16) -> Self {
+        self.config.lock().unwrap().write_hw = hw;
+        self
+    }
+
+    #[inline]
+    /// Set buffer low watermark size
+    ///
+    /// Low watermark is the same for read and write buffers.
+    /// By default low watermark value is 1kb.
+    pub fn low_watermark(self, lw: u16) -> Self {
+        self.config.lock().unwrap().lw = lw;
+        self
+    }
+
     /// Use listener for accepting incoming connection requests
     ///
     /// HttpServer does not change any configuration for TcpListener,
@@ -250,6 +284,9 @@ where
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
+                    .low_watermark(c.lw)
+                    .read_high_watermark(c.read_hw)
+                    .write_high_watermark(c.write_hw)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .tcp()
             },
@@ -294,6 +331,9 @@ where
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
+                    .low_watermark(c.lw)
+                    .read_high_watermark(c.read_hw)
+                    .write_high_watermark(c.write_hw)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .openssl(acceptor.clone())
             },
@@ -338,6 +378,9 @@ where
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
+                    .low_watermark(c.lw)
+                    .read_high_watermark(c.read_hw)
+                    .write_high_watermark(c.write_hw)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .rustls(config.clone())
             },
@@ -457,6 +500,9 @@ where
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
+                    .low_watermark(c.lw)
+                    .read_high_watermark(c.read_hw)
+                    .write_high_watermark(c.write_hw)
                     .finish(map_config(factory(), move |_| config.clone())),
             )
         })?;
@@ -495,6 +541,9 @@ where
                         HttpService::build()
                             .keep_alive(c.keep_alive)
                             .client_timeout(c.client_timeout)
+                            .low_watermark(c.lw)
+                            .read_high_watermark(c.read_hw)
+                            .write_high_watermark(c.write_hw)
                             .finish(map_config(factory(), move |_| config.clone())),
                     )
             },

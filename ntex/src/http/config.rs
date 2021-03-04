@@ -45,6 +45,9 @@ pub(super) struct Inner {
     pub(super) timer: DateService,
     pub(super) ssl_handshake_timeout: u64,
     pub(super) timer_h1: Timer,
+    pub(super) lw: u16,
+    pub(super) read_hw: u16,
+    pub(super) write_hw: u16,
 }
 
 impl Clone for ServiceConfig {
@@ -55,7 +58,7 @@ impl Clone for ServiceConfig {
 
 impl Default for ServiceConfig {
     fn default() -> Self {
-        Self::new(KeepAlive::Timeout(5), 0, 0, 5000)
+        Self::new(KeepAlive::Timeout(5), 0, 0, 5000, 1024, 8 * 1024, 8 * 1024)
     }
 }
 
@@ -66,6 +69,9 @@ impl ServiceConfig {
         client_timeout: u64,
         client_disconnect: u64,
         ssl_handshake_timeout: u64,
+        lw: u16,
+        read_hw: u16,
+        write_hw: u16,
     ) -> ServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (val as u64, true),
@@ -84,6 +90,9 @@ impl ServiceConfig {
             client_timeout,
             client_disconnect,
             ssl_handshake_timeout,
+            lw,
+            read_hw,
+            write_hw,
             timer: DateService::new(),
             timer_h1: Timer::default(),
         }))
@@ -100,6 +109,9 @@ pub(super) struct DispatcherConfig<S, X, U> {
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
     pub(super) timer_h1: Timer,
+    pub(super) lw: u16,
+    pub(super) read_hw: u16,
+    pub(super) write_hw: u16,
 }
 
 impl<S, X, U> DispatcherConfig<S, X, U> {
@@ -119,6 +131,9 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
             ka_enabled: cfg.0.ka_enabled,
             timer: cfg.0.timer.clone(),
             timer_h1: cfg.0.timer_h1.clone(),
+            lw: cfg.0.lw,
+            read_hw: cfg.0.read_hw,
+            write_hw: cfg.0.write_hw,
         }
     }
 

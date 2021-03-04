@@ -111,6 +111,29 @@ impl State {
     }
 
     #[inline]
+    /// Create `State` instance with custom params
+    pub fn with_params(
+        read_hw: u16,
+        write_hw: u16,
+        low_watermark: u16,
+        disconnect_timeout: u16,
+    ) -> Self {
+        State(Rc::new(IoStateInner {
+            flags: Cell::new(Flags::empty()),
+            error: Cell::new(None),
+            lw: Cell::new(low_watermark),
+            read_hw: Cell::new(read_hw),
+            write_hw: Cell::new(write_hw),
+            disconnect_timeout: Cell::new(disconnect_timeout),
+            dispatch_task: LocalWaker::new(),
+            read_task: LocalWaker::new(),
+            write_task: LocalWaker::new(),
+            read_buf: RefCell::new(BytesMut::with_capacity(low_watermark as usize)),
+            write_buf: RefCell::new(BytesMut::with_capacity(low_watermark as usize)),
+        }))
+    }
+
+    #[inline]
     /// Convert State to a Framed instance
     pub fn into_framed<Io, U>(self, io: Io, codec: U) -> Framed<Io, U> {
         let mut parts = FramedParts::new(io, codec);
