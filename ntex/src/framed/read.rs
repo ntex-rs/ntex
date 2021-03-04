@@ -38,10 +38,13 @@ where
         } else if self.state.is_read_paused() {
             self.state.register_read_task(cx.waker());
             Poll::Pending
-        } else if self.state.read_io(&mut *self.io.borrow_mut(), cx) {
-            Poll::Pending
         } else {
-            Poll::Ready(())
+            let mut io = self.io.borrow_mut();
+            if self.state.read_io(&mut *io, cx) {
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
         }
     }
 }
