@@ -72,7 +72,7 @@ where
     }
 }
 
-/// Buffer service - service that can buffer incoming request.
+/// Buffer service - service that can buffer incoming requests.
 ///
 /// Default number of buffered requests is 16
 pub struct BufferService<S: Service<Error = E>, E> {

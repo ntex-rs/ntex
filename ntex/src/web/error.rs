@@ -18,6 +18,7 @@ use crate::http::helpers::Writer;
 use crate::http::{error, header, StatusCode};
 
 pub use super::error_default::{DefaultError, Error};
+pub use crate::http::error::BlockingError;
 
 pub trait ErrorRenderer: Sized + 'static {
     type Container: ErrorContainer;

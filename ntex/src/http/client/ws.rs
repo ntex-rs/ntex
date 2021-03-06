@@ -7,12 +7,12 @@ use futures::future::{err, ok, Either};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::framed::{DispatchItem, Dispatcher, State};
-use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue, AUTHORIZATION};
-use crate::http::{ConnectionType, Payload, RequestHead, StatusCode, Uri};
-use crate::rt::time::timeout;
+use crate::http::{
+    error::HttpError, ConnectionType, Payload, RequestHead, StatusCode, Uri,
+};
 use crate::service::{apply_fn, IntoService, Service};
-use crate::ws;
+use crate::{channel::mpsc, rt, rt::time::timeout, util::sink, ws};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
 
@@ -434,8 +434,17 @@ where
         &self.res
     }
 
+    /// Start client websockets with `SinkService` and `mpsc::Receiver<Frame>`
+    pub fn start_default(self) -> mpsc::Receiver<ws::Frame> {
+        let (tx, rx) = mpsc::channel();
+
+        rt::spawn(self.start(sink::SinkService::new(tx).map(|_| None)));
+
+        rx
+    }
+
     /// Start client websockets service.
-    pub async fn start<T, F, Rx>(self, service: F) -> Result<(), ws::WsError<T::Error>>
+    pub async fn start<T, F>(self, service: F) -> Result<(), ws::WsError<T::Error>>
     where
         T: Service<Request = ws::Frame, Response = Option<ws::Message>> + 'static,
         F: IntoService<T>,

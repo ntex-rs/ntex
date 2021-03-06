@@ -13,10 +13,10 @@ use serde::Serialize;
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
 
-use crate::codec::{AsyncRead, AsyncWrite, Framed};
+use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::MessageBody;
 use crate::http::client::error::WsClientError;
-use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::http::client::{ws, Client, ClientRequest, ClientResponse, Connector};
 use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
@@ -936,18 +936,16 @@ impl TestServer {
     pub async fn ws_at(
         &self,
         path: &str,
-    ) -> Result<Framed<impl AsyncRead + AsyncWrite, crate::ws::Codec>, WsClientError>
-    {
+    ) -> Result<ws::WsConnection<impl AsyncRead + AsyncWrite>, WsClientError> {
         let url = self.url(path);
         let connect = self.client.ws(url).connect();
-        connect.await.map(|ws| ws.into_inner().1)
+        connect.await
     }
 
     /// Connect to a websocket server
     pub async fn ws(
         &self,
-    ) -> Result<Framed<impl AsyncRead + AsyncWrite, crate::ws::Codec>, WsClientError>
-    {
+    ) -> Result<ws::WsConnection<impl AsyncRead + AsyncWrite>, WsClientError> {
         self.ws_at("/").await
     }
 
