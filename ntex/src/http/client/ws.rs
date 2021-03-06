@@ -3,7 +3,7 @@ use std::{convert::TryFrom, fmt, net::SocketAddr, rc::Rc, str};
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
-use futures::future::{err, ok, Either};
+use futures::future::{err, ok, Either, TryFutureExt};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::framed::{DispatchItem, Dispatcher, State};
@@ -11,7 +11,7 @@ use crate::http::header::{self, HeaderName, HeaderValue, AUTHORIZATION};
 use crate::http::{
     error::HttpError, ConnectionType, Payload, RequestHead, StatusCode, Uri,
 };
-use crate::service::{apply_fn, IntoService, Service};
+use crate::service::{apply_fn, into_service, IntoService, Service};
 use crate::{channel::mpsc, rt, rt::time::timeout, util::sink, ws};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
@@ -435,10 +435,22 @@ where
     }
 
     /// Start client websockets with `SinkService` and `mpsc::Receiver<Frame>`
-    pub fn start_default(self) -> mpsc::Receiver<ws::Frame> {
-        let (tx, rx) = mpsc::channel();
+    pub fn start_default(self) -> mpsc::Receiver<Result<ws::Frame, ws::WsError<()>>> {
+        let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, ws::WsError<()>>>) =
+            mpsc::channel();
 
-        rt::spawn(self.start(sink::SinkService::new(tx).map(|_| None)));
+        rt::spawn(async move {
+            let srv = sink::SinkService::new(tx.clone()).map(|_| None);
+
+            if let Err(err) = self
+                .start(into_service(move |item| {
+                    srv.call(Ok::<_, ws::WsError<()>>(item)).map_err(|_| ())
+                }))
+                .await
+            {
+                let _ = tx.send(Err(err));
+            }
+        });
 
         rx
     }

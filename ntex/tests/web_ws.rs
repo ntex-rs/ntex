@@ -92,23 +92,23 @@ async fn web_ws_client() {
     sink.send(ws::Message::Text(ByteString::from_static("text")))
         .await
         .unwrap();
-    let item = rx.next().await.unwrap();
+    let item = rx.next().await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
 
     sink.send(ws::Message::Binary("text".into())).await.unwrap();
-    let item = rx.next().await.unwrap();
+    let item = rx.next().await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 
     sink.send(ws::Message::Ping("text".into())).await.unwrap();
-    let item = rx.next().await.unwrap();
+    let item = rx.next().await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
 
     sink.send(ws::Message::Close(Some(ws::CloseCode::Normal.into())))
         .await
         .unwrap();
-    let item = rx.next().await.unwrap();
+    let item = rx.next().await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Normal.into())));
 
-    let item = rx.next().await;
-    assert!(item.is_none());
+    let item = rx.next().await.unwrap();
+    assert!(item.is_err());
 }
