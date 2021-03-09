@@ -1068,7 +1068,7 @@ mod tests {
         sleep(time::Duration::from_millis(50)).await;
         assert!(h1.inner.state.is_io_err());
         let buf = client.local_buffer(|buf| buf.split().freeze());
-        assert_eq!(&buf[..36], b"HTTP/1.1 500 Internal Server Error\r\n");
+        assert_eq!(&buf[..28], b"HTTP/1.1 500 Internal Server");
         assert_eq!(&buf[buf.len() - 5..], b"error");
     }
 }
