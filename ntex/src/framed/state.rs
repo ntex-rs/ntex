@@ -803,7 +803,7 @@ impl State {
             Poll::Ready(Err(err)) => {
                 log::trace!("Error during flush: {}", err);
                 self.set_io_error(Some(err));
-                return Poll::Ready(false);
+                Poll::Ready(false)
             }
         }
     }

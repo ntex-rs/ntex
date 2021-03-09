@@ -26,11 +26,13 @@ use super::{codec::Codec, Message};
 bitflags::bitflags! {
     pub struct Flags: u16 {
         /// We parsed one complete request message
-        const STARTED       = 0b0000_0001;
+        const STARTED         = 0b0000_0001;
         /// Keep-alive is enabled on current connection
-        const KEEPALIVE     = 0b0000_0010;
+        const KEEPALIVE       = 0b0000_0010;
         /// Upgrade request
-        const UPGRADE       = 0b0000_0100;
+        const UPGRADE         = 0b0000_0100;
+        /// Stop after sending payload
+        const SENDPAYLOAD_AND_STOP = 0b0000_0100;
     }
 }
 
@@ -504,7 +506,12 @@ where
         // check if we can continue after error
         if critical || self.payload.take().is_some() {
             self.error = Some(DispatchError::Service(Box::new(err)));
-            State::Stop
+            if matches!(state, State::SendPayload { .. }) {
+                self.flags.insert(Flags::SENDPAYLOAD_AND_STOP);
+                state
+            } else {
+                State::Stop
+            }
         } else {
             state
         }
@@ -580,6 +587,8 @@ where
                     self.state.write_item(Message::Chunk(None), &self.codec)
                 {
                     self.error = Some(DispatchError::Encode(err));
+                    WritePayloadStatus::Next(State::Stop)
+                } else if self.flags.contains(Flags::SENDPAYLOAD_AND_STOP) {
                     WritePayloadStatus::Next(State::Stop)
                 } else if self.payload.is_some() {
                     WritePayloadStatus::Next(State::ReadPayload)
@@ -666,7 +675,7 @@ mod tests {
     use std::{io, sync::Arc};
 
     use bytes::{Bytes, BytesMut};
-    use futures::future::{lazy, ok, FutureExt};
+    use futures::future::{err, lazy, ok, FutureExt};
     use futures::StreamExt;
     use rand::Rng;
 
@@ -1042,5 +1051,24 @@ mod tests {
         client.close().await;
         sleep(time::Duration::from_millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+    }
+
+    #[crate::rt_test]
+    async fn test_service_error() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+        client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
+
+        let mut h1 = h1(server, |_| {
+            err::<Response<()>, _>(io::Error::new(io::ErrorKind::Other, "error"))
+        });
+        sleep(time::Duration::from_millis(50)).await;
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        sleep(time::Duration::from_millis(50)).await;
+        assert!(h1.inner.state.is_io_err());
+        let buf = client.local_buffer(|buf| buf.split().freeze());
+        assert_eq!(&buf[..36], b"HTTP/1.1 500 Internal Server Error\r\n");
+        assert_eq!(&buf[buf.len() - 5..], b"error");
     }
 }

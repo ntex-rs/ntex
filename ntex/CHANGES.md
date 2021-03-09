@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.7] - 2021-03-10
+
+* http: Fix service error handling for h1 proto
+
 ## [0.3.6] - 2021-03-06
 
 * http.client: Fix WsConnection::start() definition
