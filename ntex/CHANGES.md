@@ -1,5 +1,11 @@
 # Changes
 
+## [0.3.8] - 2021-03-11
+
+* http: fix expect/continue support, wake up write task
+
+* framed: wakeup write task if write buf has new data
+
 ## [0.3.7] - 2021-03-10
 
 * http: Fix service error handling for h1 proto

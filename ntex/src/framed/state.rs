@@ -471,7 +471,12 @@ impl State {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        f(&mut self.0.write_buf.borrow_mut())
+        let mut write_buf = self.0.write_buf.borrow_mut();
+        if write_buf.is_empty() {
+            self.0.write_task.wake();
+        }
+
+        f(&mut write_buf)
     }
 }
 
