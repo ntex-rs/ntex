@@ -114,30 +114,18 @@ where
     }
 
     #[inline]
-    /// Set read buffer high water mark size
+    /// Set read/write buffer params
     ///
-    /// By default read hw is 8kb
-    pub fn read_high_watermark(mut self, hw: u16) -> Self {
-        self.read_hw = hw;
-        self
-    }
-
-    #[inline]
-    /// Set write buffer high watermark size
-    ///
-    /// By default write hw is 8kb
-    pub fn write_high_watermark(mut self, hw: u16) -> Self {
-        self.write_hw = hw;
-        self
-    }
-
-    #[inline]
-    /// Set buffer low watermark size
-    ///
-    /// Low watermark is the same for read and write buffers.
-    /// By default low watermark value is 1kb.
-    pub fn low_watermark(mut self, lw: u16) -> Self {
-        self.lw = lw;
+    /// By default read buffer is 8kb, write buffer is 8kb
+    pub fn buffer_params(
+        mut self,
+        max_read_buf_size: u16,
+        max_write_buf_size: u16,
+        min_buf_size: u16,
+    ) -> Self {
+        self.read_hw = max_read_buf_size;
+        self.write_hw = max_write_buf_size;
+        self.lw = min_buf_size;
         self
     }
 
@@ -286,5 +274,29 @@ where
             .expect(self.expect)
             .upgrade(self.upgrade)
             .on_connect(self.on_connect)
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.10")]
+    pub fn read_high_watermark(mut self, hw: u16) -> Self {
+        self.read_hw = hw;
+        self
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.10")]
+    pub fn write_high_watermark(mut self, hw: u16) -> Self {
+        self.write_hw = hw;
+        self
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.10")]
+    pub fn low_watermark(mut self, lw: u16) -> Self {
+        self.lw = lw;
+        self
     }
 }

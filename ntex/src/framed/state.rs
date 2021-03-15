@@ -191,7 +191,7 @@ impl State {
     /// Set read/write buffer sizes
     ///
     /// By default read max buf size is 8kb, write max buf size is 8kb
-    pub fn set_buffer_sizes(
+    pub fn set_buffer_params(
         &self,
         max_read_buf_size: u16,
         max_write_buf_size: u16,

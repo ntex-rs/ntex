@@ -233,28 +233,43 @@ where
     }
 
     #[inline]
-    /// Set read buffer high water mark size
+    /// Set read/write buffer params
     ///
-    /// By default read hw is 8kb
+    /// By default read buffer is 8kb, write buffer is 8kb
+    pub fn buffer_params(
+        self,
+        max_read_buf_size: u16,
+        max_write_buf_size: u16,
+        min_buf_size: u16,
+    ) -> Self {
+        {
+            let mut cfg = self.config.lock().unwrap();
+            cfg.read_hw = max_read_buf_size;
+            cfg.write_hw = max_write_buf_size;
+            cfg.lw = min_buf_size;
+        }
+        self
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.10")]
     pub fn read_high_watermark(self, hw: u16) -> Self {
         self.config.lock().unwrap().read_hw = hw;
         self
     }
 
     #[inline]
-    /// Set write buffer high watermark size
-    ///
-    /// By default write hw is 8kb
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.10")]
     pub fn write_high_watermark(self, hw: u16) -> Self {
         self.config.lock().unwrap().write_hw = hw;
         self
     }
 
     #[inline]
-    /// Set buffer low watermark size
-    ///
-    /// Low watermark is the same for read and write buffers.
-    /// By default low watermark value is 1kb.
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.10")]
     pub fn low_watermark(self, lw: u16) -> Self {
         self.config.lock().unwrap().lw = lw;
         self
@@ -284,9 +299,7 @@ where
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
-                    .low_watermark(c.lw)
-                    .read_high_watermark(c.read_hw)
-                    .write_high_watermark(c.write_hw)
+                    .buffer_params(c.read_hw, c.write_hw, c.lw)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .tcp()
             },
@@ -331,9 +344,7 @@ where
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
-                    .low_watermark(c.lw)
-                    .read_high_watermark(c.read_hw)
-                    .write_high_watermark(c.write_hw)
+                    .buffer_params(c.read_hw, c.write_hw, c.lw)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .openssl(acceptor.clone())
             },
@@ -378,9 +389,7 @@ where
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
-                    .low_watermark(c.lw)
-                    .read_high_watermark(c.read_hw)
-                    .write_high_watermark(c.write_hw)
+                    .buffer_params(c.read_hw, c.write_hw, c.lw)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .rustls(config.clone())
             },
@@ -500,9 +509,7 @@ where
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
-                    .low_watermark(c.lw)
-                    .read_high_watermark(c.read_hw)
-                    .write_high_watermark(c.write_hw)
+                    .buffer_params(c.read_hw, c.write_hw, c.lw)
                     .finish(map_config(factory(), move |_| config.clone())),
             )
         })?;
@@ -541,9 +548,7 @@ where
                         HttpService::build()
                             .keep_alive(c.keep_alive)
                             .client_timeout(c.client_timeout)
-                            .low_watermark(c.lw)
-                            .read_high_watermark(c.read_hw)
-                            .write_high_watermark(c.write_hw)
+                            .buffer_params(c.read_hw, c.write_hw, c.lw)
                             .finish(map_config(factory(), move |_| config.clone())),
                     )
             },

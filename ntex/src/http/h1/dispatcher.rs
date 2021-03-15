@@ -897,7 +897,7 @@ mod tests {
         client.remote_buffer_cap(4096);
 
         let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
-        h1.inner.state.set_buffer_sizes(16 * 1024, 16 * 1024, 1024);
+        h1.inner.state.set_buffer_params(16 * 1024, 16 * 1024, 1024);
 
         let mut decoder = ClientCodec::default();
 

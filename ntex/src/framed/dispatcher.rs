@@ -685,7 +685,7 @@ mod tests {
                 }
             }),
         );
-        state.set_buffer_sizes(8 * 1024, 16 * 1024, 1024);
+        state.set_buffer_params(8 * 1024, 16 * 1024, 1024);
         crate::rt::spawn(disp.map(|_| ()));
 
         let buf = client.read_any();

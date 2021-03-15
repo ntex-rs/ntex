@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.10] - 2021-03-15
+
+* add buffer_params() api
+
 ## [0.3.9] - 2021-03-15
 
 * framed: refactor api

@@ -8,7 +8,7 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - 1.45.0 # MSRV
+          - 1.46.0 # MSRV
           - stable
           - nightly
 
@@ -43,7 +43,7 @@ jobs:
           key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-index-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo tarpaulin
-        if: matrix.version == '1.45.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
+        if: matrix.version == '1.46.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
         uses: actions/cache@v1
         with:
           path: ~/.cargo/bin
@@ -57,19 +57,19 @@ jobs:
           args: --all --all-features --no-fail-fast -- --nocapture
 
       - name: Install tarpaulin
-        if: matrix.version == '1.45.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
+        if: matrix.version == '1.46.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
         continue-on-error: true
         run: |
           cargo install cargo-tarpaulin
 
       - name: Generate coverage report
-        if: matrix.version == '1.45.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
+        if: matrix.version == '1.46.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
         continue-on-error: true
         run: |
           cargo tarpaulin --out Xml --all --all-features
 
       - name: Upload to Codecov
-        if: matrix.version == '1.45.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
+        if: matrix.version == '1.46.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
         continue-on-error: true
         uses: codecov/codecov-action@v1
         with:
