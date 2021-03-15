@@ -4,6 +4,8 @@
 
 * framed: refactor api
 
+* update socket2 0.4
+
 ## [0.3.8] - 2021-03-11
 
 * http: fix expect/continue support, wake up write task

@@ -501,8 +501,8 @@ pub(crate) fn create_tcp_listener(
     backlog: i32,
 ) -> io::Result<net::TcpListener> {
     let builder = match addr {
-        net::SocketAddr::V4(_) => Socket::new(Domain::ipv4(), Type::stream(), None)?,
-        net::SocketAddr::V6(_) => Socket::new(Domain::ipv6(), Type::stream(), None)?,
+        net::SocketAddr::V4(_) => Socket::new(Domain::IPV4, Type::STREAM, None)?,
+        net::SocketAddr::V6(_) => Socket::new(Domain::IPV6, Type::STREAM, None)?,
     };
 
     // On Windows, this allows rebinding sockets which are actively in use,
@@ -513,7 +513,7 @@ pub(crate) fn create_tcp_listener(
 
     builder.bind(&SockAddr::from(addr))?;
     builder.listen(backlog)?;
-    Ok(builder.into_tcp_listener())
+    Ok(net::TcpListener::from(builder))
 }
 
 #[cfg(test)]

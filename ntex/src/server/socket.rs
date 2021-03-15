@@ -217,10 +217,10 @@ mod tests {
         assert_eq!(format!("{}", addr), "127.0.0.1:8080");
 
         let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let socket = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
         socket.set_reuse_address(true).unwrap();
         socket.bind(&SockAddr::from(addr)).unwrap();
-        let tcp = socket.into_tcp_listener();
+        let tcp = net::TcpListener::from(socket);
         let lst = Listener::Tcp(mio::net::TcpListener::from_std(tcp));
         assert!(format!("{:?}", lst).contains("TcpListener"));
         assert!(format!("{}", lst).contains("127.0.0.1"));
