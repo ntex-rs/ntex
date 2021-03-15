@@ -71,7 +71,7 @@ where
             log::trace!("write io is closed");
             return Poll::Ready(());
         } else if this.state.is_io_stop() {
-            self.state.dsp_wake_task();
+            self.state.wake_dispatcher();
             return Poll::Ready(());
         }
 

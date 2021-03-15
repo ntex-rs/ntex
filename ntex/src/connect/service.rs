@@ -173,7 +173,7 @@ impl<T: Address> TcpConnectorResponse<T> {
 
     fn can_continue(&self, err: &io::Error) -> bool {
         trace!(
-            "TCP connector - failed to connect to connecting to {:?} port: {} err: {:?}",
+            "TCP connector - failed to connect to {:?} port: {} err: {:?}",
             self.req.as_ref().unwrap().host(),
             self.port,
             err

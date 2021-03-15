@@ -22,7 +22,7 @@ impl WsSink {
         let inner = self.0.clone();
 
         async move {
-            inner.state.write_item(item, &inner.codec)?;
+            inner.state.write().encode(item, &inner.codec)?;
             Ok(())
         }
     }

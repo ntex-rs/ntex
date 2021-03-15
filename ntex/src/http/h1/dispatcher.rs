@@ -202,13 +202,13 @@ where
                         CallStateProject::Expect { fut } => match fut.poll(cx) {
                             Poll::Ready(result) => match result {
                                 Ok(req) => {
-                                    this.inner.state.with_write_buf(|buf| {
+                                    this.inner.state.write().with_buf(|buf| {
                                         buf.extend_from_slice(
                                             b"HTTP/1.1 100 Continue\r\n\r\n",
                                         )
                                     });
                                     if this.inner.flags.contains(Flags::UPGRADE) {
-                                        this.inner.state.dsp_stop_io(cx.waker());
+                                        this.inner.state.stop_io(cx.waker());
                                         *this.st = State::Upgrade(Some(req));
                                         return Poll::Pending;
                                     } else {
@@ -246,7 +246,7 @@ where
                 }
                 State::ReadRequest => {
                     // stop dispatcher
-                    if this.inner.state.is_dsp_stopped() {
+                    if this.inner.state.is_dispatcher_stopped() {
                         log::trace!("dispatcher is instructed to stop");
                         *this.st = State::Stop;
                         continue;
@@ -268,9 +268,11 @@ where
                         continue;
                     }
 
+                    let read = this.inner.state.read();
+
                     // decode incoming bytes stream
-                    if this.inner.state.is_read_ready() {
-                        match this.inner.state.decode_item(&this.inner.codec) {
+                    if read.is_ready() {
+                        match read.decode(&this.inner.codec) {
                             Ok(Some((mut req, pl))) => {
                                 log::trace!(
                                     "http message is received: {:?} and payload {:?}",
@@ -325,7 +327,7 @@ where
                                 } else if upgrade {
                                     // Handle UPGRADE request
                                     log::trace!("prep io for upgrade handler");
-                                    this.inner.state.dsp_stop_io(cx.waker());
+                                    this.inner.state.stop_io(cx.waker());
                                     *this.st = State::Upgrade(Some(req));
                                     return Poll::Pending;
                                 } else {
@@ -347,10 +349,10 @@ where
                                         || this.inner.state.is_io_err())
                                 {
                                     *this.st = State::Stop;
-                                    this.inner.state.dsp_mark_stopped();
+                                    this.inner.state.dispatcher_stopped();
                                     continue;
                                 }
-                                this.inner.state.dsp_read_more_data(cx.waker());
+                                this.inner.state.read().wake(cx.waker());
                                 return Poll::Pending;
                             }
                             Err(err) => {
@@ -372,7 +374,7 @@ where
                             *this.st = State::Stop;
                             continue;
                         }
-                        this.inner.state.dsp_register_task(cx.waker());
+                        this.inner.state.register_dispatcher(cx.waker());
                         return Poll::Pending;
                     }
                 }
@@ -406,7 +408,8 @@ where
                                 WritePayloadStatus::Pause => {
                                     this.inner
                                         .state
-                                        .dsp_enable_write_backpressure(cx.waker());
+                                        .write()
+                                        .enable_backpressure(Some(cx.waker()));
                                     return Poll::Pending;
                                 }
                                 WritePayloadStatus::Continue => (),
@@ -426,7 +429,7 @@ where
                         }
                     } else {
                         // wait next task stop
-                        this.inner.state.dsp_register_task(cx.waker());
+                        this.inner.state.register_dispatcher(cx.waker());
                         return Poll::Pending;
                     };
                     log::trace!("initate upgrade handling");
@@ -525,7 +528,8 @@ where
         if !self.state.is_io_err() {
             let result = self
                 .state
-                .write_item(Message::Item((msg, body.size())), &self.codec)
+                .write()
+                .encode(Message::Item((msg, body.size())), &self.codec)
                 .map_err(|err| {
                     if let Some(mut payload) = self.payload.take() {
                         payload.1.set_error(PayloadError::Incomplete(None));
@@ -566,7 +570,8 @@ where
                 trace!("Got response chunk: {:?}", item.len());
                 match self
                     .state
-                    .write_item(Message::Chunk(Some(item)), &self.codec)
+                    .write()
+                    .encode(Message::Chunk(Some(item)), &self.codec)
                 {
                     Err(err) => {
                         self.error = Some(DispatchError::Encode(err));
@@ -584,7 +589,7 @@ where
             None => {
                 trace!("Response payload eof");
                 if let Err(err) =
-                    self.state.write_item(Message::Chunk(None), &self.codec)
+                    self.state.write().encode(Message::Chunk(None), &self.codec)
                 {
                     self.error = Some(DispatchError::Encode(err));
                     WritePayloadStatus::Next(State::Stop)
@@ -611,10 +616,12 @@ where
         if let Some(ref mut payload) = self.payload {
             match payload.1.poll_data_required(cx) {
                 PayloadStatus::Read => {
+                    let read = self.state.read();
+
                     // read request payload
                     let mut updated = false;
                     loop {
-                        let item = self.state.decode_item(&payload.0);
+                        let item = read.decode(&payload.0);
                         match item {
                             Ok(Some(PayloadItem::Chunk(chunk))) => {
                                 updated = true;
@@ -635,7 +642,7 @@ where
                                     self.error = Some(ParseError::Incomplete.into());
                                     return ReadPayloadStatus::Dropped;
                                 } else {
-                                    self.state.dsp_read_more_data(cx.waker());
+                                    read.wake(cx.waker());
                                     break;
                                 }
                             }
@@ -890,7 +897,8 @@ mod tests {
         client.remote_buffer_cap(4096);
 
         let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
-        h1.inner.state.set_read_high_watermark(16 * 1024);
+        h1.inner.state.set_buffer_sizes(16 * 1024, 16 * 1024, 1024);
+
         let mut decoder = ClientCodec::default();
 
         let data = rand::thread_rng()
@@ -994,11 +1002,11 @@ mod tests {
         assert_eq!(num.load(Ordering::Relaxed), 65_536);
 
         // response message + chunking encoding
-        assert_eq!(state.with_write_buf(|buf| buf.len()), 65629);
+        assert_eq!(state.write().with_buf(|buf| buf.len()), 65629);
 
         client.remote_buffer_cap(65536);
         sleep(time::Duration::from_millis(50)).await;
-        assert_eq!(state.with_write_buf(|buf| buf.len()), 93);
+        assert_eq!(state.write().with_buf(|buf| buf.len()), 93);
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(num.load(Ordering::Relaxed), 65_536 * 2);

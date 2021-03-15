@@ -67,6 +67,8 @@ async fn web_ws() {
 
 #[ntex::test]
 async fn web_ws_client() {
+    env_logger::init();
+
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest, pl: web::types::Payload| async move {

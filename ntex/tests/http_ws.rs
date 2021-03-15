@@ -53,7 +53,8 @@ where
             let res = handshake(req.head()).unwrap().message_body(());
 
             state
-                .write_item((res, body::BodySize::None).into(), &mut codec)
+                .write()
+                .encode((res, body::BodySize::None).into(), &mut codec)
                 .unwrap();
 
             Dispatcher::new(io, ws::Codec::new(), state, service, Timer::default())

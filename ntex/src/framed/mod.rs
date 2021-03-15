@@ -8,7 +8,7 @@ mod write;
 
 pub use self::dispatcher::Dispatcher;
 pub use self::read::ReadTask;
-pub use self::state::State;
+pub use self::state::{Read, State, Write};
 pub use self::time::Timer;
 pub use self::write::WriteTask;
 

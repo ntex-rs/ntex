@@ -40,7 +40,8 @@ async fn test_simple() {
 
                         // send handshake respone
                         state
-                            .write_item(
+                            .write()
+                            .encode(
                                 h1::Message::Item((res.drop_body(), BodySize::None)),
                                 &mut codec,
                             )

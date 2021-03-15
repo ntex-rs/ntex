@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.9] - 2021-03-15
+
+* framed: refactor api
+
 ## [0.3.8] - 2021-03-11
 
 * http: fix expect/continue support, wake up write task
