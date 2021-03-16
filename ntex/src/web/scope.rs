@@ -3,7 +3,7 @@ use std::{cell::RefCell, fmt, rc::Rc, task::Context, task::Poll};
 use futures::future::{ok, Either, Future, FutureExt, LocalBoxFuture, Ready};
 
 use crate::http::Response;
-use crate::router::{ResourceDef, ResourceInfo, Router};
+use crate::router::{IntoPattern, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{
     apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
@@ -61,7 +61,7 @@ type BoxedResponse<Err: ErrorRenderer> =
 ///
 pub struct Scope<Err: ErrorRenderer, T = ScopeEndpoint<Err>> {
     endpoint: T,
-    rdef: String,
+    rdef: Vec<String>,
     data: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     guards: Vec<Box<dyn Guard>>,
@@ -72,11 +72,11 @@ pub struct Scope<Err: ErrorRenderer, T = ScopeEndpoint<Err>> {
 
 impl<Err: ErrorRenderer> Scope<Err> {
     /// Create a new scope
-    pub fn new(path: &str) -> Scope<Err> {
+    pub fn new<T: IntoPattern>(path: T) -> Scope<Err> {
         let fref = Rc::new(RefCell::new(None));
         Scope {
             endpoint: ScopeEndpoint::new(fref.clone()),
-            rdef: path.to_string(),
+            rdef: path.patterns(),
             data: None,
             guards: Vec::new(),
             services: Vec::new(),
@@ -430,8 +430,8 @@ where
             .into_iter()
             .for_each(|mut srv| srv.register(&mut cfg));
 
-        let slesh = self.rdef.ends_with('/');
-        let mut rmap = ResourceMap::new(ResourceDef::root_prefix(&self.rdef));
+        let slesh = self.rdef.iter().find(|s| s.ends_with('/')).is_some();
+        let mut rmap = ResourceMap::new(ResourceDef::root_prefix(self.rdef.clone()));
 
         // external resources
         for mut rdef in std::mem::take(&mut self.external) {
@@ -475,7 +475,7 @@ where
 
         // register final service
         config.register_service(
-            ResourceDef::root_prefix(&self.rdef),
+            ResourceDef::root_prefix(self.rdef),
             guards,
             self.endpoint,
             Some(Rc::new(rmap)),
@@ -658,6 +658,32 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_scope_root_multi() {
+        let srv = init_service(
+            App::new().service(
+                web::scope(["/app", "/app2"])
+                    .service(web::resource("").to(|| async { HttpResponse::Ok() }))
+                    .service(
+                        web::resource("/").to(|| async { HttpResponse::Created() }),
+                    ),
+            ),
+        )
+        .await;
+
+        for url in &["/app", "/app2"] {
+            let req = TestRequest::with_uri(url).to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        for url in &["/app/", "/app2/"] {
+            let req = TestRequest::with_uri(url).to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::CREATED);
+        }
+    }
+
+    #[crate::rt_test]
     async fn test_scope_root2() {
         let srv = init_service(
             App::new().service(
@@ -674,6 +700,29 @@ mod tests {
         let req = TestRequest::with_uri("/app/").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[crate::rt_test]
+    async fn test_scope_root2_multi() {
+        let srv = init_service(
+            App::new().service(
+                web::scope(["/app/", "/app2/"])
+                    .service(web::resource("").to(|| async { HttpResponse::Ok() })),
+            ),
+        )
+        .await;
+
+        for url in &["/app", "/app2"] {
+            let req = TestRequest::with_uri(url).to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        }
+
+        for url in &["/app/", "/app2/"] {
+            let req = TestRequest::with_uri(url).to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
     }
 
     #[crate::rt_test]
@@ -706,21 +755,47 @@ mod tests {
         )
         .await;
 
-        let req = TestRequest::with_uri("/app/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        for (m, status) in &[
+            (Method::GET, StatusCode::OK),
+            (Method::DELETE, StatusCode::OK),
+            (Method::POST, StatusCode::NOT_FOUND),
+        ] {
+            let req = TestRequest::with_uri("/app/path1")
+                .method(m.clone())
+                .to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), status.clone());
+        }
+    }
 
-        let req = TestRequest::with_uri("/app/path1")
-            .method(Method::DELETE)
-            .to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+    #[crate::rt_test]
+    async fn test_scope_route_multi() {
+        let srv = init_service(
+            App::new().service(
+                web::scope(["app", "app2"])
+                    .route("/path1", web::get().to(|| async { HttpResponse::Ok() }))
+                    .route("/path1", web::delete().to(|| async { HttpResponse::Ok() })),
+            ),
+        )
+        .await;
 
-        let req = TestRequest::with_uri("/app/path1")
-            .method(Method::POST)
-            .to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        for (m, status) in &[
+            (Method::GET, StatusCode::OK),
+            (Method::DELETE, StatusCode::OK),
+            (Method::POST, StatusCode::NOT_FOUND),
+        ] {
+            let req = TestRequest::with_uri("/app/path1")
+                .method(m.clone())
+                .to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), status.clone());
+
+            let req = TestRequest::with_uri("/app2/path1")
+                .method(m.clone())
+                .to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), status.clone());
+        }
     }
 
     #[crate::rt_test]

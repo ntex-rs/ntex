@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.3.10"
+version = "0.3.11"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -38,7 +38,7 @@ cookie = ["coo-kie", "coo-kie/percent-encode"]
 [dependencies]
 ntex-codec = "0.4.0"
 ntex-rt = "0.2.1"
-ntex-router = "0.4.1"
+ntex-router = "0.4.2"
 ntex-service = "0.1.5"
 ntex-macros = "0.1.3"
 
@@ -56,12 +56,12 @@ http = "0.2.1"
 httparse = "1.3"
 log = "0.4"
 mime = "0.3"
-mio = "0.7.9"
+mio = "0.7.10"
 num_cpus = "1.13"
 percent-encoding = "2.1"
 pin-project-lite = "0.2"
 rand = "0.8"
-regex = "1.3"
+regex = "1.4"
 sha-1 = "0.9"
 slab = "0.4"
 serde = { version = "1.0", features=["derive"] }

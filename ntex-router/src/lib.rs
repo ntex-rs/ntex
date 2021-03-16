@@ -1,5 +1,5 @@
 #![deny(rust_2018_idioms, unreachable_pub)]
-#![allow(clippy::cognitive_complexity)]
+#![warn(nonstandard_style, future_incompatible)]
 
 //! Resource path matching library.
 mod de;

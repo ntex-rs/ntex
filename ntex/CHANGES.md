@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.11] - 2021-03-16
+
+* web: use patterns for scope's prefix definitions
+
 ## [0.3.10] - 2021-03-15
 
 * add buffer_params() api
