@@ -21,6 +21,7 @@ use super::response::WebResponse;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
 use super::types::data::{Data, DataFactory};
+use super::types::rc_data::RcData;
 use super::{DefaultError, ErrorRenderer};
 
 type HttpNewService<Err: ErrorRenderer> =
@@ -128,6 +129,11 @@ where
         self
     }
 
+    pub fn rc_data<U: 'static>(mut self, data: U) -> Self {
+        self.data.push(Box::new(RcData::new(data)));
+        self
+    }
+
     /// Set application data factory. This function is
     /// similar to `.data()` but it accepts data factory. Data object get
     /// constructed asynchronously during application initialization.
@@ -149,6 +155,34 @@ where
                         }
                         Ok(data) => {
                             let data: Box<dyn DataFactory> = Box::new(Data::new(data));
+                            Ok(data)
+                        }
+                    }
+                }
+            }
+            .boxed_local()
+        }));
+        self
+    }
+
+    pub fn rc_data_factory<F, Out, D, E>(mut self, data: F) -> Self
+    where
+        F: Fn() -> Out + 'static,
+        Out: Future<Output = Result<D, E>> + 'static,
+        D: 'static,
+        E: std::fmt::Debug,
+    {
+        self.data_factories.push(Box::new(move || {
+            {
+                let fut = data();
+                async move {
+                    match fut.await {
+                        Err(e) => {
+                            log::error!("Can not construct data instance: {:?}", e);
+                            Err(())
+                        }
+                        Ok(data) => {
+                            let data: Box<dyn DataFactory> = Box::new(RcData::new(data));
                             Ok(data)
                         }
                     }
