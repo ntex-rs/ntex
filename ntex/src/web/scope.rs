@@ -5,9 +5,8 @@ use futures::future::{ok, Either, Future, FutureExt, LocalBoxFuture, Ready};
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{
-    apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
-};
+use crate::service::{apply, apply_fn_factory, pipeline_factory};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::Extensions;
 
 use super::config::ServiceConfig;
@@ -68,6 +67,7 @@ pub struct Scope<Err: ErrorRenderer, T = ScopeEndpoint<Err>> {
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
     external: Vec<ResourceDef>,
     factory_ref: Rc<RefCell<Option<ScopeFactory<Err>>>>,
+    case_insensitive: bool,
 }
 
 impl<Err: ErrorRenderer> Scope<Err> {
@@ -83,6 +83,7 @@ impl<Err: ErrorRenderer> Scope<Err> {
             default: Rc::new(RefCell::new(None)),
             external: Vec::new(),
             factory_ref: fref,
+            case_insensitive: false,
         }
     }
 }
@@ -161,6 +162,14 @@ where
             self.data = Some(Extensions::new());
         }
         self.data.as_mut().unwrap().insert(data);
+        self
+    }
+
+    /// Use ascii case-insensitive routing.
+    ///
+    /// Only static segments could be case-insensitive.
+    pub fn case_insensitive_routing(mut self) -> Self {
+        self.case_insensitive = true;
         self
     }
 
@@ -302,8 +311,60 @@ where
         self
     }
 
-    /// Registers middleware, in the form of a middleware component (type),
-    /// that runs during inbound processing in the request
+    /// Register request filter.
+    ///
+    /// Filter runs during inbound processing in the request
+    /// lifecycle (request -> response), modifying request as
+    /// necessary, across all requests managed by the *Scope*.
+    ///
+    /// This is similar to `App's` filters, but filter get invoked on scope level.
+    pub fn filter<F>(
+        self,
+        filter: F,
+    ) -> Scope<
+        Err,
+        impl ServiceFactory<
+            Config = (),
+            Request = WebRequest<Err>,
+            Response = WebResponse,
+            Error = Err::Container,
+            InitError = (),
+        >,
+    >
+    where
+        F: ServiceFactory<
+            Config = (),
+            Request = WebRequest<Err>,
+            Response = Either<WebRequest<Err>, WebResponse>,
+            Error = Err::Container,
+            InitError = (),
+        >,
+    {
+        let ep = self.endpoint;
+        let endpoint =
+            pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
+                match result {
+                    Either::Left(req) => Either::Left(srv.call(req)),
+                    Either::Right(res) => Either::Right(ok(res)),
+                }
+            });
+
+        Scope {
+            endpoint,
+            rdef: self.rdef,
+            data: self.data,
+            guards: self.guards,
+            services: self.services,
+            default: self.default,
+            external: self.external,
+            factory_ref: self.factory_ref,
+            case_insensitive: self.case_insensitive,
+        }
+    }
+
+    /// Registers middleware, in the form of a middleware component (type).
+    ///
+    /// That runs during inbound processing in the request
     /// lifecycle (request -> response), modifying request as
     /// necessary, across all requests managed by the *Scope*.  Scope-level
     /// middleware is more limited in what it can modify, relative to Route or
@@ -342,12 +403,14 @@ where
             default: self.default,
             external: self.external,
             factory_ref: self.factory_ref,
+            case_insensitive: self.case_insensitive,
         }
     }
 
-    /// Registers middleware, in the form of a closure, that runs during inbound
-    /// processing in the request lifecycle (request -> response), modifying
-    /// request as necessary, across all requests managed by the *Scope*.
+    /// Registers middleware, in the form of a closure.
+    ///
+    /// That runs during inbound processing in the request lifecycle (request -> response),
+    /// modifying request as necessary, across all requests managed by the *Scope*.
     /// Scope-level middleware is more limited in what it can modify, relative
     /// to Route or Application level middleware, in that Scope-level middleware
     /// can not modify WebResponse.
@@ -403,6 +466,7 @@ where
             default: self.default,
             external: self.external,
             factory_ref: self.factory_ref,
+            case_insensitive: self.case_insensitive,
         }
     }
 }
@@ -447,6 +511,7 @@ where
         *self.factory_ref.borrow_mut() = Some(ScopeFactory {
             data: self.data.take().map(Rc::new),
             default: self.default.clone(),
+            case_insensitive: self.case_insensitive,
             services: Rc::new(
                 cfg.into_services()
                     .1
@@ -487,6 +552,7 @@ struct ScopeFactory<Err: ErrorRenderer> {
     data: Option<Rc<Extensions>>,
     services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
+    case_insensitive: bool,
 }
 
 impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
@@ -500,6 +566,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
 
     fn new_service(&self, _: ()) -> Self::Future {
         let services = self.services.clone();
+        let case_insensitive = self.case_insensitive;
         let data = self.data.clone();
         let default_fut = self
             .default
@@ -510,6 +577,9 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
         async move {
             // create http services
             let mut router = Router::build();
+            if case_insensitive {
+                router.case_insensitive();
+            }
             for (path, factory, guards) in &mut services.iter() {
                 let service = factory.new_service(()).await?;
                 router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
@@ -604,12 +674,12 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeEndpoint<Err> {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use futures::future::{ok, ready};
+    use futures::future::{ok, ready, Either};
 
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::http::{Method, StatusCode};
-    use crate::service::Service;
+    use crate::service::{fn_service, Service};
     use crate::web::middleware::DefaultHeaders;
     use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
@@ -1048,6 +1118,23 @@ mod tests {
         let req = TestRequest::with_uri("/app2/non-exist").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[crate::rt_test]
+    async fn test_filter() {
+        let srv = init_service(
+            App::new().service(
+                web::scope("app")
+                    .filter(fn_service(|req: WebRequest<_>| async move {
+                        Ok(Either::Right(req.into_response(HttpResponse::NotFound())))
+                    }))
+                    .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
+            ),
+        )
+        .await;
+        let req = TestRequest::with_uri("/app/test").to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[crate::rt_test]

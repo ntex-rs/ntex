@@ -4,6 +4,12 @@
 
 * web: use patterns for scope's prefix definitions
 
+* web: allow case-insensitive request matching on scope level
+
+* web: add helper method `App::finish()`, creates service factory with default `AppConfig`
+
+* web: add `.filter()` method, allows to register request filters
+
 ## [0.3.10] - 2021-03-15
 
 * add buffer_params() api

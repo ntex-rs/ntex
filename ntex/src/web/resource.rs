@@ -5,9 +5,8 @@ use futures::future::{ok, Either, Future, FutureExt, LocalBoxFuture, Ready};
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{
-    apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
-};
+use crate::service::{apply, apply_fn_factory, pipeline_factory};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::Extensions;
 
 use super::dev::{insert_slesh, WebServiceConfig, WebServiceFactory};
@@ -242,6 +241,52 @@ where
     {
         self.routes.push(Route::new().to(handler));
         self
+    }
+
+    /// Register request filter.
+    ///
+    /// This is similar to `App's` filters, but filter get invoked on resource level.
+    pub fn filter<F>(
+        self,
+        filter: F,
+    ) -> Resource<
+        Err,
+        impl ServiceFactory<
+            Config = (),
+            Request = WebRequest<Err>,
+            Response = WebResponse,
+            Error = Err::Container,
+            InitError = (),
+        >,
+    >
+    where
+        F: ServiceFactory<
+            Config = (),
+            Request = WebRequest<Err>,
+            Response = Either<WebRequest<Err>, WebResponse>,
+            Error = Err::Container,
+            InitError = (),
+        >,
+    {
+        let ep = self.endpoint;
+        let endpoint =
+            pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
+                match result {
+                    Either::Left(req) => Either::Left(srv.call(req)),
+                    Either::Right(res) => Either::Right(ok(res)),
+                }
+            });
+
+        Resource {
+            endpoint,
+            rdef: self.rdef,
+            name: self.name,
+            guards: self.guards,
+            routes: self.routes,
+            default: self.default,
+            data: self.data,
+            factory_ref: self.factory_ref,
+        }
     }
 
     /// Register a resource middleware.
@@ -534,7 +579,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ResourceEndpoint<Err> {
 mod tests {
     use std::time::Duration;
 
-    use futures::future::{ok, ready};
+    use futures::future::{ok, ready, Either};
 
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
@@ -543,7 +588,24 @@ mod tests {
     use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, TestRequest};
     use crate::web::{self, guard, App, DefaultError, HttpResponse};
-    use crate::Service;
+    use crate::{fn_service, Service};
+
+    #[crate::rt_test]
+    async fn test_filter() {
+        let srv = init_service(
+            App::new().service(
+                web::resource("/test")
+                    .filter(fn_service(|req: WebRequest<_>| async move {
+                        Ok(Either::Right(req.into_response(HttpResponse::NotFound())))
+                    }))
+                    .route(web::get().to(|| async { HttpResponse::Ok() })),
+            ),
+        )
+        .await;
+        let req = TestRequest::with_uri("/test").to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
 
     #[crate::rt_test]
     async fn test_middleware() {

@@ -3,14 +3,13 @@ use std::fmt;
 use std::future::Future;
 use std::rc::Rc;
 
-use futures::future::{FutureExt, LocalBoxFuture};
+use futures::future::{ok, Either, FutureExt, LocalBoxFuture};
 
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
-use crate::service::{
-    apply, apply_fn_factory, IntoServiceFactory, ServiceFactory, Transform,
-};
+use crate::service::{apply, apply_fn_factory, pipeline_factory};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::Extensions;
 
 use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
@@ -339,6 +338,76 @@ where
         self
     }
 
+    /// Register request filter.
+    ///
+    /// Filter runs during inbound processing in the request
+    /// lifecycle (request -> response), modifying request as
+    /// necessary, across all requests managed by the *Application*.
+    ///
+    /// Use filter when you need to read or modify *every* request in some way.
+    /// If filter returns request object then pipeline execution continues
+    /// to the next service in pipeline. In case of response, it get returned
+    /// immediately.
+    ///
+    /// ```rust
+    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
+    /// use ntex::web::{self, middleware, App};
+    ///
+    /// async fn index() -> &'static str {
+    ///     "Welcome!"
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::new()
+    ///         .wrap(middleware::Logger::default())
+    ///         .route("/index.html", web::get().to(index));
+    /// }
+    /// ```
+    pub fn filter<F>(
+        self,
+        filter: F,
+    ) -> App<
+        impl ServiceFactory<
+            Config = (),
+            Request = WebRequest<Err>,
+            Response = WebResponse,
+            Error = Err::Container,
+            InitError = (),
+        >,
+        Err,
+    >
+    where
+        F: ServiceFactory<
+            Config = (),
+            Request = WebRequest<Err>,
+            Response = Either<WebRequest<Err>, WebResponse>,
+            Error = Err::Container,
+            InitError = (),
+        >,
+    {
+        let ep = self.endpoint;
+        let endpoint =
+            pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
+                match result {
+                    Either::Left(req) => Either::Left(srv.call(req)),
+                    Either::Right(res) => Either::Right(ok(res)),
+                }
+            });
+
+        App {
+            endpoint,
+            data: self.data,
+            data_factories: self.data_factories,
+            services: self.services,
+            default: self.default,
+            factory_ref: self.factory_ref,
+            external: self.external,
+            extensions: self.extensions,
+            error_renderer: self.error_renderer,
+            case_insensitive: self.case_insensitive,
+        }
+    }
+
     /// Registers middleware, in the form of a middleware component (type),
     /// that runs during inbound and/or outbound processing in the request
     /// lifecycle (request -> response), modifying request/response as
@@ -473,6 +542,36 @@ where
         self
     }
 
+    /// Construct service factory with default `AppConfig`, suitable for `http::HttpService`.
+    ///
+    /// ```rust,no_run
+    /// use ntex::{web, http, server};
+    ///
+    /// #[ntex::main]
+    /// async fn main() -> std::io::Result<()> {
+    ///     server::build().bind("http", "127.0.0.1:0", ||
+    ///         http::HttpService::build().finish(
+    ///             web::App::new()
+    ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))
+    ///                 .finish()
+    ///         ).tcp()
+    ///     )?
+    ///     .run()
+    ///     .await
+    /// }
+    /// ```
+    pub fn finish(
+        self,
+    ) -> impl ServiceFactory<
+        Config = (),
+        Request = Request,
+        Response = WebResponse,
+        Error = T::Error,
+        InitError = T::InitError,
+    > {
+        crate::map_config(self.into_factory(), move |_| Default::default())
+    }
+
     /// Construct service factory suitable for `http::HttpService`.
     ///
     /// ```rust,no_run
@@ -544,7 +643,7 @@ mod tests {
     use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, DefaultError, HttpRequest, HttpResponse};
-    use crate::Service;
+    use crate::{fn_service, Service};
 
     #[crate::rt_test]
     async fn test_default_resource() {
@@ -629,6 +728,21 @@ mod tests {
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[crate::rt_test]
+    async fn test_filter() {
+        let srv = init_service(
+            App::new()
+                .filter(fn_service(|req: WebRequest<_>| async move {
+                    Ok(Either::Right(req.into_response(HttpResponse::NotFound())))
+                }))
+                .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
+        )
+        .await;
+        let req = TestRequest::with_uri("/test").to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[crate::rt_test]

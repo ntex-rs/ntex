@@ -110,11 +110,14 @@ pub use self::error::{
 pub use self::extract::FromRequest;
 pub use self::handler::Handler;
 pub use self::httprequest::HttpRequest;
+pub use self::request::WebRequest;
 pub use self::resource::Resource;
 pub use self::responder::Responder;
+pub use self::response::WebResponse;
 pub use self::route::Route;
 pub use self::scope::Scope;
 pub use self::server::HttpServer;
+pub use self::service::WebServiceFactory;
 pub use self::util::*;
 
 pub mod dev {
