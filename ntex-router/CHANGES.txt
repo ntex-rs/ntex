@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.2] - 2021-03-16
+
+* Use `IntoPattern` for prefix resources
+
 ## [0.4.1] - 2021-02-26
 
 * Fix: partial matches keep garbage in segments
