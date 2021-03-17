@@ -122,16 +122,22 @@ impl ResourceDef {
     /// Use `prefix` type instead of `static`.
     ///
     /// Panics if path regex pattern is malformed.
-    pub fn prefix(path: &str) -> Self {
-        ResourceDef::with_prefix(path, true)
+    pub fn prefix<T: IntoPattern>(path: T) -> Self {
+        ResourceDef::with_prefix(path)
     }
 
     /// Parse path pattern and create new `ResourceDef` instance.
     /// Inserts `/` to the start of the pattern.
     ///
     /// Panics if path regex pattern is malformed.
-    pub fn root_prefix(path: &str) -> Self {
-        ResourceDef::with_prefix(&insert_slash(path), true)
+    pub fn root_prefix<T: IntoPattern>(path: T) -> Self {
+        let mut patterns = path.patterns();
+        for path in &mut patterns {
+            let p = insert_slash(path.as_str());
+            *path = p
+        }
+
+        ResourceDef::with_prefix(patterns)
     }
 
     /// Resource id
@@ -145,17 +151,27 @@ impl ResourceDef {
     }
 
     /// Parse path pattern and create new `Pattern` instance with custom prefix
-    fn with_prefix(path: &str, for_prefix: bool) -> Self {
-        let path = path.to_owned();
-        let (tp, elements) = ResourceDef::parse(&path);
+    fn with_prefix<T: IntoPattern>(path: T) -> Self {
+        let patterns = path.patterns();
+
+        let mut p = String::new();
+        let mut tp = Vec::new();
+        let mut elements = Vec::new();
+
+        for path in patterns {
+            p = path.clone();
+            let (pelems, elems) = ResourceDef::parse(&path);
+            tp.push(pelems);
+            elements = elems;
+        }
 
         ResourceDef {
+            tp,
             elements,
             id: 0,
-            tp: vec![tp],
             name: String::new(),
-            pattern: path,
-            prefix: for_prefix,
+            pattern: p,
+            prefix: true,
         }
     }
 
@@ -806,9 +822,25 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/name")), None);
         assert_eq!(tree.find(&mut Path::new("/name1")), None);
 
+        let tree = Tree::new(&ResourceDef::prefix(vec!["/name/", "/name2/"]), 1);
+        assert_eq!(tree.find(&mut Path::new("/name/")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name/test/test")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name2/")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name2/test/test")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name")), None);
+        assert_eq!(tree.find(&mut Path::new("/name1")), None);
+
         let tree = Tree::new(&ResourceDef::root_prefix("name/"), 1);
         assert_eq!(tree.find(&mut Path::new("/name/")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/name/test/test")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name")), None);
+        assert_eq!(tree.find(&mut Path::new("/name1")), None);
+
+        let tree = Tree::new(&ResourceDef::root_prefix(vec!["name/", "name2/"]), 1);
+        assert_eq!(tree.find(&mut Path::new("/name/")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name/test/test")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name2/")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/name2/test/test")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/name")), None);
         assert_eq!(tree.find(&mut Path::new("/name1")), None);
 
@@ -844,10 +876,28 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/name1")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/name~")), Some(1));
 
-        let mut resource = Path::new("/test2/subpath1/subpath2/index.html");
+        let tree = Tree::new(&ResourceDef::prefix(vec!["/1/{name}/", "/2/{name}/"]), 1);
+        assert_eq!(tree.find(&mut Path::new("/1/name/")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/1/name/test/test")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/2/name/")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/2/name/test/test")), Some(1));
+        assert_eq!(tree.find(&mut Path::new("/1/name")), None);
+        assert_eq!(tree.find(&mut Path::new("/1/name1")), None);
+        assert_eq!(tree.find(&mut Path::new("/1/name~")), None);
+        assert_eq!(tree.find(&mut Path::new("/2/name")), None);
+        assert_eq!(tree.find(&mut Path::new("/2/name1")), None);
+        assert_eq!(tree.find(&mut Path::new("/2/name~")), None);
+
+        let mut resource = Path::new("/1/test2/subpath1/subpath2/index.html");
         assert_eq!(tree.find(&mut resource), Some(1));
         assert_eq!(&resource["name"], "test2");
         assert_eq!(&resource[0], "test2");
+        assert_eq!(resource.path(), "/subpath1/subpath2/index.html");
+
+        let mut resource = Path::new("/2/test3/subpath1/subpath2/index.html");
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(&resource["name"], "test3");
+        assert_eq!(&resource[0], "test3");
         assert_eq!(resource.path(), "/subpath1/subpath2/index.html");
 
         // nested
@@ -863,6 +913,37 @@ mod tests {
         assert_eq!(tree.find(&mut resource), Some(2));
         assert_eq!(&resource["v1"], "1");
         assert_eq!(tree.find(&mut Path::new("/prefix/1")), Some(2));
+
+        // nested
+        let mut tree = Tree::new(
+            &ResourceDef::prefix(vec![
+                "/prefix/{v1}/second/{v2}",
+                "/prefix2/{v1}/second/{v2}",
+            ]),
+            1,
+        );
+        tree.insert(&ResourceDef::prefix("/prefix/{v1}"), 2);
+        tree.insert(&ResourceDef::prefix("/prefix2/{v1}"), 3);
+
+        let mut resource = Path::new("/prefix/1/second/2");
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(&resource["v1"], "1");
+        assert_eq!(&resource["v2"], "2");
+
+        let mut resource = Path::new("/prefix2/1/second/2");
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(&resource["v1"], "1");
+        assert_eq!(&resource["v2"], "2");
+
+        let mut resource = Path::new("/prefix/1/second");
+        assert_eq!(tree.find(&mut resource), Some(2));
+        assert_eq!(&resource["v1"], "1");
+        assert_eq!(tree.find(&mut Path::new("/prefix/1")), Some(2));
+
+        let mut resource = Path::new("/prefix2/1/second");
+        assert_eq!(tree.find(&mut resource), Some(3));
+        assert_eq!(&resource["v1"], "1");
+        assert_eq!(tree.find(&mut Path::new("/prefix2/1")), Some(3));
     }
 
     #[test]

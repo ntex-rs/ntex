@@ -3,11 +3,10 @@ use std::{cell::RefCell, fmt, rc::Rc, task::Context, task::Poll};
 use futures::future::{ok, Either, Future, FutureExt, LocalBoxFuture, Ready};
 
 use crate::http::Response;
-use crate::router::{ResourceDef, ResourceInfo, Router};
+use crate::router::{IntoPattern, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{
-    apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
-};
+use crate::service::{apply, apply_fn_factory, pipeline_factory};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::Extensions;
 
 use super::config::ServiceConfig;
@@ -61,28 +60,30 @@ type BoxedResponse<Err: ErrorRenderer> =
 ///
 pub struct Scope<Err: ErrorRenderer, T = ScopeEndpoint<Err>> {
     endpoint: T,
-    rdef: String,
+    rdef: Vec<String>,
     data: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     guards: Vec<Box<dyn Guard>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
     external: Vec<ResourceDef>,
     factory_ref: Rc<RefCell<Option<ScopeFactory<Err>>>>,
+    case_insensitive: bool,
 }
 
 impl<Err: ErrorRenderer> Scope<Err> {
     /// Create a new scope
-    pub fn new(path: &str) -> Scope<Err> {
+    pub fn new<T: IntoPattern>(path: T) -> Scope<Err> {
         let fref = Rc::new(RefCell::new(None));
         Scope {
             endpoint: ScopeEndpoint::new(fref.clone()),
-            rdef: path.to_string(),
+            rdef: path.patterns(),
             data: None,
             guards: Vec::new(),
             services: Vec::new(),
             default: Rc::new(RefCell::new(None)),
             external: Vec::new(),
             factory_ref: fref,
+            case_insensitive: false,
         }
     }
 }
@@ -161,6 +162,14 @@ where
             self.data = Some(Extensions::new());
         }
         self.data.as_mut().unwrap().insert(data);
+        self
+    }
+
+    /// Use ascii case-insensitive routing.
+    ///
+    /// Only static segments could be case-insensitive.
+    pub fn case_insensitive_routing(mut self) -> Self {
+        self.case_insensitive = true;
         self
     }
 
@@ -302,8 +311,60 @@ where
         self
     }
 
-    /// Registers middleware, in the form of a middleware component (type),
-    /// that runs during inbound processing in the request
+    /// Register request filter.
+    ///
+    /// Filter runs during inbound processing in the request
+    /// lifecycle (request -> response), modifying request as
+    /// necessary, across all requests managed by the *Scope*.
+    ///
+    /// This is similar to `App's` filters, but filter get invoked on scope level.
+    pub fn filter<F>(
+        self,
+        filter: F,
+    ) -> Scope<
+        Err,
+        impl ServiceFactory<
+            Config = (),
+            Request = WebRequest<Err>,
+            Response = WebResponse,
+            Error = Err::Container,
+            InitError = (),
+        >,
+    >
+    where
+        F: ServiceFactory<
+            Config = (),
+            Request = WebRequest<Err>,
+            Response = Either<WebRequest<Err>, WebResponse>,
+            Error = Err::Container,
+            InitError = (),
+        >,
+    {
+        let ep = self.endpoint;
+        let endpoint =
+            pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
+                match result {
+                    Either::Left(req) => Either::Left(srv.call(req)),
+                    Either::Right(res) => Either::Right(ok(res)),
+                }
+            });
+
+        Scope {
+            endpoint,
+            rdef: self.rdef,
+            data: self.data,
+            guards: self.guards,
+            services: self.services,
+            default: self.default,
+            external: self.external,
+            factory_ref: self.factory_ref,
+            case_insensitive: self.case_insensitive,
+        }
+    }
+
+    /// Registers middleware, in the form of a middleware component (type).
+    ///
+    /// That runs during inbound processing in the request
     /// lifecycle (request -> response), modifying request as
     /// necessary, across all requests managed by the *Scope*.  Scope-level
     /// middleware is more limited in what it can modify, relative to Route or
@@ -342,12 +403,14 @@ where
             default: self.default,
             external: self.external,
             factory_ref: self.factory_ref,
+            case_insensitive: self.case_insensitive,
         }
     }
 
-    /// Registers middleware, in the form of a closure, that runs during inbound
-    /// processing in the request lifecycle (request -> response), modifying
-    /// request as necessary, across all requests managed by the *Scope*.
+    /// Registers middleware, in the form of a closure.
+    ///
+    /// That runs during inbound processing in the request lifecycle (request -> response),
+    /// modifying request as necessary, across all requests managed by the *Scope*.
     /// Scope-level middleware is more limited in what it can modify, relative
     /// to Route or Application level middleware, in that Scope-level middleware
     /// can not modify WebResponse.
@@ -403,6 +466,7 @@ where
             default: self.default,
             external: self.external,
             factory_ref: self.factory_ref,
+            case_insensitive: self.case_insensitive,
         }
     }
 }
@@ -430,8 +494,8 @@ where
             .into_iter()
             .for_each(|mut srv| srv.register(&mut cfg));
 
-        let slesh = self.rdef.ends_with('/');
-        let mut rmap = ResourceMap::new(ResourceDef::root_prefix(&self.rdef));
+        let slesh = self.rdef.iter().find(|s| s.ends_with('/')).is_some();
+        let mut rmap = ResourceMap::new(ResourceDef::root_prefix(self.rdef.clone()));
 
         // external resources
         for mut rdef in std::mem::take(&mut self.external) {
@@ -447,6 +511,7 @@ where
         *self.factory_ref.borrow_mut() = Some(ScopeFactory {
             data: self.data.take().map(Rc::new),
             default: self.default.clone(),
+            case_insensitive: self.case_insensitive,
             services: Rc::new(
                 cfg.into_services()
                     .1
@@ -475,7 +540,7 @@ where
 
         // register final service
         config.register_service(
-            ResourceDef::root_prefix(&self.rdef),
+            ResourceDef::root_prefix(self.rdef),
             guards,
             self.endpoint,
             Some(Rc::new(rmap)),
@@ -487,6 +552,7 @@ struct ScopeFactory<Err: ErrorRenderer> {
     data: Option<Rc<Extensions>>,
     services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
+    case_insensitive: bool,
 }
 
 impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
@@ -500,6 +566,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
 
     fn new_service(&self, _: ()) -> Self::Future {
         let services = self.services.clone();
+        let case_insensitive = self.case_insensitive;
         let data = self.data.clone();
         let default_fut = self
             .default
@@ -510,6 +577,9 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
         async move {
             // create http services
             let mut router = Router::build();
+            if case_insensitive {
+                router.case_insensitive();
+            }
             for (path, factory, guards) in &mut services.iter() {
                 let service = factory.new_service(()).await?;
                 router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
@@ -604,12 +674,12 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeEndpoint<Err> {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use futures::future::{ok, ready};
+    use futures::future::{ok, ready, Either};
 
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::http::{Method, StatusCode};
-    use crate::service::Service;
+    use crate::service::{fn_service, Service};
     use crate::web::middleware::DefaultHeaders;
     use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
@@ -658,6 +728,32 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_scope_root_multi() {
+        let srv = init_service(
+            App::new().service(
+                web::scope(["/app", "/app2"])
+                    .service(web::resource("").to(|| async { HttpResponse::Ok() }))
+                    .service(
+                        web::resource("/").to(|| async { HttpResponse::Created() }),
+                    ),
+            ),
+        )
+        .await;
+
+        for url in &["/app", "/app2"] {
+            let req = TestRequest::with_uri(url).to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        for url in &["/app/", "/app2/"] {
+            let req = TestRequest::with_uri(url).to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::CREATED);
+        }
+    }
+
+    #[crate::rt_test]
     async fn test_scope_root2() {
         let srv = init_service(
             App::new().service(
@@ -674,6 +770,29 @@ mod tests {
         let req = TestRequest::with_uri("/app/").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[crate::rt_test]
+    async fn test_scope_root2_multi() {
+        let srv = init_service(
+            App::new().service(
+                web::scope(["/app/", "/app2/"])
+                    .service(web::resource("").to(|| async { HttpResponse::Ok() })),
+            ),
+        )
+        .await;
+
+        for url in &["/app", "/app2"] {
+            let req = TestRequest::with_uri(url).to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        }
+
+        for url in &["/app/", "/app2/"] {
+            let req = TestRequest::with_uri(url).to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
     }
 
     #[crate::rt_test]
@@ -706,21 +825,47 @@ mod tests {
         )
         .await;
 
-        let req = TestRequest::with_uri("/app/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        for (m, status) in &[
+            (Method::GET, StatusCode::OK),
+            (Method::DELETE, StatusCode::OK),
+            (Method::POST, StatusCode::NOT_FOUND),
+        ] {
+            let req = TestRequest::with_uri("/app/path1")
+                .method(m.clone())
+                .to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), status.clone());
+        }
+    }
 
-        let req = TestRequest::with_uri("/app/path1")
-            .method(Method::DELETE)
-            .to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+    #[crate::rt_test]
+    async fn test_scope_route_multi() {
+        let srv = init_service(
+            App::new().service(
+                web::scope(["app", "app2"])
+                    .route("/path1", web::get().to(|| async { HttpResponse::Ok() }))
+                    .route("/path1", web::delete().to(|| async { HttpResponse::Ok() })),
+            ),
+        )
+        .await;
 
-        let req = TestRequest::with_uri("/app/path1")
-            .method(Method::POST)
-            .to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        for (m, status) in &[
+            (Method::GET, StatusCode::OK),
+            (Method::DELETE, StatusCode::OK),
+            (Method::POST, StatusCode::NOT_FOUND),
+        ] {
+            let req = TestRequest::with_uri("/app/path1")
+                .method(m.clone())
+                .to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), status.clone());
+
+            let req = TestRequest::with_uri("/app2/path1")
+                .method(m.clone())
+                .to_request();
+            let resp = srv.call(req).await.unwrap();
+            assert_eq!(resp.status(), status.clone());
+        }
     }
 
     #[crate::rt_test]
@@ -973,6 +1118,23 @@ mod tests {
         let req = TestRequest::with_uri("/app2/non-exist").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[crate::rt_test]
+    async fn test_filter() {
+        let srv = init_service(
+            App::new().service(
+                web::scope("app")
+                    .filter(fn_service(|req: WebRequest<_>| async move {
+                        Ok(Either::Right(req.into_response(HttpResponse::NotFound())))
+                    }))
+                    .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
+            ),
+        )
+        .await;
+        let req = TestRequest::with_uri("/app/test").to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[crate::rt_test]

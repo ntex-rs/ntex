@@ -75,7 +75,7 @@ pub fn resource<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<Err> {
 ///  * /{project_id}/path2
 ///  * /{project_id}/path3
 ///
-pub fn scope<Err: ErrorRenderer>(path: &str) -> Scope<Err> {
+pub fn scope<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Scope<Err> {
     Scope::new(path)
 }
 
