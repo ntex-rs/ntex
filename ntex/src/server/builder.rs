@@ -511,6 +511,13 @@ pub(crate) fn create_tcp_listener(
     #[cfg(not(windows))]
     builder.set_reuse_address(true)?;
 
+    // On client disconnected, release the socket fastly
+    let params = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(5))
+        .with_interval(Duration::from_secs(1))
+        .with_retries(3);
+    builder.set_tcp_keepalive(&params)?;
+
     builder.bind(&SockAddr::from(addr))?;
     builder.listen(backlog)?;
     Ok(net::TcpListener::from(builder))
