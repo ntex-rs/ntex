@@ -1,11 +1,9 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{
-    cell::RefCell, error::Error, fmt, marker::PhantomData, net, pin::Pin, rc::Rc, time,
-};
+use std::{cell::RefCell, error::Error, fmt, marker, net, pin::Pin, rc::Rc, time};
 
 use bytes::Bytes;
-use futures::Future;
+use futures::future::{Future, LocalBoxFuture};
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::{ReadTask, State as IoState, WriteTask};
@@ -62,6 +60,7 @@ pin_project_lite::pin_project! {
         Service { #[pin] fut: S::Future },
         Expect { #[pin] fut: X::Future },
         Upgrade { #[pin] fut: U::Future },
+        Filter { fut: LocalBoxFuture<'static, Result<Request, Response>> }
     }
 }
 
@@ -69,14 +68,14 @@ struct DispatcherInner<T, S, B, X, U> {
     io: Option<Rc<RefCell<T>>>,
     flags: Flags,
     codec: Codec,
-    config: Rc<DispatcherConfig<S, X, U>>,
+    config: Rc<DispatcherConfig<T, S, X, U>>,
     state: IoState,
     expire: time::Instant,
     error: Option<DispatchError>,
     payload: Option<(PayloadDecoder, PayloadSender)>,
     peer_addr: Option<net::SocketAddr>,
     on_connect_data: Option<Box<dyn DataFactory>>,
-    _t: PhantomData<(S, B)>,
+    _t: marker::PhantomData<(S, B)>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -108,7 +107,7 @@ where
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(
         io: T,
-        config: Rc<DispatcherConfig<S, X, U>>,
+        config: Rc<DispatcherConfig<T, S, X, U>>,
         peer_addr: Option<net::SocketAddr>,
         on_connect_data: Option<Box<dyn DataFactory>>,
     ) -> Self {
@@ -147,7 +146,7 @@ where
                 expire,
                 peer_addr,
                 on_connect_data,
-                _t: PhantomData,
+                _t: marker::PhantomData,
             },
         }
     }
@@ -236,6 +235,35 @@ where
                                 DispatchError::Upgrade(Box::new(e))
                             });
                         }
+                        // handle FILTER call
+                        CallStateProject::Filter { fut } => {
+                            if let Poll::Ready(result) = Pin::new(fut).poll(cx) {
+                                match result {
+                                    Ok(req) => {
+                                        if req.head().expect() {
+                                            // Handle normal requests with EXPECT: 100-Continue` header
+                                            Some(CallState::Expect {
+                                                fut: this.inner.config.expect.call(req),
+                                            })
+                                        } else {
+                                            // Handle normal requests
+                                            Some(CallState::Service {
+                                                fut: this.inner.config.service.call(req),
+                                            })
+                                        }
+                                    }
+                                    Err(res) => {
+                                        let (res, body) = res.into_parts();
+                                        *this.st = this
+                                            .inner
+                                            .send_response(res, body.into_body());
+                                        None
+                                    }
+                                }
+                            } else {
+                                return Poll::Pending;
+                            }
+                        }
                         CallStateProject::None => unreachable!(),
                     };
 
@@ -318,24 +346,40 @@ where
                                     on_connect.set(&mut req.extensions_mut());
                                 }
 
-                                if req.head().expect() {
-                                    // Handle normal requests with EXPECT: 100-Continue` header
-                                    *this.st = State::Call;
-                                    this.call.set(CallState::Expect {
-                                        fut: this.inner.config.expect.call(req),
-                                    });
-                                } else if upgrade {
+                                if upgrade {
                                     // Handle UPGRADE request
                                     log::trace!("prep io for upgrade handler");
                                     this.inner.state.stop_io(cx.waker());
                                     *this.st = State::Upgrade(Some(req));
                                     return Poll::Pending;
                                 } else {
-                                    // Handle normal requests
                                     *this.st = State::Call;
-                                    this.call.set(CallState::Service {
-                                        fut: this.inner.config.service.call(req),
-                                    });
+                                    this.call.set(
+                                        if let Some(ref f) = this.inner.config.on_request
+                                        {
+                                            // Handle filter fut
+                                            CallState::Filter {
+                                                fut: (*f)(
+                                                    req,
+                                                    this.inner
+                                                        .io
+                                                        .as_ref()
+                                                        .unwrap()
+                                                        .clone(),
+                                                ),
+                                            }
+                                        } else if req.head().expect() {
+                                            // Handle normal requests with EXPECT: 100-Continue` header
+                                            CallState::Expect {
+                                                fut: this.inner.config.expect.call(req),
+                                            }
+                                        } else {
+                                            // Handle normal requests
+                                            CallState::Service {
+                                                fut: this.inner.config.service.call(req),
+                                            }
+                                        },
+                                    );
                                 }
                             }
                             Ok(None) => {
@@ -679,7 +723,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::{io, sync::Arc};
+    use std::{cell::Cell, io, sync::Arc};
 
     use bytes::{Bytes, BytesMut};
     use futures::future::{err, lazy, ok, FutureExt};
@@ -692,7 +736,7 @@ mod tests {
     use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
     use crate::http::{body, Request, ResponseHead, StatusCode};
     use crate::rt::time::sleep;
-    use crate::service::IntoService;
+    use crate::service::{fn_service, IntoService};
     use crate::testing::Io;
 
     const BUFFER_SIZE: usize = 32_768;
@@ -716,6 +760,7 @@ mod tests {
                 service.into_service(),
                 ExpectHandler,
                 None,
+                None,
             )),
             None,
             None,
@@ -738,6 +783,7 @@ mod tests {
                     service.into_service(),
                     ExpectHandler,
                     None,
+                    None,
                 )),
                 None,
                 None,
@@ -747,6 +793,39 @@ mod tests {
 
     fn load(decoder: &mut ClientCodec, buf: &mut BytesMut) -> ResponseHead {
         decoder.decode(buf).unwrap().unwrap()
+    }
+
+    #[crate::rt_test]
+    async fn test_on_request() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(1024);
+        client.write("GET /test HTTP/1.0\r\n\r\n");
+
+        let data = Rc::new(Cell::new(false));
+        let data2 = data.clone();
+        let mut h1 = Dispatcher::<_, _, _, _, UpgradeHandler<Io>>::new(
+            server,
+            Rc::new(DispatcherConfig::new(
+                ServiceConfig::default(),
+                fn_service(|_| ok::<_, io::Error>(Response::Ok().finish())),
+                ExpectHandler,
+                None,
+                Some(Box::new(move |req, _| {
+                    data2.set(true);
+                    Box::pin(ok(req))
+                })),
+            )),
+            None,
+            None,
+        );
+        sleep(time::Duration::from_millis(50)).await;
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        sleep(time::Duration::from_millis(50)).await;
+
+        client.local_buffer(|buf| assert_eq!(&buf[..15], b"HTTP/1.0 200 OK"));
+        client.close().await;
+        assert!(data.get());
     }
 
     #[crate::rt_test]

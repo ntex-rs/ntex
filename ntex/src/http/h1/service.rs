@@ -1,5 +1,5 @@
 use std::{
-    error::Error, fmt, marker::PhantomData, net, rc::Rc, task::Context, task::Poll,
+    cell::RefCell, error::Error, fmt, marker, net, rc::Rc, task::Context, task::Poll,
 };
 
 use futures::future::{ok, FutureExt, LocalBoxFuture};
@@ -7,7 +7,7 @@ use futures::future::{ok, FutureExt, LocalBoxFuture};
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::State as IoState;
 use crate::http::body::MessageBody;
-use crate::http::config::{DispatcherConfig, ServiceConfig};
+use crate::http::config::{DispatcherConfig, OnRequest, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
@@ -26,9 +26,10 @@ pub struct H1Service<T, S, B, X = ExpectHandler, U = UpgradeHandler<T>> {
     expect: X,
     upgrade: Option<U>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    on_request: RefCell<Option<OnRequest<T>>>,
     #[allow(dead_code)]
     handshake_timeout: u64,
-    _t: PhantomData<(T, B)>,
+    _t: marker::PhantomData<(T, B)>,
 }
 
 impl<T, S, B> H1Service<T, S, B>
@@ -49,8 +50,9 @@ where
             expect: ExpectHandler,
             upgrade: None,
             on_connect: None,
+            on_request: RefCell::new(None),
             handshake_timeout: cfg.0.ssl_handshake_timeout,
-            _t: PhantomData,
+            _t: marker::PhantomData,
             cfg,
         }
     }
@@ -225,8 +227,9 @@ where
             srv: self.srv,
             upgrade: self.upgrade,
             on_connect: self.on_connect,
+            on_request: self.on_request,
             handshake_timeout: self.handshake_timeout,
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 
@@ -243,8 +246,9 @@ where
             srv: self.srv,
             expect: self.expect,
             on_connect: self.on_connect,
+            on_request: self.on_request,
             handshake_timeout: self.handshake_timeout,
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 
@@ -254,6 +258,14 @@ where
         f: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     ) -> Self {
         self.on_connect = f;
+        self
+    }
+
+    /// Set req request callback.
+    ///
+    /// It get called once per request.
+    pub(crate) fn on_request(self, f: Option<OnRequest<T>>) -> Self {
+        *self.on_request.borrow_mut() = f;
         self
     }
 }
@@ -293,6 +305,7 @@ where
         let fut_ex = self.expect.new_service(());
         let fut_upg = self.upgrade.as_ref().map(|f| f.new_service(()));
         let on_connect = self.on_connect.clone();
+        let on_request = self.on_request.borrow_mut().take();
         let cfg = self.cfg.clone();
 
         async move {
@@ -311,12 +324,14 @@ where
                 None
             };
 
-            let config = Rc::new(DispatcherConfig::new(cfg, service, expect, upgrade));
+            let config = Rc::new(DispatcherConfig::new(
+                cfg, service, expect, upgrade, on_request,
+            ));
 
             Ok(H1ServiceHandler {
                 config,
                 on_connect,
-                _t: PhantomData,
+                _t: marker::PhantomData,
             })
         }
         .boxed_local()
@@ -325,9 +340,9 @@ where
 
 /// `Service` implementation for HTTP1 transport
 pub struct H1ServiceHandler<T, S: Service, B, X: Service, U: Service> {
-    config: Rc<DispatcherConfig<S, X, U>>,
+    config: Rc<DispatcherConfig<T, S, X, U>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-    _t: PhantomData<(T, B)>,
+    _t: marker::PhantomData<(T, B)>,
 }
 
 impl<T, S, B, X, U> Service for H1ServiceHandler<T, S, B, X, U>

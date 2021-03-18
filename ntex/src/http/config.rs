@@ -1,10 +1,11 @@
-use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time::Duration};
+use std::{cell::Cell, cell::RefCell, ptr::copy_nonoverlapping, rc::Rc, time::Duration};
 
 use bytes::BytesMut;
-use futures::{future, FutureExt};
+use futures::future::{self, FutureExt, LocalBoxFuture};
 use time::OffsetDateTime;
 
 use crate::framed::Timer;
+use crate::http::{Request, Response};
 use crate::rt::time::{sleep, sleep_until, Instant, Sleep};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -99,7 +100,14 @@ impl ServiceConfig {
     }
 }
 
-pub(super) struct DispatcherConfig<S, X, U> {
+pub(super) type OnRequest<T> = Box<
+    dyn Fn(
+        Request,
+        Rc<RefCell<T>>,
+    ) -> LocalBoxFuture<'static, Result<Request, Response>>,
+>;
+
+pub(super) struct DispatcherConfig<T, S, X, U> {
     pub(super) service: S,
     pub(super) expect: X,
     pub(super) upgrade: Option<U>,
@@ -112,19 +120,22 @@ pub(super) struct DispatcherConfig<S, X, U> {
     pub(super) lw: u16,
     pub(super) read_hw: u16,
     pub(super) write_hw: u16,
+    pub(super) on_request: Option<OnRequest<T>>,
 }
 
-impl<S, X, U> DispatcherConfig<S, X, U> {
+impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
     pub(super) fn new(
         cfg: ServiceConfig,
         service: S,
         expect: X,
         upgrade: Option<U>,
+        on_request: Option<OnRequest<T>>,
     ) -> Self {
         DispatcherConfig {
             service,
             expect,
             upgrade,
+            on_request,
             keep_alive: Duration::from_secs(cfg.0.keep_alive),
             client_timeout: cfg.0.client_timeout,
             client_disconnect: cfg.0.client_disconnect,

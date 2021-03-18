@@ -1,8 +1,10 @@
-use std::{error::Error, fmt, marker::PhantomData, rc::Rc};
+use std::{
+    cell::RefCell, error::Error, fmt, future::Future, marker::PhantomData, rc::Rc,
+};
 
 use crate::framed::State;
 use crate::http::body::MessageBody;
-use crate::http::config::{KeepAlive, ServiceConfig};
+use crate::http::config::{KeepAlive, OnRequest, ServiceConfig};
 use crate::http::error::ResponseError;
 use crate::http::h1::{Codec, ExpectHandler, H1Service, UpgradeHandler};
 use crate::http::h2::H2Service;
@@ -27,6 +29,7 @@ pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
     expect: X,
     upgrade: Option<U>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
+    on_request: Option<OnRequest<T>>,
     _t: PhantomData<(T, S)>,
 }
 
@@ -44,6 +47,7 @@ impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
             expect: ExpectHandler,
             upgrade: None,
             on_connect: None,
+            on_request: None,
             _t: PhantomData,
         }
     }
@@ -151,6 +155,7 @@ where
             expect: expect.into_factory(),
             upgrade: self.upgrade,
             on_connect: self.on_connect,
+            on_request: self.on_request,
             lw: self.lw,
             read_hw: self.read_hw,
             write_hw: self.write_hw,
@@ -183,6 +188,7 @@ where
             expect: self.expect,
             upgrade: Some(upgrade.into_factory()),
             on_connect: self.on_connect,
+            on_request: self.on_request,
             lw: self.lw,
             read_hw: self.read_hw,
             write_hw: self.write_hw,
@@ -200,6 +206,18 @@ where
         I: Clone + 'static,
     {
         self.on_connect = Some(Rc::new(move |io| Box::new(Data(f(io)))));
+        self
+    }
+
+    /// Set req request callback.
+    ///
+    /// It get called once per request.
+    pub fn on_request<F, R>(mut self, f: F) -> Self
+    where
+        F: Fn(Request, Rc<RefCell<T>>) -> R + 'static,
+        R: Future<Output = Result<Request, Response>> + 'static,
+    {
+        self.on_request = Some(Box::new(move |req, io| Box::pin(f(req, io))));
         self
     }
 
@@ -226,6 +244,7 @@ where
             .expect(self.expect)
             .upgrade(self.upgrade)
             .on_connect(self.on_connect)
+            .on_request(self.on_request)
     }
 
     /// Finish service configuration and create *http service* for HTTP/2 protocol.
@@ -274,6 +293,7 @@ where
             .expect(self.expect)
             .upgrade(self.upgrade)
             .on_connect(self.on_connect)
+            .on_request(self.on_request)
     }
 
     #[inline]

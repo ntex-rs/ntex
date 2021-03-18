@@ -213,7 +213,7 @@ where
 
         async move {
             let service = fut.await?;
-            let config = Rc::new(DispatcherConfig::new(cfg, service, (), None));
+            let config = Rc::new(DispatcherConfig::new(cfg, service, (), None, None));
 
             Ok(H2ServiceHandler {
                 config,
@@ -227,7 +227,7 @@ where
 
 /// `Service` implementation for http/2 transport
 pub struct H2ServiceHandler<T, S: Service, B> {
-    config: Rc<DispatcherConfig<S, (), ()>>,
+    config: Rc<DispatcherConfig<T, S, (), ()>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     _t: PhantomData<(T, B)>,
 }
@@ -286,7 +286,7 @@ where
 {
     Incoming(Dispatcher<T, S, B, (), ()>),
     Handshake(
-        Rc<DispatcherConfig<S, (), ()>>,
+        Rc<DispatcherConfig<T, S, (), ()>>,
         Option<net::SocketAddr>,
         Option<Box<dyn DataFactory>>,
         Handshake<T, Bytes>,

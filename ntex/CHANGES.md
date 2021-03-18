@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.12] - 2021-03-18
+
+* http: add per request callback for http1
+
 ## [0.3.11] - 2021-03-16
 
 * web: use patterns for scope's prefix definitions

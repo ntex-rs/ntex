@@ -83,7 +83,7 @@ pub enum ParseError {
     Status,
     /// A timeout occurred waiting for an IO event.
     #[allow(dead_code)]
-    #[display(fmt = "Timeout")]
+    #[display(fmt = "Timeout during parse")]
     Timeout,
     /// An `InvalidInput` occurred while trying to parse incoming stream.
     InvalidInput(&'static str),
