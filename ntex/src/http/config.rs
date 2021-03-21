@@ -1,12 +1,13 @@
 use std::{cell::Cell, cell::RefCell, ptr::copy_nonoverlapping, rc::Rc, time::Duration};
 
 use bytes::BytesMut;
-use futures::future::{self, FutureExt, LocalBoxFuture};
+use futures::future::{self, FutureExt};
 use time::OffsetDateTime;
 
 use crate::framed::Timer;
 use crate::http::{Request, Response};
 use crate::rt::time::{sleep, sleep_until, Instant, Sleep};
+use crate::service::boxed::BoxService;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 /// Server keep-alive setting
@@ -100,12 +101,7 @@ impl ServiceConfig {
     }
 }
 
-pub(super) type OnRequest<T> = Box<
-    dyn Fn(
-        Request,
-        Rc<RefCell<T>>,
-    ) -> LocalBoxFuture<'static, Result<Request, Response>>,
->;
+pub(super) type OnRequest<T> = BoxService<(Request, Rc<RefCell<T>>), Request, Response>;
 
 pub(super) struct DispatcherConfig<T, S, X, U> {
     pub(super) service: S,

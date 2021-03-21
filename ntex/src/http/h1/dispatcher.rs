@@ -359,14 +359,14 @@ where
                                         {
                                             // Handle filter fut
                                             CallState::Filter {
-                                                fut: (*f)(
+                                                fut: f.call((
                                                     req,
                                                     this.inner
                                                         .io
                                                         .as_ref()
                                                         .unwrap()
                                                         .clone(),
-                                                ),
+                                                )),
                                             }
                                         } else if req.head().expect() {
                                             // Handle normal requests with EXPECT: 100-Continue` header
@@ -736,7 +736,7 @@ mod tests {
     use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
     use crate::http::{body, Request, ResponseHead, StatusCode};
     use crate::rt::time::sleep;
-    use crate::service::{fn_service, IntoService};
+    use crate::service::{boxed, fn_service, IntoService};
     use crate::testing::Io;
 
     const BUFFER_SIZE: usize = 32_768;
@@ -810,10 +810,10 @@ mod tests {
                 fn_service(|_| ok::<_, io::Error>(Response::Ok().finish())),
                 ExpectHandler,
                 None,
-                Some(Box::new(move |req, _| {
+                Some(boxed::service(crate::into_service(move |(req, _)| {
                     data2.set(true);
-                    Box::pin(ok(req))
-                })),
+                    ok(req)
+                }))),
             )),
             None,
             None,

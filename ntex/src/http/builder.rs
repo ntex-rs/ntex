@@ -1,6 +1,4 @@
-use std::{
-    cell::RefCell, error::Error, fmt, future::Future, marker::PhantomData, rc::Rc,
-};
+use std::{cell::RefCell, error::Error, fmt, marker::PhantomData, rc::Rc};
 
 use crate::framed::State;
 use crate::http::body::MessageBody;
@@ -12,7 +10,7 @@ use crate::http::helpers::{Data, DataFactory};
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::service::HttpService;
-use crate::service::{IntoServiceFactory, Service, ServiceFactory};
+use crate::service::{boxed, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// A http service builder
 ///
@@ -212,12 +210,16 @@ where
     /// Set req request callback.
     ///
     /// It get called once per request.
-    pub fn on_request<F, R>(mut self, f: F) -> Self
+    pub fn on_request<Filter, F>(mut self, f: F) -> Self
     where
-        F: Fn(Request, Rc<RefCell<T>>) -> R + 'static,
-        R: Future<Output = Result<Request, Response>> + 'static,
+        F: IntoService<Filter>,
+        Filter: Service<
+                Request = (Request, Rc<RefCell<T>>),
+                Response = Request,
+                Error = Response,
+            > + 'static,
     {
-        self.on_request = Some(Box::new(move |req, io| Box::pin(f(req, io))));
+        self.on_request = Some(boxed::service(f.into_service()));
         self
     }
 
