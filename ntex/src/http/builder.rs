@@ -91,7 +91,7 @@ where
         self
     }
 
-    /// Set server connection disconnect timeout in milliseconds.
+    /// Set server connection disconnect timeout in seconds.
     ///
     /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
     /// within this time, the connection get dropped.

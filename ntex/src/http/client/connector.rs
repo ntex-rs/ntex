@@ -191,7 +191,7 @@ impl Connector {
         self
     }
 
-    /// Set server connection disconnect timeout in milliseconds.
+    /// Set server connection disconnect timeout.
     ///
     /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
     /// within this time, the socket get dropped. This timeout affects only secure connections.
