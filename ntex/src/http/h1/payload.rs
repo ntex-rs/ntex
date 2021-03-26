@@ -161,6 +161,7 @@ impl Inner {
 
     fn set_error(&mut self, err: PayloadError) {
         self.err = Some(err);
+        self.task.wake()
     }
 
     fn feed_eof(&mut self) {

@@ -423,20 +423,26 @@ where
                     }
                 }
                 // consume request's payload
-                State::ReadPayload => loop {
-                    match this.inner.poll_read_payload(cx) {
-                        ReadPayloadStatus::Updated => continue,
-                        ReadPayloadStatus::Pending => return Poll::Pending,
-                        ReadPayloadStatus::Done => {
-                            *this.st = {
-                                this.inner.reset_keepalive();
-                                State::ReadRequest
+                State::ReadPayload => {
+                    if this.inner.state.is_io_err() {
+                        *this.st = State::Stop;
+                    } else {
+                        loop {
+                            match this.inner.poll_read_payload(cx) {
+                                ReadPayloadStatus::Updated => continue,
+                                ReadPayloadStatus::Pending => return Poll::Pending,
+                                ReadPayloadStatus::Done => {
+                                    *this.st = {
+                                        this.inner.reset_keepalive();
+                                        State::ReadRequest
+                                    }
+                                }
+                                ReadPayloadStatus::Dropped => *this.st = State::Stop,
                             }
+                            break;
                         }
-                        ReadPayloadStatus::Dropped => *this.st = State::Stop,
                     }
-                    break;
-                },
+                }
                 // send response body
                 State::SendPayload { ref mut body } => {
                     if this.inner.state.is_io_err() {

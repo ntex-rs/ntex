@@ -4,6 +4,8 @@
 
 * framed: add socket disconnect notification
 
+* http: wake up reader on h1 payload error
+
 * ws: add sink disconnect notification
 
 * fix wrong api docs
