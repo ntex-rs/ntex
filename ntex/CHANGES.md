@@ -1,5 +1,7 @@
 # Changes
 
+* framed: add socket disconnect notification
+
 * fix wrong api docs
 
 ## [0.3.12] - 2021-03-18

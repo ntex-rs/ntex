@@ -2,7 +2,8 @@
 use std::task::{Context, Poll, Waker};
 use std::{cell::Cell, cell::RefCell, hash, io, mem, pin::Pin, rc::Rc};
 
-use futures::{future::poll_fn, ready};
+use futures::{future::poll_fn, ready, Future};
+use slab::Slab;
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::task::LocalWaker;
@@ -48,6 +49,7 @@ pub(crate) struct IoStateInner {
     dispatch_task: LocalWaker,
     read_buf: RefCell<BytesMut>,
     write_buf: RefCell<BytesMut>,
+    on_disconnect: RefCell<Slab<Option<LocalWaker>>>,
 }
 
 impl IoStateInner {
@@ -100,6 +102,7 @@ impl State {
             write_task: LocalWaker::new(),
             read_buf: RefCell::new(BytesMut::new()),
             write_buf: RefCell::new(BytesMut::new()),
+            on_disconnect: RefCell::new(Slab::new()),
         }))
     }
 
@@ -120,6 +123,7 @@ impl State {
             write_task: LocalWaker::new(),
             read_buf: RefCell::new(parts.read_buf),
             write_buf: RefCell::new(parts.write_buf),
+            on_disconnect: RefCell::new(Slab::new()),
         }));
         (parts.io, parts.codec, state)
     }
@@ -144,6 +148,7 @@ impl State {
             write_task: LocalWaker::new(),
             read_buf: RefCell::new(BytesMut::with_capacity(min_buf_size as usize)),
             write_buf: RefCell::new(BytesMut::with_capacity(min_buf_size as usize)),
+            on_disconnect: RefCell::new(Slab::new()),
         }))
     }
 
@@ -209,6 +214,21 @@ impl State {
     }
 
     #[inline]
+    /// Notify when socket get disconnected
+    pub fn on_disconnect(&self) -> OnDisconnect {
+        OnDisconnect::new(self.0.clone(), self.0.flags.get().contains(Flags::IO_ERR))
+    }
+
+    fn notify_disconnect(&self) {
+        let slab = self.0.on_disconnect.borrow();
+        for item in slab.iter() {
+            if let Some(waker) = item.1 {
+                waker.wake();
+            }
+        }
+    }
+
+    #[inline]
     /// Check if io error occured in read or write task
     pub fn is_io_err(&self) -> bool {
         self.0.flags.get().contains(Flags::IO_ERR)
@@ -256,11 +276,15 @@ impl State {
         self.0.write_task.wake();
         self.0.dispatch_task.wake();
         self.insert_flags(Flags::IO_ERR | Flags::DSP_STOP);
+        self.notify_disconnect();
     }
 
     pub(super) fn set_wr_shutdown_complete(&self) {
-        self.insert_flags(Flags::IO_ERR);
-        self.0.read_task.wake();
+        if !self.0.flags.get().contains(Flags::IO_ERR) {
+            self.notify_disconnect();
+            self.insert_flags(Flags::IO_ERR);
+            self.0.read_task.wake();
+        }
     }
 
     pub(super) fn register_read_task(&self, waker: &Waker) {
@@ -1024,9 +1048,66 @@ impl<'a> Read<'a> {
     }
 }
 
+/// OnDisconnect future resolves when socket get disconnected
+#[must_use = "OnDisconnect do nothing unless polled"]
+pub struct OnDisconnect {
+    token: usize,
+    inner: Rc<IoStateInner>,
+}
+
+impl OnDisconnect {
+    fn new(inner: Rc<IoStateInner>, disconnected: bool) -> Self {
+        let token = inner.on_disconnect.borrow_mut().insert(if disconnected {
+            Some(LocalWaker::default())
+        } else {
+            None
+        });
+        Self { token, inner }
+    }
+
+    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let mut on_disconnect = self.inner.on_disconnect.borrow_mut();
+
+        let inner = unsafe { on_disconnect.get_unchecked_mut(self.token) };
+        if inner.is_none() {
+            let waker = LocalWaker::default();
+            waker.register(cx.waker());
+            *inner = Some(waker);
+        } else if !inner.as_mut().unwrap().register(cx.waker()) {
+            return Poll::Ready(());
+        }
+        Poll::Pending
+    }
+}
+
+impl Clone for OnDisconnect {
+    fn clone(&self) -> Self {
+        let token = self.inner.on_disconnect.borrow_mut().insert(None);
+        OnDisconnect {
+            token,
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl Future for OnDisconnect {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().poll_ready(cx)
+    }
+}
+
+impl Drop for OnDisconnect {
+    fn drop(&mut self) {
+        self.inner.on_disconnect.borrow_mut().remove(self.token);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use futures::future::lazy;
 
     use crate::codec::BytesCodec;
     use crate::testing::Io;
@@ -1099,5 +1180,38 @@ mod tests {
         state.force_close();
         state.flags().contains(Flags::DSP_STOP);
         state.flags().contains(Flags::IO_SHUTDOWN);
+    }
+
+    #[crate::rt_test]
+    async fn test_on_disconnect() {
+        let state = State::new();
+        let mut waiter = state.on_disconnect();
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
+            Poll::Pending
+        );
+        let mut waiter2 = waiter.clone();
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter2).poll(cx)).await,
+            Poll::Pending
+        );
+        state.set_wr_shutdown_complete();
+        assert_eq!(waiter.await, ());
+        assert_eq!(waiter2.await, ());
+
+        let mut waiter = state.on_disconnect();
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
+            Poll::Ready(())
+        );
+
+        let state = State::new();
+        let mut waiter = state.on_disconnect();
+        assert_eq!(
+            lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
+            Poll::Pending
+        );
+        state.set_io_error(None);
+        assert_eq!(waiter.await, ());
     }
 }

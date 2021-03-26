@@ -73,6 +73,7 @@ impl Waiter {
     }
 
     #[doc(hidden)]
+    #[deprecated(since = "0.3.0")]
     pub fn poll_waiter(&self, cx: &mut Context<'_>) -> Poll<()> {
         self.poll_ready(cx)
     }
@@ -92,7 +93,7 @@ impl Future for Waiter {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut().poll_waiter(cx)
+        self.get_mut().poll_ready(cx)
     }
 }
 
@@ -136,12 +137,13 @@ mod tests {
     }
 
     #[crate::rt_test]
+    #[allow(deprecated)]
     async fn test_condition_poll() {
         let cond = Condition::new();
         let waiter = cond.wait();
-        assert_eq!(lazy(|cx| waiter.poll_waiter(cx)).await, Poll::Pending);
+        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Pending);
         cond.notify();
-        assert_eq!(lazy(|cx| waiter.poll_waiter(cx)).await, Poll::Ready(()));
+        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Ready(()));
 
         let waiter = cond.wait();
         assert_eq!(lazy(|cx| waiter.poll_waiter(cx)).await, Poll::Pending);

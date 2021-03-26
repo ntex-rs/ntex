@@ -494,7 +494,7 @@ where
             .into_iter()
             .for_each(|mut srv| srv.register(&mut cfg));
 
-        let slesh = self.rdef.iter().find(|s| s.ends_with('/')).is_some();
+        let slesh = self.rdef.iter().any(|s| s.ends_with('/'));
         let mut rmap = ResourceMap::new(ResourceDef::root_prefix(self.rdef.clone()));
 
         // external resources
