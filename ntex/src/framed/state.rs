@@ -220,10 +220,12 @@ impl State {
     }
 
     fn notify_disconnect(&self) {
-        let slab = self.0.on_disconnect.borrow();
-        for item in slab.iter() {
+        let mut slab = self.0.on_disconnect.borrow_mut();
+        for item in slab.iter_mut() {
             if let Some(waker) = item.1 {
                 waker.wake();
+            } else {
+                *item.1 = Some(LocalWaker::default())
             }
         }
     }

@@ -2,6 +2,8 @@
 
 * framed: add socket disconnect notification
 
+* ws: add sink disconnect notification
+
 * fix wrong api docs
 
 ## [0.3.12] - 2021-03-18
