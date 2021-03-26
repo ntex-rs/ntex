@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.6] - 2021-03-26
+
+* Add .on_shutdown() callback to fn_service
+
 ## [0.1.5] - 2021-01-13
 
 * Use pin-project-lite instead of pin-project
