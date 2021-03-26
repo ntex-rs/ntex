@@ -1,5 +1,7 @@
 # Changes
 
+## [0.3.13] - 2021-03-26
+
 * framed: add socket disconnect notification
 
 * ws: add sink disconnect notification
