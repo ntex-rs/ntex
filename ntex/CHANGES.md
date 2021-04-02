@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.14] - 2021-04-xx
+
+* server: prevent double socket registration if accept loop is in back-pressure state
+
 ## [0.3.13] - 2021-03-26
 
 * framed: add socket disconnect notification

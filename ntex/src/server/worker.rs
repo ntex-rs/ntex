@@ -13,11 +13,11 @@ use crate::util::counter::Counter;
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
-use super::socket::{SocketAddr, Stream};
+use super::socket::Stream;
 use super::Token;
 
 #[derive(Debug)]
-pub(super) struct WorkerCommand(Conn);
+pub(super) struct WorkerCommand(Connection);
 
 #[derive(Debug)]
 /// Stop worker message. Returns `true` on successful shutdown
@@ -28,10 +28,9 @@ pub(super) struct StopCommand {
 }
 
 #[derive(Debug)]
-pub(super) struct Conn {
+pub(super) struct Connection {
     pub(super) io: Stream,
     pub(super) token: Token,
-    pub(super) peer: Option<SocketAddr>,
 }
 
 static MAX_CONNS: AtomicUsize = AtomicUsize::new(25600);
@@ -78,7 +77,7 @@ impl WorkerClient {
         }
     }
 
-    pub(super) fn send(&self, msg: Conn) -> Result<(), Conn> {
+    pub(super) fn send(&self, msg: Connection) -> Result<(), Connection> {
         self.tx1
             .unbounded_send(WorkerCommand(msg))
             .map_err(|msg| msg.into_inner().0)

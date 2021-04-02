@@ -77,15 +77,15 @@ impl Listener {
         }
     }
 
-    pub(crate) fn accept(&self) -> io::Result<Option<(Stream, SocketAddr)>> {
+    pub(crate) fn accept(&self) -> io::Result<Option<Stream>> {
         match *self {
-            Listener::Tcp(ref lst) => lst.accept().map(|(stream, addr)| {
-                Some((Stream::Tcp(stream), SocketAddr::Tcp(addr)))
-            }),
+            Listener::Tcp(ref lst) => {
+                lst.accept().map(|(stream, _)| Some(Stream::Tcp(stream)))
+            }
             #[cfg(unix)]
-            Listener::Uds(ref lst) => lst.accept().map(|(stream, addr)| {
-                Some((Stream::Uds(stream), SocketAddr::Uds(addr)))
-            }),
+            Listener::Uds(ref lst) => {
+                lst.accept().map(|(stream, _)| Some(Stream::Uds(stream)))
+            }
         }
     }
 }
