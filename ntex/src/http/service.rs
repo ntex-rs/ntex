@@ -1,7 +1,7 @@
 use std::{cell, error, fmt, marker, net, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use bytes::Bytes;
-use futures::future::{ok, Future, FutureExt, LocalBoxFuture};
+use futures::future::{ok, Future};
 use h2::server::{self, Handshake};
 
 use crate::codec::{AsyncRead, AsyncWrite};
@@ -379,7 +379,7 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = HttpServiceHandler<T, S::Service, B, X::Service, U::Service>;
-    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         let fut = self.srv.new_service(());
@@ -389,7 +389,7 @@ where
         let on_request = self.on_request.borrow_mut().take();
         let cfg = self.cfg.clone();
 
-        async move {
+        Box::pin(async move {
             let service = fut
                 .await
                 .map_err(|e| log::error!("Init http service error: {:?}", e))?;
@@ -415,8 +415,7 @@ where
                 config: Rc::new(config),
                 _t: marker::PhantomData,
             })
-        }
-        .boxed_local()
+        })
     }
 }
 

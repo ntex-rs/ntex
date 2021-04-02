@@ -1,10 +1,9 @@
-use std::marker::PhantomData;
-use std::net::SocketAddr;
-use std::task::{Context, Poll};
-use std::time::Duration;
+use std::{
+    marker::PhantomData, net::SocketAddr, pin::Pin, task::Context, task::Poll,
+    time::Duration,
+};
 
-use futures::future::{err, ok, LocalBoxFuture, Ready};
-use futures::{FutureExt, TryFutureExt};
+use futures::future::{err, ok, Future, Ready};
 use log::error;
 
 use crate::rt::spawn;
@@ -37,7 +36,7 @@ pub(super) trait InternalServiceFactory: Send {
 
     fn create(
         &self,
-    ) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>;
 }
 
 pub(super) type BoxedServerService = Box<
@@ -154,17 +153,21 @@ where
 
     fn create(
         &self,
-    ) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
+    {
         let token = self.token;
-        self.inner
-            .create()
-            .new_service(())
-            .map_err(|_| ())
-            .map_ok(move |inner| {
-                let service: BoxedServerService = Box::new(StreamService::new(inner));
-                vec![(token, service)]
-            })
-            .boxed_local()
+        let fut = self.inner.create().new_service(());
+
+        Box::pin(async move {
+            match fut.await {
+                Ok(inner) => {
+                    let service: BoxedServerService =
+                        Box::new(StreamService::new(inner));
+                    Ok(vec![(token, service)])
+                }
+                Err(_) => Err(()),
+            }
+        })
     }
 }
 
@@ -179,7 +182,8 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 
     fn create(
         &self,
-    ) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
+    {
         self.as_ref().create()
     }
 }

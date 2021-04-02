@@ -4,8 +4,8 @@ use std::{pin::Pin, sync::Arc, time};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::channel::oneshot;
-use futures::future::{join_all, LocalBoxFuture, MapOk};
-use futures::{Future, FutureExt, Stream as StdStream, TryFutureExt};
+use futures::future::join_all;
+use futures::{Future, Stream as FutStream};
 
 use crate::rt::time::{sleep_until, Instant, Sleep};
 use crate::rt::{spawn, Arbiter};
@@ -207,12 +207,17 @@ impl Worker {
             state: WorkerState::Unavailable,
         });
 
-        let mut fut: Vec<MapOk<LocalBoxFuture<'static, _>, _>> = Vec::new();
+        let mut fut: Vec<Pin<Box<dyn Future<Output = _>>>> = Vec::new();
         for (idx, factory) in wrk.factories.iter().enumerate() {
-            fut.push(factory.create().map_ok(move |r| {
-                r.into_iter()
-                    .map(|(t, s): (Token, _)| (idx, t, s))
-                    .collect::<Vec<_>>()
+            let f = factory.create();
+            fut.push(Box::pin(async move {
+                let r = f.await?;
+
+                Ok::<_, ()>(
+                    r.into_iter()
+                        .map(|(t, s): (Token, _)| (idx, t, s))
+                        .collect::<Vec<_>>(),
+                )
             }));
         }
 
@@ -241,11 +246,10 @@ impl Worker {
             self.services.iter_mut().for_each(|srv| {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopped;
-                    spawn(
-                        srv.service
-                            .call((None, ServerMessage::ForceShutdown))
-                            .map(|_| ()),
-                    );
+                    let fut = srv.service.call((None, ServerMessage::ForceShutdown));
+                    spawn(async move {
+                        let _ = fut.await;
+                    });
                 }
             });
         } else {
@@ -253,11 +257,11 @@ impl Worker {
             self.services.iter_mut().for_each(move |srv| {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopping;
-                    spawn(
-                        srv.service
-                            .call((None, ServerMessage::Shutdown(timeout)))
-                            .map(|_| ()),
-                    );
+
+                    let fut = srv.service.call((None, ServerMessage::Shutdown(timeout)));
+                    spawn(async move {
+                        let _ = fut.await;
+                    });
                 }
             });
         }

@@ -1,14 +1,11 @@
 //! Request extractors
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
-use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
-
-use crate::http::Payload;
+use futures::future::{ok, Ready};
 
 use super::error::ErrorRenderer;
 use super::httprequest::HttpRequest;
+use crate::http::Payload;
 
 /// Trait implemented by types that can be extracted from request.
 ///
@@ -87,19 +84,20 @@ where
     <T as FromRequest<Err>>::Error: Into<Err::Container>,
 {
     type Error = Err::Container;
-    type Future = LocalBoxFuture<'static, Result<Option<T>, Self::Error>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Option<T>, Self::Error>>>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
-        T::from_request(req, payload)
-            .then(|r| match r {
-                Ok(v) => ok(Some(v)),
+        let fut = T::from_request(req, payload);
+        Box::pin(async move {
+            match fut.await {
+                Ok(v) => Ok(Some(v)),
                 Err(e) => {
                     log::debug!("Error for Option<T> extractor: {}", e.into());
-                    ok(None)
+                    Ok(None)
                 }
-            })
-            .boxed_local()
+            }
+        })
     }
 }
 
@@ -156,16 +154,18 @@ where
     E: ErrorRenderer,
 {
     type Error = T::Error;
-    type Future = LocalBoxFuture<'static, Result<Result<T, T::Error>, Self::Error>>;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Result<T, T::Error>, Self::Error>>>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
-        T::from_request(req, payload)
-            .then(|res| match res {
-                Ok(v) => ok(Ok(v)),
-                Err(e) => ok(Err(e)),
-            })
-            .boxed_local()
+        let fut = T::from_request(req, payload);
+        Box::pin(async move {
+            match fut.await {
+                Ok(v) => Ok(Ok(v)),
+                Err(e) => Ok(Err(e)),
+            }
+        })
     }
 }
 

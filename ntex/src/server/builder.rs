@@ -5,15 +5,12 @@ use std::{io, mem, net};
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use futures::channel::oneshot;
-use futures::future::ready;
 use futures::stream::FuturesUnordered;
-use futures::{ready, Future, FutureExt, Stream, StreamExt};
+use futures::{ready, Future, Stream, StreamExt};
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::rt::net::TcpStream;
-use crate::rt::time::{sleep_until, Instant};
-use crate::rt::{spawn, System};
+use crate::rt::{net::TcpStream, spawn, time::sleep, System};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfiguredService, ServiceConfig};
@@ -22,6 +19,8 @@ use super::signals::{Signal, Signals};
 use super::socket::Listener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use super::{Server, ServerCommand, Token};
+
+const STOP_DELAY: Duration = Duration::from_millis(300);
 
 /// Server builder
 pub struct ServerBuilder {
@@ -369,45 +368,34 @@ impl ServerBuilder {
 
                 // stop workers
                 if !self.workers.is_empty() && graceful {
-                    spawn(
-                        self.workers
-                            .iter()
-                            .map(move |worker| worker.1.stop(graceful))
-                            .collect::<FuturesUnordered<_>>()
-                            .collect::<Vec<_>>()
-                            .then(move |_| {
-                                if let Some(tx) = completion {
-                                    let _ = tx.send(());
-                                }
-                                for tx in notify {
-                                    let _ = tx.send(());
-                                }
-                                if exit {
-                                    spawn(
-                                        async {
-                                            sleep_until(
-                                                Instant::now()
-                                                    + Duration::from_millis(300),
-                                            )
-                                            .await;
-                                            System::current().stop();
-                                        }
-                                        .boxed(),
-                                    );
-                                }
-                                ready(())
-                            }),
-                    );
+                    let fut = self
+                        .workers
+                        .iter()
+                        .map(move |worker| worker.1.stop(graceful))
+                        .collect::<FuturesUnordered<_>>()
+                        .collect::<Vec<_>>();
+
+                    spawn(async move {
+                        let _ = fut.await;
+
+                        if let Some(tx) = completion {
+                            let _ = tx.send(());
+                        }
+                        for tx in notify {
+                            let _ = tx.send(());
+                        }
+                        if exit {
+                            sleep(STOP_DELAY).await;
+                            System::current().stop();
+                        }
+                    });
                 } else {
                     // we need to stop system if server was spawned
                     if self.exit {
-                        spawn(
-                            sleep_until(Instant::now() + Duration::from_millis(300))
-                                .then(|_| {
-                                    System::current().stop();
-                                    ready(())
-                                }),
-                        );
+                        spawn(async {
+                            sleep(STOP_DELAY).await;
+                            System::current().stop();
+                        });
                     }
                     if let Some(tx) = completion {
                         let _ = tx.send(());

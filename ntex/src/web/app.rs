@@ -1,9 +1,6 @@
-use std::cell::RefCell;
-use std::fmt;
-use std::future::Future;
-use std::rc::Rc;
+use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
 
-use futures::future::{ok, Either, FutureExt, LocalBoxFuture};
+use futures::future::{ok, Either};
 
 use crate::http::Request;
 use crate::router::ResourceDef;
@@ -25,7 +22,7 @@ use super::{DefaultError, ErrorRenderer};
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type FnDataFactory =
-    Box<dyn Fn() -> LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>;
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Box<dyn DataFactory>, ()>>>>>;
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
@@ -138,22 +135,19 @@ where
         E: std::fmt::Debug,
     {
         self.data_factories.push(Box::new(move || {
-            {
-                let fut = data();
-                async move {
-                    match fut.await {
-                        Err(e) => {
-                            log::error!("Can not construct data instance: {:?}", e);
-                            Err(())
-                        }
-                        Ok(data) => {
-                            let data: Box<dyn DataFactory> = Box::new(Data::new(data));
-                            Ok(data)
-                        }
+            let fut = data();
+            Box::pin(async move {
+                match fut.await {
+                    Err(e) => {
+                        log::error!("Can not construct data instance: {:?}", e);
+                        Err(())
+                    }
+                    Ok(data) => {
+                        let data: Box<dyn DataFactory> = Box::new(Data::new(data));
+                        Ok(data)
                     }
                 }
-            }
-            .boxed_local()
+            })
         }));
         self
     }

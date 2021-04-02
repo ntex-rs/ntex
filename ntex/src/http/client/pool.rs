@@ -2,7 +2,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, collections::VecDeque, pin::Pin, rc::Rc};
 
-use futures::future::{poll_fn, Future, FutureExt, LocalBoxFuture};
+use futures::future::{poll_fn, Future};
 use h2::client::{handshake, Connection, SendRequest};
 use http::uri::Authority;
 
@@ -102,7 +102,7 @@ where
     type Request = Connect;
     type Response = IoConnection<Io>;
     type Error = ConnectError;
-    type Future = LocalBoxFuture<'static, Result<IoConnection<Io>, ConnectError>>;
+    type Future = Pin<Box<dyn Future<Output = Result<IoConnection<Io>, ConnectError>>>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -120,7 +120,7 @@ where
         let connector = self.0.clone();
         let inner = self.1.clone();
 
-        let fut = async move {
+        Box::pin(async move {
             let key = if let Some(authority) = req.uri.authority() {
                 authority.clone().into()
             } else {
@@ -162,9 +162,7 @@ where
                     }
                 }
             }
-        };
-
-        fut.boxed_local()
+        })
     }
 }
 
@@ -441,9 +439,15 @@ where
 {
     fut: F,
     h2: Option<
-        LocalBoxFuture<
-            'static,
-            Result<(SendRequest<Bytes>, Connection<Io, Bytes>), h2::Error>,
+        Pin<
+            Box<
+                dyn Future<
+                    Output = Result<
+                        (SendRequest<Bytes>, Connection<Io, Bytes>),
+                        h2::Error,
+                    >,
+                >,
+            >,
         >,
     >,
     tx: Option<Waiter<Io>>,
@@ -492,7 +496,9 @@ where
                         // waiter is gone, return connection to pool
                         conn.release()
                     }
-                    spawn(connection.map(|_| ()));
+                    spawn(async move {
+                        let _ = connection.await;
+                    });
                     Poll::Ready(())
                 }
                 Poll::Pending => Poll::Pending,
@@ -530,7 +536,7 @@ where
                     Poll::Ready(())
                 } else {
                     // init http2 handshake
-                    this.h2 = Some(handshake(io).boxed_local());
+                    this.h2 = Some(Box::pin(handshake(io)));
                     self.poll(cx)
                 }
             }

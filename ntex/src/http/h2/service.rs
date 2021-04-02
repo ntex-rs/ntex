@@ -1,12 +1,7 @@
-use std::future::Future;
-use std::marker::PhantomData;
-use std::net;
-use std::pin::Pin;
-use std::rc::Rc;
 use std::task::{Context, Poll};
+use std::{future::Future, marker::PhantomData, net, pin::Pin, rc::Rc};
 
 use bytes::Bytes;
-use futures::future::{ok, FutureExt, LocalBoxFuture};
 use h2::server::{self, Handshake};
 use log::error;
 
@@ -88,9 +83,9 @@ where
         InitError = S::InitError,
     > {
         pipeline_factory(fn_factory(|| async {
-            Ok::<_, S::InitError>(fn_service(|io: TcpStream| {
+            Ok::<_, S::InitError>(fn_service(|io: TcpStream| async move {
                 let peer_addr = io.peer_addr().ok();
-                ok::<_, DispatchError>((io, peer_addr))
+                Ok::<_, DispatchError>((io, peer_addr))
             }))
         }))
         .and_then(self)
@@ -131,11 +126,13 @@ mod openssl {
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(fn_factory(|| {
-                ok::<_, S::InitError>(fn_service(|io: SslStream<TcpStream>| {
-                    let peer_addr = io.get_ref().peer_addr().ok();
-                    ok((io, peer_addr))
-                }))
+            .and_then(fn_factory(|| async {
+                Ok::<_, S::InitError>(fn_service(
+                    |io: SslStream<TcpStream>| async move {
+                        let peer_addr = io.get_ref().peer_addr().ok();
+                        Ok((io, peer_addr))
+                    },
+                ))
             }))
             .and_then(self.map_err(SslError::Service))
         }
@@ -177,11 +174,13 @@ mod rustls {
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(fn_factory(|| {
-                ok::<_, S::InitError>(fn_service(|io: TlsStream<TcpStream>| {
-                    let peer_addr = io.get_ref().0.peer_addr().ok();
-                    ok((io, peer_addr))
-                }))
+            .and_then(fn_factory(|| async {
+                Ok::<_, S::InitError>(fn_service(
+                    |io: TlsStream<TcpStream>| async move {
+                        let peer_addr = io.get_ref().0.peer_addr().ok();
+                        Ok((io, peer_addr))
+                    },
+                ))
             }))
             .and_then(self.map_err(SslError::Service))
         }
@@ -204,14 +203,14 @@ where
     type Error = DispatchError;
     type InitError = S::InitError;
     type Service = H2ServiceHandler<T, S::Service, B>;
-    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         let fut = self.srv.new_service(());
         let cfg = self.cfg.clone();
         let on_connect = self.on_connect.clone();
 
-        async move {
+        Box::pin(async move {
             let service = fut.await?;
             let config = Rc::new(DispatcherConfig::new(cfg, service, (), None, None));
 
@@ -220,8 +219,7 @@ where
                 on_connect,
                 _t: PhantomData,
             })
-        }
-        .boxed_local()
+        })
     }
 }
 

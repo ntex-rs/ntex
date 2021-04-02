@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use std::{cell::RefCell, error::Error, fmt, marker, net, pin::Pin, rc::Rc, time};
 
 use bytes::Bytes;
-use futures::future::{Future, LocalBoxFuture};
+use futures::future::Future;
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::{ReadTask, State as IoState, WriteTask};
@@ -60,7 +60,7 @@ pin_project_lite::pin_project! {
         Service { #[pin] fut: S::Future },
         Expect { #[pin] fut: X::Future },
         Upgrade { #[pin] fut: U::Future },
-        Filter { fut: LocalBoxFuture<'static, Result<Request, Response>> }
+        Filter { fut: Pin<Box<dyn Future<Output = Result<Request, Response>>>> }
     }
 }
 

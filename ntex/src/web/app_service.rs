@@ -1,6 +1,5 @@
-use std::{cell::RefCell, marker::PhantomData, rc::Rc, task::Context, task::Poll};
-
-use futures::future::{ok, FutureExt, LocalBoxFuture};
+use std::task::{Context, Poll};
+use std::{cell::RefCell, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceInfo, Router};
@@ -24,9 +23,9 @@ type HttpService<Err: ErrorRenderer> =
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type BoxResponse<Err: ErrorRenderer> =
-    LocalBoxFuture<'static, Result<WebResponse, Err::Container>>;
+    Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
 type FnDataFactory =
-    Box<dyn Fn() -> LocalBoxFuture<'static, Result<Box<dyn DataFactory>, ()>>>;
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Box<dyn DataFactory>, ()>>>>>;
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes data factories.
@@ -71,14 +70,16 @@ where
     type Error = T::Error;
     type InitError = T::InitError;
     type Service = AppFactoryService<T::Service, Err>;
-    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, config: AppConfig) -> Self::Future {
         // update resource default service
         let default = self.default.clone().unwrap_or_else(|| {
-            Rc::new(boxed::factory(fn_service(|req: WebRequest<Err>| {
-                ok(req.into_response(Response::NotFound().finish()))
-            })))
+            Rc::new(boxed::factory(fn_service(
+                |req: WebRequest<Err>| async move {
+                    Ok(req.into_response(Response::NotFound().finish()))
+                },
+            )))
         });
 
         // App config
@@ -127,7 +128,7 @@ where
             .take()
             .unwrap_or_else(Extensions::new);
 
-        async move {
+        Box::pin(async move {
             // main service
             let service = fut.await?;
 
@@ -151,8 +152,7 @@ where
                 pool: HttpRequestPool::create(),
                 _t: PhantomData,
             })
-        }
-        .boxed_local()
+        })
     }
 }
 
@@ -250,7 +250,7 @@ impl<Err: ErrorRenderer> ServiceFactory for AppRoutingFactory<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = AppRouting<Err>;
-    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         let services = self.services.clone();
@@ -261,7 +261,7 @@ impl<Err: ErrorRenderer> ServiceFactory for AppRoutingFactory<Err> {
             router.case_insensitive();
         }
 
-        async move {
+        Box::pin(async move {
             // create http services
             for (path, factory, guards) in &mut services.iter() {
                 let service = factory.new_service(()).await?;
@@ -273,8 +273,7 @@ impl<Err: ErrorRenderer> ServiceFactory for AppRoutingFactory<Err> {
                 router: router.finish(),
                 default: Some(default_fut.await?),
             })
-        }
-        .boxed_local()
+        })
     }
 }
 
@@ -317,7 +316,7 @@ impl<Err: ErrorRenderer> Service for AppRouting<Err> {
             default.call(req)
         } else {
             let req = req.into_parts().0;
-            ok(WebResponse::new(Response::NotFound().finish(), req)).boxed_local()
+            Box::pin(async { Ok(WebResponse::new(Response::NotFound().finish(), req)) })
         }
     }
 }
@@ -340,7 +339,7 @@ impl<Err: ErrorRenderer> ServiceFactory for AppEntry<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = AppRouting<Err>;
-    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         self.factory.borrow_mut().as_mut().unwrap().new_service(())

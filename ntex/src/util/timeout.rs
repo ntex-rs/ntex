@@ -2,11 +2,9 @@
 //!
 //! If the response does not complete within the specified timeout, the response
 //! will be aborted.
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{fmt, time};
+use std::{
+    fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll, time,
+};
 
 use futures::future::{ok, Either, Ready};
 
@@ -223,7 +221,7 @@ where
 #[cfg(test)]
 mod tests {
     use derive_more::Display;
-    use futures::future::{lazy, ok, FutureExt, LocalBoxFuture};
+    use futures::future::{lazy, ok};
     use std::task::{Context, Poll};
     use std::time::Duration;
 
@@ -240,7 +238,7 @@ mod tests {
         type Request = ();
         type Response = ();
         type Error = SrvError;
-        type Future = LocalBoxFuture<'static, Result<(), SrvError>>;
+        type Future = Pin<Box<dyn Future<Output = Result<(), SrvError>>>>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
@@ -255,9 +253,11 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            crate::rt::time::sleep(self.0)
-                .then(|_| ok::<_, SrvError>(()))
-                .boxed_local()
+            let fut = crate::rt::time::sleep(self.0);
+            Box::pin(async move {
+                let _ = fut.await;
+                Ok::<_, SrvError>(())
+            })
         }
     }
 

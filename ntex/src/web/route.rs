@@ -1,8 +1,6 @@
-use std::mem;
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::{future::Future, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use futures::future::{ok, ready, LocalBoxFuture, Ready};
+use futures::future::{ok, ready, Ready};
 
 use crate::http::Method;
 use crate::{Service, ServiceFactory};
@@ -95,7 +93,7 @@ impl<Err: ErrorRenderer> Service for RouteService<Err> {
     type Request = WebRequest<Err>;
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

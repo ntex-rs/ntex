@@ -1,13 +1,10 @@
 //! Form extractor
 
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{fmt, ops};
+use std::{fmt, future::Future, ops, pin::Pin, task::Context, task::Poll};
 
 use bytes::BytesMut;
 use encoding_rs::{Encoding, UTF_8};
-use futures::future::{ready, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ready, Ready};
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -109,7 +106,7 @@ where
     Err: ErrorRenderer,
 {
     type Error = UrlencodedError;
-    type Future = LocalBoxFuture<'static, Result<Self, Self::Error>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
@@ -118,13 +115,13 @@ where
             .map(|c| c.limit)
             .unwrap_or(16384);
 
-        UrlEncoded::new(req, payload)
-            .limit(limit)
-            .map(move |res| match res {
+        let fut = UrlEncoded::new(req, payload).limit(limit);
+        Box::pin(async move {
+            match fut.await {
                 Err(e) => Err(e),
                 Ok(item) => Ok(Form(item)),
-            })
-            .boxed_local()
+            }
+        })
     }
 }
 
@@ -228,7 +225,7 @@ struct UrlEncoded<U> {
     length: Option<usize>,
     encoding: &'static Encoding,
     err: Option<UrlencodedError>,
-    fut: Option<LocalBoxFuture<'static, Result<U, UrlencodedError>>>,
+    fut: Option<Pin<Box<dyn Future<Output = Result<U, UrlencodedError>>>>>,
 }
 
 impl<U> UrlEncoded<U> {
@@ -316,36 +313,33 @@ where
         let encoding = self.encoding;
         let mut stream = self.stream.take().unwrap();
 
-        self.fut = Some(
-            async move {
-                let mut body = BytesMut::with_capacity(8192);
+        self.fut = Some(Box::pin(async move {
+            let mut body = BytesMut::with_capacity(8192);
 
-                while let Some(item) = stream.next().await {
-                    let chunk = item?;
-                    if (body.len() + chunk.len()) > limit {
-                        return Err(UrlencodedError::Overflow {
-                            size: body.len() + chunk.len(),
-                            limit,
-                        });
-                    } else {
-                        body.extend_from_slice(&chunk);
-                    }
-                }
-
-                if encoding == UTF_8 {
-                    serde_urlencoded::from_bytes::<U>(&body)
-                        .map_err(|_| UrlencodedError::Parse)
+            while let Some(item) = stream.next().await {
+                let chunk = item?;
+                if (body.len() + chunk.len()) > limit {
+                    return Err(UrlencodedError::Overflow {
+                        size: body.len() + chunk.len(),
+                        limit,
+                    });
                 } else {
-                    let body = encoding
-                        .decode_without_bom_handling_and_without_replacement(&body)
-                        .map(|s| s.into_owned())
-                        .ok_or(UrlencodedError::Parse)?;
-                    serde_urlencoded::from_str::<U>(&body)
-                        .map_err(|_| UrlencodedError::Parse)
+                    body.extend_from_slice(&chunk);
                 }
             }
-            .boxed_local(),
-        );
+
+            if encoding == UTF_8 {
+                serde_urlencoded::from_bytes::<U>(&body)
+                    .map_err(|_| UrlencodedError::Parse)
+            } else {
+                let body = encoding
+                    .decode_without_bom_handling_and_without_replacement(&body)
+                    .map(|s| s.into_owned())
+                    .ok_or(UrlencodedError::Parse)?;
+                serde_urlencoded::from_str::<U>(&body)
+                    .map_err(|_| UrlencodedError::Parse)
+            }
+        }));
         self.poll(cx)
     }
 }

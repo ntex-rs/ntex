@@ -1,6 +1,6 @@
-use std::{cell::RefCell, fmt, rc::Rc, task::Context, task::Poll};
+use std::{cell::RefCell, fmt, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use futures::future::{ok, Either, Future, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ok, Either, Future, Ready};
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, ResourceInfo, Router};
@@ -27,7 +27,7 @@ type HttpService<Err: ErrorRenderer> =
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type BoxedResponse<Err: ErrorRenderer> =
-    LocalBoxFuture<'static, Result<WebResponse, Err::Container>>;
+    Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
 
 /// Resources scope.
 ///
@@ -562,7 +562,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = ScopeService<Err>;
-    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         let services = self.services.clone();
@@ -574,7 +574,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
             .as_ref()
             .map(|srv| srv.new_service(()));
 
-        async move {
+        Box::pin(async move {
             // create http services
             let mut router = Router::build();
             if case_insensitive {
@@ -597,8 +597,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
                 router: router.finish(),
                 _ready: None,
             })
-        }
-        .boxed_local()
+        })
     }
 }
 
@@ -664,7 +663,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeEndpoint<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = ScopeService<Err>;
-    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         self.factory.borrow_mut().as_mut().unwrap().new_service(())

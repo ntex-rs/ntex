@@ -1,6 +1,6 @@
 use std::{io, pin::Pin, task::Context, task::Poll};
 
-use futures::future::{ok, Future, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ok, Future, Ready};
 pub use open_ssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
 pub use tokio_openssl::SslStream;
 
@@ -102,7 +102,7 @@ impl<T: Address + 'static> Service for OpensslConnector<T> {
     type Request = Connect<T>;
     type Response = SslStream<TcpStream>;
     type Error = ConnectError;
-    type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -110,7 +110,7 @@ impl<T: Address + 'static> Service for OpensslConnector<T> {
     }
 
     fn call(&self, req: Connect<T>) -> Self::Future {
-        self.connect(req).boxed_local()
+        Box::pin(self.connect(req))
     }
 }
 

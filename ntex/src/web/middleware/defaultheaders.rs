@@ -1,10 +1,8 @@
 //! Middleware for setting default response headers
-use std::convert::TryFrom;
-use std::marker::PhantomData;
-use std::rc::Rc;
 use std::task::{Context, Poll};
+use std::{convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
-use futures::future::{ok, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ok, Ready};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
@@ -125,7 +123,7 @@ where
     type Request = WebRequest<E>;
     type Response = WebResponse;
     type Error = S::Error;
-    type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -141,7 +139,7 @@ where
         let inner = self.inner.clone();
         let fut = self.service.call(req);
 
-        async move {
+        Box::pin(async move {
             let mut res = fut.await?;
 
             // set response headers
@@ -158,8 +156,7 @@ where
                 );
             }
             Ok(res)
-        }
-        .boxed_local()
+        })
     }
 }
 

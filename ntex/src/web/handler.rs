@@ -1,9 +1,4 @@
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use futures::future::{FutureExt, LocalBoxFuture};
+use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
@@ -42,7 +37,7 @@ pub(super) trait HandlerFn<Err: ErrorRenderer> {
     fn call(
         &self,
         _: WebRequest<Err>,
-    ) -> LocalBoxFuture<'static, Result<WebResponse, Err::Container>>;
+    ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
 
     fn clone_handler(&self) -> Box<dyn HandlerFn<Err>>;
 }
@@ -86,17 +81,16 @@ where
     fn call(
         &self,
         req: WebRequest<Err>,
-    ) -> LocalBoxFuture<'static, Result<WebResponse, Err::Container>> {
+    ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>> {
         let (req, mut payload) = req.into_parts();
 
-        HandlerWrapperResponse {
+        Box::pin(HandlerWrapperResponse {
             hnd: self.hnd.clone(),
             from_request: Some(T::from_request(&req, &mut payload)),
             handler: None,
             responder: None,
             req: Some(req),
-        }
-        .boxed_local()
+        })
     }
 
     fn clone_handler(&self) -> Box<dyn HandlerFn<Err>> {

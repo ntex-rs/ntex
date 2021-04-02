@@ -1,13 +1,9 @@
 //! Json extractor/responder
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::{fmt, ops};
+use std::{fmt, future::Future, ops, pin::Pin, sync::Arc, task::Context, task::Poll};
 
 use bytes::BytesMut;
-use futures::future::{ready, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ready, Ready};
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -175,7 +171,7 @@ where
     T: DeserializeOwned + 'static,
 {
     type Error = JsonPayloadError;
-    type Future = LocalBoxFuture<'static, Result<Self, Self::Error>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
@@ -185,9 +181,9 @@ where
             .map(|c| (c.limit, c.content_type.clone()))
             .unwrap_or((32768, None));
 
-        JsonBody::new(req, payload, ctype)
-            .limit(limit)
-            .map(move |res| match res {
+        let fut = JsonBody::new(req, payload, ctype).limit(limit);
+        Box::pin(async move {
+            match fut.await {
                 Err(e) => {
                     log::debug!(
                         "Failed to deserialize Json from payload. \
@@ -197,8 +193,8 @@ where
                     Err(e)
                 }
                 Ok(data) => Ok(Json(data)),
-            })
-            .boxed_local()
+            }
+        })
     }
 }
 
@@ -281,7 +277,7 @@ struct JsonBody<U> {
     #[cfg(not(feature = "compress"))]
     stream: Option<Payload>,
     err: Option<JsonPayloadError>,
-    fut: Option<LocalBoxFuture<'static, Result<U, JsonPayloadError>>>,
+    fut: Option<Pin<Box<dyn Future<Output = Result<U, JsonPayloadError>>>>>,
 }
 
 impl<U> JsonBody<U>
@@ -363,22 +359,19 @@ where
         }
         let mut stream = self.stream.take().unwrap();
 
-        self.fut = Some(
-            async move {
-                let mut body = BytesMut::with_capacity(8192);
+        self.fut = Some(Box::pin(async move {
+            let mut body = BytesMut::with_capacity(8192);
 
-                while let Some(item) = stream.next().await {
-                    let chunk = item?;
-                    if (body.len() + chunk.len()) > limit {
-                        return Err(JsonPayloadError::Overflow);
-                    } else {
-                        body.extend_from_slice(&chunk);
-                    }
+            while let Some(item) = stream.next().await {
+                let chunk = item?;
+                if (body.len() + chunk.len()) > limit {
+                    return Err(JsonPayloadError::Overflow);
+                } else {
+                    body.extend_from_slice(&chunk);
                 }
-                Ok(serde_json::from_slice::<U>(&body)?)
             }
-            .boxed_local(),
-        );
+            Ok(serde_json::from_slice::<U>(&body)?)
+        }));
 
         self.poll(cx)
     }

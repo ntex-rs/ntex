@@ -2,7 +2,7 @@ use std::task::{Context, Poll};
 use std::{collections::VecDeque, io, net::SocketAddr, pin::Pin};
 
 use either::Either;
-use futures::future::{ok, Future, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ok, Future, Ready};
 
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
@@ -140,7 +140,7 @@ struct TcpConnectorResponse<T> {
     req: Option<T>,
     port: u16,
     addrs: Option<VecDeque<SocketAddr>>,
-    stream: Option<LocalBoxFuture<'static, Result<TcpStream, io::Error>>>,
+    stream: Option<Pin<Box<dyn Future<Output = Result<TcpStream, io::Error>>>>>,
 }
 
 impl<T: Address> TcpConnectorResponse<T> {
@@ -160,7 +160,7 @@ impl<T: Address> TcpConnectorResponse<T> {
                 req: Some(req),
                 port,
                 addrs: None,
-                stream: Some(TcpStream::connect(addr).boxed_local()),
+                stream: Some(Box::pin(TcpStream::connect(addr))),
             },
             Either::Right(addrs) => TcpConnectorResponse {
                 req: Some(req),
@@ -217,7 +217,7 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
 
             // try to connect
             let addr = this.addrs.as_mut().unwrap().pop_front().unwrap();
-            this.stream = Some(TcpStream::connect(addr).boxed());
+            this.stream = Some(Box::pin(TcpStream::connect(addr)));
         }
     }
 }

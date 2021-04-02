@@ -1,12 +1,9 @@
 //! Payload/Bytes/String extractors
-use std::future::Future;
-use std::pin::Pin;
-use std::str;
-use std::task::{Context, Poll};
+use std::{future::Future, pin::Pin, str, task::Context, task::Poll};
 
 use bytes::{Bytes, BytesMut};
 use encoding_rs::UTF_8;
-use futures::future::{err, ok, Either, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{err, ok, Either, Ready};
 use futures::{Stream, StreamExt};
 use mime::Mime;
 
@@ -133,7 +130,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
 impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
     type Error = PayloadError;
     type Future = Either<
-        LocalBoxFuture<'static, Result<Bytes, Self::Error>>,
+        Pin<Box<dyn Future<Output = Result<Bytes, Self::Error>>>>,
         Ready<Result<Bytes, Self::Error>>,
     >;
 
@@ -156,7 +153,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
 
         let limit = cfg.limit;
         let fut = HttpMessageBody::new(req, payload).limit(limit);
-        Either::Left(async move { fut.await }.boxed_local())
+        Either::Left(Box::pin(async move { fut.await }))
     }
 }
 
@@ -190,7 +187,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
 impl<Err: ErrorRenderer> FromRequest<Err> for String {
     type Error = PayloadError;
     type Future = Either<
-        LocalBoxFuture<'static, Result<String, Self::Error>>,
+        Pin<Box<dyn Future<Output = Result<String, Self::Error>>>>,
         Ready<Result<String, Self::Error>>,
     >;
 
@@ -220,23 +217,20 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
         let limit = cfg.limit;
         let fut = HttpMessageBody::new(req, payload).limit(limit);
 
-        Either::Left(
-            async move {
-                let body = fut.await?;
+        Either::Left(Box::pin(async move {
+            let body = fut.await?;
 
-                if encoding == UTF_8 {
-                    Ok(str::from_utf8(body.as_ref())
-                        .map_err(|_| PayloadError::Decoding)?
-                        .to_owned())
-                } else {
-                    Ok(encoding
-                        .decode_without_bom_handling_and_without_replacement(&body)
-                        .map(|s| s.into_owned())
-                        .ok_or(PayloadError::Decoding)?)
-                }
+            if encoding == UTF_8 {
+                Ok(str::from_utf8(body.as_ref())
+                    .map_err(|_| PayloadError::Decoding)?
+                    .to_owned())
+            } else {
+                Ok(encoding
+                    .decode_without_bom_handling_and_without_replacement(&body)
+                    .map(|s| s.into_owned())
+                    .ok_or(PayloadError::Decoding)?)
             }
-            .boxed_local(),
-        )
+        }))
     }
 }
 /// Payload configuration for request's payload.
@@ -315,7 +309,7 @@ struct HttpMessageBody {
     #[cfg(not(feature = "compress"))]
     stream: Option<crate::http::Payload>,
     err: Option<PayloadError>,
-    fut: Option<LocalBoxFuture<'static, Result<Bytes, PayloadError>>>,
+    fut: Option<Pin<Box<dyn Future<Output = Result<Bytes, PayloadError>>>>>,
 }
 
 impl HttpMessageBody {
@@ -395,22 +389,19 @@ impl Future for HttpMessageBody {
         // future
         let limit = self.limit;
         let mut stream = self.stream.take().unwrap();
-        self.fut = Some(
-            async move {
-                let mut body = BytesMut::with_capacity(8192);
+        self.fut = Some(Box::pin(async move {
+            let mut body = BytesMut::with_capacity(8192);
 
-                while let Some(item) = stream.next().await {
-                    let chunk = item?;
-                    if body.len() + chunk.len() > limit {
-                        return Err(PayloadError::from(error::PayloadError::Overflow));
-                    } else {
-                        body.extend_from_slice(&chunk);
-                    }
+            while let Some(item) = stream.next().await {
+                let chunk = item?;
+                if body.len() + chunk.len() > limit {
+                    return Err(PayloadError::from(error::PayloadError::Overflow));
+                } else {
+                    body.extend_from_slice(&chunk);
                 }
-                Ok(body.freeze())
             }
-            .boxed_local(),
-        );
+            Ok(body.freeze())
+        }));
         self.poll(cx)
     }
 }

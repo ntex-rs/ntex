@@ -1,9 +1,6 @@
 //! Service that limits number of in-flight async requests.
 
-use std::convert::Infallible;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{convert::Infallible, future::Future, pin::Pin, task::Context, task::Poll};
 
 use futures::future::{ok, Ready};
 
@@ -125,7 +122,7 @@ mod tests {
 
     use super::*;
     use crate::service::{apply, fn_factory, Service, ServiceFactory};
-    use futures::future::{lazy, ok, FutureExt, LocalBoxFuture};
+    use futures::future::{lazy, ok};
 
     struct SleepService(Duration);
 
@@ -133,16 +130,18 @@ mod tests {
         type Request = ();
         type Response = ();
         type Error = ();
-        type Future = LocalBoxFuture<'static, Result<(), ()>>;
+        type Future = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            crate::rt::time::sleep(self.0)
-                .then(|_| ok::<_, ()>(()))
-                .boxed_local()
+            let fut = crate::rt::time::sleep(self.0);
+            Box::pin(async move {
+                let _ = fut.await;
+                Ok::<_, ()>(())
+            })
         }
     }
 

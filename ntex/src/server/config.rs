@@ -1,6 +1,6 @@
-use std::{cell::RefCell, fmt, io, marker::PhantomData, mem, net, rc::Rc};
+use std::{cell::RefCell, fmt, io, marker::PhantomData, mem, net, pin::Pin, rc::Rc};
 
-use futures::future::{ok, Future, FutureExt, LocalBoxFuture, Ready};
+use futures::future::{ok, Future, Ready};
 use log::error;
 
 use crate::rt::net::TcpStream;
@@ -128,7 +128,8 @@ impl InternalServiceFactory for ConfiguredService {
 
     fn create(
         &self,
-    ) -> LocalBoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
+    {
         // configure services
         let rt = ServiceRuntime::new(self.topics.clone());
         let cfg_fut = self.rt.configure(ServiceRuntime(rt.0.clone()));
@@ -136,7 +137,7 @@ impl InternalServiceFactory for ConfiguredService {
         let tokens = self.services.clone();
 
         // construct services
-        async move {
+        Box::pin(async move {
             cfg_fut.await?;
             rt.validate();
 
@@ -172,15 +173,17 @@ impl InternalServiceFactory for ConfiguredService {
                 };
             }
             Ok(res)
-        }
-        .boxed_local()
+        })
     }
 }
 
 pub(super) trait ServiceRuntimeConfiguration {
     fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration + Send>;
 
-    fn configure(&self, rt: ServiceRuntime) -> LocalBoxFuture<'static, Result<(), ()>>;
+    fn configure(
+        &self,
+        rt: ServiceRuntime,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 }
 
 struct ConfigWrapper<F, R, E> {
@@ -204,7 +207,10 @@ where
         })
     }
 
-    fn configure(&self, rt: ServiceRuntime) -> LocalBoxFuture<'static, Result<(), ()>> {
+    fn configure(
+        &self,
+        rt: ServiceRuntime,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
         let f = self.f.clone();
         Box::pin(async move {
             (f)(rt).await.map_err(|e| {
@@ -223,7 +229,7 @@ pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 struct ServiceRuntimeInner {
     names: HashMap<String, Token>,
     services: HashMap<Token, BoxedNewService>,
-    onstart: Vec<LocalBoxFuture<'static, ()>>,
+    onstart: Vec<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
 impl ServiceRuntime {
@@ -275,7 +281,7 @@ impl ServiceRuntime {
     where
         F: Future<Output = ()> + 'static,
     {
-        self.0.borrow_mut().onstart.push(fut.boxed_local())
+        self.0.borrow_mut().onstart.push(Box::pin(fut))
     }
 }
 
@@ -287,7 +293,7 @@ type BoxedNewService = Box<
         InitError = (),
         Config = (),
         Service = BoxedServerService,
-        Future = LocalBoxFuture<'static, Result<BoxedServerService, ()>>,
+        Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>,
     >,
 >;
 
@@ -309,11 +315,11 @@ where
     type InitError = ();
     type Config = ();
     type Service = BoxedServerService;
-    type Future = LocalBoxFuture<'static, Result<BoxedServerService, ()>>;
+    type Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         let fut = self.inner.new_service(());
-        async move {
+        Box::pin(async move {
             match fut.await {
                 Ok(s) => Ok(Box::new(StreamService::new(s)) as BoxedServerService),
                 Err(e) => {
@@ -321,7 +327,6 @@ where
                     Err(())
                 }
             }
-        }
-        .boxed_local()
+        })
     }
 }

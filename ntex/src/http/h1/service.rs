@@ -1,8 +1,7 @@
 use std::{
-    cell::RefCell, error::Error, fmt, marker, net, rc::Rc, task::Context, task::Poll,
+    cell::RefCell, error::Error, fmt, future::Future, marker, net, pin::Pin, rc::Rc,
+    task,
 };
-
-use futures::future::{ok, FutureExt, LocalBoxFuture};
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::State as IoState;
@@ -89,9 +88,9 @@ where
         Error = DispatchError,
         InitError = (),
     > {
-        pipeline_factory(|io: TcpStream| {
+        pipeline_factory(|io: TcpStream| async move {
             let peer_addr = io.peer_addr().ok();
-            ok((io, peer_addr))
+            Ok((io, peer_addr))
         })
         .and_then(self)
     }
@@ -142,9 +141,9 @@ mod openssl {
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(|io: SslStream<TcpStream>| {
+            .and_then(|io: SslStream<TcpStream>| async move {
                 let peer_addr = io.get_ref().peer_addr().ok();
-                ok((io, peer_addr))
+                Ok((io, peer_addr))
             })
             .and_then(self.map_err(SslError::Service))
         }
@@ -196,9 +195,9 @@ mod rustls {
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(|io: TlsStream<TcpStream>| {
+            .and_then(|io: TlsStream<TcpStream>| async move {
                 let peer_addr = io.get_ref().0.peer_addr().ok();
-                ok((io, peer_addr))
+                Ok((io, peer_addr))
             })
             .and_then(self.map_err(SslError::Service))
         }
@@ -298,7 +297,7 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = H1ServiceHandler<T, S::Service, B, X::Service, U::Service>;
-    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         let fut = self.srv.new_service(());
@@ -308,7 +307,7 @@ where
         let on_request = self.on_request.borrow_mut().take();
         let cfg = self.cfg.clone();
 
-        async move {
+        Box::pin(async move {
             let service = fut
                 .await
                 .map_err(|e| log::error!("Init http service error: {:?}", e))?;
@@ -333,8 +332,7 @@ where
                 on_connect,
                 _t: marker::PhantomData,
             })
-        }
-        .boxed_local()
+        })
     }
 }
 
@@ -362,7 +360,10 @@ where
     type Error = DispatchError;
     type Future = Dispatcher<T, S, B, X, U>;
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(
+        &self,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<Result<(), Self::Error>> {
         let cfg = self.config.as_ref();
 
         let ready = cfg
@@ -397,13 +398,17 @@ where
         };
 
         if ready {
-            Poll::Ready(Ok(()))
+            task::Poll::Ready(Ok(()))
         } else {
-            Poll::Pending
+            task::Poll::Pending
         }
     }
 
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    fn poll_shutdown(
+        &self,
+        cx: &mut task::Context<'_>,
+        is_error: bool,
+    ) -> task::Poll<()> {
         let ready = self.config.expect.poll_shutdown(cx, is_error).is_ready();
         let ready = self.config.service.poll_shutdown(cx, is_error).is_ready() && ready;
         let ready = if let Some(ref upg) = self.config.upgrade {
@@ -413,9 +418,9 @@ where
         };
 
         if ready {
-            Poll::Ready(())
+            task::Poll::Ready(())
         } else {
-            Poll::Pending
+            task::Poll::Pending
         }
     }
 
