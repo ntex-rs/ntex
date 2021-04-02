@@ -1,22 +1,17 @@
 //! Request logging middleware
-use std::convert::TryFrom;
-use std::env;
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
+use std::fmt::{self, Display};
 use std::task::{Context, Poll};
+use std::{convert::TryFrom, env, error::Error, future::Future, pin::Pin, rc::Rc};
 
 use bytes::Bytes;
-use futures::future::{ok, Either, Ready};
+use futures::future::Either;
 use regex::Regex;
 use time::OffsetDateTime;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
 use crate::service::{Service, Transform};
-use crate::util::HashSet;
+use crate::util::{HashSet, Ready};
 use crate::web::dev::{WebRequest, WebResponse};
 use crate::web::HttpResponse;
 
@@ -131,10 +126,10 @@ where
     type Error = S::Error;
     type InitError = ();
     type Transform = LoggerMiddleware<S>;
-    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+    type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(LoggerMiddleware {
+        Ready::ok(LoggerMiddleware {
             service,
             inner: self.inner.clone(),
         })
@@ -241,7 +236,7 @@ struct StreamLog {
 impl Drop for StreamLog {
     fn drop(&mut self) {
         if let Some(ref format) = self.format {
-            let render = |fmt: &mut Formatter<'_>| {
+            let render = |fmt: &mut fmt::Formatter<'_>| {
                 for unit in &format.0 {
                     unit.render(fmt, self.size, self.time)?;
                 }
@@ -360,7 +355,7 @@ enum FormatText {
 impl FormatText {
     fn render(
         &self,
-        fmt: &mut Formatter<'_>,
+        fmt: &mut fmt::Formatter<'_>,
         size: usize,
         entry_time: OffsetDateTime,
     ) -> Result<(), fmt::Error> {
@@ -460,11 +455,11 @@ impl FormatText {
 }
 
 pub(crate) struct FormatDisplay<'a>(
-    &'a dyn Fn(&mut Formatter<'_>) -> Result<(), fmt::Error>,
+    &'a dyn Fn(&mut fmt::Formatter<'_>) -> Result<(), fmt::Error>,
 );
 
 impl<'a> fmt::Display for FormatDisplay<'a> {
-    fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         (self.0)(fmt)
     }
 }
@@ -538,7 +533,7 @@ mod tests {
             unit.render_response(&resp);
         }
 
-        let render = |fmt: &mut Formatter<'_>| {
+        let render = |fmt: &mut fmt::Formatter<'_>| {
             for unit in &format.0 {
                 unit.render(fmt, 1024, now)?;
             }
@@ -569,7 +564,7 @@ mod tests {
         }
 
         let entry_time = OffsetDateTime::now_utc();
-        let render = |fmt: &mut Formatter<'_>| {
+        let render = |fmt: &mut fmt::Formatter<'_>| {
             for unit in &format.0 {
                 unit.render(fmt, 1024, entry_time)?;
             }
@@ -596,7 +591,7 @@ mod tests {
             unit.render_response(&resp);
         }
 
-        let render = |fmt: &mut Formatter<'_>| {
+        let render = |fmt: &mut fmt::Formatter<'_>| {
             for unit in &format.0 {
                 unit.render(fmt, 1024, now)?;
             }

@@ -1,8 +1,5 @@
 //! Http response
-use std::cell::{Ref, RefMut};
-use std::convert::TryFrom;
-use std::error::Error;
-use std::{fmt, str};
+use std::{cell::Ref, cell::RefMut, convert::TryFrom, error::Error, fmt, str};
 
 use bytes::{Bytes, BytesMut};
 use futures::Stream;

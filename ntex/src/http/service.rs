@@ -1,7 +1,9 @@
-use std::{cell, error, fmt, marker, net, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{
+    cell, error, fmt, future::Future, marker, net, pin::Pin, rc::Rc, task::Context,
+    task::Poll,
+};
 
 use bytes::Bytes;
-use futures::future::{ok, Future};
 use h2::server::{self, Handshake};
 
 use crate::codec::{AsyncRead, AsyncWrite};
@@ -204,9 +206,9 @@ where
         Error = DispatchError,
         InitError = (),
     > {
-        pipeline_factory(|io: TcpStream| {
+        pipeline_factory(|io: TcpStream| async move {
             let peer_addr = io.peer_addr().ok();
-            ok((io, Protocol::Http1, peer_addr))
+            Ok((io, Protocol::Http1, peer_addr))
         })
         .and_then(self)
     }
@@ -259,7 +261,7 @@ mod openssl {
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(|io: SslStream<TcpStream>| {
+            .and_then(|io: SslStream<TcpStream>| async move {
                 let proto = if let Some(protos) = io.ssl().selected_alpn_protocol() {
                     if protos.windows(2).any(|window| window == b"h2") {
                         Protocol::Http2
@@ -270,7 +272,7 @@ mod openssl {
                     Protocol::Http1
                 };
                 let peer_addr = io.get_ref().peer_addr().ok();
-                ok((io, proto, peer_addr))
+                Ok((io, proto, peer_addr))
             })
             .and_then(self.map_err(SslError::Service))
         }
@@ -327,7 +329,7 @@ mod rustls {
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(|io: TlsStream<TcpStream>| {
+            .and_then(|io: TlsStream<TcpStream>| async move {
                 let proto = io
                     .get_ref()
                     .1
@@ -341,7 +343,7 @@ mod rustls {
                     })
                     .unwrap_or(Protocol::Http1);
                 let peer_addr = io.get_ref().0.peer_addr().ok();
-                ok((io, proto, peer_addr))
+                Ok((io, proto, peer_addr))
             })
             .and_then(self.map_err(SslError::Service))
         }

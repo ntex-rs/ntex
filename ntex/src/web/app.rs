@@ -1,13 +1,13 @@
 use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
 
-use futures::future::{ok, Either};
+use futures::future::Either;
 
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{apply, apply_fn_factory, pipeline_factory};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
-use crate::util::Extensions;
+use crate::util::{Extensions, Ready};
 
 use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
 use super::config::{AppConfig, ServiceConfig};
@@ -384,7 +384,7 @@ where
             pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
                 match result {
                     Either::Left(req) => Either::Left(srv.call(req)),
-                    Either::Right(res) => Either::Right(ok(res)),
+                    Either::Right(res) => Either::Right(Ready::ok(res)),
                 }
             });
 

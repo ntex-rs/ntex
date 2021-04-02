@@ -1,13 +1,15 @@
-use std::{cell::RefCell, fmt, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{
+    cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
-use futures::future::{ok, Either, Future, Ready};
+use futures::future::Either;
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{apply, apply_fn_factory, pipeline_factory};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
-use crate::util::Extensions;
+use crate::util::{Extensions, Ready};
 
 use super::dev::{insert_slesh, WebServiceConfig, WebServiceFactory};
 use super::error::ErrorRenderer;
@@ -273,7 +275,7 @@ where
             pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
                 match result {
                     Either::Left(req) => Either::Left(srv.call(req)),
-                    Either::Right(res) => Either::Right(ok(res)),
+                    Either::Right(res) => Either::Right(Ready::ok(res)),
                 }
             });
 
@@ -520,7 +522,7 @@ impl<Err: ErrorRenderer> Service for ResourceService<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
     type Future = Either<
-        Ready<Result<WebResponse, Err::Container>>,
+        Ready<WebResponse, Err::Container>,
         Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>,
     >;
 
@@ -541,7 +543,7 @@ impl<Err: ErrorRenderer> Service for ResourceService<Err> {
         if let Some(ref default) = self.default {
             Either::Right(default.call(req))
         } else {
-            Either::Left(ok(WebResponse::new(
+            Either::Left(Ready::ok(WebResponse::new(
                 Response::MethodNotAllowed().finish(),
                 req.into_parts().0,
             )))
@@ -578,7 +580,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ResourceEndpoint<Err> {
 mod tests {
     use std::time::Duration;
 
-    use futures::future::{ok, ready, Either};
+    use futures::future::Either;
 
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
@@ -695,8 +697,8 @@ mod tests {
                     web::resource("/test")
                         .route(web::get().to(|| async { HttpResponse::Ok() })),
                 )
-                .default_service(|r: WebRequest<DefaultError>| {
-                    ok(r.into_response(HttpResponse::BadRequest()))
+                .default_service(|r: WebRequest<DefaultError>| async move {
+                    Ok(r.into_response(HttpResponse::BadRequest()))
                 }),
         )
         .await;
@@ -714,8 +716,8 @@ mod tests {
             App::new().service(
                 web::resource("/test")
                     .route(web::get().to(|| async { HttpResponse::Ok() }))
-                    .default_service(|r: WebRequest<DefaultError>| {
-                        ok(r.into_response(HttpResponse::BadRequest()))
+                    .default_service(|r: WebRequest<DefaultError>| async move {
+                        Ok(r.into_response(HttpResponse::BadRequest()))
                     }),
             ),
         )
@@ -792,7 +794,7 @@ mod tests {
                                 assert_eq!(**data1, 10);
                                 assert_eq!(**data2, '*');
                                 assert_eq!(**data3, 1);
-                                ready(HttpResponse::Ok())
+                                async { HttpResponse::Ok() }
                             },
                         ),
                 ),

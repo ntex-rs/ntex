@@ -1,13 +1,10 @@
-use std::cell::RefCell;
-use std::convert::Infallible;
-use std::rc::Rc;
 use std::task::{Context, Poll};
 use std::time::{self, Duration, Instant};
-
-use futures::future::{ok, ready, FutureExt, Ready};
+use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
 use crate::rt::time::sleep;
 use crate::service::{Service, ServiceFactory};
+use crate::util::Ready;
 
 #[derive(Clone, Debug)]
 pub struct LowResTime(Rc<RefCell<Inner>>);
@@ -50,11 +47,11 @@ impl ServiceFactory for LowResTime {
     type InitError = Infallible;
     type Config = ();
     type Service = LowResTimeService;
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     #[inline]
     fn new_service(&self, _: ()) -> Self::Future {
-        ok(self.timer())
+        Ready::ok(self.timer())
     }
 }
 
@@ -81,10 +78,10 @@ impl LowResTimeService {
                 b.resolution
             };
 
-            crate::rt::spawn(sleep(interval).then(move |_| {
+            crate::rt::spawn(async move {
+                sleep(interval).await;
                 inner.borrow_mut().current.take();
-                ready(())
-            }));
+            });
             now
         }
     }
@@ -94,7 +91,7 @@ impl Service for LowResTimeService {
     type Request = ();
     type Response = Instant;
     type Error = Infallible;
-    type Future = Ready<Result<Self::Response, Self::Error>>;
+    type Future = Ready<Self::Response, Self::Error>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -103,7 +100,7 @@ impl Service for LowResTimeService {
 
     #[inline]
     fn call(&self, _: ()) -> Self::Future {
-        ok(self.now())
+        Ready::ok(self.now())
     }
 }
 
@@ -148,10 +145,10 @@ impl SystemTimeService {
                 b.resolution
             };
 
-            crate::rt::spawn(sleep(interval).then(move |_| {
+            crate::rt::spawn(async move {
+                sleep(interval).await;
                 inner.borrow_mut().current.take();
-                ready(())
-            }));
+            });
             now
         }
     }

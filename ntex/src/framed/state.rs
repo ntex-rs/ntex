@@ -1,8 +1,8 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll, Waker};
-use std::{cell::Cell, cell::RefCell, hash, io, mem, pin::Pin, rc::Rc};
+use std::{cell::Cell, cell::RefCell, future::Future, hash, io, mem, pin::Pin, rc::Rc};
 
-use futures::{future::poll_fn, ready, Future};
+use futures::future::poll_fn;
 use slab::Slab;
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
@@ -649,16 +649,17 @@ impl State {
             return match codec.decode(&mut buf) {
                 Ok(Some(el)) => Poll::Ready(Ok(Some(el))),
                 Ok(None) => {
-                    let n = ready!(crate::codec::poll_read_buf(
-                        Pin::new(&mut *io),
-                        cx,
-                        &mut *buf
-                    ))
-                    .map_err(Either::Right)?;
-                    if n == 0 {
-                        Poll::Ready(Ok(None))
-                    } else {
-                        continue;
+                    match crate::codec::poll_read_buf(Pin::new(&mut *io), cx, &mut *buf)
+                    {
+                        Poll::Pending => Poll::Pending,
+                        Poll::Ready(Err(err)) => Poll::Ready(Err(Either::Right(err))),
+                        Poll::Ready(Ok(n)) => {
+                            if n == 0 {
+                                Poll::Ready(Ok(None))
+                            } else {
+                                continue;
+                            }
+                        }
                     }
                 }
                 Err(err) => {

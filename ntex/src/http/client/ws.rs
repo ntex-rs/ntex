@@ -3,7 +3,7 @@ use std::{convert::TryFrom, fmt, net::SocketAddr, rc::Rc, str};
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
-use futures::future::{err, ok, Either, TryFutureExt};
+use futures::future::{Either, TryFutureExt};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::framed::{DispatchItem, Dispatcher, State};
@@ -12,7 +12,7 @@ use crate::http::{
     error::HttpError, ConnectionType, Payload, RequestHead, StatusCode, Uri,
 };
 use crate::service::{apply_fn, into_service, IntoService, Service};
-use crate::{channel::mpsc, rt, rt::time::timeout, util::sink, ws};
+use crate::{channel::mpsc, rt, rt::time::timeout, util::sink, util::Ready, ws};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
 
@@ -466,14 +466,16 @@ where
             |req, srv| match req {
                 DispatchItem::Item(item) => Either::Left(srv.call(item)),
                 DispatchItem::WBackPressureEnabled
-                | DispatchItem::WBackPressureDisabled => Either::Right(ok(None)),
+                | DispatchItem::WBackPressureDisabled => Either::Right(Ready::ok(None)),
                 DispatchItem::KeepAliveTimeout => {
-                    Either::Right(err(ws::WsError::KeepAlive))
+                    Either::Right(Ready::err(ws::WsError::KeepAlive))
                 }
                 DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
-                    Either::Right(err(ws::WsError::Protocol(e)))
+                    Either::Right(Ready::err(ws::WsError::Protocol(e)))
                 }
-                DispatchItem::IoError(e) => Either::Right(err(ws::WsError::Io(e))),
+                DispatchItem::IoError(e) => {
+                    Either::Right(Ready::err(ws::WsError::Io(e)))
+                }
             },
         );
 

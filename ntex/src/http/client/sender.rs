@@ -1,13 +1,9 @@
-use std::convert::TryFrom;
-use std::error::Error;
-use std::net;
-use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::{convert::TryFrom, error::Error, future::Future, net, pin::Pin, time};
 
 use bytes::Bytes;
 use derive_more::From;
-use futures::{Future, Stream};
+use futures::Stream;
 use serde::Serialize;
 
 use crate::http::body::{Body, BodyStream};
@@ -64,7 +60,7 @@ impl SendClientRequest {
     pub(crate) fn new(
         send: Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>>>>,
         response_decompress: bool,
-        timeout: Option<Duration>,
+        timeout: Option<time::Duration>,
     ) -> SendClientRequest {
         let delay = timeout.map(|d| Box::pin(sleep(d)));
         SendClientRequest::Fut(send, delay, response_decompress)
@@ -133,7 +129,7 @@ impl RequestHeadType {
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: Option<Duration>,
+        timeout: Option<time::Duration>,
         config: &ClientConfig,
         body: B,
     ) -> SendClientRequest
@@ -151,7 +147,7 @@ impl RequestHeadType {
         mut self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: Option<Duration>,
+        timeout: Option<time::Duration>,
         config: &ClientConfig,
         value: &T,
     ) -> SendClientRequest {
@@ -178,7 +174,7 @@ impl RequestHeadType {
         mut self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: Option<Duration>,
+        timeout: Option<time::Duration>,
         config: &ClientConfig,
         value: &T,
     ) -> SendClientRequest {
@@ -208,7 +204,7 @@ impl RequestHeadType {
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: Option<Duration>,
+        timeout: Option<time::Duration>,
         config: &ClientConfig,
         stream: S,
     ) -> SendClientRequest
@@ -229,7 +225,7 @@ impl RequestHeadType {
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: Option<Duration>,
+        timeout: Option<time::Duration>,
         config: &ClientConfig,
     ) -> SendClientRequest {
         self.send_body(addr, response_decompress, timeout, config, Body::Empty)

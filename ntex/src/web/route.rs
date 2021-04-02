@@ -1,9 +1,6 @@
 use std::{future::Future, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use futures::future::{ok, ready, Ready};
-
-use crate::http::Method;
-use crate::{Service, ServiceFactory};
+use crate::{http::Method, util::Ready, Service, ServiceFactory};
 
 use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
@@ -29,7 +26,9 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// Create new route which matches any request.
     pub fn new() -> Route<Err> {
         Route {
-            handler: Box::new(HandlerWrapper::new(|| ready(HttpResponse::NotFound()))),
+            handler: Box::new(HandlerWrapper::new(|| async {
+                HttpResponse::NotFound()
+            })),
             methods: Vec::new(),
             guards: Rc::new(Vec::new()),
         }
@@ -61,10 +60,10 @@ impl<Err: ErrorRenderer> ServiceFactory for Route<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = RouteService<Err>;
-    type Future = Ready<Result<RouteService<Err>, ()>>;
+    type Future = Ready<RouteService<Err>, ()>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        ok(self.service())
+        Ok(self.service()).into()
     }
 }
 

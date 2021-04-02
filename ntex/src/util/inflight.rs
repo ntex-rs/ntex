@@ -1,11 +1,8 @@
 //! Service that limits number of in-flight async requests.
-
 use std::{convert::Infallible, future::Future, pin::Pin, task::Context, task::Poll};
 
-use futures::future::{ok, Ready};
-
 use super::counter::{Counter, CounterGuard};
-use crate::service::{IntoService, Service, Transform};
+use crate::{util::Ready, IntoService, Service, Transform};
 
 /// InFlight - service factory for service that can limit number of in-flight
 /// async requests.
@@ -36,10 +33,10 @@ where
     type Error = S::Error;
     type InitError = Infallible;
     type Transform = InFlightService<S>;
-    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+    type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(InFlightService::new(self.max_inflight, service))
+        Ready::ok(InFlightService::new(self.max_inflight, service))
     }
 }
 

@@ -4,6 +4,8 @@
 
 * server: prevent double socket registration if accept loop is in back-pressure state
 
+* util: add custom Ready future
+
 ## [0.3.13] - 2021-03-26
 
 * framed: add socket disconnect notification

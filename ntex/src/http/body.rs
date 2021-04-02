@@ -1,11 +1,9 @@
-use std::error::Error;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::{fmt, mem};
+use std::{
+    error::Error, fmt, marker::PhantomData, mem, pin::Pin, task::Context, task::Poll,
+};
 
 use bytes::{Bytes, BytesMut};
-use futures::{ready, Stream};
+use futures::Stream;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 /// Body size hint
@@ -415,12 +413,11 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         loop {
-            return Poll::Ready(
-                match ready!(Pin::new(&mut self.stream).poll_next(cx)) {
-                    Some(Ok(ref bytes)) if bytes.is_empty() => continue,
-                    opt => opt.map(|res| res.map_err(Into::into)),
-                },
-            );
+            return Poll::Ready(match Pin::new(&mut self.stream).poll_next(cx) {
+                Poll::Ready(Some(Ok(ref bytes))) if bytes.is_empty() => continue,
+                Poll::Ready(opt) => opt.map(|res| res.map_err(Into::into)),
+                Poll::Pending => return Poll::Pending,
+            });
         }
     }
 }
@@ -458,12 +455,11 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         loop {
-            return Poll::Ready(
-                match ready!(Pin::new(&mut self.stream).poll_next(cx)) {
-                    Some(Ok(ref bytes)) if bytes.is_empty() => continue,
-                    opt => opt,
-                },
-            );
+            return Poll::Ready(match Pin::new(&mut self.stream).poll_next(cx) {
+                Poll::Ready(Some(Ok(ref bytes))) if bytes.is_empty() => continue,
+                Poll::Ready(opt) => opt,
+                Poll::Pending => return Poll::Pending,
+            });
         }
     }
 }
@@ -502,23 +498,22 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
         loop {
-            return Poll::Ready(
-                match ready!(Pin::new(&mut self.stream).poll_next(cx)) {
-                    Some(Ok(ref bytes)) if bytes.is_empty() => continue,
-                    val => val,
-                },
-            );
+            return Poll::Ready(match Pin::new(&mut self.stream).poll_next(cx) {
+                Poll::Ready(Some(Ok(ref bytes))) if bytes.is_empty() => continue,
+                Poll::Ready(val) => val,
+                Poll::Pending => return Poll::Pending,
+            });
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use futures::{future::poll_fn, stream};
     use std::io;
 
     use super::*;
-    use futures::future::{ok, poll_fn};
-    use futures::stream;
+    use crate::util::Ready;
 
     impl Body {
         pub(crate) fn get_ref(&self) -> &[u8] {
@@ -696,7 +691,8 @@ mod tests {
 
     #[crate::rt_test]
     async fn body_stream() {
-        let st = BodyStream::new(stream::once(ok::<_, io::Error>(Bytes::from("1"))));
+        let st =
+            BodyStream::new(stream::once(Ready::<_, io::Error>::ok(Bytes::from("1"))));
         let body: Body = st.into();
         assert!(format!("{:?}", body).contains("Body::Message(_)"));
         assert!(body != Body::None);

@@ -1,13 +1,15 @@
-use std::{cell::RefCell, fmt, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{
+    cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
-use futures::future::{ok, Either, Future, Ready};
+use futures::future::Either;
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{apply, apply_fn_factory, pipeline_factory};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
-use crate::util::Extensions;
+use crate::util::{Extensions, Ready};
 
 use super::config::ServiceConfig;
 use super::dev::{WebServiceConfig, WebServiceFactory};
@@ -345,7 +347,7 @@ where
             pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
                 match result {
                     Either::Left(req) => Either::Left(srv.call(req)),
-                    Either::Right(res) => Either::Right(ok(res)),
+                    Either::Right(res) => Either::Right(Ready::ok(res)),
                 }
             });
 
@@ -612,7 +614,7 @@ impl<Err: ErrorRenderer> Service for ScopeService<Err> {
     type Request = WebRequest<Err>;
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future = Either<BoxedResponse<Err>, Ready<Result<Self::Response, Self::Error>>>;
+    type Future = Either<BoxedResponse<Err>, Ready<Self::Response, Self::Error>>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -640,7 +642,10 @@ impl<Err: ErrorRenderer> Service for ScopeService<Err> {
             Either::Left(default.call(req))
         } else {
             let req = req.into_parts().0;
-            Either::Right(ok(WebResponse::new(Response::NotFound().finish(), req)))
+            Either::Right(Ready::ok(WebResponse::new(
+                Response::NotFound().finish(),
+                req,
+            )))
         }
     }
 }
@@ -673,7 +678,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeEndpoint<Err> {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use futures::future::{ok, ready, Either};
+    use futures::future::Either;
 
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
@@ -1076,8 +1081,8 @@ mod tests {
             App::new().service(
                 web::scope("/app")
                     .service(web::resource("/path1").to(|| async { HttpResponse::Ok() }))
-                    .default_service(|r: WebRequest<DefaultError>| {
-                        ok(r.into_response(HttpResponse::BadRequest()))
+                    .default_service(|r: WebRequest<DefaultError>| async move {
+                        Ok(r.into_response(HttpResponse::BadRequest()))
                     }),
             ),
         )
@@ -1100,8 +1105,8 @@ mod tests {
                     web::resource("").to(|| async { HttpResponse::BadRequest() }),
                 ))
                 .service(web::scope("/app2"))
-                .default_service(|r: WebRequest<DefaultError>| {
-                    ok(r.into_response(HttpResponse::MethodNotAllowed()))
+                .default_service(|r: WebRequest<DefaultError>| async move {
+                    Ok(r.into_response(HttpResponse::MethodNotAllowed()))
                 }),
         )
         .await;
@@ -1197,7 +1202,7 @@ mod tests {
                 "/t",
                 web::get().to(|data: web::types::Data<usize>| {
                     assert_eq!(**data, 10);
-                    ready(HttpResponse::Ok())
+                    async { HttpResponse::Ok() }
                 }),
             ),
         ))
@@ -1218,7 +1223,7 @@ mod tests {
                         "/t",
                         web::get().to(|data: web::types::Data<usize>| {
                             assert_eq!(**data, 10);
-                            ready(HttpResponse::Ok())
+                            async { HttpResponse::Ok() }
                         }),
                     ),
             ),

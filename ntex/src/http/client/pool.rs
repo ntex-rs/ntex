@@ -1,8 +1,8 @@
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use std::{cell::RefCell, collections::VecDeque, pin::Pin, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
 
-use futures::future::{poll_fn, Future};
+use futures::future::poll_fn;
 use h2::client::{handshake, Connection, SendRequest};
 use http::uri::Authority;
 
@@ -609,7 +609,7 @@ impl<T> Drop for Acquired<T> {
 
 #[cfg(test)]
 mod tests {
-    use futures::future::{lazy, ok, Future};
+    use futures::future::lazy;
     use std::cell::RefCell;
     use std::convert::TryFrom;
     use std::rc::Rc;
@@ -631,7 +631,7 @@ mod tests {
             fn_service(move |req| {
                 let (client, server) = Io::create();
                 store2.borrow_mut().push((req, server));
-                ok((client, Protocol::Http1))
+                Box::pin(async move { Ok((client, Protocol::Http1)) })
             }),
             Duration::from_secs(10),
             Duration::from_secs(10),

@@ -6,10 +6,11 @@ use std::{
     fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll, time,
 };
 
-use futures::future::{ok, Either, Ready};
+use futures::future::Either;
 
 use crate::rt::time::{sleep, Sleep};
 use crate::service::{IntoService, Service, Transform};
+use crate::util::Ready;
 
 const ZERO: time::Duration = time::Duration::from_millis(0);
 
@@ -93,10 +94,10 @@ where
     type Error = TimeoutError<S::Error>;
     type InitError = E;
     type Transform = TimeoutService<S>;
-    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+    type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(TimeoutService {
+        Ready::ok(TimeoutService {
             service,
             timeout: self.timeout,
         })

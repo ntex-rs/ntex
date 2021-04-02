@@ -1,9 +1,11 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{cell::RefCell, error::Error, fmt, marker, net, pin::Pin, rc::Rc, time};
+use std::{
+    cell::RefCell, error::Error, fmt, future::Future, marker, net, pin::Pin, rc::Rc,
+    time,
+};
 
 use bytes::Bytes;
-use futures::future::Future;
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::{ReadTask, State as IoState, WriteTask};

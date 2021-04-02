@@ -1,11 +1,11 @@
-use std::{io, pin::Pin, task::Context, task::Poll};
+use std::{future::Future, io, pin::Pin, task::Context, task::Poll};
 
-use futures::future::{ok, Future, Ready};
 pub use open_ssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
 pub use tokio_openssl::SslStream;
 
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
+use crate::util::Ready;
 
 use super::{Address, Connect, ConnectError, Connector, DnsResolver};
 
@@ -91,10 +91,10 @@ impl<T: Address + 'static> ServiceFactory for OpensslConnector<T> {
     type Config = ();
     type Service = OpensslConnector<T>;
     type InitError = ();
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        ok(self.clone())
+        Ready::ok(self.clone())
     }
 }
 

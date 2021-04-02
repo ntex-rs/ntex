@@ -3,11 +3,12 @@ use std::{future::Future, pin::Pin, str, task::Context, task::Poll};
 
 use bytes::{Bytes, BytesMut};
 use encoding_rs::UTF_8;
-use futures::future::{err, ok, Either, Ready};
+use futures::future::Either;
 use futures::{Stream, StreamExt};
 use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
+use crate::util::Ready;
 use crate::web::error::{ErrorRenderer, PayloadError};
 use crate::web::{FromRequest, HttpRequest};
 
@@ -91,14 +92,14 @@ impl Stream for Payload {
 /// ```
 impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
     type Error = Err::Container;
-    type Future = Ready<Result<Payload, Self::Error>>;
+    type Future = Ready<Payload, Self::Error>;
 
     #[inline]
     fn from_request(
         _: &HttpRequest,
         payload: &mut crate::http::Payload,
     ) -> Self::Future {
-        ok(Payload(payload.take()))
+        Ready::ok(Payload(payload.take()))
     }
 }
 
@@ -131,7 +132,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
     type Error = PayloadError;
     type Future = Either<
         Pin<Box<dyn Future<Output = Result<Bytes, Self::Error>>>>,
-        Ready<Result<Bytes, Self::Error>>,
+        Ready<Bytes, Self::Error>,
     >;
 
     #[inline]
@@ -148,7 +149,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
         };
 
         if let Err(e) = cfg.check_mimetype(req) {
-            return Either::Right(err(e));
+            return Either::Right(Ready::err(e));
         }
 
         let limit = cfg.limit;
@@ -188,7 +189,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
     type Error = PayloadError;
     type Future = Either<
         Pin<Box<dyn Future<Output = Result<String, Self::Error>>>>,
-        Ready<Result<String, Self::Error>>,
+        Ready<String, Self::Error>,
     >;
 
     #[inline]
@@ -206,13 +207,13 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
 
         // check content-type
         if let Err(e) = cfg.check_mimetype(req) {
-            return Either::Right(err(e));
+            return Either::Right(Ready::err(e));
         }
 
         // check charset
         let encoding = match req.encoding() {
             Ok(enc) => enc,
-            Err(e) => return Either::Right(err(PayloadError::from(e))),
+            Err(e) => return Either::Right(Ready::err(PayloadError::from(e))),
         };
         let limit = cfg.limit;
         let fut = HttpMessageBody::new(req, payload).limit(limit);

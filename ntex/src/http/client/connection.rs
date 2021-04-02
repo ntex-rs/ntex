@@ -1,7 +1,7 @@
-use std::{fmt, pin::Pin, time};
+use std::{fmt, future::Future, pin::Pin, time};
 
 use bytes::Bytes;
-use futures::future::{err, Either, Future, Ready};
+use futures::future::Either;
 use h2::client::SendRequest;
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
@@ -10,6 +10,7 @@ use crate::http::h1::ClientCodec;
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
 use crate::http::Protocol;
+use crate::util::Ready;
 
 use super::error::SendRequestError;
 use super::pool::Acquired;
@@ -153,7 +154,7 @@ where
                 >,
             >,
         >,
-        Ready<Result<(ResponseHead, Framed<Self::Io, ClientCodec>), SendRequestError>>,
+        Ready<(ResponseHead, Framed<Self::Io, ClientCodec>), SendRequestError>,
     >;
 
     /// Send request, returns Response and Framed
@@ -170,7 +171,7 @@ where
                         None,
                     ));
                 }
-                Either::Right(err(SendRequestError::TunnelNotSupported))
+                Either::Right(Ready::err(SendRequestError::TunnelNotSupported))
             }
         }
     }

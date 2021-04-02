@@ -1,14 +1,13 @@
-use std::rc::Rc;
-use std::task::{Context, Poll};
-use std::time::Duration;
+use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
-use futures::future::{err, Either, Ready};
+use futures::future::Either;
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
 use crate::http::{Protocol, Uri};
 use crate::service::{apply_fn, boxed, Service};
 use crate::util::timeout::{TimeoutError, TimeoutService};
+use crate::util::Ready;
 
 use super::connection::Connection;
 use super::error::ConnectError;
@@ -318,7 +317,7 @@ where
     type Response = <Pool<T> as Service>::Response;
     type Error = ConnectError;
     type Future =
-        Either<<Pool<T> as Service>::Future, Ready<Result<Self::Response, Self::Error>>>;
+        Either<<Pool<T> as Service>::Future, Ready<Self::Response, Self::Error>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -356,7 +355,7 @@ where
                 if let Some(ref conn) = self.ssl_pool {
                     Either::Left(conn.call(req))
                 } else {
-                    Either::Right(err(ConnectError::SslIsNotSupported))
+                    Either::Right(Ready::err(ConnectError::SslIsNotSupported))
                 }
             }
             _ => Either::Left(self.tcp_pool.call(req)),

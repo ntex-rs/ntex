@@ -1,15 +1,10 @@
-use std::cell::RefCell;
-use std::convert::Infallible;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
-
-use futures::future::{ok, Ready};
+use std::{
+    cell::RefCell, convert::Infallible, future::Future, marker, pin::Pin, time::Duration,
+};
 
 use crate::rt::time::{sleep_until, Instant, Sleep};
-use crate::{Service, ServiceFactory};
+use crate::{util::Ready, Service, ServiceFactory};
 
 use super::time::{LowResTime, LowResTimeService};
 
@@ -20,7 +15,7 @@ pub struct KeepAlive<R, E, F> {
     f: F,
     ka: Duration,
     time: LowResTime,
-    _t: PhantomData<(R, E)>,
+    _t: marker::PhantomData<(R, E)>,
 }
 
 impl<R, E, F> KeepAlive<R, E, F>
@@ -36,7 +31,7 @@ where
             ka,
             time,
             f: err,
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
@@ -50,7 +45,7 @@ where
             f: self.f.clone(),
             ka: self.ka,
             time: self.time.clone(),
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
@@ -65,10 +60,10 @@ where
     type InitError = Infallible;
     type Config = ();
     type Service = KeepAliveService<R, E, F>;
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        ok(KeepAliveService::new(
+        Ready::ok(KeepAliveService::new(
             self.ka,
             self.time.timer(),
             self.f.clone(),
@@ -81,7 +76,7 @@ pub struct KeepAliveService<R, E, F> {
     ka: Duration,
     time: LowResTimeService,
     inner: RefCell<Inner>,
-    _t: PhantomData<(R, E)>,
+    _t: marker::PhantomData<(R, E)>,
 }
 
 struct Inner {
@@ -103,7 +98,7 @@ where
                 expire,
                 delay: Box::pin(sleep_until(expire)),
             }),
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
@@ -115,7 +110,7 @@ where
     type Request = R;
     type Response = R;
     type Error = E;
-    type Future = Ready<Result<R, E>>;
+    type Future = Ready<R, E>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let mut inner = self.inner.borrow_mut();
@@ -138,7 +133,7 @@ where
 
     fn call(&self, req: R) -> Self::Future {
         self.inner.borrow_mut().expire = Instant::from_std(self.time.now() + self.ka);
-        ok(req)
+        Ready::ok(req)
     }
 }
 

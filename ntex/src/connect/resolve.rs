@@ -1,12 +1,13 @@
 use std::{
-    fmt, marker::PhantomData, net::SocketAddr, pin::Pin, rc::Rc, task::Context,
-    task::Poll,
+    fmt, future::Future, marker::PhantomData, net::SocketAddr, pin::Pin, rc::Rc,
+    task::Context, task::Poll,
 };
 
-use futures::future::{ok, Either, Future, Ready};
+use futures::future::Either;
 
 use super::{default_resolver, Address, Connect, ConnectError, DnsResolver};
 use crate::service::{Service, ServiceFactory};
+use crate::util::Ready;
 
 /// DNS Resolver Service
 pub struct Resolver<T> {
@@ -39,10 +40,10 @@ impl<T: Address> Resolver<T> {
         mut req: Connect<T>,
     ) -> impl Future<Output = Result<Connect<T>, ConnectError>> {
         if req.addr.is_some() || req.req.addr().is_some() {
-            Either::Right(ok(req))
+            Either::Right(Ready::ok(req))
         } else if let Ok(ip) = req.host().parse() {
             req.addr = Some(either::Either::Left(SocketAddr::new(ip, req.port())));
-            Either::Right(ok(req))
+            Either::Right(Ready::ok(req))
         } else {
             trace!("DNS resolver: resolving host {:?}", req.host());
             let resolver = self.resolver.clone();
@@ -111,10 +112,10 @@ impl<T: Address> ServiceFactory for Resolver<T> {
     type Config = ();
     type Service = Resolver<T>;
     type InitError = ();
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        ok(self.clone())
+        Ready::ok(self.clone())
     }
 }
 

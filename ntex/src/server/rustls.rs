@@ -1,7 +1,6 @@
 use std::task::{Context, Poll};
-use std::{error::Error, io, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
+use std::{error::Error, future::Future, io, marker, pin::Pin, sync::Arc, time};
 
-use futures::future::{ok, Future, Ready};
 use tokio_rustls::{Accept, TlsAcceptor};
 
 pub use rust_tls::{ServerConfig, Session};
@@ -12,6 +11,7 @@ use crate::codec::{AsyncRead, AsyncWrite};
 use crate::rt::time::{sleep, Sleep};
 use crate::service::{Service, ServiceFactory};
 use crate::util::counter::{Counter, CounterGuard};
+use crate::util::Ready;
 
 use super::{MAX_SSL_ACCEPT_COUNTER, ZERO};
 
@@ -19,9 +19,9 @@ use super::{MAX_SSL_ACCEPT_COUNTER, ZERO};
 ///
 /// `rust-tls` feature enables `RustlsAcceptor` type
 pub struct Acceptor<T> {
-    timeout: Duration,
+    timeout: time::Duration,
     config: Arc<ServerConfig>,
-    io: PhantomData<T>,
+    io: marker::PhantomData<T>,
 }
 
 impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
@@ -29,8 +29,8 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     pub fn new(config: ServerConfig) -> Self {
         Acceptor {
             config: Arc::new(config),
-            timeout: Duration::from_secs(5),
-            io: PhantomData,
+            timeout: time::Duration::from_secs(5),
+            io: marker::PhantomData,
         }
     }
 
@@ -38,7 +38,7 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     ///
     /// Default is set to 5 seconds.
     pub fn timeout(mut self, time: u64) -> Self {
-        self.timeout = Duration::from_millis(time);
+        self.timeout = time::Duration::from_millis(time);
         self
     }
 }
@@ -48,7 +48,7 @@ impl<T> Clone for Acceptor<T> {
         Self {
             config: self.config.clone(),
             timeout: self.timeout,
-            io: PhantomData,
+            io: marker::PhantomData,
         }
     }
 }
@@ -61,15 +61,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin> ServiceFactory for Acceptor<T> {
 
     type Config = ();
     type InitError = ();
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
-            ok(AcceptorService {
+            Ready::ok(AcceptorService {
                 acceptor: self.config.clone().into(),
                 conns: conns.priv_clone(),
                 timeout: self.timeout,
-                io: PhantomData,
+                io: marker::PhantomData,
             })
         })
     }
@@ -78,9 +78,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin> ServiceFactory for Acceptor<T> {
 /// RusTLS based `Acceptor` service
 pub struct AcceptorService<T> {
     acceptor: TlsAcceptor,
-    io: PhantomData<T>,
+    io: marker::PhantomData<T>,
     conns: Counter,
-    timeout: Duration,
+    timeout: time::Duration,
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {

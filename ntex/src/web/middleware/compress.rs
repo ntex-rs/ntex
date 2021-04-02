@@ -1,16 +1,11 @@
 //! `Middleware` for compressing response body.
-use std::cmp;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::str::FromStr;
 use std::task::{Context, Poll};
-
-use futures::future::{ok, Ready};
+use std::{cmp, future::Future, marker, pin::Pin, str::FromStr};
 
 use crate::http::encoding::Encoder;
 use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
 use crate::service::{Service, Transform};
+use crate::util::Ready;
 
 use crate::web::dev::{WebRequest, WebResponse};
 use crate::web::{BodyEncoding, ErrorRenderer};
@@ -61,13 +56,13 @@ where
     type Error = S::Error;
     type InitError = ();
     type Transform = CompressMiddleware<S, E>;
-    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+    type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(CompressMiddleware {
+        Ready::ok(CompressMiddleware {
             service,
             encoding: self.enc,
-            _t: PhantomData,
+            _t: marker::PhantomData,
         })
     }
 }
@@ -75,7 +70,7 @@ where
 pub struct CompressMiddleware<S, E> {
     service: S,
     encoding: ContentEncoding,
-    _t: PhantomData<E>,
+    _t: marker::PhantomData<E>,
 }
 
 impl<S, E> Service for CompressMiddleware<S, E>
@@ -113,7 +108,7 @@ where
         CompressResponse {
             encoding,
             fut: self.service.call(req),
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
@@ -125,7 +120,7 @@ pin_project_lite::pin_project! {
         #[pin]
         fut: S::Future,
         encoding: ContentEncoding,
-        _t: PhantomData<E>,
+        _t: marker::PhantomData<E>,
     }
 }
 

@@ -3,6 +3,7 @@ pub mod counter;
 mod extensions;
 pub mod inflight;
 pub mod keepalive;
+mod ready;
 pub mod sink;
 pub mod stream;
 pub mod time;
@@ -10,6 +11,7 @@ pub mod timeout;
 pub mod variant;
 
 pub use self::extensions::Extensions;
+pub use self::ready::Ready;
 
 pub use bytes::{Buf, BufMut, Bytes, BytesMut};
 pub use bytestring::ByteString;

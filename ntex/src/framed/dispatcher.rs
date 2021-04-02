@@ -1,9 +1,11 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{cell::Cell, cell::RefCell, pin::Pin, rc::Rc, time::Duration, time::Instant};
+use std::{
+    cell::Cell, cell::RefCell, future::Future, pin::Pin, rc::Rc, time::Duration,
+    time::Instant,
+};
 
 use either::Either;
-use futures::{ready, Future, FutureExt};
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use crate::framed::{DispatchItem, Read, ReadTask, State, Timer, Write, WriteTask};
@@ -225,7 +227,12 @@ where
         loop {
             match slf.st.get() {
                 DispatcherState::Processing => {
-                    let item = match ready!(slf.poll_service(&this.service, cx, read)) {
+                    let result = match slf.poll_service(&this.service, cx, read) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(result) => result,
+                    };
+
+                    let item = match result {
                         PollService::Ready => {
                             if !write.is_ready() {
                                 // instruct write task to notify dispatcher when data is flushed
@@ -279,7 +286,11 @@ where
                 }
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
-                    let item = match ready!(slf.poll_service(&this.service, cx, read)) {
+                    let result = match slf.poll_service(&this.service, cx, read) {
+                        Poll::Ready(result) => result,
+                        Poll::Pending => return Poll::Pending,
+                    };
+                    let item = match result {
                         PollService::Ready => {
                             if write.is_ready() {
                                 slf.st.set(DispatcherState::Processing);
@@ -355,7 +366,10 @@ where
 
         let st = self.state.clone();
         let shared = self.shared.clone();
-        crate::rt::spawn(fut.map(move |item| shared.handle_result(item, st.write())));
+        crate::rt::spawn(async move {
+            let item = fut.await;
+            shared.handle_result(item, st.write());
+        });
     }
 
     fn handle_result(
@@ -488,7 +502,6 @@ where
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use futures::future::FutureExt;
     use rand::Rng;
     use std::sync::{Arc, Mutex};
 
@@ -569,7 +582,9 @@ mod tests {
                 }
             }),
         );
-        crate::rt::spawn(disp.map(|_| ()));
+        crate::rt::spawn(async move {
+            let _ = disp.await;
+        });
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
@@ -595,7 +610,9 @@ mod tests {
                 }
             }),
         );
-        crate::rt::spawn(disp.disconnect_timeout(25).map(|_| ()));
+        crate::rt::spawn(async move {
+            let _ = disp.disconnect_timeout(25).await;
+        });
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
@@ -632,7 +649,9 @@ mod tests {
                 &mut BytesCodec,
             )
             .unwrap();
-        crate::rt::spawn(disp.map(|_| ()));
+        crate::rt::spawn(async move {
+            let _ = disp.await;
+        });
 
         // buffer should be flushed
         client.remote_buffer_cap(1024);
@@ -686,7 +705,9 @@ mod tests {
             }),
         );
         state.set_buffer_params(8 * 1024, 16 * 1024, 1024);
-        crate::rt::spawn(disp.map(|_| ()));
+        crate::rt::spawn(async move {
+            let _ = disp.await;
+        });
 
         let buf = client.read_any();
         assert_eq!(buf, Bytes::from_static(b""));
@@ -743,7 +764,9 @@ mod tests {
                 }
             }),
         );
-        crate::rt::spawn(disp.keepalive_timeout(0).keepalive_timeout(1).map(|_| ()));
+        crate::rt::spawn(async move {
+            let _ = disp.keepalive_timeout(0).keepalive_timeout(1).await;
+        });
 
         state.set_disconnect_timeout(1);
 

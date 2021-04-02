@@ -1,11 +1,9 @@
 //! Request extractors
 use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
-use futures::future::{ok, Ready};
-
 use super::error::ErrorRenderer;
 use super::httprequest::HttpRequest;
-use crate::http::Payload;
+use crate::{http::Payload, util::Ready};
 
 /// Trait implemented by types that can be extracted from request.
 ///
@@ -35,9 +33,8 @@ pub trait FromRequest<Err>: Sized {
 /// ## Example
 ///
 /// ```rust
-/// use ntex::http;
+/// use ntex::{http, util::Ready};
 /// use ntex::web::{self, error, App, HttpRequest, FromRequest, DefaultError};
-/// use futures::future::{ok, err, Ready};
 /// use serde_derive::Deserialize;
 /// use rand;
 ///
@@ -48,15 +45,14 @@ pub trait FromRequest<Err>: Sized {
 ///
 /// impl<Err> FromRequest<Err> for Thing {
 ///     type Error = error::Error;
-///     type Future = Ready<Result<Self, Self::Error>>;
+///     type Future = Ready<Self, Self::Error>;
 ///
 ///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
 ///         if rand::random() {
-///             ok(Thing { name: "thingy".into() })
+///             Ready::ok(Thing { name: "thingy".into() })
 ///         } else {
-///             err(error::ErrorBadRequest("no luck").into())
+///             Ready::err(error::ErrorBadRequest("no luck").into())
 ///         }
-///
 ///     }
 /// }
 ///
@@ -108,9 +104,8 @@ where
 /// ## Example
 ///
 /// ```rust
-/// use ntex::http;
+/// use ntex::{http, util::Ready};
 /// use ntex::web::{self, error, App, HttpRequest, FromRequest};
-/// use futures::future::{ok, err, Ready};
 /// use serde_derive::Deserialize;
 /// use rand;
 ///
@@ -121,13 +116,13 @@ where
 ///
 /// impl<Err> FromRequest<Err> for Thing {
 ///     type Error = error::Error;
-///     type Future = Ready<Result<Thing, Self::Error>>;
+///     type Future = Ready<Thing, Self::Error>;
 ///
 ///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
 ///         if rand::random() {
-///             ok(Thing { name: "thingy".into() })
+///             Ready::ok(Thing { name: "thingy".into() })
 ///         } else {
-///             err(error::ErrorBadRequest("no luck").into())
+///             Ready::err(error::ErrorBadRequest("no luck").into())
 ///         }
 ///     }
 /// }
@@ -172,10 +167,10 @@ where
 #[doc(hidden)]
 impl<E: ErrorRenderer> FromRequest<E> for () {
     type Error = E::Container;
-    type Future = Ready<Result<(), E::Container>>;
+    type Future = Ready<(), E::Container>;
 
     fn from_request(_: &HttpRequest, _: &mut Payload) -> Self::Future {
-        ok(())
+        Ok(()).into()
     }
 }
 

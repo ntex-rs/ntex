@@ -1,7 +1,6 @@
 use std::{cell::Cell, cell::RefCell, ptr::copy_nonoverlapping, rc::Rc, time::Duration};
 
 use bytes::BytesMut;
-use futures::future::{self, FutureExt};
 use time::OffsetDateTime;
 
 use crate::framed::Timer;
@@ -225,10 +224,10 @@ impl DateService {
 
             // periodic date update
             let s = self.clone();
-            crate::rt::spawn(sleep(Duration::from_millis(500)).then(move |_| {
+            crate::rt::spawn(async move {
+                sleep(Duration::from_millis(500)).await;
                 s.0.current.set(false);
-                future::ready(())
-            }));
+            });
         }
     }
 

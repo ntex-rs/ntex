@@ -1,9 +1,9 @@
 use std::cell::{Ref, RefMut};
 use std::task::{Context, Poll};
-use std::{fmt, marker::PhantomData, mem, pin::Pin};
+use std::{fmt, future::Future, marker::PhantomData, mem, pin::Pin};
 
 use bytes::{Bytes, BytesMut};
-use futures::{ready, Future, Stream};
+use futures::Stream;
 use serde::de::DeserializeOwned;
 
 #[cfg(feature = "cookie")]
@@ -304,7 +304,10 @@ where
             }
         }
 
-        let body = ready!(Pin::new(&mut self.get_mut().fut.as_mut().unwrap()).poll(cx))?;
+        let body = match Pin::new(&mut self.get_mut().fut.as_mut().unwrap()).poll(cx) {
+            Poll::Ready(result) => result?,
+            Poll::Pending => return Poll::Pending,
+        };
         Poll::Ready(serde_json::from_slice::<U>(&body).map_err(JsonPayloadError::from))
     }
 }

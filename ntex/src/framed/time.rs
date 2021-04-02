@@ -1,7 +1,5 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Duration, time::Instant};
 
-use futures::future::{ready, FutureExt};
-
 use crate::framed::State;
 use crate::rt::time::sleep;
 use crate::util::HashSet;
@@ -84,7 +82,8 @@ impl Timer {
                 b.resolution
             };
 
-            crate::rt::spawn(sleep(interval).then(move |_| {
+            crate::rt::spawn(async move {
+                sleep(interval).await;
                 let empty = {
                     let mut i = inner.borrow_mut();
                     let now = i.current.take().unwrap_or_else(Instant::now);
@@ -107,9 +106,7 @@ impl Timer {
                 if !empty {
                     let _ = Timer(inner).now();
                 }
-
-                ready(())
-            }));
+            });
 
             now
         }

@@ -1,9 +1,7 @@
 use std::{ops::Deref, sync::Arc};
 
-use futures::future::{err, ok, Ready};
-
 use crate::http::Payload;
-use crate::util::Extensions;
+use crate::util::{Extensions, Ready};
 use crate::web::error::{DataExtractorError, ErrorRenderer};
 use crate::web::extract::FromRequest;
 use crate::web::httprequest::HttpRequest;
@@ -101,19 +99,19 @@ impl<T> Clone for Data<T> {
 
 impl<T: 'static, E: ErrorRenderer> FromRequest<E> for Data<T> {
     type Error = DataExtractorError;
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = Ready<Self, Self::Error>;
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
         if let Some(st) = req.app_data::<Data<T>>() {
-            ok(st.clone())
+            Ready::ok(st.clone())
         } else {
             log::debug!(
                 "Failed to construct App-level Data extractor. \
                  Request path: {:?}",
                 req.path()
             );
-            err(DataExtractorError::NotConfigured)
+            Ready::err(DataExtractorError::NotConfigured)
         }
     }
 }

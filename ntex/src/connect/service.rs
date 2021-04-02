@@ -1,11 +1,9 @@
 use std::task::{Context, Poll};
-use std::{collections::VecDeque, io, net::SocketAddr, pin::Pin};
-
-use either::Either;
-use futures::future::{ok, Future, Ready};
+use std::{collections::VecDeque, future::Future, io, net::SocketAddr, pin::Pin};
 
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
+use crate::util::{Either, Ready};
 
 use super::{Address, Connect, ConnectError, DnsResolver, Resolver};
 
@@ -58,11 +56,11 @@ impl<T: Address> ServiceFactory for Connector<T> {
     type Config = ();
     type Service = Connector<T>;
     type InitError = ();
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     #[inline]
     fn new_service(&self, _: ()) -> Self::Future {
-        ok(self.clone())
+        Ready::ok(self.clone())
     }
 }
 

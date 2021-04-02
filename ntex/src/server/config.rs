@@ -1,11 +1,13 @@
-use std::{cell::RefCell, fmt, io, marker::PhantomData, mem, net, pin::Pin, rc::Rc};
+use std::{
+    cell::RefCell, fmt, future::Future, io, marker::PhantomData, mem, net, pin::Pin,
+    rc::Rc,
+};
 
-use futures::future::{ok, Future, Ready};
 use log::error;
 
 use crate::rt::net::TcpStream;
 use crate::service;
-use crate::util::{counter::CounterGuard, HashMap};
+use crate::util::{counter::CounterGuard, HashMap, Ready};
 
 use super::builder::bind_addr;
 use super::service::{
@@ -65,12 +67,10 @@ impl ServiceConfig {
     where
         F: Fn(&mut ServiceRuntime) + Send + Clone + 'static,
     {
-        self.apply_async::<_, Ready<Result<(), &'static str>>, &'static str>(
-            move |mut rt| {
-                f(&mut rt);
-                ok(())
-            },
-        )
+        self.apply_async::<_, Ready<(), &'static str>, &'static str>(move |mut rt| {
+            f(&mut rt);
+            Ready::ok(())
+        })
     }
 
     /// Register async service configuration function.
@@ -166,7 +166,7 @@ impl InternalServiceFactory for ConfiguredService {
                         Box::new(StreamService::new(service::fn_service(
                             move |_: TcpStream| {
                                 error!("Service {:?} is not configured", name);
-                                ok::<_, ()>(())
+                                Ready::<_, ()>::ok(())
                             },
                         ))),
                     ));

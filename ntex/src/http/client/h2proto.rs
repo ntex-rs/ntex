@@ -1,5 +1,4 @@
-use std::convert::TryFrom;
-use std::time;
+use std::{convert::TryFrom, time};
 
 use bytes::Bytes;
 use futures::future::poll_fn;

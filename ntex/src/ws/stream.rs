@@ -1,12 +1,9 @@
-use std::cell::RefCell;
-use std::fmt;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::{
+    cell::RefCell, fmt, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
 use bytes::{Bytes, BytesMut};
-use futures::{ready, Sink, Stream};
+use futures::{Sink, Stream};
 use ntex_codec::{Decoder, Encoder};
 
 use super::{Codec, Frame, Message, ProtocolError};
@@ -126,11 +123,10 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(ready!(self
-            .project()
+        self.project()
             .sink
             .poll_ready(cx)
-            .map_err(StreamError::Stream)))
+            .map_err(StreamError::Stream)
     }
 
     fn start_send(
@@ -155,22 +151,20 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(ready!(self
-            .project()
+        self.project()
             .sink
             .poll_flush(cx)
-            .map_err(StreamError::Stream)))
+            .map_err(StreamError::Stream)
     }
 
     fn poll_close(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(ready!(self
-            .project()
+        self.project()
             .sink
             .poll_close(cx)
-            .map_err(StreamError::Stream)))
+            .map_err(StreamError::Stream)
     }
 }
 

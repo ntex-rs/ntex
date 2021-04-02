@@ -1,14 +1,13 @@
 use std::{
-    marker::PhantomData, net::SocketAddr, pin::Pin, task::Context, task::Poll,
-    time::Duration,
+    future::Future, marker::PhantomData, net::SocketAddr, pin::Pin, task::Context,
+    task::Poll, time::Duration,
 };
 
-use futures::future::{err, ok, Future, Ready};
 use log::error;
 
 use crate::rt::spawn;
 use crate::service::{Service, ServiceFactory};
-use crate::util::counter::CounterGuard;
+use crate::util::{counter::CounterGuard, Ready};
 
 use super::socket::{FromStream, Stream};
 use super::Token;
@@ -44,7 +43,7 @@ pub(super) type BoxedServerService = Box<
         Request = (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
-        Future = Ready<Result<(), ()>>,
+        Future = Ready<(), ()>,
     >,
 >;
 
@@ -68,7 +67,7 @@ where
     type Request = (Option<CounterGuard>, ServerMessage);
     type Response = ();
     type Error = ();
-    type Future = Ready<Result<(), ()>>;
+    type Future = Ready<(), ()>;
 
     #[inline]
     fn poll_ready(&self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -93,12 +92,12 @@ where
                         let _ = f.await;
                         drop(guard);
                     });
-                    ok(())
+                    Ready::ok(())
                 } else {
-                    err(())
+                    Ready::err(())
                 }
             }
-            _ => ok(()),
+            _ => Ready::ok(()),
         }
     }
 }

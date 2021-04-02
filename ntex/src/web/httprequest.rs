@@ -1,14 +1,10 @@
-use std::cell::{Ref, RefCell, RefMut};
-use std::rc::Rc;
-use std::{fmt, net};
-
-use futures::future::{ok, Ready};
+use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 
 use crate::http::{
     HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
 };
 use crate::router::Path;
-use crate::util::Extensions;
+use crate::util::{Extensions, Ready};
 
 use super::config::AppConfig;
 use super::error::{ErrorRenderer, UrlGenerationError};
@@ -279,11 +275,11 @@ impl Drop for HttpRequest {
 /// ```
 impl<Err: ErrorRenderer> FromRequest<Err> for HttpRequest {
     type Error = Err::Container;
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = Ready<Self, Self::Error>;
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        ok(req.clone())
+        Ok(req.clone()).into()
     }
 }
 
@@ -336,8 +332,6 @@ impl HttpRequestPool {
 
 #[cfg(test)]
 mod tests {
-    use futures::future::ready;
-
     use super::*;
     use crate::http::{header, StatusCode};
     use crate::router::ResourceDef;
@@ -469,12 +463,12 @@ mod tests {
     #[crate::rt_test]
     async fn test_data() {
         let srv = init_service(App::new().app_data(10usize).service(
-            web::resource("/").to(|req: HttpRequest| {
-                ready(if req.app_data::<usize>().is_some() {
+            web::resource("/").to(|req: HttpRequest| async move {
+                if req.app_data::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {
                     HttpResponse::BadRequest()
-                })
+                }
             }),
         ))
         .await;
@@ -521,7 +515,7 @@ mod tests {
                     req.extensions_mut().insert(Foo {
                         tracker: Rc::clone(&tracker2),
                     });
-                    ready(HttpResponse::Ok())
+                    async { HttpResponse::Ok() }
                 }),
             ))
             .await;

@@ -1,15 +1,14 @@
 use std::task::{Context, Poll};
-use std::{error::Error, fmt, io, marker::PhantomData, pin::Pin, time::Duration};
+use std::{error::Error, fmt, future::Future, io, marker, pin::Pin, time};
 
 pub use open_ssl::ssl::{self, AlpnError, Ssl, SslAcceptor, SslAcceptorBuilder};
 pub use tokio_openssl::SslStream;
-
-use futures::future::{ok, Future, Ready};
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::rt::time::{sleep, Sleep};
 use crate::service::{Service, ServiceFactory};
 use crate::util::counter::{Counter, CounterGuard};
+use crate::util::Ready;
 
 use super::{MAX_SSL_ACCEPT_COUNTER, ZERO};
 
@@ -18,8 +17,8 @@ use super::{MAX_SSL_ACCEPT_COUNTER, ZERO};
 /// `openssl` feature enables `Acceptor` type
 pub struct Acceptor<T: AsyncRead + AsyncWrite> {
     acceptor: SslAcceptor,
-    timeout: Duration,
-    io: PhantomData<T>,
+    timeout: time::Duration,
+    io: marker::PhantomData<T>,
 }
 
 impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
@@ -27,8 +26,8 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     pub fn new(acceptor: SslAcceptor) -> Self {
         Acceptor {
             acceptor,
-            timeout: Duration::from_secs(5),
-            io: PhantomData,
+            timeout: time::Duration::from_secs(5),
+            io: marker::PhantomData,
         }
     }
 
@@ -36,7 +35,7 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     ///
     /// Default is set to 5 seconds.
     pub fn timeout(mut self, time: u64) -> Self {
-        self.timeout = Duration::from_millis(time);
+        self.timeout = time::Duration::from_millis(time);
         self
     }
 }
@@ -46,7 +45,7 @@ impl<T: AsyncRead + AsyncWrite> Clone for Acceptor<T> {
         Self {
             acceptor: self.acceptor.clone(),
             timeout: self.timeout,
-            io: PhantomData,
+            io: marker::PhantomData,
         }
     }
 }
@@ -61,15 +60,15 @@ where
     type Config = ();
     type Service = AcceptorService<T>;
     type InitError = ();
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
-            ok(AcceptorService {
+            Ready::ok(AcceptorService {
                 acceptor: self.acceptor.clone(),
                 conns: conns.priv_clone(),
                 timeout: self.timeout,
-                io: PhantomData,
+                io: marker::PhantomData,
             })
         })
     }
@@ -78,8 +77,8 @@ where
 pub struct AcceptorService<T> {
     acceptor: SslAcceptor,
     conns: Counter,
-    timeout: Duration,
-    io: PhantomData<T>,
+    timeout: time::Duration,
+    io: marker::PhantomData<T>,
 }
 
 impl<T> Service for AcceptorService<T>
