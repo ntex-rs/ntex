@@ -1,11 +1,5 @@
-use std::cell::RefCell;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::rc::Rc;
 use std::task::{Context, Poll};
-
-use futures_util::ready;
+use std::{cell::RefCell, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use super::{IntoServiceFactory, Service, ServiceFactory};
 
@@ -273,21 +267,31 @@ where
 
         match this.state.as_mut().project() {
             ResponseStateProject::CreateMapper { fut } => {
-                let mapper = ready!(fut.poll(cx))?;
+                let mapper = match fut.poll(cx) {
+                    Poll::Ready(result) => result?,
+                    Poll::Pending => return Poll::Pending,
+                };
                 *this.inner.mapper.borrow_mut() = Some(mapper);
                 this.state.set(ResponseState::MapReady);
                 self.poll(cx)
             }
             ResponseStateProject::MapReady => {
                 let mapper = this.inner.mapper.borrow();
-                ready!(mapper.as_ref().unwrap().poll_ready(cx))?;
+                match mapper.as_ref().unwrap().poll_ready(cx) {
+                    Poll::Ready(result) => result?,
+                    Poll::Pending => return Poll::Pending,
+                };
+
                 let fut = mapper.as_ref().unwrap().call(this.config.take().unwrap());
                 this.state.set(ResponseState::MapConfig { fut });
                 drop(mapper);
                 self.poll(cx)
             }
             ResponseStateProject::MapConfig { fut } => {
-                let config = ready!(fut.poll(cx))?;
+                let config = match fut.poll(cx) {
+                    Poll::Ready(result) => result?,
+                    Poll::Pending => return Poll::Pending,
+                };
                 let fut = this.inner.a.new_service(config);
                 this.state.set(ResponseState::CreateService { fut });
                 self.poll(cx)
@@ -300,22 +304,22 @@ where
 #[cfg(test)]
 #[allow(clippy::redundant_closure)]
 mod tests {
-    use futures_util::future::ok;
-    use std::cell::Cell;
-    use std::rc::Rc;
+    use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{fn_factory_with_config, fn_service, ServiceFactory};
+    use crate::{fn_factory_with_config, fn_service, util::Ready, ServiceFactory};
 
     #[ntex::test]
     async fn test_map_config() {
         let item = Rc::new(Cell::new(1usize));
 
-        let factory =
-            map_config(fn_service(|item: usize| ok::<_, ()>(item)), |t: usize| {
+        let factory = map_config(
+            fn_service(|item: usize| Ready::<_, ()>::ok(item)),
+            |t: usize| {
                 item.set(item.get() + t);
-            })
-            .clone();
+            },
+        )
+        .clone();
 
         let _ = factory.new_service(10).await;
         assert_eq!(item.get(), 11);
@@ -323,7 +327,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_unit_config() {
-        let _ = unit_config(fn_service(|item: usize| ok::<_, ()>(item)))
+        let _ = unit_config(fn_service(|item: usize| Ready::<_, ()>::ok(item)))
             .clone()
             .new_service(10)
             .await;
@@ -339,10 +343,10 @@ mod tests {
                 let item = item2.clone();
                 async move {
                     item.set(next);
-                    Ok::<_, ()>(fn_service(|id: usize| ok::<_, ()>(id * 2)))
+                    Ok::<_, ()>(fn_service(|id: usize| Ready::<_, ()>::ok(id * 2)))
                 }
             }),
-            fn_service(move |item: usize| ok::<_, ()>(item + 1)),
+            fn_service(move |item: usize| Ready::<_, ()>::ok(item + 1)),
         )
         .clone()
         .new_service(10)

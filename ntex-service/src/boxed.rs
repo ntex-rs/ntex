@@ -1,8 +1,4 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use futures_util::future::FutureExt;
+use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use crate::{Service, ServiceFactory};
 
@@ -114,11 +110,11 @@ where
     type Future = BoxFuture<Self::Service, Self::InitError>;
 
     fn new_service(&self, cfg: C) -> Self::Future {
-        Box::pin(
-            self.factory
-                .new_service(cfg)
-                .map(|res| res.map(ServiceWrapper::boxed)),
-        )
+        let fut = self.factory.new_service(cfg);
+        Box::pin(async move {
+            let srv = fut.await?;
+            Ok(ServiceWrapper::boxed(srv))
+        })
     }
 }
 

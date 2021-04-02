@@ -1,7 +1,6 @@
-use futures_util::future::{ok, Ready};
 use std::{future::Future, marker::PhantomData};
 
-use crate::{apply_fn, dev::Apply, Service, Transform};
+use crate::{apply_fn, dev::Apply, util::Ready, Service, Transform};
 
 /// Use function as transform service
 pub fn fn_transform<S, F, R, Req, Res, Err>(
@@ -47,10 +46,10 @@ where
     type Error = Err;
     type Transform = Apply<S, F, R, Req, Res, Err>;
     type InitError = ();
-    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+    type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        ok(apply_fn(service, self.f.clone()))
+        Ready::ok(apply_fn(service, self.f.clone()))
     }
 }
 
@@ -68,11 +67,10 @@ where
 #[cfg(test)]
 #[allow(clippy::redundant_clone)]
 mod tests {
-    use futures_util::future::{lazy, ok};
     use std::task::{Context, Poll};
 
     use super::*;
-    use crate::Service;
+    use crate::{util::lazy, Service};
 
     #[derive(Clone)]
     struct Srv;
@@ -81,14 +79,14 @@ mod tests {
         type Request = usize;
         type Response = usize;
         type Error = ();
-        type Future = Ready<Result<usize, ()>>;
+        type Future = Ready<usize, ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
         fn call(&self, i: usize) -> Self::Future {
-            ok(i * 2)
+            Ready::ok(i * 2)
         }
     }
 

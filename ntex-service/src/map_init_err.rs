@@ -1,7 +1,4 @@
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use super::ServiceFactory;
 
@@ -97,8 +94,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures_util::future::ok;
-
     use crate::{fn_factory_with_config, fn_service, pipeline_factory, ServiceFactory};
 
     #[ntex::test]
@@ -107,7 +102,7 @@ mod tests {
             if err {
                 Err(())
             } else {
-                Ok(fn_service(|i: usize| ok::<_, ()>(i * 2)))
+                Ok(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
             }
         }))
         .map_init_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "err"))

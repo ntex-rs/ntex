@@ -1,7 +1,4 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use super::{Service, ServiceFactory};
 
@@ -272,12 +269,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-    use std::rc::Rc;
-    use std::task::{Context, Poll};
+    use std::{cell::Cell, rc::Rc, task::Context, task::Poll};
 
-    use futures_util::future::{lazy, ok, ready, Ready};
-
+    use crate::util::{lazy, Ready};
     use crate::{fn_factory, pipeline, pipeline_factory, Service, ServiceFactory};
 
     struct Srv1(Rc<Cell<usize>>);
@@ -286,7 +280,7 @@ mod tests {
         type Request = &'static str;
         type Response = &'static str;
         type Error = ();
-        type Future = Ready<Result<Self::Response, ()>>;
+        type Future = Ready<Self::Response, ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.set(self.0.get() + 1);
@@ -294,7 +288,7 @@ mod tests {
         }
 
         fn call(&self, req: &'static str) -> Self::Future {
-            ok(req)
+            Ready::ok(req)
         }
     }
 
@@ -305,7 +299,7 @@ mod tests {
         type Request = &'static str;
         type Response = (&'static str, &'static str);
         type Error = ();
-        type Future = Ready<Result<Self::Response, ()>>;
+        type Future = Ready<Self::Response, ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.set(self.0.get() + 1);
@@ -313,7 +307,7 @@ mod tests {
         }
 
         fn call(&self, req: &'static str) -> Self::Future {
-            ok((req, "srv2"))
+            Ready::ok((req, "srv2"))
         }
     }
 
@@ -344,10 +338,11 @@ mod tests {
     async fn test_factory() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
-        let new_srv =
-            pipeline_factory(fn_factory(move || ready(Ok::<_, ()>(Srv1(cnt2.clone())))))
-                .and_then(move || ready(Ok(Srv2(cnt.clone()))))
-                .clone();
+        let new_srv = pipeline_factory(fn_factory(move || {
+            Ready::result(Ok::<_, ()>(Srv1(cnt2.clone())))
+        }))
+        .and_then(move || Ready::result(Ok(Srv2(cnt.clone()))))
+        .clone();
 
         let srv = new_srv.new_service(()).await.unwrap();
         let res = srv.call("srv1").await;

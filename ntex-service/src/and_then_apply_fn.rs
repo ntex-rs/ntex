@@ -1,8 +1,6 @@
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::{
+    future::Future, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
 use crate::{Service, ServiceFactory};
 
@@ -294,8 +292,7 @@ where
 mod tests {
     use super::*;
 
-    use futures_util::future::{lazy, ok, Ready, TryFutureExt};
-
+    use crate::util::{lazy, Ready};
     use crate::{fn_service, pipeline, pipeline_factory, Service, ServiceFactory};
 
     #[derive(Clone)]
@@ -304,22 +301,23 @@ mod tests {
         type Request = ();
         type Response = ();
         type Error = ();
-        type Future = Ready<Result<(), ()>>;
+        type Future = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
         fn call(&self, _: Self::Request) -> Self::Future {
-            ok(())
+            Ready::ok(())
         }
     }
 
     #[ntex::test]
     async fn test_service() {
-        let srv = pipeline(ok)
+        let srv = pipeline(Ready::<_, ()>::ok)
             .and_then_apply_fn(Srv, |req: &'static str, s| {
-                s.call(()).map_ok(move |res| (req, res))
+                let f = s.call(());
+                async move { f.await.map(move |res| (req, res)) }
             })
             .clone();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
@@ -335,12 +333,16 @@ mod tests {
 
     #[ntex::test]
     async fn test_service_factory() {
-        let new_srv = pipeline_factory(|| ok::<_, ()>(fn_service(ok)))
-            .and_then_apply_fn(
-                || ok(Srv),
-                |req: &'static str, s| s.call(()).map_ok(move |res| (req, res)),
-            )
-            .clone();
+        let new_srv =
+            pipeline_factory(|| Ready::<_, ()>::ok(fn_service(Ready::<_, ()>::ok)))
+                .and_then_apply_fn(
+                    || Ready::ok(Srv),
+                    |req: &'static str, s| {
+                        let f = s.call(());
+                        async move { f.await.map(move |res| (req, res)) }
+                    },
+                )
+                .clone();
         let srv = new_srv.new_service(()).await.unwrap();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));

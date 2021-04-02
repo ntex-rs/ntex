@@ -1,11 +1,7 @@
-use std::cell::{Cell, RefCell};
-use std::future::Future;
-use std::marker::PhantomData;
 use std::task::{Context, Poll};
+use std::{cell::Cell, cell::RefCell, future::Future, marker::PhantomData};
 
-use futures_util::future::{ok, Ready};
-
-use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
+use crate::{util::Ready, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 #[inline]
 /// Create `ServiceFactory` for function that can act as a `Service`
@@ -37,7 +33,6 @@ where
 /// ```rust
 /// use std::io;
 /// use ntex_service::{fn_factory, fn_service, Service, ServiceFactory};
-/// use futures_util::future::ok;
 ///
 /// /// Service that divides two usize values.
 /// async fn div((x, y): (usize, usize)) -> Result<usize, io::Error> {
@@ -52,7 +47,7 @@ where
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory that produces `div` services
 ///     let factory = fn_factory(|| {
-///         ok::<_, io::Error>(fn_service(div))
+///         async {Ok::<_, io::Error>(fn_service(div))}
 ///     });
 ///
 ///     // construct new service
@@ -88,14 +83,13 @@ where
 /// ```rust
 /// use std::io;
 /// use ntex_service::{fn_factory_with_config, fn_service, Service, ServiceFactory};
-/// use futures_util::future::ok;
 ///
 /// #[ntex::main]
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory. factory uses config argument for
 ///     // services it generates.
 ///     let factory = fn_factory_with_config(|y: usize| {
-///         ok::<_, io::Error>(fn_service(move |x: usize| ok::<_, io::Error>(x * y)))
+///         async move { Ok::<_, io::Error>(fn_service(move |x: usize| async move { Ok::<_, io::Error>(x * y) })) }
 ///     });
 ///
 ///     // construct new service with config argument
@@ -322,14 +316,14 @@ where
     type Config = Cfg;
     type Service = FnService<F, Fut, Req, Res, Err, FShut>;
     type InitError = ();
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     #[inline]
     fn new_service(&self, _: Cfg) -> Self::Future {
         let f = self.f_shutdown.take();
         self.f_shutdown.set(f.clone());
 
-        ok(FnService {
+        Ready::ok(FnService {
             f: self.f.clone(),
             f_shutdown: Cell::new(f),
             _t: PhantomData,
@@ -531,15 +525,13 @@ where
 mod tests {
     use std::{rc::Rc, task::Poll};
 
-    use futures_util::future::{lazy, ok};
-
     use super::*;
-    use crate::{Service, ServiceFactory};
+    use crate::{util::lazy, Service, ServiceFactory};
 
     #[ntex::test]
     async fn test_fn_service() {
         let shutdown = Rc::new(RefCell::new(false));
-        let new_srv = fn_service(|()| ok::<_, ()>("srv"))
+        let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") })
             .on_shutdown(|| {
                 *shutdown.borrow_mut() = true;
             })
@@ -565,7 +557,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_fn_mut_service() {
-        let srv = fn_mut_service(|()| ok::<_, ()>("srv")).clone();
+        let srv = fn_mut_service(|()| async { Ok::<_, ()>("srv") }).clone();
 
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
@@ -576,7 +568,7 @@ mod tests {
     #[ntex::test]
     async fn test_fn_service_service() {
         let shutdown = Rc::new(RefCell::new(false));
-        let srv = fn_service(|()| ok::<_, ()>("srv"))
+        let srv = fn_service(|()| async { Ok::<_, ()>("srv") })
             .on_shutdown(|| {
                 *shutdown.borrow_mut() = true;
             })
@@ -595,8 +587,10 @@ mod tests {
 
     #[ntex::test]
     async fn test_fn_service_with_config() {
-        let new_srv = fn_factory_with_config(|cfg: usize| {
-            ok::<_, ()>(fn_service(move |()| ok::<_, ()>(("srv", cfg))))
+        let new_srv = fn_factory_with_config(|cfg: usize| async move {
+            Ok::<_, ()>(fn_service(
+                move |()| async move { Ok::<_, ()>(("srv", cfg)) },
+            ))
         })
         .clone();
 

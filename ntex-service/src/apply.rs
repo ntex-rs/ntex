@@ -1,7 +1,4 @@
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
@@ -216,10 +213,10 @@ where
 mod tests {
     use std::task::{Context, Poll};
 
-    use futures_util::future::{lazy, ok, Ready};
-
     use super::*;
-    use crate::{pipeline, pipeline_factory, Service, ServiceFactory};
+    use crate::{
+        pipeline, pipeline_factory, util::lazy, util::Ready, Service, ServiceFactory,
+    };
 
     #[derive(Clone)]
     struct Srv;
@@ -228,14 +225,14 @@ mod tests {
         type Request = ();
         type Response = ();
         type Error = ();
-        type Future = Ready<Result<(), ()>>;
+        type Future = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            ok(())
+            Ready::ok(())
         }
     }
 
@@ -267,7 +264,7 @@ mod tests {
     async fn test_new_service() {
         let new_srv = pipeline_factory(
             apply_fn_factory(
-                || ok::<_, ()>(Srv),
+                || Ready::<_, ()>::ok(Srv),
                 |req: &'static str, srv| {
                     let fut = srv.call(());
                     async move {

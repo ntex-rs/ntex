@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.7] - 2021-04-02
+
+* drop futures-util dependency
+
+* add custom Ready and Lazy futures
+
 ## [0.1.6] - 2021-03-26
 
 * Add .on_shutdown() callback to fn_service
