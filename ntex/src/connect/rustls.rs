@@ -10,7 +10,7 @@ use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
 use crate::util::Ready;
 
-use super::{Address, Connect, ConnectError, Connector, DnsResolver};
+use super::{Address, Connect, ConnectError, Connector};
 
 /// Rustls connector factory
 pub struct RustlsConnector<T> {
@@ -23,14 +23,6 @@ impl<T> RustlsConnector<T> {
         RustlsConnector {
             config,
             connector: Connector::default(),
-        }
-    }
-
-    /// Construct new connect service with custom dns resolver
-    pub fn with_resolver(config: Arc<ClientConfig>, resolver: DnsResolver) -> Self {
-        RustlsConnector {
-            config,
-            connector: Connector::new(resolver),
         }
     }
 }

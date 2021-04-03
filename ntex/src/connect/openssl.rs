@@ -7,7 +7,7 @@ use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
 use crate::util::Ready;
 
-use super::{Address, Connect, ConnectError, Connector, DnsResolver};
+use super::{Address, Connect, ConnectError, Connector};
 
 pub struct OpensslConnector<T> {
     connector: Connector<T>,
@@ -19,14 +19,6 @@ impl<T> OpensslConnector<T> {
     pub fn new(connector: SslConnector) -> Self {
         OpensslConnector {
             connector: Connector::default(),
-            openssl: connector,
-        }
-    }
-
-    /// Construct new connect service with custom dns resolver
-    pub fn with_resolver(connector: SslConnector, resolver: DnsResolver) -> Self {
-        OpensslConnector {
-            connector: Connector::new(resolver),
             openssl: connector,
         }
     }

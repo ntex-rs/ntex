@@ -1,7 +1,7 @@
 use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
 use crate::codec::{AsyncRead, AsyncWrite};
-use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
+use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::http::{Protocol, Uri};
 use crate::service::{apply_fn, boxed, Service};
 use crate::util::timeout::{TimeoutError, TimeoutService};
@@ -44,8 +44,6 @@ pub struct Connector {
     limit: usize,
     connector: BoxedConnector,
     ssl_connector: Option<BoxedConnector>,
-    #[allow(dead_code)]
-    resolver: connect::DnsResolver,
 }
 
 trait Io: AsyncRead + AsyncWrite + Unpin {}
@@ -53,15 +51,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Io for T {}
 
 impl Default for Connector {
     fn default() -> Self {
-        Connector::new(connect::default_resolver())
+        Connector::new()
     }
 }
 
 impl Connector {
-    pub fn new(resolver: connect::DnsResolver) -> Connector {
+    pub fn new() -> Connector {
         let conn = Connector {
             connector: boxed::service(
-                TcpConnector::new(resolver.clone())
+                TcpConnector::new()
                     .map(|io| (Box::new(io) as Box<dyn Io>, Protocol::Http1))
                     .map_err(ConnectError::from),
             ),
@@ -71,7 +69,6 @@ impl Connector {
             conn_keep_alive: Duration::from_secs(15),
             disconnect_timeout: Duration::from_millis(3000),
             limit: 100,
-            resolver,
         };
 
         #[cfg(feature = "openssl")]
@@ -114,23 +111,19 @@ impl Connector {
     pub fn openssl(self, connector: OpensslConnector) -> Self {
         use crate::connect::openssl::OpensslConnector;
 
-        let resolver = self.resolver.clone();
-
         const H2: &[u8] = b"h2";
-        self.secure_connector(OpensslConnector::with_resolver(connector, resolver).map(
-            |sock| {
-                let h2 = sock
-                    .ssl()
-                    .selected_alpn_protocol()
-                    .map(|protos| protos.windows(2).any(|w| w == H2))
-                    .unwrap_or(false);
-                if h2 {
-                    (sock, Protocol::Http2)
-                } else {
-                    (sock, Protocol::Http1)
-                }
-            },
-        ))
+        self.secure_connector(OpensslConnector::new(connector).map(|sock| {
+            let h2 = sock
+                .ssl()
+                .selected_alpn_protocol()
+                .map(|protos| protos.windows(2).any(|w| w == H2))
+                .unwrap_or(false);
+            if h2 {
+                (sock, Protocol::Http2)
+            } else {
+                (sock, Protocol::Http1)
+            }
+        }))
     }
 
     #[cfg(feature = "rustls")]
@@ -138,24 +131,20 @@ impl Connector {
     pub fn rustls(self, connector: Arc<ClientConfig>) -> Self {
         use crate::connect::rustls::{RustlsConnector, Session};
 
-        let resolver = self.resolver.clone();
-
         const H2: &[u8] = b"h2";
-        self.secure_connector(RustlsConnector::with_resolver(connector, resolver).map(
-            |sock| {
-                let h2 = sock
-                    .get_ref()
-                    .1
-                    .get_alpn_protocol()
-                    .map(|protos| protos.windows(2).any(|w| w == H2))
-                    .unwrap_or(false);
-                if h2 {
-                    (Box::new(sock) as Box<dyn Io>, Protocol::Http2)
-                } else {
-                    (Box::new(sock) as Box<dyn Io>, Protocol::Http1)
-                }
-            },
-        ))
+        self.secure_connector(RustlsConnector::new(connector).map(|sock| {
+            let h2 = sock
+                .get_ref()
+                .1
+                .get_alpn_protocol()
+                .map(|protos| protos.windows(2).any(|w| w == H2))
+                .unwrap_or(false);
+            if h2 {
+                (Box::new(sock) as Box<dyn Io>, Protocol::Http2)
+            } else {
+                (Box::new(sock) as Box<dyn Io>, Protocol::Http1)
+            }
+        }))
     }
 
     /// Set total number of simultaneous connections per type of scheme.

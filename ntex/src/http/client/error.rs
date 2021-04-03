@@ -6,7 +6,6 @@ use serde_json::error::Error as JsonError;
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl::{HandshakeError, SslError};
-use crate::connect::ResolveError;
 
 use crate::http::error::{HttpError, ParseError, PayloadError};
 use crate::http::header::HeaderValue;
@@ -91,8 +90,9 @@ pub enum ConnectError {
     SslHandshakeError(String),
 
     /// Failed to resolve the hostname
+    #[from(ignore)]
     #[display(fmt = "Failed resolving hostname: {}", _0)]
-    Resolver(ResolveError),
+    Resolver(io::Error),
 
     /// No dns records
     #[display(fmt = "No dns records found for the input")]

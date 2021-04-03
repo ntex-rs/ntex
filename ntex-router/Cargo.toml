@@ -1,6 +1,6 @@
 [package]
 name = "ntex-router"
-version = "0.4.2"
+version = "0.4.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Path router"
 keywords = ["ntex"]
@@ -17,11 +17,11 @@ path = "src/lib.rs"
 default = ["http"]
 
 [dependencies]
-regex = "1.4"
 serde = "1.0"
 bytestring = "1.0"
 log = "0.4"
 http = { version = "0.2", optional = true }
+regex = { version = "1.4.5", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 http = "0.2"

@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures::SinkExt;
 
 use ntex::codec::{BytesCodec, Framed};
-use ntex::connect::{Connect, ResolverConfig, ResolverOpts};
+use ntex::connect::Connect;
 use ntex::rt::net::TcpStream;
 use ntex::server::test_server;
 use ntex::service::{fn_service, Service, ServiceFactory};
@@ -53,14 +53,13 @@ async fn test_static_str() {
         })
     });
 
-    let resolver = ntex::connect::default_resolver();
-    let conn = ntex::connect::Connector::new(resolver.clone());
+    let conn = ntex::connect::Connector::new();
 
     let con = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(con.peer_addr().unwrap(), srv.addr());
 
     let connect = Connect::new("127.0.0.1".to_owned());
-    let conn = ntex::connect::Connector::new(resolver);
+    let conn = ntex::connect::Connector::new();
     let con = conn.call(connect).await;
     assert!(con.is_err());
 }
@@ -75,13 +74,7 @@ async fn test_new_service() {
         })
     });
 
-    let resolver = ntex::connect::start_resolver(
-        ResolverConfig::default(),
-        ResolverOpts::default(),
-    );
-
-    let factory = ntex::connect::Connector::new(resolver);
-
+    let factory = ntex::connect::Connector::new();
     let conn = factory.new_service(()).await.unwrap();
     let con = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(con.peer_addr().unwrap(), srv.addr());

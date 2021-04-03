@@ -176,7 +176,7 @@ async fn test_timeout() {
 
     let connector = Connector::default()
         .connector(
-            ntex::connect::Connector::new(ntex::connect::default_resolver())
+            ntex::connect::Connector::new()
                 .map(|sock| (sock, ntex::http::Protocol::Http1)),
         )
         .timeout(Duration::from_secs(15))

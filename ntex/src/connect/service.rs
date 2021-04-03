@@ -5,7 +5,7 @@ use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
 use crate::util::{Either, Ready};
 
-use super::{Address, Connect, ConnectError, DnsResolver, Resolver};
+use super::{Address, Connect, ConnectError, Resolver};
 
 pub struct Connector<T> {
     resolver: Resolver<T>,
@@ -13,9 +13,9 @@ pub struct Connector<T> {
 
 impl<T> Connector<T> {
     /// Construct new connect service with custom dns resolver
-    pub fn new(resolver: DnsResolver) -> Self {
+    pub fn new() -> Self {
         Connector {
-            resolver: Resolver::new(resolver),
+            resolver: Resolver::new(),
         }
     }
 }

@@ -143,7 +143,7 @@ async fn test_chunked_payload() {
         let mut data = String::new();
         let _ = stream.read_to_string(&mut data);
 
-        let re = Regex::new(r"size=(\d+)").unwrap();
+        let re = Regex::new(r"size=([0-9]+)").unwrap();
         let size: usize = match re.captures(&data) {
             Some(caps) => caps.get(1).unwrap().as_str().parse().unwrap(),
             None => panic!("Failed to find size in HTTP Response: {}", data),

@@ -62,7 +62,7 @@ num_cpus = "1.13"
 nanorand = "0.5"
 percent-encoding = "2.1"
 pin-project-lite = "0.2"
-regex = "1.4"
+regex = { version = "1.4.5", default-features = false, features = ["std"] }
 sha-1 = "0.9"
 slab = "0.4"
 serde = { version = "1.0", features=["derive"] }
@@ -72,10 +72,6 @@ socket2 = "0.4"
 url = "2.1"
 coo-kie = { version = "0.15", package = "cookie", optional = true }
 tokio = { version = "1", default-features=false, features = ["sync"] }
-
-# resolver
-trust-dns-proto = { version = "0.20", default-features = false }
-trust-dns-resolver = { version = "0.20", default-features = false, features=["system-config", "tokio-runtime"] }
 
 # openssl
 open-ssl = { version="0.10", package = "openssl", optional = true }

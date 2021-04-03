@@ -6,6 +6,8 @@
 
 * util: add custom Ready, Either future and several helper functions
 
+* drop trust-dns, use blocking calls
+
 * reduce futures crate dependencies
 
 ## [0.3.13] - 2021-03-26
