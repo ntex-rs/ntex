@@ -38,7 +38,6 @@ pub mod connect;
 pub mod framed;
 pub mod http;
 pub mod server;
-pub mod task;
 pub mod testing;
 pub mod util;
 pub mod web;
@@ -48,6 +47,7 @@ pub use self::service::*;
 
 pub use futures_core::stream::Stream;
 pub use futures_sink::Sink;
+pub use ntex_util::task;
 
 pub mod codec {
     //! Utilities for encoding and decoding frames.

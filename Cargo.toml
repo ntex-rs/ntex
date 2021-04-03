@@ -6,6 +6,7 @@ members = [
   "ntex-rt",
   "ntex-service",
   "ntex-macros",
+  "ntex-util",
 ]
 
 [patch.crates-io]
@@ -15,3 +16,4 @@ ntex-router = { path = "ntex-router" }
 ntex-rt = { path = "ntex-rt" }
 ntex-service = { path = "ntex-service" }
 ntex-macros = { path = "ntex-macros" }
+ntex-util = { path = "ntex-util" }

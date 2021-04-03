@@ -18,9 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 bitflags = "1.2.1"
 bytes = "1.0"
-ntex-service = "0.1.7"
-futures-core = { version = "0.3.13", default-features = false, features = ["alloc"] }
-futures-sink = { version = "0.3.13", default-features = false, features = ["alloc"] }
+ntex-util = "0.1.0"
 log = "0.4"
 tokio = { version = "1", default-features = false }
 

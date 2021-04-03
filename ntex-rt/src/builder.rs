@@ -1,6 +1,6 @@
 use std::{borrow::Cow, future::Future, io};
 
-use ntex_service::util::lazy;
+use ntex_util::future::lazy;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot::{channel, Receiver};
 use tokio::task::LocalSet;

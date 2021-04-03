@@ -1,6 +1,5 @@
-use std::{future::Future, pin::Pin, task::Context, task::Poll};
-
 use slab::Slab;
+use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::cell::Cell;
 use crate::task::LocalWaker;
@@ -69,12 +68,6 @@ impl Waiter {
         }
         Poll::Pending
     }
-
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.0")]
-    pub fn poll_waiter(&self, cx: &mut Context<'_>) -> Poll<()> {
-        self.poll_ready(cx)
-    }
 }
 
 impl Clone for Waiter {
@@ -106,7 +99,7 @@ mod tests {
     use super::*;
     use crate::util::lazy;
 
-    #[crate::rt_test]
+    #[ntex::test]
     #[allow(clippy::unit_cmp)]
     async fn test_condition() {
         let cond = Condition::new();
@@ -134,8 +127,7 @@ mod tests {
         assert_eq!(waiter2.await, ());
     }
 
-    #[crate::rt_test]
-    #[allow(deprecated)]
+    #[ntex::test]
     async fn test_condition_poll() {
         let cond = Condition::new();
         let waiter = cond.wait();
@@ -143,13 +135,8 @@ mod tests {
         cond.notify();
         assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Ready(()));
 
-        let waiter = cond.wait();
-        assert_eq!(lazy(|cx| waiter.poll_waiter(cx)).await, Poll::Pending);
-        let waiter2 = waiter.clone();
-        assert_eq!(lazy(|cx| waiter2.poll_waiter(cx)).await, Poll::Pending);
-
         drop(cond);
-        assert_eq!(lazy(|cx| waiter.poll_waiter(cx)).await, Poll::Ready(()));
-        assert_eq!(lazy(|cx| waiter2.poll_waiter(cx)).await, Poll::Ready(()));
+        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Ready(()));
+        assert_eq!(lazy(|cx| waiter2.poll_ready(cx)).await, Poll::Ready(()));
     }
 }

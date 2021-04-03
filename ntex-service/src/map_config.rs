@@ -304,10 +304,11 @@ where
 #[cfg(test)]
 #[allow(clippy::redundant_closure)]
 mod tests {
+    use ntex_util::future::Ready;
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{fn_factory_with_config, fn_service, util::Ready, ServiceFactory};
+    use crate::{fn_factory_with_config, fn_service, ServiceFactory};
 
     #[ntex::test]
     async fn test_map_config() {

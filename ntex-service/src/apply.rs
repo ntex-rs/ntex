@@ -211,12 +211,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use ntex_util::future::{lazy, Ready};
     use std::task::{Context, Poll};
 
     use super::*;
-    use crate::{
-        pipeline, pipeline_factory, util::lazy, util::Ready, Service, ServiceFactory,
-    };
+    use crate::{pipeline, pipeline_factory, Service, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv;

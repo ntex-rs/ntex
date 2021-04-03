@@ -227,10 +227,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use ntex_util::future::Ready;
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{fn_service, util::Ready, Service};
+    use crate::{fn_service, Service};
 
     #[ntex::test]
     async fn test_apply() {

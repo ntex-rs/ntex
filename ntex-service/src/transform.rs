@@ -233,8 +233,10 @@ where
 #[cfg(test)]
 #[allow(clippy::redundant_clone)]
 mod tests {
+    use ntex_util::future::{lazy, Ready};
+
     use super::*;
-    use crate::{fn_service, util::lazy, util::Ready, Service, ServiceFactory};
+    use crate::{fn_service, Service, ServiceFactory};
 
     #[derive(Clone)]
     struct Tr;

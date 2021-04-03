@@ -271,8 +271,8 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc, task::Context, task::Poll};
 
-    use crate::util::{lazy, Ready};
     use crate::{fn_factory, pipeline, pipeline_factory, Service, ServiceFactory};
+    use ntex_util::future::{lazy, Ready};
 
     struct Srv1(Rc<Cell<usize>>);
 

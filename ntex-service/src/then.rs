@@ -256,11 +256,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use ntex_util::future::{lazy, Ready};
     use std::{cell::Cell, rc::Rc, task::Context, task::Poll};
 
-    use crate::{
-        pipeline, pipeline_factory, util::lazy, util::Ready, Service, ServiceFactory,
-    };
+    use crate::{pipeline, pipeline_factory, Service, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>);

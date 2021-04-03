@@ -1,0 +1,26 @@
+[package]
+name = "ntex-util"
+version = "0.1.0"
+authors = ["ntex contributors <team@ntex.rs>"]
+description = "Utilities for ntex framework"
+keywords = ["network", "framework", "async", "futures"]
+homepage = "https://ntex.rs"
+repository = "https://github.com/ntex-rs/ntex.git"
+documentation = "https://docs.rs/ntex-util/"
+categories = ["network-programming", "asynchronous"]
+license = "MIT"
+edition = "2018"
+
+[lib]
+name = "ntex_util"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags = "1.2"
+slab = "0.4"
+futures-core = { version = "0.3.13", default-features = false, features = ["alloc"] }
+futures-sink = { version = "0.3.13", default-features = false, features = ["alloc"] }
+pin-project-lite = "0.2.6"
+
+[dev-dependencies]
+ntex = "0.3.14"

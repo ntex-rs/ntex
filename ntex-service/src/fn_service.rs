@@ -1,7 +1,9 @@
 use std::task::{Context, Poll};
 use std::{cell::Cell, cell::RefCell, future::Future, marker::PhantomData};
 
-use crate::{util::Ready, IntoService, IntoServiceFactory, Service, ServiceFactory};
+use ntex_util::future::Ready;
+
+use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 #[inline]
 /// Create `ServiceFactory` for function that can act as a `Service`
@@ -523,10 +525,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use ntex_util::future::lazy;
     use std::{rc::Rc, task::Poll};
 
     use super::*;
-    use crate::{util::lazy, Service, ServiceFactory};
+    use crate::{Service, ServiceFactory};
 
     #[ntex::test]
     async fn test_fn_service() {

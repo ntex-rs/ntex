@@ -1,7 +1,6 @@
 //! A one-shot pool, futures-aware channel.
-use std::{future::Future, pin::Pin, task::Context, task::Poll};
-
 use slab::Slab;
+use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::{cell::Cell, Canceled};
 use crate::task::LocalWaker;

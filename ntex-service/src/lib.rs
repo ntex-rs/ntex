@@ -21,10 +21,6 @@ mod then;
 mod transform;
 mod transform_err;
 
-mod either;
-mod lazy;
-mod ready;
-
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::fn_service::{
     fn_factory, fn_factory_with_config, fn_mut_service, fn_service,
@@ -339,12 +335,6 @@ where
     T: IntoService<S>,
 {
     tp.into_service()
-}
-
-pub mod util {
-    pub use crate::either::Either;
-    pub use crate::lazy::{lazy, Lazy};
-    pub use crate::ready::Ready;
 }
 
 pub mod dev {

@@ -1,5 +1,5 @@
 //! A runtime implementation that runs everything on the current thread.
-use ntex_service::util::lazy;
+use ntex_util::future::lazy;
 use std::future::Future;
 
 mod arbiter;

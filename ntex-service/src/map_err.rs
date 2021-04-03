@@ -208,8 +208,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::{lazy, Ready};
     use crate::{IntoServiceFactory, Service, ServiceFactory};
+    use ntex_util::future::{lazy, Ready};
 
     #[derive(Clone)]
     struct Srv;

@@ -1,6 +1,7 @@
+use ntex_util::future::Ready;
 use std::{future::Future, marker::PhantomData};
 
-use crate::{apply_fn, dev::Apply, util::Ready, Service, Transform};
+use crate::{apply_fn, dev::Apply, Service, Transform};
 
 /// Use function as transform service
 pub fn fn_transform<S, F, R, Req, Res, Err>(
@@ -67,10 +68,11 @@ where
 #[cfg(test)]
 #[allow(clippy::redundant_clone)]
 mod tests {
+    use ntex_util::future::lazy;
     use std::task::{Context, Poll};
 
     use super::*;
-    use crate::{util::lazy, Service};
+    use crate::Service;
 
     #[derive(Clone)]
     struct Srv;

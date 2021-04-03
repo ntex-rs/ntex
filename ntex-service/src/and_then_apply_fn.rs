@@ -292,8 +292,8 @@ where
 mod tests {
     use super::*;
 
-    use crate::util::{lazy, Ready};
     use crate::{fn_service, pipeline, pipeline_factory, Service, ServiceFactory};
+    use ntex_util::future::{lazy, Ready};
 
     #[derive(Clone)]
     struct Srv;
