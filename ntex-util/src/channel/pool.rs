@@ -175,9 +175,9 @@ impl<T> Future for Receiver<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::lazy;
+    use crate::future::lazy;
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_pool() {
         let p = new();
         let (tx, rx) = p.channel();

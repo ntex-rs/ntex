@@ -101,9 +101,9 @@ impl<T> Future for Receiver<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::lazy;
+    use crate::future::lazy;
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_oneshot() {
         let (tx, rx) = channel();
         tx.send("test").unwrap();
