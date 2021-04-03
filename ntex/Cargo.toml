@@ -59,7 +59,7 @@ log = "0.4"
 mime = "0.3"
 mio = "0.7.10"
 num_cpus = "1.13"
-nanorand = "0.5"
+nanorand = { version = "0.5", default-features = false, features = ["std", "wyrand"] }
 percent-encoding = "2.1"
 pin-project-lite = "0.2"
 regex = { version = "1.4.5", default-features = false, features = ["std"] }
