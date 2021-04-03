@@ -314,7 +314,7 @@ mod tests {
         let item = Rc::new(Cell::new(1usize));
 
         let factory = map_config(
-            fn_service(|item: usize| Ready::<_, ()>::ok(item)),
+            fn_service(|item: usize| Ready::<_, ()>::Ok(item)),
             |t: usize| {
                 item.set(item.get() + t);
             },
@@ -327,7 +327,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_unit_config() {
-        let _ = unit_config(fn_service(|item: usize| Ready::<_, ()>::ok(item)))
+        let _ = unit_config(fn_service(|item: usize| Ready::<_, ()>::Ok(item)))
             .clone()
             .new_service(10)
             .await;
@@ -343,10 +343,10 @@ mod tests {
                 let item = item2.clone();
                 async move {
                     item.set(next);
-                    Ok::<_, ()>(fn_service(|id: usize| Ready::<_, ()>::ok(id * 2)))
+                    Ok::<_, ()>(fn_service(|id: usize| Ready::<_, ()>::Ok(id * 2)))
                 }
             }),
-            fn_service(move |item: usize| Ready::<_, ()>::ok(item + 1)),
+            fn_service(move |item: usize| Ready::<_, ()>::Ok(item + 1)),
         )
         .clone()
         .new_service(10)

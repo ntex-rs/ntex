@@ -249,7 +249,7 @@ mod tests {
         type Future = Ready<Self::Transform, Self::InitError>;
 
         fn new_transform(&self, service: S) -> Self::Future {
-            Ready::ok(Srv(service))
+            Ready::Ok(Srv(service))
         }
     }
 
@@ -275,7 +275,7 @@ mod tests {
     async fn transform() {
         let factory = apply(
             Rc::new(Tr.map_init_err(|_| ()).clone()),
-            fn_service(|i: usize| Ready::<_, ()>::ok(i * 2)),
+            fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)),
         )
         .clone();
 

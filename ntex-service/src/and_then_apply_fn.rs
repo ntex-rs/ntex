@@ -308,13 +308,13 @@ mod tests {
         }
 
         fn call(&self, _: Self::Request) -> Self::Future {
-            Ready::ok(())
+            Ready::Ok(())
         }
     }
 
     #[ntex::test]
     async fn test_service() {
-        let srv = pipeline(Ready::<_, ()>::ok)
+        let srv = pipeline(Ready::<_, ()>::Ok)
             .and_then_apply_fn(Srv, |req: &'static str, s| {
                 let f = s.call(());
                 async move { f.await.map(move |res| (req, res)) }
@@ -334,9 +334,9 @@ mod tests {
     #[ntex::test]
     async fn test_service_factory() {
         let new_srv =
-            pipeline_factory(|| Ready::<_, ()>::ok(fn_service(Ready::<_, ()>::ok)))
+            pipeline_factory(|| Ready::<_, ()>::Ok(fn_service(Ready::<_, ()>::Ok)))
                 .and_then_apply_fn(
-                    || Ready::ok(Srv),
+                    || Ready::Ok(Srv),
                     |req: &'static str, s| {
                         let f = s.call(());
                         async move { f.await.map(move |res| (req, res)) }

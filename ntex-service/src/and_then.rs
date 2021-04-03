@@ -288,7 +288,7 @@ mod tests {
         }
 
         fn call(&self, req: &'static str) -> Self::Future {
-            Ready::ok(req)
+            Ready::Ok(req)
         }
     }
 
@@ -307,7 +307,7 @@ mod tests {
         }
 
         fn call(&self, req: &'static str) -> Self::Future {
-            Ready::ok((req, "srv2"))
+            Ready::Ok((req, "srv2"))
         }
     }
 
@@ -339,9 +339,9 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
         let new_srv = pipeline_factory(fn_factory(move || {
-            Ready::result(Ok::<_, ()>(Srv1(cnt2.clone())))
+            Ready::from(Ok::<_, ()>(Srv1(cnt2.clone())))
         }))
-        .and_then(move || Ready::result(Ok(Srv2(cnt.clone()))))
+        .and_then(move || Ready::from(Ok(Srv2(cnt.clone()))))
         .clone();
 
         let srv = new_srv.new_service(()).await.unwrap();

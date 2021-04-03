@@ -223,7 +223,7 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            Ready::ok(())
+            Ready::Ok(())
         }
     }
 

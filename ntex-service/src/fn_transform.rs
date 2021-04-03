@@ -86,7 +86,7 @@ mod tests {
         }
 
         fn call(&self, i: usize) -> Self::Future {
-            Ready::ok(i * 2)
+            Ready::Ok(i * 2)
         }
     }
 

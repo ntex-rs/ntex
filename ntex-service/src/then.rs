@@ -278,8 +278,8 @@ mod tests {
 
         fn call(&self, req: Result<&'static str, &'static str>) -> Self::Future {
             match req {
-                Ok(msg) => Ready::ok(msg),
-                Err(_) => Ready::err(()),
+                Ok(msg) => Ready::Ok(msg),
+                Err(_) => Ready::Err(()),
             }
         }
     }
@@ -299,8 +299,8 @@ mod tests {
 
         fn call(&self, req: Result<&'static str, ()>) -> Self::Future {
             match req {
-                Ok(msg) => Ready::ok((msg, "ok")),
-                Err(()) => Ready::ok(("srv2", "err")),
+                Ok(msg) => Ready::Ok((msg, "ok")),
+                Err(()) => Ready::Ok(("srv2", "err")),
             }
         }
     }
@@ -334,9 +334,9 @@ mod tests {
     async fn test_factory() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
-        let blank = move || Ready::<_, ()>::ok(Srv1(cnt2.clone()));
+        let blank = move || Ready::<_, ()>::Ok(Srv1(cnt2.clone()));
         let factory = pipeline_factory(blank)
-            .then(move || Ready::ok(Srv2(cnt.clone())))
+            .then(move || Ready::Ok(Srv2(cnt.clone())))
             .clone();
         let srv = factory.new_service(&()).await.unwrap();
         let res = srv.call(Ok("srv1")).await;

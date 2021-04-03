@@ -232,7 +232,7 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            Ready::ok(())
+            Ready::Ok(())
         }
     }
 
@@ -264,7 +264,7 @@ mod tests {
     async fn test_new_service() {
         let new_srv = pipeline_factory(
             apply_fn_factory(
-                || Ready::<_, ()>::ok(Srv),
+                || Ready::<_, ()>::Ok(Srv),
                 |req: &'static str, srv| {
                     let fut = srv.call(());
                     async move {

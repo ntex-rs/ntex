@@ -225,7 +225,7 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            Ready::err(())
+            Ready::Err(())
         }
     }
 
@@ -257,7 +257,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_factory() {
-        let new_srv = (|| Ready::<_, ()>::ok(Srv))
+        let new_srv = (|| Ready::<_, ()>::Ok(Srv))
             .into_factory()
             .map_err(|_| "error")
             .clone();

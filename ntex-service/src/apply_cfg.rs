@@ -238,7 +238,7 @@ mod tests {
         let item2 = item.clone();
 
         let srv = apply_cfg(
-            fn_service(move |item: usize| Ready::<_, ()>::ok(item + 1)),
+            fn_service(move |item: usize| Ready::<_, ()>::Ok(item + 1)),
             move |_: (), srv| {
                 let id = item2.get();
                 let fut = srv.call(id);
@@ -246,7 +246,7 @@ mod tests {
 
                 async move {
                     item.set(fut.await.unwrap());
-                    Ok::<_, ()>(fn_service(|id: usize| Ready::<_, ()>::ok(id * 2)))
+                    Ok::<_, ()>(fn_service(|id: usize| Ready::<_, ()>::Ok(id * 2)))
                 }
             },
         )
@@ -265,7 +265,7 @@ mod tests {
         let item2 = item.clone();
 
         let srv = apply_cfg_factory(
-            fn_service(move |item: usize| Ready::<_, ()>::ok(item + 1)),
+            fn_service(move |item: usize| Ready::<_, ()>::Ok(item + 1)),
             move |_: (), srv| {
                 let id = item2.get();
                 let fut = srv.call(id);
@@ -273,7 +273,7 @@ mod tests {
 
                 async move {
                     item.set(fut.await.unwrap());
-                    Ok::<_, ()>(fn_service(|id: usize| Ready::<_, ()>::ok(id * 2)))
+                    Ok::<_, ()>(fn_service(|id: usize| Ready::<_, ()>::Ok(id * 2)))
                 }
             },
         )
