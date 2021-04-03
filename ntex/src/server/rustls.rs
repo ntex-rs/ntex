@@ -65,7 +65,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> ServiceFactory for Acceptor<T> {
 
     fn new_service(&self, _: ()) -> Self::Future {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
-            Ready::ok(AcceptorService {
+            Ready::Ok(AcceptorService {
                 acceptor: self.config.clone().into(),
                 conns: conns.priv_clone(),
                 timeout: self.timeout,

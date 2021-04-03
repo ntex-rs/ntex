@@ -49,7 +49,7 @@ where
     type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        Ready::ok(apply_fn(service, self.f.clone()))
+        Ready::Ok(apply_fn(service, self.f.clone()))
     }
 }
 

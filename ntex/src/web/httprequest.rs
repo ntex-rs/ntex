@@ -7,7 +7,7 @@ use crate::router::Path;
 use crate::util::{Extensions, Ready};
 
 use super::config::AppConfig;
-use super::error::{ErrorRenderer, UrlGenerationError};
+use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::info::ConnectionInfo;
 use super::rmap::ResourceMap;
@@ -133,6 +133,7 @@ impl HttpRequest {
         self.head().extensions_mut()
     }
 
+    #[cfg(feature = "url")]
     /// Generate url for named resource
     ///
     /// ```rust
@@ -155,7 +156,7 @@ impl HttpRequest {
         &self,
         name: &str,
         elements: U,
-    ) -> Result<url::Url, UrlGenerationError>
+    ) -> Result<url_pkg::Url, super::error::UrlGenerationError>
     where
         U: IntoIterator<Item = I>,
         I: AsRef<str>,
@@ -163,11 +164,15 @@ impl HttpRequest {
         self.0.rmap.url_for(&self, name, elements)
     }
 
+    #[cfg(feature = "url")]
     /// Generate url for named resource
     ///
     /// This method is similar to `HttpRequest::url_for()` but it can be used
     /// for urls that do not contain variable parts.
-    pub fn url_for_static(&self, name: &str) -> Result<url::Url, UrlGenerationError> {
+    pub fn url_for_static(
+        &self,
+        name: &str,
+    ) -> Result<url_pkg::Url, super::error::UrlGenerationError> {
         const NO_PARAMS: [&str; 0] = [];
         self.url_for(name, &NO_PARAMS)
     }
@@ -391,6 +396,7 @@ mod tests {
         assert_eq!(req.query_string(), "id=test");
     }
 
+    #[cfg(feature = "url")]
     #[test]
     fn test_url_for() {
         let mut res = ResourceDef::new("/user/{name}.{ext}");
@@ -407,11 +413,11 @@ mod tests {
 
         assert_eq!(
             req.url_for("unknown", &["test"]),
-            Err(UrlGenerationError::ResourceNotFound)
+            Err(crate::web::error::UrlGenerationError::ResourceNotFound)
         );
         assert_eq!(
             req.url_for("index", &["test"]),
-            Err(UrlGenerationError::NotEnoughElements)
+            Err(crate::web::error::UrlGenerationError::NotEnoughElements)
         );
         let url = req.url_for("index", &["test", "html"]);
         assert_eq!(
@@ -420,6 +426,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "url")]
     #[test]
     fn test_url_for_static() {
         let mut rdef = ResourceDef::new("/index.html");
@@ -441,6 +448,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "url")]
     #[test]
     fn test_url_for_external() {
         let mut rdef = ResourceDef::new("https://youtube.com/watch/{video_id}");

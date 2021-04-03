@@ -323,7 +323,7 @@ where
         let f = self.f_shutdown.take();
         self.f_shutdown.set(f.clone());
 
-        Ready::ok(FnService {
+        Ready::Ok(FnService {
             f: self.f.clone(),
             f_shutdown: Cell::new(f),
             _t: PhantomData,

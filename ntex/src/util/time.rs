@@ -51,7 +51,7 @@ impl ServiceFactory for LowResTime {
 
     #[inline]
     fn new_service(&self, _: ()) -> Self::Future {
-        Ready::ok(self.timer())
+        Ready::Ok(self.timer())
     }
 }
 
@@ -100,7 +100,7 @@ impl Service for LowResTimeService {
 
     #[inline]
     fn call(&self, _: ()) -> Self::Future {
-        Ready::ok(self.now())
+        Ready::Ok(self.now())
     }
 }
 

@@ -51,7 +51,7 @@ pub fn default_service<Err: ErrorRenderer>(
     Error = std::convert::Infallible,
 > {
     (move |req: WebRequest<Err>| {
-        Ready::ok(req.into_response(HttpResponse::build(status_code).finish()))
+        Ready::Ok(req.into_response(HttpResponse::build(status_code).finish()))
     })
     .into_service()
 }

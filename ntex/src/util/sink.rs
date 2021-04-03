@@ -77,6 +77,6 @@ where
     }
 
     fn call(&self, req: I) -> Self::Future {
-        Ready::result(Pin::new(&mut *self.sink.borrow_mut()).start_send(req))
+        Ready::from(Pin::new(&mut *self.sink.borrow_mut()).start_send(req))
     }
 }

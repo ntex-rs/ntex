@@ -92,12 +92,12 @@ where
                         let _ = f.await;
                         drop(guard);
                     });
-                    Ready::ok(())
+                    Ready::Ok(())
                 } else {
-                    Ready::err(())
+                    Ready::Err(())
                 }
             }
-            _ => Ready::ok(()),
+            _ => Ready::Ok(()),
         }
     }
 }

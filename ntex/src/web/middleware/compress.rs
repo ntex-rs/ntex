@@ -59,7 +59,7 @@ where
     type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        Ready::ok(CompressMiddleware {
+        Ready::Ok(CompressMiddleware {
             service,
             encoding: self.enc,
             _t: marker::PhantomData,

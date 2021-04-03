@@ -530,7 +530,7 @@ mod tests {
         fn new_service(&self, _: ()) -> Self::Future {
             let mut cnt = self.counter.lock().unwrap();
             *cnt += 1;
-            Ready::ok(Srv {
+            Ready::Ok(Srv {
                 st: self.st.clone(),
             })
         }
@@ -566,7 +566,7 @@ mod tests {
         }
 
         fn call(&self, _: TcpStream) -> Self::Future {
-            Ready::ok(())
+            Ready::Ok(())
         }
     }
 

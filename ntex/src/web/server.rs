@@ -502,7 +502,7 @@ where
                 c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
             );
             pipeline_factory(|io: UnixStream| {
-                crate::util::Ready::ok((io, Protocol::Http1, None))
+                crate::util::Ready::Ok((io, Protocol::Http1, None))
             })
             .and_then(
                 HttpService::build()
@@ -543,7 +543,7 @@ where
                     c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
                 );
                 pipeline_factory(|io: UnixStream| {
-                    crate::util::Ready::ok((io, Protocol::Http1, None))
+                    crate::util::Ready::Ok((io, Protocol::Http1, None))
                 })
                 .and_then(
                     HttpService::build()

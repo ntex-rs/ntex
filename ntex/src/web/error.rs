@@ -6,7 +6,8 @@ use derive_more::{Display, From};
 
 pub use http::Error as HttpError;
 pub use serde_json::error::Error as JsonError;
-pub use url::ParseError as UrlParseError;
+#[cfg(feature = "url")]
+pub use url_pkg::ParseError as UrlParseError;
 
 use super::{HttpRequest, HttpResponse};
 use crate::http::body::Body;
@@ -94,6 +95,7 @@ pub enum UrlGenerationError {
     #[display(fmt = "Not all path pattern covered")]
     NotEnoughElements,
     /// URL parse error
+    #[cfg(feature = "url")]
     #[display(fmt = "{}", _0)]
     ParseError(UrlParseError),
 }

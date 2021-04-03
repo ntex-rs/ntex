@@ -27,10 +27,10 @@ impl<T: Address> Resolver<T> {
         mut req: Connect<T>,
     ) -> impl Future<Output = Result<Connect<T>, ConnectError>> {
         if req.addr.is_some() || req.req.addr().is_some() {
-            Either::Right(Ready::ok(req))
+            Either::Right(Ready::Ok(req))
         } else if let Ok(ip) = req.host().parse() {
             req.addr = Some(Either::Left(net::SocketAddr::new(ip, req.port())));
-            Either::Right(Ready::ok(req))
+            Either::Right(Ready::Ok(req))
         } else {
             trace!("DNS resolver: resolving host {:?}", req.host());
 
@@ -112,7 +112,7 @@ impl<T: Address> ServiceFactory for Resolver<T> {
     type Future = Ready<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        Ready::ok(self.clone())
+        Ready::Ok(self.clone())
     }
 }
 

@@ -382,7 +382,7 @@ where
             pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
                 match result {
                     Either::Left(req) => Either::Left(srv.call(req)),
-                    Either::Right(res) => Either::Right(Ready::ok(res)),
+                    Either::Right(res) => Either::Right(Ready::Ok(res)),
                 }
             });
 

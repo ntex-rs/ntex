@@ -69,7 +69,7 @@ impl ServiceConfig {
     {
         self.apply_async::<_, Ready<(), &'static str>, &'static str>(move |mut rt| {
             f(&mut rt);
-            Ready::ok(())
+            Ready::Ok(())
         })
     }
 
@@ -166,7 +166,7 @@ impl InternalServiceFactory for ConfiguredService {
                         Box::new(StreamService::new(service::fn_service(
                             move |_: TcpStream| {
                                 error!("Service {:?} is not configured", name);
-                                Ready::<_, ()>::ok(())
+                                Ready::<_, ()>::Ok(())
                             },
                         ))),
                     ));

@@ -170,7 +170,7 @@ where
                         None,
                     ));
                 }
-                Either::Right(Ready::err(SendRequestError::TunnelNotSupported))
+                Either::Right(Ready::Err(SendRequestError::TunnelNotSupported))
             }
         }
     }

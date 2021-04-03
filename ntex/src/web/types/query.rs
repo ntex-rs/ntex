@@ -134,7 +134,7 @@ where
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
         serde_urlencoded::from_str::<T>(req.query_string())
-            .map(|val| Ready::ok(Query(val)))
+            .map(|val| Ready::Ok(Query(val)))
             .unwrap_or_else(move |e| {
                 let e = QueryPayloadError::Deserialize(e);
 
@@ -143,7 +143,7 @@ where
                      Request path: {:?}",
                     req.path()
                 );
-                Ready::err(e)
+                Ready::Err(e)
             })
     }
 }

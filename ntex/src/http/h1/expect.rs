@@ -17,7 +17,7 @@ impl ServiceFactory for ExpectHandler {
 
     #[inline]
     fn new_service(&self, _: ()) -> Self::Future {
-        Ready::ok(ExpectHandler)
+        Ready::Ok(ExpectHandler)
     }
 }
 
@@ -34,6 +34,6 @@ impl Service for ExpectHandler {
 
     #[inline]
     fn call(&self, req: Request) -> Self::Future {
-        Ready::ok(req)
+        Ready::Ok(req)
     }
 }

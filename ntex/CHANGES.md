@@ -10,6 +10,8 @@
 
 * reduce futures crate dependencies
 
+* make url crate optional
+
 ## [0.3.13] - 2021-03-26
 
 * framed: add socket disconnect notification

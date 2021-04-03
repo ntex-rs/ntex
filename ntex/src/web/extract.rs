@@ -48,9 +48,9 @@ pub trait FromRequest<Err>: Sized {
 ///
 ///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
 ///         if rand::random() {
-///             Ready::ok(Thing { name: "thingy".into() })
+///             Ready::Ok(Thing { name: "thingy".into() })
 ///         } else {
-///             Ready::err(error::ErrorBadRequest("no luck").into())
+///             Ready::Err(error::ErrorBadRequest("no luck").into())
 ///         }
 ///     }
 /// }
@@ -118,9 +118,9 @@ where
 ///
 ///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
 ///         if rand::random() {
-///             Ready::ok(Thing { name: "thingy".into() })
+///             Ready::Ok(Thing { name: "thingy".into() })
 ///         } else {
-///             Ready::err(error::ErrorBadRequest("no luck").into())
+///             Ready::Err(error::ErrorBadRequest("no luck").into())
 ///         }
 ///     }
 /// }

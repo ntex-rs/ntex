@@ -343,7 +343,7 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            Ready::<_, ()>::ok(1)
+            Ready::<_, ()>::Ok(1)
         }
     }
 
@@ -365,7 +365,7 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            Ready::<_, ()>::ok(2)
+            Ready::<_, ()>::Ok(2)
         }
     }
 

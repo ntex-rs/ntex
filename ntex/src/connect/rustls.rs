@@ -81,7 +81,7 @@ impl<T: Address + 'static> ServiceFactory for RustlsConnector<T> {
     type Future = Ready<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        Ready::ok(self.clone())
+        Ready::Ok(self.clone())
     }
 }
 

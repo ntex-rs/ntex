@@ -56,7 +56,7 @@ where
     type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        Ready::ok(BufferService {
+        Ready::Ok(BufferService {
             size: self.buf_size,
             inner: Rc::new(Inner {
                 service,
@@ -267,7 +267,7 @@ mod tests {
         fn call(&self, _: ()) -> Self::Future {
             self.0.ready.set(false);
             self.0.count.set(self.0.count.get() + 1);
-            Ready::ok(())
+            Ready::Ok(())
         }
     }
 

@@ -35,6 +35,9 @@ compress = ["flate2", "brotli2"]
 # enable cookie support
 cookie = ["coo-kie", "coo-kie/percent-encode"]
 
+# url support
+url = ["url-pkg"]
+
 [dependencies]
 ntex-codec = "0.4.1"
 ntex-rt = "0.2.2"
@@ -69,7 +72,7 @@ serde = { version = "1.0", features=["derive"] }
 serde_json = "1.0"
 serde_urlencoded = "0.7"
 socket2 = "0.4"
-url = "2.1"
+url-pkg = { version = "2.1", package = "url", optional = true }
 coo-kie = { version = "0.15", package = "cookie", optional = true }
 tokio = { version = "1", default-features=false, features = ["sync"] }
 

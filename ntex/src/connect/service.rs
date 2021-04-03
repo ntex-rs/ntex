@@ -60,7 +60,7 @@ impl<T: Address> ServiceFactory for Connector<T> {
 
     #[inline]
     fn new_service(&self, _: ()) -> Self::Future {
-        Ready::ok(self.clone())
+        Ready::Ok(self.clone())
     }
 }
 

@@ -63,7 +63,7 @@ where
     type Future = Ready<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        Ready::ok(KeepAliveService::new(
+        Ready::Ok(KeepAliveService::new(
             self.ka,
             self.time.timer(),
             self.f.clone(),
@@ -133,7 +133,7 @@ where
 
     fn call(&self, req: R) -> Self::Future {
         self.inner.borrow_mut().expire = Instant::from_std(self.time.now() + self.ka);
-        Ready::ok(req)
+        Ready::Ok(req)
     }
 }
 

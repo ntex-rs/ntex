@@ -127,7 +127,7 @@ where
     type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        Ready::ok(LoggerMiddleware {
+        Ready::Ok(LoggerMiddleware {
             service,
             inner: self.inner.clone(),
         })

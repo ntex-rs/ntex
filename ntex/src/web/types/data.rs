@@ -104,14 +104,14 @@ impl<T: 'static, E: ErrorRenderer> FromRequest<E> for Data<T> {
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
         if let Some(st) = req.app_data::<Data<T>>() {
-            Ready::ok(st.clone())
+            Ready::Ok(st.clone())
         } else {
             log::debug!(
                 "Failed to construct App-level Data extractor. \
                  Request path: {:?}",
                 req.path()
             );
-            Ready::err(DataExtractorError::NotConfigured)
+            Ready::Err(DataExtractorError::NotConfigured)
         }
     }
 }

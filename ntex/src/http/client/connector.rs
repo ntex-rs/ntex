@@ -342,7 +342,7 @@ where
                 if let Some(ref conn) = self.ssl_pool {
                     Either::Left(conn.call(req))
                 } else {
-                    Either::Right(Ready::err(ConnectError::SslIsNotSupported))
+                    Either::Right(Ready::Err(ConnectError::SslIsNotSupported))
                 }
             }
             _ => Either::Left(self.tcp_pool.call(req)),

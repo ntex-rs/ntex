@@ -468,15 +468,15 @@ where
             |req, srv| match req {
                 DispatchItem::Item(item) => Either::Left(srv.call(item)),
                 DispatchItem::WBackPressureEnabled
-                | DispatchItem::WBackPressureDisabled => Either::Right(Ready::ok(None)),
+                | DispatchItem::WBackPressureDisabled => Either::Right(Ready::Ok(None)),
                 DispatchItem::KeepAliveTimeout => {
-                    Either::Right(Ready::err(ws::WsError::KeepAlive))
+                    Either::Right(Ready::Err(ws::WsError::KeepAlive))
                 }
                 DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
-                    Either::Right(Ready::err(ws::WsError::Protocol(e)))
+                    Either::Right(Ready::Err(ws::WsError::Protocol(e)))
                 }
                 DispatchItem::IoError(e) => {
-                    Either::Right(Ready::err(ws::WsError::Io(e)))
+                    Either::Right(Ready::Err(ws::WsError::Io(e)))
                 }
             },
         );

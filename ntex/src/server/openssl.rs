@@ -64,7 +64,7 @@ where
 
     fn new_service(&self, _: ()) -> Self::Future {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
-            Ready::ok(AcceptorService {
+            Ready::Ok(AcceptorService {
                 acceptor: self.acceptor.clone(),
                 conns: conns.priv_clone(),
                 timeout: self.timeout,

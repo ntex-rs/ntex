@@ -36,7 +36,7 @@ where
     type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        Ready::ok(InFlightService::new(self.max_inflight, service))
+        Ready::Ok(InFlightService::new(self.max_inflight, service))
     }
 }
 

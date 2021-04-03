@@ -345,7 +345,7 @@ where
             pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
                 match result {
                     Either::Left(req) => Either::Left(srv.call(req)),
-                    Either::Right(res) => Either::Right(Ready::ok(res)),
+                    Either::Right(res) => Either::Right(Ready::Ok(res)),
                 }
             });
 
@@ -640,7 +640,7 @@ impl<Err: ErrorRenderer> Service for ScopeService<Err> {
             Either::Left(default.call(req))
         } else {
             let req = req.into_parts().0;
-            Either::Right(Ready::ok(WebResponse::new(
+            Either::Right(Ready::Ok(WebResponse::new(
                 Response::NotFound().finish(),
                 req,
             )))

@@ -692,7 +692,7 @@ mod tests {
     #[crate::rt_test]
     async fn body_stream() {
         let st =
-            BodyStream::new(stream::once(Ready::<_, io::Error>::ok(Bytes::from("1"))));
+            BodyStream::new(stream::once(Ready::<_, io::Error>::Ok(Bytes::from("1"))));
         let body: Body = st.into();
         assert!(format!("{:?}", body).contains("Body::Message(_)"));
         assert!(body != Body::None);

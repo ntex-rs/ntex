@@ -1,10 +1,11 @@
 use std::{cell::RefCell, rc::Rc};
 
-use url::Url;
+#[cfg(feature = "url")]
+use url_pkg::Url;
 
 use crate::router::ResourceDef;
 use crate::util::HashMap;
-use crate::web::error::UrlGenerationError;
+#[cfg(feature = "url")]
 use crate::web::httprequest::HttpRequest;
 
 #[derive(Clone, Debug)]
@@ -44,6 +45,7 @@ impl ResourceMap {
     }
 }
 
+#[cfg(feature = "url")]
 impl ResourceMap {
     /// Generate url for named resource
     ///
@@ -54,7 +56,7 @@ impl ResourceMap {
         req: &HttpRequest,
         name: &str,
         elements: U,
-    ) -> Result<Url, UrlGenerationError>
+    ) -> Result<Url, super::error::UrlGenerationError>
     where
         U: IntoIterator<Item = I>,
         I: AsRef<str>,
@@ -75,7 +77,7 @@ impl ResourceMap {
                 Ok(Url::parse(&path)?)
             }
         } else {
-            Err(UrlGenerationError::ResourceNotFound)
+            Err(super::error::UrlGenerationError::ResourceNotFound)
         }
     }
 
@@ -99,7 +101,7 @@ impl ResourceMap {
         name: &str,
         path: &mut String,
         elements: &mut U,
-    ) -> Result<Option<()>, UrlGenerationError>
+    ) -> Result<Option<()>, super::error::UrlGenerationError>
     where
         U: Iterator<Item = I>,
         I: AsRef<str>,
@@ -116,7 +118,7 @@ impl ResourceMap {
         name: &str,
         path: &mut String,
         elements: &mut U,
-    ) -> Result<Option<()>, UrlGenerationError>
+    ) -> Result<Option<()>, super::error::UrlGenerationError>
     where
         U: Iterator<Item = I>,
         I: AsRef<str>,
@@ -128,7 +130,7 @@ impl ResourceMap {
             if pattern.resource_path(path, elements) {
                 Ok(Some(()))
             } else {
-                Err(UrlGenerationError::NotEnoughElements)
+                Err(super::error::UrlGenerationError::NotEnoughElements)
             }
         } else {
             for (_, rmap) in &self.patterns {
@@ -146,7 +148,7 @@ impl ResourceMap {
         &self,
         path: &mut String,
         elements: &mut U,
-    ) -> Result<(), UrlGenerationError>
+    ) -> Result<(), super::error::UrlGenerationError>
     where
         U: Iterator<Item = I>,
         I: AsRef<str>,
@@ -157,7 +159,7 @@ impl ResourceMap {
         if self.root.resource_path(path, elements) {
             Ok(())
         } else {
-            Err(UrlGenerationError::NotEnoughElements)
+            Err(super::error::UrlGenerationError::NotEnoughElements)
         }
     }
 
@@ -166,7 +168,7 @@ impl ResourceMap {
         name: &str,
         path: &mut String,
         elements: &mut U,
-    ) -> Result<Option<()>, UrlGenerationError>
+    ) -> Result<Option<()>, super::error::UrlGenerationError>
     where
         U: Iterator<Item = I>,
         I: AsRef<str>,
@@ -177,7 +179,7 @@ impl ResourceMap {
                 if pattern.resource_path(path, elements) {
                     Ok(Some(()))
                 } else {
-                    Err(UrlGenerationError::NotEnoughElements)
+                    Err(super::error::UrlGenerationError::NotEnoughElements)
                 }
             } else {
                 parent.parent_pattern_for(name, path, elements)

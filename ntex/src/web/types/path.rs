@@ -158,7 +158,7 @@ where
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        Ready::result(
+        Ready::from(
             de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
                 .map(|inner| Path { inner })
                 .map_err(move |e| {

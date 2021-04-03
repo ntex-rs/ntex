@@ -93,7 +93,7 @@ where
     type Future = Ready<Self::Transform, Self::InitError>;
 
     fn new_transform(&self, service: S) -> Self::Future {
-        Ready::ok(TimeoutService {
+        Ready::Ok(TimeoutService {
             service,
             timeout: self.timeout,
         })

@@ -98,7 +98,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
         _: &HttpRequest,
         payload: &mut crate::http::Payload,
     ) -> Self::Future {
-        Ready::ok(Payload(payload.take()))
+        Ready::Ok(Payload(payload.take()))
     }
 }
 
@@ -148,7 +148,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
         };
 
         if let Err(e) = cfg.check_mimetype(req) {
-            return Either::Right(Ready::err(e));
+            return Either::Right(Ready::Err(e));
         }
 
         let limit = cfg.limit;
@@ -206,13 +206,13 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
 
         // check content-type
         if let Err(e) = cfg.check_mimetype(req) {
-            return Either::Right(Ready::err(e));
+            return Either::Right(Ready::Err(e));
         }
 
         // check charset
         let encoding = match req.encoding() {
             Ok(enc) => enc,
-            Err(e) => return Either::Right(Ready::err(PayloadError::from(e))),
+            Err(e) => return Either::Right(Ready::Err(PayloadError::from(e))),
         };
         let limit = cfg.limit;
         let fut = HttpMessageBody::new(req, payload).limit(limit);
