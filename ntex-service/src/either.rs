@@ -22,14 +22,6 @@ impl<A, B> Either<A, B> {
 
     #[inline]
     /// Return true if the value is the `Left` variant.
-    ///
-    /// ```
-    /// use either::*;
-    ///
-    /// let values = [Left(1), Right("the right value")];
-    /// assert_eq!(values[0].is_left(), true);
-    /// assert_eq!(values[1].is_left(), false);
-    /// ```
     pub fn is_left(&self) -> bool {
         match *self {
             Either::Left(_) => true,
@@ -39,30 +31,12 @@ impl<A, B> Either<A, B> {
 
     #[inline]
     /// Return true if the value is the `Right` variant.
-    ///
-    /// ```
-    /// use either::*;
-    ///
-    /// let values = [Left(1), Right("the right value")];
-    /// assert_eq!(values[0].is_right(), false);
-    /// assert_eq!(values[1].is_right(), true);
-    /// ```
     pub fn is_right(&self) -> bool {
         !self.is_left()
     }
 
     #[inline]
     /// Convert the left side of `Either<L, R>` to an `Option<L>`.
-    ///
-    /// ```
-    /// use either::*;
-    ///
-    /// let left: Either<_, ()> = Left("some value");
-    /// assert_eq!(left.left(),  Some("some value"));
-    ///
-    /// let right: Either<(), _> = Right(321);
-    /// assert_eq!(right.left(), None);
-    /// ```
     pub fn left(self) -> Option<A> {
         match self {
             Either::Left(l) => Some(l),
@@ -72,16 +46,6 @@ impl<A, B> Either<A, B> {
 
     #[inline]
     /// Convert the right side of `Either<L, R>` to an `Option<R>`.
-    ///
-    /// ```
-    /// use either::*;
-    ///
-    /// let left: Either<_, ()> = Left("some value");
-    /// assert_eq!(left.right(),  None);
-    ///
-    /// let right: Either<(), _> = Right(321);
-    /// assert_eq!(right.right(), Some(321));
-    /// ```
     pub fn right(self) -> Option<B> {
         match self {
             Either::Left(_) => None,
@@ -89,17 +53,8 @@ impl<A, B> Either<A, B> {
         }
     }
 
+    #[inline]
     /// Convert `&Either<L, R>` to `Either<&L, &R>`.
-    ///
-    /// ```
-    /// use either::*;
-    ///
-    /// let left: Either<_, ()> = Left("some value");
-    /// assert_eq!(left.as_ref(), Left(&"some value"));
-    ///
-    /// let right: Either<(), _> = Right("some value");
-    /// assert_eq!(right.as_ref(), Right(&"some value"));
-    /// ```
     pub fn as_ref(&self) -> Either<&A, &B> {
         match *self {
             Either::Left(ref inner) => Either::Left(inner),
@@ -107,24 +62,8 @@ impl<A, B> Either<A, B> {
         }
     }
 
+    #[inline]
     /// Convert `&mut Either<L, R>` to `Either<&mut L, &mut R>`.
-    ///
-    /// ```
-    /// use either::*;
-    ///
-    /// fn mutate_left(value: &mut Either<u32, u32>) {
-    ///     if let Some(l) = value.as_mut().left() {
-    ///         *l = 999;
-    ///     }
-    /// }
-    ///
-    /// let mut left = Left(123);
-    /// let mut right = Right(123);
-    /// mutate_left(&mut left);
-    /// mutate_left(&mut right);
-    /// assert_eq!(left, Left(999));
-    /// assert_eq!(right, Right(123));
-    /// ```
     pub fn as_mut(&mut self) -> Either<&mut A, &mut B> {
         match *self {
             Either::Left(ref mut inner) => Either::Left(inner),
