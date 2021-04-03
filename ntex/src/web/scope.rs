@@ -2,14 +2,12 @@ use std::{
     cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll,
 };
 
-use futures::future::Either;
-
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{apply, apply_fn_factory, pipeline_factory};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
-use crate::util::{Extensions, Ready};
+use crate::util::{Either, Extensions, Ready};
 
 use super::config::ServiceConfig;
 use super::dev::{WebServiceConfig, WebServiceFactory};
@@ -306,7 +304,7 @@ where
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
             f.into_factory().map_init_err(|e| {
-                log::error!("Can not construct default service: {:?}", e)
+                log::error!("Cannot construct default service: {:?}", e)
             }),
         )))));
 
@@ -677,13 +675,11 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeEndpoint<Err> {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use futures::future::Either;
-
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::http::{Method, StatusCode};
     use crate::service::{fn_service, Service};
+    use crate::util::{Bytes, Either};
     use crate::web::middleware::DefaultHeaders;
     use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};

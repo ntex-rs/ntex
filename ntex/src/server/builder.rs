@@ -1,16 +1,13 @@
-use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
-use std::{io, mem, net};
+use std::{future::Future, io, mem, net, pin::Pin, time::Duration};
 
-use futures::channel::mpsc::{unbounded, UnboundedReceiver};
-use futures::channel::oneshot;
-use futures::stream::FuturesUnordered;
-use futures::{ready, Future, Stream, StreamExt};
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::sync::oneshot;
 
 use crate::rt::{net::TcpStream, spawn, time::sleep, System};
+use crate::util::join_all;
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfiguredService, ServiceConfig};
@@ -48,7 +45,7 @@ impl Default for ServerBuilder {
 impl ServerBuilder {
     /// Create new Server builder instance
     pub fn new() -> ServerBuilder {
-        let (tx, rx) = unbounded();
+        let (tx, rx) = unbounded_channel();
         let server = Server::new(tx);
 
         ServerBuilder {
@@ -368,15 +365,14 @@ impl ServerBuilder {
 
                 // stop workers
                 if !self.workers.is_empty() && graceful {
-                    let fut = self
+                    let futs: Vec<_> = self
                         .workers
                         .iter()
                         .map(move |worker| worker.1.stop(graceful))
-                        .collect::<FuturesUnordered<_>>()
-                        .collect::<Vec<_>>();
+                        .collect();
 
                     spawn(async move {
-                        let _ = fut.await;
+                        let _ = join_all(futs).await;
 
                         if let Some(tx) = completion {
                             let _ = tx.send(());
@@ -443,11 +439,10 @@ impl Future for ServerBuilder {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            match ready!(Pin::new(&mut self.cmd).poll_next(cx)) {
-                Some(it) => self.as_mut().get_mut().handle_cmd(it),
-                None => {
-                    return Poll::Pending;
-                }
+            match Pin::new(&mut self.cmd).poll_recv(cx) {
+                Poll::Ready(Some(it)) => self.as_mut().get_mut().handle_cmd(it),
+                Poll::Ready(None) => return Poll::Pending,
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
@@ -476,7 +471,7 @@ pub(super) fn bind_addr<S: net::ToSocketAddrs>(
         } else {
             Err(io::Error::new(
                 io::ErrorKind::Other,
-                "Can not bind to address.",
+                "Cannot bind to address.",
             ))
         }
     } else {
@@ -513,7 +508,6 @@ mod tests {
     #[cfg(unix)]
     #[crate::rt_test]
     async fn test_signals() {
-        use futures::future::ok;
         use std::sync::mpsc;
         use std::{net, thread, time};
 
@@ -525,7 +519,9 @@ mod tests {
                     crate::server::build()
                         .workers(1)
                         .disable_signals()
-                        .bind("test", addr, move || fn_service(|_| ok::<_, ()>(())))
+                        .bind("test", addr, move || {
+                            fn_service(|_| async { Ok::<_, ()>(()) })
+                        })
                         .unwrap()
                         .start()
                 });

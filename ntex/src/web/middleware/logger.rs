@@ -1,17 +1,15 @@
 //! Request logging middleware
 use std::fmt::{self, Display};
 use std::task::{Context, Poll};
-use std::{convert::TryFrom, env, error::Error, future::Future, pin::Pin, rc::Rc};
+use std::{convert::TryFrom, env, error::Error, future::Future, pin::Pin, rc::Rc, time};
 
 use bytes::Bytes;
-use futures::future::Either;
 use regex::Regex;
-use time::OffsetDateTime;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
 use crate::service::{Service, Transform};
-use crate::util::{HashSet, Ready};
+use crate::util::{Either, HashSet, Ready};
 use crate::web::dev::{WebRequest, WebResponse};
 use crate::web::HttpResponse;
 
@@ -166,7 +164,7 @@ where
         if self.inner.exclude.contains(req.path()) {
             Either::Right(self.service.call(req))
         } else {
-            let time = OffsetDateTime::now_utc();
+            let time = time::SystemTime::now();
             let mut format = self.inner.format.clone();
 
             for unit in &mut format.0 {
@@ -187,7 +185,7 @@ pin_project_lite::pin_project! {
     {
         #[pin]
         fut: S::Future,
-        time: OffsetDateTime,
+        time: time::SystemTime,
         format: Option<Format>,
     }
 }
@@ -201,9 +199,10 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
-        let res = match futures::ready!(this.fut.poll(cx)) {
-            Ok(res) => res,
-            Err(e) => return Poll::Ready(Err(e)),
+        let res = match this.fut.poll(cx) {
+            Poll::Ready(Ok(res)) => res,
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+            Poll::Pending => return Poll::Pending,
         };
 
         if let Some(ref mut format) = this.format {
@@ -230,7 +229,7 @@ struct StreamLog {
     body: ResponseBody<Body>,
     format: Option<Format>,
     size: usize,
-    time: OffsetDateTime,
+    time: time::SystemTime,
 }
 
 impl Drop for StreamLog {
@@ -357,20 +356,20 @@ impl FormatText {
         &self,
         fmt: &mut fmt::Formatter<'_>,
         size: usize,
-        entry_time: OffsetDateTime,
+        entry_time: time::SystemTime,
     ) -> Result<(), fmt::Error> {
         match *self {
             FormatText::Str(ref string) => fmt.write_str(string),
             FormatText::Percent => "%".fmt(fmt),
             FormatText::ResponseSize => size.fmt(fmt),
             FormatText::Time => {
-                let rt = OffsetDateTime::now_utc() - entry_time;
-                let rt = rt.as_seconds_f64();
+                let rt = entry_time.elapsed().unwrap();
+                let rt = rt.as_secs_f64();
                 fmt.write_fmt(format_args!("{:.6}", rt))
             }
             FormatText::TimeMillis => {
-                let rt = OffsetDateTime::now_utc() - entry_time;
-                let rt = (rt.whole_nanoseconds() as f64) / 1_000_000.0;
+                let rt = entry_time.elapsed().unwrap();
+                let rt = (rt.as_nanos() as f64) / 1_000_000.0;
                 fmt.write_fmt(format_args!("{:.6}", rt))
             }
             FormatText::EnvironHeader(ref name) => {
@@ -405,7 +404,7 @@ impl FormatText {
         }
     }
 
-    fn render_request<E>(&mut self, now: OffsetDateTime, req: &WebRequest<E>) {
+    fn render_request<E>(&mut self, now: time::SystemTime, req: &WebRequest<E>) {
         match *self {
             FormatText::RequestLine => {
                 *self = if req.query_string().is_empty() {
@@ -427,7 +426,7 @@ impl FormatText {
             }
             FormatText::UrlPath => *self = FormatText::Str(req.path().to_string()),
             FormatText::RequestTime => {
-                *self = FormatText::Str(now.format("%Y-%m-%dT%H:%M:%S"))
+                *self = FormatText::Str(httpdate::HttpDate::from(now).to_string())
             }
             FormatText::RequestHeader(ref name) => {
                 let s = if let Some(val) = req.headers().get(name) {
@@ -466,18 +465,17 @@ impl<'a> fmt::Display for FormatDisplay<'a> {
 
 #[cfg(test)]
 mod tests {
-    use futures::future::{lazy, ok};
-
     use super::*;
     use crate::http::{header, StatusCode};
     use crate::service::{IntoService, Service, Transform};
+    use crate::util::lazy;
     use crate::web::test::{self, TestRequest};
     use crate::web::{DefaultError, Error};
 
     #[crate::rt_test]
     async fn test_logger() {
-        let srv = |req: WebRequest<DefaultError>| {
-            ok::<_, Error>(
+        let srv = |req: WebRequest<DefaultError>| async move {
+            Ok::<_, Error>(
                 req.into_response(
                     HttpResponse::build(StatusCode::OK)
                         .header("X-Test", "ttt")
@@ -523,7 +521,7 @@ mod tests {
         .uri("/test/route/yeah?q=test")
         .to_srv_request();
 
-        let now = OffsetDateTime::now_utc();
+        let now = time::SystemTime::now();
         for unit in &mut format.0 {
             unit.render_request(now, &req);
         }
@@ -553,7 +551,7 @@ mod tests {
         )
         .to_srv_request();
 
-        let now = OffsetDateTime::now_utc();
+        let now = time::SystemTime::now();
         for unit in &mut format.0 {
             unit.render_request(now, &req);
         }
@@ -563,7 +561,7 @@ mod tests {
             unit.render_response(&resp);
         }
 
-        let entry_time = OffsetDateTime::now_utc();
+        let entry_time = time::SystemTime::now();
         let render = |fmt: &mut fmt::Formatter<'_>| {
             for unit in &format.0 {
                 unit.render(fmt, 1024, entry_time)?;
@@ -581,7 +579,7 @@ mod tests {
         let mut format = Format::new("%t");
         let req = TestRequest::default().to_srv_request();
 
-        let now = OffsetDateTime::now_utc();
+        let now = time::SystemTime::now();
         for unit in &mut format.0 {
             unit.render_request(now, &req);
         }
@@ -598,6 +596,6 @@ mod tests {
             Ok(())
         };
         let s = format!("{}", FormatDisplay(&render));
-        assert!(s.contains(&now.format("%Y-%m-%dT%H:%M:%S")));
+        assert!(s.contains(&httpdate::HttpDate::from(now).to_string()));
     }
 }

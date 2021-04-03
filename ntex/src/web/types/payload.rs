@@ -3,12 +3,11 @@ use std::{future::Future, pin::Pin, str, task::Context, task::Poll};
 
 use bytes::{Bytes, BytesMut};
 use encoding_rs::UTF_8;
-use futures::future::Either;
-use futures::{Stream, StreamExt};
+use futures_core::Stream;
 use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
-use crate::util::Ready;
+use crate::util::{next, Either, Ready};
 use crate::web::error::{ErrorRenderer, PayloadError};
 use crate::web::{FromRequest, HttpRequest};
 
@@ -18,14 +17,14 @@ use crate::web::{FromRequest, HttpRequest};
 ///
 /// ```rust
 /// use bytes::BytesMut;
-/// use futures::{Future, Stream, StreamExt};
+/// use futures::{Future, Stream};
 /// use ntex::web::{self, error, App, HttpResponse};
 ///
 /// /// extract binary data from request
 /// async fn index(mut body: web::types::Payload) -> Result<HttpResponse, error::PayloadError>
 /// {
 ///     let mut bytes = BytesMut::new();
-///     while let Some(item) = body.next().await {
+///     while let Some(item) = ntex::util::next(&mut body).await {
 ///         bytes.extend_from_slice(&item?);
 ///     }
 ///
@@ -68,14 +67,14 @@ impl Stream for Payload {
 ///
 /// ```rust
 /// use bytes::BytesMut;
-/// use futures::{Future, Stream, StreamExt};
+/// use futures::{Future, Stream};
 /// use ntex::web::{self, error, App, Error, HttpResponse};
 ///
 /// /// extract binary data from request
 /// async fn index(mut body: web::types::Payload) -> Result<HttpResponse, error::PayloadError>
 /// {
 ///     let mut bytes = BytesMut::new();
-///     while let Some(item) = body.next().await {
+///     while let Some(item) = ntex::util::next(&mut body).await {
 ///         bytes.extend_from_slice(&item?);
 ///     }
 ///
@@ -393,7 +392,7 @@ impl Future for HttpMessageBody {
         self.fut = Some(Box::pin(async move {
             let mut body = BytesMut::with_capacity(8192);
 
-            while let Some(item) = stream.next().await {
+            while let Some(item) = next(&mut stream).await {
                 let chunk = item?;
                 if body.len() + chunk.len() > limit {
                     return Err(PayloadError::from(error::PayloadError::Overflow));
@@ -410,7 +409,6 @@ impl Future for HttpMessageBody {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use futures::StreamExt;
 
     use super::*;
     use crate::http::header;
@@ -444,7 +442,7 @@ mod tests {
             .await
             .unwrap()
             .into_inner();
-        let b = s.next().await.unwrap().unwrap();
+        let b = next(&mut s).await.unwrap().unwrap();
         assert_eq!(b, Bytes::from_static(b"hello=world"));
     }
 

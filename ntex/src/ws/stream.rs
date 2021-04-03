@@ -3,10 +3,10 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use futures::{Sink, Stream};
 use ntex_codec::{Decoder, Encoder};
 
 use super::{Codec, Frame, Message, ProtocolError};
+use crate::{Sink, Stream};
 
 /// Stream error
 #[derive(Debug, Display)]
@@ -171,10 +171,9 @@ where
 #[cfg(test)]
 mod tests {
     use bytestring::ByteString;
-    use futures::{SinkExt, StreamExt};
 
     use super::*;
-    use crate::channel::mpsc;
+    use crate::{channel::mpsc, util::next, util::poll_fn, util::send};
 
     #[crate::rt_test]
     async fn test_decoder() {
@@ -191,12 +190,12 @@ mod tests {
             .unwrap();
 
         tx.send(Ok::<_, ()>(buf.split().freeze())).unwrap();
-        let frame = StreamExt::next(&mut decoder).await.unwrap().unwrap();
+        let frame = next(&mut decoder).await.unwrap().unwrap();
         match frame {
             Frame::Text(data) => assert_eq!(data, b"test1"[..]),
             _ => panic!(),
         }
-        let frame = StreamExt::next(&mut decoder).await.unwrap().unwrap();
+        let frame = next(&mut decoder).await.unwrap().unwrap();
         match frame {
             Frame::Text(data) => assert_eq!(data, b"test2"[..]),
             _ => panic!(),
@@ -208,15 +207,21 @@ mod tests {
         let (tx, mut rx) = mpsc::channel();
         let mut encoder = StreamEncoder::new(tx);
 
-        encoder
-            .send(Ok::<_, ()>(Message::Text(ByteString::from_static("test"))))
+        send(
+            &mut encoder,
+            Ok::<_, ()>(Message::Text(ByteString::from_static("test"))),
+        )
+        .await
+        .unwrap();
+        poll_fn(|cx| Pin::new(&mut encoder).poll_flush(cx))
             .await
             .unwrap();
-        encoder.flush().await.unwrap();
-        encoder.close().await.unwrap();
+        poll_fn(|cx| Pin::new(&mut encoder).poll_close(cx))
+            .await
+            .unwrap();
 
-        let data = rx.next().await.unwrap().unwrap();
+        let data = next(&mut rx).await.unwrap().unwrap();
         assert_eq!(data, b"\x81\x04test".as_ref());
-        assert!(rx.next().await.is_none());
+        assert!(next(&mut rx).await.is_none());
     }
 }

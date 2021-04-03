@@ -2,12 +2,11 @@
 use std::task::{Context, Poll, Waker};
 use std::{cell::Cell, cell::RefCell, future::Future, hash, io, mem, pin::Pin, rc::Rc};
 
-use futures::future::poll_fn;
 use slab::Slab;
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::task::LocalWaker;
-use crate::util::{Buf, BytesMut, Either};
+use crate::util::{poll_fn, Buf, BytesMut, Either};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -1110,12 +1109,9 @@ impl Drop for OnDisconnect {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use futures::future::lazy;
-
-    use crate::codec::BytesCodec;
-    use crate::testing::Io;
 
     use super::*;
+    use crate::{codec::BytesCodec, testing::Io, util::lazy};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";

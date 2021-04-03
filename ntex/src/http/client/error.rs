@@ -2,7 +2,6 @@
 use std::{error::Error, io};
 
 use derive_more::{Display, From};
-use either::Either;
 use serde_json::error::Error as JsonError;
 
 #[cfg(feature = "openssl")]
@@ -12,6 +11,7 @@ use crate::connect::ResolveError;
 use crate::http::error::{HttpError, ParseError, PayloadError};
 use crate::http::header::HeaderValue;
 use crate::http::StatusCode;
+use crate::util::Either;
 use crate::ws::ProtocolError;
 
 /// Websocket client error

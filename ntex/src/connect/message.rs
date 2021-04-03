@@ -3,7 +3,7 @@ use std::fmt;
 use std::iter::{FromIterator, FusedIterator};
 use std::net::SocketAddr;
 
-use either::Either;
+use crate::util::Either;
 
 /// Connect request
 pub trait Address: Unpin + 'static {

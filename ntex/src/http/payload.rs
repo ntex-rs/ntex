@@ -1,7 +1,7 @@
 use std::{fmt, mem, pin::Pin, task::Context, task::Poll};
 
 use bytes::Bytes;
-use futures::Stream;
+use futures_core::Stream;
 use h2::RecvStream;
 
 use super::error::PayloadError;

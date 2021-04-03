@@ -5,11 +5,10 @@ use std::{
     time::Instant,
 };
 
-use either::Either;
-
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use crate::framed::{DispatchItem, Read, ReadTask, State, Timer, Write, WriteTask};
 use crate::service::{IntoService, Service};
+use crate::util::Either;
 
 type Response<U> = <U as Encoder>::Item;
 

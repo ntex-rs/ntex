@@ -1,5 +1,6 @@
 //! A runtime implementation that runs everything on the current thread.
-use futures::future::{self, Future, FutureExt};
+use ntex_service::util::lazy;
+use std::future::Future;
 
 mod arbiter;
 mod builder;
@@ -21,7 +22,7 @@ pub use self::system::System;
 #[inline]
 pub fn spawn<F>(f: F) -> self::task::JoinHandle<F::Output>
 where
-    F: futures::Future + 'static,
+    F: Future + 'static,
 {
     tokio::task::spawn_local(f)
 }
@@ -39,7 +40,10 @@ where
     F: FnOnce() -> R + 'static,
     R: Future + 'static,
 {
-    tokio::task::spawn_local(future::lazy(|_| f()).flatten())
+    tokio::task::spawn_local(async move {
+        let r = lazy(|_| f()).await;
+        r.await
+    })
 }
 
 /// Asynchronous signal handling

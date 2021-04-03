@@ -1,13 +1,11 @@
 use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
 
-use futures::future::Either;
-
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{apply, apply_fn_factory, pipeline_factory};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
-use crate::util::{Extensions, Ready};
+use crate::util::{Either, Extensions, Ready};
 
 use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
 use super::config::{AppConfig, ServiceConfig};
@@ -139,7 +137,7 @@ where
             Box::pin(async move {
                 match fut.await {
                     Err(e) => {
-                        log::error!("Can not construct data instance: {:?}", e);
+                        log::error!("Cannot construct data instance: {:?}", e);
                         Err(())
                     }
                     Ok(data) => {
@@ -293,7 +291,7 @@ where
     {
         // create and configure default resource
         self.default = Some(Rc::new(boxed::factory(f.into_factory().map_init_err(
-            |e| log::error!("Can not construct default service: {:?}", e),
+            |e| log::error!("Cannot construct default service: {:?}", e),
         ))));
 
         self
@@ -628,7 +626,6 @@ where
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use futures::future::ok;
 
     use super::*;
     use crate::http::header::{self, HeaderValue};
@@ -659,13 +656,13 @@ mod tests {
                 .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
                 .service(
                     web::resource("/test2")
-                        .default_service(|r: WebRequest<DefaultError>| {
-                            ok(r.into_response(HttpResponse::Created()))
+                        .default_service(|r: WebRequest<DefaultError>| async move {
+                            Ok(r.into_response(HttpResponse::Created()))
                         })
                         .route(web::get().to(|| async { HttpResponse::Ok() })),
                 )
-                .default_service(|r: WebRequest<DefaultError>| {
-                    ok(r.into_response(HttpResponse::MethodNotAllowed()))
+                .default_service(|r: WebRequest<DefaultError>| async move {
+                    Ok(r.into_response(HttpResponse::MethodNotAllowed()))
                 }),
         )
         .await;
@@ -688,10 +685,12 @@ mod tests {
     #[crate::rt_test]
     async fn test_data_factory() {
         let srv = init_service(
-            App::new().data_factory(|| ok::<_, ()>(10usize)).service(
-                web::resource("/")
-                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
-            ),
+            App::new()
+                .data_factory(|| async { Ok::<_, ()>(10usize) })
+                .service(
+                    web::resource("/")
+                        .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+                ),
         )
         .await;
         let req = TestRequest::default().to_request();
@@ -699,10 +698,12 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(
-            App::new().data_factory(|| ok::<_, ()>(10u32)).service(
-                web::resource("/")
-                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
-            ),
+            App::new()
+                .data_factory(|| async { Ok::<_, ()>(10u32) })
+                .service(
+                    web::resource("/")
+                        .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+                ),
         )
         .await;
         let req = TestRequest::default().to_request();

@@ -119,7 +119,7 @@ mod tests {
 
     use super::*;
     use crate::service::{apply, fn_factory, Service, ServiceFactory};
-    use futures::future::{lazy, ok};
+    use crate::util::lazy;
 
     struct SleepService(Duration);
 
@@ -162,7 +162,10 @@ mod tests {
     async fn test_newtransform() {
         let wait_time = Duration::from_millis(50);
 
-        let srv = apply(InFlight::new(1), fn_factory(|| ok(SleepService(wait_time))));
+        let srv = apply(
+            InFlight::new(1),
+            fn_factory(|| async { Ok(SleepService(wait_time)) }),
+        );
 
         let srv = srv.new_service(&()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));

@@ -3,9 +3,9 @@ use std::task::{Context, Poll};
 use std::{fmt, io};
 
 use bytes::{Buf, BytesMut};
-use either::Either;
 use futures_core::{ready, Stream};
 use futures_sink::Sink;
+use ntex_service::util::Either;
 
 use crate::{AsyncRead, AsyncWrite, Decoder, Encoder};
 

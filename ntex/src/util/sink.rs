@@ -2,10 +2,9 @@ use std::{
     cell::Cell, cell::RefCell, marker::PhantomData, pin::Pin, task::Context, task::Poll,
 };
 
-use futures::future::{ready, Ready};
-use futures::Sink;
+use futures_sink::Sink;
 
-use crate::service::Service;
+use crate::{service::Service, util::Ready};
 
 /// `SinkService` forwards incoming requests to the provided `Sink`
 pub struct SinkService<S, I> {
@@ -48,7 +47,7 @@ where
     type Request = I;
     type Response = ();
     type Error = S::Error;
-    type Future = Ready<Result<(), S::Error>>;
+    type Future = Ready<(), S::Error>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let mut inner = self.sink.borrow_mut();
@@ -78,6 +77,6 @@ where
     }
 
     fn call(&self, req: I) -> Self::Future {
-        ready(Pin::new(&mut *self.sink.borrow_mut()).start_send(req))
+        Ready::result(Pin::new(&mut *self.sink.borrow_mut()).start_send(req))
     }
 }

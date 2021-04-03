@@ -1,7 +1,7 @@
 use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc, time::Duration};
 
 use bytes::Bytes;
-use futures::Stream;
+use futures_core::Stream;
 use serde::Serialize;
 
 use crate::http::body::Body;

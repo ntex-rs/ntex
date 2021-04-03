@@ -20,15 +20,14 @@ use crate::{http::Payload, util::Ready};
 ///
 /// ```rust
 /// use ntex::web;
-/// use serde_derive::Deserialize;
 ///
-/// #[derive(Debug, Deserialize)]
+/// #[derive(Debug, serde::Deserialize)]
 /// pub enum ResponseType {
 ///    Token,
 ///    Code
 /// }
 ///
-/// #[derive(Deserialize)]
+/// #[derive(serde::Deserialize)]
 /// pub struct AuthRequest {
 ///    id: u64,
 ///    response_type: ResponseType,
@@ -98,15 +97,14 @@ impl<T: fmt::Display> fmt::Display for Query<T> {
 ///
 /// ```rust
 /// use ntex::web;
-/// use serde_derive::Deserialize;
 ///
-/// #[derive(Debug, Deserialize)]
+/// #[derive(Debug, serde::Deserialize)]
 /// pub enum ResponseType {
 ///    Token,
 ///    Code
 /// }
 ///
-/// #[derive(Deserialize)]
+/// #[derive(serde::Deserialize)]
 /// pub struct AuthRequest {
 ///    id: u64,
 ///    response_type: ResponseType,
@@ -153,12 +151,11 @@ where
 #[cfg(test)]
 mod tests {
     use derive_more::Display;
-    use serde_derive::Deserialize;
 
     use super::*;
     use crate::web::test::{from_request, TestRequest};
 
-    #[derive(Deserialize, Debug, Display)]
+    #[derive(serde::Deserialize, Debug, Display)]
     struct Id {
         id: String,
     }

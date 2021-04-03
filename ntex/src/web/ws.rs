@@ -1,7 +1,10 @@
-use std::error::Error as StdError;
+use std::{
+    error::Error as StdError, marker::PhantomData, pin::Pin, task::Context, task::Poll,
+};
 
 use bytes::Bytes;
-use futures::{Sink, Stream, TryStreamExt};
+use futures_core::Stream;
+use futures_sink::Sink;
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
 
@@ -84,10 +87,10 @@ where
     // start websockets service dispatcher
     rt::spawn(crate::util::stream::Dispatcher::new(
         // wrap bytes stream to ws::Frame's stream
-        ws::StreamDecoder::new(payload).map_err(|e| {
-            let e: Box<dyn StdError> = Box::new(e);
-            e
-        }),
+        MapStream {
+            stream: ws::StreamDecoder::new(payload),
+            _t: PhantomData,
+        },
         // converter wraper from ws::Message to Bytes
         sink,
         // websockets handler service
@@ -95,4 +98,36 @@ where
     ));
 
     Ok(res.body(Body::from_message(BoxedBodyStream::new(rx))))
+}
+
+pin_project_lite::pin_project! {
+    struct MapStream<S, I, E>{
+        #[pin]
+        stream: S,
+        _t: PhantomData<(I, E)>,
+    }
+}
+
+impl<S, I, E> Stream for MapStream<S, I, E>
+where
+    S: Stream<Item = Result<I, E>>,
+    E: StdError + 'static,
+{
+    type Item = Result<I, Box<dyn StdError>>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        match self.project().stream.poll_next(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(Ok(item))) => Poll::Ready(Some(Ok(item))),
+            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(Box::new(err)))),
+            Poll::Ready(None) => Poll::Ready(None),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.stream.size_hint()
+    }
 }

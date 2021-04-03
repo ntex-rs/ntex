@@ -1,13 +1,11 @@
 use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
-use futures::future::Either;
-
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
 use crate::http::{Protocol, Uri};
 use crate::service::{apply_fn, boxed, Service};
 use crate::util::timeout::{TimeoutError, TimeoutService};
-use crate::util::Ready;
+use crate::util::{Either, Ready};
 
 use super::connection::Connection;
 use super::error::ConnectError;
@@ -83,7 +81,7 @@ impl Connector {
             let mut ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
             let _ = ssl
                 .set_alpn_protos(b"\x02h2\x08http/1.1")
-                .map_err(|e| error!("Can not set ALPN protocol: {:?}", e));
+                .map_err(|e| error!("Cannot set ALPN protocol: {:?}", e));
             conn.openssl(ssl.build())
         }
         #[cfg(all(not(feature = "openssl"), feature = "rustls"))]
@@ -366,7 +364,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::future::lazy;
+    use crate::util::lazy;
 
     #[crate::rt_test]
     async fn test_readiness() {

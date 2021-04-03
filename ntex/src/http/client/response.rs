@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use std::{fmt, future::Future, marker::PhantomData, mem, pin::Pin};
 
 use bytes::{Bytes, BytesMut};
-use futures::Stream;
+use futures_core::Stream;
 use serde::de::DeserializeOwned;
 
 #[cfg(feature = "cookie")]

@@ -139,11 +139,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::future::lazy;
-
     use super::*;
     use crate::rt::time::sleep;
     use crate::service::{Service, ServiceFactory};
+    use crate::util::lazy;
 
     #[derive(Debug, PartialEq)]
     struct TestErr;

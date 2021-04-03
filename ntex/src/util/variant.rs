@@ -319,11 +319,11 @@ variant_impl_and!(VariantFactory7, VariantFactory8, V8, v8, (V2, V3, V4, V5, V6,
 
 #[cfg(test)]
 mod tests {
-    use futures::future::{lazy, ok, Ready};
     use std::task::{Context, Poll};
 
     use super::*;
     use crate::service::{fn_factory, Service, ServiceFactory};
+    use crate::util::{lazy, Ready};
 
     #[derive(Clone)]
     struct Srv1;
@@ -332,7 +332,7 @@ mod tests {
         type Request = ();
         type Response = usize;
         type Error = ();
-        type Future = Ready<Result<usize, ()>>;
+        type Future = Ready<usize, ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
@@ -343,7 +343,7 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            ok::<_, ()>(1)
+            Ready::<_, ()>::ok(1)
         }
     }
 
@@ -354,7 +354,7 @@ mod tests {
         type Request = ();
         type Response = usize;
         type Error = ();
-        type Future = Ready<Result<usize, ()>>;
+        type Future = Ready<usize, ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
@@ -365,15 +365,15 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            ok::<_, ()>(2)
+            Ready::<_, ()>::ok(2)
         }
     }
 
     #[crate::rt_test]
     async fn test_variant() {
-        let factory = variant(fn_factory(|| ok::<_, ()>(Srv1)))
-            .and(fn_factory(|| ok::<_, ()>(Srv2)))
-            .and(fn_factory(|| ok::<_, ()>(Srv2)))
+        let factory = variant(fn_factory(|| async { Ok::<_, ()>(Srv1) }))
+            .and(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
+            .and(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
         let service = factory.new_service(&()).await.clone().unwrap();
 

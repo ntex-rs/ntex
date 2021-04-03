@@ -144,10 +144,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Future for AcceptorServiceFut<T> {
             }
         }
 
-        let res = futures::ready!(Pin::new(&mut this.fut).poll(cx));
-        match res {
-            Ok(io) => Poll::Ready(Ok(io)),
-            Err(e) => Poll::Ready(Err(Box::new(e))),
+        match Pin::new(&mut this.fut).poll(cx) {
+            Poll::Ready(Ok(io)) => Poll::Ready(Ok(io)),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

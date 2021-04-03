@@ -46,6 +46,9 @@ pub mod ws;
 
 pub use self::service::*;
 
+pub use futures_core::stream::Stream;
+pub use futures_sink::Sink;
+
 pub mod codec {
     //! Utilities for encoding and decoding frames.
     pub use ntex_codec::*;

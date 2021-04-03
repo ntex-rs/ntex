@@ -1,12 +1,9 @@
-use std::future::Future;
-use std::io::{self, Write};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{future::Future, io, io::Write, pin::Pin, task::Context, task::Poll};
 
 use brotli2::write::BrotliDecoder;
 use bytes::Bytes;
 use flate2::write::{GzDecoder, ZlibDecoder};
-use futures::{ready, Stream};
+use futures_core::Stream;
 
 use super::Writer;
 use crate::http::error::PayloadError;
@@ -79,10 +76,11 @@ where
     ) -> Poll<Option<Self::Item>> {
         loop {
             if let Some(ref mut fut) = self.fut {
-                let (chunk, decoder) = match ready!(Pin::new(fut).poll(cx)) {
-                    Ok(Ok(item)) => item,
-                    Ok(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
-                    Err(e) => return Poll::Ready(Some(Err(e.into()))),
+                let (chunk, decoder) = match Pin::new(fut).poll(cx) {
+                    Poll::Ready(Ok(Ok(item))) => item,
+                    Poll::Ready(Ok(Err(e))) => return Poll::Ready(Some(Err(e.into()))),
+                    Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
+                    Poll::Pending => return Poll::Pending,
                 };
                 self.decoder = Some(decoder);
                 self.fut.take();

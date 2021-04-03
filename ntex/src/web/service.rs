@@ -365,8 +365,6 @@ tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(
 
 #[cfg(test)]
 mod tests {
-    use futures::future::ok;
-
     use super::*;
     use crate::http::{Method, StatusCode};
     use crate::service::Service;
@@ -398,8 +396,8 @@ mod tests {
     async fn test_service() {
         let srv = init_service(App::new().service(
             web::service("/test").name("test").finish(
-                |req: WebRequest<DefaultError>| {
-                    ok(req.into_response(HttpResponse::Ok().finish()))
+                |req: WebRequest<DefaultError>| async move {
+                    Ok(req.into_response(HttpResponse::Ok().finish()))
                 },
             ),
         ))
@@ -410,8 +408,8 @@ mod tests {
 
         let srv = init_service(App::new().service(
             web::service("/test").guard(guard::Get()).finish(
-                |req: WebRequest<DefaultError>| {
-                    ok(req.into_response(HttpResponse::Ok().finish()))
+                |req: WebRequest<DefaultError>| async move {
+                    Ok(req.into_response(HttpResponse::Ok().finish()))
                 },
             ),
         ))

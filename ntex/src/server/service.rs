@@ -83,7 +83,7 @@ where
         match req {
             ServerMessage::Connect(stream) => {
                 let stream = FromStream::from_stream(stream).map_err(|e| {
-                    error!("Can not convert to an async io stream: {}", e);
+                    error!("Cannot convert to an async io stream: {}", e);
                 });
 
                 if let Ok(stream) = stream {

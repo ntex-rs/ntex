@@ -1,8 +1,6 @@
-use std::cell::RefCell;
-use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-use futures::channel::mpsc::UnboundedSender;
+use std::{cell::RefCell, io};
+use tokio::sync::mpsc::UnboundedSender;
 
 use super::arbiter::{Arbiter, SystemCommand};
 use super::builder::{Builder, SystemRunner};
@@ -83,7 +81,7 @@ impl System {
 
     /// Stop the system with a particular exit code.
     pub fn stop_with_code(&self, code: i32) {
-        let _ = self.sys.unbounded_send(SystemCommand::Exit(code));
+        let _ = self.sys.send(SystemCommand::Exit(code));
     }
 
     pub(super) fn sys(&self) -> &UnboundedSender<SystemCommand> {

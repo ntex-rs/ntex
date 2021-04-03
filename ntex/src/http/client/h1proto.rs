@@ -1,7 +1,6 @@
 use std::{io, io::Write, pin::Pin, task::Context, task::Poll, time};
 
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::{future::poll_fn, SinkExt, Stream, StreamExt};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed, ReadBuf};
 use crate::http::body::{BodySize, MessageBody};
@@ -10,6 +9,8 @@ use crate::http::h1;
 use crate::http::header::{HeaderMap, HeaderValue, HOST};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::{Payload, PayloadStream};
+use crate::util::{next, poll_fn, send};
+use crate::{Sink, Stream};
 
 use super::connection::{ConnectionLifetime, ConnectionType, IoConnection};
 use super::error::{ConnectError, SendRequestError};
@@ -48,7 +49,7 @@ where
                         headers.insert(HOST, value)
                     }
                 },
-                Err(e) => log::error!("Can not set HOST header {}", e),
+                Err(e) => log::error!("Cannot set HOST header {}", e),
             }
         }
     }
@@ -61,7 +62,7 @@ where
 
     // create Framed and send request
     let mut framed = Framed::new(io, h1::ClientCodec::default());
-    framed.send((head, body.size()).into()).await?;
+    send(&mut framed, (head, body.size()).into()).await?;
 
     // send request body
     match body.size() {
@@ -70,10 +71,8 @@ where
     };
 
     // read response and init read body
-    let res = framed.into_future().await;
-    let (head, framed) = if let (Some(result), framed) = res {
-        let item = result.map_err(SendRequestError::from)?;
-        (item, framed)
+    let head = if let Some(result) = next(&mut framed).await {
+        result.map_err(SendRequestError::from)?
     } else {
         return Err(SendRequestError::from(ConnectError::Disconnected));
     };
@@ -85,7 +84,7 @@ where
             Ok((head, Payload::None))
         }
         _ => {
-            let pl: PayloadStream = PlStream::new(framed).boxed_local();
+            let pl: PayloadStream = Box::pin(PlStream::new(framed));
             Ok((head, pl.into()))
         }
     }
@@ -100,10 +99,10 @@ where
 {
     // create Framed and send request
     let mut framed = Framed::new(io, h1::ClientCodec::default());
-    framed.send((head, BodySize::None).into()).await?;
+    send(&mut framed, (head, BodySize::None).into()).await?;
 
     // read response
-    if let (Some(result), framed) = framed.into_future().await {
+    if let Some(result) = next(&mut framed).await {
         let head = result.map_err(SendRequestError::from)?;
         Ok((head, framed))
     } else {
@@ -150,7 +149,8 @@ where
         }
     }
 
-    SinkExt::flush(framed).await?;
+    poll_fn(|cx| Pin::new(&mut *framed).poll_flush(cx)).await?;
+
     Ok(())
 }
 

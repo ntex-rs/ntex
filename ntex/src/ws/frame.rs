@@ -2,6 +2,7 @@ use std::convert::TryFrom;
 
 use bytes::{Buf, BufMut, BytesMut};
 use log::debug;
+use nanorand::{WyRand, RNG};
 
 use super::mask::apply_mask;
 use super::proto::{CloseCode, CloseReason, OpCode};
@@ -187,7 +188,7 @@ impl Parser {
         };
 
         if mask {
-            let mask = rand::random::<u32>();
+            let mask: u32 = WyRand::new().generate();
             dst.put_u32_le(mask);
             dst.extend_from_slice(payload.as_ref());
             let pos = dst.len() - payload_len;

@@ -734,18 +734,14 @@ mod tests {
     use std::{cell::Cell, io, sync::Arc};
 
     use bytes::{Bytes, BytesMut};
-    use futures::future::{err, lazy, ok, FutureExt};
-    use futures::StreamExt;
     use rand::Rng;
 
     use super::*;
-    use crate::codec::Decoder;
     use crate::http::config::{DispatcherConfig, ServiceConfig};
     use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
     use crate::http::{body, Request, ResponseHead, StatusCode};
-    use crate::rt::time::sleep;
     use crate::service::{boxed, fn_service, IntoService};
-    use crate::testing::Io;
+    use crate::{codec::Decoder, rt::time::sleep, testing::Io, util::lazy, util::next};
 
     const BUFFER_SIZE: usize = 32_768;
 
@@ -815,12 +811,14 @@ mod tests {
             server,
             Rc::new(DispatcherConfig::new(
                 ServiceConfig::default(),
-                fn_service(|_| ok::<_, io::Error>(Response::Ok().finish())),
+                fn_service(|_| {
+                    Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
+                }),
                 ExpectHandler,
                 None,
                 Some(boxed::service(crate::into_service(move |(req, _)| {
                     data2.set(true);
-                    ok(req)
+                    Box::pin(async move { Ok(req) })
                 }))),
             )),
             None,
@@ -842,7 +840,9 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
-        let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
+        let mut h1 = h1(server, |_| {
+            Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
+        });
         sleep(time::Duration::from_millis(50)).await;
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
@@ -863,7 +863,9 @@ mod tests {
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
-        spawn_h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
+        spawn_h1(server, |_| async {
+            Ok::<_, io::Error>(Response::Ok().finish())
+        });
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
 
@@ -891,7 +893,7 @@ mod tests {
         let mut decoder = ClientCodec::default();
         spawn_h1(server, |mut req: Request| async move {
             let mut p = req.take_payload();
-            while let Some(_) = p.next().await {}
+            while let Some(_) = next(&mut p).await {}
             Ok::<_, io::Error>(Response::Ok().finish())
         });
 
@@ -963,7 +965,7 @@ mod tests {
         let (client, server) = Io::create();
         spawn_h1(server, move |_| {
             num2.fetch_add(1, Ordering::Relaxed);
-            ok::<_, io::Error>(Response::Ok().finish())
+            async { Ok::<_, io::Error>(Response::Ok().finish()) }
         });
 
         client.remote_buffer_cap(1024);
@@ -983,7 +985,9 @@ mod tests {
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
 
-        let mut h1 = h1(server, |_| ok::<_, io::Error>(Response::Ok().finish()));
+        let mut h1 = h1(server, |_| {
+            Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
+        });
         h1.inner.state.set_buffer_params(16 * 1024, 16 * 1024, 1024);
 
         let mut decoder = ClientCodec::default();
@@ -1018,7 +1022,7 @@ mod tests {
             async move {
                 // read one chunk
                 let mut pl = req.take_payload();
-                let _ = pl.next().await.unwrap().unwrap();
+                let _ = next(&mut pl).await.unwrap().unwrap();
                 m.store(true, Ordering::Relaxed);
                 // sleep
                 sleep(time::Duration::from_secs(999_999)).await;
@@ -1071,8 +1075,9 @@ mod tests {
         let (client, server) = Io::create();
         let mut h1 = h1(server, move |_| {
             let n = num2.clone();
-            async move { Ok::<_, io::Error>(Response::Ok().message_body(Stream(n.clone()))) }
-            .boxed_local()
+            Box::pin(async move {
+                Ok::<_, io::Error>(Response::Ok().message_body(Stream(n.clone())))
+            })
         });
         let state = h1.inner.state.clone();
 
@@ -1128,7 +1133,9 @@ mod tests {
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
         let mut h1 = h1(server, |_| {
-            ok::<_, io::Error>(Response::Ok().message_body(Stream(false)))
+            Box::pin(async {
+                Ok::<_, io::Error>(Response::Ok().message_body(Stream(false)))
+            })
         });
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
@@ -1155,7 +1162,9 @@ mod tests {
         client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
 
         let mut h1 = h1(server, |_| {
-            err::<Response<()>, _>(io::Error::new(io::ErrorKind::Other, "error"))
+            Box::pin(async {
+                Err::<Response<()>, _>(io::Error::new(io::ErrorKind::Other, "error"))
+            })
         });
         sleep(time::Duration::from_millis(50)).await;
 

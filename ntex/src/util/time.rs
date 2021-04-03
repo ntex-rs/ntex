@@ -157,7 +157,7 @@ impl SystemTimeService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::future::lazy;
+    use crate::util::lazy;
     use std::time::{Duration, SystemTime};
 
     #[crate::rt_test]

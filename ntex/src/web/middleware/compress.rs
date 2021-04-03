@@ -134,8 +134,8 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
-        match futures::ready!(this.fut.poll(cx)) {
-            Ok(resp) => {
+        match this.fut.poll(cx)? {
+            Poll::Ready(resp) => {
                 let enc = if let Some(enc) = resp.response().get_encoding() {
                     enc
                 } else {
@@ -146,7 +146,7 @@ where
                     resp.map_body(move |head, body| Encoder::response(enc, head, body))
                 ))
             }
-            Err(e) => Poll::Ready(Err(e)),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

@@ -2,15 +2,11 @@
 //!
 //! If the response does not complete within the specified timeout, the response
 //! will be aborted.
-use std::{
-    fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll, time,
-};
-
-use futures::future::Either;
+use std::{fmt, future::Future, marker, pin::Pin, task::Context, task::Poll, time};
 
 use crate::rt::time::{sleep, Sleep};
 use crate::service::{IntoService, Service, Transform};
-use crate::util::Ready;
+use crate::util::{Either, Ready};
 
 const ZERO: time::Duration = time::Duration::from_millis(0);
 
@@ -20,7 +16,7 @@ const ZERO: time::Duration = time::Duration::from_millis(0);
 #[derive(Debug)]
 pub struct Timeout<E = ()> {
     timeout: time::Duration,
-    _t: PhantomData<E>,
+    _t: marker::PhantomData<E>,
 }
 
 /// Timeout error
@@ -74,7 +70,7 @@ impl<E> Timeout<E> {
     pub fn new(timeout: time::Duration) -> Self {
         Timeout {
             timeout,
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
@@ -222,12 +218,12 @@ where
 #[cfg(test)]
 mod tests {
     use derive_more::Display;
-    use futures::future::{lazy, ok};
     use std::task::{Context, Poll};
     use std::time::Duration;
 
     use super::*;
     use crate::service::{apply, fn_factory, Service, ServiceFactory};
+    use crate::util::lazy;
 
     #[derive(Clone, Debug, PartialEq)]
     struct SleepService(Duration);
@@ -303,7 +299,7 @@ mod tests {
 
         let timeout = apply(
             Timeout::new(resolution).clone(),
-            fn_factory(|| ok::<_, ()>(SleepService(wait_time))),
+            fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
         );
         let srv = timeout.new_service(&()).await.unwrap();
 

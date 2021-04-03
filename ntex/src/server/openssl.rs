@@ -155,10 +155,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Future for AcceptorServiceResponse<T> {
         }
 
         let io = this.io.as_mut().unwrap();
-        let res = futures::ready!(Pin::new(io).poll_accept(cx));
-        match res {
-            Ok(_) => Poll::Ready(Ok(this.io.take().unwrap())),
-            Err(e) => Poll::Ready(Err(Box::new(e))),
+        match Pin::new(io).poll_accept(cx) {
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(this.io.take().unwrap())),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
+            Poll::Pending => Poll::Pending,
         }
     }
 }

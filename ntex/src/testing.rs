@@ -1,15 +1,30 @@
 use std::cell::{Cell, RefCell};
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
-use std::{cmp, io, mem, time};
+use std::task::{Context, Poll, Waker};
+use std::{cmp, fmt, io, mem, pin::Pin, time};
 
 use bytes::BytesMut;
-use futures::future::poll_fn;
-use futures::task::AtomicWaker;
 
 use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::rt::time::sleep;
+use crate::util::poll_fn;
+
+#[derive(Default)]
+struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
+
+impl AtomicWaker {
+    fn wake(&self) {
+        if let Some(waker) = self.0.lock().unwrap().borrow_mut().take() {
+            waker.wake()
+        }
+    }
+}
+
+impl fmt::Debug for AtomicWaker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "AtomicWaker")
+    }
+}
 
 /// Async io stream
 #[derive(Debug)]
@@ -196,7 +211,8 @@ impl Io {
                     if closed {
                         Poll::Ready(())
                     } else {
-                        read.waker.register(cx.waker());
+                        *read.waker.0.lock().unwrap().borrow_mut() =
+                            Some(cx.waker().clone());
                         drop(read);
                         drop(guard);
                         Poll::Pending
@@ -248,7 +264,7 @@ impl AsyncRead for Io {
     ) -> Poll<io::Result<()>> {
         let guard = self.local.lock().unwrap();
         let mut ch = guard.borrow_mut();
-        ch.waker.register(cx.waker());
+        *ch.waker.0.lock().unwrap().borrow_mut() = Some(cx.waker().clone());
 
         if !ch.buf.is_empty() {
             let size = std::cmp::min(ch.buf.len(), buf.remaining());
@@ -288,23 +304,31 @@ impl AsyncWrite for Io {
                     ch.waker.wake();
                     Poll::Ready(Ok(cap))
                 } else {
-                    self.local
+                    *self
+                        .local
                         .lock()
                         .unwrap()
                         .borrow_mut()
                         .waker
-                        .register(cx.waker());
+                        .0
+                        .lock()
+                        .unwrap()
+                        .borrow_mut() = Some(cx.waker().clone());
                     Poll::Pending
                 }
             }
             IoState::Close => Poll::Ready(Ok(0)),
             IoState::Pending => {
-                self.local
+                *self
+                    .local
                     .lock()
                     .unwrap()
                     .borrow_mut()
                     .waker
-                    .register(cx.waker());
+                    .0
+                    .lock()
+                    .unwrap()
+                    .borrow_mut() = Some(cx.waker().clone());
                 Poll::Pending
             }
             IoState::Err(e) => Poll::Ready(Err(e)),

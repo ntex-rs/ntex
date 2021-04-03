@@ -50,7 +50,7 @@ impl Signals {
                 match unix::signal(*kind) {
                     Ok(stream) => signals.push((*sig, stream)),
                     Err(e) => log::error!(
-                        "Can not initialize stream handler for {:?} err: {}",
+                        "Cannot initialize stream handler for {:?} err: {}",
                         sig,
                         e
                     ),

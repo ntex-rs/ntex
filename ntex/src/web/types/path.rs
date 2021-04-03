@@ -1,13 +1,11 @@
 //! Path extractor
 use std::{fmt, ops};
 
-use futures::future::{ready, Ready};
 use serde::de;
 
-use crate::http::Payload;
-use crate::router::PathDeserializer;
 use crate::web::error::{ErrorRenderer, PathError};
 use crate::web::{FromRequest, HttpRequest};
+use crate::{http::Payload, router::PathDeserializer, util::Ready};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 /// Extract typed information from the request's path.
@@ -39,9 +37,8 @@ use crate::web::{FromRequest, HttpRequest};
 ///
 /// ```rust
 /// use ntex::web;
-/// use serde_derive::Deserialize;
 ///
-/// #[derive(Deserialize)]
+/// #[derive(serde::Deserialize)]
 /// struct Info {
 ///     username: String,
 /// }
@@ -134,9 +131,8 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 ///
 /// ```rust
 /// use ntex::web;
-/// use serde_derive::Deserialize;
 ///
-/// #[derive(Deserialize)]
+/// #[derive(serde::Deserialize)]
 /// struct Info {
 ///     username: String,
 /// }
@@ -158,11 +154,11 @@ where
     T: de::DeserializeOwned,
 {
     type Error = PathError;
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = Ready<Self, Self::Error>;
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        ready(
+        Ready::result(
             de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
                 .map(|inner| Path { inner })
                 .map_err(move |e| {
@@ -180,20 +176,19 @@ where
 #[cfg(test)]
 mod tests {
     use derive_more::Display;
-    use serde_derive::Deserialize;
 
     use super::*;
     use crate::router::Router;
     use crate::web::test::{from_request, TestRequest};
 
-    #[derive(Deserialize, Debug, Display)]
+    #[derive(serde::Deserialize, Debug, Display)]
     #[display(fmt = "MyStruct({}, {})", key, value)]
     struct MyStruct {
         key: String,
         value: String,
     }
 
-    #[derive(Deserialize)]
+    #[derive(serde::Deserialize)]
     struct Test2 {
         key: String,
         value: u32,

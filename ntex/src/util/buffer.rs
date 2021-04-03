@@ -5,13 +5,10 @@ use std::{
     collections::VecDeque, convert::Infallible, future::Future, pin::Pin, rc::Rc,
 };
 
-use futures::future::Either;
-use futures::ready;
-
 use crate::channel::oneshot;
 use crate::service::{IntoService, Service, Transform};
 use crate::task::LocalWaker;
-use crate::util::Ready;
+use crate::util::{Either, Ready};
 
 /// Buffer - service factory for service that can buffer incoming request.
 ///
@@ -223,7 +220,10 @@ impl<S: Service<Error = E>, E> Future for BufferServiceResponse<S, E> {
                     Poll::Pending => return Poll::Pending,
                 },
                 StateProject::Srv { fut, inner } => {
-                    let res = ready!(fut.poll(cx));
+                    let res = match fut.poll(cx) {
+                        Poll::Ready(res) => res,
+                        Poll::Pending => return Poll::Pending,
+                    };
                     inner.waker.wake();
                     return Poll::Ready(res);
                 }
@@ -238,7 +238,7 @@ mod tests {
 
     use super::*;
     use crate::service::{apply, fn_factory, Service, ServiceFactory};
-    use futures::future::lazy;
+    use crate::util::lazy;
 
     #[derive(Clone)]
     struct TestService(Rc<Inner>);

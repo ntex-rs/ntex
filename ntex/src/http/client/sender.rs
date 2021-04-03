@@ -3,7 +3,7 @@ use std::{convert::TryFrom, error::Error, future::Future, net, pin::Pin, time};
 
 use bytes::Bytes;
 use derive_more::From;
-use futures::Stream;
+use futures_core::Stream;
 use serde::Serialize;
 
 use crate::http::body::{Body, BodyStream};
@@ -82,7 +82,10 @@ impl Future for SendClientRequest {
                     }
                 }
 
-                let res = futures::ready!(Pin::new(send).poll(cx));
+                let res = match Pin::new(send).poll(cx) {
+                    Poll::Ready(res) => res,
+                    Poll::Pending => return Poll::Pending,
+                };
 
                 #[cfg(feature = "compress")]
                 let res = res.map(|mut res| {

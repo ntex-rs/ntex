@@ -61,7 +61,7 @@ impl TestResponse {
                 return self;
             }
         }
-        panic!("Can not create header");
+        panic!("Cannot create header");
     }
 
     #[cfg(feature = "cookie")]

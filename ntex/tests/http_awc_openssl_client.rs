@@ -63,7 +63,7 @@ async fn test_connection_reuse_h2() {
     builder.set_verify(SslVerifyMode::NONE);
     let _ = builder
         .set_alpn_protos(b"\x02h2\x08http/1.1")
-        .map_err(|e| log::error!("Can not set alpn protocol: {:?}", e));
+        .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
 
     let client = Client::build()
         .connector(Connector::default().openssl(builder.build()).finish())

@@ -3,7 +3,7 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use futures::Stream;
+use futures_core::Stream;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 /// Body size hint
@@ -509,11 +509,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::{future::poll_fn, stream};
+    use futures::stream;
     use std::io;
 
     use super::*;
-    use crate::util::Ready;
+    use crate::util::{poll_fn, Ready};
 
     impl Body {
         pub(crate) fn get_ref(&self) -> &[u8] {

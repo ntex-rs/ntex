@@ -21,6 +21,7 @@ mod then;
 mod transform;
 mod transform_err;
 
+mod either;
 mod lazy;
 mod ready;
 
@@ -341,6 +342,7 @@ where
 }
 
 pub mod util {
+    pub use crate::either::Either;
     pub use crate::lazy::{lazy, Lazy};
     pub use crate::ready::Ready;
 }

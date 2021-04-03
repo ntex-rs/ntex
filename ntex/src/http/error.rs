@@ -1,16 +1,16 @@
 //! Http related errors
 use std::{fmt, io, io::Write, str::Utf8Error, string::FromUtf8Error};
 
-use either::Either;
 use http::{header, uri::InvalidUri, StatusCode};
 
 // re-export for convinience
-pub use futures::channel::oneshot::Canceled;
+pub use crate::channel::Canceled;
 pub use http::Error as HttpError;
 
 use crate::http::body::Body;
 use crate::http::response::Response;
 use crate::rt::task::JoinError;
+use crate::util::Either;
 
 /// Error that can be converted to `Response`
 pub trait ResponseError: fmt::Display + fmt::Debug {
@@ -128,7 +128,7 @@ pub enum PayloadError {
     )]
     Incomplete(Option<io::Error>),
     /// Content encoding stream corruption
-    #[display(fmt = "Can not decode content-encoding.")]
+    #[display(fmt = "Cannot decode content-encoding.")]
     EncodingCorrupted,
     /// A payload reached size limit.
     #[display(fmt = "A payload reached size limit.")]
@@ -219,8 +219,8 @@ impl std::error::Error for DispatchError {}
 /// A set of error that can occure during parsing content type
 #[derive(PartialEq, Debug, Display)]
 pub enum ContentTypeError {
-    /// Can not parse content type
-    #[display(fmt = "Can not parse content type")]
+    /// Cannot parse content type
+    #[display(fmt = "Cannot parse content type")]
     ParseError,
     /// Unknown content encoding
     #[display(fmt = "Unknown content encoding")]

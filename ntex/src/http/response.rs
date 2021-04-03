@@ -2,7 +2,6 @@
 use std::{cell::Ref, cell::RefMut, convert::TryFrom, error::Error, fmt, str};
 
 use bytes::{Bytes, BytesMut};
-use futures::Stream;
 use serde::Serialize;
 
 #[cfg(feature = "cookie")]
@@ -13,7 +12,7 @@ use crate::http::error::{HttpError, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{ConnectionType, Message, ResponseHead};
 use crate::http::StatusCode;
-use crate::util::Extensions;
+use crate::{util::Extensions, Stream};
 
 /// An HTTP Response
 pub struct Response<B = Body> {

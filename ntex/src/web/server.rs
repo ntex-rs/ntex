@@ -1,13 +1,9 @@
-use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
-use std::{fmt, io, net};
+use std::{fmt, io, marker::PhantomData, net, sync::Arc, sync::Mutex};
 
 #[cfg(feature = "openssl")]
 use crate::server::openssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
 use crate::server::rustls::ServerConfig as RustlsServerConfig;
-#[cfg(unix)]
-use futures::future::ok;
 
 #[cfg(unix)]
 use crate::http::Protocol;
@@ -433,7 +429,7 @@ where
             } else {
                 Err(io::Error::new(
                     io::ErrorKind::Other,
-                    "Can not bind to address.",
+                    "Cannot bind to address.",
                 ))
             }
         } else {
@@ -505,7 +501,10 @@ where
                 socket_addr,
                 c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
             );
-            pipeline_factory(|io: UnixStream| ok((io, Protocol::Http1, None))).and_then(
+            pipeline_factory(|io: UnixStream| {
+                crate::util::Ready::ok((io, Protocol::Http1, None))
+            })
+            .and_then(
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
@@ -543,14 +542,16 @@ where
                     socket_addr,
                     c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
                 );
-                pipeline_factory(|io: UnixStream| ok((io, Protocol::Http1, None)))
-                    .and_then(
-                        HttpService::build()
-                            .keep_alive(c.keep_alive)
-                            .client_timeout(c.client_timeout)
-                            .buffer_params(c.read_hw, c.write_hw, c.lw)
-                            .finish(map_config(factory(), move |_| config.clone())),
-                    )
+                pipeline_factory(|io: UnixStream| {
+                    crate::util::Ready::ok((io, Protocol::Http1, None))
+                })
+                .and_then(
+                    HttpService::build()
+                        .keep_alive(c.keep_alive)
+                        .client_timeout(c.client_timeout)
+                        .buffer_params(c.read_hw, c.write_hw, c.lw)
+                        .finish(map_config(factory(), move |_| config.clone())),
+                )
             },
         )?;
         Ok(self)

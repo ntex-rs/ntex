@@ -1,9 +1,8 @@
-use std::borrow::Cow;
-use std::io;
+use std::{borrow::Cow, future::Future, io};
 
-use futures::channel::mpsc::unbounded;
-use futures::channel::oneshot::{channel, Receiver};
-use futures::future::{lazy, Future, FutureExt};
+use ntex_service::util::lazy;
+use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::oneshot::{channel, Receiver};
 use tokio::task::LocalSet;
 
 use super::arbiter::{Arbiter, SystemArbiter};
@@ -74,7 +73,7 @@ impl Builder {
 
     fn create_async_runtime(self, local: &LocalSet) -> AsyncSystemRunner {
         let (stop_tx, stop) = channel();
-        let (sys_sender, sys_receiver) = unbounded();
+        let (sys_sender, sys_receiver) = unbounded_channel();
 
         let system = System::construct(
             sys_sender,
@@ -96,7 +95,7 @@ impl Builder {
         F: FnOnce() + 'static,
     {
         let (stop_tx, stop) = channel();
-        let (sys_sender, sys_receiver) = unbounded();
+        let (sys_sender, sys_receiver) = unbounded_channel();
 
         let rt = Runtime::new().unwrap();
 
@@ -129,7 +128,7 @@ impl AsyncSystemRunner {
         let AsyncSystemRunner { stop, .. } = self;
 
         // run loop
-        lazy(|_| async {
+        async move {
             match stop.await {
                 Ok(code) => {
                     if code != 0 {
@@ -143,8 +142,7 @@ impl AsyncSystemRunner {
                 }
                 Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
             }
-        })
-        .flatten()
+        }
     }
 }
 

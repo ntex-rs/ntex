@@ -100,7 +100,6 @@ pub use ntex_macros::web_trace as trace;
 
 pub use crate::http::Response as HttpResponse;
 pub use crate::http::ResponseBuilder as HttpResponseBuilder;
-pub use either::Either;
 
 pub use self::app::App;
 pub use self::config::ServiceConfig;

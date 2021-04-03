@@ -146,9 +146,8 @@ impl<Err: ErrorRenderer> Route<Err> {
     ///
     /// ```rust
     /// use ntex::web;
-    /// use serde_derive::Deserialize;
     ///
-    /// #[derive(Deserialize)]
+    /// #[derive(serde::Deserialize)]
     /// struct Info {
     ///     username: String,
     /// }
@@ -170,10 +169,9 @@ impl<Err: ErrorRenderer> Route<Err> {
     ///
     /// ```rust
     /// # use std::collections::HashMap;
-    /// # use serde_derive::Deserialize;
     /// use ntex::web;
     ///
-    /// #[derive(Deserialize)]
+    /// #[derive(serde::Deserialize)]
     /// struct Info {
     ///     username: String,
     /// }
@@ -279,14 +277,13 @@ mod tests {
     use std::time::Duration;
 
     use bytes::Bytes;
-    use serde_derive::Serialize;
 
     use crate::http::{Method, StatusCode};
     use crate::rt::time::sleep;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, error, App, DefaultError, HttpResponse};
 
-    #[derive(Serialize, PartialEq, Debug)]
+    #[derive(serde::Serialize, PartialEq, Debug)]
     struct MyObject {
         name: String,
     }

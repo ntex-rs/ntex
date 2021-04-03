@@ -1,15 +1,13 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
-use std::{pin::Pin, sync::Arc, time};
+use std::{future::Future, pin::Pin, sync::Arc, time};
 
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
-use futures::channel::oneshot;
-use futures::future::join_all;
-use futures::{Future, Stream as FutStream};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 
 use crate::rt::time::{sleep_until, Instant, Sleep};
 use crate::rt::{spawn, Arbiter};
-use crate::util::counter::Counter;
+use crate::util::{counter::Counter, join_all};
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
@@ -78,9 +76,7 @@ impl WorkerClient {
     }
 
     pub(super) fn send(&self, msg: Connection) -> Result<(), Connection> {
-        self.tx1
-            .unbounded_send(WorkerCommand(msg))
-            .map_err(|msg| msg.into_inner().0)
+        self.tx1.send(WorkerCommand(msg)).map_err(|msg| msg.0 .0)
     }
 
     pub(super) fn available(&self) -> bool {
@@ -89,7 +85,7 @@ impl WorkerClient {
 
     pub(super) fn stop(&self, graceful: bool) -> oneshot::Receiver<bool> {
         let (result, rx) = oneshot::channel();
-        let _ = self.tx2.unbounded_send(StopCommand { graceful, result });
+        let _ = self.tx2.send(StopCommand { graceful, result });
         rx
     }
 }
@@ -165,8 +161,8 @@ impl Worker {
         availability: WorkerAvailability,
         shutdown_timeout: time::Duration,
     ) -> WorkerClient {
-        let (tx1, rx1) = unbounded();
-        let (tx2, rx2) = unbounded();
+        let (tx1, rx1) = unbounded_channel();
+        let (tx2, rx2) = unbounded_channel();
         let avail = availability.clone();
 
         Arbiter::default().exec_fn(move || {
@@ -178,7 +174,7 @@ impl Worker {
                         let _ = spawn(wrk);
                     }
                     Err(e) => {
-                        error!("Can not start worker: {:?}", e);
+                        error!("Cannot start worker: {:?}", e);
                         Arbiter::current().stop();
                     }
                 }
@@ -221,8 +217,7 @@ impl Worker {
             }));
         }
 
-        let res = join_all(fut).await;
-        let res: Result<Vec<_>, _> = res.into_iter().collect();
+        let res: Result<Vec<_>, _> = join_all(fut).await.into_iter().collect();
         match res {
             Ok(services) => {
                 for item in services {
@@ -335,7 +330,7 @@ impl Future for Worker {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // `StopWorker` message handler
         if let Poll::Ready(Some(StopCommand { graceful, result })) =
-            Pin::new(&mut self.rx2).poll_next(cx)
+            Pin::new(&mut self.rx2).poll_recv(cx)
         {
             self.availability.set(false);
             let num = num_connections();
@@ -409,7 +404,7 @@ impl Future for Worker {
                     }
                     Poll::Ready(Err(_)) => {
                         panic!(
-                            "Can not restart {:?} service",
+                            "Cannot restart {:?} service",
                             self.factories[idx].name(token)
                         );
                     }
@@ -475,7 +470,7 @@ impl Future for Worker {
                         }
                     }
 
-                    match Pin::new(&mut self.rx).poll_next(cx) {
+                    match Pin::new(&mut self.rx).poll_recv(cx) {
                         // handle incoming io stream
                         Poll::Ready(Some(WorkerCommand(msg))) => {
                             let guard = self.conns.get();
@@ -502,14 +497,13 @@ impl Future for Worker {
 
 #[cfg(test)]
 mod tests {
-    use futures::future::{lazy, ok, Ready};
-    use futures::SinkExt;
     use std::sync::{Arc, Mutex};
 
     use super::*;
     use crate::rt::net::TcpStream;
     use crate::server::service::Factory;
     use crate::service::{Service, ServiceFactory};
+    use crate::util::{lazy, Ready};
 
     #[derive(Clone, Copy, Debug)]
     enum St {
@@ -531,12 +525,12 @@ mod tests {
         type Service = Srv;
         type Config = ();
         type InitError = ();
-        type Future = Ready<Result<Srv, ()>>;
+        type Future = Ready<Srv, ()>;
 
         fn new_service(&self, _: ()) -> Self::Future {
             let mut cnt = self.counter.lock().unwrap();
             *cnt += 1;
-            ok(Srv {
+            Ready::ok(Srv {
                 st: self.st.clone(),
             })
         }
@@ -550,7 +544,7 @@ mod tests {
         type Request = TcpStream;
         type Response = ();
         type Error = ();
-        type Future = Ready<Result<(), ()>>;
+        type Future = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let st: St = { *self.st.lock().unwrap() };
@@ -572,15 +566,15 @@ mod tests {
         }
 
         fn call(&self, _: TcpStream) -> Self::Future {
-            ok(())
+            Ready::ok(())
         }
     }
 
     #[crate::rt_test]
     #[allow(clippy::mutex_atomic)]
     async fn basics() {
-        let (_tx1, rx1) = unbounded();
-        let (mut tx2, rx2) = unbounded();
+        let (_tx1, rx1) = unbounded_channel();
+        let (tx2, rx2) = unbounded_channel();
         let (sync_tx, _sync_rx) = std::sync::mpsc::channel();
         let poll = mio::Poll::new().unwrap();
         let waker = Arc::new(mio::Waker::new(poll.registry(), mio::Token(1)).unwrap());
@@ -650,7 +644,6 @@ mod tests {
             graceful: true,
             result: tx,
         })
-        .await
         .unwrap();
 
         let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
@@ -660,8 +653,8 @@ mod tests {
         let _ = rx.await;
 
         // force shutdown
-        let (_tx1, rx1) = unbounded();
-        let (mut tx2, rx2) = unbounded();
+        let (_tx1, rx1) = unbounded_channel();
+        let (tx2, rx2) = unbounded_channel();
         let avail = WorkerAvailability::new(AcceptNotify::new(waker, sync_tx.clone()));
         let f = SrvFactory {
             st: st.clone(),
@@ -695,7 +688,6 @@ mod tests {
             graceful: false,
             result: tx,
         })
-        .await
         .unwrap();
 
         assert!(lazy(|cx| Pin::new(&mut worker).poll(cx)).await.is_ready());

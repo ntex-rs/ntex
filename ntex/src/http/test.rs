@@ -112,7 +112,7 @@ impl TestRequest {
                 return self;
             }
         }
-        panic!("Can not create header");
+        panic!("Cannot create header");
     }
 
     #[cfg(feature = "cookie")]
@@ -242,7 +242,7 @@ pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
                 builder.set_verify(SslVerifyMode::NONE);
                 let _ = builder
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
-                    .map_err(|e| log::error!("Can not set alpn protocol: {:?}", e));
+                    .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
                 Connector::default()
                     .timeout(time::Duration::from_millis(30000))
                     .openssl(builder.build())

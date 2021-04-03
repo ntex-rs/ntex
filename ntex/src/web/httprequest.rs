@@ -259,9 +259,8 @@ impl Drop for HttpRequest {
 ///
 /// ```rust
 /// use ntex::web::{self, App, HttpRequest};
-/// use serde_derive::Deserialize;
 ///
-/// /// extract `Thing` from request
+/// /// extract `HttpRequest` from request
 /// async fn index(req: HttpRequest) -> String {
 ///    format!("Got thing: {:?}", req)
 /// }

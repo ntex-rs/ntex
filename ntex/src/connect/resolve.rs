@@ -3,11 +3,9 @@ use std::{
     task::Context, task::Poll,
 };
 
-use futures::future::Either;
-
 use super::{default_resolver, Address, Connect, ConnectError, DnsResolver};
 use crate::service::{Service, ServiceFactory};
-use crate::util::Ready;
+use crate::util::{Either, Ready};
 
 /// DNS Resolver Service
 pub struct Resolver<T> {
@@ -42,7 +40,7 @@ impl<T: Address> Resolver<T> {
         if req.addr.is_some() || req.req.addr().is_some() {
             Either::Right(Ready::ok(req))
         } else if let Ok(ip) = req.host().parse() {
-            req.addr = Some(either::Either::Left(SocketAddr::new(ip, req.port())));
+            req.addr = Some(Either::Left(SocketAddr::new(ip, req.port())));
             Either::Right(Ready::ok(req))
         } else {
             trace!("DNS resolver: resolving host {:?}", req.host());
@@ -138,9 +136,8 @@ impl<T: Address> Service for Resolver<T> {
 
 #[cfg(test)]
 mod tests {
-    use futures::future::lazy;
-
     use super::*;
+    use crate::util::lazy;
 
     #[crate::rt_test]
     async fn resolver() {

@@ -1,11 +1,8 @@
 //! A multi-producer, single-consumer, futures-aware, FIFO queue.
-use std::collections::VecDeque;
-use std::error::Error;
-use std::fmt;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{collections::VecDeque, fmt, pin::Pin, task::Context, task::Poll};
 
-use futures::{Sink, Stream};
+use futures_core::Stream;
+use futures_sink::Sink;
 
 use super::cell::{Cell, WeakCell};
 use crate::task::LocalWaker;
@@ -209,7 +206,7 @@ impl<T> Drop for Receiver<T> {
 /// dropped
 pub struct SendError<T>(T);
 
-impl<T> Error for SendError<T> {}
+impl<T> std::error::Error for SendError<T> {}
 
 impl<T> fmt::Debug for SendError<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -233,8 +230,8 @@ impl<T> SendError<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::future::lazy;
-    use futures::{Sink, Stream, StreamExt};
+    use crate::{util::lazy, util::next, Stream};
+    use futures_sink::Sink;
 
     #[crate::rt_test]
     async fn test_mpsc() {
@@ -243,11 +240,11 @@ mod tests {
         assert!(format!("{:?}", rx).contains("Receiver"));
 
         tx.send("test").unwrap();
-        assert_eq!(rx.next().await.unwrap(), "test");
+        assert_eq!(next(&mut rx).await.unwrap(), "test");
 
         let tx2 = tx.clone();
         tx2.send("test2").unwrap();
-        assert_eq!(rx.next().await.unwrap(), "test2");
+        assert_eq!(next(&mut rx).await.unwrap(), "test2");
 
         assert_eq!(
             lazy(|cx| Pin::new(&mut rx).poll_next(cx)).await,
@@ -262,7 +259,7 @@ mod tests {
 
         let (tx, mut rx) = channel::<String>();
         tx.close();
-        assert_eq!(rx.next().await, None);
+        assert_eq!(next(&mut rx).await, None);
 
         let (tx, _rx) = channel::<String>();
         let weak_tx = tx.downgrade();
@@ -295,8 +292,8 @@ mod tests {
             assert!(Pin::new(&mut tx).poll_close(cx).is_ready());
         })
         .await;
-        assert_eq!(rx.next().await.unwrap(), "test");
-        assert_eq!(rx.next().await, None);
+        assert_eq!(next(&mut rx).await.unwrap(), "test");
+        assert_eq!(next(&mut rx).await, None);
     }
 
     #[crate::rt_test]

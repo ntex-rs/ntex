@@ -2,7 +2,6 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
 
-use futures::future::poll_fn;
 use h2::client::{handshake, Connection, SendRequest};
 use http::uri::Authority;
 
@@ -12,7 +11,7 @@ use crate::http::Protocol;
 use crate::rt::{spawn, time::sleep, time::Sleep};
 use crate::service::Service;
 use crate::task::LocalWaker;
-use crate::util::{Bytes, HashMap};
+use crate::util::{poll_fn, Bytes, HashMap};
 
 use super::connection::{ConnectionType, IoConnection};
 use super::error::ConnectError;
@@ -609,18 +608,14 @@ impl<T> Drop for Acquired<T> {
 
 #[cfg(test)]
 mod tests {
-    use futures::future::lazy;
-    use std::cell::RefCell;
-    use std::convert::TryFrom;
-    use std::rc::Rc;
-    use std::time::Duration;
+    use std::{cell::RefCell, convert::TryFrom, rc::Rc, time::Duration};
 
     use super::*;
-    use crate::http::client::Connection;
-    use crate::http::Uri;
     use crate::rt::time::sleep;
-    use crate::service::fn_service;
-    use crate::testing::Io;
+    use crate::{
+        http::client::Connection, http::Uri, service::fn_service, testing::Io,
+        util::lazy,
+    };
 
     #[crate::rt_test]
     async fn test_basics() {

@@ -155,7 +155,7 @@ impl InternalServiceFactory for ConfiguredService {
                             res.push((token, serv));
                         }
                         Err(_) => {
-                            error!("Can not construct service");
+                            error!("Cannot construct service");
                             return Err(());
                         }
                     }
@@ -323,7 +323,7 @@ where
             match fut.await {
                 Ok(s) => Ok(Box::new(StreamService::new(s)) as BoxedServerService),
                 Err(e) => {
-                    error!("Can not construct service: {:?}", e);
+                    error!("Cannot construct service: {:?}", e);
                     Err(())
                 }
             }

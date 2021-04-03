@@ -5,8 +5,7 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use futures::future::ok;
-use futures::stream::{Stream, StreamExt};
+use futures_core::Stream;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -24,7 +23,7 @@ use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Versio
 use crate::router::{Path, ResourceDef};
 use crate::rt::{time::sleep, System};
 use crate::server::Server;
-use crate::util::Extensions;
+use crate::util::{next, Extensions, Ready};
 use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 use crate::web::config::AppConfig;
@@ -52,7 +51,7 @@ pub fn default_service<Err: ErrorRenderer>(
     Error = std::convert::Infallible,
 > {
     (move |req: WebRequest<Err>| {
-        ok(req.into_response(HttpResponse::build(status_code).finish()))
+        Ready::ok(req.into_response(HttpResponse::build(status_code).finish()))
     })
     .into_service()
 }
@@ -165,7 +164,7 @@ where
 
     let mut body = resp.take_body();
     let mut bytes = BytesMut::new();
-    while let Some(item) = body.next().await {
+    while let Some(item) = next(&mut body).await {
         bytes.extend_from_slice(&item.unwrap());
     }
     bytes.freeze()
@@ -201,7 +200,7 @@ where
 pub async fn read_body(mut res: WebResponse) -> Bytes {
     let mut body = res.take_body();
     let mut bytes = BytesMut::new();
-    while let Some(item) = body.next().await {
+    while let Some(item) = next(&mut body).await {
         bytes.extend_from_slice(&item.unwrap());
     }
     bytes.freeze()
@@ -213,7 +212,7 @@ where
     S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
 {
     let mut data = BytesMut::new();
-    while let Some(item) = stream.next().await {
+    while let Some(item) = next(&mut stream).await {
         data.extend_from_slice(&item?);
     }
     Ok(data.freeze())
@@ -735,7 +734,7 @@ where
                 builder.set_verify(SslVerifyMode::NONE);
                 let _ = builder
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
-                    .map_err(|e| log::error!("Can not set alpn protocol: {:?}", e));
+                    .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
                 Connector::default()
                     .lifetime(time::Duration::from_secs(0))
                     .keep_alive(time::Duration::from_millis(30000))

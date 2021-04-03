@@ -71,9 +71,9 @@ impl DefaultHeaders {
                         .headers
                         .append(key, value);
                 }
-                Err(_) => panic!("Can not create header value"),
+                Err(_) => panic!("Cannot create header value"),
             },
-            Err(_) => panic!("Can not create header name"),
+            Err(_) => panic!("Cannot create header name"),
         }
         self
     }
@@ -161,11 +161,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::future::lazy;
-
     use super::*;
     use crate::http::header::CONTENT_TYPE;
     use crate::service::IntoService;
+    use crate::util::lazy;
     use crate::web::request::WebRequest;
     use crate::web::test::{ok_service, TestRequest};
     use crate::web::{DefaultError, Error, HttpResponse};

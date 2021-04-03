@@ -1,7 +1,6 @@
 use std::{convert::TryFrom, time};
 
 use bytes::Bytes;
-use futures::future::poll_fn;
 use h2::{client::SendRequest, SendStream};
 use http::header::{HeaderValue, CONNECTION, CONTENT_LENGTH, TRANSFER_ENCODING};
 use http::{request::Request, Method, Version};
@@ -11,6 +10,7 @@ use crate::http::body::{BodySize, MessageBody};
 use crate::http::header::HeaderMap;
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
+use crate::util::poll_fn;
 
 use super::connection::{ConnectionType, IoConnection};
 use super::error::SendRequestError;

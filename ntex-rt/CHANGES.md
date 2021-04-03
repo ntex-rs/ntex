@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.2] - 2021-04-03
+
+* precise futures crate dependency
+
 ## [0.2.1] - 2021-02-25
 
 * Drop macros

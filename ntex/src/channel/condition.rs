@@ -1,6 +1,4 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use slab::Slab;
 
@@ -106,7 +104,7 @@ impl Drop for Waiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::future::lazy;
+    use crate::util::lazy;
 
     #[crate::rt_test]
     #[allow(clippy::unit_cmp)]

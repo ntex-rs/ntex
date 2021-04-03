@@ -1,13 +1,9 @@
 //! Web error
-use std::cell::RefCell;
-use std::fmt;
-use std::io::Write;
-use std::marker::PhantomData;
+use std::{cell::RefCell, fmt, io::Write, marker::PhantomData};
 
 use bytes::BytesMut;
 use derive_more::{Display, From};
 
-pub use futures::channel::oneshot::Canceled;
 pub use http::Error as HttpError;
 pub use serde_json::error::Error as JsonError;
 pub use url::ParseError as UrlParseError;
@@ -16,6 +12,7 @@ use super::{HttpRequest, HttpResponse};
 use crate::http::body::Body;
 use crate::http::helpers::Writer;
 use crate::http::{error, header, StatusCode};
+use crate::util::Either;
 
 pub use super::error_default::{DefaultError, Error};
 pub use crate::http::error::BlockingError;
@@ -59,7 +56,7 @@ where
 
 impl<Err: ErrorRenderer> WebResponseError<Err> for std::convert::Infallible {}
 
-impl<A, B, Err> WebResponseError<Err> for either::Either<A, B>
+impl<A, B, Err> WebResponseError<Err> for Either<A, B>
 where
     A: WebResponseError<Err>,
     B: WebResponseError<Err>,
@@ -67,15 +64,15 @@ where
 {
     fn status_code(&self) -> StatusCode {
         match self {
-            either::Either::Left(ref a) => a.status_code(),
-            either::Either::Right(ref b) => b.status_code(),
+            Either::Left(ref a) => a.status_code(),
+            Either::Right(ref b) => b.status_code(),
         }
     }
 
     fn error_response(&self, req: &HttpRequest) -> HttpResponse {
         match self {
-            either::Either::Left(ref a) => a.error_response(req),
-            either::Either::Right(ref b) => b.error_response(req),
+            Either::Left(ref a) => a.error_response(req),
+            Either::Right(ref b) => b.error_response(req),
         }
     }
 }
@@ -104,8 +101,8 @@ pub enum UrlGenerationError {
 /// A set of errors that can occur during parsing urlencoded payloads
 #[derive(Debug, Display, From)]
 pub enum UrlencodedError {
-    /// Can not decode chunked transfer encoding
-    #[display(fmt = "Can not decode chunked transfer encoding")]
+    /// Cannot decode chunked transfer encoding
+    #[display(fmt = "Cannot decode chunked transfer encoding")]
     Chunked,
     /// Payload size is bigger than allowed. (default: 256kB)
     #[display(
@@ -170,7 +167,7 @@ pub enum PayloadError {
     Payload(error::PayloadError),
     #[display(fmt = "{}", _0)]
     ContentType(error::ContentTypeError),
-    #[display(fmt = "Can not decode body")]
+    #[display(fmt = "Cannot decode body")]
     Decoding,
 }
 
@@ -760,15 +757,15 @@ mod tests {
     fn test_either_error() {
         let req = TestRequest::default().to_http_request();
 
-        let err: either::Either<SendRequestError, PayloadError> =
-            either::Either::Left(SendRequestError::TunnelNotSupported);
+        let err: Either<SendRequestError, PayloadError> =
+            Either::Left(SendRequestError::TunnelNotSupported);
         let code = WebResponseError::<DefaultError>::status_code(&err);
         assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
         let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-        let err: either::Either<SendRequestError, PayloadError> =
-            either::Either::Right(PayloadError::Decoding);
+        let err: Either<SendRequestError, PayloadError> =
+            Either::Right(PayloadError::Decoding);
         let code = WebResponseError::<DefaultError>::status_code(&err);
         assert_eq!(code, StatusCode::BAD_REQUEST);
         let resp = WebResponseError::<DefaultError>::error_response(&err, &req);

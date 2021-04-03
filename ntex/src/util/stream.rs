@@ -1,9 +1,8 @@
-use std::{fmt, pin::Pin, task::Context, task::Poll};
-
-use futures::{ready, Future, FutureExt, Sink, SinkExt, Stream};
+use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 
 use crate::channel::mpsc;
 use crate::service::{IntoService, Service};
+use crate::{util::poll_fn, Sink, Stream};
 
 pin_project_lite::pin_project! {
     pub struct Dispatcher<R, S, T, U>
@@ -65,12 +64,17 @@ where
         if let Some(is_err) = this.shutdown {
             if let Some(mut sink) = this.sink.take() {
                 crate::rt::spawn(async move {
-                    if sink.flush().await.is_ok() {
-                        let _ = sink.close().await;
+                    if poll_fn(|cx| Pin::new(&mut sink).poll_flush(cx))
+                        .await
+                        .is_ok()
+                    {
+                        let _ = poll_fn(|cx| Pin::new(&mut sink).poll_close(cx)).await;
                     }
                 });
             }
-            ready!(this.service.poll_shutdown(cx, *is_err));
+            if let Poll::Pending = this.service.poll_shutdown(cx, *is_err) {
+                return Poll::Pending;
+            }
             return Poll::Ready(());
         }
 
@@ -126,9 +130,11 @@ where
                 Poll::Ready(Ok(_)) => match Pin::new(&mut this.stream).poll_next(cx) {
                     Poll::Ready(Some(Ok(item))) => {
                         let tx = this.rx.sender();
-                        crate::rt::spawn(this.service.call(item).map(move |res| {
+                        let fut = this.service.call(item);
+                        crate::rt::spawn(async move {
+                            let res = fut.await;
                             let _ = tx.send(res);
-                        }));
+                        });
                         this = self.as_mut().project();
                         continue;
                     }
@@ -157,14 +163,13 @@ where
 mod tests {
     use bytes::BytesMut;
     use bytestring::ByteString;
-    use futures::{future::ok, StreamExt};
     use std::{cell::Cell, rc::Rc, time::Duration};
 
     use super::*;
     use crate::channel::mpsc;
     use crate::codec::Encoder;
     use crate::rt::time::sleep;
-    use crate::ws;
+    use crate::{util::next, ws};
 
     #[crate::rt_test]
     async fn test_basic() {
@@ -181,10 +186,12 @@ mod tests {
             encoder,
             crate::fn_service(move |_| {
                 counter2.set(counter2.get() + 1);
-                ok(Some(ws::Message::Text(ByteString::from_static("test"))))
+                async { Ok(Some(ws::Message::Text(ByteString::from_static("test")))) }
             }),
         );
-        crate::rt::spawn(disp.map(|_| ()));
+        crate::rt::spawn(async move {
+            let _ = disp.await;
+        });
 
         let mut buf = BytesMut::new();
         let codec = ws::Codec::new().client_mode();
@@ -193,12 +200,12 @@ mod tests {
             .unwrap();
         tx.send(Ok::<_, ()>(buf.split().freeze())).unwrap();
 
-        let data = rx.next().await.unwrap().unwrap();
+        let data = next(&mut rx).await.unwrap().unwrap();
         assert_eq!(data, b"\x81\x04test".as_ref());
 
         drop(tx);
         sleep(Duration::from_millis(10)).await;
-        assert!(rx.next().await.is_none());
+        assert!(next(&mut rx).await.is_none());
 
         assert_eq!(counter.get(), 1);
     }

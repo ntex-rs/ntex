@@ -50,7 +50,7 @@ fn ssl_acceptor() -> SslAcceptor {
     });
     builder
         .set_alpn_protos(b"\x08http/1.1\x02h2")
-        .expect("Can not contrust SslAcceptor");
+        .expect("Cannot contrust SslAcceptor");
 
     builder.build()
 }

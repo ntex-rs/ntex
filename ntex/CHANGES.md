@@ -1,10 +1,12 @@
 # Changes
 
-## [0.3.14] - 2021-04-xx
+## [0.3.14] - 2021-04-03
 
 * server: prevent double socket registration if accept loop is in back-pressure state
 
-* util: add custom Ready future
+* util: add custom Ready, Either future and several helper functions
+
+* reduce futures crate dependencies
 
 ## [0.3.13] - 2021-03-26
 

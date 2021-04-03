@@ -55,13 +55,13 @@ impl AcceptLoop {
     pub(super) fn new(srv: Server) -> AcceptLoop {
         // Create a poll instance
         let poll = mio::Poll::new()
-            .map_err(|e| panic!("Can not create mio::Poll {}", e))
+            .map_err(|e| panic!("Cannot create mio::Poll {}", e))
             .unwrap();
 
         let (tx, rx) = sync_mpsc::channel();
         let waker = Arc::new(
             mio::Waker::new(poll.registry(), NOTIFY)
-                .map_err(|e| panic!("Can not create mio::Waker {}", e))
+                .map_err(|e| panic!("Cannot create mio::Waker {}", e))
                 .unwrap(),
         );
         let notify = AcceptNotify::new(waker, tx);
@@ -159,7 +159,7 @@ impl Accept {
                 mio::Token(token + DELTA),
                 mio::Interest::READABLE,
             ) {
-                panic!("Can not register io: {}", err);
+                panic!("Cannot register io: {}", err);
             }
 
             entry.insert(ServerSocketInfo {
@@ -231,7 +231,7 @@ impl Accept {
                             mio::Token(token + DELTA),
                             mio::Interest::READABLE,
                         ) {
-                            error!("Can not register server socket {}", err);
+                            error!("Cannot register server socket {}", err);
                         } else {
                             info!("Resume accepting connections on {}", info.addr);
                         }
@@ -253,7 +253,7 @@ impl Accept {
                             if let Err(err) =
                                 self.poll.registry().deregister(&mut info.sock)
                             {
-                                error!("Can not deregister server socket {}", err);
+                                error!("Cannot deregister server socket {}", err);
                             } else {
                                 info!("Paused accepting connections on {}", info.addr);
                             }
@@ -266,7 +266,7 @@ impl Accept {
                                 mio::Token(token + DELTA),
                                 mio::Interest::READABLE,
                             ) {
-                                error!("Can not resume socket accept process: {}", err);
+                                error!("Cannot resume socket accept process: {}", err);
                             } else {
                                 info!(
                                     "Accepting connections on {} has been resumed",
@@ -321,7 +321,7 @@ impl Accept {
                         mio::Token(token + DELTA),
                         mio::Interest::READABLE,
                     ) {
-                        error!("Can not resume socket accept process: {}", err);
+                        error!("Cannot resume socket accept process: {}", err);
                     } else {
                         info!("Accepting connections on {} has been resumed", info.addr);
                     }
@@ -412,7 +412,7 @@ impl Accept {
                         error!("Error accepting connection: {}", e);
                         if let Err(err) = self.poll.registry().deregister(&mut info.sock)
                         {
-                            error!("Can not deregister server socket {}", err);
+                            error!("Cannot deregister server socket {}", err);
                         }
 
                         // sleep after error
