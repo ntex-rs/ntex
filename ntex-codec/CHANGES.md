@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.1] - 2021-04-04
+
+* Use Either from ntex-service
+
 ## [0.4.0] - 2021-02-23
 
 * Migrate to tokio 1.x

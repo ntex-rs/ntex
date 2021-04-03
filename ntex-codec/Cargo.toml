@@ -22,7 +22,7 @@ ntex-service = "0.1.7"
 futures-core = { version = "0.3.13", default-features = false, features = ["alloc"] }
 futures-sink = { version = "0.3.13", default-features = false, features = ["alloc"] }
 log = "0.4"
-tokio = { version = "1", default-features=false }
+tokio = { version = "1", default-features = false }
 
 [dev-dependencies]
 ntex = "0.3.13"

@@ -17,4 +17,4 @@ path = "src/lib.rs"
 
 [dependencies]
 ntex-service = "0.1.7"
-tokio = { version = "1", default-features=false, features = ["rt", "net", "time", "signal", "sync"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "signal", "sync"] }

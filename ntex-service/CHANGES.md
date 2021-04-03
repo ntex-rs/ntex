@@ -1,10 +1,10 @@
 # Changes
 
-## [0.1.7] - 2021-04-02
+## [0.1.7] - 2021-04-03
 
 * drop futures-util dependency
 
-* add custom Ready and Lazy futures
+* add custom Ready,Lazy,Either futures
 
 ## [0.1.6] - 2021-03-26
 

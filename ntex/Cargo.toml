@@ -74,7 +74,7 @@ serde_urlencoded = "0.7"
 socket2 = "0.4"
 url-pkg = { version = "2.1", package = "url", optional = true }
 coo-kie = { version = "0.15", package = "cookie", optional = true }
-tokio = { version = "1", default-features=false, features = ["sync"] }
+tokio = { version = "1", default-features = false, features = ["sync"] }
 
 # openssl
 open-ssl = { version="0.10", package = "openssl", optional = true }

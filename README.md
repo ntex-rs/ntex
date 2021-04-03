@@ -24,7 +24,7 @@
 ## Documentation & community resources
 
 * [Documentation](https://docs.rs/ntex)
-* Minimum supported Rust version: 1.45 or later
+* Minimum supported Rust version: 1.46 or later
 
 ## License
 
