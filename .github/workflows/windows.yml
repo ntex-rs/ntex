@@ -75,3 +75,7 @@ jobs:
                 --skip test_body
                 --skip test_form
                 --skip test_json
+                --skip test_connection_reuse
+                --skip test_connection_wait_queue
+                --skip test_no_decompress
+                --skip test_connection_reuse_h2
