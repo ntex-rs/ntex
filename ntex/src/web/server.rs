@@ -247,30 +247,6 @@ where
         self
     }
 
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.10")]
-    pub fn read_high_watermark(self, hw: u16) -> Self {
-        self.config.lock().unwrap().read_hw = hw;
-        self
-    }
-
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.10")]
-    pub fn write_high_watermark(self, hw: u16) -> Self {
-        self.config.lock().unwrap().write_hw = hw;
-        self
-    }
-
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.10")]
-    pub fn low_watermark(self, lw: u16) -> Self {
-        self.config.lock().unwrap().lw = lw;
-        self
-    }
-
     /// Use listener for accepting incoming connection requests
     ///
     /// HttpServer does not change any configuration for TcpListener,

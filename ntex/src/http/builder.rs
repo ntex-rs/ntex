@@ -297,28 +297,4 @@ where
             .on_connect(self.on_connect)
             .on_request(self.on_request)
     }
-
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.10")]
-    pub fn read_high_watermark(mut self, hw: u16) -> Self {
-        self.read_hw = hw;
-        self
-    }
-
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.10")]
-    pub fn write_high_watermark(mut self, hw: u16) -> Self {
-        self.write_hw = hw;
-        self
-    }
-
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.10")]
-    pub fn low_watermark(mut self, lw: u16) -> Self {
-        self.lw = lw;
-        self
-    }
 }
