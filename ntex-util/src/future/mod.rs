@@ -45,17 +45,33 @@ where
     }
 }
 
-/// Creates a future that resolves to the next item in the stream.
+#[doc(hidden)]
 pub async fn next<S>(stream: &mut S) -> Option<S::Item>
+where
+    S: Stream + Unpin,
+{
+    stream_recv(stream).await
+}
+
+/// Creates a future that resolves to the next item in the stream.
+pub async fn stream_recv<S>(stream: &mut S) -> Option<S::Item>
 where
     S: Stream + Unpin,
 {
     poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await
 }
 
+#[doc(hidden)]
+pub async fn send<S, I>(sink: &mut S, item: I) -> Result<(), S::Error>
+where
+    S: Sink<I> + Unpin,
+{
+    sink_write(sink, item).await
+}
+
 /// A future that completes after the given item has been fully processed
 /// into the sink, including flushing.
-pub async fn send<S, I>(sink: &mut S, item: I) -> Result<(), S::Error>
+pub async fn sink_write<S, I>(sink: &mut S, item: I) -> Result<(), S::Error>
 where
     S: Sink<I> + Unpin,
 {
