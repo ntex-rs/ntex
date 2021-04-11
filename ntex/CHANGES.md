@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.15] - 2021-04-11
+
+* Move various utils to ntex-util crate
+
 ## [0.3.14] - 2021-04-03
 
 * server: prevent double socket registration if accept loop is in back-pressure state
