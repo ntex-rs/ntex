@@ -349,3 +349,10 @@ pub mod dev {
     pub use crate::transform::ApplyTransform;
     pub use crate::transform_err::TransformMapInitErr;
 }
+
+#[doc(hidden)]
+pub mod util {
+    pub use ntex_util::future::Either;
+    pub use ntex_util::future::Ready;
+    pub use ntex_util::future::{lazy, Lazy};
+}

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.8] - 2021-04-11
+
+* Move utils to ntex-util crate
+
 ## [0.1.7] - 2021-04-03
 
 * drop futures-util dependency

@@ -42,7 +42,7 @@ url = ["url-pkg"]
 ntex-codec = "0.4.1"
 ntex-rt = "0.2.2"
 ntex-router = "0.4.2"
-ntex-service = "0.1.7"
+ntex-service = "0.1.8"
 ntex-macros = "0.1.3"
 ntex-util = "0.1.1"
 
