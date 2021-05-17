@@ -5,6 +5,8 @@ mod error;
 mod message;
 mod resolve;
 mod service;
+
+#[cfg(feature = "http-framework")]
 mod uri;
 
 #[cfg(feature = "openssl")]

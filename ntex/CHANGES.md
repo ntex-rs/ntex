@@ -4,6 +4,8 @@
 
 * framed: process unhandled data on disconnect
 
+* add "http-framework" feature
+
 ## [0.3.15] - 2021-04-11
 
 * Move various utils to ntex-util crate
