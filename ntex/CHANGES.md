@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.16] - 2021-05-17
+
+* framed: process unhandled data on disconnect
+
 ## [0.3.15] - 2021-04-11
 
 * Move various utils to ntex-util crate

@@ -424,13 +424,19 @@ where
                     log::trace!("dispatcher is instructed to stop");
 
                     self.unregister_keepalive();
-                    self.st.set(DispatcherState::Stop);
 
-                    // get io error
-                    if let Some(err) = self.state.take_io_error() {
-                        PollService::Item(DispatchItem::IoError(err))
+                    // process unhandled data
+                    if let Ok(Some(el)) = read.decode(&self.shared.codec) {
+                        PollService::Item(DispatchItem::Item(el))
                     } else {
-                        PollService::ServiceError
+                        self.st.set(DispatcherState::Stop);
+
+                        // get io error
+                        if let Some(err) = self.state.take_io_error() {
+                            PollService::Item(DispatchItem::IoError(err))
+                        } else {
+                            PollService::ServiceError
+                        }
                     }
                 } else {
                     PollService::Ready
@@ -502,7 +508,7 @@ where
 mod tests {
     use bytes::Bytes;
     use rand::Rng;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{atomic::AtomicBool, atomic::Ordering::Relaxed, Arc, Mutex};
 
     use crate::codec::BytesCodec;
     use crate::rt::time::sleep;
@@ -780,5 +786,38 @@ mod tests {
         assert!(flags.contains(crate::framed::state::Flags::IO_SHUTDOWN));
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
+    }
+
+    #[crate::rt_test]
+    async fn test_unhandled_data() {
+        let handled = Arc::new(AtomicBool::new(false));
+        let handled2 = handled.clone();
+
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(1024);
+        client.write("GET /test HTTP/1\r\n\r\n");
+
+        let (disp, _) = Dispatcher::debug(
+            server,
+            BytesCodec,
+            crate::fn_service(move |msg: DispatchItem<BytesCodec>| {
+                handled2.store(true, Relaxed);
+                async move {
+                    sleep(Duration::from_millis(50)).await;
+                    if let DispatchItem::Item(msg) = msg {
+                        Ok::<_, ()>(Some(msg.freeze()))
+                    } else {
+                        panic!()
+                    }
+                }
+            }),
+        );
+        client.close().await;
+        crate::rt::spawn(async move {
+            let _ = disp.await;
+        });
+        sleep(Duration::from_millis(50)).await;
+
+        assert!(handled.load(Relaxed));
     }
 }
