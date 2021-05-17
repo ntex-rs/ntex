@@ -24,7 +24,7 @@
 //! at!), several other resources are available:
 //!
 //! * [User Guide](https://docs.rs/ntex/)
-//! * [GitHub repository](https://github.com/mtex-rs/ntex)
+//! * [GitHub repository](https://github.com/ntex-rs/ntex)
 //! * [Cargo package](https://crates.io/crates/ntex)
 //!
 //! To get started navigating the API documentation you may want to
