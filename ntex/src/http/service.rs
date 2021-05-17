@@ -509,11 +509,7 @@ where
             proto,
             peer_addr
         );
-        let on_connect = if let Some(ref on_connect) = self.on_connect {
-            Some(on_connect(&io))
-        } else {
-            None
-        };
+        let on_connect = self.on_connect.as_ref().map(|f| f(&io));
 
         match proto {
             Protocol::Http2 => HttpServiceHandlerResponse {

@@ -260,17 +260,11 @@ where
     fn call(&self, (io, addr): Self::Request) -> Self::Future {
         trace!("New http2 connection, peer address: {:?}", addr);
 
-        let on_connect = if let Some(ref on_connect) = self.on_connect {
-            Some(on_connect(&io))
-        } else {
-            None
-        };
-
         H2ServiceHandlerResponse {
             state: State::Handshake(
                 self.config.clone(),
                 addr,
-                on_connect,
+                self.on_connect.as_ref().map(|f| f(&io)),
                 server::handshake(io),
             ),
         }

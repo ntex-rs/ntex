@@ -419,8 +419,8 @@ where
 
         Self {
             io,
-            codec,
             state,
+            codec,
             res,
         }
     }

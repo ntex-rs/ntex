@@ -265,7 +265,7 @@ impl Tree {
                         base_skip,
                     )
                 })
-                .filter_map(|x| x)
+                .flatten()
                 .next();
 
             return if let Some((val, skip)) = res {
@@ -519,7 +519,7 @@ impl Tree {
                                                     base_skip,
                                                 )
                                             })
-                                            .filter_map(|x| x)
+                                            .flatten()
                                             .next()
                                         {
                                             return Some(res);
@@ -559,7 +559,7 @@ impl Tree {
                                 base_skip,
                             )
                         })
-                        .filter_map(|x| x)
+                        .flatten()
                         .next();
                 } else {
                     path = &path[idx + 1..];

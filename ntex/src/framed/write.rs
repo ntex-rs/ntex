@@ -53,7 +53,7 @@ where
             Shutdown::None,
         );
 
-        Self { io, st, state }
+        Self { st, io, state }
     }
 }
 
@@ -165,7 +165,7 @@ where
 
                     // disconnect timeout
                     if let Some(ref mut delay) = delay {
-                        if let Poll::Pending = Pin::new(delay).poll(cx) {
+                        if Pin::new(delay).poll(cx).is_pending() {
                             return Poll::Pending;
                         }
                     }

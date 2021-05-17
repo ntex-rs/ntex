@@ -206,13 +206,11 @@ impl AcceptEncoding {
             .collect();
         encodings.sort();
 
-        for enc in encodings {
-            if let Some(enc) = enc {
-                if encoding == ContentEncoding::Auto {
-                    return enc.encoding;
-                } else if encoding == enc.encoding {
-                    return encoding;
-                }
+        for enc in encodings.into_iter().flatten() {
+            if encoding == ContentEncoding::Auto {
+                return enc.encoding;
+            } else if encoding == enc.encoding {
+                return encoding;
             }
         }
         ContentEncoding::Identity

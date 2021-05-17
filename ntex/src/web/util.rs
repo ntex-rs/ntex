@@ -310,11 +310,7 @@ pub trait BodyEncoding {
 
 impl BodyEncoding for HttpResponseBuilder {
     fn get_encoding(&self) -> Option<ContentEncoding> {
-        if let Some(ref enc) = self.extensions().get::<Enc>() {
-            Some(enc.0)
-        } else {
-            None
-        }
+        self.extensions().get::<Enc>().as_ref().map(|enc| enc.0)
     }
 
     fn encoding(&mut self, encoding: ContentEncoding) -> &mut Self {
@@ -325,11 +321,7 @@ impl BodyEncoding for HttpResponseBuilder {
 
 impl<B> BodyEncoding for HttpResponse<B> {
     fn get_encoding(&self) -> Option<ContentEncoding> {
-        if let Some(ref enc) = self.extensions().get::<Enc>() {
-            Some(enc.0)
-        } else {
-            None
-        }
+        self.extensions().get::<Enc>().as_ref().map(|enc| enc.0)
     }
 
     fn encoding(&mut self, encoding: ContentEncoding) -> &mut Self {

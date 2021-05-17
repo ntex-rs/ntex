@@ -72,7 +72,7 @@ where
                     }
                 });
             }
-            if let Poll::Pending = this.service.poll_shutdown(cx, *is_err) {
+            if this.service.poll_shutdown(cx, *is_err).is_pending() {
                 return Poll::Pending;
             }
             return Poll::Ready(());

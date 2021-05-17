@@ -184,7 +184,7 @@ where
     F: Fn(A::Error) -> E,
 {
     fn new(fut: A::Future, f: F) -> Self {
-        MapErrServiceFuture { f, fut }
+        MapErrServiceFuture { fut, f }
     }
 }
 

@@ -331,7 +331,7 @@ impl Accept {
             self.backpressure = true;
             for (_, info) in self.sockets.iter_mut() {
                 // disable err timeout
-                if let None = info.timeout.take() {
+                if info.timeout.take().is_none() {
                     trace!("Enabling backpressure for {}", info.addr);
                     let _ = self.poll.registry().deregister(&mut info.sock);
                 }

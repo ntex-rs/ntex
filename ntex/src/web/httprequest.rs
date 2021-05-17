@@ -41,9 +41,9 @@ impl HttpRequest {
             head,
             path,
             payload,
+            app_data,
             rmap,
             config,
-            app_data,
             pool,
         }))
     }
@@ -218,11 +218,7 @@ impl HttpRequest {
     /// let opt_t = req.app_data::<Data<T>>();
     /// ```
     pub fn app_data<T: 'static>(&self) -> Option<&T> {
-        if let Some(st) = self.0.app_data.get::<T>() {
-            Some(&st)
-        } else {
-            None
-        }
+        self.0.app_data.get::<T>()
     }
 }
 
@@ -322,11 +318,7 @@ impl HttpRequestPool {
     /// Get message from the pool
     #[inline]
     pub(crate) fn get_request(&self) -> Option<HttpRequest> {
-        if let Some(inner) = self.0.borrow_mut().pop() {
-            Some(HttpRequest(inner))
-        } else {
-            None
-        }
+        self.0.borrow_mut().pop().map(HttpRequest)
     }
 
     pub(crate) fn clear(&self) {
