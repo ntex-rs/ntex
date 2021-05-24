@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.17] - 2021-05-24
+
+* framed: add read/write bytes pool
+
 ## [0.3.16] - 2021-05-17
 
 * framed: process unhandled data on disconnect

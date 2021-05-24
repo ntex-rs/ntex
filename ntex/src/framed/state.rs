@@ -46,9 +46,20 @@ pub(crate) struct IoStateInner {
     read_task: LocalWaker,
     write_task: LocalWaker,
     dispatch_task: LocalWaker,
-    read_buf: RefCell<BytesMut>,
+    read_buf: Cell<Option<BytesMut>>,
     write_buf: RefCell<BytesMut>,
     on_disconnect: RefCell<Slab<Option<LocalWaker>>>,
+}
+
+thread_local!(static BYTES_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(16)));
+
+fn release_to_pool(buf: BytesMut) {
+    BYTES_POOL.with(|pool| {
+        let v = &mut pool.borrow_mut();
+        if v.len() < 16 {
+            v.push(buf);
+        }
+    })
 }
 
 impl IoStateInner {
@@ -62,6 +73,42 @@ impl IoStateInner {
         let mut flags = self.flags.get();
         flags.remove(f);
         self.flags.set(flags);
+    }
+
+    fn get_read_buf(&self) -> BytesMut {
+        if let Some(buf) = self.read_buf.take() {
+            buf
+        } else {
+            BYTES_POOL.with(|pool| {
+                if let Some(buf) = pool.borrow_mut().pop() {
+                    buf
+                } else {
+                    BytesMut::with_capacity(self.read_hw.get() as usize)
+                }
+            })
+        }
+    }
+
+    fn release_read_buf(&self, buf: BytesMut) {
+        if buf.is_empty() {
+            if buf.capacity() > (self.lw.get() as usize) {
+                release_to_pool(buf);
+            }
+        } else {
+            self.read_buf.set(Some(buf));
+        }
+    }
+}
+
+impl Drop for IoStateInner {
+    fn drop(&mut self) {
+        if let Some(mut buf) = self.read_buf.take() {
+            buf.clear();
+            let cap = buf.capacity();
+            if cap > (self.lw.get() as usize) && cap <= self.read_hw.get() as usize {
+                release_to_pool(buf);
+            }
+        }
     }
 }
 
@@ -99,7 +146,7 @@ impl State {
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            read_buf: RefCell::new(BytesMut::new()),
+            read_buf: Cell::new(None),
             write_buf: RefCell::new(BytesMut::new()),
             on_disconnect: RefCell::new(Slab::new()),
         }))
@@ -109,8 +156,14 @@ impl State {
     /// Create `State` from Framed
     pub fn from_framed<Io, U>(framed: Framed<Io, U>) -> (Io, U, Self) {
         let parts = framed.into_parts();
+        let read_buf = if !parts.read_buf.is_empty() {
+            Cell::new(Some(parts.read_buf))
+        } else {
+            Cell::new(None)
+        };
 
         let state = State(Rc::new(IoStateInner {
+            read_buf,
             flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
             lw: Cell::new(1024),
@@ -120,7 +173,6 @@ impl State {
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            read_buf: RefCell::new(parts.read_buf),
             write_buf: RefCell::new(parts.write_buf),
             on_disconnect: RefCell::new(Slab::new()),
         }));
@@ -143,9 +195,9 @@ impl State {
             write_hw: Cell::new(max_write_buf_size),
             disconnect_timeout: Cell::new(disconnect_timeout),
             dispatch_task: LocalWaker::new(),
+            read_buf: Cell::new(None),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            read_buf: RefCell::new(BytesMut::with_capacity(min_buf_size as usize)),
             write_buf: RefCell::new(BytesMut::with_capacity(min_buf_size as usize)),
             on_disconnect: RefCell::new(Slab::new()),
         }))
@@ -155,7 +207,12 @@ impl State {
     /// Convert State to a Framed instance
     pub fn into_framed<Io, U>(self, io: Io, codec: U) -> Framed<Io, U> {
         let mut parts = FramedParts::new(io, codec);
-        parts.read_buf = mem::take(&mut self.0.read_buf.borrow_mut());
+
+        parts.read_buf = if let Some(buf) = self.0.read_buf.take() {
+            buf
+        } else {
+            BytesMut::new()
+        };
         parts.write_buf = mem::take(&mut self.0.write_buf.borrow_mut());
         Framed::from_parts(parts)
     }
@@ -398,18 +455,15 @@ impl State {
         T: AsyncRead + AsyncWrite + Unpin,
         U: Decoder,
     {
+        let mut buf = self.0.get_read_buf();
+
         loop {
-            let item = codec.decode(&mut self.0.read_buf.borrow_mut());
-            return match item {
+            let item = codec.decode(&mut buf);
+            let result = match item {
                 Ok(Some(el)) => Ok(Some(el)),
                 Ok(None) => {
-                    let st = self.0.clone();
                     let n = poll_fn(|cx| {
-                        crate::codec::poll_read_buf(
-                            Pin::new(&mut *io),
-                            cx,
-                            &mut *st.read_buf.borrow_mut(),
-                        )
+                        crate::codec::poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
                     })
                     .await
                     .map_err(Either::Right)?;
@@ -424,6 +478,8 @@ impl State {
                     Err(Either::Left(err))
                 }
             };
+            self.0.release_read_buf(buf);
+            return result;
         }
     }
 
@@ -464,14 +520,13 @@ impl State {
         T: AsyncRead + AsyncWrite + Unpin,
         U: Decoder,
     {
-        let mut buf = self.0.read_buf.borrow_mut();
+        let mut buf = self.0.get_read_buf();
 
         loop {
-            return match codec.decode(&mut buf) {
+            let item = match codec.decode(&mut buf) {
                 Ok(Some(el)) => Poll::Ready(Ok(Some(el))),
                 Ok(None) => {
-                    match crate::codec::poll_read_buf(Pin::new(&mut *io), cx, &mut *buf)
-                    {
+                    match crate::codec::poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
                         Poll::Pending => Poll::Pending,
                         Poll::Ready(Err(err)) => Poll::Ready(Err(Either::Right(err))),
                         Poll::Ready(Ok(n)) => {
@@ -488,6 +543,8 @@ impl State {
                     Poll::Ready(Err(Either::Left(err)))
                 }
             };
+            self.0.release_read_buf(buf);
+            return item;
         }
     }
 
@@ -498,7 +555,7 @@ impl State {
     {
         let inner = self.0.as_ref();
         let lw = inner.lw.get() as usize;
-        let buf = &mut inner.read_buf.borrow_mut();
+        let mut buf = inner.get_read_buf();
 
         // read data from socket
         let mut updated = false;
@@ -509,11 +566,12 @@ impl State {
                 buf.reserve((inner.read_hw.get() as usize) - remaining);
             }
 
-            match crate::codec::poll_read_buf(Pin::new(&mut *io), cx, buf) {
+            match crate::codec::poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
                 Poll::Pending => break,
                 Poll::Ready(Ok(n)) => {
                     if n == 0 {
                         log::trace!("io stream is disconnected");
+                        inner.release_read_buf(buf);
                         self.set_io_error(None);
                         return false;
                     } else {
@@ -522,9 +580,10 @@ impl State {
                                 "buffer is too large {}, enable read back-pressure",
                                 buf.len()
                             );
-                            self.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
-                            self.0.dispatch_task.wake();
-                            self.0.read_task.register(cx.waker());
+                            inner.dispatch_task.wake();
+                            inner.read_buf.set(Some(buf));
+                            inner.read_task.register(cx.waker());
+                            inner.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
                             return true;
                         }
 
@@ -533,6 +592,11 @@ impl State {
                 }
                 Poll::Ready(Err(err)) => {
                     log::trace!("read task failed on io {:?}", err);
+                    if updated {
+                        inner.read_buf.set(Some(buf));
+                    } else {
+                        release_to_pool(buf);
+                    }
                     self.set_io_error(Some(err));
                     return false;
                 }
@@ -540,8 +604,14 @@ impl State {
         }
 
         if updated {
+            inner.read_buf.set(Some(buf));
             self.insert_flags(Flags::RD_READY);
             self.0.dispatch_task.wake();
+        } else if buf.is_empty() {
+            // no new data, return back to pool
+            release_to_pool(buf);
+        } else {
+            inner.read_buf.set(Some(buf));
         }
         self.0.read_task.register(cx.waker());
         true
@@ -771,7 +841,13 @@ impl<'a> Read<'a> {
     #[inline]
     /// Check if read buffer is full
     pub fn is_full(&self) -> bool {
-        self.0.read_buf.borrow().len() >= self.0.read_hw.get() as usize
+        if let Some(buf) = self.0.read_buf.take() {
+            let result = buf.len() >= self.0.read_hw.get() as usize;
+            self.0.read_buf.set(Some(buf));
+            result
+        } else {
+            false
+        }
     }
 
     #[inline]
@@ -819,7 +895,13 @@ impl<'a> Read<'a> {
     where
         U: Decoder,
     {
-        codec.decode(&mut self.0.read_buf.borrow_mut())
+        if let Some(mut buf) = self.0.read_buf.take() {
+            let result = codec.decode(&mut buf);
+            self.0.release_read_buf(buf);
+            result
+        } else {
+            codec.decode(&mut BytesMut::new())
+        }
     }
 
     /// Get mut access to read buffer
@@ -827,7 +909,13 @@ impl<'a> Read<'a> {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        f(&mut self.0.read_buf.borrow_mut())
+        if let Some(mut buf) = self.0.read_buf.take() {
+            let res = f(&mut buf);
+            self.0.release_read_buf(buf);
+            res
+        } else {
+            f(&mut BytesMut::new())
+        }
     }
 }
 

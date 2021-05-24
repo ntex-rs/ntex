@@ -385,15 +385,14 @@ impl<T: Head> Drop for Message<T> {
     }
 }
 
-#[doc(hidden)]
 /// Request's objects pool
 pub(crate) struct MessagePool<T: Head>(RefCell<Vec<Rc<T>>>);
 
-thread_local!(static REQUEST_POOL: MessagePool<RequestHead> = MessagePool::<RequestHead>::create());
-thread_local!(static RESPONSE_POOL: MessagePool<ResponseHead> = MessagePool::<ResponseHead>::create());
+thread_local!(static REQUEST_POOL: MessagePool<RequestHead> = MessagePool::<RequestHead>::new());
+thread_local!(static RESPONSE_POOL: MessagePool<ResponseHead> = MessagePool::<ResponseHead>::new());
 
 impl<T: Head> MessagePool<T> {
-    fn create() -> MessagePool<T> {
+    fn new() -> MessagePool<T> {
         MessagePool(RefCell::new(Vec::with_capacity(128)))
     }
 

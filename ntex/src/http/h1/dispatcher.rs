@@ -988,7 +988,7 @@ mod tests {
         let mut h1 = h1(server, |_| {
             Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
         });
-        h1.inner.state.set_buffer_params(16 * 1024, 16 * 1024, 1024);
+        h1.inner.state.set_buffer_params(15 * 1024, 15 * 1024, 1024);
 
         let mut decoder = ClientCodec::default();
 
