@@ -834,11 +834,14 @@ async fn client_read_until_eof() {
         let lst = std::net::TcpListener::bind(addr).unwrap();
 
         for stream in lst.incoming() {
-            let mut stream = stream.unwrap();
-            let mut b = [0; 1000];
-            let _ = stream.read(&mut b).unwrap();
-            let _ = stream
-                .write_all(b"HTTP/1.0 200 OK\r\nconnection: close\r\n\r\nwelcome!");
+            if let Ok(mut stream) = stream {
+                let mut b = [0; 1000];
+                let _ = stream.read(&mut b).unwrap();
+                let _ = stream
+                    .write_all(b"HTTP/1.0 200 OK\r\nconnection: close\r\n\r\nwelcome!");
+            } else {
+                break;
+            }
         }
     });
     ntex::rt::time::sleep(Duration::from_millis(300)).await;

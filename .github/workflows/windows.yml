@@ -79,3 +79,4 @@ jobs:
                 --skip test_connection_wait_queue
                 --skip test_no_decompress
                 --skip test_connection_reuse_h2
+                --skip test_h2_tcp
