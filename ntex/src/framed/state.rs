@@ -643,11 +643,7 @@ impl State {
                 }
                 Poll::Ready(Err(err)) => {
                     log::trace!("read task failed on io {:?}", err);
-                    if updated {
-                        inner.read_buf.set(Some(buf));
-                    } else {
-                        release_to_r_pool(buf);
-                    }
+                    inner.release_read_buf(buf);
                     self.set_io_error(Some(err));
                     return false;
                 }
@@ -658,11 +654,8 @@ impl State {
             inner.read_buf.set(Some(buf));
             self.insert_flags(Flags::RD_READY);
             self.0.dispatch_task.wake();
-        } else if buf.is_empty() {
-            // no new data, return back to pool
-            release_to_r_pool(buf);
         } else {
-            inner.read_buf.set(Some(buf));
+            inner.release_read_buf(buf);
         }
         self.0.read_task.register(cx.waker());
         true
