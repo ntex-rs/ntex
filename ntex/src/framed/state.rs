@@ -1,6 +1,6 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll, Waker};
-use std::{cell::Cell, cell::RefCell, future::Future, hash, io, mem, pin::Pin, rc::Rc};
+use std::{cell::Cell, cell::RefCell, future::Future, hash, io, pin::Pin, rc::Rc};
 
 use slab::Slab;
 
@@ -47,16 +47,28 @@ pub(crate) struct IoStateInner {
     write_task: LocalWaker,
     dispatch_task: LocalWaker,
     read_buf: Cell<Option<BytesMut>>,
-    write_buf: RefCell<BytesMut>,
+    write_buf: Cell<Option<BytesMut>>,
     on_disconnect: RefCell<Slab<Option<LocalWaker>>>,
 }
 
-thread_local!(static BYTES_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(16)));
+thread_local!(static R_BYTES_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(16)));
+thread_local!(static W_BYTES_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(16)));
 
-fn release_to_pool(buf: BytesMut) {
-    BYTES_POOL.with(|pool| {
+fn release_to_r_pool(mut buf: BytesMut) {
+    R_BYTES_POOL.with(|pool| {
         let v = &mut pool.borrow_mut();
         if v.len() < 16 {
+            buf.clear();
+            v.push(buf);
+        }
+    })
+}
+
+fn release_to_w_pool(mut buf: BytesMut) {
+    W_BYTES_POOL.with(|pool| {
+        let v = &mut pool.borrow_mut();
+        if v.len() < 16 {
+            buf.clear();
             v.push(buf);
         }
     })
@@ -79,7 +91,7 @@ impl IoStateInner {
         if let Some(buf) = self.read_buf.take() {
             buf
         } else {
-            BYTES_POOL.with(|pool| {
+            R_BYTES_POOL.with(|pool| {
                 if let Some(buf) = pool.borrow_mut().pop() {
                     buf
                 } else {
@@ -89,24 +101,54 @@ impl IoStateInner {
         }
     }
 
+    fn get_write_buf(&self) -> BytesMut {
+        if let Some(buf) = self.write_buf.take() {
+            buf
+        } else {
+            W_BYTES_POOL.with(|pool| {
+                if let Some(buf) = pool.borrow_mut().pop() {
+                    buf
+                } else {
+                    BytesMut::with_capacity(self.write_hw.get() as usize)
+                }
+            })
+        }
+    }
+
     fn release_read_buf(&self, buf: BytesMut) {
         if buf.is_empty() {
             if buf.capacity() > (self.lw.get() as usize) {
-                release_to_pool(buf);
+                release_to_r_pool(buf);
             }
         } else {
             self.read_buf.set(Some(buf));
+        }
+    }
+
+    fn release_write_buf(&self, buf: BytesMut) {
+        if buf.is_empty() {
+            let cap = buf.capacity();
+            if cap > (self.lw.get() as usize) && cap <= self.write_hw.get() as usize {
+                release_to_w_pool(buf);
+            }
+        } else {
+            self.write_buf.set(Some(buf));
         }
     }
 }
 
 impl Drop for IoStateInner {
     fn drop(&mut self) {
-        if let Some(mut buf) = self.read_buf.take() {
-            buf.clear();
+        if let Some(buf) = self.read_buf.take() {
             let cap = buf.capacity();
             if cap > (self.lw.get() as usize) && cap <= self.read_hw.get() as usize {
-                release_to_pool(buf);
+                release_to_r_pool(buf);
+            }
+        }
+        if let Some(buf) = self.write_buf.take() {
+            let cap = buf.capacity();
+            if cap > (self.lw.get() as usize) && cap <= self.write_hw.get() as usize {
+                release_to_w_pool(buf);
             }
         }
     }
@@ -147,7 +189,7 @@ impl State {
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
             read_buf: Cell::new(None),
-            write_buf: RefCell::new(BytesMut::new()),
+            write_buf: Cell::new(None),
             on_disconnect: RefCell::new(Slab::new()),
         }))
     }
@@ -161,9 +203,15 @@ impl State {
         } else {
             Cell::new(None)
         };
+        let write_buf = if !parts.write_buf.is_empty() {
+            Cell::new(Some(parts.write_buf))
+        } else {
+            Cell::new(None)
+        };
 
         let state = State(Rc::new(IoStateInner {
             read_buf,
+            write_buf,
             flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
             lw: Cell::new(1024),
@@ -173,7 +221,6 @@ impl State {
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            write_buf: RefCell::new(parts.write_buf),
             on_disconnect: RefCell::new(Slab::new()),
         }));
         (parts.io, parts.codec, state)
@@ -197,8 +244,8 @@ impl State {
             dispatch_task: LocalWaker::new(),
             read_buf: Cell::new(None),
             read_task: LocalWaker::new(),
+            write_buf: Cell::new(None),
             write_task: LocalWaker::new(),
-            write_buf: RefCell::new(BytesMut::with_capacity(min_buf_size as usize)),
             on_disconnect: RefCell::new(Slab::new()),
         }))
     }
@@ -213,7 +260,11 @@ impl State {
         } else {
             BytesMut::new()
         };
-        parts.write_buf = mem::take(&mut self.0.write_buf.borrow_mut());
+        parts.write_buf = if let Some(buf) = self.0.write_buf.take() {
+            buf
+        } else {
+            BytesMut::new()
+        };
         Framed::from_parts(parts)
     }
 
@@ -495,10 +546,10 @@ impl State {
         T: AsyncRead + AsyncWrite + Unpin,
         U: Encoder,
     {
-        codec
-            .encode(item, &mut self.0.write_buf.borrow_mut())
-            .map_err(Either::Left)?;
+        let mut buf = self.0.get_write_buf();
+        codec.encode(item, &mut buf).map_err(Either::Left)?;
 
+        self.0.write_buf.set(Some(buf));
         if !poll_fn(|cx| self.flush_io(io, cx)).await {
             let err = self.0.error.take().unwrap_or_else(|| {
                 io::Error::new(io::ErrorKind::Other, "Internal error")
@@ -595,7 +646,7 @@ impl State {
                     if updated {
                         inner.read_buf.set(Some(buf));
                     } else {
-                        release_to_pool(buf);
+                        release_to_r_pool(buf);
                     }
                     self.set_io_error(Some(err));
                     return false;
@@ -609,7 +660,7 @@ impl State {
             self.0.dispatch_task.wake();
         } else if buf.is_empty() {
             // no new data, return back to pool
-            release_to_pool(buf);
+            release_to_r_pool(buf);
         } else {
             inner.read_buf.set(Some(buf));
         }
@@ -623,7 +674,12 @@ impl State {
         T: AsyncRead + AsyncWrite + Unpin,
     {
         let inner = self.0.as_ref();
-        let buf = &mut inner.write_buf.borrow_mut();
+        let mut buf = if let Some(buf) = inner.write_buf.take() {
+            buf
+        } else {
+            self.0.write_task.register(cx.waker());
+            return Poll::Ready(true);
+        };
         let len = buf.len();
 
         if len != 0 {
@@ -639,6 +695,8 @@ impl State {
                                 "Disconnected during flush, written {}",
                                 written
                             );
+                            buf.clear();
+                            inner.release_write_buf(buf);
                             self.set_io_error(Some(io::Error::new(
                                 io::ErrorKind::WriteZero,
                                 "failed to write frame to transport",
@@ -650,6 +708,8 @@ impl State {
                     }
                     Poll::Ready(Err(e)) => {
                         log::trace!("Error during flush: {}", e);
+                        buf.clear();
+                        inner.release_write_buf(buf);
                         self.set_io_error(Some(e));
                         return Poll::Ready(false);
                     }
@@ -679,7 +739,7 @@ impl State {
         self.0.write_task.register(cx.waker());
 
         // flush
-        match Pin::new(&mut *io).poll_flush(cx) {
+        let result = match Pin::new(&mut *io).poll_flush(cx) {
             Poll::Ready(Ok(_)) => {
                 if buf.is_empty() {
                     Poll::Ready(true)
@@ -693,7 +753,9 @@ impl State {
                 self.set_io_error(Some(err));
                 Poll::Ready(false)
             }
-        }
+        };
+        inner.release_write_buf(buf);
+        result
     }
 }
 
@@ -710,7 +772,13 @@ impl<'a> Write<'a> {
     #[inline]
     /// Check if write buffer is full
     pub fn is_full(&self) -> bool {
-        self.0.write_buf.borrow().len() >= self.0.write_hw.get() as usize
+        if let Some(buf) = self.0.read_buf.take() {
+            let result = buf.len() >= self.0.write_hw.get() as usize;
+            self.0.write_buf.set(Some(buf));
+            result
+        } else {
+            false
+        }
     }
 
     #[inline]
@@ -736,12 +804,14 @@ impl<'a> Write<'a> {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        let mut write_buf = self.0.write_buf.borrow_mut();
-        if write_buf.is_empty() {
+        let mut buf = self.0.get_write_buf();
+        if buf.is_empty() {
             self.0.write_task.wake();
         }
 
-        f(&mut write_buf)
+        let result = f(&mut buf);
+        self.0.release_write_buf(buf);
+        result
     }
 
     #[inline]
@@ -759,22 +829,24 @@ impl<'a> Write<'a> {
         let flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
-            let mut write_buf = self.0.write_buf.borrow_mut();
-            let is_write_sleep = write_buf.is_empty();
+            let mut buf = self.0.get_write_buf();
+            let is_write_sleep = buf.is_empty();
 
             // make sure we've got room
-            let remaining = write_buf.capacity() - write_buf.len();
+            let remaining = buf.capacity() - buf.len();
             if remaining < self.0.lw.get() as usize {
-                write_buf.reserve((self.0.write_hw.get() as usize) - remaining);
+                buf.reserve((self.0.write_hw.get() as usize) - remaining);
             }
 
             // encode item and wake write task
-            codec.encode(item, &mut *write_buf).map(|_| {
+            let result = codec.encode(item, &mut buf).map(|_| {
                 if is_write_sleep {
                     self.0.write_task.wake();
                 }
-                write_buf.len() < self.0.write_hw.get() as usize
-            })
+                buf.len() < self.0.write_hw.get() as usize
+            });
+            self.0.write_buf.set(Some(buf));
+            result
         } else {
             Ok(true)
         }
@@ -795,25 +867,28 @@ impl<'a> Write<'a> {
         if !flags.intersects(Flags::IO_ERR | Flags::ST_DSP_ERR) {
             match item {
                 Ok(Some(item)) => {
-                    let mut write_buf = self.0.write_buf.borrow_mut();
-                    let is_write_sleep = write_buf.is_empty();
+                    let mut buf = self.0.get_write_buf();
+                    let is_write_sleep = buf.is_empty();
 
                     // make sure we've got room
-                    let remaining = write_buf.capacity() - write_buf.len();
+                    let remaining = buf.capacity() - buf.len();
                     if remaining < self.0.lw.get() as usize {
-                        write_buf.reserve((self.0.write_hw.get() as usize) - remaining);
+                        buf.reserve((self.0.write_hw.get() as usize) - remaining);
                     }
 
                     // encode item
-                    if let Err(err) = codec.encode(item, &mut write_buf) {
+                    if let Err(err) = codec.encode(item, &mut buf) {
                         log::trace!("Encoder error: {:?}", err);
+                        self.0.release_write_buf(buf);
                         self.0.insert_flags(Flags::DSP_STOP | Flags::ST_DSP_ERR);
                         self.0.dispatch_task.wake();
                         return Err(Either::Right(err));
                     } else if is_write_sleep {
                         self.0.write_task.wake();
                     }
-                    Ok(write_buf.len() < self.0.write_hw.get() as usize)
+                    let result = Ok(buf.len() < self.0.write_hw.get() as usize);
+                    self.0.write_buf.set(Some(buf));
+                    result
                 }
                 Err(err) => {
                     self.0.insert_flags(Flags::DSP_STOP | Flags::ST_DSP_ERR);
