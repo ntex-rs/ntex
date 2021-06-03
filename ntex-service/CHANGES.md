@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.9] - 2021-06-03
+
+* Add rc wrapped service, `RcService`
+
 ## [0.1.8] - 2021-04-11
 
 * Move utils to ntex-util crate

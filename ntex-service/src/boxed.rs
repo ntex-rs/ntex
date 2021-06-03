@@ -1,10 +1,19 @@
-use std::{future::Future, pin::Pin, task::Context, task::Poll};
+use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use crate::{Service, ServiceFactory};
 
 pub type BoxFuture<I, E> = Pin<Box<dyn Future<Output = Result<I, E>>>>;
 
 pub type BoxService<Req, Res, Err> = Box<
+    dyn Service<
+        Request = Req,
+        Response = Res,
+        Error = Err,
+        Future = BoxFuture<Res, Err>,
+    >,
+>;
+
+pub type RcService<Req, Res, Err> = Rc<
     dyn Service<
         Request = Req,
         Response = Res,
@@ -43,6 +52,15 @@ where
     T::Future: 'static,
 {
     Box::new(ServiceWrapper(service))
+}
+
+/// Create rc service
+pub fn rcservice<T>(service: T) -> RcService<T::Request, T::Response, T::Error>
+where
+    T: Service + 'static,
+    T::Future: 'static,
+{
+    Rc::new(ServiceWrapper(service))
 }
 
 type Inner<C, Req, Res, Err, InitErr> = Box<
