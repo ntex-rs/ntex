@@ -33,6 +33,12 @@ pub use self::test::{build_test_server, test_server, TestServer};
 #[doc(hidden)]
 pub use self::socket::FromStream;
 
+/// Server readiness status
+pub enum ServerStatus {
+    Ready,
+    NotReady,
+}
+
 /// Socket id token
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(self) struct Token(usize);

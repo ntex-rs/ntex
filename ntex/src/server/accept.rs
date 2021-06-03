@@ -8,7 +8,7 @@ use crate::rt::System;
 
 use super::socket::{Listener, SocketAddr};
 use super::worker::{Connection, WorkerClient};
-use super::{Server, Token};
+use super::{Server, ServerStatus, Token};
 
 const DELTA: usize = 100;
 const NOTIFY: mio::Token = mio::Token(0);
@@ -49,6 +49,7 @@ impl AcceptNotify {
 pub(super) struct AcceptLoop {
     notify: AcceptNotify,
     inner: Option<(sync_mpsc::Receiver<Command>, mio::Poll, Server)>,
+    status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
 }
 
 impl AcceptLoop {
@@ -69,6 +70,7 @@ impl AcceptLoop {
         AcceptLoop {
             notify,
             inner: Some((rx, poll, srv)),
+            status_handler: None,
         }
     }
 
@@ -80,6 +82,13 @@ impl AcceptLoop {
         self.notify.clone()
     }
 
+    pub(super) fn set_status_handler<F>(&mut self, f: F)
+    where
+        F: FnMut(ServerStatus) + Send + 'static,
+    {
+        self.status_handler = Some(Box::new(f));
+    }
+
     pub(super) fn start(
         &mut self,
         socks: Vec<(Token, Listener)>,
@@ -89,8 +98,17 @@ impl AcceptLoop {
             .inner
             .take()
             .expect("AcceptLoop cannot be used multiple times");
+        let status_handler = self.status_handler.take();
 
-        Accept::start(rx, poll, socks, srv, workers, self.notify.clone());
+        Accept::start(
+            rx,
+            poll,
+            socks,
+            srv,
+            workers,
+            self.notify.clone(),
+            status_handler,
+        );
     }
 }
 
@@ -103,6 +121,7 @@ struct Accept {
     notify: AcceptNotify,
     next: usize,
     backpressure: bool,
+    status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
 }
 
 /// This function defines errors that are per-connection. Which basically
@@ -126,6 +145,7 @@ impl Accept {
         srv: Server,
         workers: Vec<WorkerClient>,
         notify: AcceptNotify,
+        status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) {
         let sys = System::current();
 
@@ -134,7 +154,7 @@ impl Accept {
             .name("ntex-server accept loop".to_owned())
             .spawn(move || {
                 System::set_current(sys);
-                Accept::new(rx, poll, socks, workers, srv, notify).poll()
+                Accept::new(rx, poll, socks, workers, srv, notify, status_handler).poll()
             });
     }
 
@@ -145,6 +165,7 @@ impl Accept {
         workers: Vec<WorkerClient>,
         srv: Server,
         notify: AcceptNotify,
+        status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) -> Accept {
         // Start accept
         let mut sockets = Slab::new();
@@ -177,8 +198,15 @@ impl Accept {
             workers,
             notify,
             srv,
+            status_handler,
             next: 0,
             backpressure: false,
+        }
+    }
+
+    fn update_status(&mut self, st: ServerStatus) {
+        if let Some(ref mut hnd) = self.status_handler {
+            (&mut *hnd)(st)
         }
     }
 
@@ -258,6 +286,7 @@ impl Accept {
                                 info!("Paused accepting connections on {}", info.addr);
                             }
                         }
+                        self.update_status(ServerStatus::NotReady);
                     }
                     Command::Resume => {
                         for (token, info) in self.sockets.iter_mut() {
@@ -274,12 +303,14 @@ impl Accept {
                                 );
                             }
                         }
+                        self.update_status(ServerStatus::Ready);
                     }
                     Command::Stop => {
                         for (_, info) in self.sockets.iter_mut() {
                             trace!("Stopping socket listener: {}", info.addr);
                             let _ = self.poll.registry().deregister(&mut info.sock);
                         }
+                        self.update_status(ServerStatus::NotReady);
                         return false;
                     }
                     Command::Worker(worker) => {
@@ -308,6 +339,12 @@ impl Accept {
     }
 
     fn backpressure(&mut self, on: bool) {
+        self.update_status(if on {
+            ServerStatus::NotReady
+        } else {
+            ServerStatus::Ready
+        });
+
         if self.backpressure {
             if !on {
                 self.backpressure = false;

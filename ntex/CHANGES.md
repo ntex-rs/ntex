@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.18] - 2021-06-03
+
+* server: expose server status change notifications
+
 ## [0.3.17] - 2021-05-24
 
 * framed: add read/write bytes pool

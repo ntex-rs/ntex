@@ -15,7 +15,7 @@ use super::service::{Factory, InternalServiceFactory, StreamServiceFactory};
 use super::signals::{Signal, Signals};
 use super::socket::Listener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
-use super::{Server, ServerCommand, Token};
+use super::{Server, ServerCommand, ServerStatus, Token};
 
 const STOP_DELAY: Duration = Duration::from_millis(300);
 
@@ -125,6 +125,18 @@ impl ServerBuilder {
     /// By default shutdown timeout sets to 30 seconds.
     pub fn shutdown_timeout(mut self, sec: u64) -> Self {
         self.shutdown_timeout = Duration::from_secs(sec);
+        self
+    }
+
+    #[doc(hidden)]
+    /// Set server status handler.
+    ///
+    /// Server calls this handler on every inner status update.
+    pub fn status_handler<F>(mut self, handler: F) -> Self
+    where
+        F: FnMut(ServerStatus) + Send + 'static,
+    {
+        self.accept.set_status_handler(handler);
         self
     }
 
