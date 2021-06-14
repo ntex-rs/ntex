@@ -900,25 +900,38 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_scope_guard() {
-        let srv =
-            init_service(App::new().service(
-                web::scope("/app").guard(guard::Get()).service(
+        let srv = init_service(
+            App::new()
+                .service(web::scope("/app").guard(guard::Get()).service(
                     web::resource("/path1").to(|| async { HttpResponse::Ok() }),
+                ))
+                .service(web::scope("/app").guard(guard::Post()).service(
+                    web::resource("/path1").to(|| async { HttpResponse::NotModified() }),
+                ))
+                .service(
+                    web::resource("/app/path1")
+                        .to(|| async { HttpResponse::NoContent() }),
                 ),
-            ))
-            .await;
+        )
+        .await;
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::POST)
             .to_request();
         let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::GET)
             .to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+
+        let req = TestRequest::with_uri("/app/path1")
+            .method(Method::DELETE)
+            .to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
     #[crate::rt_test]

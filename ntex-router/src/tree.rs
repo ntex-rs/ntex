@@ -8,22 +8,27 @@ use super::{Resource, ResourcePath};
 #[derive(Debug, Clone)]
 pub(super) struct Tree {
     key: Vec<Segment>,
-    value: Vec<Value>,
-    children: Vec<Tree>,
+    items: Vec<Item>,
+}
+
+#[derive(Clone, Debug)]
+enum Item {
+    Value(Value),
+    Subtree(Tree),
 }
 
 #[derive(Copy, Clone, Debug)]
 enum Value {
     Val(usize),
-    Slesh(usize),
+    Slash(usize),
     Prefix(usize),
-    PrefixSlesh(usize),
+    PrefixSlash(usize),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum PathState {
     Empty,
-    Slesh,
+    Slash,
     Tail,
 }
 
@@ -31,9 +36,9 @@ impl Value {
     fn value(&self) -> usize {
         match self {
             Value::Val(v) => *v,
-            Value::Slesh(v) => *v,
+            Value::Slash(v) => *v,
             Value::Prefix(v) => *v,
-            Value::PrefixSlesh(v) => *v,
+            Value::PrefixSlash(v) => *v,
         }
     }
 }
@@ -42,8 +47,7 @@ impl Default for Tree {
     fn default() -> Tree {
         Tree {
             key: Vec::new(),
-            value: Vec::new(),
-            children: Vec::new(),
+            items: Vec::new(),
         }
     }
 }
@@ -56,9 +60,9 @@ impl Tree {
 
         let val = if resource.tp[0].slesh {
             if resource.prefix {
-                Value::PrefixSlesh(value)
+                Value::PrefixSlash(value)
             } else {
-                Value::Slesh(value)
+                Value::Slash(value)
             }
         } else if resource.prefix {
             Value::Prefix(value)
@@ -71,9 +75,9 @@ impl Tree {
         for seg in &resource.tp[1..] {
             let val = if seg.slesh {
                 if resource.prefix {
-                    Value::PrefixSlesh(value)
+                    Value::PrefixSlash(value)
                 } else {
-                    Value::Slesh(value)
+                    Value::Slash(value)
                 }
             } else if resource.prefix {
                 Value::Prefix(value)
@@ -86,25 +90,21 @@ impl Tree {
     }
 
     fn child(key: Vec<Segment>, value: Option<Value>) -> Tree {
-        let value = if let Some(val) = value {
-            vec![val]
+        let items = if let Some(val) = value {
+            vec![Item::Value(val)]
         } else {
             Vec::new()
         };
-        Tree {
-            key,
-            value,
-            children: Vec::new(),
-        }
+        Tree { key, items }
     }
 
     pub(super) fn insert(&mut self, resource: &ResourceDef, value: usize) {
         for seg in &resource.tp {
             let value = if seg.slesh {
                 if resource.prefix {
-                    Value::PrefixSlesh(value)
+                    Value::PrefixSlash(value)
                 } else {
-                    Value::Slesh(value)
+                    Value::Slash(value)
                 }
             } else if resource.prefix {
                 Value::Prefix(value)
@@ -123,33 +123,34 @@ impl Tree {
         if p < self.key.len() {
             let child = Tree {
                 key: self.key.split_off(p),
-                value: mem::take(&mut self.value),
-                children: mem::take(&mut self.children),
+                items: mem::take(&mut self.items),
             };
-            self.children.push(child);
+            self.items.push(Item::Subtree(child));
         }
 
         // update value if key is the same
         if p == key.len() {
             match value {
-                Value::PrefixSlesh(v) => {
-                    self.children
-                        .push(Tree::child(Vec::new(), Some(Value::Prefix(v))));
+                Value::PrefixSlash(v) => {
+                    self.items.push(Item::Subtree(Tree::child(
+                        Vec::new(),
+                        Some(Value::Prefix(v)),
+                    )));
                 }
-                value => self.value.push(value),
+                value => self.items.push(Item::Value(value)),
             }
         } else {
             // insert into sub tree
-            let mut child = self
-                .children
-                .iter_mut()
-                .find(|x| common_prefix(&x.key, &key[p..]) > 0);
-            if let Some(ref mut child) = child {
-                child.insert_path(key[p..].to_vec(), value)
-            } else {
-                self.children
-                    .push(Tree::child(key[p..].to_vec(), Some(value)));
+            for child in &mut self.items {
+                if let Item::Subtree(ref mut tree) = child {
+                    if common_prefix(&tree.key, &key[p..]) > 0 {
+                        tree.insert_path(key[p..].to_vec(), value);
+                        return;
+                    }
+                }
             }
+            self.items
+                .push(Item::Subtree(Tree::child(key[p..].to_vec(), Some(value))));
         }
     }
 
@@ -213,98 +214,133 @@ impl Tree {
 
         if self.key.is_empty() {
             if path == "/" {
-                for val in &self.value {
-                    let v = match val {
-                        Value::Slesh(v) | Value::Prefix(v) | Value::PrefixSlesh(v) => *v,
-                        _ => continue,
-                    };
-                    if check(v, resource) {
-                        return Some(v);
+                for val in &self.items {
+                    match val {
+                        Item::Value(val) => {
+                            let v = match val {
+                                Value::Slash(v)
+                                | Value::Prefix(v)
+                                | Value::PrefixSlash(v) => *v,
+                                _ => continue,
+                            };
+                            if check(v, resource) {
+                                return Some(v);
+                            }
+                        }
+                        Item::Subtree(ref tree) => {
+                            let result = tree.find_inner_wrapped(
+                                "",
+                                resource,
+                                check,
+                                1,
+                                &mut segments,
+                                insensitive,
+                                base_skip - 1,
+                            );
+                            if let Some((val, skip)) = result {
+                                let path = resource.resource_path();
+                                path.segments = segments;
+                                path.skip += skip as u16;
+                                return Some(val);
+                            }
+                        }
                     }
                 }
             } else if path.is_empty() {
-                for val in &self.value {
-                    let v = match val {
-                        Value::Val(v) | Value::Prefix(v) => *v,
-                        _ => continue,
-                    };
-                    if check(v, resource) {
-                        return Some(v);
+                for val in &self.items {
+                    match val {
+                        Item::Value(val) => {
+                            let v = match val {
+                                Value::Val(v) | Value::Prefix(v) => *v,
+                                _ => continue,
+                            };
+                            if check(v, resource) {
+                                return Some(v);
+                            }
+                        }
+                        Item::Subtree(ref tree) => {
+                            let result = tree.find_inner_wrapped(
+                                "",
+                                resource,
+                                check,
+                                1,
+                                &mut segments,
+                                insensitive,
+                                base_skip,
+                            );
+                            if let Some((val, skip)) = result {
+                                let path = resource.resource_path();
+                                path.segments = segments;
+                                path.skip += skip as u16;
+                                return Some(val);
+                            }
+                        }
                     }
                 }
             } else {
-                for val in &self.value {
-                    let v = match val {
-                        Value::PrefixSlesh(v) => *v,
-                        _ => continue,
-                    };
-                    if check(v, resource) {
-                        return Some(v);
+                let subtree_path = if let Some(spath) = path.strip_prefix('/') {
+                    spath
+                } else {
+                    base_skip -= 1;
+                    path
+                };
+
+                for val in &self.items {
+                    match val {
+                        Item::Value(val) => {
+                            let v = match val {
+                                Value::PrefixSlash(v) => *v,
+                                _ => continue,
+                            };
+                            if check(v, resource) {
+                                return Some(v);
+                            }
+                        }
+                        Item::Subtree(ref tree) => {
+                            let result = tree.find_inner_wrapped(
+                                subtree_path,
+                                resource,
+                                check,
+                                1,
+                                &mut segments,
+                                insensitive,
+                                base_skip,
+                            );
+                            if let Some((val, skip)) = result {
+                                let path = resource.resource_path();
+                                path.segments = segments;
+                                path.skip += skip as u16;
+                                return Some(val);
+                            }
+                        }
                     }
                 }
             }
-
-            let path = if let Some(path) = path.strip_prefix('/') {
-                path
+        } else if !path.is_empty() {
+            let subtree_path = if let Some(spath) = path.strip_prefix('/') {
+                spath
             } else {
                 base_skip -= 1;
                 path
             };
+            let res = self.find_inner_wrapped(
+                subtree_path,
+                resource,
+                check,
+                1,
+                &mut segments,
+                insensitive,
+                base_skip,
+            );
 
-            let res = self
-                .children
-                .iter()
-                .map(|x| {
-                    x.find_inner_wrapped(
-                        path,
-                        resource,
-                        check,
-                        1,
-                        &mut segments,
-                        insensitive,
-                        base_skip,
-                    )
-                })
-                .flatten()
-                .next();
-
-            return if let Some((val, skip)) = res {
+            if let Some((val, skip)) = res {
                 let path = resource.resource_path();
                 path.segments = segments;
                 path.skip += skip as u16;
-                Some(val)
-            } else {
-                None
-            };
+                return Some(val);
+            }
         }
-
-        if path.is_empty() {
-            return None;
-        }
-
-        let path = if let Some(path) = path.strip_prefix('/') {
-            path
-        } else {
-            base_skip -= 1;
-            path
-        };
-
-        if let Some((val, skip)) = self.find_inner_wrapped(
-            path,
-            resource,
-            check,
-            1,
-            &mut segments,
-            insensitive,
-            base_skip,
-        ) {
-            let path = resource.resource_path();
-            path.segments = segments;
-            path.skip += skip as u16;
-            Some(val)
-        } else {
-            None
-        }
+        None
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -357,9 +393,9 @@ impl Tree {
     {
         if self.key.is_empty() {
             if path.is_empty() {
-                for val in &self.value {
+                for val in &self.items {
                     let v = match val {
-                        Value::Val(v) | Value::Prefix(v) => *v,
+                        Item::Value(Value::Val(v)) | Item::Value(Value::Prefix(v)) => *v,
                         _ => continue,
                     };
                     if check(v, resource) {
@@ -367,9 +403,9 @@ impl Tree {
                     }
                 }
             } else {
-                for val in &self.value {
+                for val in &self.items {
                     let v = match val {
-                        Value::Prefix(v) => *v,
+                        Item::Value(Value::Prefix(v)) => *v,
                         _ => continue,
                     };
                     if check(v, resource) {
@@ -434,10 +470,12 @@ impl Tree {
                         // we have to process checker for tail matches separately
                         if tail && is_match {
                             // checker
-                            for val in &self.value {
-                                let v = val.value();
-                                if check(v, resource) {
-                                    return Some((v, skip + idx));
+                            for val in &self.items {
+                                if let Item::Value(ref val) = val {
+                                    let v = val.value();
+                                    if check(v, resource) {
+                                        return Some((v, skip + idx));
+                                    }
                                 }
                             }
                         }
@@ -458,13 +496,17 @@ impl Tree {
                     return {
                         if key.is_empty() {
                             // checker
-                            for val in &self.value {
-                                let v = match val {
-                                    Value::Val(v) | Value::Prefix(v) => *v,
-                                    Value::Slesh(_) | Value::PrefixSlesh(_) => continue,
-                                };
-                                if check(v, resource) {
-                                    return Some((v, skip));
+                            for val in &self.items {
+                                if let Item::Value(ref val) = val {
+                                    let v = match val {
+                                        Value::Val(v) | Value::Prefix(v) => *v,
+                                        Value::Slash(_) | Value::PrefixSlash(_) => {
+                                            continue
+                                        }
+                                    };
+                                    if check(v, resource) {
+                                        return Some((v, skip));
+                                    }
                                 }
                             }
                         }
@@ -472,95 +514,72 @@ impl Tree {
                     };
                 } else if key.is_empty() {
                     path = &path[idx..];
+                    let subtree_path = if path.len() != 1 { &path[1..] } else { path };
 
                     let p = if path.is_empty() {
                         PathState::Empty
                     } else if path == "/" {
-                        PathState::Slesh
+                        PathState::Slash
                     } else {
                         PathState::Tail
                     };
 
-                    for val in &self.value {
-                        let v = match val {
-                            Value::Val(v) => {
-                                if p == PathState::Empty {
-                                    *v
-                                } else {
-                                    continue;
-                                }
-                            }
-                            Value::Slesh(v) => {
-                                if p == PathState::Slesh {
-                                    *v
-                                } else {
-                                    continue;
-                                }
-                            }
-                            Value::Prefix(v) => {
-                                if p == PathState::Slesh || p == PathState::Tail {
-                                    if !self.children.is_empty() {
-                                        let p = if path.len() != 1 {
-                                            &path[1..]
+                    for val in &self.items {
+                        match val {
+                            Item::Value(val) => {
+                                let v = match val {
+                                    Value::Val(v) => {
+                                        if p == PathState::Empty {
+                                            *v
                                         } else {
-                                            path
-                                        };
-                                        if let Some(res) = self
-                                            .children
-                                            .iter()
-                                            .map(|x| {
-                                                x.find_inner_wrapped(
-                                                    p,
-                                                    resource,
-                                                    check,
-                                                    skip,
-                                                    segments,
-                                                    insensitive,
-                                                    base_skip,
-                                                )
-                                            })
-                                            .flatten()
-                                            .next()
-                                        {
-                                            return Some(res);
+                                            continue;
                                         }
                                     }
-                                    *v
-                                } else {
-                                    continue;
+                                    Value::Slash(v) => {
+                                        if p == PathState::Slash {
+                                            *v
+                                        } else {
+                                            continue;
+                                        }
+                                    }
+                                    Value::Prefix(v) => {
+                                        if p == PathState::Slash || p == PathState::Tail
+                                        {
+                                            *v
+                                        } else {
+                                            continue;
+                                        }
+                                    }
+                                    Value::PrefixSlash(v) => {
+                                        if p == PathState::Slash || p == PathState::Tail
+                                        {
+                                            *v
+                                        } else {
+                                            continue;
+                                        }
+                                    }
+                                };
+                                if check(v, resource) {
+                                    return Some((v, skip - 1));
                                 }
                             }
-                            Value::PrefixSlesh(v) => {
-                                if p == PathState::Slesh || p == PathState::Tail {
-                                    *v
-                                } else {
-                                    continue;
+                            Item::Subtree(ref tree) => {
+                                let result = tree.find_inner_wrapped(
+                                    subtree_path,
+                                    resource,
+                                    check,
+                                    skip,
+                                    segments,
+                                    insensitive,
+                                    base_skip,
+                                );
+                                if result.is_some() {
+                                    return result;
                                 }
                             }
-                        };
-                        if check(v, resource) {
-                            return Some((v, skip - 1));
                         }
                     }
-
-                    let path = if path.len() != 1 { &path[1..] } else { path };
-
-                    return self
-                        .children
-                        .iter()
-                        .map(|x| {
-                            x.find_inner_wrapped(
-                                path,
-                                resource,
-                                check,
-                                skip,
-                                segments,
-                                insensitive,
-                                base_skip,
-                            )
-                        })
-                        .flatten()
-                        .next();
+                    return None;
                 } else {
                     path = &path[idx + 1..];
                 }
