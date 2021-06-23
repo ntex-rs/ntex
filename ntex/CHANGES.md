@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.19] - 2021-06-23
+
+* rustls connector - #50 fix rustls connect to work around a port in hostname (giving invalid DNS)
+
 ## [0.3.18] - 2021-06-03
 
 * server: expose server status change notifications
