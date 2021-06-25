@@ -4,6 +4,8 @@
 
 * drop direct tokio dependency
 
+* rustls connector - fix rustls connect to work around a port in hostname (giving invalid DNS) #50
+
 ## [0.3.18] - 2021-06-03
 
 * server: expose server status change notifications
