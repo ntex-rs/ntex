@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, io};
 
-use bytes::{Buf, BytesMut};
+use ntex_bytes::{Buf, BytesMut};
 use ntex_util::{future::Either, ready, Sink, Stream};
 
 use crate::{AsyncRead, AsyncWrite, Decoder, Encoder};

@@ -1,4 +1,4 @@
-use bytes::BytesMut;
+use ntex_bytes::BytesMut;
 use std::rc::Rc;
 
 /// Decoding of frames via buffers.

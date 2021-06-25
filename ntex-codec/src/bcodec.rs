@@ -1,4 +1,4 @@
-use bytes::{Bytes, BytesMut};
+use ntex_bytes::{Bytes, BytesMut};
 use std::io;
 
 use super::{Decoder, Encoder};
