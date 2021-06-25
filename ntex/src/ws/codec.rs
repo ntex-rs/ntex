@@ -117,7 +117,7 @@ impl Encoder for Codec {
         match item {
             Message::Text(txt) => Parser::write_message(
                 dst,
-                txt,
+                txt.as_ref(),
                 OpCode::Text,
                 true,
                 !self.flags.get().contains(Flags::SERVER),

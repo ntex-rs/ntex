@@ -39,7 +39,7 @@ impl<'a> ResourcePath for &'a str {
     }
 }
 
-impl ResourcePath for bytestring::ByteString {
+impl ResourcePath for ntex_bytes::ByteString {
     fn path(&self) -> &str {
         &*self
     }

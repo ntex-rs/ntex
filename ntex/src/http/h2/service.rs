@@ -265,7 +265,7 @@ where
                 self.config.clone(),
                 addr,
                 self.on_connect.as_ref().map(|f| f(&io)),
-                server::handshake(io),
+                server::Builder::new().handshake(io),
             ),
         }
     }

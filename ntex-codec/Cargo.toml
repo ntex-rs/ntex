@@ -17,7 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 bitflags = "1.2.1"
-ntex-bytes = "0.5"
+ntex-bytes = "0.1.0"
 ntex-util = "0.1.0"
 log = "0.4"
 tokio = { version = "1", default-features = false }

@@ -38,7 +38,7 @@ impl Stream for Payload {
                 if let Err(err) = this.pl.flow_control().release_capacity(len) {
                     Poll::Ready(Some(Err(err.into())))
                 } else {
-                    Poll::Ready(Some(Ok(chunk)))
+                    Poll::Ready(Some(Ok(Bytes::copy_from_slice(&chunk[..]))))
                 }
             }
             Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err.into()))),

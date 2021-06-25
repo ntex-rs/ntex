@@ -1,11 +1,11 @@
 [package]
 name = "ntex-bytes"
-version = "0.5.0"
+version = "0.1.0"
 license = "MIT"
 authors = ["Carl Lerche <me@carllerche.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
 documentation = "https://docs.rs/ntex-bytes"
-repository = "https://github.com/ntex/bytes"
+repository = "https://github.com/ntex-rs/ntex-bytes"
 readme = "README.md"
 keywords = ["buffers", "zero-copy", "io"]
 categories = ["network-programming", "data-structures"]

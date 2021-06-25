@@ -1,6 +1,8 @@
 # Changes
 
-## [0.3.19] - 2021-07-xx
+## [0.4.0] - 2021-07-xx
+
+* use ntex-bytes instead of bytes
 
 * drop direct tokio dependency
 

@@ -515,7 +515,7 @@ where
             Protocol::Http2 => HttpServiceHandlerResponse {
                 state: ResponseState::H2Handshake {
                     data: Some((
-                        server::handshake(io),
+                        server::Builder::new().handshake(io),
                         self.config.clone(),
                         on_connect,
                         peer_addr,

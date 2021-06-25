@@ -114,7 +114,7 @@ pub(super) trait MessageType: Sized {
         let mut pos = 0;
         let mut has_date = false;
         let mut remaining = dst.capacity() - dst.len();
-        let mut buf = dst.chunk_mut().as_mut_ptr() as *mut u8;
+        let mut buf = unsafe { dst.chunk_mut().as_mut_ptr() as *mut u8 };
         for (key, value) in headers {
             match *key {
                 CONNECTION => continue,

@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "ntex",
+  "ntex-bytes",
   "ntex-codec",
   "ntex-router",
   "ntex-rt",
@@ -11,6 +12,7 @@ members = [
 
 [patch.crates-io]
 ntex = { path = "ntex" }
+ntex-bytes = { path = "ntex-bytes" }
 ntex-codec = { path = "ntex-codec" }
 ntex-router = { path = "ntex-router" }
 ntex-rt = { path = "ntex-rt" }
