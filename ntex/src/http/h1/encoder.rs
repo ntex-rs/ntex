@@ -1,8 +1,5 @@
-use std::io::Write;
 use std::marker::PhantomData;
-use std::{cell::Cell, cmp, io, mem, ptr, ptr::copy_nonoverlapping, slice};
-
-use bytes::{BufMut, BytesMut};
+use std::{cell::Cell, cmp, io, io::Write, mem, ptr, ptr::copy_nonoverlapping, slice};
 
 use crate::http::body::BodySize;
 use crate::http::config::DateService;
@@ -11,6 +8,7 @@ use crate::http::helpers;
 use crate::http::message::{ConnectionType, RequestHeadType};
 use crate::http::response::Response;
 use crate::http::{HeaderMap, StatusCode, Version};
+use crate::util::{BufMut, BytesMut};
 
 const AVERAGE_HEADER_SIZE: usize = 30;
 
@@ -595,11 +593,10 @@ unsafe fn convert_usize(mut n: u64, bytes: &mut BytesMut) {
 mod tests {
     use std::rc::Rc;
 
-    use bytes::Bytes;
-
     use super::*;
     use crate::http::header::{HeaderValue, AUTHORIZATION};
     use crate::http::RequestHead;
+    use crate::util::Bytes;
 
     #[test]
     fn test_chunked_te() {

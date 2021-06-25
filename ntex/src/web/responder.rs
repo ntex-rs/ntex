@@ -1,12 +1,10 @@
 use std::task::{Context, Poll};
 use std::{convert::TryFrom, future::Future, marker::PhantomData, pin::Pin};
 
-use bytes::{Bytes, BytesMut};
-
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Response, ResponseBuilder, StatusCode};
-use crate::util::Either;
+use crate::util::{Bytes, BytesMut, Either};
 
 use super::error::{
     DefaultError, ErrorContainer, ErrorRenderer, InternalError, WebResponseError,
@@ -418,15 +416,13 @@ where
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use bytes::{Bytes, BytesMut};
-
     use super::*;
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::http::{Response as HttpResponse, StatusCode};
     use crate::web;
     use crate::web::test::{init_service, TestRequest};
-    use crate::Service;
+    use crate::{util::Bytes, util::BytesMut, Service};
 
     fn responder<T: Responder<DefaultError>>(
         responder: T,

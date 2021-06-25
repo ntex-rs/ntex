@@ -1045,10 +1045,8 @@ impl Drop for OnDisconnect {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-
     use super::*;
-    use crate::{codec::BytesCodec, testing::Io, util::lazy};
+    use crate::{codec::BytesCodec, testing::Io, util::lazy, util::Bytes};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";

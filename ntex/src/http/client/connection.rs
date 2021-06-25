@@ -1,6 +1,5 @@
 use std::{fmt, future::Future, pin::Pin, time};
 
-use bytes::Bytes;
 use h2::client::SendRequest;
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
@@ -9,7 +8,7 @@ use crate::http::h1::ClientCodec;
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
 use crate::http::Protocol;
-use crate::util::{Either, Ready};
+use crate::util::{Bytes, Either, Ready};
 
 use super::error::SendRequestError;
 use super::pool::Acquired;

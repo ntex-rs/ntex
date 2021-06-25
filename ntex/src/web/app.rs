@@ -625,8 +625,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-
     use super::*;
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
@@ -634,7 +632,7 @@ mod tests {
     use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, DefaultError, HttpRequest, HttpResponse};
-    use crate::{fn_service, Service};
+    use crate::{fn_service, util::Bytes, Service};
 
     #[crate::rt_test]
     async fn test_default_resource() {

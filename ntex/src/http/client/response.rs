@@ -2,8 +2,6 @@ use std::cell::{Ref, RefMut};
 use std::task::{Context, Poll};
 use std::{fmt, future::Future, marker::PhantomData, mem, pin::Pin};
 
-use bytes::{Bytes, BytesMut};
-use futures_core::Stream;
 use serde::de::DeserializeOwned;
 
 #[cfg(feature = "cookie")]
@@ -13,7 +11,8 @@ use crate::http::error::PayloadError;
 use crate::http::header::{AsName, HeaderValue, CONTENT_LENGTH};
 use crate::http::{HeaderMap, StatusCode, Version};
 use crate::http::{HttpMessage, Payload, ResponseHead};
-use crate::util::Extensions;
+use crate::util::{Bytes, BytesMut, Extensions};
+use crate::Stream;
 
 use super::error::JsonPayloadError;
 

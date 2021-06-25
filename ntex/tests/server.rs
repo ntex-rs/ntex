@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{mpsc, Arc};
 use std::{io, io::Read, net, thread, time};
 
-use bytes::Bytes;
 use futures::future::{lazy, ok, FutureExt};
 use futures::SinkExt;
 
@@ -10,6 +9,7 @@ use ntex::codec::{BytesCodec, Framed};
 use ntex::rt::net::TcpStream;
 use ntex::server::{Server, TestServer};
 use ntex::service::fn_service;
+use ntex::util::Bytes;
 
 #[test]
 fn test_bind() {

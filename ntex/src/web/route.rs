@@ -276,10 +276,9 @@ array_routes!(12, a, b, c, d, e, f, g, h, i, j, k, l);
 mod tests {
     use std::time::Duration;
 
-    use bytes::Bytes;
-
     use crate::http::{Method, StatusCode};
     use crate::rt::time::sleep;
+    use crate::util::Bytes;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, error, App, DefaultError, HttpResponse};
 

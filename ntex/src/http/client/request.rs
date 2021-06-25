@@ -1,11 +1,8 @@
 use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc, time::Duration};
 
-use bytes::Bytes;
-use futures_core::Stream;
-use serde::Serialize;
-
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
+use serde::Serialize;
 
 use crate::http::body::Body;
 use crate::http::error::HttpError;
@@ -13,6 +10,7 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{
     uri, ConnectionType, Method, RequestHead, RequestHeadType, Uri, Version,
 };
+use crate::{util::Bytes, Stream};
 
 use super::error::{FreezeRequestError, InvalidUrl};
 use super::frozen::FrozenClientRequest;

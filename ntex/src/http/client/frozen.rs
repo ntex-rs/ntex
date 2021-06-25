@@ -1,13 +1,10 @@
 use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc, time::Duration};
 
-use bytes::Bytes;
-use futures_core::Stream;
-use serde::Serialize;
-
 use crate::http::body::Body;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Method, RequestHead, RequestHeadType, Uri};
+use crate::{util::Bytes, Stream};
 
 use super::sender::SendClientRequest;
 use super::ClientConfig;
@@ -54,7 +51,7 @@ impl FrozenClientRequest {
     }
 
     /// Send a json body.
-    pub fn send_json<T: Serialize>(&self, value: &T) -> SendClientRequest {
+    pub fn send_json<T: serde::Serialize>(&self, value: &T) -> SendClientRequest {
         RequestHeadType::Rc(self.head.clone(), None).send_json(
             self.addr,
             self.response_decompress,
@@ -65,7 +62,7 @@ impl FrozenClientRequest {
     }
 
     /// Send an urlencoded body.
-    pub fn send_form<T: Serialize>(&self, value: &T) -> SendClientRequest {
+    pub fn send_form<T: serde::Serialize>(&self, value: &T) -> SendClientRequest {
         RequestHeadType::Rc(self.head.clone(), None).send_form(
             self.addr,
             self.response_decompress,
@@ -190,7 +187,7 @@ impl FrozenSendBuilder {
     }
 
     /// Complete request construction and send a json body.
-    pub fn send_json<T: Serialize>(self, value: &T) -> SendClientRequest {
+    pub fn send_json<T: serde::Serialize>(self, value: &T) -> SendClientRequest {
         if let Some(e) = self.err {
             return e.into();
         }
@@ -205,7 +202,7 @@ impl FrozenSendBuilder {
     }
 
     /// Complete request construction and send an urlencoded body.
-    pub fn send_form<T: Serialize>(self, value: &T) -> SendClientRequest {
+    pub fn send_form<T: serde::Serialize>(self, value: &T) -> SendClientRequest {
         if let Some(e) = self.err {
             return e.into();
         }

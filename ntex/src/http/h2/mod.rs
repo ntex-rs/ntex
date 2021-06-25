@@ -2,8 +2,6 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::Bytes;
-use futures_core::Stream;
 use h2::RecvStream;
 
 mod dispatcher;
@@ -11,7 +9,7 @@ mod service;
 
 pub use self::dispatcher::Dispatcher;
 pub use self::service::H2Service;
-use crate::http::error::PayloadError;
+use crate::{http::error::PayloadError, util::Bytes, Stream};
 
 /// H2 receive stream
 #[derive(Debug)]

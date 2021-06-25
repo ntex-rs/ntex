@@ -3,13 +3,12 @@ use std::fmt::{self, Display};
 use std::task::{Context, Poll};
 use std::{convert::TryFrom, env, error::Error, future::Future, pin::Pin, rc::Rc, time};
 
-use bytes::Bytes;
 use regex::Regex;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
 use crate::service::{Service, Transform};
-use crate::util::{Either, HashSet, Ready};
+use crate::util::{Bytes, Either, HashSet, Ready};
 use crate::web::dev::{WebRequest, WebResponse};
 use crate::web::HttpResponse;
 

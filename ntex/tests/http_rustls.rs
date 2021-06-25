@@ -3,7 +3,6 @@ use std::fs::File;
 use std::io::{self, BufReader};
 use std::time::Duration;
 
-use bytes::{Bytes, BytesMut};
 use futures::future::{self, err, ok};
 use futures::stream::{once, Stream, StreamExt};
 use rust_tls::{
@@ -16,6 +15,7 @@ use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
 use ntex::http::{body, HttpService, Method, Request, Response, StatusCode, Version};
 use ntex::service::{fn_factory_with_config, fn_service};
+use ntex::util::{Bytes, BytesMut};
 use ntex::web::error::InternalError;
 
 async fn load_body<S>(mut stream: S) -> Result<BytesMut, PayloadError>

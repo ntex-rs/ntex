@@ -1,23 +1,22 @@
 //! Payload/Bytes/String extractors
 use std::{future::Future, pin::Pin, str, task::Context, task::Poll};
 
-use bytes::{Bytes, BytesMut};
 use encoding_rs::UTF_8;
-use futures_core::Stream;
 use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
-use crate::util::{next, Either, Ready};
+use crate::util::{next, Bytes, BytesMut, Either, Ready};
 use crate::web::error::{ErrorRenderer, PayloadError};
 use crate::web::{FromRequest, HttpRequest};
+use crate::Stream;
 
 /// Payload extractor returns request 's payload stream.
 ///
 /// ## Example
 ///
 /// ```rust
-/// use bytes::BytesMut;
 /// use futures::{Future, Stream};
+/// use ntex::util::BytesMut;
 /// use ntex::web::{self, error, App, HttpResponse};
 ///
 /// /// extract binary data from request
@@ -66,8 +65,8 @@ impl Stream for Payload {
 /// ## Example
 ///
 /// ```rust
-/// use bytes::BytesMut;
 /// use futures::{Future, Stream};
+/// use ntex::util::BytesMut;
 /// use ntex::web::{self, error, App, Error, HttpResponse};
 ///
 /// /// extract binary data from request
@@ -112,8 +111,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
 /// ## Example
 ///
 /// ```rust
-/// use bytes::Bytes;
-/// use ntex::web;
+/// use ntex::{web, util::Bytes};
 ///
 /// /// extract binary data from request
 /// async fn index(body: Bytes) -> String {
@@ -408,10 +406,9 @@ impl Future for HttpMessageBody {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-
     use super::*;
     use crate::http::header;
+    use crate::util::Bytes;
     use crate::web::test::{from_request, TestRequest};
 
     #[crate::rt_test]

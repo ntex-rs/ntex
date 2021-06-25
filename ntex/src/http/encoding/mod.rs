@@ -1,7 +1,7 @@
 //! Content-Encoding support
 use std::io;
 
-use bytes::{Bytes, BytesMut};
+use crate::util::{Bytes, BytesMut};
 
 mod decoder;
 mod encoder;

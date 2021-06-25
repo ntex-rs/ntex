@@ -1,7 +1,6 @@
 use std::task::{Context, Poll};
 use std::{future::Future, marker::PhantomData, net, pin::Pin, rc::Rc};
 
-use bytes::Bytes;
 use h2::server::{self, Handshake};
 use log::error;
 
@@ -13,6 +12,7 @@ use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::rt::net::TcpStream;
+use crate::util::Bytes;
 use crate::{
     fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
     ServiceFactory,

@@ -2,15 +2,13 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::{cell::Cell, io, marker::PhantomData, pin::Pin};
 
-use bytes::Bytes;
-use bytestring::ByteString;
 use futures::{future, Future, SinkExt, StreamExt};
 
 use ntex::codec::{AsyncRead, AsyncWrite};
 use ntex::framed::{DispatchItem, Dispatcher, State, Timer};
 use ntex::http::{body, h1, test, ws::handshake, HttpService, Request, Response};
 use ntex::service::{fn_factory, Service};
-use ntex::ws;
+use ntex::{util::ByteString, util::Bytes, ws};
 
 struct WsService<T>(Arc<Mutex<Cell<bool>>>, PhantomData<T>);
 

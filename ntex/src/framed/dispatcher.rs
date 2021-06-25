@@ -1,8 +1,7 @@
 //! Framed transport dispatcher
-use std::task::{Context, Poll};
 use std::{
-    cell::Cell, cell::RefCell, future::Future, pin::Pin, rc::Rc, time::Duration,
-    time::Instant,
+    cell::Cell, cell::RefCell, future::Future, pin::Pin, rc::Rc, task::Context,
+    task::Poll, time::Duration, time::Instant,
 };
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
@@ -506,13 +505,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
     use rand::Rng;
     use std::sync::{atomic::AtomicBool, atomic::Ordering::Relaxed, Arc, Mutex};
 
     use crate::codec::BytesCodec;
     use crate::rt::time::sleep;
     use crate::testing::Io;
+    use crate::util::Bytes;
 
     use super::*;
 

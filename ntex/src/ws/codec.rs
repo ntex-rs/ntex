@@ -1,8 +1,7 @@
-use bytes::{Bytes, BytesMut};
-use bytestring::ByteString;
 use std::cell::Cell;
 
 use crate::codec::{Decoder, Encoder};
+use crate::util::{ByteString, Bytes, BytesMut};
 
 use super::frame::Parser;
 use super::proto::{CloseReason, OpCode};

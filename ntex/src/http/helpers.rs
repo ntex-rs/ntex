@@ -1,9 +1,8 @@
 use std::io;
 
-use bytes::BytesMut;
 use percent_encoding::{AsciiSet, CONTROLS};
 
-use crate::util::Extensions;
+use crate::util::{BytesMut, Extensions};
 
 pub(crate) struct Writer<'a>(pub(crate) &'a mut BytesMut);
 

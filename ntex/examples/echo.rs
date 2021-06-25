@@ -1,11 +1,11 @@
 use std::{env, io};
 
-use bytes::BytesMut;
 use futures::StreamExt;
 use log::info;
 use ntex::http::header::HeaderValue;
 use ntex::http::{HttpService, Request, Response};
 use ntex::server::Server;
+use ntex::util::BytesMut;
 
 #[ntex::main]
 async fn main() -> io::Result<()> {

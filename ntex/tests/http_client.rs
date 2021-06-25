@@ -1,11 +1,11 @@
 use std::io;
 
-use bytes::Bytes;
 use futures::future::{self, ok};
 
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Method, Request, Response};
 use ntex::service::ServiceFactory;
+use ntex::util::Bytes;
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
