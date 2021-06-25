@@ -1,10 +1,11 @@
 use std::task::{Context, Poll};
 use std::{future::Future, io, mem, net, pin::Pin, time::Duration};
 
+use async_channel::{unbounded, Receiver};
+use async_oneshot as oneshot;
+use futures_core::Stream;
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
-use tokio::sync::oneshot;
 
 use crate::rt::{net::TcpStream, spawn, time::sleep, System};
 use crate::util::join_all;
@@ -31,7 +32,7 @@ pub struct ServerBuilder {
     exit: bool,
     shutdown_timeout: Duration,
     no_signals: bool,
-    cmd: UnboundedReceiver<ServerCommand>,
+    cmd: Receiver<ServerCommand>,
     server: Server,
     notify: Vec<oneshot::Sender<()>>,
 }
@@ -45,7 +46,7 @@ impl Default for ServerBuilder {
 impl ServerBuilder {
     /// Create new Server builder instance
     pub fn new() -> ServerBuilder {
-        let (tx, rx) = unbounded_channel();
+        let (tx, rx) = unbounded();
         let server = Server::new(tx);
 
         ServerBuilder {
@@ -323,11 +324,11 @@ impl ServerBuilder {
 
     fn handle_cmd(&mut self, item: ServerCommand) {
         match item {
-            ServerCommand::Pause(tx) => {
+            ServerCommand::Pause(mut tx) => {
                 self.accept.send(Command::Pause);
                 let _ = tx.send(());
             }
-            ServerCommand::Resume(tx) => {
+            ServerCommand::Resume(mut tx) => {
                 self.accept.send(Command::Resume);
                 let _ = tx.send(());
             }
@@ -386,10 +387,10 @@ impl ServerBuilder {
                     spawn(async move {
                         let _ = join_all(futs).await;
 
-                        if let Some(tx) = completion {
+                        if let Some(mut tx) = completion {
                             let _ = tx.send(());
                         }
-                        for tx in notify {
+                        for mut tx in notify {
                             let _ = tx.send(());
                         }
                         if exit {
@@ -405,10 +406,10 @@ impl ServerBuilder {
                             System::current().stop();
                         });
                     }
-                    if let Some(tx) = completion {
+                    if let Some(mut tx) = completion {
                         let _ = tx.send(());
                     }
-                    for tx in notify {
+                    for mut tx in notify {
                         let _ = tx.send(());
                     }
                 }
@@ -451,7 +452,7 @@ impl Future for ServerBuilder {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            match Pin::new(&mut self.cmd).poll_recv(cx) {
+            match Pin::new(&mut self.cmd).poll_next(cx) {
                 Poll::Ready(Some(it)) => self.as_mut().get_mut().handle_cmd(it),
                 Poll::Ready(None) => return Poll::Pending,
                 Poll::Pending => return Poll::Pending,

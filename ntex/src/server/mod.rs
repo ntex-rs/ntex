@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::{future::Future, io, pin::Pin};
 
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
+use async_channel::Sender;
+use async_oneshot as oneshot;
 
 use crate::util::counter::Counter;
 
@@ -98,13 +98,10 @@ enum ServerCommand {
 
 /// Server controller
 #[derive(Debug)]
-pub struct Server(
-    UnboundedSender<ServerCommand>,
-    Option<oneshot::Receiver<()>>,
-);
+pub struct Server(Sender<ServerCommand>, Option<oneshot::Receiver<()>>);
 
 impl Server {
-    fn new(tx: UnboundedSender<ServerCommand>) -> Self {
+    fn new(tx: Sender<ServerCommand>) -> Self {
         Server(tx, None)
     }
 
@@ -114,11 +111,11 @@ impl Server {
     }
 
     fn signal(&self, sig: signals::Signal) {
-        let _ = self.0.send(ServerCommand::Signal(sig));
+        let _ = self.0.try_send(ServerCommand::Signal(sig));
     }
 
     fn worker_faulted(&self, idx: usize) {
-        let _ = self.0.send(ServerCommand::WorkerFaulted(idx));
+        let _ = self.0.try_send(ServerCommand::WorkerFaulted(idx));
     }
 
     /// Pause accepting incoming connections
@@ -126,8 +123,8 @@ impl Server {
     /// If socket contains some pending connection, they might be dropped.
     /// All opened connection remains active.
     pub fn pause(&self) -> impl Future<Output = ()> {
-        let (tx, rx) = oneshot::channel();
-        let _ = self.0.send(ServerCommand::Pause(tx));
+        let (tx, rx) = oneshot::oneshot();
+        let _ = self.0.try_send(ServerCommand::Pause(tx));
         async move {
             let _ = rx.await;
         }
@@ -135,8 +132,8 @@ impl Server {
 
     /// Resume accepting incoming connections
     pub fn resume(&self) -> impl Future<Output = ()> {
-        let (tx, rx) = oneshot::channel();
-        let _ = self.0.send(ServerCommand::Resume(tx));
+        let (tx, rx) = oneshot::oneshot();
+        let _ = self.0.try_send(ServerCommand::Resume(tx));
         async move {
             let _ = rx.await;
         }
@@ -146,8 +143,8 @@ impl Server {
     ///
     /// If server starts with `spawn()` method, then spawned thread get terminated.
     pub fn stop(&self, graceful: bool) -> impl Future<Output = ()> {
-        let (tx, rx) = oneshot::channel();
-        let _ = self.0.send(ServerCommand::Stop {
+        let (tx, rx) = oneshot::oneshot();
+        let _ = self.0.try_send(ServerCommand::Stop {
             graceful,
             completion: Some(tx),
         });
@@ -170,8 +167,8 @@ impl Future for Server {
         let this = self.get_mut();
 
         if this.1.is_none() {
-            let (tx, rx) = oneshot::channel();
-            if this.0.send(ServerCommand::Notify(tx)).is_err() {
+            let (tx, rx) = oneshot::oneshot();
+            if this.0.try_send(ServerCommand::Notify(tx)).is_err() {
                 return Poll::Ready(Ok(()));
             }
             this.1 = Some(rx);

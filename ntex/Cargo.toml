@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.3.18"
+version = "0.3.19"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -68,7 +68,9 @@ sha-1 = "0.9"
 slab = "0.4"
 serde = { version = "1.0", features=["derive"] }
 socket2 = "0.4"
-tokio = { version = "1", default-features = false, features = ["sync"] }
+
+async-oneshot = "0.5.0"
+async-channel = "1.6.1"
 
 # http/web framework
 h2 = { version = "0.3", optional = true }

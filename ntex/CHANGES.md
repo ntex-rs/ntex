@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.19] - 2021-07-xx
+
+* drop direct tokio dependency
+
 ## [0.3.18] - 2021-06-03
 
 * server: expose server status change notifications
