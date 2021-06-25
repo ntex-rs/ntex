@@ -706,6 +706,33 @@ impl Bytes {
         self.inner.truncate(len);
     }
 
+    /// Shortens the buffer to `len` bytes and dropping the rest.
+    ///
+    /// This is useful if underlying buffer is larger than cuurrent bytes object.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::Bytes;
+    ///
+    /// let mut buf = Bytes::from(&b"hello world"[..]);
+    /// buf.trimdown();
+    /// assert_eq!(buf, b"hello world"[..]);
+    /// ```
+    #[inline]
+    pub fn trimdown(&mut self) {
+        let kind = self.inner.kind();
+
+        // trim down only if buffer is not inline or static and
+        // buffer cap is greater than 64 bytes
+        if !(kind == KIND_INLINE || kind == KIND_STATIC)
+            && (self.inner.capacity() - self.inner.len() >= 64)
+        {
+            let bytes = Bytes::copy_from_slice(self);
+            let _ = mem::replace(self, bytes);
+        }
+    }
+
     /// Clears the buffer, removing all data.
     ///
     /// # Examples

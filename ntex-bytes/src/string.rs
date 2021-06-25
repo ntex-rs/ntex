@@ -32,6 +32,12 @@ impl ByteString {
         Self(Bytes::from_static(src.as_bytes()))
     }
 
+    /// Shortens the buffer to `len` bytes and dropping the rest.
+    #[inline]
+    pub fn trimdown(&mut self) {
+        self.0.trimdown()
+    }
+
     /// Creates a new `ByteString` from a Bytes.
     ///
     /// # Safety

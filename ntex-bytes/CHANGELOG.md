@@ -1,5 +1,9 @@
 # 0.1.0 (2021-07-xx)
 
+* Add `Bytes::trimdown()` method
+
+* Remove unused code
+
 * Project fork
 
 # 0.4.12 (March 6, 2019)

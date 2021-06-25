@@ -5,7 +5,7 @@ A utility library for working with bytes. This is fork of bytes crate (https://g
 [![Crates.io][crates-badge]][crates-url]
 [![Build Status][azure-badge]][azure-url]
 
-[crates-badge]: https://img.shields.io/crates/v/bytes.svg
+[crates-badge]: https://img.shields.io/crates/v/ntex-bytes.svg
 [crates-url]: https://crates.io/crates/ntex-bytes
 
 [Documentation](https://docs.rs/ntex-bytes)
