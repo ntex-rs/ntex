@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.3.18"
+version = "0.3.19"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
