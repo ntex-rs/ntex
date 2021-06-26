@@ -1022,7 +1022,7 @@ impl FromIterator<u8> for Bytes {
 
 impl<'a> FromIterator<&'a u8> for BytesMut {
     fn from_iter<T: IntoIterator<Item = &'a u8>>(into_iter: T) -> Self {
-        BytesMut::from_iter(into_iter.into_iter().copied())
+        into_iter.into_iter().copied().collect::<BytesMut>()
     }
 }
 
@@ -1752,6 +1752,7 @@ impl<'a> From<&'a [u8]> for BytesMut {
             BytesMut::new()
         } else if len <= INLINE_CAP {
             unsafe {
+                #[allow(clippy::uninit_assumed_init)]
                 let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
 
                 // Set inline mask
@@ -1946,6 +1947,7 @@ impl Inner {
         if capacity <= INLINE_CAP {
             unsafe {
                 // Using uninitialized memory is ~30% faster
+                #[allow(clippy::uninit_assumed_init)]
                 let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
                 inner.arc = AtomicPtr::new(KIND_INLINE as *mut Shared);
                 inner
