@@ -754,7 +754,7 @@ mod tests {
         let re = ResourceDef::new("/*".to_string());
         let tree = Tree::new(&re, 1);
         assert_eq!(
-            tree.find(&mut Path::new(bytestring::ByteString::from_static("/"))),
+            tree.find(&mut Path::new(ntex_bytes::ByteString::from_static("/"))),
             None
         );
         assert_eq!(tree.find(&mut Path::new("/profile")), Some(1));
