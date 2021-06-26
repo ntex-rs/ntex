@@ -37,7 +37,7 @@ impl<T: Address + 'static> RustlsConnector<T> {
         Connect<T>: From<U>,
     {
         let req = Connect::from(message);
-        let host = req.host().split(":").next().unwrap().to_owned();
+        let host = req.host().split(':').next().unwrap().to_owned();
         let conn = self.connector.call(req);
         let config = self.config.clone();
 
