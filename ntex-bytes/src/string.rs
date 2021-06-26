@@ -1,5 +1,5 @@
 //! A UTF-8 encoded read-only string using Bytes as storage.
-use std::{borrow, convert::TryFrom, fmt, hash, ops, str};
+use std::{borrow, convert::TryFrom, fmt, hash, ops, slice, str};
 
 use crate::Bytes;
 
@@ -30,6 +30,96 @@ impl ByteString {
     #[inline]
     pub const fn from_static(src: &'static str) -> ByteString {
         Self(Bytes::from_static(src.as_bytes()))
+    }
+
+    /// Returns a slice of self for the provided range.
+    ///
+    /// This will increment the reference count for the underlying memory and
+    /// return a new `ByteString` handle set to the slice.
+    ///
+    /// This operation is `O(1)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::ByteString;
+    ///
+    /// let a = ByteString::from("hello world");
+    /// let b = a.slice(2..5);
+    ///
+    /// assert_eq!(b, "llo");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Requires that `begin <= end` and `end <= self.len()`, otherwise slicing
+    /// will panic.
+    pub fn slice(
+        &self,
+        range: impl ops::RangeBounds<usize> + slice::SliceIndex<str> + Clone,
+    ) -> ByteString {
+        ops::Index::index(self.as_ref(), range.clone());
+        ByteString(self.0.slice(range))
+    }
+
+    /// Splits the bytestring into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[0, at)`, and the returned `ByteString`
+    /// contains elements `[at, len)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and
+    /// sets a few indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::ByteString;
+    ///
+    /// let mut a = ByteString::from("hello world");
+    /// let b = a.split_off(5);
+    ///
+    /// assert_eq!(a, "hello");
+    /// assert_eq!(b, " world");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > len`.
+    pub fn split_off(&mut self, at: usize) -> ByteString {
+        // check str
+        self.split_at(at);
+
+        ByteString(self.0.split_off(at))
+    }
+
+    /// Splits the bytestring into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[at, len)`, and the returned
+    /// `Bytes` contains elements `[0, at)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and
+    /// sets a few indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::ByteString;
+    ///
+    /// let mut a = ByteString::from("hello world");
+    /// let b = a.split_to(5);
+    ///
+    /// assert_eq!(a, " world");
+    /// assert_eq!(b, "hello");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > len`.
+    pub fn split_to(&mut self, at: usize) -> ByteString {
+        // check str
+        self.split_at(at);
+
+        ByteString(self.0.split_to(at))
     }
 
     /// Shortens the buffer to `len` bytes and dropping the rest.

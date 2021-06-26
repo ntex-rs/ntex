@@ -2,6 +2,8 @@
 
 * Add `Bytes::trimdown()` method
 
+* Add `ByteString::slice()`, `ByteString::slice_off()`, `ByteString::slice_to()`
+
 * Remove unused code
 
 * Project fork
