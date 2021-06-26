@@ -9,10 +9,7 @@ fn test_vec_as_mut_buf() {
     let mut buf = Vec::with_capacity(64);
 
     assert_eq!(buf.remaining_mut(), usize::MAX);
-
-    unsafe {
-        assert!(buf.bytes_mut().len() >= 64);
-    }
+    assert!(buf.chunk_mut().len() >= 64);
 
     buf.put(&b"zomg"[..]);
 
@@ -65,11 +62,4 @@ fn test_clone() {
 
     buf.write_str(" of our emergency broadcast system").unwrap();
     assert!(buf != buf2);
-}
-
-#[test]
-fn test_mut_slice() {
-    let mut v = vec![0, 0, 0, 0];
-    let mut s = &mut v[..];
-    s.put_u32(42);
 }

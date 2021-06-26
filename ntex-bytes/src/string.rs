@@ -156,32 +156,6 @@ impl TryFrom<crate::BytesMut> for ByteString {
     }
 }
 
-macro_rules! array_impls {
-    ($($len:expr)+) => {
-        $(
-            impl TryFrom<[u8; $len]> for ByteString {
-                type Error = str::Utf8Error;
-
-                #[inline]
-                fn try_from(value: [u8; $len]) -> Result<Self, Self::Error> {
-                    ByteString::try_from(&value[..])
-                }
-            }
-
-            impl TryFrom<&[u8; $len]> for ByteString {
-                type Error = str::Utf8Error;
-
-                #[inline]
-                fn try_from(value: &[u8; $len]) -> Result<Self, Self::Error> {
-                    ByteString::try_from(&value[..])
-                }
-            }
-        )+
-    }
-}
-
-array_impls!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32);
-
 impl fmt::Debug for ByteString {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         (**self).fmt(fmt)
@@ -196,8 +170,6 @@ impl fmt::Display for ByteString {
 
 #[cfg(feature = "serde")]
 mod serde {
-    use alloc::string::String;
-
     use serde::de::{Deserialize, Deserializer};
     use serde::ser::{Serialize, Serializer};
 
@@ -226,10 +198,9 @@ mod serde {
 
 #[cfg(test)]
 mod test {
-    use alloc::borrow::ToOwned;
-    use core::hash::{Hash, Hasher};
-
-    use ahash::AHasher;
+    use std::borrow::ToOwned;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     use super::*;
 
@@ -248,10 +219,10 @@ mod test {
 
     #[test]
     fn test_hash() {
-        let mut hasher1 = AHasher::default();
+        let mut hasher1 = DefaultHasher::default();
         "str".hash(&mut hasher1);
 
-        let mut hasher2 = AHasher::default();
+        let mut hasher2 = DefaultHasher::default();
         let s = ByteString::from_static("str");
         s.hash(&mut hasher2);
         assert_eq!(hasher1.finish(), hasher2.finish());
@@ -278,15 +249,7 @@ mod test {
 
     #[test]
     fn test_try_from_slice() {
-        let _ = ByteString::try_from(b"nice bytes").unwrap();
-    }
-
-    #[test]
-    fn test_try_from_array() {
-        assert_eq!(
-            ByteString::try_from([b'h', b'i']).unwrap(),
-            ByteString::from_static("hi")
-        );
+        let _ = ByteString::try_from(Bytes::from_static(b"nice bytes")).unwrap();
     }
 
     #[test]
@@ -296,7 +259,7 @@ mod test {
 
     #[test]
     fn test_try_from_bytes_mut() {
-        let _ = ByteString::try_from(bytes::BytesMut::from(&b"nice bytes"[..])).unwrap();
+        let _ = ByteString::try_from(crate::BytesMut::from(&b"nice bytes"[..])).unwrap();
     }
 
     #[cfg(feature = "serde")]

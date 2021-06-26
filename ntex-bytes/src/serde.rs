@@ -1,9 +1,10 @@
-use super::{Bytes, BytesMut};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::{cmp, fmt};
 
+use super::{Bytes, BytesMut};
+
 macro_rules! serde_impl {
-    ($ty:ident, $visitor_ty:ident) => {
+    ($ty:ident, $visitor_ty:ident, $from_slice:ident) => {
         impl Serialize for $ty {
             #[inline]
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -43,7 +44,7 @@ macro_rules! serde_impl {
             where
                 E: de::Error,
             {
-                Ok($ty::from(v))
+                Ok($ty::$from_slice(v))
             }
 
             #[inline]
@@ -59,7 +60,7 @@ macro_rules! serde_impl {
             where
                 E: de::Error,
             {
-                Ok($ty::from(v))
+                Ok($ty::$from_slice(v.as_bytes()))
             }
 
             #[inline]
@@ -83,5 +84,5 @@ macro_rules! serde_impl {
     };
 }
 
-serde_impl!(Bytes, BytesVisitor);
-serde_impl!(BytesMut, BytesMutVisitor);
+serde_impl!(Bytes, BytesVisitor, copy_from_slice);
+serde_impl!(BytesMut, BytesMutVisitor, from);

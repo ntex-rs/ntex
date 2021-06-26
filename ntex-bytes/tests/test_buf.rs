@@ -7,17 +7,17 @@ fn test_fresh_cursor_vec() {
     let mut buf = &b"hello"[..];
 
     assert_eq!(buf.remaining(), 5);
-    assert_eq!(buf.bytes(), b"hello");
+    assert_eq!(buf.chunk(), b"hello");
 
     buf.advance(2);
 
     assert_eq!(buf.remaining(), 3);
-    assert_eq!(buf.bytes(), b"llo");
+    assert_eq!(buf.chunk(), b"llo");
 
     buf.advance(3);
 
     assert_eq!(buf.remaining(), 0);
-    assert_eq!(buf.bytes(), b"");
+    assert_eq!(buf.chunk(), b"");
 }
 
 #[test]

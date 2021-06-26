@@ -1,6 +1,6 @@
-use super::Writer;
-
 use std::{cmp, mem, ptr, usize};
+
+use super::{UninitSlice, Writer};
 
 /// A trait for values that provide sequential write access to bytes.
 ///
@@ -27,7 +27,7 @@ pub trait BufMut {
     /// position until the end of the buffer is reached.
     ///
     /// This value is greater than or equal to the length of the slice returned
-    /// by `bytes_mut`.
+    /// by `chunk_mut`.
     ///
     /// # Examples
     ///
@@ -66,14 +66,10 @@ pub trait BufMut {
     /// let mut buf = Vec::with_capacity(16);
     ///
     /// unsafe {
-    ///     buf.bytes_mut()[0] = b'h';
-    ///     buf.bytes_mut()[1] = b'e';
-    ///
+    ///     buf.chunk_mut()[0..2].copy_from_slice(b"he");
     ///     buf.advance_mut(2);
     ///
-    ///     buf.bytes_mut()[0] = b'l';
-    ///     buf.bytes_mut()[1..3].copy_from_slice(b"lo");
-    ///
+    ///     buf.chunk_mut()[0..3].copy_from_slice(b"llo");
     ///     buf.advance_mut(3);
     /// }
     ///
@@ -134,13 +130,11 @@ pub trait BufMut {
     /// let mut buf = Vec::with_capacity(16);
     ///
     /// unsafe {
-    ///     buf.bytes_mut()[0] = b'h';
-    ///     buf.bytes_mut()[1] = b'e';
+    ///     buf.chunk_mut()[0..2].copy_from_slice(b"he");
     ///
     ///     buf.advance_mut(2);
     ///
-    ///     buf.bytes_mut()[0] = b'l';
-    ///     buf.bytes_mut()[1..3].copy_from_slice(b"lo");
+    ///     buf.chunk_mut()[0..3].copy_from_slice(b"llo");
     ///
     ///     buf.advance_mut(3);
     /// }
@@ -156,7 +150,7 @@ pub trait BufMut {
     /// `bytes_mut` returning an empty slice implies that `remaining_mut` will
     /// return 0 and `remaining_mut` returning 0 implies that `bytes_mut` will
     /// return an empty slice.
-    unsafe fn chunk_mut(&mut self) -> &mut [u8];
+    fn chunk_mut(&mut self) -> &mut UninitSlice;
 
     /// Transfer bytes into `self` from `src` and advance the cursor by the
     /// number of bytes written.
@@ -192,7 +186,7 @@ pub trait BufMut {
                 let d = self.chunk_mut();
                 l = cmp::min(s.len(), d.len());
 
-                ptr::copy_nonoverlapping(s.as_ptr(), d.as_mut_ptr(), l);
+                ptr::copy_nonoverlapping(s.as_ptr(), d.as_mut_ptr() as *mut u8, l);
             }
 
             src.advance(l);
@@ -233,7 +227,11 @@ pub trait BufMut {
                 let dst = self.chunk_mut();
                 cnt = cmp::min(dst.len(), src.len() - off);
 
-                ptr::copy_nonoverlapping(src[off..].as_ptr(), dst.as_mut_ptr(), cnt);
+                ptr::copy_nonoverlapping(
+                    src[off..].as_ptr(),
+                    dst.as_mut_ptr() as *mut u8,
+                    cnt,
+                );
 
                 off += cnt;
             }
@@ -882,7 +880,7 @@ impl<T: BufMut + ?Sized> BufMut for &mut T {
         (**self).remaining_mut()
     }
 
-    unsafe fn chunk_mut(&mut self) -> &mut [u8] {
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
         (**self).chunk_mut()
     }
 
@@ -896,31 +894,12 @@ impl<T: BufMut + ?Sized> BufMut for Box<T> {
         (**self).remaining_mut()
     }
 
-    unsafe fn chunk_mut(&mut self) -> &mut [u8] {
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
         (**self).chunk_mut()
     }
 
     unsafe fn advance_mut(&mut self, cnt: usize) {
         (**self).advance_mut(cnt)
-    }
-}
-
-impl BufMut for &mut [u8] {
-    #[inline]
-    fn remaining_mut(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    unsafe fn chunk_mut(&mut self) -> &mut [u8] {
-        self
-    }
-
-    #[inline]
-    unsafe fn advance_mut(&mut self, cnt: usize) {
-        // Lifetime dance taken from `impl Write for &mut [u8]`.
-        let (_, b) = std::mem::replace(self, &mut []).split_at_mut(cnt);
-        *self = b;
     }
 }
 
@@ -944,9 +923,7 @@ impl BufMut for Vec<u8> {
     }
 
     #[inline]
-    unsafe fn chunk_mut(&mut self) -> &mut [u8] {
-        use std::slice;
-
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
         if self.capacity() == self.len() {
             self.reserve(64); // Grow the vec
         }
@@ -955,7 +932,35 @@ impl BufMut for Vec<u8> {
         let len = self.len();
 
         let ptr = self.as_mut_ptr();
-        &mut slice::from_raw_parts_mut(ptr, cap)[len..]
+        unsafe { &mut UninitSlice::from_raw_parts_mut(ptr, cap)[len..] }
+    }
+}
+
+impl BufMut for &mut [u8] {
+    #[inline]
+    fn remaining_mut(&self) -> usize {
+        self.len()
+    }
+
+    #[inline]
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
+        // UninitSlice is repr(transparent), so safe to transmute
+        unsafe { &mut *(*self as *mut [u8] as *mut _) }
+    }
+
+    #[inline]
+    unsafe fn advance_mut(&mut self, cnt: usize) {
+        // Lifetime dance taken from `impl Write for &mut [u8]`.
+        let (_, b) = core::mem::replace(self, &mut []).split_at_mut(cnt);
+        *self = b;
+    }
+
+    #[inline]
+    fn put_slice(&mut self, src: &[u8]) {
+        self[..src.len()].copy_from_slice(src);
+        unsafe {
+            self.advance_mut(src.len());
+        }
     }
 }
 

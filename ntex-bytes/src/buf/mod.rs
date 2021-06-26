@@ -19,9 +19,11 @@
 mod buf_impl;
 mod buf_mut;
 mod iter;
+mod uninit_slice;
 mod writer;
 
 pub use self::buf_impl::Buf;
 pub use self::buf_mut::BufMut;
 pub use self::iter::IntoIter;
+pub use self::uninit_slice::UninitSlice;
 pub use self::writer::Writer;

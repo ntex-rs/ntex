@@ -1,13 +1,11 @@
-use crate::buf::IntoIter;
-use crate::debug;
-use crate::{Buf, BufMut};
-
 use std::borrow::{Borrow, BorrowMut};
 use std::iter::{FromIterator, Iterator};
 use std::ops::{Deref, DerefMut, RangeBounds};
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize};
 use std::{cmp, fmt, hash, mem, ptr, slice, usize};
+
+use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};
 
 /// A reference counted contiguous slice of memory.
 ///
@@ -1659,11 +1657,15 @@ impl BufMut for BytesMut {
     }
 
     #[inline]
-    unsafe fn chunk_mut(&mut self) -> &mut [u8] {
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
         let len = self.len();
 
-        // This will never panic as `len` can never become invalid
-        &mut self.inner.as_raw()[len..]
+        unsafe {
+            // This will never panic as `len` can never become invalid
+            let ptr = &mut self.inner.as_raw()[len..];
+
+            UninitSlice::from_raw_parts_mut(ptr.as_mut_ptr(), self.capacity() - len)
+        }
     }
 
     #[inline]
@@ -1673,7 +1675,11 @@ impl BufMut for BytesMut {
         let len = src.len();
 
         unsafe {
-            self.chunk_mut()[..len].copy_from_slice(src);
+            ptr::copy_nonoverlapping(
+                src.as_ptr(),
+                self.chunk_mut().as_mut_ptr() as *mut u8,
+                len,
+            );
             self.advance_mut(len);
         }
     }
@@ -1879,10 +1885,7 @@ impl Extend<u8> for BytesMut {
         self.reserve(lower);
 
         for b in iter {
-            unsafe {
-                self.chunk_mut()[0] = b;
-                self.advance_mut(1);
-            }
+            self.put_u8(b);
         }
     }
 }
