@@ -142,6 +142,7 @@ impl UninitSlice {
     /// assert_eq!(len, 3);
     /// ```
     #[inline]
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.0.len()
     }

@@ -884,7 +884,7 @@ impl Bytes {
     /// assert_eq!(iter.next().map(|b| *b), Some(b'c'));
     /// assert_eq!(iter.next(), None);
     /// ```
-    pub fn iter<'a>(&'a self) -> std::slice::Iter<'a, u8> {
+    pub fn iter(&'_ self) -> std::slice::Iter<'_, u8> {
         self.chunk().iter()
     }
 }
@@ -1022,7 +1022,7 @@ impl FromIterator<u8> for Bytes {
 
 impl<'a> FromIterator<&'a u8> for BytesMut {
     fn from_iter<T: IntoIterator<Item = &'a u8>>(into_iter: T) -> Self {
-        BytesMut::from_iter(into_iter.into_iter().map(|b| *b))
+        BytesMut::from_iter(into_iter.into_iter().copied())
     }
 }
 
@@ -1095,7 +1095,7 @@ impl<'a> IntoIterator for &'a Bytes {
     type IntoIter = std::slice::Iter<'a, u8>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.as_ref().into_iter()
+        self.as_ref().iter()
     }
 }
 
@@ -1133,7 +1133,7 @@ impl<'a> Extend<&'a u8> for Bytes {
     where
         T: IntoIterator<Item = &'a u8>,
     {
-        self.extend(iter.into_iter().map(|b| *b))
+        self.extend(iter.into_iter().copied())
     }
 }
 
@@ -1479,6 +1479,7 @@ impl BytesMut {
     /// This method will panic if `len` is out of bounds for the underlying
     /// slice or if it comes after the `end` of the configured window.
     #[inline]
+    #[allow(clippy::missing_safety_doc)]
     pub unsafe fn set_len(&mut self, len: usize) {
         self.inner.set_len(len)
     }
@@ -1614,7 +1615,7 @@ impl BytesMut {
     /// assert_eq!(iter.next().map(|b| *b), Some(b'c'));
     /// assert_eq!(iter.next(), None);
     /// ```
-    pub fn iter<'a>(&'a self) -> std::slice::Iter<'a, u8> {
+    pub fn iter(&'_ self) -> std::slice::Iter<'_, u8> {
         self.chunk().iter()
     }
 }
@@ -1870,7 +1871,7 @@ impl<'a> IntoIterator for &'a BytesMut {
     type IntoIter = std::slice::Iter<'a, u8>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.as_ref().into_iter()
+        self.as_ref().iter()
     }
 }
 
@@ -1895,7 +1896,7 @@ impl<'a> Extend<&'a u8> for BytesMut {
     where
         T: IntoIterator<Item = &'a u8>,
     {
-        self.extend(iter.into_iter().map(|b| *b))
+        self.extend(iter.into_iter().copied())
     }
 }
 
@@ -2000,13 +2001,13 @@ impl Inner {
             let len = self.inline_len();
             assert!(len < INLINE_CAP);
             unsafe {
-                *self.inline_ptr().offset(len as isize) = n;
+                *self.inline_ptr().add(len) = n;
             }
             self.set_inline_len(len + 1);
         } else {
             assert!(self.len < self.cap);
             unsafe {
-                *self.ptr.offset(self.len as isize) = n;
+                *self.ptr.add(self.len) = n;
             }
             self.len += 1;
         }
@@ -2109,7 +2110,7 @@ impl Inner {
         }
 
         unsafe {
-            ptr = self.ptr.offset(self.len as isize);
+            ptr = self.ptr.add(self.len);
         }
         if ptr == other.ptr && self.kind() == KIND_ARC && other.kind() == KIND_ARC {
             debug_assert_eq!(self.arc.load(Acquire), other.arc.load(Acquire));
@@ -2163,7 +2164,7 @@ impl Inner {
                 let new_len = len - start;
 
                 let dst = self.inline_ptr();
-                let src = (dst as *const u8).offset(start as isize);
+                let src = (dst as *const u8).add(start);
 
                 ptr::copy(src, dst, new_len);
 
@@ -2194,7 +2195,7 @@ impl Inner {
             // Updating the start of the view is setting `ptr` to point to the
             // new start and updating the `len` field to reflect the new length
             // of the view.
-            self.ptr = self.ptr.offset(start as isize);
+            self.ptr = self.ptr.add(start);
 
             if self.len >= start {
                 self.len -= start;
@@ -2229,11 +2230,9 @@ impl Inner {
 
         // Always check `inline` first, because if the handle is using inline
         // data storage, all of the `Inner` struct fields will be gibberish.
-        if kind == KIND_INLINE {
+        if kind == KIND_INLINE || kind == KIND_VEC {
             // Inlined buffers can always be mutated as the data is never shared
             // across handles.
-            true
-        } else if kind == KIND_VEC {
             true
         } else if kind == KIND_STATIC {
             false
@@ -2462,7 +2461,7 @@ impl Inner {
                     v.reserve(additional);
 
                     // Update the info
-                    self.ptr = v.as_mut_ptr().offset(off as isize);
+                    self.ptr = v.as_mut_ptr().add(off);
                     self.len = v.len() - off;
                     self.cap = v.capacity() - off;
 
@@ -2569,19 +2568,13 @@ impl Inner {
     /// safe to check VEC_KIND
     #[inline]
     fn is_shared(&mut self) -> bool {
-        match self.kind() {
-            KIND_VEC => false,
-            _ => true,
-        }
+        !matches!(self.kind(), KIND_VEC)
     }
 
     /// Used for `debug_assert` statements
     #[inline]
     fn is_static(&mut self) -> bool {
-        match self.kind() {
-            KIND_STATIC => true,
-            _ => false,
-        }
+        matches!(self.kind(), KIND_STATIC)
     }
 
     #[inline]
@@ -2651,7 +2644,7 @@ impl Inner {
 
         unsafe {
             let p: &mut AtomicPtr<Shared> = &mut self.arc;
-            let p: &mut usize = mem::transmute(p);
+            let p: &mut usize = &mut *(p as *mut _ as *mut usize);
             *p = (pos << VEC_POS_OFFSET) | (prev & NOT_VEC_POS_MASK);
         }
     }
@@ -2854,7 +2847,7 @@ impl PartialOrd<BytesMut> for str {
 
 impl PartialEq<Vec<u8>> for BytesMut {
     fn eq(&self, other: &Vec<u8>) -> bool {
-        *self == &other[..]
+        *self == other[..]
     }
 }
 
@@ -2878,7 +2871,7 @@ impl PartialOrd<BytesMut> for Vec<u8> {
 
 impl PartialEq<String> for BytesMut {
     fn eq(&self, other: &String) -> bool {
-        *self == &other[..]
+        *self == other[..]
     }
 }
 
@@ -2992,7 +2985,7 @@ impl PartialOrd<Bytes> for str {
 
 impl PartialEq<Vec<u8>> for Bytes {
     fn eq(&self, other: &Vec<u8>) -> bool {
-        *self == &other[..]
+        *self == other[..]
     }
 }
 
@@ -3016,7 +3009,7 @@ impl PartialOrd<Bytes> for Vec<u8> {
 
 impl PartialEq<String> for Bytes {
     fn eq(&self, other: &String) -> bool {
-        *self == &other[..]
+        *self == other[..]
     }
 }
 
@@ -3082,13 +3075,13 @@ where
 
 impl PartialEq<BytesMut> for Bytes {
     fn eq(&self, other: &BytesMut) -> bool {
-        &other[..] == &self[..]
+        other[..] == self[..]
     }
 }
 
 impl PartialEq<Bytes> for BytesMut {
     fn eq(&self, other: &Bytes) -> bool {
-        &other[..] == &self[..]
+        other[..] == self[..]
     }
 }
 

@@ -550,10 +550,9 @@ impl<T, U> FramedParts<T, U> {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use futures::future::lazy;
-    use futures::Sink;
+    use futures::{future::lazy, Sink};
     use ntex::testing::Io;
+    use ntex_bytes::Bytes;
 
     use super::*;
     use crate::BytesCodec;

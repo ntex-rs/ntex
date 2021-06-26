@@ -1,4 +1,4 @@
-use std::{cmp, io::IoSlice, mem, ptr};
+use std::{cmp, mem, ptr};
 
 macro_rules! buf_get_impl {
     ($this:ident, $typ:tt::$conv:tt) => {{
@@ -120,46 +120,6 @@ pub trait Buf {
     /// empty slice.
     fn chunk(&self) -> &[u8];
 
-    /// Fills `dst` with potentially multiple slices starting at `self`'s
-    /// current position.
-    ///
-    /// If the `Buf` is backed by disjoint slices of bytes, `bytes_vectored` enables
-    /// fetching more than one slice at once. `dst` is a slice of `IoSlice`
-    /// references, enabling the slice to be directly used with [`writev`]
-    /// without any further conversion. The sum of the lengths of all the
-    /// buffers in `dst` will be less than or equal to `Buf::remaining()`.
-    ///
-    /// The entries in `dst` will be overwritten, but the data **contained** by
-    /// the slices **will not** be modified. If `bytes_vectored` does not fill every
-    /// entry in `dst`, then `dst` is guaranteed to contain all remaining slices
-    /// in `self.
-    ///
-    /// This is a lower level function. Most operations are done with other
-    /// functions.
-    ///
-    /// # Implementer notes
-    ///
-    /// This function should never panic. Once the end of the buffer is reached,
-    /// i.e., `Buf::remaining` returns 0, calls to `bytes_vectored` must return 0
-    /// without mutating `dst`.
-    ///
-    /// Implementations should also take care to properly handle being called
-    /// with `dst` being a zero length slice.
-    ///
-    /// [`writev`]: http://man7.org/linux/man-pages/man2/readv.2.html
-    fn bytes_vectored<'a>(&'a self, dst: &mut [IoSlice<'a>]) -> usize {
-        if dst.is_empty() {
-            return 0;
-        }
-
-        if self.has_remaining() {
-            dst[0] = IoSlice::new(self.chunk());
-            1
-        } else {
-            0
-        }
-    }
-
     /// Advance the internal cursor of the Buf
     ///
     /// The next call to `bytes` will return a slice starting `cnt` bytes
@@ -271,6 +231,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is no more remaining data in `self`.
+    #[inline]
     fn get_u8(&mut self) -> u8 {
         assert!(self.remaining() >= 1);
         let ret = self.chunk()[0];
@@ -294,6 +255,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is no more remaining data in `self`.
+    #[inline]
     fn get_i8(&mut self) -> i8 {
         assert!(self.remaining() >= 1);
         let ret = self.chunk()[0] as i8;
@@ -317,6 +279,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_u16(&mut self) -> u16 {
         buf_get_impl!(self, u16::from_be_bytes);
     }
@@ -337,6 +300,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_u16_le(&mut self) -> u16 {
         buf_get_impl!(self, u16::from_le_bytes);
     }
@@ -357,6 +321,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_i16(&mut self) -> i16 {
         buf_get_impl!(self, i16::from_be_bytes);
     }
@@ -377,6 +342,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_i16_le(&mut self) -> i16 {
         buf_get_impl!(self, i16::from_le_bytes);
     }
@@ -397,6 +363,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_u32(&mut self) -> u32 {
         buf_get_impl!(self, u32::from_be_bytes);
     }
@@ -417,6 +384,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_u32_le(&mut self) -> u32 {
         buf_get_impl!(self, u32::from_le_bytes);
     }
@@ -437,6 +405,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_i32(&mut self) -> i32 {
         buf_get_impl!(self, i32::from_be_bytes);
     }
@@ -457,6 +426,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_i32_le(&mut self) -> i32 {
         buf_get_impl!(self, i32::from_le_bytes);
     }
@@ -477,6 +447,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_u64(&mut self) -> u64 {
         buf_get_impl!(self, u64::from_be_bytes);
     }
@@ -497,6 +468,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_u64_le(&mut self) -> u64 {
         buf_get_impl!(self, u64::from_le_bytes);
     }
@@ -517,6 +489,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_i64(&mut self) -> i64 {
         buf_get_impl!(self, i64::from_be_bytes);
     }
@@ -537,6 +510,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_i64_le(&mut self) -> i64 {
         buf_get_impl!(self, i64::from_le_bytes);
     }
@@ -557,6 +531,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_u128(&mut self) -> u128 {
         buf_get_impl!(self, u128::from_be_bytes);
     }
@@ -577,6 +552,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_u128_le(&mut self) -> u128 {
         buf_get_impl!(self, u128::from_le_bytes);
     }
@@ -597,6 +573,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_i128(&mut self) -> i128 {
         buf_get_impl!(self, i128::from_be_bytes);
     }
@@ -617,6 +594,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_i128_le(&mut self) -> i128 {
         buf_get_impl!(self, i128::from_le_bytes);
     }
@@ -637,6 +615,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_uint(&mut self, nbytes: usize) -> u64 {
         buf_get_impl!(be => self, u64, nbytes);
     }
@@ -657,6 +636,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_uint_le(&mut self, nbytes: usize) -> u64 {
         buf_get_impl!(le => self, u64, nbytes);
     }
@@ -677,6 +657,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_int(&mut self, nbytes: usize) -> i64 {
         buf_get_impl!(be => self, i64, nbytes);
     }
@@ -697,6 +678,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_int_le(&mut self, nbytes: usize) -> i64 {
         buf_get_impl!(le => self, i64, nbytes);
     }
@@ -718,6 +700,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_f32(&mut self) -> f32 {
         f32::from_bits(Self::get_u32(self))
     }
@@ -739,6 +722,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_f32_le(&mut self) -> f32 {
         f32::from_bits(Self::get_u32_le(self))
     }
@@ -760,6 +744,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_f64(&mut self) -> f64 {
         f64::from_bits(Self::get_u64(self))
     }
@@ -781,6 +766,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if there is not enough remaining data in `self`.
+    #[inline]
     fn get_f64_le(&mut self) -> f64 {
         f64::from_bits(Self::get_u64_le(self))
     }
@@ -795,6 +781,8 @@ pub trait Buf {
     /// let bytes = "hello world".to_bytes();
     /// assert_eq!(&bytes[..], &b"hello world"[..]);
     /// ```
+    #[inline]
+    #[allow(clippy::wrong_self_convention)]
     fn to_bytes(&mut self) -> crate::Bytes {
         use super::BufMut;
         let mut ret = crate::BytesMut::with_capacity(self.remaining());
@@ -804,34 +792,31 @@ pub trait Buf {
 }
 
 impl<T: Buf + ?Sized> Buf for &mut T {
+    #[inline]
     fn remaining(&self) -> usize {
         (**self).remaining()
     }
 
+    #[inline]
     fn chunk(&self) -> &[u8] {
         (**self).chunk()
     }
 
-    fn bytes_vectored<'b>(&'b self, dst: &mut [IoSlice<'b>]) -> usize {
-        (**self).bytes_vectored(dst)
-    }
-
+    #[inline]
     fn advance(&mut self, cnt: usize) {
         (**self).advance(cnt)
     }
 }
 
 impl<T: Buf + ?Sized> Buf for Box<T> {
+    #[inline]
     fn remaining(&self) -> usize {
         (**self).remaining()
     }
 
+    #[inline]
     fn chunk(&self) -> &[u8] {
         (**self).chunk()
-    }
-
-    fn bytes_vectored<'b>(&'b self, dst: &mut [IoSlice<'b>]) -> usize {
-        (**self).bytes_vectored(dst)
     }
 
     fn advance(&mut self, cnt: usize) {
@@ -883,9 +868,7 @@ impl Buf for Option<[u8; 1]> {
     }
 
     fn chunk(&self) -> &[u8] {
-        self.as_ref()
-            .map(AsRef::as_ref)
-            .unwrap_or(Default::default())
+        self.as_ref().map(AsRef::as_ref).unwrap_or_default()
     }
 
     fn advance(&mut self, cnt: usize) {

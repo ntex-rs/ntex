@@ -88,6 +88,7 @@ pub trait BufMut {
     /// the call must behave as if `cnt == self.remaining_mut()`.
     ///
     /// A call with `cnt == 0` should never panic and be a no-op.
+    #[allow(clippy::missing_safety_doc)]
     unsafe fn advance_mut(&mut self, cnt: usize);
 
     /// Returns true if there is space in `self` for more bytes.
