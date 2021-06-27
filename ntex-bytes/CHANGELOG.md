@@ -1,5 +1,9 @@
 # Changes
 
+## 0.1.2 (2021-06-27)
+
+* Reserve space for put_slice
+
 ## 0.1.1 (2021-06-27)
 
 * Add `ByteString::as_slice()` method

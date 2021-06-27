@@ -1566,7 +1566,6 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn extend_from_slice(&mut self, extend: &[u8]) {
-        self.reserve(extend.len());
         self.put_slice(extend);
     }
 
@@ -1671,9 +1670,8 @@ impl BufMut for BytesMut {
 
     #[inline]
     fn put_slice(&mut self, src: &[u8]) {
-        assert!(self.remaining_mut() >= src.len());
-
         let len = src.len();
+        self.reserve(len);
 
         unsafe {
             ptr::copy_nonoverlapping(
@@ -1687,11 +1685,13 @@ impl BufMut for BytesMut {
 
     #[inline]
     fn put_u8(&mut self, n: u8) {
+        self.reserve(1);
         self.inner.put_u8(n);
     }
 
     #[inline]
     fn put_i8(&mut self, n: i8) {
+        self.reserve(1);
         self.put_u8(n as u8);
     }
 }
