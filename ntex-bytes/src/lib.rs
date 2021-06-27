@@ -76,7 +76,7 @@
     missing_debug_implementations,
     rust_2018_idioms
 )]
-#![doc(html_root_url = "https://docs.rs/bytes/0.5.0")]
+#![doc(html_root_url = "https://docs.rs/ntex-bytes/")]
 
 pub mod buf;
 pub use crate::buf::{Buf, BufMut};
