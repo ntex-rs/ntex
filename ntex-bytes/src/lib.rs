@@ -2,7 +2,7 @@
 //!
 //! This is fork of bytes crate (https://github.com/tokio-rs/bytes)
 //!
-//! The `bytes` crate provides an efficient byte buffer structure
+//! The `ntex-bytes` crate provides an efficient byte buffer structure
 //! ([`Bytes`](struct.Bytes.html)) and traits for working with buffer
 //! implementations ([`Buf`], [`BufMut`]).
 //!
@@ -49,26 +49,6 @@
 //! See the [struct docs] for more details.
 //!
 //! [struct docs]: struct.Bytes.html
-//!
-//! # `Buf`, `BufMut`
-//!
-//! These two traits provide read and write access to buffers. The underlying
-//! storage may or may not be in contiguous memory. For example, `Bytes` is a
-//! buffer that guarantees contiguous memory, but a [rope] stores the bytes in
-//! disjoint chunks. `Buf` and `BufMut` maintain cursors tracking the current
-//! position in the underlying byte storage. When bytes are read or written, the
-//! cursor is advanced.
-//!
-//! [rope]: https://en.wikipedia.org/wiki/Rope_(data_structure)
-//!
-//! ## Relation with `Read` and `Write`
-//!
-//! At first glance, it may seem that `Buf` and `BufMut` overlap in
-//! functionality with `std::io::Read` and `std::io::Write`. However, they
-//! serve different purposes. A buffer is the value that is provided as an
-//! argument to `Read::read` and `Write::write`. `Read` and `Write` may then
-//! perform a syscall, which has the potential of failing. Operations on `Buf`
-//! and `BufMut` are infallible.
 
 #![deny(
     warnings,
