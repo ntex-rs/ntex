@@ -544,6 +544,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
 
 unsafe fn convert_usize(mut n: u64, bytes: &mut BytesMut) {
     let mut curr: isize = 39;
+    #[allow(clippy::uninit_assumed_init)]
     let mut buf: [u8; 41] = mem::MaybeUninit::uninit().assume_init();
     buf[39] = b'\r';
     buf[40] = b'\n';
