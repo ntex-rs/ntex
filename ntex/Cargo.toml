@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.3.19"
+version = "0.4.0-b.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -86,7 +86,7 @@ coo-kie = { version = "0.15", package = "cookie", optional = true }
 
 # openssl
 open-ssl = { version="0.10", package = "openssl", optional = true }
-tokio-openssl = { version = "0.6.1", optional = true }
+tokio-openssl = { version = "0.6.2", optional = true }
 
 # rustls
 rust-tls = { version = "0.19", package = "rustls", optional = true }

@@ -1,6 +1,6 @@
 # Changes
 
-## [0.4.0] - 2021-07-xx
+## [0.4.0-b.1] - 2021-06-27
 
 * use ntex-bytes instead of bytes
 
