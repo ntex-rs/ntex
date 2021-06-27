@@ -1,6 +1,6 @@
 # Changes
 
-## 0.1.3 (2021-06-27)
+## 0.1.4 (2021-06-27)
 
 * Reduce size of Option<Bytes> by using NonNull
 

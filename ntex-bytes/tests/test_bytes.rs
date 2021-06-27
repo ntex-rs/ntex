@@ -18,6 +18,21 @@ fn is_send<T: Send>() {}
 fn test_size() {
     assert_eq!(32, std::mem::size_of::<Bytes>());
     assert_eq!(32, std::mem::size_of::<Option<Bytes>>());
+
+    let mut t = BytesMut::new();
+    t.extend_from_slice(
+        &b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"[..],
+    );
+
+    let val = t.freeze();
+    assert!(val.is_inline());
+
+    let val = Some(val);
+    assert!(val.is_some());
+    assert_eq!(
+        val.as_ref().unwrap(),
+        &b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"[..]
+    )
 }
 
 #[test]

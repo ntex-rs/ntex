@@ -296,8 +296,8 @@ pub struct BytesMut {
 struct Inner {
     // WARNING: Do not access the fields directly unless you know what you are
     // doing. Instead, use the fns. See implementation comment above.
-    arc: AtomicPtr<Shared>,
-    ptr: NonNull<u8>,
+    arc: NonNull<Shared>,
+    ptr: *mut u8,
     len: usize,
     cap: usize,
 }
@@ -307,10 +307,10 @@ struct Inner {
 struct Inner {
     // WARNING: Do not access the fields directly unless you know what you are
     // doing. Instead, use the fns. See implementation comment above.
-    ptr: NonNull<u8>,
+    ptr: *mut u8,
     len: usize,
     cap: usize,
-    arc: AtomicPtr<Shared>,
+    arc: NonNull<Shared>,
 }
 
 // Thread-safe reference-counted container for the shared storage. This mostly
@@ -1756,7 +1756,7 @@ impl<'a> From<&'a [u8]> for BytesMut {
                 let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
 
                 // Set inline mask
-                inner.arc = AtomicPtr::new(KIND_INLINE as *mut Shared);
+                inner.arc = NonNull::new_unchecked(KIND_INLINE as *mut Shared);
                 inner.set_inline_len(len);
                 inner.as_raw()[0..len].copy_from_slice(src);
 
@@ -1916,8 +1916,8 @@ impl Inner {
             // `arc` won't ever store a pointer. Instead, use it to
             // track the fact that the `Bytes` handle is backed by a
             // static buffer.
-            arc: AtomicPtr::new(KIND_STATIC as *mut Shared),
-            ptr: unsafe { NonNull::new_unchecked(ptr) },
+            arc: unsafe { NonNull::new_unchecked(KIND_STATIC as *mut Shared) },
+            ptr,
             len: bytes.len(),
             cap: bytes.len(),
         }
@@ -1935,8 +1935,8 @@ impl Inner {
         let arc = (original_capacity_repr << ORIGINAL_CAPACITY_OFFSET) | KIND_VEC;
 
         Inner {
-            arc: AtomicPtr::new(arc as *mut Shared),
-            ptr: unsafe { NonNull::new_unchecked(ptr) },
+            arc: unsafe { NonNull::new_unchecked(arc as *mut Shared) },
+            ptr,
             len,
             cap,
         }
@@ -1949,7 +1949,7 @@ impl Inner {
                 // Using uninitialized memory is ~30% faster
                 #[allow(invalid_value, clippy::uninit_assumed_init)]
                 let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
-                inner.arc = AtomicPtr::new(KIND_INLINE as *mut Shared);
+                inner.arc = NonNull::new_unchecked(KIND_INLINE as *mut Shared);
                 inner
             }
         } else {
@@ -1964,7 +1964,7 @@ impl Inner {
             if self.is_inline() {
                 slice::from_raw_parts(self.inline_ptr(), self.inline_len())
             } else {
-                slice::from_raw_parts(self.ptr.as_ptr(), self.len)
+                slice::from_raw_parts(self.ptr, self.len)
             }
         }
     }
@@ -1978,7 +1978,7 @@ impl Inner {
             if self.is_inline() {
                 slice::from_raw_parts_mut(self.inline_ptr(), self.inline_len())
             } else {
-                slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len)
+                slice::from_raw_parts_mut(self.ptr, self.len)
             }
         }
     }
@@ -1992,7 +1992,7 @@ impl Inner {
         if self.is_inline() {
             slice::from_raw_parts_mut(self.inline_ptr(), INLINE_CAP)
         } else {
-            slice::from_raw_parts_mut(self.ptr.as_ptr(), self.cap)
+            slice::from_raw_parts_mut(self.ptr, self.cap)
         }
     }
 
@@ -2009,7 +2009,7 @@ impl Inner {
         } else {
             assert!(self.len < self.cap);
             unsafe {
-                *self.ptr.as_ptr().add(self.len) = n;
+                *self.ptr.add(self.len) = n;
             }
             self.len += 1;
         }
@@ -2035,8 +2035,7 @@ impl Inner {
         // This is undefind behavior due to a data race, but experimental
         // evidence shows that it works in practice (discussion:
         // https://internals.rust-lang.org/t/bit-wise-reasoning-for-atomic-accesses/8853).
-        let p: *const usize = unsafe { mem::transmute(&self.arc) };
-        (unsafe { *p } & INLINE_LEN_MASK) >> INLINE_LEN_OFFSET
+        (self.arc.as_ptr() as usize & INLINE_LEN_MASK) >> INLINE_LEN_OFFSET
     }
 
     /// Set the length of the inline buffer. This is done by writing to the
@@ -2044,8 +2043,12 @@ impl Inner {
     #[inline]
     fn set_inline_len(&mut self, len: usize) {
         debug_assert!(len <= INLINE_CAP);
-        let p = self.arc.get_mut();
-        *p = ((*p as usize & !INLINE_LEN_MASK) | (len << INLINE_LEN_OFFSET)) as _;
+        self.arc = unsafe {
+            NonNull::new_unchecked(
+                ((self.arc.as_ptr() as usize & !INLINE_LEN_MASK)
+                    | (len << INLINE_LEN_OFFSET)) as _,
+            )
+        };
     }
 
     /// slice.
@@ -2112,10 +2115,10 @@ impl Inner {
         }
 
         unsafe {
-            ptr = NonNull::new_unchecked(self.ptr.as_ptr().add(self.len));
+            ptr = self.ptr.add(self.len);
         }
         if ptr == other.ptr && self.kind() == KIND_ARC && other.kind() == KIND_ARC {
-            debug_assert_eq!(self.arc.load(Acquire), other.arc.load(Acquire));
+            // debug_assert_eq!(self.arc.load(Acquire), other.arc.load(Acquire));
             // Contiguous blocks, just combine directly
             self.len += other.len;
             self.cap += other.cap;
@@ -2197,7 +2200,7 @@ impl Inner {
             // Updating the start of the view is setting `ptr` to point to the
             // new start and updating the `len` field to reflect the new length
             // of the view.
-            self.ptr = NonNull::new_unchecked(self.ptr.as_ptr().add(start));
+            self.ptr = self.ptr.add(start);
 
             if self.len >= start {
                 self.len -= start;
@@ -2241,7 +2244,7 @@ impl Inner {
         } else {
             // Otherwise, the underlying buffer is potentially shared with other
             // handles, so the ref_count needs to be checked.
-            unsafe { (**self.arc.get_mut()).is_unique() }
+            unsafe { (*self.arc.as_ptr()).is_unique() }
         }
     }
 
@@ -2282,7 +2285,8 @@ impl Inner {
         // `compare_and_swap` that comes later in this function. The goal is
         // to ensure that if `arc` is currently set to point to a `Shared`,
         // that the current thread acquires the associated memory.
-        let arc = self.arc.load(Acquire);
+        let slf_arc: &AtomicPtr<Shared> = mem::transmute(&self.arc);
+        let arc = slf_arc.load(Acquire);
         let kind = arc as usize & KIND_MASK;
 
         if kind == KIND_ARC {
@@ -2303,7 +2307,7 @@ impl Inner {
         }
 
         Inner {
-            arc: AtomicPtr::new(arc),
+            arc: NonNull::new_unchecked(arc),
             ..*self
         }
     }
@@ -2343,14 +2347,15 @@ impl Inner {
 
         // The pointer should be aligned, so this assert should
         // always succeed.
-        debug_assert!(0 == (shared as usize & 0b11));
+        debug_assert!(0 == (shared as usize & KIND_MASK));
 
         // If there are no references to self in other threads,
         // expensive atomic operations can be avoided.
         if mut_self {
-            self.arc.store(shared, Relaxed);
+            let slf_arc: &AtomicPtr<Shared> = mem::transmute(&self.arc);
+            slf_arc.store(shared, Relaxed);
             return Inner {
-                arc: AtomicPtr::new(shared),
+                arc: NonNull::new_unchecked(shared),
                 ..*self
             };
         }
@@ -2364,16 +2369,14 @@ impl Inner {
         // ordering will synchronize with the `compare_and_swap`
         // that happened in the other thread and the `Shared`
         // pointed to by `actual` will be visible.
-        match self
-            .arc
-            .compare_exchange(arc as *mut Shared, shared, AcqRel, Acquire)
-        {
+        let slf_arc: &AtomicPtr<Shared> = mem::transmute(&self.arc);
+        match slf_arc.compare_exchange(arc as *mut Shared, shared, AcqRel, Acquire) {
             Ok(actual) => {
                 debug_assert!(actual as usize == arc);
                 // The upgrade was successful, the new handle can be
                 // returned.
                 Inner {
-                    arc: AtomicPtr::new(shared),
+                    arc: NonNull::new_unchecked(shared),
                     ..*self
                 }
             }
@@ -2421,13 +2424,13 @@ impl Inner {
             let mut v = Vec::with_capacity(new_cap);
             v.extend_from_slice(self.as_ref());
 
-            self.ptr = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
+            self.ptr = v.as_mut_ptr();
             self.len = v.len();
             self.cap = v.capacity();
 
             // Since the minimum capacity is `INLINE_CAP`, don't bother encoding
             // the original capacity as INLINE_CAP
-            self.arc = AtomicPtr::new(KIND_VEC as *mut Shared);
+            self.arc = unsafe { NonNull::new_unchecked(KIND_VEC as *mut Shared) };
 
             mem::forget(v);
             return;
@@ -2449,9 +2452,9 @@ impl Inner {
                     //
                     // Just move the pointer back to the start after copying
                     // data back.
-                    let base_ptr = self.ptr.as_ptr().offset(-(off as isize));
-                    ptr::copy(self.ptr.as_ptr(), base_ptr, self.len);
-                    self.ptr = NonNull::new_unchecked(base_ptr);
+                    let base_ptr = self.ptr.offset(-(off as isize));
+                    ptr::copy(self.ptr, base_ptr, self.len);
+                    self.ptr = base_ptr;
                     self.uncoordinated_set_vec_pos(0, prev);
 
                     // Length stays constant, but since we moved backwards we
@@ -2463,7 +2466,7 @@ impl Inner {
                     v.reserve(additional);
 
                     // Update the info
-                    self.ptr = NonNull::new_unchecked(v.as_mut_ptr().add(off));
+                    self.ptr = v.as_mut_ptr().add(off);
                     self.len = v.len() - off;
                     self.cap = v.capacity() - off;
 
@@ -2474,7 +2477,7 @@ impl Inner {
             }
         }
 
-        let arc = *self.arc.get_mut();
+        let arc = self.arc.as_ptr();
 
         debug_assert!(kind == KIND_ARC);
 
@@ -2502,9 +2505,9 @@ impl Inner {
                     // The capacity is sufficient, reclaim the buffer
                     let ptr = v.as_mut_ptr();
 
-                    ptr::copy(self.ptr.as_ptr(), ptr, len);
+                    ptr::copy(self.ptr, ptr, len);
 
-                    self.ptr = NonNull::new_unchecked(ptr);
+                    self.ptr = ptr;
                     self.cap = v.capacity();
 
                     return;
@@ -2536,13 +2539,13 @@ impl Inner {
         release_shared(arc);
 
         // Update self
-        self.ptr = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
+        self.ptr = v.as_mut_ptr();
         self.len = v.len();
         self.cap = v.capacity();
 
         let arc = (original_capacity_repr << ORIGINAL_CAPACITY_OFFSET) | KIND_VEC;
 
-        self.arc = AtomicPtr::new(arc as *mut Shared);
+        self.arc = unsafe { NonNull::new_unchecked(arc as *mut Shared) };
 
         // Forget the vector handle
         mem::forget(v);
@@ -2605,23 +2608,20 @@ impl Inner {
 
         #[cfg(target_endian = "little")]
         #[inline]
-        fn imp(arc: &AtomicPtr<Shared>) -> usize {
-            unsafe {
-                let p: *const u8 = mem::transmute(arc);
-                (*p as usize) & KIND_MASK
-            }
+        fn imp(arc: *mut Shared) -> usize {
+            (arc as usize) & KIND_MASK
         }
 
         #[cfg(target_endian = "big")]
         #[inline]
-        fn imp(arc: &AtomicPtr<Shared>) -> usize {
+        fn imp(arc: *mut Shared) -> usize {
             unsafe {
-                let p: *const usize = mem::transmute(arc);
+                let p: *const usize = arc as *const usize;
                 *p & KIND_MASK
             }
         }
 
-        imp(&self.arc)
+        imp(self.arc.as_ptr())
     }
 
     #[inline]
@@ -2630,11 +2630,7 @@ impl Inner {
         // be called when in the KIND_VEC mode. This + the &mut self argument
         // guarantees that there is no possibility of concurrent calls to this
         // function.
-        let prev = unsafe {
-            let p: &AtomicPtr<Shared> = &self.arc;
-            let p: *const usize = mem::transmute(p);
-            *p
-        };
+        let prev = self.arc.as_ptr() as usize;
 
         (prev >> VEC_POS_OFFSET, prev)
     }
@@ -2645,16 +2641,16 @@ impl Inner {
         debug_assert!(pos <= MAX_VEC_POS);
 
         unsafe {
-            let p: &mut AtomicPtr<Shared> = &mut self.arc;
-            let p: &mut usize = &mut *(p as *mut _ as *mut usize);
-            *p = (pos << VEC_POS_OFFSET) | (prev & NOT_VEC_POS_MASK);
+            self.arc = NonNull::new_unchecked(
+                ((pos << VEC_POS_OFFSET) | (prev & NOT_VEC_POS_MASK)) as *mut Shared,
+            );
         }
     }
 }
 
-fn rebuild_vec(ptr: NonNull<u8>, mut len: usize, mut cap: usize, off: usize) -> Vec<u8> {
+fn rebuild_vec(ptr: *mut u8, mut len: usize, mut cap: usize, off: usize) -> Vec<u8> {
     unsafe {
-        let ptr = ptr.as_ptr().offset(-(off as isize));
+        let ptr = ptr.offset(-(off as isize));
         len += off;
         cap += off;
 
@@ -2672,7 +2668,7 @@ impl Drop for Inner {
             // Vector storage, free the vector
             let _ = rebuild_vec(self.ptr, self.len, self.cap, off);
         } else if kind == KIND_ARC {
-            release_shared(*self.arc.get_mut());
+            release_shared(self.arc.as_ptr());
         }
     }
 }
