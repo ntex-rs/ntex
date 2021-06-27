@@ -1,4 +1,12 @@
-# 0.1.0 (2021-06-27)
+# Changes
+
+## 0.1.1 (2021-06-27)
+
+* Add `ByteString::as_slice()` method
+
+* Enable serde
+
+## 0.1.0 (2021-06-27)
 
 * Add `Bytes::trimdown()` method
 

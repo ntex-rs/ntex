@@ -69,6 +69,4 @@ mod string;
 pub use crate::bytes::{Bytes, BytesMut};
 pub use crate::string::ByteString;
 
-// Optional Serde support
-#[cfg(feature = "serde")]
 mod serde;

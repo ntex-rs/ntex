@@ -1,6 +1,6 @@
 [package]
 name = "ntex-bytes"
-version = "0.1.0"
+version = "0.1.1"
 license = "MIT"
 authors = ["Carl Lerche <me@carllerche.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
@@ -12,7 +12,7 @@ categories = ["network-programming", "data-structures"]
 edition = "2018"
 
 [dependencies]
-serde = { version = "1.0", optional = true }
+serde = "1.0"
 bytes = "1.0.1"
 
 [dev-dependencies]

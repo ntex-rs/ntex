@@ -14,6 +14,12 @@ impl ByteString {
         ByteString(Bytes::new())
     }
 
+    /// Get a reference to the underlying bytes.
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+
     /// Get a reference to the underlying `Bytes` object.
     #[inline]
     pub fn as_bytes(&self) -> &Bytes {
@@ -258,7 +264,6 @@ impl fmt::Display for ByteString {
     }
 }
 
-#[cfg(feature = "serde")]
 mod serde {
     use serde::de::{Deserialize, Deserializer};
     use serde::ser::{Serialize, Serializer};
