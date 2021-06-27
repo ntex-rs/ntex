@@ -3,7 +3,7 @@ use std::iter::{FromIterator, Iterator};
 use std::ops::{Deref, DerefMut, RangeBounds};
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize};
-use std::{cmp, fmt, hash, mem, ptr, slice, usize};
+use std::{cmp, fmt, hash, mem, ptr, ptr::NonNull, slice, usize};
 
 use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};
 
@@ -297,7 +297,7 @@ struct Inner {
     // WARNING: Do not access the fields directly unless you know what you are
     // doing. Instead, use the fns. See implementation comment above.
     arc: AtomicPtr<Shared>,
-    ptr: *mut u8,
+    ptr: NonNull<u8>,
     len: usize,
     cap: usize,
 }
@@ -307,7 +307,7 @@ struct Inner {
 struct Inner {
     // WARNING: Do not access the fields directly unless you know what you are
     // doing. Instead, use the fns. See implementation comment above.
-    ptr: *mut u8,
+    ptr: NonNull<u8>,
     len: usize,
     cap: usize,
     arc: AtomicPtr<Shared>,
@@ -1752,7 +1752,7 @@ impl<'a> From<&'a [u8]> for BytesMut {
             BytesMut::new()
         } else if len <= INLINE_CAP {
             unsafe {
-                #[allow(clippy::uninit_assumed_init)]
+                #[allow(invalid_value, clippy::uninit_assumed_init)]
                 let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
 
                 // Set inline mask
@@ -1917,7 +1917,7 @@ impl Inner {
             // track the fact that the `Bytes` handle is backed by a
             // static buffer.
             arc: AtomicPtr::new(KIND_STATIC as *mut Shared),
-            ptr,
+            ptr: unsafe { NonNull::new_unchecked(ptr) },
             len: bytes.len(),
             cap: bytes.len(),
         }
@@ -1936,7 +1936,7 @@ impl Inner {
 
         Inner {
             arc: AtomicPtr::new(arc as *mut Shared),
-            ptr,
+            ptr: unsafe { NonNull::new_unchecked(ptr) },
             len,
             cap,
         }
@@ -1947,7 +1947,7 @@ impl Inner {
         if capacity <= INLINE_CAP {
             unsafe {
                 // Using uninitialized memory is ~30% faster
-                #[allow(clippy::uninit_assumed_init)]
+                #[allow(invalid_value, clippy::uninit_assumed_init)]
                 let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
                 inner.arc = AtomicPtr::new(KIND_INLINE as *mut Shared);
                 inner
@@ -1964,7 +1964,7 @@ impl Inner {
             if self.is_inline() {
                 slice::from_raw_parts(self.inline_ptr(), self.inline_len())
             } else {
-                slice::from_raw_parts(self.ptr, self.len)
+                slice::from_raw_parts(self.ptr.as_ptr(), self.len)
             }
         }
     }
@@ -1978,7 +1978,7 @@ impl Inner {
             if self.is_inline() {
                 slice::from_raw_parts_mut(self.inline_ptr(), self.inline_len())
             } else {
-                slice::from_raw_parts_mut(self.ptr, self.len)
+                slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len)
             }
         }
     }
@@ -1992,7 +1992,7 @@ impl Inner {
         if self.is_inline() {
             slice::from_raw_parts_mut(self.inline_ptr(), INLINE_CAP)
         } else {
-            slice::from_raw_parts_mut(self.ptr, self.cap)
+            slice::from_raw_parts_mut(self.ptr.as_ptr(), self.cap)
         }
     }
 
@@ -2009,7 +2009,7 @@ impl Inner {
         } else {
             assert!(self.len < self.cap);
             unsafe {
-                *self.ptr.add(self.len) = n;
+                *self.ptr.as_ptr().add(self.len) = n;
             }
             self.len += 1;
         }
@@ -2112,7 +2112,7 @@ impl Inner {
         }
 
         unsafe {
-            ptr = self.ptr.add(self.len);
+            ptr = NonNull::new_unchecked(self.ptr.as_ptr().add(self.len));
         }
         if ptr == other.ptr && self.kind() == KIND_ARC && other.kind() == KIND_ARC {
             debug_assert_eq!(self.arc.load(Acquire), other.arc.load(Acquire));
@@ -2197,7 +2197,7 @@ impl Inner {
             // Updating the start of the view is setting `ptr` to point to the
             // new start and updating the `len` field to reflect the new length
             // of the view.
-            self.ptr = self.ptr.add(start);
+            self.ptr = NonNull::new_unchecked(self.ptr.as_ptr().add(start));
 
             if self.len >= start {
                 self.len -= start;
@@ -2421,7 +2421,7 @@ impl Inner {
             let mut v = Vec::with_capacity(new_cap);
             v.extend_from_slice(self.as_ref());
 
-            self.ptr = v.as_mut_ptr();
+            self.ptr = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
             self.len = v.len();
             self.cap = v.capacity();
 
@@ -2449,9 +2449,9 @@ impl Inner {
                     //
                     // Just move the pointer back to the start after copying
                     // data back.
-                    let base_ptr = self.ptr.offset(-(off as isize));
-                    ptr::copy(self.ptr, base_ptr, self.len);
-                    self.ptr = base_ptr;
+                    let base_ptr = self.ptr.as_ptr().offset(-(off as isize));
+                    ptr::copy(self.ptr.as_ptr(), base_ptr, self.len);
+                    self.ptr = NonNull::new_unchecked(base_ptr);
                     self.uncoordinated_set_vec_pos(0, prev);
 
                     // Length stays constant, but since we moved backwards we
@@ -2463,7 +2463,7 @@ impl Inner {
                     v.reserve(additional);
 
                     // Update the info
-                    self.ptr = v.as_mut_ptr().add(off);
+                    self.ptr = NonNull::new_unchecked(v.as_mut_ptr().add(off));
                     self.len = v.len() - off;
                     self.cap = v.capacity() - off;
 
@@ -2502,9 +2502,9 @@ impl Inner {
                     // The capacity is sufficient, reclaim the buffer
                     let ptr = v.as_mut_ptr();
 
-                    ptr::copy(self.ptr, ptr, len);
+                    ptr::copy(self.ptr.as_ptr(), ptr, len);
 
-                    self.ptr = ptr;
+                    self.ptr = NonNull::new_unchecked(ptr);
                     self.cap = v.capacity();
 
                     return;
@@ -2536,7 +2536,7 @@ impl Inner {
         release_shared(arc);
 
         // Update self
-        self.ptr = v.as_mut_ptr();
+        self.ptr = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
         self.len = v.len();
         self.cap = v.capacity();
 
@@ -2652,9 +2652,9 @@ impl Inner {
     }
 }
 
-fn rebuild_vec(ptr: *mut u8, mut len: usize, mut cap: usize, off: usize) -> Vec<u8> {
+fn rebuild_vec(ptr: NonNull<u8>, mut len: usize, mut cap: usize, off: usize) -> Vec<u8> {
     unsafe {
-        let ptr = ptr.offset(-(off as isize));
+        let ptr = ptr.as_ptr().offset(-(off as isize));
         len += off;
         cap += off;
 

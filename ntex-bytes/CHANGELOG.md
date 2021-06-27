@@ -1,5 +1,9 @@
 # Changes
 
+## 0.1.3 (2021-06-27)
+
+* Reduce size of Option<Bytes> by using NonNull
+
 ## 0.1.2 (2021-06-27)
 
 * Reserve space for put_slice

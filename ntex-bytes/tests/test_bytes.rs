@@ -13,6 +13,13 @@ fn inline_cap() -> usize {
 fn is_sync<T: Sync>() {}
 fn is_send<T: Send>() {}
 
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn test_size() {
+    assert_eq!(32, std::mem::size_of::<Bytes>());
+    assert_eq!(32, std::mem::size_of::<Option<Bytes>>());
+}
+
 #[test]
 fn test_bounds() {
     is_sync::<Bytes>();
