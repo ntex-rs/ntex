@@ -82,7 +82,7 @@ impl<B> Response<B> {
         self.head.status
     }
 
-    /// Set the `StatusCode` for this response
+    /// Get the `StatusCode` for this response
     #[inline]
     pub fn status_mut(&mut self) -> &mut StatusCode {
         &mut self.head.status
