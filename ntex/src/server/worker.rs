@@ -7,9 +7,11 @@ use tokio::sync::oneshot;
 
 use crate::rt::time::{sleep_until, Instant, Sleep};
 use crate::rt::{spawn, Arbiter};
+use crate::server::backpressure::Backpressure;
 use crate::util::{counter::Counter, join_all};
 
 use super::accept::{AcceptNotify, Command};
+use super::backpressure::{BackpressureServiceHandler, BackpressureHandlerFactory};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
 use super::socket::Stream;
 use super::Token;
@@ -127,6 +129,8 @@ pub(super) struct Worker {
     availability: WorkerAvailability,
     conns: Counter,
     factories: Vec<Box<dyn InternalServiceFactory>>,
+    backpressure: Option<Box<dyn BackpressureHandlerFactory>>,
+    backpressure_service: Option<Pin<Box<dyn BackpressureServiceHandler>>>,
     state: WorkerState,
     shutdown_timeout: time::Duration,
 }
@@ -158,6 +162,7 @@ impl Worker {
     pub(super) fn start(
         idx: usize,
         factories: Vec<Box<dyn InternalServiceFactory>>,
+        backpressure: Option<Box<dyn BackpressureHandlerFactory>>,
         availability: WorkerAvailability,
         shutdown_timeout: time::Duration,
     ) -> WorkerClient {
@@ -167,8 +172,15 @@ impl Worker {
 
         Arbiter::default().exec_fn(move || {
             let _ = spawn(async move {
-                match Worker::create(rx1, rx2, factories, availability, shutdown_timeout)
-                    .await
+                match Worker::create(
+                    rx1,
+                    rx2,
+                    factories,
+                    backpressure,
+                    availability,
+                    shutdown_timeout,
+                )
+                .await
                 {
                     Ok(wrk) => {
                         let _ = spawn(wrk);
@@ -188,6 +200,7 @@ impl Worker {
         rx: UnboundedReceiver<WorkerCommand>,
         rx2: UnboundedReceiver<StopCommand>,
         factories: Vec<Box<dyn InternalServiceFactory>>,
+        backpressure: Option<Box<dyn BackpressureHandlerFactory>>,
         availability: WorkerAvailability,
         shutdown_timeout: time::Duration,
     ) -> Result<Worker, ()> {
@@ -197,8 +210,10 @@ impl Worker {
             rx2,
             availability,
             factories,
+            backpressure,
             shutdown_timeout,
             services: Vec::new(),
+            backpressure_service: None,
             conns: conns.priv_clone(),
             state: WorkerState::Unavailable,
         });
@@ -230,10 +245,18 @@ impl Worker {
                         });
                     }
                 }
-                Ok(wrk)
             }
-            Err(_) => Err(()),
+            Err(_) => return Err(()),
         }
+
+        if let Some(factory) = &wrk.backpressure {
+            match factory.create().await {
+                Ok(service) => wrk.backpressure_service = Some(service.into()),
+                Err(_) => return Err(()),
+            }
+        }
+
+        Ok(wrk)
     }
 
     fn shutdown(&mut self, force: bool) {
@@ -262,9 +285,30 @@ impl Worker {
         }
     }
 
-    fn check_readiness(&mut self, cx: &mut Context<'_>) -> Result<bool, (Token, usize)> {
-        let mut ready = self.conns.available(cx);
+    fn check_readiness(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Result<WorkerReadiness, (Token, usize)> {
+        let mut ready = if self.conns.available(cx) {
+            if let Some(service) = &mut self.backpressure_service {
+                match service.as_mut().poll_ready(cx) {
+                    Poll::Ready(Ok(Backpressure::None)) => WorkerReadiness::Ready,
+                    Poll::Ready(Err(_)) => {
+                        error!("Worker backpressure service is faulted, disabling");
+                        self.backpressure_service = None;
+                        WorkerReadiness::Ready
+                    }
+                    Poll::Ready(Ok(Backpressure::Full)) => WorkerReadiness::Backpressure,
+                    Poll::Pending => WorkerReadiness::Unready,
+                }
+            } else {
+                WorkerReadiness::Ready
+            }
+        } else {
+            WorkerReadiness::Unready
+        };
         let mut failed = None;
+
         for (idx, srv) in &mut self.services.iter_mut().enumerate() {
             if srv.status == WorkerServiceStatus::Available
                 || srv.status == WorkerServiceStatus::Unavailable
@@ -280,7 +324,7 @@ impl Worker {
                         }
                     }
                     Poll::Pending => {
-                        ready = false;
+                        ready = WorkerReadiness::Unready;
 
                         if srv.status == WorkerServiceStatus::Available {
                             trace!(
@@ -307,6 +351,12 @@ impl Worker {
             Ok(ready)
         }
     }
+}
+
+enum WorkerReadiness {
+    Unready,
+    Backpressure,
+    Ready,
 }
 
 enum WorkerState {
@@ -365,13 +415,19 @@ impl Future for Worker {
         match self.state {
             WorkerState::Unavailable => {
                 match self.check_readiness(cx) {
-                    Ok(true) => {
+                    Ok(WorkerReadiness::Ready) => {
                         // process requests from wait queue
                         self.state = WorkerState::Available;
                         self.availability.set(true);
                         self.poll(cx)
                     }
-                    Ok(false) => Poll::Pending,
+                    Ok(WorkerReadiness::Backpressure) => {
+                        // process requests from wait queue, but push back on new requests
+                        self.state = WorkerState::Available;
+                        self.availability.set(false);
+                        self.poll(cx)
+                    }
+                    Ok(WorkerReadiness::Unready) => Poll::Pending,
                     Err((token, idx)) => {
                         trace!(
                             "Service {:?} failed, restarting",
@@ -446,8 +502,13 @@ impl Future for Worker {
             WorkerState::Available => {
                 loop {
                     match self.check_readiness(cx) {
-                        Ok(true) => (),
-                        Ok(false) => {
+                        Ok(WorkerReadiness::Ready) => {
+                            self.availability.set(true);
+                        }
+                        Ok(WorkerReadiness::Backpressure) => {
+                            self.availability.set(false);
+                        }
+                        Ok(WorkerReadiness::Unready) => {
                             trace!("Worker is unavailable");
                             self.availability.set(false);
                             self.state = WorkerState::Unavailable;

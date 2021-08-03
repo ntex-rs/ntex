@@ -10,6 +10,7 @@ use crate::rt::{net::TcpStream, spawn, time::sleep, System};
 use crate::util::join_all;
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
+use super::backpressure::{BackpressureFactory, BackpressureServiceFactory, BackpressureHandlerFactory};
 use super::config::{ConfiguredService, ServiceConfig};
 use super::service::{Factory, InternalServiceFactory, StreamServiceFactory};
 use super::signals::{Signal, Signals};
@@ -26,6 +27,7 @@ pub struct ServerBuilder {
     backlog: i32,
     workers: Vec<(usize, WorkerClient)>,
     services: Vec<Box<dyn InternalServiceFactory>>,
+    backpressure: Option<Box<dyn BackpressureHandlerFactory>>,
     sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
     exit: bool,
@@ -53,6 +55,7 @@ impl ServerBuilder {
             token: Token(0),
             workers: Vec::new(),
             services: Vec::new(),
+            backpressure: None,
             sockets: Vec::new(),
             accept: AcceptLoop::new(server.clone()),
             backlog: 2048,
@@ -269,6 +272,18 @@ impl ServerBuilder {
         Ok(self)
     }
 
+    pub fn backpressure<F>(
+        mut self,
+        factory: F
+    ) -> Self 
+    where
+        F: BackpressureServiceFactory
+    {
+        self.backpressure = Some(Box::new(BackpressureFactory::new(factory)));
+        self
+    }
+
+
     #[doc(hidden)]
     pub fn start(self) -> Server {
         self.run()
@@ -317,8 +332,9 @@ impl ServerBuilder {
         let avail = WorkerAvailability::new(notify);
         let services: Vec<Box<dyn InternalServiceFactory>> =
             self.services.iter().map(|v| v.clone_factory()).collect();
+        let backpressure = self.backpressure.as_ref().map(|v| v.clone_factory());
 
-        Worker::start(idx, services, avail, self.shutdown_timeout)
+        Worker::start(idx, services, backpressure, avail, self.shutdown_timeout)
     }
 
     fn handle_cmd(&mut self, item: ServerCommand) {
