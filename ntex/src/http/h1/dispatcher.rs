@@ -5,11 +5,10 @@ use std::{
     time,
 };
 
-use bytes::Bytes;
-
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::{ReadTask, State as IoState, WriteTask};
 use crate::service::Service;
+use crate::util::Bytes;
 
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -733,7 +732,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::{cell::Cell, io, sync::Arc};
 
-    use bytes::{Bytes, BytesMut};
     use rand::Rng;
 
     use super::*;
@@ -741,7 +739,8 @@ mod tests {
     use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
     use crate::http::{body, Request, ResponseHead, StatusCode};
     use crate::service::{boxed, fn_service, IntoService};
-    use crate::{codec::Decoder, rt::time::sleep, testing::Io, util::lazy, util::next};
+    use crate::util::{lazy, next, Bytes, BytesMut};
+    use crate::{codec::Decoder, rt::time::sleep, testing::Io};
 
     const BUFFER_SIZE: usize = 32_768;
 

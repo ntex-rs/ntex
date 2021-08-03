@@ -1,8 +1,7 @@
-use bytes::{Bytes, BytesMut};
-use bytestring::ByteString;
 use std::cell::Cell;
 
 use crate::codec::{Decoder, Encoder};
+use crate::util::{ByteString, Bytes, BytesMut};
 
 use super::frame::Parser;
 use super::proto::{CloseReason, OpCode};
@@ -118,7 +117,7 @@ impl Encoder for Codec {
         match item {
             Message::Text(txt) => Parser::write_message(
                 dst,
-                txt,
+                txt.as_ref(),
                 OpCode::Text,
                 true,
                 !self.flags.get().contains(Flags::SERVER),

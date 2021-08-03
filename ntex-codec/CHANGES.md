@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.0] - 2021-06-27
+
+* Use ntex-bytes stead of bytes
+
 ## [0.4.1] - 2021-04-04
 
 * Use Either from ntex-service

@@ -1,17 +1,14 @@
 //! Form extractor
-
 use std::{fmt, future::Future, ops, pin::Pin, task::Context, task::Poll};
 
-use bytes::BytesMut;
 use encoding_rs::{Encoding, UTF_8};
-use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Serialize};
 
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::util::next;
+use crate::util::{next, BytesMut};
 use crate::web::error::{ErrorRenderer, UrlencodedError, WebResponseError};
 use crate::web::responder::{Ready, Responder};
 use crate::web::{FromRequest, HttpRequest};
@@ -342,11 +339,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
     use serde::{Deserialize, Serialize};
 
     use super::*;
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
+    use crate::util::Bytes;
     use crate::web::test::{from_request, respond_to, TestRequest};
 
     #[derive(Deserialize, Serialize, Debug, PartialEq, derive_more::Display)]

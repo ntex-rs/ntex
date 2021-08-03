@@ -2,11 +2,9 @@ use std::{
     cell::RefCell, fmt, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
 };
 
-use bytes::{Bytes, BytesMut};
-use ntex_codec::{Decoder, Encoder};
-
 use super::{Codec, Frame, Message, ProtocolError};
-use crate::{Sink, Stream};
+use crate::util::{Bytes, BytesMut};
+use crate::{codec::Decoder, codec::Encoder, Sink, Stream};
 
 /// Stream error
 #[derive(Debug, Display)]
@@ -170,10 +168,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use bytestring::ByteString;
-
     use super::*;
-    use crate::{channel::mpsc, util::next, util::poll_fn, util::send};
+    use crate::{
+        channel::mpsc, util::next, util::poll_fn, util::send, util::ByteString,
+    };
 
     #[crate::rt_test]
     async fn test_decoder() {

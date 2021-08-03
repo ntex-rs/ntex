@@ -2,10 +2,6 @@ use std::{
     error::Error as StdError, marker::PhantomData, pin::Pin, task::Context, task::Poll,
 };
 
-use bytes::Bytes;
-use futures_core::Stream;
-use futures_sink::Sink;
-
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
 
 use crate::http::body::{Body, BoxedBodyStream};
@@ -13,7 +9,7 @@ use crate::http::error::PayloadError;
 use crate::http::ws::{handshake, HandshakeError};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::web::{HttpRequest, HttpResponse};
-use crate::{channel::mpsc, rt, ws};
+use crate::{channel::mpsc, rt, util::Bytes, ws, Sink, Stream};
 
 pub type WebSocketsSink =
     ws::StreamEncoder<mpsc::Sender<Result<Bytes, Box<dyn StdError>>>>;

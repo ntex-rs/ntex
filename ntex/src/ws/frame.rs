@@ -1,12 +1,11 @@
 use std::convert::TryFrom;
 
-use bytes::{Buf, BufMut, BytesMut};
 use log::debug;
 use nanorand::{WyRand, RNG};
 
-use super::mask::apply_mask;
 use super::proto::{CloseCode, CloseReason, OpCode};
-use super::ProtocolError;
+use super::{mask::apply_mask, ProtocolError};
+use crate::util::{Buf, BufMut, BytesMut};
 
 /// WebSocket frame parser.
 #[derive(Debug)]
@@ -219,7 +218,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
+    use crate::util::Bytes;
 
     struct F {
         finished: bool,

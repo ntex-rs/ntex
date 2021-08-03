@@ -1,5 +1,4 @@
-use std::net::SocketAddr;
-use std::rc::Rc;
+use std::{net::SocketAddr, rc::Rc};
 
 use crate::router::ResourceDef;
 
@@ -128,13 +127,11 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-
     use super::*;
     use crate::http::{Method, StatusCode};
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, App, HttpRequest, HttpResponse};
-    use crate::Service;
+    use crate::{util::Bytes, Service};
 
     #[crate::rt_test]
     async fn test_configure_data() {

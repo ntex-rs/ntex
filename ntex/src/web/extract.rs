@@ -252,9 +252,8 @@ tuple_from_req!(TupleFromRequest10, (0, A), (1, B), (2, C), (3, D), (4, E), (5, 
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-
     use crate::http::header;
+    use crate::util::Bytes;
     use crate::web::error::UrlencodedError;
     use crate::web::test::{from_request, TestRequest};
     use crate::web::types::{Form, FormConfig};

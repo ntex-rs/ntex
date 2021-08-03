@@ -1,0 +1,20 @@
+[package]
+name = "ntex-bytes"
+version = "0.1.4"
+license = "MIT"
+authors = ["Carl Lerche <me@carllerche.com>"]
+description = "Types and traits for working with bytes (bytes crate fork)"
+documentation = "https://docs.rs/ntex-bytes"
+repository = "https://github.com/ntex-rs/ntex-bytes"
+readme = "README.md"
+keywords = ["buffers", "zero-copy", "io"]
+categories = ["network-programming", "data-structures"]
+edition = "2018"
+
+[dependencies]
+serde = "1.0"
+bytes = "1.0.1"
+
+[dev-dependencies]
+serde_test = "1.0"
+serde_json = "1.0"

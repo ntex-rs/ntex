@@ -1,9 +1,6 @@
 //! Web error
-use std::io::Write;
-use std::str::Utf8Error;
-use std::{fmt, io};
+use std::{fmt, io, io::Write, str::Utf8Error};
 
-use bytes::BytesMut;
 use serde::de::value::Error as DeError;
 use serde_json::error::Error as JsonError;
 use serde_urlencoded::ser::Error as FormError;
@@ -12,7 +9,7 @@ use crate::http::body::Body;
 use crate::http::helpers::Writer;
 use crate::http::ws::HandshakeError;
 use crate::http::{self, header, StatusCode};
-use crate::util::timeout::TimeoutError;
+use crate::util::{timeout::TimeoutError, BytesMut};
 
 use super::error::{self, ErrorContainer, ErrorRenderer, WebResponseError};
 use super::{HttpRequest, HttpResponse};

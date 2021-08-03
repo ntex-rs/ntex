@@ -1,8 +1,6 @@
 use std::{cell::Cell, fmt, io};
 
 use bitflags::bitflags;
-use bytes::BytesMut;
-use http::{Method, Version};
 
 use crate::codec::{Decoder, Encoder};
 use crate::http::body::BodySize;
@@ -11,6 +9,8 @@ use crate::http::error::ParseError;
 use crate::http::message::ConnectionType;
 use crate::http::request::Request;
 use crate::http::response::Response;
+use crate::http::{Method, Version};
+use crate::util::BytesMut;
 
 use super::{decoder, decoder::PayloadType, encoder, Message};
 
@@ -182,10 +182,9 @@ impl Encoder for Codec {
 
 #[cfg(test)]
 mod tests {
-    use bytes::{Bytes, BytesMut};
-
     use super::*;
     use crate::http::{h1::PayloadItem, HttpMessage, Method};
+    use crate::util::{Bytes, BytesMut};
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {

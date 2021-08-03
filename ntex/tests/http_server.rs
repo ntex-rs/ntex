@@ -1,8 +1,6 @@
 use std::io::{Read, Write};
-use std::time::Duration;
-use std::{io, net, thread};
+use std::{io, net, thread, time::Duration};
 
-use bytes::Bytes;
 use futures::future::{self, ok, ready, FutureExt};
 use futures::stream::{once, StreamExt};
 use regex::Regex;
@@ -13,6 +11,7 @@ use ntex::http::{
 };
 use ntex::rt::time::sleep;
 use ntex::service::fn_service;
+use ntex::util::Bytes;
 use ntex::web::error;
 
 #[ntex::test]

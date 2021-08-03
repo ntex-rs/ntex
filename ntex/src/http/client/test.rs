@@ -1,14 +1,13 @@
 //! Test helpers for ntex http client to use during testing.
 use std::convert::TryFrom;
 
-use bytes::Bytes;
-
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderName, HeaderValue};
 use crate::http::{h1, Payload, ResponseHead, StatusCode, Version};
+use crate::util::Bytes;
 
 use super::ClientResponse;
 

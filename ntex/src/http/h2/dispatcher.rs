@@ -3,7 +3,6 @@ use std::{
     convert::TryFrom, future::Future, marker::PhantomData, net, pin::Pin, rc::Rc,
 };
 
-use bytes::{Bytes, BytesMut};
 use h2::server::{Connection, SendResponse};
 use h2::SendStream;
 use http::header::{HeaderValue, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
@@ -19,6 +18,7 @@ use crate::http::payload::Payload;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::rt::time::{Instant, Sleep};
+use crate::util::{Bytes, BytesMut};
 use crate::Service;
 
 const CHUNK_SIZE: usize = 16_384;

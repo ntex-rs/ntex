@@ -4,7 +4,6 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use brotli2::write::{BrotliDecoder, BrotliEncoder};
-use bytes::Bytes;
 use derive_more::Display;
 use flate2::read::GzDecoder;
 use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
@@ -19,6 +18,7 @@ use ntex::http::header::{
 };
 use ntex::http::{Method, StatusCode};
 use ntex::rt::time::{sleep, Sleep};
+use ntex::util::Bytes;
 
 use ntex::web::middleware::Compress;
 use ntex::web::{

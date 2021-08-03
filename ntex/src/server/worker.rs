@@ -2,8 +2,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::{future::Future, pin::Pin, sync::Arc, time};
 
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot;
+use async_channel::{unbounded, Receiver, Sender};
+use async_oneshot as oneshot;
+use futures_core::Stream as FutStream;
 
 use crate::rt::time::{sleep_until, Instant, Sleep};
 use crate::rt::{spawn, Arbiter};
@@ -57,16 +58,16 @@ thread_local! {
 #[derive(Clone, Debug)]
 pub(super) struct WorkerClient {
     pub(super) idx: usize,
-    tx1: UnboundedSender<WorkerCommand>,
-    tx2: UnboundedSender<StopCommand>,
+    tx1: Sender<WorkerCommand>,
+    tx2: Sender<StopCommand>,
     avail: WorkerAvailability,
 }
 
 impl WorkerClient {
     pub(super) fn new(
         idx: usize,
-        tx1: UnboundedSender<WorkerCommand>,
-        tx2: UnboundedSender<StopCommand>,
+        tx1: Sender<WorkerCommand>,
+        tx2: Sender<StopCommand>,
         avail: WorkerAvailability,
     ) -> Self {
         WorkerClient {
@@ -78,7 +79,9 @@ impl WorkerClient {
     }
 
     pub(super) fn send(&self, msg: Connection) -> Result<(), Connection> {
-        self.tx1.send(WorkerCommand(msg)).map_err(|msg| msg.0 .0)
+        self.tx1
+            .try_send(WorkerCommand(msg))
+            .map_err(|msg| msg.into_inner().0)
     }
 
     pub(super) fn available(&self) -> bool {
@@ -86,8 +89,8 @@ impl WorkerClient {
     }
 
     pub(super) fn stop(&self, graceful: bool) -> oneshot::Receiver<bool> {
-        let (result, rx) = oneshot::channel();
-        let _ = self.tx2.send(StopCommand { graceful, result });
+        let (result, rx) = oneshot::oneshot();
+        let _ = self.tx2.try_send(StopCommand { graceful, result });
         rx
     }
 }
@@ -123,8 +126,8 @@ impl WorkerAvailability {
 /// Worker accepts Socket objects via unbounded channel and starts stream
 /// processing.
 pub(super) struct Worker {
-    rx: UnboundedReceiver<WorkerCommand>,
-    rx2: UnboundedReceiver<StopCommand>,
+    rx: Receiver<WorkerCommand>,
+    rx2: Receiver<StopCommand>,
     services: Vec<WorkerService>,
     availability: WorkerAvailability,
     conns: Counter,
@@ -166,8 +169,8 @@ impl Worker {
         availability: WorkerAvailability,
         shutdown_timeout: time::Duration,
     ) -> WorkerClient {
-        let (tx1, rx1) = unbounded_channel();
-        let (tx2, rx2) = unbounded_channel();
+        let (tx1, rx1) = unbounded();
+        let (tx2, rx2) = unbounded();
         let avail = availability.clone();
 
         Arbiter::default().exec_fn(move || {
@@ -197,8 +200,8 @@ impl Worker {
     }
 
     async fn create(
-        rx: UnboundedReceiver<WorkerCommand>,
-        rx2: UnboundedReceiver<StopCommand>,
+        rx: Receiver<WorkerCommand>,
+        rx2: Receiver<StopCommand>,
         factories: Vec<Box<dyn InternalServiceFactory>>,
         backpressure: Option<Box<dyn BackpressureHandlerFactory>>,
         availability: WorkerAvailability,
@@ -379,8 +382,10 @@ impl Future for Worker {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // `StopWorker` message handler
-        if let Poll::Ready(Some(StopCommand { graceful, result })) =
-            Pin::new(&mut self.rx2).poll_recv(cx)
+        if let Poll::Ready(Some(StopCommand {
+            graceful,
+            mut result,
+        })) = Pin::new(&mut self.rx2).poll_next(cx)
         {
             self.availability.set(false);
             let num = num_connections();
@@ -531,7 +536,7 @@ impl Future for Worker {
                         }
                     }
 
-                    match Pin::new(&mut self.rx).poll_recv(cx) {
+                    match Pin::new(&mut self.rx).poll_next(cx) {
                         // handle incoming io stream
                         Poll::Ready(Some(WorkerCommand(msg))) => {
                             let guard = self.conns.get();
@@ -634,8 +639,8 @@ mod tests {
     #[crate::rt_test]
     #[allow(clippy::mutex_atomic)]
     async fn basics() {
-        let (_tx1, rx1) = unbounded_channel();
-        let (tx2, rx2) = unbounded_channel();
+        let (_tx1, rx1) = unbounded();
+        let (tx2, rx2) = unbounded();
         let (sync_tx, _sync_rx) = std::sync::mpsc::channel();
         let poll = mio::Poll::new().unwrap();
         let waker = Arc::new(mio::Waker::new(poll.registry(), mio::Token(1)).unwrap());
@@ -700,8 +705,8 @@ mod tests {
         // shutdown
         let g = MAX_CONNS_COUNTER.with(|conns| conns.get());
 
-        let (tx, rx) = oneshot::channel();
-        tx2.send(StopCommand {
+        let (tx, rx) = oneshot::oneshot();
+        tx2.try_send(StopCommand {
             graceful: true,
             result: tx,
         })
@@ -714,8 +719,8 @@ mod tests {
         let _ = rx.await;
 
         // force shutdown
-        let (_tx1, rx1) = unbounded_channel();
-        let (tx2, rx2) = unbounded_channel();
+        let (_tx1, rx1) = unbounded();
+        let (tx2, rx2) = unbounded();
         let avail = WorkerAvailability::new(AcceptNotify::new(waker, sync_tx.clone()));
         let f = SrvFactory {
             st: st.clone(),
@@ -744,8 +749,8 @@ mod tests {
         let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
         assert!(avail.available());
 
-        let (tx, rx) = oneshot::channel();
-        tx2.send(StopCommand {
+        let (tx, rx) = oneshot::oneshot();
+        tx2.try_send(StopCommand {
             graceful: false,
             result: tx,
         })

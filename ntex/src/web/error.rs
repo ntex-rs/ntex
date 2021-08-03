@@ -1,7 +1,6 @@
 //! Web error
 use std::{cell::RefCell, fmt, io::Write, marker::PhantomData};
 
-use bytes::BytesMut;
 use derive_more::{Display, From};
 
 pub use http::Error as HttpError;
@@ -13,7 +12,7 @@ use super::{HttpRequest, HttpResponse};
 use crate::http::body::Body;
 use crate::http::helpers::Writer;
 use crate::http::{error, header, StatusCode};
-use crate::util::Either;
+use crate::util::{BytesMut, Either};
 
 pub use super::error_default::{DefaultError, Error};
 pub use crate::http::error::BlockingError;

@@ -161,15 +161,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use bytes::BytesMut;
-    use bytestring::ByteString;
     use std::{cell::Cell, rc::Rc, time::Duration};
 
     use super::*;
-    use crate::channel::mpsc;
-    use crate::codec::Encoder;
-    use crate::rt::time::sleep;
-    use crate::{util::next, ws};
+    use crate::util::{next, ByteString, BytesMut};
+    use crate::{channel::mpsc, codec::Encoder, rt::time::sleep, ws};
 
     #[crate::rt_test]
     async fn test_basic() {

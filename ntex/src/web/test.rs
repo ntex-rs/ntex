@@ -4,13 +4,10 @@ use std::{
     thread, time,
 };
 
-use bytes::{Bytes, BytesMut};
-use futures_core::Stream;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::MessageBody;
@@ -23,8 +20,10 @@ use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Versio
 use crate::router::{Path, ResourceDef};
 use crate::rt::{time::sleep, System};
 use crate::server::Server;
-use crate::util::{next, Extensions, Ready};
-use crate::{map_config, IntoService, IntoServiceFactory, Service, ServiceFactory};
+use crate::util::{next, Bytes, BytesMut, Extensions, Ready};
+use crate::{
+    map_config, IntoService, IntoServiceFactory, Service, ServiceFactory, Stream,
+};
 
 use crate::web::config::AppConfig;
 use crate::web::dev::{WebRequest, WebResponse};
@@ -130,8 +129,7 @@ where
 /// Helper function that returns a response body of a TestRequest
 ///
 /// ```rust
-/// use bytes::Bytes;
-/// use ntex::http::header;
+/// use ntex::{http::header, util::Bytes};
 /// use ntex::web::{self, test, App, HttpResponse};
 ///
 /// #[ntex::test]
@@ -173,8 +171,7 @@ where
 /// Helper function that returns a response body of a WebResponse.
 ///
 /// ```rust
-/// use bytes::Bytes;
-/// use ntex::http::header;
+/// use ntex::{util::Bytes, http::header};
 /// use ntex::web::{self, test, App, HttpResponse};
 ///
 /// #[ntex::test]

@@ -1,7 +1,5 @@
 use std::{io, io::Write, pin::Pin, task::Context, task::Poll, time};
 
-use bytes::{BufMut, Bytes, BytesMut};
-
 use crate::codec::{AsyncRead, AsyncWrite, Framed, ReadBuf};
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::error::PayloadError;
@@ -9,7 +7,7 @@ use crate::http::h1;
 use crate::http::header::{HeaderMap, HeaderValue, HOST};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::{Payload, PayloadStream};
-use crate::util::{next, poll_fn, send};
+use crate::util::{next, poll_fn, send, BufMut, Bytes, BytesMut};
 use crate::{Sink, Stream};
 
 use super::connection::{ConnectionLifetime, ConnectionType, IoConnection};

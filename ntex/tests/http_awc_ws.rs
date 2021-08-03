@@ -1,7 +1,5 @@
 use std::io;
 
-use bytes::Bytes;
-use bytestring::ByteString;
 use futures::{future::ok, SinkExt, StreamExt};
 
 use ntex::framed::{DispatchItem, Dispatcher, State};
@@ -9,7 +7,7 @@ use ntex::http::test::server as test_server;
 use ntex::http::ws::handshake_response;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
 use ntex::rt::net::TcpStream;
-use ntex::ws;
+use ntex::{util::ByteString, util::Bytes, ws};
 
 async fn ws_service(
     msg: DispatchItem<ws::Codec>,

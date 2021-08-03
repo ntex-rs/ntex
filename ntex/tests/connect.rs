@@ -1,6 +1,5 @@
 use std::io;
 
-use bytes::Bytes;
 use futures::SinkExt;
 
 use ntex::codec::{BytesCodec, Framed};
@@ -8,6 +7,7 @@ use ntex::connect::Connect;
 use ntex::rt::net::TcpStream;
 use ntex::server::test_server;
 use ntex::service::{fn_service, Service, ServiceFactory};
+use ntex::util::Bytes;
 
 #[cfg(feature = "openssl")]
 #[ntex::test]

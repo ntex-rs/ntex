@@ -21,20 +21,19 @@ pub use self::framed::{Framed, FramedParts};
 
 pub use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use bytes::BufMut;
+use ntex_bytes::{BufMut, BytesMut};
 
 pub fn poll_read_buf<T: AsyncRead>(
     io: Pin<&mut T>,
     cx: &mut Context<'_>,
-    buf: &mut bytes::BytesMut,
+    buf: &mut BytesMut,
 ) -> Poll<io::Result<usize>> {
     if !buf.has_remaining_mut() {
         return Poll::Ready(Ok(0));
     }
 
     let n = {
-        let dst = buf.chunk_mut();
-        let dst = unsafe { &mut *(dst as *mut _ as *mut [MaybeUninit<u8>]) };
+        let dst = unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [MaybeUninit<u8>]) };
         let mut buf = ReadBuf::uninit(dst);
         let ptr = buf.filled().as_ptr();
         if io.poll_read(cx, &mut buf)?.is_pending() {

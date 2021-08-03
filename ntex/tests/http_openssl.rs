@@ -1,7 +1,6 @@
 #![cfg(feature = "openssl")]
 use std::io;
 
-use bytes::{Bytes, BytesMut};
 use futures::future::{err, ok, ready};
 use futures::stream::{once, Stream, StreamExt};
 use open_ssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
@@ -11,6 +10,7 @@ use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
 use ntex::http::{body, HttpService, Method, Request, Response, StatusCode, Version};
 use ntex::service::{fn_service, ServiceFactory};
+use ntex::util::{Bytes, BytesMut};
 use ntex::web::error::InternalError;
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>

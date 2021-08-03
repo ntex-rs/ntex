@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, io};
 
-use bytes::{Buf, BytesMut};
+use ntex_bytes::{Buf, BytesMut};
 use ntex_util::{future::Either, ready, Sink, Stream};
 
 use crate::{AsyncRead, AsyncWrite, Decoder, Encoder};
@@ -550,10 +550,9 @@ impl<T, U> FramedParts<T, U> {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use futures::future::lazy;
-    use futures::Sink;
+    use futures::{future::lazy, Sink};
     use ntex::testing::Io;
+    use ntex_bytes::Bytes;
 
     use super::*;
     use crate::BytesCodec;

@@ -5,11 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use brotli2::write::BrotliEncoder;
-use bytes::Bytes;
 use coo_kie::Cookie;
 use flate2::{read::GzDecoder, write::GzEncoder, write::ZlibEncoder, Compression};
-use futures::future::ok;
-use futures::stream::once;
+use futures::{future::ok, stream::once};
 use rand::Rng;
 
 use ntex::http::client::error::{JsonPayloadError, SendRequestError};
@@ -17,6 +15,7 @@ use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{header, HttpMessage, HttpService};
 use ntex::service::{map_config, pipeline_factory, Service};
+use ntex::util::Bytes;
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
 use ntex::web::{self, test, App, BodyEncoding, Error, HttpRequest, HttpResponse};

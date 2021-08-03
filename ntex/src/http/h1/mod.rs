@@ -1,5 +1,5 @@
 //! HTTP/1 implementation
-use bytes::{Bytes, BytesMut};
+use crate::util::{Bytes, BytesMut};
 
 mod client;
 mod codec;

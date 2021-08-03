@@ -1,7 +1,6 @@
 use std::{cell::Cell, cell::RefCell, io};
 
 use bitflags::bitflags;
-use bytes::{Bytes, BytesMut};
 
 use crate::codec::{Decoder, Encoder};
 use crate::http::body::BodySize;
@@ -9,6 +8,7 @@ use crate::http::config::DateService;
 use crate::http::error::{ParseError, PayloadError};
 use crate::http::message::{ConnectionType, RequestHeadType, ResponseHead};
 use crate::http::{Method, Version};
+use crate::util::{Bytes, BytesMut};
 
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 use super::{decoder, encoder, reserve_readbuf, Message, MessageType};

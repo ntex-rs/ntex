@@ -1,9 +1,6 @@
 use std::task::{Context, Poll};
 use std::{convert::TryFrom, error::Error, future::Future, net, pin::Pin, time};
 
-use bytes::Bytes;
-use derive_more::From;
-use futures_core::Stream;
 use serde::Serialize;
 
 use crate::http::body::{Body, BodyStream};
@@ -11,6 +8,7 @@ use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::RequestHeadType;
 use crate::rt::time::{sleep, Sleep};
+use crate::{util::Bytes, Stream};
 
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;

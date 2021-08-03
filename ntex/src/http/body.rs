@@ -2,8 +2,7 @@ use std::{
     error::Error, fmt, marker::PhantomData, mem, pin::Pin, task::Context, task::Poll,
 };
 
-use bytes::{Bytes, BytesMut};
-use futures_core::Stream;
+use crate::{util::Bytes, util::BytesMut, Stream};
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 /// Body size hint

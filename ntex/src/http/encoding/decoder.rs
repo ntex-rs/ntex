@@ -1,14 +1,13 @@
 use std::{future::Future, io, io::Write, pin::Pin, task::Context, task::Poll};
 
 use brotli2::write::BrotliDecoder;
-use bytes::Bytes;
 use flate2::write::{GzDecoder, ZlibDecoder};
-use futures_core::Stream;
 
 use super::Writer;
 use crate::http::error::PayloadError;
 use crate::http::header::{ContentEncoding, HeaderMap, CONTENT_ENCODING};
 use crate::rt::task::{spawn_blocking, JoinHandle};
+use crate::{util::Bytes, Stream};
 
 const INPLACE: usize = 2049;
 

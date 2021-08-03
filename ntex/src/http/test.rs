@@ -1,14 +1,13 @@
 //! Test helpers to use during testing.
 use std::{convert::TryFrom, io, net, str::FromStr, sync::mpsc, thread, time};
 
-use bytes::Bytes;
-
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::rt::{net::TcpStream, System};
 use crate::server::{Server, StreamServiceFactory};
+use crate::util::Bytes;
 
 use super::client::error::WsClientError;
 use super::client::{Client, ClientRequest, ClientResponse, Connector};

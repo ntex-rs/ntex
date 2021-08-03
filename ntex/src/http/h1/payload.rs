@@ -3,11 +3,8 @@ use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 use std::{cell::RefCell, collections::VecDeque, pin::Pin};
 
-use bytes::Bytes;
-use futures_core::Stream;
-
 use crate::http::error::PayloadError;
-use crate::task::LocalWaker;
+use crate::{task::LocalWaker, util::Bytes, Stream};
 
 /// max buffer size 32k
 const MAX_BUFFER_SIZE: usize = 32_768;

@@ -3,11 +3,9 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::{cmp, fmt, io, mem, pin::Pin, time};
 
-use bytes::BytesMut;
-
 use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::rt::time::sleep;
-use crate::util::poll_fn;
+use crate::util::{poll_fn, BytesMut};
 
 #[derive(Default)]
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);

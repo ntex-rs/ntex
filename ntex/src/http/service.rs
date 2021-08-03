@@ -3,13 +3,13 @@ use std::{
     task::Poll,
 };
 
-use bytes::Bytes;
 use h2::server::{self, Handshake};
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::State;
 use crate::rt::net::TcpStream;
 use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
+use crate::util::Bytes;
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
@@ -515,7 +515,7 @@ where
             Protocol::Http2 => HttpServiceHandlerResponse {
                 state: ResponseState::H2Handshake {
                     data: Some((
-                        server::handshake(io),
+                        server::Builder::new().handshake(io),
                         self.config.clone(),
                         on_connect,
                         peer_addr,

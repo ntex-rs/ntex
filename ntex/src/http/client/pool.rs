@@ -2,7 +2,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
 
-use h2::client::{handshake, Connection, SendRequest};
+use h2::client::{Builder, Connection, SendRequest};
 use http::uri::Authority;
 
 use crate::channel::pool;
@@ -535,7 +535,7 @@ where
                     Poll::Ready(())
                 } else {
                     // init http2 handshake
-                    this.h2 = Some(Box::pin(handshake(io)));
+                    this.h2 = Some(Box::pin(Builder::new().handshake(io)));
                     self.poll(cx)
                 }
             }

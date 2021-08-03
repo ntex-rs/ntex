@@ -2,7 +2,6 @@ use std::{
     cell::Cell, convert::TryFrom, marker::PhantomData, mem::MaybeUninit, task::Poll,
 };
 
-use bytes::{Buf, Bytes, BytesMut};
 use http::header::{HeaderName, HeaderValue};
 use http::{header, Method, StatusCode, Uri, Version};
 
@@ -11,6 +10,7 @@ use crate::http::error::ParseError;
 use crate::http::header::HeaderMap;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::request::Request;
+use crate::util::{Buf, Bytes, BytesMut};
 
 use super::MAX_BUFFER_SIZE;
 
@@ -641,12 +641,11 @@ impl ChunkedState {
 
 #[cfg(test)]
 mod tests {
-    use bytes::{Bytes, BytesMut};
-
     use super::*;
     use crate::http::error::ParseError;
     use crate::http::header::{HeaderName, SET_COOKIE};
     use crate::http::{HttpMessage, Method, Version};
+    use crate::util::{Bytes, BytesMut};
 
     impl PayloadType {
         fn unwrap(self) -> PayloadDecoder {
