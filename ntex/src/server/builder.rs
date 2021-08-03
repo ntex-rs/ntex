@@ -11,7 +11,7 @@ use crate::rt::{net::TcpStream, spawn, time::sleep, System};
 use crate::util::join_all;
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
-use super::backpressure::{BackpressureFactory, BackpressureServiceFactory, BackpressureHandlerFactory};
+use super::backpressure::{BackpressureStreamFactory, BoxedInternalBackpressureStreamFactory, BoxingBackpressureStreamFactory};
 use super::config::{ConfiguredService, ServiceConfig};
 use super::service::{Factory, InternalServiceFactory, StreamServiceFactory};
 use super::signals::{Signal, Signals};
@@ -28,7 +28,7 @@ pub struct ServerBuilder {
     backlog: i32,
     workers: Vec<(usize, WorkerClient)>,
     services: Vec<Box<dyn InternalServiceFactory>>,
-    backpressure: Option<Box<dyn BackpressureHandlerFactory>>,
+    backpressure: Option<BoxedInternalBackpressureStreamFactory>,
     sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
     exit: bool,
@@ -278,9 +278,9 @@ impl ServerBuilder {
         factory: F
     ) -> Self 
     where
-        F: BackpressureServiceFactory
+        F: BackpressureStreamFactory
     {
-        self.backpressure = Some(Box::new(BackpressureFactory::new(factory)));
+        self.backpressure = Some(Box::new(BoxingBackpressureStreamFactory::new(factory)));
         self
     }
 

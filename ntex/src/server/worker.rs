@@ -12,7 +12,7 @@ use crate::server::backpressure::Backpressure;
 use crate::util::{counter::Counter, join_all};
 
 use super::accept::{AcceptNotify, Command};
-use super::backpressure::{BackpressureServiceHandler, BackpressureHandlerFactory};
+use super::backpressure::{BoxedBackpressureStream, BoxedInternalBackpressureStreamFactory};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
 use super::socket::Stream;
 use super::Token;
@@ -132,8 +132,8 @@ pub(super) struct Worker {
     availability: WorkerAvailability,
     conns: Counter,
     factories: Vec<Box<dyn InternalServiceFactory>>,
-    backpressure: Option<Box<dyn BackpressureHandlerFactory>>,
-    backpressure_service: Option<Pin<Box<dyn BackpressureServiceHandler>>>,
+    backpressure_stream: Option<BoxedBackpressureStream>,
+    backpressure: Backpressure,
     state: WorkerState,
     shutdown_timeout: time::Duration,
 }
@@ -165,7 +165,7 @@ impl Worker {
     pub(super) fn start(
         idx: usize,
         factories: Vec<Box<dyn InternalServiceFactory>>,
-        backpressure: Option<Box<dyn BackpressureHandlerFactory>>,
+        backpressure: Option<BoxedInternalBackpressureStreamFactory>,
         availability: WorkerAvailability,
         shutdown_timeout: time::Duration,
     ) -> WorkerClient {
@@ -203,7 +203,7 @@ impl Worker {
         rx: Receiver<WorkerCommand>,
         rx2: Receiver<StopCommand>,
         factories: Vec<Box<dyn InternalServiceFactory>>,
-        backpressure: Option<Box<dyn BackpressureHandlerFactory>>,
+        backpressure: Option<BoxedInternalBackpressureStreamFactory>,
         availability: WorkerAvailability,
         shutdown_timeout: time::Duration,
     ) -> Result<Worker, ()> {
@@ -213,10 +213,10 @@ impl Worker {
             rx2,
             availability,
             factories,
-            backpressure,
             shutdown_timeout,
             services: Vec::new(),
-            backpressure_service: None,
+            backpressure_stream: None,
+            backpressure: Backpressure::Disabled,
             conns: conns.priv_clone(),
             state: WorkerState::Unavailable,
         });
@@ -252,11 +252,8 @@ impl Worker {
             Err(_) => return Err(()),
         }
 
-        if let Some(factory) = &wrk.backpressure {
-            match factory.create().await {
-                Ok(service) => wrk.backpressure_service = Some(service.into()),
-                Err(_) => return Err(()),
-            }
+        if let Some(factory) = backpressure {
+            wrk.backpressure_stream = Some(factory.create());
         }
 
         Ok(wrk)
@@ -293,16 +290,21 @@ impl Worker {
         cx: &mut Context<'_>,
     ) -> Result<WorkerReadiness, (Token, usize)> {
         let mut ready = if self.conns.available(cx) {
-            if let Some(service) = &mut self.backpressure_service {
-                match service.as_mut().poll_ready(cx) {
-                    Poll::Ready(Ok(Backpressure::None)) => WorkerReadiness::Ready,
-                    Poll::Ready(Err(_)) => {
-                        error!("Worker backpressure service is faulted, disabling");
-                        self.backpressure_service = None;
-                        WorkerReadiness::Ready
+            if let Some(service) = &mut self.backpressure_stream {
+                match service.as_mut().poll_next(cx) {
+                    Poll::Ready(Some(backpressure)) => self.backpressure = backpressure,
+                    Poll::Ready(None) => {
+                        error!("Worker backpressure stream stopped unexpectedly, disabling");
+                        self.backpressure_stream = None;
+                        self.backpressure = Backpressure::Disabled;
                     }
-                    Poll::Ready(Ok(Backpressure::Full)) => WorkerReadiness::Backpressure,
-                    Poll::Pending => WorkerReadiness::Unready,
+                    Poll::Pending => {},
+                }
+                
+                match self.backpressure {
+                    Backpressure::Disabled => WorkerReadiness::Ready,
+                    Backpressure::Enabled => WorkerReadiness::Backpressure,
+                    Backpressure::Blocked => WorkerReadiness::Unready,
                 }
             } else {
                 WorkerReadiness::Ready

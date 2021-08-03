@@ -1,128 +1,65 @@
-use std::{future::Future, pin::Pin, task::{Context, Poll}};
+use std::pin::Pin;
 
-use ntex_service::boxed::BoxFuture;
-
-use crate::service::{Service, ServiceFactory};
+use futures_core::FusedStream;
 
 pub enum Backpressure {
-    Full,
-    None,
+    Disabled,
+    Enabled,
+    Blocked,
 }
 
-pub trait BackpressureServiceFactory: Send + Clone + 'static {
-    type Factory: ServiceFactory<Config = (), Request = (), Response = Backpressure>;
+pub trait BackpressureStream: FusedStream<Item = Backpressure> {}
 
-    fn create(&self) -> Self::Factory;
+pub trait BackpressureStreamFactory: Send + Clone + 'static {
+    type Stream: BackpressureStream;
+
+    fn create(&self) -> Self::Stream;
 }
 
-impl<F, T> BackpressureServiceFactory for F
+impl<F, T> BackpressureStreamFactory for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: ServiceFactory<Config = (), Request = (), Response = Backpressure>,
+    T: BackpressureStream,
 {
-    type Factory = T;
+    type Stream = T;
 
     #[inline]
-    fn create(&self) -> T {
+    fn create(&self) -> Self::Stream {
         (self)()
     }
 }
 
-pub(super) trait BackpressureHandlerFactory: Send {
-    fn clone_factory(&self) -> Box<dyn BackpressureHandlerFactory>;
+pub(super) type BoxedBackpressureStream = Pin<Box<dyn BackpressureStream>>;
 
-    fn create(
-        &self,
-    ) -> BoxFuture<BoxedBackpressureHandler, ()>;
+pub(super) trait InternalBackpressureStreamFactory: Send {
+    fn clone_factory(&self) -> Box<dyn InternalBackpressureStreamFactory>;
+
+    fn create(&self) -> BoxedBackpressureStream;
 }
 
-pub(super) struct BackpressureFactory<F: BackpressureServiceFactory>(F);
+pub(super) type BoxedInternalBackpressureStreamFactory = Box<dyn InternalBackpressureStreamFactory>;
 
-impl<F> BackpressureFactory<F>
+pub(super) struct BoxingBackpressureStreamFactory<F: BackpressureStreamFactory>(F);
+
+impl<F> BoxingBackpressureStreamFactory<F>
 where
-    F: BackpressureServiceFactory,
+    F: BackpressureStreamFactory,
 {
     pub(super) fn new(factory: F) -> Self {
         Self(factory)
     }
 }
 
-impl<F> BackpressureHandlerFactory for BackpressureFactory<F>
-where F: BackpressureServiceFactory 
+impl<F> InternalBackpressureStreamFactory for BoxingBackpressureStreamFactory<F>
+where
+    F: BackpressureStreamFactory,
 {
-    fn clone_factory(&self) -> Box<dyn BackpressureHandlerFactory> {
+    fn clone_factory(&self) -> Box<dyn InternalBackpressureStreamFactory> {
         Box::new(Self(self.0.clone()))
     }
 
-    fn create(
-        &self,
-    ) -> BoxFuture<BoxedBackpressureHandler, ()> {
-        let fut = self.0.create().new_service(());
-
-        Box::pin(async move {
-            fut.await
-                .map(|srv| {
-                    Box::new(ServiceHandler {
-                        service: srv,
-                        fut: None,
-                    }) as Box<dyn BackpressureServiceHandler>
-                })
-                .map_err(|_| ())
-        })
+    fn create(&self) -> BoxedBackpressureStream {
+        Box::pin(self.0.create())
     }
-}
 
-pub(super) trait BackpressureServiceHandler {
-    fn poll_ready(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<Backpressure, ()>>;
-}
-
-pub(super) type BoxedBackpressureHandler = Box<dyn BackpressureServiceHandler>;
-
-pin_project_lite::pin_project! {
-    struct ServiceHandler<T>
-    where
-        T: Service<Request = (), Response = Backpressure>,
-    {
-        service: T,
-        #[pin]
-        fut: Option<T::Future>,
-    }
-}
-
-impl<T> BackpressureServiceHandler for ServiceHandler<T>
-where
-    T: Service<Request = (), Response = Backpressure>,
-{
-    fn poll_ready(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<Backpressure, ()>> {
-        let mut this = self.as_mut().project();
-
-        // if this backpressure service is not ready, it can not provide backpressure
-        // or block availability any longer.
-        match this.service.poll_ready(cx) {
-            Poll::Ready(Ok(_)) => (),
-            Poll::Ready(Err(_)) => return Poll::Ready(Err(())),
-            Poll::Pending => {
-                this.fut.set(None);
-                return Poll::Ready(Ok(Backpressure::None));
-            }
-        }
-
-        this.fut.set(Some(this.service.call(())));
-        let result = this
-            .fut
-            .as_pin_mut()
-            .expect("set above")
-            .poll(cx)
-            .map_err(|_| ());
-        if result.is_ready() {
-            self.project().fut.set(None)
-        }
-        result
-    }
 }
