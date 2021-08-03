@@ -2,6 +2,7 @@ use std::pin::Pin;
 
 use futures_core::FusedStream;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Backpressure {
     Disabled,
     Enabled,
@@ -61,5 +62,4 @@ where
     fn create(&self) -> BoxedBackpressureStream {
         Box::pin(self.0.create())
     }
-
 }
