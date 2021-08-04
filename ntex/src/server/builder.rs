@@ -11,7 +11,10 @@ use crate::rt::{net::TcpStream, spawn, time::sleep, System};
 use crate::util::join_all;
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
-use super::backpressure::{BackpressureStreamFactory, BoxedInternalBackpressureStreamFactory, BoxingBackpressureStreamFactory};
+use super::backpressure::{
+    BackpressureStreamFactory, BoxedInternalBackpressureStreamFactory,
+    BoxingBackpressureStreamFactory,
+};
 use super::config::{ConfiguredService, ServiceConfig};
 use super::service::{Factory, InternalServiceFactory, StreamServiceFactory};
 use super::signals::{Signal, Signals};
@@ -279,17 +282,14 @@ impl ServerBuilder {
     /// notifications to the `Worker` about the capacity of the system to take more work.
     /// This can be used for example when all the services or connections in a `Worker` are
     /// competing for a finite resource like a hardware component.
-    pub fn backpressure<F>(
-        mut self,
-        factory: F
-    ) -> Self 
+    pub fn backpressure<F>(mut self, factory: F) -> Self
     where
-        F: BackpressureStreamFactory
+        F: BackpressureStreamFactory,
     {
-        self.backpressure = Some(Box::new(BoxingBackpressureStreamFactory::new(factory)));
+        self.backpressure =
+            Some(Box::new(BoxingBackpressureStreamFactory::new(factory)));
         self
     }
-
 
     #[doc(hidden)]
     pub fn start(self) -> Server {

@@ -23,7 +23,7 @@ impl Default for Backpressure {
 
 /// Provides a stream to wake up the `Worker` when the `Backpressure` requirements
 /// for the `Worker` have changed.
-/// 
+///
 /// The stream should only yield changes to the `Backpressure` state. The stream
 /// should never end. In the event of failure by termination or end-of-stream, no
 /// backpressure will be applied for the rest of the `Worker`'s lifetime.
@@ -57,7 +57,8 @@ pub(super) trait InternalBackpressureStreamFactory: Send {
     fn create(&self) -> BoxedBackpressureStream;
 }
 
-pub(super) type BoxedInternalBackpressureStreamFactory = Box<dyn InternalBackpressureStreamFactory>;
+pub(super) type BoxedInternalBackpressureStreamFactory =
+    Box<dyn InternalBackpressureStreamFactory>;
 
 pub(super) struct BoxingBackpressureStreamFactory<F: BackpressureStreamFactory>(F);
 

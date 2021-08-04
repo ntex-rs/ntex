@@ -766,7 +766,7 @@ mod tests {
         let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
         assert!(avail.available());
         assert!(matches!(worker.state, WorkerState::Available));
-        
+
         *bp_st.lock().unwrap() = None;
 
         // restart
