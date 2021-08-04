@@ -897,7 +897,7 @@ impl Buf for Bytes {
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        &(self.inner.as_ref())
+        self.inner.as_ref()
     }
 
     #[inline]
@@ -920,7 +920,7 @@ impl bytes::buf::Buf for Bytes {
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        &(self.inner.as_ref())
+        self.inner.as_ref()
     }
 
     #[inline]
@@ -1061,7 +1061,7 @@ impl Default for Bytes {
 
 impl fmt::Debug for Bytes {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&debug::BsDebug(&self.inner.as_ref()), fmt)
+        fmt::Debug::fmt(&debug::BsDebug(self.inner.as_ref()), fmt)
     }
 }
 
@@ -1627,7 +1627,7 @@ impl Buf for BytesMut {
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        &(self.inner.as_ref())
+        self.inner.as_ref()
     }
 
     #[inline]
@@ -1809,7 +1809,7 @@ impl Default for BytesMut {
 
 impl fmt::Debug for BytesMut {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&debug::BsDebug(&self.inner.as_ref()), fmt)
+        fmt::Debug::fmt(&debug::BsDebug(self.inner.as_ref()), fmt)
     }
 }
 
