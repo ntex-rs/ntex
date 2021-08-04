@@ -8,11 +8,12 @@ use futures_core::Stream as FutStream;
 
 use crate::rt::time::{sleep_until, Instant, Sleep};
 use crate::rt::{spawn, Arbiter};
-use crate::server::backpressure::Backpressure;
 use crate::util::{counter::Counter, join_all};
 
 use super::accept::{AcceptNotify, Command};
-use super::backpressure::{BoxedBackpressureStream, BoxedInternalBackpressureStreamFactory};
+use super::backpressure::{
+    Backpressure, BoxedBackpressureStream, BoxedInternalBackpressureStreamFactory,
+};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
 use super::socket::Stream;
 use super::Token;
@@ -290,22 +291,8 @@ impl Worker {
         cx: &mut Context<'_>,
     ) -> Result<WorkerReadiness, (Token, usize)> {
         let mut ready = if self.conns.available(cx) {
-            if let Some(service) = &mut self.backpressure_stream {
-                match service.as_mut().poll_next(cx) {
-                    Poll::Ready(Some(backpressure)) => self.backpressure = backpressure,
-                    Poll::Ready(None) => {
-                        error!("Worker backpressure stream stopped unexpectedly, disabling");
-                        self.backpressure_stream = None;
-                        self.backpressure = Backpressure::Disabled;
-                    }
-                    Poll::Pending => {},
-                }
-                
-                match self.backpressure {
-                    Backpressure::Disabled => WorkerReadiness::Ready,
-                    Backpressure::Enabled => WorkerReadiness::Backpressure,
-                    Backpressure::Blocked => WorkerReadiness::Unready,
-                }
+            if self.update_backpressure(cx) {
+                self.backpressure.into()
             } else {
                 WorkerReadiness::Ready
             }
@@ -356,12 +343,49 @@ impl Worker {
             Ok(ready)
         }
     }
+
+    fn update_backpressure(&mut self, cx: &mut Context<'_>) -> bool {
+        if let Some(service) = &mut self.backpressure_stream {
+            if service.is_terminated() {
+                error!("Worker backpressure stream terminated unexpectedly, disabling");
+                self.backpressure_stream = None;
+                self.backpressure = Backpressure::Disabled;
+                false
+            } else {
+                match service.as_mut().poll_next(cx) {
+                    Poll::Ready(Some(backpressure)) => self.backpressure = backpressure,
+                    Poll::Ready(None) => {
+                        error!(
+                            "Worker backpressure stream ended unexpectedly, disabling"
+                        );
+                        self.backpressure_stream = None;
+                        self.backpressure = Backpressure::Disabled;
+                        return false;
+                    }
+                    Poll::Pending => {}
+                }
+                true
+            }
+        } else {
+            false
+        }
+    }
 }
 
 enum WorkerReadiness {
     Unready,
     Backpressure,
     Ready,
+}
+
+impl From<Backpressure> for WorkerReadiness {
+    fn from(value: Backpressure) -> Self {
+        match value {
+            Backpressure::Disabled => WorkerReadiness::Ready,
+            Backpressure::Enabled => WorkerReadiness::Backpressure,
+            Backpressure::Blocked => WorkerReadiness::Unready,
+        }
+    }
 }
 
 enum WorkerState {

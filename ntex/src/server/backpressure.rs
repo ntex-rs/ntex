@@ -9,6 +9,12 @@ pub enum Backpressure {
     Blocked,
 }
 
+impl Default for Backpressure {
+    fn default() -> Self {
+        Self::Disabled
+    }
+}
+
 pub trait BackpressureStream: FusedStream<Item = Backpressure> {}
 
 pub trait BackpressureStreamFactory: Send + Clone + 'static {
