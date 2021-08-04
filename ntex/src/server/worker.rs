@@ -180,7 +180,7 @@ impl Worker {
                     rx1,
                     rx2,
                     factories,
-                    backpressure,
+                    backpressure.map(|f| f.create()),
                     availability,
                     shutdown_timeout,
                 )
@@ -204,7 +204,7 @@ impl Worker {
         rx: Receiver<WorkerCommand>,
         rx2: Receiver<StopCommand>,
         factories: Vec<Box<dyn InternalServiceFactory>>,
-        backpressure: Option<BoxedInternalBackpressureStreamFactory>,
+        backpressure_stream: Option<BoxedBackpressureStream>,
         availability: WorkerAvailability,
         shutdown_timeout: time::Duration,
     ) -> Result<Worker, ()> {
@@ -216,7 +216,7 @@ impl Worker {
             factories,
             shutdown_timeout,
             services: Vec::new(),
-            backpressure_stream: None,
+            backpressure_stream,
             backpressure: Backpressure::Disabled,
             conns: conns.priv_clone(),
             state: WorkerState::Unavailable,
@@ -251,10 +251,6 @@ impl Worker {
                 }
             }
             Err(_) => return Err(()),
-        }
-
-        if let Some(factory) = backpressure {
-            wrk.backpressure_stream = Some(factory.create());
         }
 
         Ok(wrk)
@@ -591,9 +587,12 @@ impl Future for Worker {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use futures_core::FusedStream;
+
     use super::*;
     use crate::rt::net::TcpStream;
     use crate::server::service::Factory;
+    use crate::server::BackpressureStream;
     use crate::service::{Service, ServiceFactory};
     use crate::util::{lazy, Ready};
 
@@ -662,6 +661,32 @@ mod tests {
         }
     }
 
+    struct BpStream {
+        st: Arc<Mutex<Option<Backpressure>>>,
+    }
+
+    impl BackpressureStream for BpStream {}
+
+    impl FusedStream for BpStream {
+        fn is_terminated(&self) -> bool {
+            false
+        }
+    }
+
+    impl FutStream for BpStream {
+        type Item = Backpressure;
+
+        fn poll_next(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Self::Item>> {
+            self.st
+                .lock()
+                .unwrap()
+                .map_or(Poll::Pending, |v| Poll::Ready(Some(v)))
+        }
+    }
+
     #[crate::rt_test]
     #[allow(clippy::mutex_atomic)]
     async fn basics() {
@@ -681,6 +706,9 @@ mod tests {
             counter: counter.clone(),
         };
 
+        let bp_st = Arc::new(Mutex::new(Some(Backpressure::Disabled)));
+        let bp_stream = BpStream { st: bp_st.clone() };
+
         let mut worker = Worker::create(
             rx1,
             rx2,
@@ -690,6 +718,7 @@ mod tests {
                 move || f.clone(),
                 "127.0.0.1:8080".parse().unwrap(),
             )],
+            Some(Box::pin(bp_stream)),
             avail.clone(),
             time::Duration::from_secs(5),
         )
@@ -699,6 +728,7 @@ mod tests {
 
         let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
         assert!(!avail.available());
+        *bp_st.lock().unwrap() = None;
 
         let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
         assert!(!avail.available());
@@ -714,6 +744,30 @@ mod tests {
         *st.lock().unwrap() = St::Ready;
         let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
         assert!(avail.available());
+        assert!(matches!(worker.state, WorkerState::Available));
+
+        // backpressure
+        *bp_st.lock().unwrap() = Some(Backpressure::Enabled);
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(!avail.available());
+        assert!(matches!(worker.state, WorkerState::Available));
+
+        *bp_st.lock().unwrap() = None;
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(!avail.available());
+        assert!(matches!(worker.state, WorkerState::Available));
+
+        *bp_st.lock().unwrap() = Some(Backpressure::Blocked);
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(!avail.available());
+        assert!(matches!(worker.state, WorkerState::Unavailable));
+
+        *bp_st.lock().unwrap() = Some(Backpressure::Disabled);
+        let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
+        assert!(avail.available());
+        assert!(matches!(worker.state, WorkerState::Available));
+        
+        *bp_st.lock().unwrap() = None;
 
         // restart
         *st.lock().unwrap() = St::Fail;
@@ -762,6 +816,7 @@ mod tests {
                 move || f.clone(),
                 "127.0.0.1:8080".parse().unwrap(),
             )],
+            None,
             avail.clone(),
             time::Duration::from_secs(5),
         )
