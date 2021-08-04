@@ -273,6 +273,12 @@ impl ServerBuilder {
         Ok(self)
     }
 
+    /// Provide a factory to create a `BackpressureStream` for each worker.
+    ///
+    /// The factory will be called on the `Worker` thread. The `BackpressureStream` provides
+    /// notifications to the `Worker` about the capacity of the system to take more work.
+    /// This can be used for example when all the services or connections in a `Worker` are
+    /// competing for a finite resource like a hardware component.
     pub fn backpressure<F>(
         mut self,
         factory: F
