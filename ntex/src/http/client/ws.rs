@@ -3,7 +3,7 @@ use std::{convert::TryFrom, fmt, net::SocketAddr, rc::Rc, str};
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
-use nanorand::{Rng, WyRand};
+use nanorand::{WyRand, RNG};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::framed::{DispatchItem, Dispatcher, State};

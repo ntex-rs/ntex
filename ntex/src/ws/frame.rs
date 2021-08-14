@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 
 use log::debug;
-use nanorand::{Rng, WyRand};
+use nanorand::{WyRand, RNG};
 
 use super::proto::{CloseCode, CloseReason, OpCode};
 use super::{mask::apply_mask, ProtocolError};
