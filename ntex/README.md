@@ -7,7 +7,7 @@
 [![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/master/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex) 
 [![crates.io](https://img.shields.io/crates/v/ntex.svg)](https://crates.io/crates/ntex) 
 [![Documentation](https://docs.rs/ntex/badge.svg)](https://docs.rs/ntex) 
-[![Version](https://img.shields.io/badge/rustc-1.46+-lightgray.svg)](https://blog.rust-lang.org/2020/08/27/Rust-1.46.0.html) 
+[![Version](https://img.shields.io/badge/rustc-1.48+-lightgray.svg)](https://blog.rust-lang.org/2020/11/19/Rust-1.48.html) 
 ![License](https://img.shields.io/crates/l/ntex.svg) 
 
   </p>
@@ -24,7 +24,7 @@
 ## Documentation & community resources
 
 * [Documentation](https://docs.rs/ntex)
-* Minimum supported Rust version: 1.46 or later
+* Minimum supported Rust version: 1.48 or later
 
 ## License
 
