@@ -5,7 +5,7 @@
 
 [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Linux)") 
 [![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/master/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex) 
-[![crates.io](https://meritbadge.herokuapp.com/ntex)](https://crates.io/crates/ntex) 
+[![crates.io](https://img.shields.io/crates/v/ntex.svg)](https://crates.io/crates/ntex) 
 [![Documentation](https://docs.rs/ntex/badge.svg)](https://docs.rs/ntex) 
 [![Version](https://img.shields.io/badge/rustc-1.46+-lightgray.svg)](https://blog.rust-lang.org/2020/08/27/Rust-1.46.0.html) 
 ![License](https://img.shields.io/crates/l/ntex.svg) 
