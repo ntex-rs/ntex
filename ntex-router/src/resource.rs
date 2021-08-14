@@ -260,7 +260,7 @@ impl ResourceDef {
             }
             let p = pattern.split_at(start_idx);
             pattern = p.1;
-            re.push_str(&escape(&p.0));
+            re.push_str(&escape(p.0));
             elems.push(PathElement::Str(p.0.to_string()));
 
             // find closing }

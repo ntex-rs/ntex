@@ -80,6 +80,7 @@ pub(super) trait MessageType: Sized {
             BodySize::Sized(len) => write_content_length(len, dst),
             BodySize::Stream => {
                 if chunked {
+                    skip_len = true;
                     dst.extend_from_slice(b"\r\ntransfer-encoding: chunked\r\n")
                 } else {
                     skip_len = false;

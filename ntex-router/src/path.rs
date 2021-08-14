@@ -122,7 +122,7 @@ impl<T: ResourcePath> Path<T> {
         for item in self.segments.iter() {
             if key == item.0 {
                 return match item.1 {
-                    PathItem::Static(ref s) => Some(&s),
+                    PathItem::Static(s) => Some(s),
                     PathItem::Segment(ref s) => Some(s),
                     PathItem::IdxSegment(s, e) => {
                         Some(&self.path.path()[(s as usize)..(e as usize)])
@@ -192,7 +192,7 @@ impl<'a, T: ResourcePath> Iterator for PathIter<'a, T> {
                 }
             };
             self.idx += 1;
-            return Some((&self.params.segments[idx].0, res));
+            return Some((self.params.segments[idx].0, res));
         }
         None
     }
@@ -212,8 +212,8 @@ impl<T: ResourcePath> Index<usize> for Path<T> {
 
     fn index(&self, idx: usize) -> &str {
         match self.segments[idx].1 {
-            PathItem::Static(ref s) => &s,
-            PathItem::Segment(ref s) => &s,
+            PathItem::Static(s) => s,
+            PathItem::Segment(ref s) => s,
             PathItem::IdxSegment(s, e) => &self.path.path()[(s as usize)..(e as usize)],
         }
     }

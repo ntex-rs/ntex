@@ -125,13 +125,11 @@ pub(super) trait MessageType: Sized {
                                 && content_length.is_none()
                             {
                                 chunked = true
+                            } else if s.eq_ignore_ascii_case("identity") {
+                                // allow silently since multiple TE headers are already checked
                             } else {
-                                if s.eq_ignore_ascii_case("identity") {
-                                    // allow silently since multiple TE headers are already checked
-                                } else {
-                                    log::debug!("illegal Transfer-Encoding: {:?}", s);
-                                    return Err(ParseError::Header);
-                                }
+                                log::debug!("illegal Transfer-Encoding: {:?}", s);
+                                return Err(ParseError::Header);
                             }
                         } else {
                             return Err(ParseError::Header);

@@ -90,7 +90,7 @@ impl<Err> WebRequest<Err> {
     /// This method returns reference to the request head
     #[inline]
     pub fn head(&self) -> &RequestHead {
-        &self.req.head()
+        self.req.head()
     }
 
     /// This method returns reference to the request head

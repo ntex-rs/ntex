@@ -225,7 +225,7 @@ where
         loop {
             match slf.st.get() {
                 DispatcherState::Processing => {
-                    let result = match slf.poll_service(&this.service, cx, read) {
+                    let result = match slf.poll_service(this.service, cx, read) {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(result) => result,
                     };
@@ -284,7 +284,7 @@ where
                 }
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
-                    let result = match slf.poll_service(&this.service, cx, read) {
+                    let result = match slf.poll_service(this.service, cx, read) {
                         Poll::Ready(result) => result,
                         Poll::Pending => return Poll::Pending,
                     };

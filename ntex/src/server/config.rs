@@ -244,7 +244,7 @@ impl ServiceRuntime {
     fn validate(&self) {
         let inner = self.0.as_ref().borrow();
         for (name, token) in &inner.names {
-            if !inner.services.contains_key(&token) {
+            if !inner.services.contains_key(token) {
                 error!("Service {:?} is not configured", name);
             }
         }

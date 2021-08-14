@@ -528,6 +528,7 @@ async fn test_h1_body_length() {
 
 #[ntex::test]
 async fn test_h1_body_chunked_explicit() {
+    env_logger::init();
     let mut srv = test_server(|| {
         HttpService::build()
             .h1(|_| {

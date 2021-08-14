@@ -447,7 +447,7 @@ impl Tree {
                     if let Some(captures) = pattern.captures(seg) {
                         let mut is_match = true;
                         for name in names.iter() {
-                            if let Some(m) = captures.name(&name) {
+                            if let Some(m) = captures.name(name) {
                                 let item = if quoted {
                                     PathItem::Segment(m.as_str().to_string())
                                 } else {
