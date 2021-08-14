@@ -72,6 +72,7 @@ pub(super) trait MessageType: Sized {
         let mut has_upgrade = false;
         let mut expect = false;
         let mut chunked = false;
+        let mut seen_te = false;
         let mut content_length = None;
 
         {
@@ -88,8 +89,16 @@ pub(super) trait MessageType: Sized {
                     )
                 };
                 match name {
-                    header::CONTENT_LENGTH => {
-                        if let Ok(s) = value.to_str() {
+                    header::CONTENT_LENGTH if content_length.is_some() || chunked => {
+                        log::debug!("multiple Content-Length not allowed");
+                        return Err(ParseError::Header);
+                    }
+                    header::CONTENT_LENGTH => match value.to_str() {
+                        Ok(s) if s.trim_start().starts_with('+') => {
+                            log::debug!("illegal Content-Length: {:?}", s);
+                            return Err(ParseError::Header);
+                        }
+                        Ok(s) => {
                             if let Ok(len) = s.parse::<u64>() {
                                 if len != 0 {
                                     content_length = Some(len);
@@ -98,15 +107,32 @@ pub(super) trait MessageType: Sized {
                                 log::debug!("illegal Content-Length: {:?}", s);
                                 return Err(ParseError::Header);
                             }
-                        } else {
+                        }
+                        Err(_) => {
                             log::debug!("illegal Content-Length: {:?}", value);
                             return Err(ParseError::Header);
                         }
-                    }
+                    },
                     // transfer-encoding
+                    header::TRANSFER_ENCODING if seen_te => {
+                        log::debug!("Transfer-Encoding header usage is not allowed");
+                        return Err(ParseError::Header);
+                    }
                     header::TRANSFER_ENCODING => {
-                        if let Ok(s) = value.to_str().map(|s| s.trim()) {
-                            chunked = s.eq_ignore_ascii_case("chunked");
+                        seen_te = true;
+                        if let Ok(s) = value.to_str().map(str::trim) {
+                            if s.eq_ignore_ascii_case("chunked")
+                                && content_length.is_none()
+                            {
+                                chunked = true
+                            } else {
+                                if s.eq_ignore_ascii_case("identity") {
+                                    // allow silently since multiple TE headers are already checked
+                                } else {
+                                    log::debug!("illegal Transfer-Encoding: {:?}", s);
+                                    return Err(ParseError::Header);
+                                }
+                            }
                         } else {
                             return Err(ParseError::Header);
                         }
@@ -530,20 +556,10 @@ impl ChunkedState {
         rdr: &mut BytesMut,
         size: &mut u64,
     ) -> Poll<Result<ChunkedState, ParseError>> {
-        let radix = 16;
-        match byte!(rdr) {
-            b @ b'0'..=b'9' => {
-                *size *= radix;
-                *size += u64::from(b - b'0');
-            }
-            b @ b'a'..=b'f' => {
-                *size *= radix;
-                *size += u64::from(b + 10 - b'a');
-            }
-            b @ b'A'..=b'F' => {
-                *size *= radix;
-                *size += u64::from(b + 10 - b'A');
-            }
+        let rem = match byte!(rdr) {
+            b @ b'0'..=b'9' => b - b'0',
+            b @ b'a'..=b'f' => b + 10 - b'a',
+            b @ b'A'..=b'F' => b + 10 - b'A',
             b'\t' | b' ' => return Poll::Ready(Ok(ChunkedState::SizeLws)),
             b';' => return Poll::Ready(Ok(ChunkedState::Extension)),
             b'\r' => return Poll::Ready(Ok(ChunkedState::SizeLf)),
@@ -552,8 +568,22 @@ impl ChunkedState {
                     "Invalid chunk size line: Invalid Size",
                 )));
             }
+        };
+
+        match size.checked_mul(16) {
+            Some(n) => {
+                *size = n as u64;
+                *size += rem as u64;
+
+                Poll::Ready(Ok(ChunkedState::Size))
+            }
+            None => {
+                log::debug!("chunk size would overflow u64");
+                Poll::Ready(Err(ParseError::InvalidInput(
+                    "Invalid chunk size line: Size is too big",
+                )))
+            }
         }
-        Poll::Ready(Ok(ChunkedState::Size))
     }
 
     fn read_size_lws(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, ParseError>> {
@@ -571,6 +601,10 @@ impl ChunkedState {
     fn read_extension(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, ParseError>> {
         match byte!(rdr) {
             b'\r' => Poll::Ready(Ok(ChunkedState::SizeLf)),
+            // strictly 0x20 (space) should be disallowed but we don't parse quoted strings here
+            0x00..=0x08 | 0x0a..=0x1f | 0x7f => Poll::Ready(Err(
+                ParseError::InvalidInput("Invalid character in chunk extension"),
+            )),
             _ => Poll::Ready(Ok(ChunkedState::Extension)), // no supported extensions
         }
     }
@@ -981,18 +1015,12 @@ mod tests {
             unreachable!("Error");
         }
 
-        // type in chunked
+        // typo in chunked
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\n\
              transfer-encoding: chnked\r\n\r\n",
         );
-        let req = parse_ready!(&mut buf);
-
-        if let Ok(val) = req.chunked() {
-            assert!(!val);
-        } else {
-            unreachable!("Error");
-        }
+        expect_parse_err!(&mut buf)
     }
 
     #[test]
@@ -1221,5 +1249,105 @@ mod tests {
 
         let chunk = pl.decode(&mut buf).unwrap().unwrap();
         assert_eq!(chunk, PayloadItem::Chunk(Bytes::from_static(b"test data")));
+    }
+
+    #[test]
+    fn test_multiple_content_length() {
+        let mut buf = BytesMut::from(
+            "GET / HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Content-Length: 4\r\n\
+             Content-Length: 2\r\n\
+             \r\n\
+             abcd",
+        );
+        expect_parse_err!(&mut buf);
+    }
+
+    #[test]
+    fn test_content_length_plus() {
+        let mut buf = BytesMut::from(
+            "GET / HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Content-Length: +3\r\n\
+             \r\n\
+             000",
+        );
+        expect_parse_err!(&mut buf);
+    }
+
+    #[test]
+    fn test_unknown_transfer_encoding() {
+        let mut buf = BytesMut::from(
+            "GET / HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Transfer-Encoding: JUNK\r\n\
+             Transfer-Encoding: chunked\r\n\
+             \r\n\
+             5\r\n\
+             hello\r\n\
+             0",
+        );
+
+        expect_parse_err!(&mut buf);
+    }
+
+    #[test]
+    fn test_multiple_transfer_encoding() {
+        let mut buf = BytesMut::from(
+            "GET / HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Content-Length: 51\r\n\
+             Transfer-Encoding: identity\r\n\
+             Transfer-Encoding: chunked\r\n\
+             \r\n\
+             0\r\n\
+             \r\n\
+             GET /forbidden HTTP/1.1\r\n\
+             Host: example.com\r\n\r\n",
+        );
+        expect_parse_err!(&mut buf);
+    }
+
+    #[test]
+    fn test_transfer_encoding_content_length_combination() {
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Content-Length: 3\r\n\
+             Transfer-Encoding: chunked\r\n\
+             \r\n\
+             0\r\n",
+        );
+        expect_parse_err!(&mut buf);
+
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Transfer-Encoding: chunked\r\n\
+             Content-Length: 3\r\n\
+             \r\n\
+             0\r\n",
+        );
+        expect_parse_err!(&mut buf);
+    }
+
+    #[test]
+    fn test_transfer_encoding_content_length() {
+        let mut buf = BytesMut::from(
+            "GET /test HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Content-Length: 3\r\n\
+             Transfer-Encoding: identity\r\n\
+             \r\n\
+             0\r\n",
+        );
+
+        let reader = MessageDecoder::<Request>::default();
+        let (_msg, pl) = reader.decode(&mut buf).unwrap().unwrap();
+        let pl = pl.unwrap();
+
+        let chunk = pl.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(chunk, PayloadItem::Chunk(Bytes::from_static(b"0\r\n")));
     }
 }
