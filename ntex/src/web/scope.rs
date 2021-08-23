@@ -959,6 +959,39 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_scope_variable_segment2() {
+        let srv = init_service(App::new().service(web::scope("/ab-{project}").service(
+            web::resource(["", "/"]).to(|r: HttpRequest| async move {
+                HttpResponse::Ok()
+                    .body(format!("project: {}", &r.match_info()["project"]))
+            }),
+        )))
+        .await;
+
+        let req = TestRequest::with_uri("/ab-project1").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        if let ResponseBody::Body(Body::Bytes(ref b)) = resp.response().body() {
+            let bytes: Bytes = b.clone();
+            assert_eq!(bytes, Bytes::from_static(b"project: project1"));
+        }
+
+        let req = TestRequest::with_uri("/ab-project1/").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        if let ResponseBody::Body(Body::Bytes(ref b)) = resp.response().body() {
+            let bytes: Bytes = b.clone();
+            assert_eq!(bytes, Bytes::from_static(b"project: project1"));
+        }
+
+        let req = TestRequest::with_uri("/aa-project1").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[crate::rt_test]
     async fn test_nested_scope() {
         let srv = init_service(App::new().service(web::scope("/app").service(
             web::scope("/t1").service(

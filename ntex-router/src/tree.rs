@@ -224,6 +224,7 @@ impl Tree {
                                 _ => continue,
                             };
                             if check(v, resource) {
+                                resource.resource_path().segments = segments;
                                 return Some(v);
                             }
                         }
@@ -255,6 +256,7 @@ impl Tree {
                                 _ => continue,
                             };
                             if check(v, resource) {
+                                resource.resource_path().segments = segments;
                                 return Some(v);
                             }
                         }
@@ -293,6 +295,7 @@ impl Tree {
                                 _ => continue,
                             };
                             if check(v, resource) {
+                                resource.resource_path().segments = segments;
                                 return Some(v);
                             }
                         }
