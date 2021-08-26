@@ -5,7 +5,6 @@ use std::{cmp, future::Future, marker, pin::Pin, str::FromStr};
 use crate::http::encoding::Encoder;
 use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
 use crate::service::{Service, Transform};
-use crate::util::Ready;
 
 use crate::web::dev::{WebRequest, WebResponse};
 use crate::web::{BodyEncoding, ErrorRenderer};
@@ -51,19 +50,14 @@ where
     S: Service<Request = WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
-    type Request = WebRequest<E>;
-    type Response = WebResponse;
-    type Error = S::Error;
-    type InitError = ();
     type Transform = CompressMiddleware<S, E>;
-    type Future = Ready<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self, service: S) -> Self::Future {
-        Ready::Ok(CompressMiddleware {
+    fn new_transform(&self, service: S) -> Self::Transform {
+        CompressMiddleware {
             service,
             encoding: self.enc,
             _t: marker::PhantomData,
-        })
+        }
     }
 }
 

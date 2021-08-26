@@ -386,12 +386,11 @@ where
         >,
     >
     where
-        M: Transform<
-            T::Service,
+        M: Transform<T::Service>,
+        M::Transform: Service<
             Request = WebRequest<Err>,
             Response = WebResponse,
             Error = Err::Container,
-            InitError = (),
         >,
     {
         Scope {

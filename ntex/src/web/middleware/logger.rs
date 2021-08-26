@@ -8,7 +8,7 @@ use regex::Regex;
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
 use crate::service::{Service, Transform};
-use crate::util::{Bytes, Either, HashSet, Ready};
+use crate::util::{Bytes, Either, HashSet};
 use crate::web::dev::{WebRequest, WebResponse};
 use crate::web::HttpResponse;
 
@@ -118,18 +118,13 @@ impl<S, Err> Transform<S> for Logger
 where
     S: Service<Request = WebRequest<Err>, Response = WebResponse>,
 {
-    type Request = WebRequest<Err>;
-    type Response = WebResponse;
-    type Error = S::Error;
-    type InitError = ();
     type Transform = LoggerMiddleware<S>;
-    type Future = Ready<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self, service: S) -> Self::Future {
-        Ready::Ok(LoggerMiddleware {
+    fn new_transform(&self, service: S) -> Self::Transform {
+        LoggerMiddleware {
             service,
             inner: self.inner.clone(),
-        })
+        }
     }
 }
 
@@ -466,7 +461,7 @@ impl<'a> fmt::Display for FormatDisplay<'a> {
 mod tests {
     use super::*;
     use crate::http::{header, StatusCode};
-    use crate::service::{IntoService, Service, Transform};
+    use crate::service::{IntoService, Transform};
     use crate::util::lazy;
     use crate::web::test::{self, TestRequest};
     use crate::web::{DefaultError, Error};
@@ -486,10 +481,7 @@ mod tests {
         let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test")
             .exclude("/test");
 
-        let srv = Transform::new_transform(&logger, srv.into_service())
-            .await
-            .unwrap();
-
+        let srv = Transform::new_transform(&logger, srv.into_service());
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx, true).is_ready()).await);
 

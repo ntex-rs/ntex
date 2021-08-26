@@ -1,14 +1,12 @@
 //! Service that buffers incomming requests.
 use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
-use std::{
-    collections::VecDeque, convert::Infallible, future::Future, pin::Pin, rc::Rc,
-};
+use std::{collections::VecDeque, future::Future, pin::Pin, rc::Rc};
 
 use crate::channel::oneshot;
 use crate::service::{IntoService, Service, Transform};
 use crate::task::LocalWaker;
-use crate::util::{Either, Ready};
+use crate::util::Either;
 
 /// Buffer - service factory for service that can buffer incoming request.
 ///
@@ -48,15 +46,10 @@ impl<S, E> Transform<S> for Buffer<E>
 where
     S: Service<Error = E>,
 {
-    type Request = S::Request;
-    type Response = S::Response;
-    type Error = S::Error;
-    type InitError = Infallible;
     type Transform = BufferService<S, E>;
-    type Future = Ready<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self, service: S) -> Self::Future {
-        Ready::Ok(BufferService {
+    fn new_transform(&self, service: S) -> Self::Transform {
+        BufferService {
             size: self.buf_size,
             inner: Rc::new(Inner {
                 service,
@@ -65,7 +58,7 @@ where
                 waker: LocalWaker::default(),
                 buf: RefCell::new(VecDeque::with_capacity(self.buf_size)),
             }),
-        })
+        }
     }
 }
 
@@ -238,7 +231,7 @@ mod tests {
 
     use super::*;
     use crate::service::{apply, fn_factory, Service, ServiceFactory};
-    use crate::util::lazy;
+    use crate::util::{lazy, Ready};
 
     #[derive(Clone)]
     struct TestService(Rc<Inner>);
@@ -329,7 +322,7 @@ mod tests {
 
         let srv = apply(
             Buffer::new(|| ()).buf_size(2).clone(),
-            fn_factory(|| async { Ok(TestService(inner.clone())) }),
+            fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
         );
 
         let srv = srv.new_service(&()).await.unwrap();

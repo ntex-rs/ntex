@@ -6,7 +6,7 @@ use std::{fmt, future::Future, marker, pin::Pin, task::Context, task::Poll, time
 
 use crate::rt::time::{sleep, Sleep};
 use crate::service::{IntoService, Service, Transform};
-use crate::util::{Either, Ready};
+use crate::util::Either;
 
 const ZERO: time::Duration = time::Duration::from_millis(0);
 
@@ -66,7 +66,7 @@ impl<E: PartialEq> PartialEq for TimeoutError<E> {
     }
 }
 
-impl<E> Timeout<E> {
+impl Timeout {
     pub fn new(timeout: time::Duration) -> Self {
         Timeout {
             timeout,
@@ -75,28 +75,23 @@ impl<E> Timeout<E> {
     }
 }
 
-impl<E> Clone for Timeout<E> {
+impl Clone for Timeout {
     fn clone(&self) -> Self {
         Timeout::new(self.timeout)
     }
 }
 
-impl<S, E> Transform<S> for Timeout<E>
+impl<S> Transform<S> for Timeout
 where
     S: Service,
 {
-    type Request = S::Request;
-    type Response = S::Response;
-    type Error = TimeoutError<S::Error>;
-    type InitError = E;
     type Transform = TimeoutService<S>;
-    type Future = Ready<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self, service: S) -> Self::Future {
-        Ready::Ok(TimeoutService {
+    fn new_transform(&self, service: S) -> Self::Transform {
+        TimeoutService {
             service,
             timeout: self.timeout,
-        })
+        }
     }
 }
 

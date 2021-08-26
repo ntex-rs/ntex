@@ -5,7 +5,6 @@ use std::{convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::R
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::service::{Service, Transform};
-use crate::util::Ready;
 use crate::web::dev::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
@@ -92,19 +91,14 @@ where
     S: Service<Request = WebRequest<E>, Response = WebResponse>,
     S::Future: 'static,
 {
-    type Request = WebRequest<E>;
-    type Response = WebResponse;
-    type Error = S::Error;
-    type InitError = ();
     type Transform = DefaultHeadersMiddleware<S, E>;
-    type Future = Ready<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self, service: S) -> Self::Future {
-        Ready::Ok(DefaultHeadersMiddleware {
+    fn new_transform(&self, service: S) -> Self::Transform {
+        DefaultHeadersMiddleware {
             service,
             inner: self.inner.clone(),
             _t: PhantomData,
-        })
+        }
     }
 }
 
@@ -173,9 +167,7 @@ mod tests {
     async fn test_default_headers() {
         let mw = DefaultHeaders::new()
             .header(CONTENT_TYPE, "0001")
-            .new_transform(ok_service())
-            .await
-            .unwrap();
+            .new_transform(ok_service());
 
         assert!(lazy(|cx| mw.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| mw.poll_shutdown(cx, true).is_ready()).await);
@@ -193,9 +185,7 @@ mod tests {
             };
         let mw = DefaultHeaders::new()
             .header(CONTENT_TYPE, "0001")
-            .new_transform(srv.into_service())
-            .await
-            .unwrap();
+            .new_transform(srv.into_service());
         let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
     }
@@ -207,9 +197,7 @@ mod tests {
         };
         let mw = DefaultHeaders::new()
             .content_type()
-            .new_transform(srv.into_service())
-            .await
-            .unwrap();
+            .new_transform(srv.into_service());
 
         let req = TestRequest::default().to_srv_request();
         let resp = mw.call(req).await.unwrap();
