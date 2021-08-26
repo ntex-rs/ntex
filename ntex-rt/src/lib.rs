@@ -6,6 +6,7 @@ mod arbiter;
 mod builder;
 mod runtime;
 mod system;
+pub mod time;
 
 pub use self::arbiter::Arbiter;
 pub use self::builder::{Builder, SystemRunner};
@@ -67,18 +68,6 @@ pub mod net {
 
     #[cfg(unix)]
     pub use self::unix::*;
-}
-
-/// Utilities for tracking time.
-pub mod time {
-    pub use tokio::time::Instant;
-    pub use tokio::time::{interval, interval_at, Interval};
-    pub use tokio::time::{sleep, sleep_until, Sleep};
-    #[doc(hidden)]
-    pub use tokio::time::{
-        sleep as delay_for, sleep_until as delay_until, Sleep as Delay,
-    };
-    pub use tokio::time::{timeout, Timeout};
 }
 
 /// Task management.

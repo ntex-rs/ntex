@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0] - 2021-08-26
+
+* Do not use/re-export tokio::time::Instant
+
 ## [0.2.2] - 2021-04-03
 
 * precise futures crate dependency
