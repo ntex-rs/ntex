@@ -1,12 +1,9 @@
-use ntex_util::future::Ready;
 use std::{future::Future, marker::PhantomData};
 
 use crate::{apply_fn, dev::Apply, Service, Transform};
 
 /// Use function as transform service
-pub fn fn_transform<S, F, R, Req, Res, Err>(
-    f: F,
-) -> impl Transform<S, Request = Req, Response = Res, Error = Err, InitError = ()> + Clone
+pub fn fn_transform<S, F, R, Req, Res, Err>(f: F) -> FnTransform<S, F, R, Req, Res, Err>
 where
     S: Service<Error = Err>,
     F: Fn(Req, &S) -> R + Clone,
@@ -42,15 +39,10 @@ where
     F: Fn(Req, &S) -> R + Clone,
     R: Future<Output = Result<Res, Err>>,
 {
-    type Request = Req;
-    type Response = Res;
-    type Error = Err;
     type Transform = Apply<S, F, R, Req, Res, Err>;
-    type InitError = ();
-    type Future = Ready<Self::Transform, Self::InitError>;
 
-    fn new_transform(&self, service: S) -> Self::Future {
-        Ready::Ok(apply_fn(service, self.f.clone()))
+    fn new_transform(&self, service: S) -> Self::Transform {
+        apply_fn(service, self.f.clone())
     }
 }
 
@@ -68,7 +60,7 @@ where
 #[cfg(test)]
 #[allow(clippy::redundant_clone)]
 mod tests {
-    use ntex_util::future::lazy;
+    use ntex_util::future::{lazy, Ready};
     use std::task::{Context, Poll};
 
     use super::*;
@@ -94,12 +86,7 @@ mod tests {
 
     #[ntex::test]
     async fn transform() {
-        let srv =
-            fn_transform::<Srv, _, _, _, _, _>(|i: usize, srv: &_| srv.call(i + 1))
-                .clone()
-                .new_transform(Srv)
-                .await
-                .unwrap();
+        let srv = fn_transform(|i: usize, srv: &Srv| srv.call(i + 1)).new_transform(Srv);
 
         let res = srv.call(10usize).await;
         assert!(res.is_ok());

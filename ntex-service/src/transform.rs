@@ -1,13 +1,12 @@
 use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use crate::transform_err::TransformMapInitErr;
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply transform to a service.
 pub fn apply<T, S, U>(t: T, factory: U) -> ApplyTransform<T, S>
 where
     S: ServiceFactory,
-    T: Transform<S::Service, InitError = S::InitError>,
+    T: Transform<S::Service>,
     U: IntoServiceFactory<S>,
 {
     ApplyTransform::new(t, factory.into_factory())
@@ -70,14 +69,9 @@ where
 /// where
 ///     S: Service,
 /// {
-///     type Request = S::Request;
-///     type Response = S::Response;
-///     type Error = TimeoutError<S::Error>;
-///     type InitError = S::Error;
 ///     type Transform = Timeout<S>;
-///     type Future = Ready<Result<Self::Transform, Self::InitError>>;
 ///
-///     fn new_transform(&self, service: S) -> Self::Future {
+///     fn new_transform(&self, service: S) -> Self::Transform {
 ///         ok(TimeoutService {
 ///             service,
 ///             timeout: self.timeout,
@@ -86,54 +80,20 @@ where
 /// }
 /// ```
 pub trait Transform<S> {
-    /// Requests handled by the service.
-    type Request;
-
-    /// Responses given by the service.
-    type Response;
-
-    /// Errors produced by the service.
-    type Error;
-
     /// The `TransformService` value created by this factory
-    type Transform: Service<
-        Request = Self::Request,
-        Response = Self::Response,
-        Error = Self::Error,
-    >;
-
-    /// Errors produced while building a transform service.
-    type InitError;
-
-    /// The future response value.
-    type Future: Future<Output = Result<Self::Transform, Self::InitError>>;
+    type Transform: Service;
 
     /// Creates and returns a new Transform component, asynchronously
-    fn new_transform(&self, service: S) -> Self::Future;
-
-    /// Map this transforms's factory error to a different error,
-    /// returning a new transform service factory.
-    fn map_init_err<F, E>(self, f: F) -> TransformMapInitErr<Self, S, F, E>
-    where
-        Self: Sized,
-        F: Fn(Self::InitError) -> E + Clone,
-    {
-        TransformMapInitErr::new(self, f)
-    }
+    fn new_transform(&self, service: S) -> Self::Transform;
 }
 
 impl<T, S> Transform<S> for Rc<T>
 where
     T: Transform<S>,
 {
-    type Request = T::Request;
-    type Response = T::Response;
-    type Error = T::Error;
-    type InitError = T::InitError;
     type Transform = T::Transform;
-    type Future = T::Future;
 
-    fn new_transform(&self, service: S) -> T::Future {
+    fn new_transform(&self, service: S) -> T::Transform {
         self.as_ref().new_transform(service)
     }
 }
@@ -144,10 +104,10 @@ pub struct ApplyTransform<T, S>(Rc<(T, S)>);
 impl<T, S> ApplyTransform<T, S>
 where
     S: ServiceFactory,
-    T: Transform<S::Service, InitError = S::InitError>,
+    T: Transform<S::Service>,
 {
     /// Create new `ApplyTransform` new service instance
-    fn new(t: T, service: S) -> Self {
+    pub(crate) fn new(t: T, service: S) -> Self {
         Self(Rc::new((t, service)))
     }
 }
@@ -161,23 +121,21 @@ impl<T, S> Clone for ApplyTransform<T, S> {
 impl<T, S> ServiceFactory for ApplyTransform<T, S>
 where
     S: ServiceFactory,
-    T: Transform<S::Service, InitError = S::InitError>,
+    T: Transform<S::Service>,
 {
-    type Request = T::Request;
-    type Response = T::Response;
-    type Error = T::Error;
+    type Request = <T::Transform as Service>::Request;
+    type Response = <T::Transform as Service>::Response;
+    type Error = <T::Transform as Service>::Error;
 
     type Config = S::Config;
     type Service = T::Transform;
-    type InitError = T::InitError;
+    type InitError = S::InitError;
     type Future = ApplyTransformFuture<T, S>;
 
     fn new_service(&self, cfg: S::Config) -> Self::Future {
         ApplyTransformFuture {
             store: self.0.clone(),
-            state: ApplyTransformFutureState::A {
-                fut: self.0.as_ref().1.new_service(cfg),
-            },
+            fut: self.0.as_ref().1.new_service(cfg),
         }
     }
 }
@@ -186,46 +144,27 @@ pin_project_lite::pin_project! {
     pub struct ApplyTransformFuture<T, S>
     where
         S: ServiceFactory,
-        T: Transform<S::Service, InitError = S::InitError>,
+        T: Transform<S::Service>,
     {
         store: Rc<(T, S)>,
         #[pin]
-        state: ApplyTransformFutureState<T, S>,
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[project = ApplyTransformFutureStateProject]
-    pub enum ApplyTransformFutureState<T, S>
-    where
-        S: ServiceFactory,
-        T: Transform<S::Service, InitError = S::InitError>,
-    {
-        A { #[pin] fut: S::Future },
-        B { #[pin] fut: T::Future },
+        fut: S::Future,
     }
 }
 
 impl<T, S> Future for ApplyTransformFuture<T, S>
 where
     S: ServiceFactory,
-    T: Transform<S::Service, InitError = S::InitError>,
+    T: Transform<S::Service>,
 {
-    type Output = Result<T::Transform, T::InitError>;
+    type Output = Result<T::Transform, S::InitError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().project();
+        let this = self.as_mut().project();
 
-        match this.state.as_mut().project() {
-            ApplyTransformFutureStateProject::A { fut } => match fut.poll(cx)? {
-                Poll::Ready(srv) => {
-                    let fut = this.store.0.new_transform(srv);
-                    this.state.set(ApplyTransformFutureState::B { fut });
-                    self.poll(cx)
-                }
-                Poll::Pending => Poll::Pending,
-            },
-            ApplyTransformFutureStateProject::B { fut } => fut.poll(cx),
+        match this.fut.poll(cx)? {
+            Poll::Ready(srv) => Poll::Ready(Ok(this.store.0.new_transform(srv))),
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -242,16 +181,10 @@ mod tests {
     struct Tr;
 
     impl<S: Service> Transform<S> for Tr {
-        type Request = S::Request;
-        type Response = S::Response;
-        type Error = S::Error;
-
         type Transform = Srv<S>;
-        type InitError = ();
-        type Future = Ready<Self::Transform, Self::InitError>;
 
-        fn new_transform(&self, service: S) -> Self::Future {
-            Ready::Ok(Srv(service))
+        fn new_transform(&self, service: S) -> Self::Transform {
+            Srv(service)
         }
     }
 
@@ -276,7 +209,7 @@ mod tests {
     #[ntex::test]
     async fn transform() {
         let factory = apply(
-            Rc::new(Tr.map_init_err(|_| ()).clone()),
+            Rc::new(Tr.clone()),
             fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)),
         )
         .clone();

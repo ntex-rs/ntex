@@ -1,5 +1,11 @@
 # Changes
 
+## [0.2.0-b.0] - 2021-08-26
+
+* Simplify Transform trait
+
+* Add PipelineFactory::apply() combinator
+
 ## [0.1.9] - 2021-06-03
 
 * Add rc wrapped service, `RcService`

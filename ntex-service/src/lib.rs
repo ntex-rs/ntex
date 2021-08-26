@@ -19,7 +19,6 @@ mod map_init_err;
 mod pipeline;
 mod then;
 mod transform;
-mod transform_err;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::fn_service::{
@@ -342,17 +341,10 @@ pub mod dev {
     pub use crate::fn_service::{
         FnMutService, FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
+    pub use crate::fn_transform::FnTransform;
     pub use crate::map::{Map, MapServiceFactory};
     pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrServiceFactory};
     pub use crate::map_init_err::MapInitErr;
     pub use crate::transform::ApplyTransform;
-    pub use crate::transform_err::TransformMapInitErr;
-}
-
-#[doc(hidden)]
-pub mod util {
-    pub use ntex_util::future::Either;
-    pub use ntex_util::future::Ready;
-    pub use ntex_util::future::{lazy, Lazy};
 }

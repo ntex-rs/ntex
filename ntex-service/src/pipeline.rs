@@ -7,6 +7,7 @@ use crate::map::{Map, MapServiceFactory};
 use crate::map_err::{MapErr, MapErrServiceFactory};
 use crate::map_init_err::MapInitErr;
 use crate::then::{ThenService, ThenServiceFactory};
+use crate::transform::{ApplyTransform, Transform};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Contruct new pipeline with one service in pipeline chain.
@@ -246,6 +247,18 @@ impl<T: ServiceFactory> PipelineFactory<T> {
     {
         PipelineFactory {
             factory: AndThenApplyFnFactory::new(self.factory, factory.into_factory(), f),
+        }
+    }
+
+    /// Apply transform to current service factory.
+    ///
+    /// Short version of `apply(transform, pipeline_factory(...))`
+    pub fn apply<U>(self, tr: U) -> PipelineFactory<ApplyTransform<U, T>>
+    where
+        U: Transform<T::Service>,
+    {
+        PipelineFactory {
+            factory: ApplyTransform::new(tr, self.factory),
         }
     }
 
