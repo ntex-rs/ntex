@@ -2,6 +2,8 @@
 
 ## [0.4.0-b.3] - 2021-08-xx
 
+* Add timer service
+
 * Use ntex-service 0.2
 
 ## [0.4.0-b.2] - 2021-08-14

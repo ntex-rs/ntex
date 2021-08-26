@@ -2,7 +2,7 @@ use std::{cell::Cell, cell::RefCell, ptr::copy_nonoverlapping, rc::Rc, time};
 
 use crate::framed::Timer;
 use crate::http::{Request, Response};
-use crate::rt::time::{sleep, sleep_until, Instant, Sleep};
+use crate::rt::time::{sleep, sleep_until, Sleep};
 use crate::service::boxed::BoxService;
 use crate::util::BytesMut;
 
@@ -156,7 +156,7 @@ impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
     }
 
     /// Keep-alive expire time
-    pub(super) fn keep_alive_expire(&self) -> Option<Instant> {
+    pub(super) fn keep_alive_expire(&self) -> Option<time::Instant> {
         if self.keep_alive.as_secs() != 0 {
             Some(self.timer.now() + self.keep_alive)
         } else {
@@ -164,7 +164,7 @@ impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
         }
     }
 
-    pub(super) fn now(&self) -> Instant {
+    pub(super) fn now(&self) -> time::Instant {
         self.timer.now()
     }
 }
@@ -187,7 +187,7 @@ impl Default for DateService {
 
 struct DateServiceInner {
     current: Cell<bool>,
-    current_time: Cell<Instant>,
+    current_time: Cell<time::Instant>,
     current_date: Cell<[u8; DATE_VALUE_LENGTH_HDR]>,
 }
 
@@ -195,14 +195,14 @@ impl DateServiceInner {
     fn new() -> Self {
         DateServiceInner {
             current: Cell::new(false),
-            current_time: Cell::new(Instant::now()),
+            current_time: Cell::new(time::Instant::now()),
             current_date: Cell::new(DATE_VALUE_DEFAULT),
         }
     }
 
     fn update(&self) {
         self.current.set(true);
-        self.current_time.set(Instant::now());
+        self.current_time.set(time::Instant::now());
 
         let mut bytes = DATE_VALUE_DEFAULT;
         let dt = httpdate::HttpDate::from(time::SystemTime::now()).to_string();
@@ -229,7 +229,7 @@ impl DateService {
         }
     }
 
-    fn now(&self) -> Instant {
+    fn now(&self) -> time::Instant {
         self.check_date();
         self.0.current_time.get()
     }

@@ -40,6 +40,7 @@ pub mod framed;
 pub mod http;
 pub mod server;
 pub mod testing;
+pub mod time;
 pub mod util;
 #[cfg(feature = "http-framework")]
 pub mod web;

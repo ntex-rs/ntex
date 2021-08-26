@@ -1,9 +1,8 @@
 use std::task::{Context, Poll};
-use std::{
-    cell::RefCell, convert::Infallible, future::Future, marker, pin::Pin, time::Duration,
-};
+use std::time::{Duration, Instant};
+use std::{cell::RefCell, convert::Infallible, future::Future, marker, pin::Pin};
 
-use crate::rt::time::{sleep_until, Instant, Sleep};
+use crate::rt::time::{sleep_until, Sleep};
 use crate::{util::Ready, Service, ServiceFactory};
 
 use super::time::{LowResTime, LowResTimeService};
@@ -89,7 +88,7 @@ where
     F: Fn() -> E,
 {
     pub fn new(ka: Duration, time: LowResTimeService, f: F) -> Self {
-        let expire = Instant::from_std(time.now() + ka);
+        let expire = time.now() + ka;
         KeepAliveService {
             f,
             ka,
@@ -117,7 +116,7 @@ where
 
         match Pin::new(&mut inner.delay).poll(cx) {
             Poll::Ready(_) => {
-                let now = Instant::from_std(self.time.now());
+                let now = self.time.now();
                 if inner.expire <= now {
                     Poll::Ready(Err((self.f)()))
                 } else {
@@ -132,7 +131,7 @@ where
     }
 
     fn call(&self, req: R) -> Self::Future {
-        self.inner.borrow_mut().expire = Instant::from_std(self.time.now() + self.ka);
+        self.inner.borrow_mut().expire = self.time.now() + self.ka;
         Ready::Ok(req)
     }
 }

@@ -6,7 +6,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
 use futures_core::Stream as FutStream;
 
-use crate::rt::time::{sleep_until, Instant, Sleep};
+use crate::rt::time::{sleep_until, Sleep};
 use crate::rt::{spawn, Arbiter};
 use crate::util::{counter::Counter, join_all};
 
@@ -350,9 +350,11 @@ impl Future for Worker {
                     info!("Graceful worker shutdown, {} connections", num);
                     self.state = WorkerState::Shutdown(
                         Box::pin(sleep_until(
-                            Instant::now() + time::Duration::from_secs(1),
+                            time::Instant::now() + time::Duration::from_secs(1),
                         )),
-                        Box::pin(sleep_until(Instant::now() + self.shutdown_timeout)),
+                        Box::pin(sleep_until(
+                            time::Instant::now() + self.shutdown_timeout,
+                        )),
                         Some(result),
                     );
                 } else {
@@ -441,7 +443,7 @@ impl Future for Worker {
                     Poll::Pending => (),
                     Poll::Ready(_) => {
                         *t1 = Box::pin(sleep_until(
-                            Instant::now() + time::Duration::from_secs(1),
+                            time::Instant::now() + time::Duration::from_secs(1),
                         ));
                         let _ = t1.as_mut().poll(cx);
                     }

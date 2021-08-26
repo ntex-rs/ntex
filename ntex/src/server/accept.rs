@@ -1,9 +1,11 @@
-use std::{io, sync::mpsc as sync_mpsc, sync::Arc, thread, time::Duration};
+use std::{
+    io, sync::mpsc as sync_mpsc, sync::Arc, thread, time::Duration, time::Instant,
+};
 
 use log::{error, info};
 use slab::Slab;
 
-use crate::rt::time::{sleep_until, Instant};
+use crate::rt::time::sleep_until;
 use crate::rt::System;
 
 use super::socket::{Listener, SocketAddr};

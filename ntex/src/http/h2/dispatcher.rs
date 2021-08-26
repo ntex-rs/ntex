@@ -1,6 +1,6 @@
 use std::task::{Context, Poll};
 use std::{
-    convert::TryFrom, future::Future, marker::PhantomData, net, pin::Pin, rc::Rc,
+    convert::TryFrom, future::Future, marker::PhantomData, net, pin::Pin, rc::Rc, time,
 };
 
 use h2::server::{Connection, SendResponse};
@@ -17,7 +17,7 @@ use crate::http::message::ResponseHead;
 use crate::http::payload::Payload;
 use crate::http::request::Request;
 use crate::http::response::Response;
-use crate::rt::time::{Instant, Sleep};
+use crate::rt::time::Sleep;
 use crate::util::{Bytes, BytesMut};
 use crate::Service;
 
@@ -30,7 +30,7 @@ pin_project_lite::pin_project! {
         connection: Connection<T, Bytes>,
         on_connect: Option<Box<dyn DataFactory>>,
         peer_addr: Option<net::SocketAddr>,
-        ka_expire: Instant,
+        ka_expire: time::Instant,
         ka_timer: Option<Sleep>,
         _t: PhantomData<B>,
     }
