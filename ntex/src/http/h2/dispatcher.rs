@@ -54,11 +54,11 @@ where
         // keep-alive timer
         let (ka_expire, ka_timer) = if let Some(delay) = timeout {
             let expire =
-                config.timer.now() + time::Duration::from_millis(config.keep_alive);
+                config.timer.now() + std::time::Duration::from(config.keep_alive);
             (expire, Some(delay))
         } else if let Some(delay) = config.keep_alive_timer() {
             let expire =
-                config.timer.now() + time::Duration::from_millis(config.keep_alive);
+                config.timer.now() + std::time::Duration::from(config.keep_alive);
             (expire, Some(delay))
         } else {
             (config.now(), None)

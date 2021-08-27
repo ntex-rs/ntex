@@ -11,6 +11,7 @@ use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::service::HttpService;
 use crate::service::{boxed, IntoService, IntoServiceFactory, Service, ServiceFactory};
+use crate::time::{Duration, Seconds};
 
 /// A http service builder
 ///
@@ -18,9 +19,9 @@ use crate::service::{boxed, IntoService, IntoServiceFactory, Service, ServiceFac
 /// builder-like pattern.
 pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
     keep_alive: KeepAlive,
-    client_timeout: u64,
-    client_disconnect: u64,
-    handshake_timeout: u64,
+    client_timeout: Duration,
+    client_disconnect: Seconds,
+    handshake_timeout: Duration,
     lw: u16,
     read_hw: u16,
     write_hw: u16,
@@ -35,10 +36,10 @@ impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
     /// Create instance of `ServiceConfigBuilder`
     pub fn new() -> Self {
         HttpServiceBuilder {
-            keep_alive: KeepAlive::Timeout(5),
-            client_timeout: 3,
-            client_disconnect: 3,
-            handshake_timeout: 5,
+            keep_alive: KeepAlive::Timeout(Seconds(5)),
+            client_timeout: Duration::from_secs(3),
+            client_disconnect: Seconds(3),
+            handshake_timeout: Duration::from_secs(5),
             lw: 1024,
             read_hw: 8 * 1024,
             write_hw: 8 * 1024,
@@ -77,7 +78,7 @@ where
         self
     }
 
-    /// Set server client timeout in seconds for first request.
+    /// Set server client timeout for first request.
     ///
     /// Defines a timeout for reading client request header. If a client does not transmit
     /// the entire set headers within this time, the request is terminated with
@@ -86,8 +87,8 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default client timeout is set to 3 seconds.
-    pub fn client_timeout(mut self, val: u16) -> Self {
-        self.client_timeout = val as u64;
+    pub fn client_timeout(mut self, timeout: Seconds) -> Self {
+        self.client_timeout = timeout.into();
         self
     }
 
@@ -99,19 +100,19 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default disconnect timeout is set to 3 seconds.
-    pub fn disconnect_timeout(mut self, val: u16) -> Self {
-        self.client_disconnect = val as u64;
+    pub fn disconnect_timeout(mut self, timeout: Seconds) -> Self {
+        self.client_disconnect = timeout;
         self
     }
 
-    /// Set server ssl handshake timeout in seconds.
+    /// Set server ssl handshake timeout.
     ///
     /// Defines a timeout for connection ssl handshake negotiation.
     /// To disable timeout set value to 0.
     ///
     /// By default handshake timeout is set to 5 seconds.
-    pub fn ssl_handshake_timeout(mut self, val: u16) -> Self {
-        self.handshake_timeout = val as u64;
+    pub fn ssl_handshake_timeout(mut self, timeout: Seconds) -> Self {
+        self.handshake_timeout = timeout.into();
         self
     }
 

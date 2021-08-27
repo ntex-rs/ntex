@@ -4,6 +4,7 @@ use crate::codec::{AsyncRead, AsyncWrite};
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::http::{Protocol, Uri};
 use crate::service::{apply_fn, boxed, Service};
+use crate::time;
 use crate::util::timeout::{TimeoutError, TimeoutService};
 use crate::util::{Either, Ready};
 
@@ -37,10 +38,10 @@ type BoxedConnector =
 ///      .finish();
 /// ```
 pub struct Connector {
-    timeout: u64,
+    timeout: time::Duration,
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
-    disconnect_timeout_ms: u64,
+    disconnect_timeout: time::Duration,
     limit: usize,
     connector: BoxedConnector,
     ssl_connector: Option<BoxedConnector>,
@@ -64,10 +65,10 @@ impl Connector {
                     .map_err(ConnectError::from),
             ),
             ssl_connector: None,
-            timeout: 1_000,
+            timeout: time::Duration::from_millis(1_000),
             conn_lifetime: Duration::from_secs(75),
             conn_keep_alive: Duration::from_secs(15),
-            disconnect_timeout_ms: 3_000,
+            disconnect_timeout: time::Duration::from_millis(3_000),
             limit: 100,
         };
 
@@ -99,12 +100,12 @@ impl Connector {
 }
 
 impl Connector {
-    /// Connection timeout in milliseconds.
+    /// Connection timeout.
     ///
     /// i.e. max time to connect to remote host including dns name resolution.
     /// Set to 1 second by default.
-    pub fn timeout(mut self, timeout: u64) -> Self {
-        self.timeout = timeout;
+    pub fn timeout<T: Into<time::Duration>>(mut self, timeout: T) -> Self {
+        self.timeout = timeout.into();
         self
     }
 
@@ -179,16 +180,16 @@ impl Connector {
         self
     }
 
-    /// Set server connection disconnect timeout in milliseconds.
+    /// Set server connection disconnect timeout.
     ///
     /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
     /// within this time, the socket get dropped. This timeout affects only secure connections.
     ///
     /// To disable timeout set value to 0.
     ///
-    /// By default disconnect timeout is set to 3000 milliseconds.
-    pub fn disconnect_timeout(mut self, dur: u64) -> Self {
-        self.disconnect_timeout_ms = dur;
+    /// By default disconnect timeout is set to 3 seconds.
+    pub fn disconnect_timeout<T: Into<time::Duration>>(mut self, timeout: T) -> Self {
+        self.disconnect_timeout = timeout.into();
         self
     }
 
@@ -243,7 +244,7 @@ impl Connector {
                 srv,
                 self.conn_lifetime,
                 self.conn_keep_alive,
-                self.disconnect_timeout_ms,
+                self.disconnect_timeout,
                 self.limit,
             ))
         } else {
@@ -255,7 +256,7 @@ impl Connector {
                 tcp_service,
                 self.conn_lifetime,
                 self.conn_keep_alive,
-                self.disconnect_timeout_ms,
+                self.disconnect_timeout,
                 self.limit,
             ),
             ssl_pool,
@@ -265,14 +266,14 @@ impl Connector {
 
 fn connector(
     connector: BoxedConnector,
-    timeout: u64,
+    timeout: time::Duration,
 ) -> impl Service<
     Request = Connect,
     Response = (Box<dyn Io>, Protocol),
     Error = ConnectError,
     Future = impl Unpin,
 > + Unpin {
-    TimeoutService::from_millis(
+    TimeoutService::new(
         timeout,
         apply_fn(connector, |msg: Connect, srv| {
             srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr))

@@ -11,7 +11,7 @@ use ntex::http::test::server as test_server;
 use ntex::http::{body, HttpService, Method, Request, Response, StatusCode, Version};
 use ntex::service::{fn_service, ServiceFactory};
 use ntex::util::{Bytes, BytesMut};
-use ntex::web::error::InternalError;
+use ntex::{time::Seconds, web::error::InternalError};
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>
 where
@@ -444,7 +444,7 @@ async fn test_ssl_handshake_timeout() {
 
     let srv = test_server(move || {
         HttpService::build()
-            .ssl_handshake_timeout(1)
+            .ssl_handshake_timeout(Seconds(1))
             .h2(|_| ok::<_, io::Error>(Response::Ok().finish()))
             .openssl(ssl_acceptor())
             .map_err(|_| ())

@@ -4,7 +4,7 @@ use futures::future;
 use log::info;
 use ntex::http::header::HeaderValue;
 use ntex::http::{HttpService, Response};
-use ntex::server::Server;
+use ntex::{server::Server, time::Seconds};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
@@ -14,8 +14,8 @@ async fn main() -> io::Result<()> {
     Server::build()
         .bind("hello-world", "127.0.0.1:8080", || {
             HttpService::build()
-                .client_timeout(1000)
-                .disconnect_timeout(1000)
+                .client_timeout(Seconds(1))
+                .disconnect_timeout(Seconds(1))
                 .finish(|_req| {
                     info!("{:?}", _req);
                     let mut res = Response::Ok();

@@ -15,10 +15,10 @@ use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{header, HttpMessage, HttpService};
 use ntex::service::{map_config, pipeline_factory, Service};
-use ntex::util::Bytes;
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
 use ntex::web::{self, test, App, BodyEncoding, Error, HttpRequest, HttpResponse};
+use ntex::{time::Seconds, util::Bytes};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -58,7 +58,7 @@ async fn test_simple() {
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 
-    let mut response = srv.post("/").timeout(30).send().await.unwrap();
+    let mut response = srv.post("/").timeout(Seconds(30)).send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -173,10 +173,13 @@ async fn test_timeout() {
             ntex::connect::Connector::new()
                 .map(|sock| (sock, ntex::http::Protocol::Http1)),
         )
-        .timeout(15_000)
+        .timeout(Seconds(15))
         .finish();
 
-    let client = Client::build().connector(connector).timeout(1).finish();
+    let client = Client::build()
+        .connector(connector)
+        .timeout(Seconds(1))
+        .finish();
 
     let request = client.get(srv.url("/")).send();
     match request.await {
@@ -194,8 +197,8 @@ async fn test_timeout_override() {
         })))
     });
 
-    let client = Client::build().timeout(50).finish();
-    let request = client.get(srv.url("/")).timeout(1).send();
+    let client = Client::build().timeout(Seconds(50)).finish();
+    let request = client.get(srv.url("/")).timeout(Seconds(1)).send();
     match request.await {
         Err(SendRequestError::Timeout) => (),
         _ => panic!(),
@@ -224,7 +227,7 @@ async fn test_connection_reuse() {
         )
     });
 
-    let client = Client::build().timeout(10).finish();
+    let client = Client::build().timeout(Seconds(10)).finish();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -262,7 +265,7 @@ async fn test_connection_force_close() {
         )
     });
 
-    let client = Client::build().timeout(10).finish();
+    let client = Client::build().timeout(Seconds(10)).finish();
 
     // req 1
     let request = client.get(srv.url("/")).force_close().send();
@@ -300,7 +303,7 @@ async fn test_connection_server_close() {
         )
     });
 
-    let client = Client::build().timeout(10).finish();
+    let client = Client::build().timeout(Seconds(10)).finish();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -340,7 +343,7 @@ async fn test_connection_wait_queue() {
     });
 
     let client = Client::build()
-        .timeout(30)
+        .timeout(Seconds(30))
         .connector(Connector::default().limit(1).finish())
         .finish();
 
@@ -388,7 +391,7 @@ async fn test_connection_wait_queue_force_close() {
     });
 
     let client = Client::build()
-        .timeout(30)
+        .timeout(Seconds(30))
         .connector(Connector::default().limit(1).finish())
         .finish();
 
@@ -441,7 +444,7 @@ async fn test_no_decompress() {
             })))
     });
 
-    let client = Client::build().timeout(30).finish();
+    let client = Client::build().timeout(Seconds(30)).finish();
 
     let mut res = client
         .get(srv.url("/"))
@@ -600,7 +603,7 @@ async fn test_client_brotli_encoding_large_random() {
     assert_eq!(bytes, Bytes::from(data.clone()));
 
     // frozen request
-    let request = srv.post("/").timeout(30).freeze().unwrap();
+    let request = srv.post("/").timeout(Seconds(30)).freeze().unwrap();
     assert_eq!(request.get_method(), http::Method::POST);
     assert_eq!(request.get_uri(), srv.url("/").as_str());
     let mut response = request.send_body(data.clone()).await.unwrap();
@@ -638,7 +641,7 @@ async fn test_client_brotli_encoding_large_random() {
     assert_eq!(bytes, Bytes::from(data.clone()));
 
     // frozen request
-    let request = srv.post("/").timeout(30).freeze().unwrap();
+    let request = srv.post("/").timeout(Seconds(30)).freeze().unwrap();
     let mut response = request
         .send_stream(once(ok::<_, JsonPayloadError>(Bytes::from(data.clone()))))
         .await
@@ -826,7 +829,7 @@ async fn client_read_until_eof() {
 
     // client request
     let req = Client::build()
-        .timeout(30)
+        .timeout(Seconds(30))
         .finish()
         .get(format!("http://{}/", addr).as_str());
     let mut response = req.send().await.unwrap();

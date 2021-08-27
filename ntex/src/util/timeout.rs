@@ -2,13 +2,10 @@
 //!
 //! If the response does not complete within the specified timeout, the response
 //! will be aborted.
-use std::{
-    convert::TryInto, fmt, future::Future, marker, pin::Pin, task::Context, task::Poll,
-    time,
-};
+use std::{fmt, future::Future, marker, pin::Pin, task::Context, task::Poll};
 
 use crate::service::{IntoService, Service, Transform};
-use crate::time::Sleep;
+use crate::time::{sleep, Duration, Sleep};
 use crate::util::Either;
 
 /// Applies a timeout to requests.
@@ -16,7 +13,7 @@ use crate::util::Either;
 /// Timeout transform is disabled if timeout is set to 0
 #[derive(Debug)]
 pub struct Timeout<E = ()> {
-    timeout: u64,
+    timeout: Duration,
     _t: marker::PhantomData<E>,
 }
 
@@ -68,9 +65,9 @@ impl<E: PartialEq> PartialEq for TimeoutError<E> {
 }
 
 impl Timeout {
-    pub fn new(timeout: time::Duration) -> Self {
+    pub fn new<T: Into<Duration>>(timeout: T) -> Self {
         Timeout {
-            timeout: timeout.as_millis() as u64,
+            timeout: timeout.into(),
             _t: marker::PhantomData,
         }
     }
@@ -103,29 +100,20 @@ where
 #[derive(Debug, Clone)]
 pub struct TimeoutService<S> {
     service: S,
-    timeout: u64,
+    timeout: Duration,
 }
 
 impl<S> TimeoutService<S>
 where
     S: Service,
 {
-    pub fn new<U>(timeout: time::Duration, service: U) -> Self
+    pub fn new<T, U>(timeout: T, service: U) -> Self
     where
+        T: Into<Duration>,
         U: IntoService<S>,
     {
         TimeoutService {
-            timeout: timeout.as_millis().try_into().unwrap(),
-            service: service.into_service(),
-        }
-    }
-
-    pub fn from_millis<U>(timeout: u64, service: U) -> Self
-    where
-        U: IntoService<S>,
-    {
-        TimeoutService {
-            timeout,
+            timeout: timeout.into(),
             service: service.into_service(),
         }
     }
@@ -151,14 +139,14 @@ where
     }
 
     fn call(&self, request: S::Request) -> Self::Future {
-        if self.timeout == 0 {
+        if self.timeout.is_zero() {
             Either::Right(TimeoutServiceResponse2 {
                 fut: self.service.call(request),
             })
         } else {
             Either::Left(TimeoutServiceResponse {
                 fut: self.service.call(request),
-                sleep: Sleep::new(self.timeout),
+                sleep: sleep(self.timeout),
             })
         }
     }
@@ -182,7 +170,7 @@ where
     type Output = Result<T::Response, TimeoutError<T::Error>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
+        let this = self.project();
 
         // First, try polling the future
         match this.fut.poll(cx) {
@@ -192,7 +180,7 @@ where
         }
 
         // Now check the sleep
-        match Pin::new(&mut this.sleep).poll(cx) {
+        match this.sleep.poll_elapsed(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(_) => Poll::Ready(Err(TimeoutError::Timeout)),
         }
@@ -259,7 +247,7 @@ mod tests {
         }
 
         fn call(&self, _: ()) -> Self::Future {
-            let fut = crate::time::sleep_duration(self.0);
+            let fut = crate::time::sleep(self.0);
             Box::pin(async move {
                 let _ = fut.await;
                 Ok::<_, SrvError>(())

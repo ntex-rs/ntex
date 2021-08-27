@@ -15,7 +15,7 @@ use ntex::http::test::server as test_server;
 use ntex::http::{body, HttpService, Method, Request, Response, StatusCode, Version};
 use ntex::service::{fn_factory_with_config, fn_service};
 use ntex::util::{Bytes, BytesMut};
-use ntex::web::error::InternalError;
+use ntex::{time::Seconds, web::error::InternalError};
 
 async fn load_body<S>(mut stream: S) -> Result<BytesMut, PayloadError>
 where
@@ -150,14 +150,14 @@ async fn test_h2_content_length() {
         for i in 0..1 {
             let req = srv
                 .srequest(Method::GET, &format!("/{}", i))
-                .timeout(30)
+                .timeout(30_000)
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
 
             let req = srv
                 .srequest(Method::HEAD, &format!("/{}", i))
-                .timeout(100)
+                .timeout(100_000)
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
@@ -166,7 +166,7 @@ async fn test_h2_content_length() {
         for i in 1..3 {
             let req = srv
                 .srequest(Method::GET, &format!("/{}", i))
-                .timeout(30)
+                .timeout(30_000)
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), Some(&value));
@@ -445,7 +445,7 @@ async fn test_ssl_handshake_timeout() {
 
     let srv = test_server(move || {
         HttpService::build()
-            .ssl_handshake_timeout(1)
+            .ssl_handshake_timeout(Seconds(1))
             .h2(|_| ok::<_, io::Error>(Response::Ok().finish()))
             .rustls(ssl_acceptor())
     });

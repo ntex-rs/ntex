@@ -12,7 +12,9 @@ use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::rt::net::TcpStream;
-use crate::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
+use crate::{
+    pipeline_factory, time::Duration, IntoServiceFactory, Service, ServiceFactory,
+};
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;
@@ -27,7 +29,7 @@ pub struct H1Service<T, S, B, X = ExpectHandler, U = UpgradeHandler<T>> {
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_request: RefCell<Option<OnRequest<T>>>,
     #[allow(dead_code)]
-    handshake_timeout: u64,
+    handshake_timeout: Duration,
     _t: marker::PhantomData<(T, B)>,
 }
 
@@ -137,7 +139,7 @@ mod openssl {
         > {
             pipeline_factory(
                 Acceptor::new(acceptor)
-                    .timeout((self.handshake_timeout as u64) * 1000)
+                    .timeout(self.handshake_timeout)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
@@ -191,7 +193,7 @@ mod rustls {
         > {
             pipeline_factory(
                 Acceptor::new(config)
-                    .timeout((self.handshake_timeout as u64) * 1000)
+                    .timeout(self.handshake_timeout)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )

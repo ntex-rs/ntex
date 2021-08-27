@@ -2,7 +2,7 @@ use std::{convert::TryFrom, fmt, rc::Rc};
 
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::Service;
+use crate::{time, Service};
 
 use super::connect::ConnectorWrapper;
 use super::error::ConnectError;
@@ -33,7 +33,7 @@ impl ClientBuilder {
             max_redirects: 10,
             config: ClientConfig {
                 headers: HeaderMap::new(),
-                timeout: 5_000,
+                timeout: time::Duration::from_millis(5_000),
                 connector: Box::new(ConnectorWrapper(Connector::default().finish())),
             },
         }
@@ -51,18 +51,18 @@ impl ClientBuilder {
         self
     }
 
-    /// Set request timeout in seconds
+    /// Set request timeout.
     ///
     /// Request timeout is the total time before a response must be received.
     /// Default value is 5 seconds.
-    pub fn timeout(mut self, timeout: u16) -> Self {
-        self.config.timeout = ((timeout as u64) * 1000) as u64;
+    pub fn timeout<T: Into<time::Duration>>(mut self, timeout: T) -> Self {
+        self.config.timeout = timeout.into();
         self
     }
 
     /// Disable request timeout.
     pub fn disable_timeout(mut self) -> Self {
-        self.config.timeout = 0;
+        self.config.timeout = time::Duration::ZERO;
         self
     }
 

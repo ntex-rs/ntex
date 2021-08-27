@@ -7,7 +7,7 @@ use std::{
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use crate::framed::{DispatchItem, Read, ReadTask, State, Timer, Write, WriteTask};
 use crate::service::{IntoService, Service};
-use crate::util::Either;
+use crate::{time::Seconds, util::Either};
 
 type Response<U> = <U as Encoder>::Item;
 
@@ -170,7 +170,7 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default disconnect timeout is set to 1 seconds.
-    pub fn disconnect_timeout(self, val: u16) -> Self {
+    pub fn disconnect_timeout(self, val: Seconds) -> Self {
         self.inner.state.set_disconnect_timeout(val);
         self
     }
@@ -615,7 +615,7 @@ mod tests {
             }),
         );
         crate::rt::spawn(async move {
-            let _ = disp.disconnect_timeout(25).await;
+            let _ = disp.disconnect_timeout(Seconds(1)).await;
         });
 
         let buf = client.read().await.unwrap();
@@ -629,7 +629,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         st.close();
-        sleep(200).await;
+        sleep(1100).await;
         assert!(client.is_server_dropped());
     }
 
@@ -772,7 +772,7 @@ mod tests {
             let _ = disp.keepalive_timeout(0).keepalive_timeout(1).await;
         });
 
-        state.set_disconnect_timeout(1);
+        state.set_disconnect_timeout(Seconds(1));
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));

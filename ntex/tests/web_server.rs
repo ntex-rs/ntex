@@ -16,7 +16,7 @@ use ntex::http::header::{
     TRANSFER_ENCODING,
 };
 use ntex::http::{Method, StatusCode};
-use ntex::rt::time::{sleep, Sleep};
+use ntex::time::{sleep, Seconds, Sleep};
 use ntex::util::Bytes;
 
 use ntex::web::middleware::Compress;
@@ -882,7 +882,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     // client request
     let req = srv
         .post("/")
-        .timeout(10)
+        .timeout(10_000)
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
@@ -933,7 +933,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
     // client request
     let req = srv
         .post("/")
-        .timeout(10)
+        .timeout(10_000)
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
@@ -984,7 +984,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
     // client request
     let req = srv
         .post("/")
-        .timeout(10)
+        .timeout(10_000)
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
@@ -1054,7 +1054,7 @@ async fn test_server_cookies() {
 async fn test_slow_request() {
     use std::net;
 
-    let srv = test::server_with(test::config().client_timeout(1), || {
+    let srv = test::server_with(test::config().client_timeout(Seconds(1)), || {
         App::new()
             .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
     });

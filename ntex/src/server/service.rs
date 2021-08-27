@@ -5,9 +5,9 @@ use std::{
 
 use log::error;
 
-use crate::rt::spawn;
 use crate::service::{Service, ServiceFactory};
 use crate::util::{counter::CounterGuard, Ready};
+use crate::{rt::spawn, time::Duration};
 
 use super::socket::{FromStream, Stream};
 use super::Token;
@@ -17,7 +17,7 @@ pub(super) enum ServerMessage {
     /// New stream
     Connect(Stream),
     /// Gracefull shutdown in millis
-    Shutdown(u64),
+    Shutdown(Duration),
     /// Force shutdown
     ForceShutdown,
 }

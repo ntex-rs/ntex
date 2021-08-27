@@ -7,7 +7,7 @@ use coo_kie::{Cookie, CookieJar};
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::rt::{net::TcpStream, System};
 use crate::server::{Server, StreamServiceFactory};
-use crate::util::Bytes;
+use crate::{time::Seconds, util::Bytes};
 
 use super::client::error::WsClientError;
 use super::client::{Client, ClientRequest, ClientResponse, Connector};
@@ -249,11 +249,14 @@ pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
             }
             #[cfg(not(feature = "openssl"))]
             {
-                Connector::default().timeout(30).finish()
+                Connector::default().timeout(30_000).finish()
             }
         };
 
-        Client::build().timeout(30).connector(connector).finish()
+        Client::build()
+            .timeout(Seconds(30))
+            .connector(connector)
+            .finish()
     };
 
     TestServer {

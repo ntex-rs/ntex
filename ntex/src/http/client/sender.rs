@@ -8,7 +8,7 @@ use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::RequestHeadType;
 use crate::time::{sleep, Sleep};
-use crate::{util::Bytes, Stream};
+use crate::{time, util::Bytes, Stream};
 
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
@@ -58,14 +58,9 @@ impl SendClientRequest {
     pub(crate) fn new(
         send: Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>>>>,
         response_decompress: bool,
-        timeout: u64,
+        timeout: time::Duration,
     ) -> SendClientRequest {
-        let delay = if timeout != 0 {
-            Some(sleep(timeout))
-        } else {
-            None
-        };
-        SendClientRequest::Fut(send, delay, response_decompress)
+        SendClientRequest::Fut(send, timeout.map(sleep), response_decompress)
     }
 }
 
@@ -134,14 +129,14 @@ impl RequestHeadType {
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        mut timeout: u64,
+        mut timeout: time::Duration,
         config: &ClientConfig,
         body: B,
     ) -> SendClientRequest
     where
         B: Into<Body>,
     {
-        if timeout == 0 {
+        if timeout.is_zero() {
             timeout = config.timeout;
         }
 
@@ -156,7 +151,7 @@ impl RequestHeadType {
         mut self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: u64,
+        timeout: time::Duration,
         config: &ClientConfig,
         value: &T,
     ) -> SendClientRequest {
@@ -183,7 +178,7 @@ impl RequestHeadType {
         mut self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: u64,
+        timeout: time::Duration,
         config: &ClientConfig,
         value: &T,
     ) -> SendClientRequest {
@@ -213,7 +208,7 @@ impl RequestHeadType {
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: u64,
+        timeout: time::Duration,
         config: &ClientConfig,
         stream: S,
     ) -> SendClientRequest
@@ -234,7 +229,7 @@ impl RequestHeadType {
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: u64,
+        timeout: time::Duration,
         config: &ClientConfig,
     ) -> SendClientRequest {
         self.send_body(addr, response_decompress, timeout, config, Body::Empty)

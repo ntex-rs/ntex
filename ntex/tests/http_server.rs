@@ -10,17 +10,15 @@ use ntex::http::{
     body, header, HttpService, KeepAlive, Method, Request, Response, StatusCode,
 };
 use ntex::rt::time::sleep;
-use ntex::service::fn_service;
-use ntex::util::Bytes;
-use ntex::web::error;
+use ntex::{service::fn_service, time::Seconds, util::Bytes, web::error};
 
 #[ntex::test]
 async fn test_h1() {
     let srv = test_server(|| {
         HttpService::build()
             .keep_alive(KeepAlive::Disabled)
-            .client_timeout(1000)
-            .disconnect_timeout(1000)
+            .client_timeout(Seconds(1))
+            .disconnect_timeout(Seconds(1))
             .h1(|req: Request| {
                 assert!(req.peer_addr().is_some());
                 future::ok::<_, io::Error>(Response::Ok().finish())
@@ -37,8 +35,8 @@ async fn test_h1_2() {
     let srv = test_server(|| {
         HttpService::build()
             .keep_alive(KeepAlive::Disabled)
-            .client_timeout(1000)
-            .disconnect_timeout(1000)
+            .client_timeout(Seconds(1))
+            .disconnect_timeout(Seconds(1))
             .finish(|req: Request| {
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), http::Version::HTTP_11);
@@ -157,7 +155,7 @@ async fn test_chunked_payload() {
 async fn test_slow_request() {
     let srv = test_server(|| {
         HttpService::build()
-            .client_timeout(1)
+            .client_timeout(Seconds(1))
             .finish(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
             .tcp()
     });

@@ -1,9 +1,11 @@
 //! Utilities for tracking time.
 
-use std::{convert::TryInto, future::Future, pin::Pin, task, task::Poll, time};
+use std::{future::Future, pin::Pin, task, task::Poll};
 
+mod types;
 mod wheel;
 
+pub use self::types::{Duration, Seconds};
 pub use self::wheel::TimerHandle;
 
 /// Waits until `duration` has elapsed.
@@ -12,21 +14,8 @@ pub use self::wheel::TimerHandle;
 /// operates at 16.5 millisecond granularity and should not be used for tasks that
 /// require high-resolution timers.
 #[inline]
-pub fn sleep(millis: u64) -> Sleep {
-    Sleep::new(millis)
-}
-
-/// Waits until `duration` has elapsed.
-///
-/// No work is performed while awaiting on the sleep future to complete. `Sleep`
-/// operates at 16.5 millisecond granularity and should not be used for tasks that
-/// require high-resolution timers.
-#[inline]
-pub fn sleep_duration(duration: time::Duration) -> Sleep {
-    Sleep::new(duration.as_millis().try_into().unwrap_or_else(|_| {
-        log::error!("Duration is too large {:?}", duration);
-        1 << 31
-    }))
+pub fn sleep<T: Into<Duration>>(dur: T) -> Sleep {
+    Sleep::new(dur.into().0)
 }
 
 /// Require a `Future` to complete before the specified duration has elapsed.
@@ -34,11 +23,13 @@ pub fn sleep_duration(duration: time::Duration) -> Sleep {
 /// If the future completes before the duration has elapsed, then the completed
 /// value is returned. Otherwise, an error is returned and the future is
 /// canceled.
-pub fn timeout<T>(millis: u64, future: T) -> Timeout<T>
+#[inline]
+pub fn timeout<T, U>(dur: U, future: T) -> Timeout<T>
 where
     T: Future,
+    U: Into<Duration>,
 {
-    Timeout::new_with_delay(future, Sleep::new(millis))
+    Timeout::new_with_delay(future, Sleep::new(dur.into().0))
 }
 
 /// Future returned by [`sleep`](sleep).

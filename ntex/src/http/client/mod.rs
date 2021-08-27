@@ -45,6 +45,7 @@ pub use self::test::TestResponse;
 
 use crate::http::error::HttpError;
 use crate::http::{HeaderMap, Method, RequestHead, Uri};
+use crate::time;
 
 use self::connect::{Connect as InnerConnect, ConnectorWrapper};
 
@@ -77,7 +78,7 @@ pub struct Client(Rc<ClientConfig>);
 pub(self) struct ClientConfig {
     pub(self) connector: Box<dyn InnerConnect>,
     pub(self) headers: HeaderMap,
-    pub(self) timeout: u64,
+    pub(self) timeout: time::Duration,
 }
 
 impl Default for Client {
@@ -85,7 +86,7 @@ impl Default for Client {
         Client(Rc::new(ClientConfig {
             connector: Box::new(ConnectorWrapper(Connector::default().finish())),
             headers: HeaderMap::new(),
-            timeout: 5_000,
+            timeout: time::Duration::from_millis(5_000),
         }))
     }
 }

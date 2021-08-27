@@ -13,6 +13,7 @@ use crate::http::{
 #[cfg(unix)]
 use crate::pipeline_factory;
 use crate::server::{Server, ServerBuilder};
+use crate::time::Seconds;
 use crate::{map_config, IntoServiceFactory, Service, ServiceFactory};
 
 use super::config::AppConfig;
@@ -20,9 +21,9 @@ use super::config::AppConfig;
 struct Config {
     host: Option<String>,
     keep_alive: KeepAlive,
-    client_timeout: u16,
-    client_disconnect: u16,
-    handshake_timeout: u16,
+    client_timeout: Seconds,
+    client_disconnect: Seconds,
+    handshake_timeout: Seconds,
     lw: u16,
     read_hw: u16,
     write_hw: u16,
@@ -81,10 +82,10 @@ where
             factory,
             config: Arc::new(Mutex::new(Config {
                 host: None,
-                keep_alive: KeepAlive::Timeout(5),
-                client_timeout: 5000,
-                client_disconnect: 5000,
-                handshake_timeout: 5000,
+                keep_alive: KeepAlive::Timeout(Seconds(5)),
+                client_timeout: Seconds(5),
+                client_disconnect: Seconds(5),
+                handshake_timeout: Seconds(5),
                 lw: 1024,
                 read_hw: 8 * 1024,
                 write_hw: 8 * 1024,
@@ -159,7 +160,7 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default client timeout is set to 5 seconds.
-    pub fn client_timeout(self, val: u16) -> Self {
+    pub fn client_timeout(self, val: Seconds) -> Self {
         self.config.lock().unwrap().client_timeout = val;
         self
     }
@@ -172,7 +173,7 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default client timeout is set to 5 seconds.
-    pub fn disconnect_timeout(self, val: u16) -> Self {
+    pub fn disconnect_timeout(self, val: Seconds) -> Self {
         self.config.lock().unwrap().client_disconnect = val;
         self
     }
@@ -183,7 +184,7 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default handshake timeout is set to 5 seconds.
-    pub fn ssl_handshake_timeout(self, val: u16) -> Self {
+    pub fn ssl_handshake_timeout(self, val: Seconds) -> Self {
         self.config.lock().unwrap().handshake_timeout = val;
         self
     }
@@ -223,7 +224,7 @@ where
     /// dropped.
     ///
     /// By default shutdown timeout sets to 30 seconds.
-    pub fn shutdown_timeout(mut self, sec: u64) -> Self {
+    pub fn shutdown_timeout(mut self, sec: Seconds) -> Self {
         self.builder = self.builder.shutdown_timeout(sec);
         self
     }

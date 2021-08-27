@@ -1,12 +1,12 @@
 use std::task::{Context, Poll};
-use std::{error::Error, fmt, future::Future, io, marker, pin::Pin};
+use std::{error::Error, fmt, future::Future, io, marker::PhantomData, pin::Pin};
 
 pub use open_ssl::ssl::{self, AlpnError, Ssl, SslAcceptor, SslAcceptorBuilder};
 pub use tokio_openssl::SslStream;
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::service::{Service, ServiceFactory};
-use crate::time::{sleep, Sleep};
+use crate::time::{sleep, Duration, Sleep};
 use crate::util::{counter::Counter, counter::CounterGuard, Ready};
 
 use super::MAX_SSL_ACCEPT_COUNTER;
@@ -16,8 +16,8 @@ use super::MAX_SSL_ACCEPT_COUNTER;
 /// `openssl` feature enables `Acceptor` type
 pub struct Acceptor<T: AsyncRead + AsyncWrite> {
     acceptor: SslAcceptor,
-    timeout: u64,
-    io: marker::PhantomData<T>,
+    timeout: Duration,
+    io: PhantomData<T>,
 }
 
 impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
@@ -25,16 +25,16 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     pub fn new(acceptor: SslAcceptor) -> Self {
         Acceptor {
             acceptor,
-            timeout: 5_000,
-            io: marker::PhantomData,
+            timeout: Duration::from_millis(5_000),
+            io: PhantomData,
         }
     }
 
-    /// Set handshake timeout in milliseconds
+    /// Set handshake timeout.
     ///
     /// Default is set to 5 seconds.
-    pub fn timeout(mut self, time: u64) -> Self {
-        self.timeout = time;
+    pub fn timeout<U: Into<Duration>>(mut self, timeout: U) -> Self {
+        self.timeout = timeout.into();
         self
     }
 }
@@ -44,7 +44,7 @@ impl<T: AsyncRead + AsyncWrite> Clone for Acceptor<T> {
         Self {
             acceptor: self.acceptor.clone(),
             timeout: self.timeout,
-            io: marker::PhantomData,
+            io: PhantomData,
         }
     }
 }
@@ -67,7 +67,7 @@ where
                 acceptor: self.acceptor.clone(),
                 conns: conns.priv_clone(),
                 timeout: self.timeout,
-                io: marker::PhantomData,
+                io: PhantomData,
             })
         })
     }
@@ -76,8 +76,8 @@ where
 pub struct AcceptorService<T> {
     acceptor: SslAcceptor,
     conns: Counter,
-    timeout: u64,
-    io: marker::PhantomData<T>,
+    timeout: Duration,
+    io: PhantomData<T>,
 }
 
 impl<T> Service for AcceptorService<T>
@@ -105,11 +105,7 @@ where
         AcceptorServiceResponse {
             _guard: self.conns.get(),
             io: None,
-            delay: if self.timeout == 0 {
-                None
-            } else {
-                Some(sleep(self.timeout))
-            },
+            delay: self.timeout.map(|t| sleep(t)),
             io_factory: Some(SslStream::new(ssl, req)),
         }
     }

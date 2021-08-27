@@ -1,5 +1,4 @@
-use std::task::{Context, Poll};
-use std::{future::Future, io, mem, net, pin::Pin};
+use std::{future::Future, io, mem, net, pin::Pin, task::Context, task::Poll};
 
 use async_channel::{unbounded, Receiver};
 use async_oneshot as oneshot;
@@ -8,7 +7,7 @@ use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::rt::{net::TcpStream, spawn, System};
-use crate::{time::sleep, util::join_all};
+use crate::{time::sleep, time::Duration, util::join_all};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfiguredService, ServiceConfig};
@@ -30,7 +29,7 @@ pub struct ServerBuilder {
     sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
     exit: bool,
-    shutdown_timeout: u64,
+    shutdown_timeout: Duration,
     no_signals: bool,
     cmd: Receiver<ServerCommand>,
     server: Server,
@@ -58,7 +57,7 @@ impl ServerBuilder {
             accept: AcceptLoop::new(server.clone()),
             backlog: 2048,
             exit: false,
-            shutdown_timeout: 30_000,
+            shutdown_timeout: Duration::from_secs(30),
             no_signals: false,
             cmd: rx,
             notify: Vec::new(),
@@ -117,15 +116,15 @@ impl ServerBuilder {
         self
     }
 
-    /// Timeout for graceful workers shutdown in seconds.
+    /// Timeout for graceful workers shutdown.
     ///
     /// After receiving a stop signal, workers have this much time to finish
     /// serving requests. Workers still alive after the timeout are force
     /// dropped.
     ///
     /// By default shutdown timeout sets to 30 seconds.
-    pub fn shutdown_timeout(mut self, sec: u64) -> Self {
-        self.shutdown_timeout = sec * 1000;
+    pub fn shutdown_timeout<T: Into<Duration>>(mut self, timeout: T) -> Self {
+        self.shutdown_timeout = timeout.into();
         self
     }
 

@@ -43,15 +43,8 @@ where
 
     /// Shutdown io stream
     pub fn shutdown(io: Rc<RefCell<T>>, state: State) -> Self {
-        let disconnect_timeout = state.get_disconnect_timeout() as u64;
-        let st = IoWriteState::Shutdown(
-            if disconnect_timeout != 0 {
-                Some(sleep(disconnect_timeout))
-            } else {
-                None
-            },
-            Shutdown::None,
-        );
+        let disconnect_timeout = state.get_disconnect_timeout();
+        let st = IoWriteState::Shutdown(disconnect_timeout.map(sleep), Shutdown::None);
 
         Self { st, io, state }
     }
@@ -80,13 +73,9 @@ where
                 if this.state.is_io_shutdown() {
                     log::trace!("write task is instructed to shutdown");
 
-                    let disconnect_timeout = this.state.get_disconnect_timeout() as u64;
+                    let disconnect_timeout = this.state.get_disconnect_timeout();
                     this.st = IoWriteState::Shutdown(
-                        if disconnect_timeout != 0 {
-                            Some(sleep(disconnect_timeout))
-                        } else {
-                            None
-                        },
+                        disconnect_timeout.map(sleep),
                         Shutdown::None,
                     );
                     return self.poll(cx);
@@ -162,8 +151,8 @@ where
                     }
 
                     // disconnect timeout
-                    if let Some(ref mut delay) = delay {
-                        if Pin::new(delay).poll(cx).is_pending() {
+                    if let Some(ref delay) = delay {
+                        if delay.poll_elapsed(cx).is_pending() {
                             return Poll::Pending;
                         }
                     }

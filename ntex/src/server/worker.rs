@@ -1,13 +1,12 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::task::{Context, Poll};
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc, task::Context, task::Poll};
 
 use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
 use futures_core::Stream as FutStream;
 
 use crate::rt::{spawn, Arbiter};
-use crate::time::{sleep, Sleep};
+use crate::time::{sleep, Duration, Sleep};
 use crate::util::{counter::Counter, join_all};
 
 use super::accept::{AcceptNotify, Command};
@@ -131,7 +130,7 @@ pub(super) struct Worker {
     conns: Counter,
     factories: Vec<Box<dyn InternalServiceFactory>>,
     state: WorkerState,
-    shutdown_timeout: u64,
+    shutdown_timeout: Duration,
 }
 
 struct WorkerService {
@@ -162,7 +161,7 @@ impl Worker {
         idx: usize,
         factories: Vec<Box<dyn InternalServiceFactory>>,
         availability: WorkerAvailability,
-        shutdown_timeout: u64,
+        shutdown_timeout: Duration,
     ) -> WorkerClient {
         let (tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
@@ -192,7 +191,7 @@ impl Worker {
         rx2: Receiver<StopCommand>,
         factories: Vec<Box<dyn InternalServiceFactory>>,
         availability: WorkerAvailability,
-        shutdown_timeout: u64,
+        shutdown_timeout: Duration,
     ) -> Result<Worker, ()> {
         availability.set(false);
         let mut wrk = MAX_CONNS_COUNTER.with(move |conns| Worker {
@@ -596,7 +595,7 @@ mod tests {
                 "127.0.0.1:8080".parse().unwrap(),
             )],
             avail.clone(),
-            5_000,
+            Duration::from_millis(5_000),
         )
         .await
         .unwrap();
@@ -668,7 +667,7 @@ mod tests {
                 "127.0.0.1:8080".parse().unwrap(),
             )],
             avail.clone(),
-            5_000,
+            Duration::from_millis(5_000),
         )
         .await
         .unwrap();

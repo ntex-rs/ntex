@@ -117,15 +117,15 @@ where
             config.read_hw,
             config.write_hw,
             config.lw,
-            config.client_disconnect as u16,
+            config.client_disconnect,
         );
 
         let mut expire = config.timer_h1.now();
         let io = Rc::new(RefCell::new(io));
 
         // slow-request timer
-        if config.client_timeout != 0 {
-            expire += time::Duration::from_secs(config.client_timeout);
+        if !config.client_timeout.is_zero() {
+            expire += std::time::Duration::from(config.client_timeout);
             config.timer_h1.register(expire, expire, &state);
         }
 
@@ -536,9 +536,9 @@ where
 
     fn reset_keepalive(&mut self) {
         // re-register keep-alive
-        if self.flags.contains(Flags::KEEPALIVE) && self.config.keep_alive != 0 {
+        if self.flags.contains(Flags::KEEPALIVE) && !self.config.keep_alive.is_zero() {
             let expire = self.config.timer_h1.now()
-                + time::Duration::from_millis(self.config.keep_alive);
+                + std::time::Duration::from(self.config.keep_alive);
             if expire != self.expire {
                 self.config
                     .timer_h1

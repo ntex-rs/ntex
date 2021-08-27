@@ -11,7 +11,7 @@ use crate::http::Protocol;
 use crate::rt::spawn;
 use crate::service::Service;
 use crate::task::LocalWaker;
-use crate::time::{sleep, Sleep};
+use crate::time::{self as time, sleep, Sleep};
 use crate::util::{poll_fn, Bytes, HashMap};
 
 use super::connection::{ConnectionType, IoConnection};
@@ -47,14 +47,14 @@ where
         connector: T,
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
-        disconnect_timeout_ms: u64,
+        disconnect_timeout: time::Duration,
         limit: usize,
     ) -> Self {
         let connector = Rc::new(connector);
         let inner = Rc::new(RefCell::new(Inner {
             conn_lifetime,
             conn_keep_alive,
-            disconnect_timeout_ms,
+            disconnect_timeout,
             limit,
             acquired: 0,
             waiters: VecDeque::new(),
@@ -180,7 +180,7 @@ struct AvailableConnection<Io> {
 pub(super) struct Inner<Io> {
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
-    disconnect_timeout_ms: u64,
+    disconnect_timeout: time::Duration,
     limit: usize,
     acquired: usize,
     available: HashMap<Key, VecDeque<AvailableConnection<Io>>>,
@@ -246,7 +246,7 @@ where
                     || (now - conn.created) > self.conn_lifetime
                 {
                     if let ConnectionType::H1(io) = conn.io {
-                        CloseConnection::spawn(io, self.disconnect_timeout_ms);
+                        CloseConnection::spawn(io, self.disconnect_timeout);
                     }
                 } else {
                     let mut io = conn.io;
@@ -257,10 +257,7 @@ where
                             Poll::Pending => (),
                             Poll::Ready(Ok(_)) if !read_buf.filled().is_empty() => {
                                 if let ConnectionType::H1(io) = io {
-                                    CloseConnection::spawn(
-                                        io,
-                                        self.disconnect_timeout_ms,
-                                    );
+                                    CloseConnection::spawn(io, self.disconnect_timeout);
                                 }
                                 continue;
                             }
@@ -290,7 +287,7 @@ where
     fn release_close(&mut self, io: ConnectionType<Io>) {
         self.acquired -= 1;
         if let ConnectionType::H1(io) = io {
-            CloseConnection::spawn(io, self.disconnect_timeout_ms);
+            CloseConnection::spawn(io, self.disconnect_timeout);
         }
         self.check_availibility();
     }
@@ -376,16 +373,11 @@ impl<T> CloseConnection<T>
 where
     T: AsyncWrite + AsyncRead + Unpin + 'static,
 {
-    fn spawn(io: T, timeout_ms: u64) {
-        let timeout = if timeout_ms != 0 {
-            Some(sleep(timeout_ms))
-        } else {
-            None
-        };
+    fn spawn(io: T, timeout: time::Duration) {
         spawn(Self {
             io,
-            timeout,
             shutdown: false,
+            timeout: timeout.map(sleep),
         });
     }
 }
@@ -608,10 +600,10 @@ impl<T> Drop for Acquired<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, convert::TryFrom, rc::Rc, time::Duration};
+    use std::{cell::RefCell, convert::TryFrom, rc::Rc};
 
     use super::*;
-    use crate::time::sleep;
+    use crate::time::{self as time, sleep};
     use crate::{
         http::client::Connection, http::Uri, service::fn_service, testing::Io,
         util::lazy,
@@ -630,7 +622,7 @@ mod tests {
             }),
             Duration::from_secs(10),
             Duration::from_secs(10),
-            0,
+            time::Duration::ZERO,
             1,
         )
         .clone();

@@ -18,10 +18,11 @@ use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
 use crate::router::{Path, ResourceDef};
+use crate::time::{sleep, Seconds};
 use crate::util::{next, Bytes, BytesMut, Extensions, Ready};
 use crate::{
-    map_config, rt::System, server::Server, time::sleep, IntoService,
-    IntoServiceFactory, Service, ServiceFactory, Stream,
+    map_config, rt::System, server::Server, IntoService, IntoServiceFactory, Service,
+    ServiceFactory, Stream,
 };
 
 use crate::web::config::AppConfig;
@@ -750,7 +751,7 @@ where
 
         Client::build()
             .connector(connector)
-            .timeout(30_000)
+            .timeout(Seconds(30))
             .finish()
     };
 
@@ -768,7 +769,7 @@ where
 pub struct TestServerConfig {
     tp: HttpVer,
     stream: StreamType,
-    client_timeout: u16,
+    client_timeout: Seconds,
 }
 
 #[derive(Clone, Debug)]
@@ -816,7 +817,7 @@ impl TestServerConfig {
         TestServerConfig {
             tp: HttpVer::Both,
             stream: StreamType::Tcp,
-            client_timeout: 5000,
+            client_timeout: Seconds(5),
         }
     }
 
@@ -847,7 +848,7 @@ impl TestServerConfig {
     }
 
     /// Set server client timeout in seconds for first request.
-    pub fn client_timeout(mut self, val: u16) -> Self {
+    pub fn client_timeout(mut self, val: Seconds) -> Self {
         self.client_timeout = val;
         self
     }
@@ -1222,7 +1223,7 @@ mod tests {
                     ))
                     .finish(),
             )
-            .timeout(30)
+            .timeout(Seconds(30))
             .finish();
 
         let url = format!("https://localhost:{}/", srv.addr.port());

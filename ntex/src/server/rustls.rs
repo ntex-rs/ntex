@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{error::Error, future::Future, io, marker, pin::Pin, sync::Arc};
+use std::{error::Error, future::Future, io, marker::PhantomData, pin::Pin, sync::Arc};
 
 use tokio_rustls::{Accept, TlsAcceptor};
 
@@ -9,7 +9,7 @@ pub use webpki_roots::TLS_SERVER_ROOTS;
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::service::{Service, ServiceFactory};
-use crate::time::{sleep, Sleep};
+use crate::time::{sleep, Duration, Sleep};
 use crate::util::counter::{Counter, CounterGuard};
 use crate::util::Ready;
 
@@ -19,9 +19,9 @@ use super::MAX_SSL_ACCEPT_COUNTER;
 ///
 /// `rust-tls` feature enables `RustlsAcceptor` type
 pub struct Acceptor<T> {
-    timeout: u64,
+    timeout: Duration,
     config: Arc<ServerConfig>,
-    io: marker::PhantomData<T>,
+    io: PhantomData<T>,
 }
 
 impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
@@ -29,16 +29,16 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     pub fn new(config: ServerConfig) -> Self {
         Acceptor {
             config: Arc::new(config),
-            timeout: 5000,
-            io: marker::PhantomData,
+            timeout: Duration::from_millis(5_000),
+            io: PhantomData,
         }
     }
 
-    /// Set handshake timeout in milliseconds
+    /// Set handshake timeout.
     ///
     /// Default is set to 5 seconds.
-    pub fn timeout(mut self, time: u64) -> Self {
-        self.timeout = time;
+    pub fn timeout<U: Into<Duration>>(mut self, timeout: U) -> Self {
+        self.timeout = timeout.into();
         self
     }
 }
@@ -48,7 +48,7 @@ impl<T> Clone for Acceptor<T> {
         Self {
             config: self.config.clone(),
             timeout: self.timeout,
-            io: marker::PhantomData,
+            io: PhantomData,
         }
     }
 }
@@ -69,7 +69,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> ServiceFactory for Acceptor<T> {
                 acceptor: self.config.clone().into(),
                 conns: conns.priv_clone(),
                 timeout: self.timeout,
-                io: marker::PhantomData,
+                io: PhantomData,
             })
         })
     }
@@ -78,9 +78,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin> ServiceFactory for Acceptor<T> {
 /// RusTLS based `Acceptor` service
 pub struct AcceptorService<T> {
     acceptor: TlsAcceptor,
-    io: marker::PhantomData<T>,
+    io: PhantomData<T>,
     conns: Counter,
-    timeout: u64,
+    timeout: Duration,
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {
@@ -103,11 +103,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {
         AcceptorServiceFut {
             _guard: self.conns.get(),
             fut: self.acceptor.accept(req),
-            delay: if self.timeout == 0 {
-                None
-            } else {
-                Some(sleep(self.timeout))
-            },
+            delay: self.timeout.map(|t| sleep(t)),
         }
     }
 }

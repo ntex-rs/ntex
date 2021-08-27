@@ -6,6 +6,7 @@ use slab::Slab;
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::task::LocalWaker;
+use crate::time::Seconds;
 use crate::util::{poll_fn, Buf, BytesMut, Either};
 
 bitflags::bitflags! {
@@ -41,7 +42,7 @@ pub(crate) struct IoStateInner {
     lw: Cell<u16>,
     read_hw: Cell<u16>,
     write_hw: Cell<u16>,
-    disconnect_timeout: Cell<u16>,
+    disconnect_timeout: Cell<Seconds>,
     error: Cell<Option<io::Error>>,
     read_task: LocalWaker,
     write_task: LocalWaker,
@@ -184,7 +185,7 @@ impl State {
             lw: Cell::new(1024),
             read_hw: Cell::new(8 * 1024),
             write_hw: Cell::new(8 * 1024),
-            disconnect_timeout: Cell::new(1),
+            disconnect_timeout: Cell::new(Seconds(1)),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
@@ -217,7 +218,7 @@ impl State {
             lw: Cell::new(1024),
             read_hw: Cell::new(8 * 1024),
             write_hw: Cell::new(8 * 1024),
-            disconnect_timeout: Cell::new(1),
+            disconnect_timeout: Cell::new(Seconds(1)),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
@@ -232,7 +233,7 @@ impl State {
         max_read_buf_size: u16,
         max_write_buf_size: u16,
         min_buf_size: u16,
-        disconnect_timeout: u16,
+        disconnect_timeout: Seconds,
     ) -> Self {
         State(Rc::new(IoStateInner {
             flags: Cell::new(Flags::empty()),
@@ -276,7 +277,7 @@ impl State {
         state.dispatch_task.wake();
     }
 
-    pub(super) fn get_disconnect_timeout(&self) -> u16 {
+    pub(super) fn get_disconnect_timeout(&self) -> Seconds {
         self.0.disconnect_timeout.get()
     }
 
@@ -316,7 +317,7 @@ impl State {
 
     #[inline]
     /// Set io disconnect timeout in secs
-    pub fn set_disconnect_timeout(&self, timeout: u16) {
+    pub fn set_disconnect_timeout(&self, timeout: Seconds) {
         self.0.disconnect_timeout.set(timeout)
     }
 

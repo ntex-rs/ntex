@@ -12,6 +12,7 @@ use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::rt::net::TcpStream;
+use crate::time::Duration;
 use crate::util::Bytes;
 use crate::{
     fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
@@ -26,7 +27,7 @@ pub struct H2Service<T, S, B> {
     cfg: ServiceConfig,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     #[allow(dead_code)]
-    handshake_timeout: u64,
+    handshake_timeout: Duration,
     _t: PhantomData<(T, B)>,
 }
 
@@ -47,7 +48,7 @@ where
         H2Service {
             on_connect: None,
             srv: service.into_factory(),
-            handshake_timeout: (cfg.0.ssl_handshake_timeout as u64) * 1000,
+            handshake_timeout: cfg.0.ssl_handshake_timeout,
             _t: PhantomData,
             cfg,
         }

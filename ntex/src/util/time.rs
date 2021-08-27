@@ -1,9 +1,9 @@
 use std::task::{Context, Poll};
-use std::time::{self, Duration, Instant};
-use std::{cell::RefCell, convert::Infallible, convert::TryInto, rc::Rc};
+use std::time::{self, Instant};
+use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
 use crate::service::{Service, ServiceFactory};
-use crate::time::sleep;
+use crate::time::{sleep, Duration};
 use crate::util::Ready;
 
 #[derive(Clone, Debug)]
@@ -11,19 +11,12 @@ pub struct LowResTime(Rc<RefCell<Inner>>);
 
 #[derive(Debug)]
 struct Inner {
-    resolution: u64,
+    resolution: Duration,
     current: Option<Instant>,
 }
 
 impl Inner {
     fn new(resolution: Duration) -> Self {
-        Inner::from_millis(resolution.as_millis().try_into().unwrap_or_else(|_| {
-            log::error!("Duration is too large {:?}", resolution);
-            1 << 31
-        }))
-    }
-
-    fn from_millis(resolution: u64) -> Self {
         Inner {
             resolution,
             current: None,
@@ -33,13 +26,8 @@ impl Inner {
 
 impl LowResTime {
     /// Create new timer service
-    pub fn with(resolution: Duration) -> LowResTime {
-        LowResTime(Rc::new(RefCell::new(Inner::new(resolution))))
-    }
-
-    /// Create new timer service
-    pub fn from_millis(resolution: u64) -> LowResTime {
-        LowResTime(Rc::new(RefCell::new(Inner::from_millis(resolution))))
+    pub fn new<T: Into<Duration>>(resolution: T) -> LowResTime {
+        LowResTime(Rc::new(RefCell::new(Inner::new(resolution.into()))))
     }
 
     pub fn timer(&self) -> LowResTimeService {
@@ -49,7 +37,9 @@ impl LowResTime {
 
 impl Default for LowResTime {
     fn default() -> Self {
-        LowResTime(Rc::new(RefCell::new(Inner::from_millis(1000))))
+        LowResTime(Rc::new(RefCell::new(Inner::new(Duration::from_millis(
+            1000,
+        )))))
     }
 }
 
@@ -72,8 +62,8 @@ impl ServiceFactory for LowResTime {
 pub struct LowResTimeService(Rc<RefCell<Inner>>);
 
 impl LowResTimeService {
-    pub fn with(resolution: Duration) -> LowResTimeService {
-        LowResTimeService(Rc::new(RefCell::new(Inner::new(resolution))))
+    pub fn new<T: Into<Duration>>(resolution: T) -> LowResTimeService {
+        LowResTimeService(Rc::new(RefCell::new(Inner::new(resolution.into()))))
     }
 
     /// Get current time. This function has to be called from
@@ -122,21 +112,12 @@ pub struct SystemTime(Rc<RefCell<SystemTimeInner>>);
 
 #[derive(Debug)]
 struct SystemTimeInner {
-    resolution: u64,
+    resolution: Duration,
     current: Option<time::SystemTime>,
 }
 
 impl SystemTimeInner {
     fn new(resolution: Duration) -> Self {
-        SystemTimeInner::from_millis(resolution.as_millis().try_into().unwrap_or_else(
-            |_| {
-                log::error!("Duration is too large {:?}", resolution);
-                1 << 31
-            },
-        ))
-    }
-
-    fn from_millis(resolution: u64) -> Self {
         SystemTimeInner {
             resolution,
             current: None,
@@ -149,14 +130,9 @@ pub struct SystemTimeService(Rc<RefCell<SystemTimeInner>>);
 
 impl SystemTimeService {
     /// Create new system time service
-    pub fn with(resolution: Duration) -> SystemTimeService {
-        SystemTimeService(Rc::new(RefCell::new(SystemTimeInner::new(resolution))))
-    }
-
-    /// Create new system time service, set resolution in millis
-    pub fn from_millis(resolution: u64) -> SystemTimeService {
-        SystemTimeService(Rc::new(RefCell::new(SystemTimeInner::from_millis(
-            resolution,
+    pub fn new<T: Into<Duration>>(resolution: T) -> SystemTimeService {
+        SystemTimeService(Rc::new(RefCell::new(SystemTimeInner::new(
+            resolution.into(),
         ))))
     }
 
@@ -205,7 +181,7 @@ mod tests {
     async fn system_time_service_time_does_not_immediately_change() {
         let resolution = Duration::from_millis(50);
 
-        let time_service = SystemTimeService::with(resolution);
+        let time_service = SystemTimeService::new(resolution);
         assert_eq!(time_service.now(), time_service.now());
     }
 
@@ -215,7 +191,7 @@ mod tests {
     #[crate::rt_test]
     async fn lowres_time_service_time_does_not_immediately_change() {
         let resolution = Duration::from_millis(50);
-        let time_service = LowResTimeService::with(resolution);
+        let time_service = LowResTimeService::new(resolution);
         assert_eq!(time_service.now(), time_service.now());
     }
 
@@ -228,7 +204,7 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = 300;
 
-        let time_service = SystemTimeService::with(resolution);
+        let time_service = SystemTimeService::new(resolution);
 
         let first_time = time_service
             .now()
@@ -253,7 +229,7 @@ mod tests {
     async fn lowres_time_service_time_updates_after_resolution_interval() {
         let resolution = Duration::from_millis(100);
         let wait_time = 300;
-        let time_service = LowResTimeService::with(resolution);
+        let time_service = LowResTimeService::new(resolution);
 
         let first_time = time_service.now();
 

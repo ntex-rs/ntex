@@ -2,7 +2,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{cell::Cell, convert::Infallible, marker};
 
-use crate::time::{sleep_duration, Sleep};
+use crate::time::{sleep, Sleep};
 use crate::{util::Ready, Service, ServiceFactory};
 
 use super::time::{LowResTime, LowResTimeService};
@@ -91,7 +91,7 @@ where
             dur,
             time,
             expire,
-            sleep: sleep_duration(dur),
+            sleep: sleep(dur),
             _t: marker::PhantomData,
         }
     }
@@ -141,11 +141,8 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_ka() {
-        let factory = KeepAlive::new(
-            Duration::from_millis(100),
-            LowResTime::with(Duration::from_millis(10)),
-            || TestErr,
-        );
+        let factory =
+            KeepAlive::new(Duration::from_millis(100), LowResTime::new(10), || TestErr);
         let _ = factory.clone();
 
         let service = factory.new_service(()).await.unwrap();

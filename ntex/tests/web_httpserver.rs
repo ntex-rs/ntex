@@ -4,8 +4,8 @@ use std::{thread, time::Duration};
 #[cfg(feature = "openssl")]
 use open_ssl::ssl::SslAcceptorBuilder;
 
-use ntex::server::TestServer;
 use ntex::web::{self, App, HttpResponse, HttpServer};
+use ntex::{server::TestServer, time::Seconds};
 
 #[cfg(unix)]
 #[ntex::test]
@@ -28,9 +28,9 @@ async fn test_run() {
             .maxconn(10)
             .maxconnrate(10)
             .keep_alive(10)
-            .client_timeout(5000)
-            .disconnect_timeout(1000)
-            .ssl_handshake_timeout(1000)
+            .client_timeout(Seconds(5))
+            .disconnect_timeout(Seconds(1))
+            .ssl_handshake_timeout(Seconds(1))
             .server_hostname("localhost")
             .stop_runtime()
             .disable_signals()
@@ -47,7 +47,7 @@ async fn test_run() {
     use ntex::http::client;
 
     let client = client::Client::build()
-        .connector(client::Connector::default().timeout(100_000).finish())
+        .connector(client::Connector::default().timeout(Seconds(100)).finish())
         .finish();
 
     let host = format!("http://{}", addr);
@@ -86,10 +86,10 @@ fn client() -> ntex::http::client::Client {
         .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
 
     ntex::http::client::Client::build()
-        .timeout(30)
+        .timeout(Seconds(30))
         .connector(
             ntex::http::client::Connector::default()
-                .timeout(30_000)
+                .timeout(Seconds(30))
                 .openssl(builder.build())
                 .finish(),
         )
@@ -118,7 +118,7 @@ async fn test_openssl() {
                 )))
             })
             .workers(1)
-            .shutdown_timeout(1)
+            .shutdown_timeout(Seconds(1))
             .stop_runtime()
             .disable_signals()
             .bind_openssl(format!("{}", addr), builder)
@@ -179,7 +179,7 @@ async fn test_rustls() {
                 )))
             })
             .workers(1)
-            .shutdown_timeout(1)
+            .shutdown_timeout(Seconds(1))
             .stop_runtime()
             .disable_signals()
             .bind_rustls(format!("{}", addr), config)
@@ -220,7 +220,7 @@ async fn test_bind_uds() {
                 )
             })
             .workers(1)
-            .shutdown_timeout(1)
+            .shutdown_timeout(Seconds(1))
             .stop_runtime()
             .disable_signals()
             .bind_uds("/tmp/uds-test")
@@ -274,7 +274,7 @@ async fn test_listen_uds() {
                 )
             })
             .workers(1)
-            .shutdown_timeout(1)
+            .shutdown_timeout(Seconds(1))
             .stop_runtime()
             .disable_signals()
             .listen_uds(lst)
