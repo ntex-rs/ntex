@@ -186,13 +186,12 @@ impl TimerInner {
             let bucket_entry = bucket.add_entry(no);
 
             entry.insert(TimerEntry {
-                no,
                 bucket_entry,
                 bucket: idx as u16,
                 task: LocalWaker::new(),
                 flags: TimerEntryFlags::empty(),
             });
-            slf.occupied[bucket.lvl] |= bucket.bit;
+            slf.occupied[bucket.lvl as usize] |= bucket.bit;
             (no, bucket_expiry)
         };
 
@@ -237,18 +236,18 @@ impl TimerInner {
                 let b = &mut slf.buckets[entry.bucket as usize];
                 b.entries.remove(entry.bucket_entry);
                 if b.entries.is_empty() {
-                    slf.occupied[b.lvl] &= b.bit_n;
+                    slf.occupied[b.lvl as usize] &= b.bit_n;
                 }
             }
 
             let bucket = &mut slf.buckets[idx];
-            let bucket_entry = bucket.add_entry(entry.no);
+            let bucket_entry = bucket.add_entry(hnd);
 
             entry.bucket = idx as u16;
             entry.bucket_entry = bucket_entry;
             entry.flags = TimerEntryFlags::empty();
 
-            slf.occupied[bucket.lvl] |= bucket.bit;
+            slf.occupied[bucket.lvl as usize] |= bucket.bit;
             bucket_expiry
         };
 
@@ -273,7 +272,7 @@ impl TimerInner {
             let b = &mut self.buckets[entry.bucket as usize];
             b.entries.remove(entry.bucket_entry);
             if b.entries.is_empty() {
-                self.occupied[b.lvl] &= b.bit_n;
+                self.occupied[b.lvl as usize] &= b.bit_n;
             }
         }
     }
@@ -335,7 +334,7 @@ impl TimerInner {
             let idx = (clk & LVL_MASK) + lvl * LVL_SIZE;
             let b = &mut self.buckets[idx as usize];
             if !b.entries.is_empty() {
-                self.occupied[b.lvl] &= b.bit_n;
+                self.occupied[b.lvl as usize] &= b.bit_n;
                 for no in b.entries.drain() {
                     if let Some(timer) = self.timers.get_mut(no) {
                         timer.complete();
@@ -401,8 +400,8 @@ impl TimerInner {
 
 #[derive(Debug)]
 struct Bucket {
-    lvl: usize,
-    offs: u64,
+    lvl: u32,
+    offs: u32,
     bit: u64,
     bit_n: u64,
     entries: Slab<usize>,
@@ -418,9 +417,9 @@ impl Bucket {
     fn new(lvl: usize, offs: usize) -> Self {
         let bit = 1 << (offs as u64);
         Bucket {
-            lvl,
             bit,
-            offs: offs as u64,
+            lvl: lvl as u32,
+            offs: offs as u32,
             bit_n: !bit,
             entries: Slab::default(),
         }
@@ -436,7 +435,6 @@ bitflags::bitflags! {
 #[derive(Debug)]
 struct TimerEntry {
     flags: TimerEntryFlags,
-    no: usize,
     bucket: u16,
     bucket_entry: usize,
     task: LocalWaker,
