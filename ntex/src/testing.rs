@@ -1,10 +1,10 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-use std::{cmp, fmt, io, mem, pin::Pin, time};
+use std::{cmp, fmt, io, mem, pin::Pin};
 
 use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
-use crate::rt::time::sleep;
+use crate::time::sleep;
 use crate::util::{poll_fn, BytesMut};
 
 #[derive(Default)]
@@ -169,7 +169,7 @@ impl Io {
             remote.read = IoState::Close;
             remote.waker.wake();
         }
-        sleep(time::Duration::from_millis(35)).await;
+        sleep(35).await;
     }
 
     /// Add extra data to the remote buffer and notify reader

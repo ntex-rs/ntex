@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{error::Error, future::Future, io, marker, pin::Pin, sync::Arc, time};
+use std::{error::Error, future::Future, io, marker, pin::Pin, sync::Arc};
 
 use tokio_rustls::{Accept, TlsAcceptor};
 
@@ -8,18 +8,18 @@ pub use tokio_rustls::server::TlsStream;
 pub use webpki_roots::TLS_SERVER_ROOTS;
 
 use crate::codec::{AsyncRead, AsyncWrite};
-use crate::rt::time::{sleep, Sleep};
 use crate::service::{Service, ServiceFactory};
+use crate::time::{sleep, Sleep};
 use crate::util::counter::{Counter, CounterGuard};
 use crate::util::Ready;
 
-use super::{MAX_SSL_ACCEPT_COUNTER, ZERO};
+use super::MAX_SSL_ACCEPT_COUNTER;
 
 /// Support `SSL` connections via rustls package
 ///
 /// `rust-tls` feature enables `RustlsAcceptor` type
 pub struct Acceptor<T> {
-    timeout: time::Duration,
+    timeout: u64,
     config: Arc<ServerConfig>,
     io: marker::PhantomData<T>,
 }
@@ -29,7 +29,7 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     pub fn new(config: ServerConfig) -> Self {
         Acceptor {
             config: Arc::new(config),
-            timeout: time::Duration::from_secs(5),
+            timeout: 5000,
             io: marker::PhantomData,
         }
     }
@@ -38,7 +38,7 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     ///
     /// Default is set to 5 seconds.
     pub fn timeout(mut self, time: u64) -> Self {
-        self.timeout = time::Duration::from_millis(time);
+        self.timeout = time;
         self
     }
 }
@@ -80,7 +80,7 @@ pub struct AcceptorService<T> {
     acceptor: TlsAcceptor,
     io: marker::PhantomData<T>,
     conns: Counter,
-    timeout: time::Duration,
+    timeout: u64,
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {
@@ -103,7 +103,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {
         AcceptorServiceFut {
             _guard: self.conns.get(),
             fut: self.acceptor.accept(req),
-            delay: if self.timeout == ZERO {
+            delay: if self.timeout == 0 {
                 None
             } else {
                 Some(sleep(self.timeout))
@@ -112,28 +112,25 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {
     }
 }
 
-pin_project_lite::pin_project! {
-    pub struct AcceptorServiceFut<T>
-    where
-        T: AsyncRead,
-        T: AsyncWrite,
-        T: Unpin,
-    {
-        fut: Accept<T>,
-        #[pin]
-        delay: Option<Sleep>,
-        _guard: CounterGuard,
-    }
+pub struct AcceptorServiceFut<T>
+where
+    T: AsyncRead,
+    T: AsyncWrite,
+    T: Unpin,
+{
+    fut: Accept<T>,
+    delay: Option<Sleep>,
+    _guard: CounterGuard,
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Future for AcceptorServiceFut<T> {
     type Output = Result<TlsStream<T>, Box<dyn Error>>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.as_mut();
 
-        if let Some(delay) = this.delay.as_pin_mut() {
-            match delay.poll(cx) {
+        if let Some(ref delay) = this.delay {
+            match delay.poll_elapsed(cx) {
                 Poll::Pending => (),
                 Poll::Ready(_) => {
                     return Poll::Ready(Err(Box::new(io::Error::new(

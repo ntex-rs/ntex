@@ -1,8 +1,10 @@
 # Changes
 
-## [0.4.0-b.3] - 2021-08-xx
+## [0.4.0-b.3] - 2021-08-27
 
 * Add timer service
+
+* Use ntex-rt 0.3
 
 * Use ntex-service 0.2
 

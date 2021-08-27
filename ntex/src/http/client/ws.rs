@@ -12,7 +12,7 @@ use crate::http::header::{self, HeaderName, HeaderValue, AUTHORIZATION};
 use crate::http::{ConnectionType, Payload, RequestHead, StatusCode, Uri};
 use crate::service::{apply_fn, into_service, IntoService, Service};
 use crate::util::Either;
-use crate::{channel::mpsc, rt, rt::time::timeout, util::sink, util::Ready, ws};
+use crate::{channel::mpsc, rt, time::timeout, util::sink, util::Ready, ws};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
 
@@ -311,8 +311,8 @@ impl WsRequest {
         let fut = self.config.connector.open_tunnel(head.into(), self.addr);
 
         // set request timeout
-        let (head, framed) = if let Some(to) = self.config.timeout {
-            timeout(to, fut)
+        let (head, framed) = if self.config.timeout > 0 {
+            timeout(self.config.timeout, fut)
                 .await
                 .map_err(|_| SendRequestError::Timeout)
                 .and_then(|res| res)?

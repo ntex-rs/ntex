@@ -1,8 +1,8 @@
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use std::{cell::RefCell, convert::Infallible, future::Future, marker, pin::Pin};
+use std::{cell::Cell, convert::Infallible, marker};
 
-use crate::rt::time::{sleep_until, Sleep};
+use crate::time::{sleep_duration, Sleep};
 use crate::{util::Ready, Service, ServiceFactory};
 
 use super::time::{LowResTime, LowResTimeService};
@@ -72,31 +72,26 @@ where
 
 pub struct KeepAliveService<R, E, F> {
     f: F,
-    ka: Duration,
+    dur: Duration,
     time: LowResTimeService,
-    inner: RefCell<Inner>,
+    sleep: Sleep,
+    expire: Cell<Instant>,
     _t: marker::PhantomData<(R, E)>,
-}
-
-struct Inner {
-    delay: Pin<Box<Sleep>>,
-    expire: Instant,
 }
 
 impl<R, E, F> KeepAliveService<R, E, F>
 where
     F: Fn() -> E,
 {
-    pub fn new(ka: Duration, time: LowResTimeService, f: F) -> Self {
-        let expire = time.now() + ka;
+    pub fn new(dur: Duration, time: LowResTimeService, f: F) -> Self {
+        let expire = Cell::new(time.now() + dur);
+
         KeepAliveService {
             f,
-            ka,
+            dur,
             time,
-            inner: RefCell::new(Inner {
-                expire,
-                delay: Box::pin(sleep_until(expire)),
-            }),
+            expire,
+            sleep: sleep_duration(dur),
             _t: marker::PhantomData,
         }
     }
@@ -112,17 +107,15 @@ where
     type Future = Ready<R, E>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let mut inner = self.inner.borrow_mut();
-
-        match Pin::new(&mut inner.delay).poll(cx) {
+        match self.sleep.poll_elapsed(cx) {
             Poll::Ready(_) => {
                 let now = self.time.now();
-                if inner.expire <= now {
+                if self.expire.get() <= now {
                     Poll::Ready(Err((self.f)()))
                 } else {
-                    let expire = inner.expire;
-                    inner.delay.as_mut().reset(expire);
-                    let _ = Pin::new(&mut inner.delay).poll(cx);
+                    let expire = self.expire.get() - Instant::now();
+                    self.sleep.reset(expire.as_millis() as u64);
+                    let _ = self.sleep.poll_elapsed(cx);
                     Poll::Ready(Ok(()))
                 }
             }
@@ -131,7 +124,7 @@ where
     }
 
     fn call(&self, req: R) -> Self::Future {
-        self.inner.borrow_mut().expire = self.time.now() + self.ka;
+        self.expire.set(self.time.now() + self.dur);
         Ready::Ok(req)
     }
 }
@@ -139,8 +132,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rt::time::sleep;
     use crate::service::{Service, ServiceFactory};
+    use crate::time::sleep;
     use crate::util::lazy;
 
     #[derive(Debug, PartialEq)]
@@ -160,7 +153,7 @@ mod tests {
         assert_eq!(service.call(1usize).await, Ok(1usize));
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
 
-        sleep(Duration::from_millis(500)).await;
+        sleep(500).await;
         assert_eq!(
             lazy(|cx| service.poll_ready(cx)).await,
             Poll::Ready(Err(TestErr))

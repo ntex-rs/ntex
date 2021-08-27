@@ -1,23 +1,22 @@
 use std::task::{Context, Poll};
-use std::{error::Error, fmt, future::Future, io, marker, pin::Pin, time};
+use std::{error::Error, fmt, future::Future, io, marker, pin::Pin};
 
 pub use open_ssl::ssl::{self, AlpnError, Ssl, SslAcceptor, SslAcceptorBuilder};
 pub use tokio_openssl::SslStream;
 
 use crate::codec::{AsyncRead, AsyncWrite};
-use crate::rt::time::{sleep, Sleep};
 use crate::service::{Service, ServiceFactory};
-use crate::util::counter::{Counter, CounterGuard};
-use crate::util::Ready;
+use crate::time::{sleep, Sleep};
+use crate::util::{counter::Counter, counter::CounterGuard, Ready};
 
-use super::{MAX_SSL_ACCEPT_COUNTER, ZERO};
+use super::MAX_SSL_ACCEPT_COUNTER;
 
 /// Support `TLS` server connections via openssl package
 ///
 /// `openssl` feature enables `Acceptor` type
 pub struct Acceptor<T: AsyncRead + AsyncWrite> {
     acceptor: SslAcceptor,
-    timeout: time::Duration,
+    timeout: u64,
     io: marker::PhantomData<T>,
 }
 
@@ -26,7 +25,7 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     pub fn new(acceptor: SslAcceptor) -> Self {
         Acceptor {
             acceptor,
-            timeout: time::Duration::from_secs(5),
+            timeout: 5_000,
             io: marker::PhantomData,
         }
     }
@@ -35,7 +34,7 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     ///
     /// Default is set to 5 seconds.
     pub fn timeout(mut self, time: u64) -> Self {
-        self.timeout = time::Duration::from_millis(time);
+        self.timeout = time;
         self
     }
 }
@@ -77,7 +76,7 @@ where
 pub struct AcceptorService<T> {
     acceptor: SslAcceptor,
     conns: Counter,
-    timeout: time::Duration,
+    timeout: u64,
     io: marker::PhantomData<T>,
 }
 
@@ -106,7 +105,7 @@ where
         AcceptorServiceResponse {
             _guard: self.conns.get(),
             io: None,
-            delay: if self.timeout == ZERO {
+            delay: if self.timeout == 0 {
                 None
             } else {
                 Some(sleep(self.timeout))
@@ -116,28 +115,25 @@ where
     }
 }
 
-pin_project_lite::pin_project! {
-    pub struct AcceptorServiceResponse<T>
-    where
-        T: AsyncRead,
-        T: AsyncWrite,
-    {
-        io: Option<SslStream<T>>,
-        #[pin]
-        delay: Option<Sleep>,
-        io_factory: Option<Result<SslStream<T>, open_ssl::error::ErrorStack>>,
-        _guard: CounterGuard,
-    }
+pub struct AcceptorServiceResponse<T>
+where
+    T: AsyncRead,
+    T: AsyncWrite,
+{
+    io: Option<SslStream<T>>,
+    delay: Option<Sleep>,
+    io_factory: Option<Result<SslStream<T>, open_ssl::error::ErrorStack>>,
+    _guard: CounterGuard,
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Future for AcceptorServiceResponse<T> {
     type Output = Result<SslStream<T>, Box<dyn Error>>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.as_mut();
 
-        if let Some(delay) = this.delay.as_pin_mut() {
-            match delay.poll(cx) {
+        if let Some(ref delay) = this.delay {
+            match delay.poll_elapsed(cx) {
                 Poll::Pending => (),
                 Poll::Ready(_) => {
                     return Poll::Ready(Err(Box::new(io::Error::new(
@@ -149,7 +145,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Future for AcceptorServiceResponse<T> {
         }
 
         match this.io_factory.take() {
-            Some(Ok(io)) => *this.io = Some(io),
+            Some(Ok(io)) => this.io = Some(io),
             Some(Err(err)) => return Poll::Ready(Err(Box::new(err))),
             None => (),
         }

@@ -1,7 +1,6 @@
 use std::io::{self, Read, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use brotli2::write::{BrotliDecoder, BrotliEncoder};
 use derive_more::Display;
@@ -883,7 +882,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     // client request
     let req = srv
         .post("/")
-        .timeout(Duration::from_millis(10000))
+        .timeout(10)
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
@@ -934,7 +933,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
     // client request
     let req = srv
         .post("/")
-        .timeout(Duration::from_millis(10000))
+        .timeout(10)
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
@@ -985,7 +984,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
     // client request
     let req = srv
         .post("/")
-        .timeout(Duration::from_millis(10000))
+        .timeout(10)
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 

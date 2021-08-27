@@ -1,7 +1,6 @@
 #![cfg(feature = "openssl")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures::future::ok;
 use open_ssl::ssl::{SslAcceptor, SslConnector, SslFiletype, SslMethod, SslVerifyMode};
@@ -70,10 +69,7 @@ async fn test_connection_reuse_h2() {
         .finish();
 
     // req 1
-    let request = client
-        .get(srv.surl("/"))
-        .timeout(Duration::from_secs(10))
-        .send();
+    let request = client.get(srv.surl("/")).timeout(10).send();
     let response = request.await.unwrap();
     assert!(response.status().is_success());
 

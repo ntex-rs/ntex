@@ -1,13 +1,13 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
-use std::{future::Future, pin::Pin, sync::Arc, time};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
 use futures_core::Stream as FutStream;
 
-use crate::rt::time::{sleep_until, Sleep};
 use crate::rt::{spawn, Arbiter};
+use crate::time::{sleep, Sleep};
 use crate::util::{counter::Counter, join_all};
 
 use super::accept::{AcceptNotify, Command};
@@ -131,7 +131,7 @@ pub(super) struct Worker {
     conns: Counter,
     factories: Vec<Box<dyn InternalServiceFactory>>,
     state: WorkerState,
-    shutdown_timeout: time::Duration,
+    shutdown_timeout: u64,
 }
 
 struct WorkerService {
@@ -162,7 +162,7 @@ impl Worker {
         idx: usize,
         factories: Vec<Box<dyn InternalServiceFactory>>,
         availability: WorkerAvailability,
-        shutdown_timeout: time::Duration,
+        shutdown_timeout: u64,
     ) -> WorkerClient {
         let (tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
@@ -192,7 +192,7 @@ impl Worker {
         rx2: Receiver<StopCommand>,
         factories: Vec<Box<dyn InternalServiceFactory>>,
         availability: WorkerAvailability,
-        shutdown_timeout: time::Duration,
+        shutdown_timeout: u64,
     ) -> Result<Worker, ()> {
         availability.set(false);
         let mut wrk = MAX_CONNS_COUNTER.with(move |conns| Worker {
@@ -320,11 +320,7 @@ enum WorkerState {
         Token,
         Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>,
     ),
-    Shutdown(
-        Pin<Box<Sleep>>,
-        Pin<Box<Sleep>>,
-        Option<oneshot::Sender<bool>>,
-    ),
+    Shutdown(Sleep, Sleep, Option<oneshot::Sender<bool>>),
 }
 
 impl Future for Worker {
@@ -349,12 +345,8 @@ impl Future for Worker {
                 if num != 0 {
                     info!("Graceful worker shutdown, {} connections", num);
                     self.state = WorkerState::Shutdown(
-                        Box::pin(sleep_until(
-                            time::Instant::now() + time::Duration::from_secs(1),
-                        )),
-                        Box::pin(sleep_until(
-                            time::Instant::now() + self.shutdown_timeout,
-                        )),
+                        sleep(1000),
+                        sleep(self.shutdown_timeout),
                         Some(result),
                     );
                 } else {
@@ -428,7 +420,7 @@ impl Future for Worker {
                 }
 
                 // check graceful timeout
-                match t2.as_mut().poll(cx) {
+                match t2.poll_elapsed(cx) {
                     Poll::Pending => (),
                     Poll::Ready(_) => {
                         let _ = tx.take().unwrap().send(false);
@@ -439,13 +431,11 @@ impl Future for Worker {
                 }
 
                 // sleep for 1 second and then check again
-                match t1.as_mut().poll(cx) {
+                match t1.poll_elapsed(cx) {
                     Poll::Pending => (),
                     Poll::Ready(_) => {
-                        *t1 = Box::pin(sleep_until(
-                            time::Instant::now() + time::Duration::from_secs(1),
-                        ));
-                        let _ = t1.as_mut().poll(cx);
+                        *t1 = sleep(1000);
+                        let _ = t1.poll_elapsed(cx);
                     }
                 }
                 Poll::Pending
@@ -606,7 +596,7 @@ mod tests {
                 "127.0.0.1:8080".parse().unwrap(),
             )],
             avail.clone(),
-            time::Duration::from_secs(5),
+            5_000,
         )
         .await
         .unwrap();
@@ -678,7 +668,7 @@ mod tests {
                 "127.0.0.1:8080".parse().unwrap(),
             )],
             avail.clone(),
-            time::Duration::from_secs(5),
+            5_000,
         )
         .await
         .unwrap();

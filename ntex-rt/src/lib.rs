@@ -6,6 +6,8 @@ mod arbiter;
 mod builder;
 mod runtime;
 mod system;
+
+#[doc(hidden)]
 pub mod time;
 
 pub use self::arbiter::Arbiter;

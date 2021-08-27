@@ -161,11 +161,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc, time::Duration};
+    use std::{cell::Cell, rc::Rc};
 
     use super::*;
     use crate::util::{next, ByteString, BytesMut};
-    use crate::{channel::mpsc, codec::Encoder, rt::time::sleep, ws};
+    use crate::{channel::mpsc, codec::Encoder, time::sleep, ws};
 
     #[crate::rt_test]
     async fn test_basic() {
@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(data, b"\x81\x04test".as_ref());
 
         drop(tx);
-        sleep(Duration::from_millis(10)).await;
+        sleep(10).await;
         assert!(next(&mut rx).await.is_none());
 
         assert_eq!(counter.get(), 1);

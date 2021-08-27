@@ -848,6 +848,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    #[cfg(feature = "url")]
     #[crate::rt_test]
     async fn test_external_resource() {
         let srv = init_service(

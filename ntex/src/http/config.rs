@@ -2,8 +2,8 @@ use std::{cell::Cell, cell::RefCell, ptr::copy_nonoverlapping, rc::Rc, time};
 
 use crate::framed::Timer;
 use crate::http::{Request, Response};
-use crate::rt::time::{sleep, sleep_until, Sleep};
 use crate::service::boxed::BoxService;
+use crate::time::{sleep, Sleep};
 use crate::util::BytesMut;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -104,7 +104,7 @@ pub(super) struct DispatcherConfig<T, S, X, U> {
     pub(super) service: S,
     pub(super) expect: X,
     pub(super) upgrade: Option<U>,
-    pub(super) keep_alive: time::Duration,
+    pub(super) keep_alive: u64,
     pub(super) client_timeout: u64,
     pub(super) client_disconnect: u64,
     pub(super) ka_enabled: bool,
@@ -129,7 +129,7 @@ impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
             expect,
             upgrade,
             on_request,
-            keep_alive: time::Duration::from_secs(cfg.0.keep_alive),
+            keep_alive: cfg.0.keep_alive * 1000,
             client_timeout: cfg.0.client_timeout,
             client_disconnect: cfg.0.client_disconnect,
             ka_enabled: cfg.0.ka_enabled,
@@ -148,8 +148,8 @@ impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
 
     /// Return keep-alive timer Sleep is configured.
     pub(super) fn keep_alive_timer(&self) -> Option<Sleep> {
-        if self.keep_alive.as_secs() != 0 {
-            Some(sleep_until(self.timer.now() + self.keep_alive))
+        if self.keep_alive != 0 {
+            Some(sleep(self.keep_alive))
         } else {
             None
         }
@@ -157,8 +157,8 @@ impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
 
     /// Keep-alive expire time
     pub(super) fn keep_alive_expire(&self) -> Option<time::Instant> {
-        if self.keep_alive.as_secs() != 0 {
-            Some(self.timer.now() + self.keep_alive)
+        if self.keep_alive != 0 {
+            Some(self.timer.now() + time::Duration::from_millis(self.keep_alive))
         } else {
             None
         }
@@ -223,13 +223,13 @@ impl DateService {
             // periodic date update
             let s = self.clone();
             crate::rt::spawn(async move {
-                sleep(time::Duration::from_millis(500)).await;
+                sleep(500).await;
                 s.0.current.set(false);
             });
         }
     }
 
-    fn now(&self) -> time::Instant {
+    pub(super) fn now(&self) -> time::Instant {
         self.check_date();
         self.0.current_time.get()
     }

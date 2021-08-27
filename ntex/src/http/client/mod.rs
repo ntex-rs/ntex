@@ -16,7 +16,7 @@
 //!     println!("Response: {:?}", response);
 //! }
 //! ```
-use std::{convert::TryFrom, rc::Rc, time::Duration};
+use std::{convert::TryFrom, rc::Rc};
 
 mod builder;
 mod connect;
@@ -77,7 +77,7 @@ pub struct Client(Rc<ClientConfig>);
 pub(self) struct ClientConfig {
     pub(self) connector: Box<dyn InnerConnect>,
     pub(self) headers: HeaderMap,
-    pub(self) timeout: Option<Duration>,
+    pub(self) timeout: u64,
 }
 
 impl Default for Client {
@@ -85,7 +85,7 @@ impl Default for Client {
         Client(Rc::new(ClientConfig {
             connector: Box::new(ConnectorWrapper(Connector::default().finish())),
             headers: HeaderMap::new(),
-            timeout: Some(Duration::from_secs(5)),
+            timeout: 5_000,
         }))
     }
 }

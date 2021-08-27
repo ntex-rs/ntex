@@ -1,7 +1,6 @@
 #![cfg(feature = "rustls")]
 use std::fs::File;
 use std::io::{self, BufReader};
-use std::time::Duration;
 
 use futures::future::{self, err, ok};
 use futures::stream::{once, Stream, StreamExt};
@@ -151,14 +150,14 @@ async fn test_h2_content_length() {
         for i in 0..1 {
             let req = srv
                 .srequest(Method::GET, &format!("/{}", i))
-                .timeout(Duration::from_secs(30))
+                .timeout(30)
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
 
             let req = srv
                 .srequest(Method::HEAD, &format!("/{}", i))
-                .timeout(Duration::from_secs(100))
+                .timeout(100)
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
@@ -167,7 +166,7 @@ async fn test_h2_content_length() {
         for i in 1..3 {
             let req = srv
                 .srequest(Method::GET, &format!("/{}", i))
-                .timeout(Duration::from_secs(30))
+                .timeout(30)
                 .send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), Some(&value));

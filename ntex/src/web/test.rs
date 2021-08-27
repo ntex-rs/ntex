@@ -18,11 +18,10 @@ use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
 use crate::router::{Path, ResourceDef};
-use crate::rt::{time::sleep, System};
-use crate::server::Server;
 use crate::util::{next, Bytes, BytesMut, Extensions, Ready};
 use crate::{
-    map_config, IntoService, IntoServiceFactory, Service, ServiceFactory, Stream,
+    map_config, rt::System, server::Server, time::sleep, IntoService,
+    IntoServiceFactory, Service, ServiceFactory, Stream,
 };
 
 use crate::web::config::AppConfig;
@@ -735,8 +734,8 @@ where
                 Connector::default()
                     .lifetime(time::Duration::from_secs(0))
                     .keep_alive(time::Duration::from_millis(30000))
-                    .timeout(time::Duration::from_millis(30000))
-                    .disconnect_timeout(time::Duration::from_millis(3000))
+                    .timeout(30_000)
+                    .disconnect_timeout(3_000)
                     .openssl(builder.build())
                     .finish()
             }
@@ -744,14 +743,14 @@ where
             {
                 Connector::default()
                     .lifetime(time::Duration::from_secs(0))
-                    .timeout(time::Duration::from_millis(30000))
+                    .timeout(30_000)
                     .finish()
             }
         };
 
         Client::build()
             .connector(connector)
-            .timeout(time::Duration::from_millis(30000))
+            .timeout(30_000)
             .finish()
     };
 
@@ -949,7 +948,7 @@ impl TestServer {
     pub async fn stop(self) {
         self.server.stop(true).await;
         self.system.stop();
-        sleep(time::Duration::from_millis(100)).await;
+        sleep(100).await;
     }
 }
 
@@ -1223,7 +1222,7 @@ mod tests {
                     ))
                     .finish(),
             )
-            .timeout(time::Duration::from_millis(30000))
+            .timeout(30)
             .finish();
 
         let url = format!("https://localhost:{}/", srv.addr.port());

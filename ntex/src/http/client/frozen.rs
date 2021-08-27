@@ -1,4 +1,4 @@
-use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc, time::Duration};
+use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc};
 
 use crate::http::body::Body;
 use crate::http::error::HttpError;
@@ -16,7 +16,7 @@ pub struct FrozenClientRequest {
     pub(super) head: Rc<RequestHead>,
     pub(super) addr: Option<net::SocketAddr>,
     pub(super) response_decompress: bool,
-    pub(super) timeout: Option<Duration>,
+    pub(super) timeout: u64,
     pub(super) config: Rc<ClientConfig>,
 }
 

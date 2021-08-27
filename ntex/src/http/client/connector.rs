@@ -33,14 +33,14 @@ type BoxedConnector =
 /// use ntex::http::client::Connector;
 ///
 /// let connector = Connector::default()
-///      .timeout(Duration::from_secs(5))
+///      .timeout(5_000)
 ///      .finish();
 /// ```
 pub struct Connector {
-    timeout: Duration,
+    timeout: u64,
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
-    disconnect_timeout: Duration,
+    disconnect_timeout_ms: u64,
     limit: usize,
     connector: BoxedConnector,
     ssl_connector: Option<BoxedConnector>,
@@ -64,10 +64,10 @@ impl Connector {
                     .map_err(ConnectError::from),
             ),
             ssl_connector: None,
-            timeout: Duration::from_secs(1),
+            timeout: 1_000,
             conn_lifetime: Duration::from_secs(75),
             conn_keep_alive: Duration::from_secs(15),
-            disconnect_timeout: Duration::from_millis(3000),
+            disconnect_timeout_ms: 3_000,
             limit: 100,
         };
 
@@ -99,9 +99,11 @@ impl Connector {
 }
 
 impl Connector {
-    /// Connection timeout, i.e. max time to connect to remote host including dns name resolution.
+    /// Connection timeout in milliseconds.
+    ///
+    /// i.e. max time to connect to remote host including dns name resolution.
     /// Set to 1 second by default.
-    pub fn timeout(mut self, timeout: Duration) -> Self {
+    pub fn timeout(mut self, timeout: u64) -> Self {
         self.timeout = timeout;
         self
     }
@@ -177,7 +179,7 @@ impl Connector {
         self
     }
 
-    /// Set server connection disconnect timeout.
+    /// Set server connection disconnect timeout in milliseconds.
     ///
     /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
     /// within this time, the socket get dropped. This timeout affects only secure connections.
@@ -185,8 +187,8 @@ impl Connector {
     /// To disable timeout set value to 0.
     ///
     /// By default disconnect timeout is set to 3000 milliseconds.
-    pub fn disconnect_timeout(mut self, dur: Duration) -> Self {
-        self.disconnect_timeout = dur;
+    pub fn disconnect_timeout(mut self, dur: u64) -> Self {
+        self.disconnect_timeout_ms = dur;
         self
     }
 
@@ -241,7 +243,7 @@ impl Connector {
                 srv,
                 self.conn_lifetime,
                 self.conn_keep_alive,
-                self.disconnect_timeout,
+                self.disconnect_timeout_ms,
                 self.limit,
             ))
         } else {
@@ -253,7 +255,7 @@ impl Connector {
                 tcp_service,
                 self.conn_lifetime,
                 self.conn_keep_alive,
-                self.disconnect_timeout,
+                self.disconnect_timeout_ms,
                 self.limit,
             ),
             ssl_pool,
@@ -263,14 +265,14 @@ impl Connector {
 
 fn connector(
     connector: BoxedConnector,
-    timeout: Duration,
+    timeout: u64,
 ) -> impl Service<
     Request = Connect,
     Response = (Box<dyn Io>, Protocol),
     Error = ConnectError,
     Future = impl Unpin,
 > + Unpin {
-    TimeoutService::new(
+    TimeoutService::from_millis(
         timeout,
         apply_fn(connector, |msg: Connect, srv| {
             srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr))

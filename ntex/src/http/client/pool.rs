@@ -8,9 +8,10 @@ use http::uri::Authority;
 use crate::channel::pool;
 use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::http::Protocol;
-use crate::rt::{spawn, time::sleep, time::Sleep};
+use crate::rt::spawn;
 use crate::service::Service;
 use crate::task::LocalWaker;
+use crate::time::{sleep, Sleep};
 use crate::util::{poll_fn, Bytes, HashMap};
 
 use super::connection::{ConnectionType, IoConnection};
@@ -30,7 +31,6 @@ impl From<Authority> for Key {
 
 type Waiter<Io> = pool::Sender<Result<IoConnection<Io>, ConnectError>>;
 type WaiterReceiver<Io> = pool::Receiver<Result<IoConnection<Io>, ConnectError>>;
-const ZERO: Duration = Duration::from_millis(0);
 
 /// Connections pool
 pub(super) struct ConnectionPool<T, Io: 'static>(Rc<T>, Rc<RefCell<Inner<Io>>>);
@@ -47,14 +47,14 @@ where
         connector: T,
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
-        disconnect_timeout: Duration,
+        disconnect_timeout_ms: u64,
         limit: usize,
     ) -> Self {
         let connector = Rc::new(connector);
         let inner = Rc::new(RefCell::new(Inner {
             conn_lifetime,
             conn_keep_alive,
-            disconnect_timeout,
+            disconnect_timeout_ms,
             limit,
             acquired: 0,
             waiters: VecDeque::new(),
@@ -180,7 +180,7 @@ struct AvailableConnection<Io> {
 pub(super) struct Inner<Io> {
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
-    disconnect_timeout: Duration,
+    disconnect_timeout_ms: u64,
     limit: usize,
     acquired: usize,
     available: HashMap<Key, VecDeque<AvailableConnection<Io>>>,
@@ -246,7 +246,7 @@ where
                     || (now - conn.created) > self.conn_lifetime
                 {
                     if let ConnectionType::H1(io) = conn.io {
-                        CloseConnection::spawn(io, self.disconnect_timeout);
+                        CloseConnection::spawn(io, self.disconnect_timeout_ms);
                     }
                 } else {
                     let mut io = conn.io;
@@ -257,7 +257,10 @@ where
                             Poll::Pending => (),
                             Poll::Ready(Ok(_)) if !read_buf.filled().is_empty() => {
                                 if let ConnectionType::H1(io) = io {
-                                    CloseConnection::spawn(io, self.disconnect_timeout);
+                                    CloseConnection::spawn(
+                                        io,
+                                        self.disconnect_timeout_ms,
+                                    );
                                 }
                                 continue;
                             }
@@ -287,7 +290,7 @@ where
     fn release_close(&mut self, io: ConnectionType<Io>) {
         self.acquired -= 1;
         if let ConnectionType::H1(io) = io {
-            CloseConnection::spawn(io, self.disconnect_timeout);
+            CloseConnection::spawn(io, self.disconnect_timeout_ms);
         }
         self.check_availibility();
     }
@@ -363,22 +366,19 @@ where
     }
 }
 
-pin_project_lite::pin_project! {
-    struct CloseConnection<T> {
-        io: T,
-        #[pin]
-        timeout: Option<Sleep>,
-        shutdown: bool,
-    }
+struct CloseConnection<T> {
+    io: T,
+    timeout: Option<Sleep>,
+    shutdown: bool,
 }
 
 impl<T> CloseConnection<T>
 where
     T: AsyncWrite + AsyncRead + Unpin + 'static,
 {
-    fn spawn(io: T, timeout: Duration) {
-        let timeout = if timeout != ZERO {
-            Some(sleep(timeout))
+    fn spawn(io: T, timeout_ms: u64) {
+        let timeout = if timeout_ms != 0 {
+            Some(sleep(timeout_ms))
         } else {
             None
         };
@@ -396,19 +396,19 @@ where
 {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let mut this = self.project();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let mut this = self.as_mut();
 
         // shutdown WRITE side
         match Pin::new(&mut this.io).poll_shutdown(cx) {
-            Poll::Ready(Ok(())) => *this.shutdown = true,
+            Poll::Ready(Ok(())) => this.shutdown = true,
             Poll::Pending => return Poll::Pending,
             Poll::Ready(Err(_)) => return Poll::Ready(()),
         }
 
         // read until 0 or err
-        if let Some(timeout) = this.timeout.as_pin_mut() {
-            match timeout.poll(cx) {
+        if let Some(ref timeout) = this.timeout {
+            match timeout.poll_elapsed(cx) {
                 Poll::Ready(_) => (),
                 Poll::Pending => {
                     let mut buf = [0u8; 512];
@@ -611,7 +611,7 @@ mod tests {
     use std::{cell::RefCell, convert::TryFrom, rc::Rc, time::Duration};
 
     use super::*;
-    use crate::rt::time::sleep;
+    use crate::time::sleep;
     use crate::{
         http::client::Connection, http::Uri, service::fn_service, testing::Io,
         util::lazy,
@@ -630,7 +630,7 @@ mod tests {
             }),
             Duration::from_secs(10),
             Duration::from_secs(10),
-            Duration::from_millis(0),
+            0,
             1,
         )
         .clone();
@@ -671,7 +671,7 @@ mod tests {
         let mut fut = pool.call(req.clone());
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
         drop(fut);
-        sleep(Duration::from_millis(50)).await;
+        sleep(50).await;
         pool.1.borrow_mut().check_availibility();
         assert!(pool.1.borrow().waiters.is_empty());
 

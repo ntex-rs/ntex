@@ -17,7 +17,7 @@ use crate::http::message::ResponseHead;
 use crate::http::payload::Payload;
 use crate::http::request::Request;
 use crate::http::response::Response;
-use crate::rt::time::Sleep;
+use crate::time::Sleep;
 use crate::util::{Bytes, BytesMut};
 use crate::Service;
 
@@ -53,9 +53,13 @@ where
     ) -> Self {
         // keep-alive timer
         let (ka_expire, ka_timer) = if let Some(delay) = timeout {
-            (delay.deadline(), Some(delay))
+            let expire =
+                config.timer.now() + time::Duration::from_millis(config.keep_alive);
+            (expire, Some(delay))
         } else if let Some(delay) = config.keep_alive_timer() {
-            (delay.deadline(), Some(delay))
+            let expire =
+                config.timer.now() + time::Duration::from_millis(config.keep_alive);
+            (expire, Some(delay))
         } else {
             (config.now(), None)
         };

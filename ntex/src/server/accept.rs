@@ -5,8 +5,8 @@ use std::{
 use log::{error, info};
 use slab::Slab;
 
-use crate::rt::time::sleep_until;
 use crate::rt::System;
+use crate::time::sleep;
 
 use super::socket::{Listener, SocketAddr};
 use super::worker::{Connection, WorkerClient};
@@ -15,7 +15,7 @@ use super::{Server, ServerStatus, Token};
 const DELTA: usize = 100;
 const NOTIFY: mio::Token = mio::Token(0);
 const ERR_TIMEOUT: Duration = Duration::from_millis(500);
-const ERR_SLEEP_TIMEOUT: Duration = Duration::from_millis(525);
+const ERR_SLEEP_TIMEOUT: u64 = 525;
 
 #[derive(Debug)]
 pub(super) enum Command {
@@ -459,7 +459,7 @@ impl Accept {
 
                         let notify = self.notify.clone();
                         System::current().arbiter().spawn(Box::pin(async move {
-                            sleep_until(Instant::now() + ERR_SLEEP_TIMEOUT).await;
+                            sleep(ERR_SLEEP_TIMEOUT).await;
                             notify.send(Command::Timer);
                         }));
                         return;

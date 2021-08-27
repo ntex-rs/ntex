@@ -1,14 +1,14 @@
 use std::task::{Context, Poll};
-use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc, time::Duration};
+use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
 
 use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::framed::State;
-use crate::rt::time::{sleep, Sleep};
+use crate::time::{sleep, Sleep};
 
 #[derive(Debug)]
 enum IoWriteState {
     Processing,
-    Shutdown(Option<Pin<Box<Sleep>>>, Shutdown),
+    Shutdown(Option<Sleep>, Shutdown),
 }
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ where
         let disconnect_timeout = state.get_disconnect_timeout() as u64;
         let st = IoWriteState::Shutdown(
             if disconnect_timeout != 0 {
-                Some(Box::pin(sleep(Duration::from_millis(disconnect_timeout))))
+                Some(sleep(disconnect_timeout))
             } else {
                 None
             },
@@ -83,9 +83,7 @@ where
                     let disconnect_timeout = this.state.get_disconnect_timeout() as u64;
                     this.st = IoWriteState::Shutdown(
                         if disconnect_timeout != 0 {
-                            Some(Box::pin(sleep(Duration::from_millis(
-                                disconnect_timeout,
-                            ))))
+                            Some(sleep(disconnect_timeout))
                         } else {
                             None
                         },

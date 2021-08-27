@@ -1,5 +1,5 @@
 //! Test helpers to use during testing.
-use std::{convert::TryFrom, io, net, str::FromStr, sync::mpsc, thread, time};
+use std::{convert::TryFrom, io, net, str::FromStr, sync::mpsc, thread};
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
@@ -243,22 +243,17 @@ pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
                     .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
                 Connector::default()
-                    .timeout(time::Duration::from_millis(30000))
+                    .timeout(30_000)
                     .openssl(builder.build())
                     .finish()
             }
             #[cfg(not(feature = "openssl"))]
             {
-                Connector::default()
-                    .timeout(time::Duration::from_millis(30000))
-                    .finish()
+                Connector::default().timeout(30).finish()
             }
         };
 
-        Client::build()
-            .timeout(time::Duration::from_millis(30000))
-            .connector(connector)
-            .finish()
+        Client::build().timeout(30).connector(connector).finish()
     };
 
     TestServer {

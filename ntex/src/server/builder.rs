@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{future::Future, io, mem, net, pin::Pin, time::Duration};
+use std::{future::Future, io, mem, net, pin::Pin};
 
 use async_channel::{unbounded, Receiver};
 use async_oneshot as oneshot;
@@ -7,8 +7,8 @@ use futures_core::Stream;
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::rt::{net::TcpStream, spawn, time::sleep, System};
-use crate::util::join_all;
+use crate::rt::{net::TcpStream, spawn, System};
+use crate::{time::sleep, util::join_all};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfiguredService, ServiceConfig};
@@ -18,7 +18,7 @@ use super::socket::Listener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use super::{Server, ServerCommand, ServerStatus, Token};
 
-const STOP_DELAY: Duration = Duration::from_millis(300);
+const STOP_DELAY: u64 = 300;
 
 /// Server builder
 pub struct ServerBuilder {
@@ -30,7 +30,7 @@ pub struct ServerBuilder {
     sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
     exit: bool,
-    shutdown_timeout: Duration,
+    shutdown_timeout: u64,
     no_signals: bool,
     cmd: Receiver<ServerCommand>,
     server: Server,
@@ -58,7 +58,7 @@ impl ServerBuilder {
             accept: AcceptLoop::new(server.clone()),
             backlog: 2048,
             exit: false,
-            shutdown_timeout: Duration::from_secs(30),
+            shutdown_timeout: 30_000,
             no_signals: false,
             cmd: rx,
             notify: Vec::new(),
@@ -125,7 +125,7 @@ impl ServerBuilder {
     ///
     /// By default shutdown timeout sets to 30 seconds.
     pub fn shutdown_timeout(mut self, sec: u64) -> Self {
-        self.shutdown_timeout = Duration::from_secs(sec);
+        self.shutdown_timeout = sec * 1000;
         self
     }
 
@@ -521,8 +521,7 @@ mod tests {
     #[cfg(unix)]
     #[crate::rt_test]
     async fn test_signals() {
-        use std::sync::mpsc;
-        use std::{net, thread, time};
+        use std::{net, sync::mpsc, thread};
 
         fn start(tx: mpsc::Sender<(Server, net::SocketAddr)>) -> thread::JoinHandle<()> {
             thread::spawn(move || {
@@ -552,11 +551,11 @@ mod tests {
             let h = start(tx);
             let (srv, addr) = rx.recv().unwrap();
 
-            crate::rt::time::sleep(time::Duration::from_millis(300)).await;
+            crate::time::sleep(300).await;
             assert!(net::TcpStream::connect(addr).is_ok());
 
             srv.signal(*sig);
-            crate::rt::time::sleep(time::Duration::from_millis(300)).await;
+            crate::time::sleep(300).await;
             assert!(net::TcpStream::connect(addr).is_err());
             let _ = h.join();
         }

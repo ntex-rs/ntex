@@ -47,11 +47,7 @@ async fn test_run() {
     use ntex::http::client;
 
     let client = client::Client::build()
-        .connector(
-            client::Connector::default()
-                .timeout(Duration::from_millis(100))
-                .finish(),
-        )
+        .connector(client::Connector::default().timeout(100_000).finish())
         .finish();
 
     let host = format!("http://{}", addr);
@@ -90,10 +86,10 @@ fn client() -> ntex::http::client::Client {
         .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
 
     ntex::http::client::Client::build()
-        .timeout(Duration::from_millis(30000))
+        .timeout(30)
         .connector(
             ntex::http::client::Connector::default()
-                .timeout(Duration::from_millis(30000))
+                .timeout(30_000)
                 .openssl(builder.build())
                 .finish(),
         )

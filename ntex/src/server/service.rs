@@ -1,6 +1,6 @@
 use std::{
     future::Future, marker::PhantomData, net::SocketAddr, pin::Pin, task::Context,
-    task::Poll, time::Duration,
+    task::Poll,
 };
 
 use log::error;
@@ -16,8 +16,8 @@ use super::Token;
 pub(super) enum ServerMessage {
     /// New stream
     Connect(Stream),
-    /// Gracefull shutdown
-    Shutdown(Duration),
+    /// Gracefull shutdown in millis
+    Shutdown(u64),
     /// Force shutdown
     ForceShutdown,
 }

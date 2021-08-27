@@ -1,4 +1,4 @@
-use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc, time::Duration};
+use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc};
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
@@ -51,7 +51,7 @@ pub struct ClientRequest {
     #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
     response_decompress: bool,
-    timeout: Option<Duration>,
+    timeout: u64,
     config: Rc<ClientConfig>,
 }
 
@@ -69,7 +69,7 @@ impl ClientRequest {
             addr: None,
             #[cfg(feature = "cookie")]
             cookies: None,
-            timeout: None,
+            timeout: 0,
             response_decompress: true,
         }
         .method(method)
@@ -309,12 +309,12 @@ impl ClientRequest {
         self
     }
 
-    /// Set request timeout. Overrides client wide timeout setting.
+    /// Set request timeout in secs. Overrides client wide timeout setting.
     ///
     /// Request timeout is the total time before a response must be received.
     /// Default value is 5 seconds.
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
+    pub fn timeout(mut self, timeout: u16) -> Self {
+        self.timeout = ((timeout as u64) * 1000) as u64;
         self
     }
 
