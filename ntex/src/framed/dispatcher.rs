@@ -1,13 +1,14 @@
 //! Framed transport dispatcher
 use std::{
     cell::Cell, cell::RefCell, future::Future, pin::Pin, rc::Rc, task::Context,
-    task::Poll, time::Duration, time::Instant,
+    task::Poll, time, time::Instant,
 };
 
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use crate::framed::{DispatchItem, Read, ReadTask, State, Timer, Write, WriteTask};
 use crate::service::{IntoService, Service};
-use crate::{time::Seconds, util::Either};
+use crate::time::Seconds;
+use crate::util::Either;
 
 type Response<U> = <U as Encoder>::Item;
 
@@ -38,7 +39,7 @@ where
     st: Cell<DispatcherState>,
     state: State,
     timer: Timer,
-    ka_timeout: u16,
+    ka_timeout: Seconds,
     ka_updated: Cell<Instant>,
     error: Cell<Option<S::Error>>,
     shared: Rc<DispatcherShared<S, U>>,
@@ -117,10 +118,10 @@ where
         timer: Timer,
     ) -> Self {
         let updated = timer.now();
-        let ka_timeout: u16 = 30;
+        let ka_timeout = Seconds(30);
 
         // register keepalive timer
-        let expire = updated + Duration::from_secs(ka_timeout as u64);
+        let expire = updated + time::Duration::from(ka_timeout);
         timer.register(expire, expire, &state);
 
         Dispatcher {
@@ -142,19 +143,18 @@ where
         }
     }
 
-    /// Set keep-alive timeout in seconds.
+    /// Set keep-alive timeout.
     ///
     /// To disable timeout set value to 0.
     ///
     /// By default keep-alive timeout is set to 30 seconds.
-    pub fn keepalive_timeout(mut self, timeout: u16) -> Self {
+    pub fn keepalive_timeout(mut self, timeout: Seconds) -> Self {
         // register keepalive timer
-        let prev = self.inner.ka_updated.get() + self.inner.ka();
-        if timeout == 0 {
+        let prev = self.inner.ka_updated.get() + time::Duration::from(self.inner.ka());
+        if timeout.is_zero() {
             self.inner.timer.unregister(prev, &self.inner.state);
         } else {
-            let expire =
-                self.inner.ka_updated.get() + Duration::from_secs(timeout as u64);
+            let expire = self.inner.ka_updated.get() + time::Duration::from(timeout);
             self.inner.timer.register(expire, prev, &self.inner.state);
         }
         self.inner.ka_timeout = timeout;
@@ -458,12 +458,12 @@ where
         }
     }
 
-    fn ka(&self) -> Duration {
-        Duration::from_secs(self.ka_timeout as u64)
+    fn ka(&self) -> Seconds {
+        self.ka_timeout
     }
 
     fn ka_enabled(&self) -> bool {
-        self.ka_timeout > 0
+        self.ka_timeout.non_zero()
     }
 
     /// check keepalive timeout
@@ -483,7 +483,7 @@ where
         if self.ka_enabled() {
             let updated = self.timer.now();
             if updated != self.ka_updated.get() {
-                let ka = self.ka();
+                let ka = time::Duration::from(self.ka());
                 self.timer.register(
                     updated + ka,
                     self.ka_updated.get() + ka,
@@ -497,8 +497,10 @@ where
     /// unregister keep-alive timer
     fn unregister_keepalive(&self) {
         if self.ka_enabled() {
-            self.timer
-                .unregister(self.ka_updated.get() + self.ka(), &self.state);
+            self.timer.unregister(
+                self.ka_updated.get() + time::Duration::from(self.ka()),
+                &self.state,
+            );
         }
     }
 }
@@ -507,6 +509,7 @@ where
 mod tests {
     use rand::Rng;
     use std::sync::{atomic::AtomicBool, atomic::Ordering::Relaxed, Arc, Mutex};
+    use std::time::Duration;
 
     use crate::codec::BytesCodec;
     use crate::testing::Io;
@@ -533,7 +536,7 @@ mod tests {
             T: AsyncRead + AsyncWrite + Unpin + 'static,
         {
             let timer = Timer::default();
-            let ka_timeout = 1;
+            let ka_timeout = Seconds(1);
             let ka_updated = timer.now();
             let state = State::new();
             let io = Rc::new(RefCell::new(io));
@@ -769,7 +772,10 @@ mod tests {
             }),
         );
         crate::rt::spawn(async move {
-            let _ = disp.keepalive_timeout(0).keepalive_timeout(1).await;
+            let _ = disp
+                .keepalive_timeout(Seconds::ZERO)
+                .keepalive_timeout(Seconds(1))
+                .await;
         });
 
         state.set_disconnect_timeout(Seconds(1));

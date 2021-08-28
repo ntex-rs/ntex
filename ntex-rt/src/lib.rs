@@ -7,8 +7,12 @@ mod builder;
 mod runtime;
 mod system;
 
+mod time;
+
 #[doc(hidden)]
-pub mod time;
+pub mod time_driver {
+    pub use super::time::*;
+}
 
 pub use self::arbiter::Arbiter;
 pub use self::builder::{Builder, SystemRunner};

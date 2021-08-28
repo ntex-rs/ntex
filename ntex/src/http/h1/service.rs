@@ -13,7 +13,7 @@ use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::rt::net::TcpStream;
 use crate::{
-    pipeline_factory, time::Duration, IntoServiceFactory, Service, ServiceFactory,
+    pipeline_factory, time::Millis, IntoServiceFactory, Service, ServiceFactory,
 };
 
 use super::codec::Codec;
@@ -29,7 +29,7 @@ pub struct H1Service<T, S, B, X = ExpectHandler, U = UpgradeHandler<T>> {
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     on_request: RefCell<Option<OnRequest<T>>>,
     #[allow(dead_code)]
-    handshake_timeout: Duration,
+    handshake_timeout: Millis,
     _t: marker::PhantomData<(T, B)>,
 }
 

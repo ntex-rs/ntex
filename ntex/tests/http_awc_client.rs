@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use brotli2::write::BrotliEncoder;
 use coo_kie::Cookie;
@@ -825,7 +824,7 @@ async fn client_read_until_eof() {
             }
         }
     });
-    ntex::rt::time::sleep(Duration::from_millis(300)).await;
+    ntex::time::sleep(300).await;
 
     // client request
     let req = Client::build()

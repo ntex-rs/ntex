@@ -9,7 +9,7 @@ use crate::codec::{AsyncRead, AsyncWrite};
 use crate::framed::State;
 use crate::rt::net::TcpStream;
 use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
-use crate::time::{Duration, Seconds};
+use crate::time::{Millis, Seconds};
 use crate::util::Bytes;
 
 use super::body::MessageBody;
@@ -62,9 +62,9 @@ where
     pub fn new<F: IntoServiceFactory<S>>(service: F) -> Self {
         let cfg = ServiceConfig::new(
             KeepAlive::Timeout(Seconds(5)),
-            Duration::from_millis(5_000),
+            Millis(5_000),
             Seconds::ZERO,
-            Duration::from_millis(5_000),
+            Millis(5_000),
             1024,
             8 * 1024,
             8 * 1024,

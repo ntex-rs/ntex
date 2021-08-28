@@ -5,7 +5,7 @@
 use std::{fmt, future::Future, marker, pin::Pin, task::Context, task::Poll};
 
 use crate::service::{IntoService, Service, Transform};
-use crate::time::{sleep, Duration, Sleep};
+use crate::time::{sleep, Millis, Sleep};
 use crate::util::Either;
 
 /// Applies a timeout to requests.
@@ -13,7 +13,7 @@ use crate::util::Either;
 /// Timeout transform is disabled if timeout is set to 0
 #[derive(Debug)]
 pub struct Timeout<E = ()> {
-    timeout: Duration,
+    timeout: Millis,
     _t: marker::PhantomData<E>,
 }
 
@@ -65,7 +65,7 @@ impl<E: PartialEq> PartialEq for TimeoutError<E> {
 }
 
 impl Timeout {
-    pub fn new<T: Into<Duration>>(timeout: T) -> Self {
+    pub fn new<T: Into<Millis>>(timeout: T) -> Self {
         Timeout {
             timeout: timeout.into(),
             _t: marker::PhantomData,
@@ -100,7 +100,7 @@ where
 #[derive(Debug, Clone)]
 pub struct TimeoutService<S> {
     service: S,
-    timeout: Duration,
+    timeout: Millis,
 }
 
 impl<S> TimeoutService<S>
@@ -109,7 +109,7 @@ where
 {
     pub fn new<T, U>(timeout: T, service: U) -> Self
     where
-        T: Into<Duration>,
+        T: Into<Millis>,
         U: IntoService<S>,
     {
         TimeoutService {

@@ -5,7 +5,7 @@ use std::{future::Future, pin::Pin, task, task::Poll};
 mod types;
 mod wheel;
 
-pub use self::types::{Duration, Seconds};
+pub use self::types::{Millis, Seconds};
 pub use self::wheel::TimerHandle;
 
 /// Waits until `duration` has elapsed.
@@ -14,8 +14,17 @@ pub use self::wheel::TimerHandle;
 /// operates at 16.5 millisecond granularity and should not be used for tasks that
 /// require high-resolution timers.
 #[inline]
-pub fn sleep<T: Into<Duration>>(dur: T) -> Sleep {
-    Sleep::new(dur.into().0)
+pub fn sleep<T: Into<Millis>>(dur: T) -> Sleep {
+    Sleep::new(dur.into())
+}
+
+/// Creates new [`Interval`] that yields with interval of `period`.
+///
+/// An interval will tick indefinitely. At any time, the [`Interval`] value can
+/// be dropped. This cancels the interval.
+#[inline]
+pub fn interval<T: Into<Millis>>(period: T) -> Interval {
+    Interval::new(period.into())
 }
 
 /// Require a `Future` to complete before the specified duration has elapsed.
@@ -27,9 +36,9 @@ pub fn sleep<T: Into<Duration>>(dur: T) -> Sleep {
 pub fn timeout<T, U>(dur: U, future: T) -> Timeout<T>
 where
     T: Future,
-    U: Into<Duration>,
+    U: Into<Millis>,
 {
-    Timeout::new_with_delay(future, Sleep::new(dur.into().0))
+    Timeout::new_with_delay(future, Sleep::new(dur.into()))
 }
 
 /// Future returned by [`sleep`](sleep).
@@ -57,9 +66,9 @@ pub struct Sleep {
 impl Sleep {
     /// Create new sleep future
     #[inline]
-    pub fn new(millis: u64) -> Sleep {
+    pub fn new(duration: Millis) -> Sleep {
         Sleep {
-            hnd: TimerHandle::new(millis),
+            hnd: TimerHandle::new(duration.0),
         }
     }
 
@@ -76,8 +85,8 @@ impl Sleep {
     ///
     /// This function can be called both before and after the future has
     /// completed.
-    pub fn reset(&self, millis: u64) {
-        self.hnd.reset(millis);
+    pub fn reset<T: Into<Millis>>(&self, millis: T) {
+        self.hnd.reset(millis.into().0);
     }
 
     #[inline]
@@ -130,5 +139,53 @@ where
             Poll::Ready(()) => Poll::Ready(Err(())),
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+/// Interval returned by [`interval`]
+///
+/// This type allows you to wait on a sequence of instants with a certain
+/// duration between each instant.
+#[derive(Debug)]
+pub struct Interval {
+    hnd: TimerHandle,
+    period: u64,
+}
+
+impl Interval {
+    /// Create new sleep future
+    #[inline]
+    pub fn new(period: Millis) -> Interval {
+        Interval {
+            hnd: TimerHandle::new(period.0),
+            period: period.0,
+        }
+    }
+
+    #[inline]
+    pub async fn tick(&self) {
+        crate::util::poll_fn(|cx| self.poll_tick(cx)).await;
+    }
+
+    #[inline]
+    pub fn poll_tick(&self, cx: &mut task::Context<'_>) -> Poll<()> {
+        if self.hnd.poll_elapsed(cx).is_ready() {
+            self.hnd.reset(self.period);
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl crate::Stream for Interval {
+    type Item = ();
+
+    #[inline]
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        self.poll_tick(cx).map(|_| Some(()))
     }
 }

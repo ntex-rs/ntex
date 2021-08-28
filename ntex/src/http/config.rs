@@ -3,7 +3,7 @@ use std::{cell::Cell, cell::RefCell, ptr::copy_nonoverlapping, rc::Rc, time};
 use crate::framed::Timer;
 use crate::http::{Request, Response};
 use crate::service::boxed::BoxService;
-use crate::time::{sleep, Duration, Seconds, Sleep};
+use crate::time::{sleep, Millis, Seconds, Sleep};
 use crate::util::BytesMut;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -37,12 +37,12 @@ impl From<Option<usize>> for KeepAlive {
 pub struct ServiceConfig(pub(super) Rc<Inner>);
 
 pub(super) struct Inner {
-    pub(super) keep_alive: Duration,
-    pub(super) client_timeout: Duration,
+    pub(super) keep_alive: Millis,
+    pub(super) client_timeout: Millis,
     pub(super) client_disconnect: Seconds,
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
-    pub(super) ssl_handshake_timeout: Duration,
+    pub(super) ssl_handshake_timeout: Millis,
     pub(super) timer_h1: Timer,
     pub(super) lw: u16,
     pub(super) read_hw: u16,
@@ -59,9 +59,9 @@ impl Default for ServiceConfig {
     fn default() -> Self {
         Self::new(
             KeepAlive::Timeout(Seconds(5)),
-            Duration::ZERO,
+            Millis::ZERO,
             Seconds::ZERO,
-            Duration::from_millis(5_000),
+            Millis(5_000),
             1024,
             8 * 1024,
             8 * 1024,
@@ -73,23 +73,19 @@ impl ServiceConfig {
     /// Create instance of `ServiceConfig`
     pub fn new(
         keep_alive: KeepAlive,
-        client_timeout: Duration,
+        client_timeout: Millis,
         client_disconnect: Seconds,
-        ssl_handshake_timeout: Duration,
+        ssl_handshake_timeout: Millis,
         lw: u16,
         read_hw: u16,
         write_hw: u16,
     ) -> ServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
-            KeepAlive::Timeout(val) => (Duration::from(val), true),
-            KeepAlive::Os => (Duration::ZERO, true),
-            KeepAlive::Disabled => (Duration::ZERO, false),
+            KeepAlive::Timeout(val) => (Millis::from(val), true),
+            KeepAlive::Os => (Millis::ZERO, true),
+            KeepAlive::Disabled => (Millis::ZERO, false),
         };
-        let keep_alive = if ka_enabled {
-            keep_alive
-        } else {
-            Duration::ZERO
-        };
+        let keep_alive = if ka_enabled { keep_alive } else { Millis::ZERO };
 
         ServiceConfig(Rc::new(Inner {
             keep_alive,
@@ -112,8 +108,8 @@ pub(super) struct DispatcherConfig<T, S, X, U> {
     pub(super) service: S,
     pub(super) expect: X,
     pub(super) upgrade: Option<U>,
-    pub(super) keep_alive: Duration,
-    pub(super) client_timeout: Duration,
+    pub(super) keep_alive: Millis,
+    pub(super) client_timeout: Millis,
     pub(super) client_disconnect: Seconds,
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,

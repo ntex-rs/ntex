@@ -3,7 +3,7 @@ use std::time::{self, Instant};
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
 use crate::service::{Service, ServiceFactory};
-use crate::time::{sleep, Duration};
+use crate::time::{sleep, Millis};
 use crate::util::Ready;
 
 #[derive(Clone, Debug)]
@@ -11,12 +11,12 @@ pub struct LowResTime(Rc<RefCell<Inner>>);
 
 #[derive(Debug)]
 struct Inner {
-    resolution: Duration,
+    resolution: Millis,
     current: Option<Instant>,
 }
 
 impl Inner {
-    fn new(resolution: Duration) -> Self {
+    fn new(resolution: Millis) -> Self {
         Inner {
             resolution,
             current: None,
@@ -26,7 +26,7 @@ impl Inner {
 
 impl LowResTime {
     /// Create new timer service
-    pub fn new<T: Into<Duration>>(resolution: T) -> LowResTime {
+    pub fn new<T: Into<Millis>>(resolution: T) -> LowResTime {
         LowResTime(Rc::new(RefCell::new(Inner::new(resolution.into()))))
     }
 
@@ -37,9 +37,7 @@ impl LowResTime {
 
 impl Default for LowResTime {
     fn default() -> Self {
-        LowResTime(Rc::new(RefCell::new(Inner::new(Duration::from_millis(
-            1000,
-        )))))
+        LowResTime(Rc::new(RefCell::new(Inner::new(Millis(1000)))))
     }
 }
 
@@ -62,7 +60,7 @@ impl ServiceFactory for LowResTime {
 pub struct LowResTimeService(Rc<RefCell<Inner>>);
 
 impl LowResTimeService {
-    pub fn new<T: Into<Duration>>(resolution: T) -> LowResTimeService {
+    pub fn new<T: Into<Millis>>(resolution: T) -> LowResTimeService {
         LowResTimeService(Rc::new(RefCell::new(Inner::new(resolution.into()))))
     }
 
@@ -112,12 +110,12 @@ pub struct SystemTime(Rc<RefCell<SystemTimeInner>>);
 
 #[derive(Debug)]
 struct SystemTimeInner {
-    resolution: Duration,
+    resolution: Millis,
     current: Option<time::SystemTime>,
 }
 
 impl SystemTimeInner {
-    fn new(resolution: Duration) -> Self {
+    fn new(resolution: Millis) -> Self {
         SystemTimeInner {
             resolution,
             current: None,
@@ -130,7 +128,7 @@ pub struct SystemTimeService(Rc<RefCell<SystemTimeInner>>);
 
 impl SystemTimeService {
     /// Create new system time service
-    pub fn new<T: Into<Duration>>(resolution: T) -> SystemTimeService {
+    pub fn new<T: Into<Millis>>(resolution: T) -> SystemTimeService {
         SystemTimeService(Rc::new(RefCell::new(SystemTimeInner::new(
             resolution.into(),
         ))))

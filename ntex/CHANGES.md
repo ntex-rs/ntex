@@ -4,7 +4,9 @@
 
 * Add timer service
 
-* Add helper time types Duration, Seconds
+* Add helper time types Millis and Seconds
+
+* Add sleep, interval, timeout helpers
 
 * Use ntex-rt 0.3
 

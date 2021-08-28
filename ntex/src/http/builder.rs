@@ -11,7 +11,7 @@ use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::service::HttpService;
 use crate::service::{boxed, IntoService, IntoServiceFactory, Service, ServiceFactory};
-use crate::time::{Duration, Seconds};
+use crate::time::{Millis, Seconds};
 
 /// A http service builder
 ///
@@ -19,9 +19,9 @@ use crate::time::{Duration, Seconds};
 /// builder-like pattern.
 pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
     keep_alive: KeepAlive,
-    client_timeout: Duration,
+    client_timeout: Millis,
     client_disconnect: Seconds,
-    handshake_timeout: Duration,
+    handshake_timeout: Millis,
     lw: u16,
     read_hw: u16,
     write_hw: u16,
@@ -37,9 +37,9 @@ impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
     pub fn new() -> Self {
         HttpServiceBuilder {
             keep_alive: KeepAlive::Timeout(Seconds(5)),
-            client_timeout: Duration::from_secs(3),
+            client_timeout: Millis::from_secs(3),
             client_disconnect: Seconds(3),
-            handshake_timeout: Duration::from_secs(5),
+            handshake_timeout: Millis::from_secs(5),
             lw: 1024,
             read_hw: 8 * 1024,
             write_hw: 8 * 1024,

@@ -1,7 +1,7 @@
 //! Various helpers for ntex applications to use during testing.
 use std::{
     convert::TryFrom, error::Error, fmt, net, net::SocketAddr, rc::Rc, sync::mpsc,
-    thread, time,
+    thread,
 };
 
 #[cfg(feature = "cookie")]
@@ -733,8 +733,8 @@ where
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
                     .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
                 Connector::default()
-                    .lifetime(time::Duration::from_secs(0))
-                    .keep_alive(time::Duration::from_millis(30000))
+                    .lifetime(Seconds::ZERO)
+                    .keep_alive(Seconds(30))
                     .timeout(30_000)
                     .disconnect_timeout(3_000)
                     .openssl(builder.build())
@@ -743,7 +743,7 @@ where
             #[cfg(not(feature = "openssl"))]
             {
                 Connector::default()
-                    .lifetime(time::Duration::from_secs(0))
+                    .lifetime(Seconds::ZERO)
                     .timeout(30_000)
                     .finish()
             }

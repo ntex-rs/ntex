@@ -11,7 +11,7 @@ use crate::http::Protocol;
 use crate::rt::spawn;
 use crate::service::Service;
 use crate::task::LocalWaker;
-use crate::time::{self as time, sleep, Sleep};
+use crate::time::{sleep, Millis, Sleep};
 use crate::util::{poll_fn, Bytes, HashMap};
 
 use super::connection::{ConnectionType, IoConnection};
@@ -47,7 +47,7 @@ where
         connector: T,
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
-        disconnect_timeout: time::Duration,
+        disconnect_timeout: Millis,
         limit: usize,
     ) -> Self {
         let connector = Rc::new(connector);
@@ -180,7 +180,7 @@ struct AvailableConnection<Io> {
 pub(super) struct Inner<Io> {
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
-    disconnect_timeout: time::Duration,
+    disconnect_timeout: Millis,
     limit: usize,
     acquired: usize,
     available: HashMap<Key, VecDeque<AvailableConnection<Io>>>,
@@ -373,7 +373,7 @@ impl<T> CloseConnection<T>
 where
     T: AsyncWrite + AsyncRead + Unpin + 'static,
 {
-    fn spawn(io: T, timeout: time::Duration) {
+    fn spawn(io: T, timeout: Millis) {
         spawn(Self {
             io,
             shutdown: false,
@@ -603,10 +603,9 @@ mod tests {
     use std::{cell::RefCell, convert::TryFrom, rc::Rc};
 
     use super::*;
-    use crate::time::{self as time, sleep};
     use crate::{
         http::client::Connection, http::Uri, service::fn_service, testing::Io,
-        util::lazy,
+        time::sleep, util::lazy,
     };
 
     #[crate::rt_test]
@@ -622,7 +621,7 @@ mod tests {
             }),
             Duration::from_secs(10),
             Duration::from_secs(10),
-            time::Duration::ZERO,
+            Millis::ZERO,
             1,
         )
         .clone();

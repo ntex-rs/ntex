@@ -9,7 +9,7 @@ pub use webpki_roots::TLS_SERVER_ROOTS;
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::service::{Service, ServiceFactory};
-use crate::time::{sleep, Duration, Sleep};
+use crate::time::{sleep, Millis, Sleep};
 use crate::util::counter::{Counter, CounterGuard};
 use crate::util::Ready;
 
@@ -19,7 +19,7 @@ use super::MAX_SSL_ACCEPT_COUNTER;
 ///
 /// `rust-tls` feature enables `RustlsAcceptor` type
 pub struct Acceptor<T> {
-    timeout: Duration,
+    timeout: Millis,
     config: Arc<ServerConfig>,
     io: PhantomData<T>,
 }
@@ -29,7 +29,7 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     pub fn new(config: ServerConfig) -> Self {
         Acceptor {
             config: Arc::new(config),
-            timeout: Duration::from_millis(5_000),
+            timeout: Millis(5_000),
             io: PhantomData,
         }
     }
@@ -37,7 +37,7 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     /// Set handshake timeout.
     ///
     /// Default is set to 5 seconds.
-    pub fn timeout<U: Into<Duration>>(mut self, timeout: U) -> Self {
+    pub fn timeout<U: Into<Millis>>(mut self, timeout: U) -> Self {
         self.timeout = timeout.into();
         self
     }
@@ -80,7 +80,7 @@ pub struct AcceptorService<T> {
     acceptor: TlsAcceptor,
     io: PhantomData<T>,
     conns: Counter,
-    timeout: Duration,
+    timeout: Millis,
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {

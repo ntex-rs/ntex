@@ -7,8 +7,8 @@ use crate::http::body::{Body, BodyStream};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::RequestHeadType;
-use crate::time::{sleep, Sleep};
-use crate::{time, util::Bytes, Stream};
+use crate::time::{sleep, Millis, Sleep};
+use crate::{util::Bytes, Stream};
 
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
@@ -58,7 +58,7 @@ impl SendClientRequest {
     pub(crate) fn new(
         send: Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>>>>,
         response_decompress: bool,
-        timeout: time::Duration,
+        timeout: Millis,
     ) -> SendClientRequest {
         SendClientRequest::Fut(send, timeout.map(sleep), response_decompress)
     }
@@ -129,7 +129,7 @@ impl RequestHeadType {
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        mut timeout: time::Duration,
+        mut timeout: Millis,
         config: &ClientConfig,
         body: B,
     ) -> SendClientRequest
@@ -151,7 +151,7 @@ impl RequestHeadType {
         mut self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: time::Duration,
+        timeout: Millis,
         config: &ClientConfig,
         value: &T,
     ) -> SendClientRequest {
@@ -178,7 +178,7 @@ impl RequestHeadType {
         mut self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: time::Duration,
+        timeout: Millis,
         config: &ClientConfig,
         value: &T,
     ) -> SendClientRequest {
@@ -208,7 +208,7 @@ impl RequestHeadType {
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: time::Duration,
+        timeout: Millis,
         config: &ClientConfig,
         stream: S,
     ) -> SendClientRequest
@@ -229,7 +229,7 @@ impl RequestHeadType {
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
-        timeout: time::Duration,
+        timeout: Millis,
         config: &ClientConfig,
     ) -> SendClientRequest {
         self.send_body(addr, response_decompress, timeout, config, Body::Empty)

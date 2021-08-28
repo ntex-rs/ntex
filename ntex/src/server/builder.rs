@@ -7,7 +7,7 @@ use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::rt::{net::TcpStream, spawn, System};
-use crate::{time::sleep, time::Duration, util::join_all};
+use crate::{time::sleep, time::Millis, util::join_all};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfiguredService, ServiceConfig};
@@ -29,7 +29,7 @@ pub struct ServerBuilder {
     sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
     exit: bool,
-    shutdown_timeout: Duration,
+    shutdown_timeout: Millis,
     no_signals: bool,
     cmd: Receiver<ServerCommand>,
     server: Server,
@@ -57,7 +57,7 @@ impl ServerBuilder {
             accept: AcceptLoop::new(server.clone()),
             backlog: 2048,
             exit: false,
-            shutdown_timeout: Duration::from_secs(30),
+            shutdown_timeout: Millis::from_secs(30),
             no_signals: false,
             cmd: rx,
             notify: Vec::new(),
@@ -123,7 +123,7 @@ impl ServerBuilder {
     /// dropped.
     ///
     /// By default shutdown timeout sets to 30 seconds.
-    pub fn shutdown_timeout<T: Into<Duration>>(mut self, timeout: T) -> Self {
+    pub fn shutdown_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.shutdown_timeout = timeout.into();
         self
     }

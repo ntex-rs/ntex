@@ -1,4 +1,4 @@
-use std::convert::TryInto;
+use std::{convert::TryInto, ops};
 
 // /// A measurement of a monotonically nondecreasing clock. Opaque and useful only with Duration.
 // ///
@@ -16,23 +16,18 @@ use std::convert::TryInto;
 
 /// A Duration type to represent a span of time.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Duration(pub(super) u64);
+pub struct Millis(pub u64);
 
-impl Duration {
+impl Millis {
     /// Zero milliseconds value
-    pub const ZERO: Duration = Duration(0);
+    pub const ZERO: Millis = Millis(0);
 
     /// One second value
-    pub const ONE_SEC: Duration = Duration(1_000);
+    pub const ONE_SEC: Millis = Millis(1_000);
 
     #[inline]
-    pub const fn from_secs(secs: u32) -> Duration {
-        Duration((secs as u64) * 1000)
-    }
-
-    #[inline]
-    pub const fn from_millis(millis: u64) -> Duration {
-        Duration(millis)
+    pub const fn from_secs(secs: u32) -> Millis {
+        Millis((secs as u64) * 1000)
     }
 
     #[inline]
@@ -49,7 +44,7 @@ impl Duration {
     #[inline]
     pub fn map<F, R>(&self, f: F) -> Option<R>
     where
-        F: FnOnce(Duration) -> R,
+        F: FnOnce(Millis) -> R,
     {
         if self.0 == 0 {
             None
@@ -59,30 +54,94 @@ impl Duration {
     }
 }
 
-impl Default for Duration {
+impl Default for Millis {
     #[inline]
-    fn default() -> Duration {
-        Duration::ZERO
+    fn default() -> Millis {
+        Millis::ZERO
     }
 }
 
-impl From<u64> for Duration {
+impl ops::Add<Millis> for Millis {
+    type Output = Millis;
+
     #[inline]
-    fn from(millis: u64) -> Duration {
-        Duration(millis)
+    fn add(self, other: Millis) -> Millis {
+        Millis(self.0.checked_add(other.0).unwrap_or(u64::MAX))
     }
 }
 
-impl From<Seconds> for Duration {
+impl ops::Add<Seconds> for Millis {
+    type Output = Millis;
+
     #[inline]
-    fn from(s: Seconds) -> Duration {
-        Duration((s.0 as u64) * 1000)
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    fn add(self, other: Seconds) -> Millis {
+        Millis(
+            self.0
+                .checked_add((other.0 as u64) * 1000)
+                .unwrap_or(u64::MAX),
+        )
     }
 }
 
-impl From<std::time::Duration> for Duration {
+impl ops::Add<std::time::Duration> for Millis {
+    type Output = Millis;
+
     #[inline]
-    fn from(d: std::time::Duration) -> Duration {
+    fn add(self, other: std::time::Duration) -> Millis {
+        self + Millis::from(other)
+    }
+}
+
+impl ops::Add<Millis> for std::time::Duration {
+    type Output = std::time::Duration;
+
+    #[inline]
+    fn add(self, other: Millis) -> std::time::Duration {
+        self + Self::from(other)
+    }
+}
+
+impl From<u64> for Millis {
+    #[inline]
+    fn from(millis: u64) -> Millis {
+        Millis(millis)
+    }
+}
+
+impl From<u128> for Millis {
+    #[inline]
+    fn from(d: u128) -> Millis {
+        Self(d.try_into().unwrap_or_else(|_| {
+            log::error!("time Duration is too large {:?}", d);
+            1 << 31
+        }))
+    }
+}
+
+impl From<i32> for Millis {
+    #[inline]
+    fn from(d: i32) -> Millis {
+        let millis = if d < 0 {
+            log::error!("time Duration is negative {:?}", d);
+            0
+        } else {
+            d as u64
+        };
+        Self(millis)
+    }
+}
+
+impl From<Seconds> for Millis {
+    #[inline]
+    fn from(s: Seconds) -> Millis {
+        Millis((s.0 as u64) * 1000)
+    }
+}
+
+impl From<std::time::Duration> for Millis {
+    #[inline]
+    fn from(d: std::time::Duration) -> Millis {
         Self(d.as_millis().try_into().unwrap_or_else(|_| {
             log::error!("time Duration is too large {:?}", d);
             1 << 31
@@ -90,9 +149,9 @@ impl From<std::time::Duration> for Duration {
     }
 }
 
-impl From<Duration> for std::time::Duration {
+impl From<Millis> for std::time::Duration {
     #[inline]
-    fn from(d: Duration) -> std::time::Duration {
+    fn from(d: Millis) -> std::time::Duration {
         std::time::Duration::from_millis(d.0)
     }
 }
@@ -110,6 +169,16 @@ impl Seconds {
 
     #[inline]
     pub const fn new(secs: u16) -> Seconds {
+        Seconds(secs)
+    }
+
+    #[inline]
+    pub const fn checked_new(secs: usize) -> Seconds {
+        let secs = if (u16::MAX as usize) < secs {
+            u16::MAX
+        } else {
+            secs as u16
+        };
         Seconds(secs)
     }
 
@@ -132,12 +201,12 @@ impl Seconds {
     #[inline]
     pub fn map<F, R>(&self, f: F) -> Option<R>
     where
-        F: FnOnce(Duration) -> R,
+        F: FnOnce(Millis) -> R,
     {
         if self.0 == 0 {
             None
         } else {
-            Some(f(Duration::from(*self)))
+            Some(f(Millis::from(*self)))
         }
     }
 }
@@ -146,6 +215,15 @@ impl Default for Seconds {
     #[inline]
     fn default() -> Seconds {
         Seconds::ZERO
+    }
+}
+
+impl ops::Add<Seconds> for Seconds {
+    type Output = Seconds;
+
+    #[inline]
+    fn add(self, other: Seconds) -> Seconds {
+        Seconds(self.0.checked_add(other.0).unwrap_or(u16::MAX))
     }
 }
 

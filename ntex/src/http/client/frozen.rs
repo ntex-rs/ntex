@@ -4,7 +4,7 @@ use crate::http::body::Body;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Method, RequestHead, RequestHeadType, Uri};
-use crate::{time, util::Bytes, Stream};
+use crate::{time::Millis, util::Bytes, Stream};
 
 use super::sender::SendClientRequest;
 use super::ClientConfig;
@@ -16,7 +16,7 @@ pub struct FrozenClientRequest {
     pub(super) head: Rc<RequestHead>,
     pub(super) addr: Option<net::SocketAddr>,
     pub(super) response_decompress: bool,
-    pub(super) timeout: time::Duration,
+    pub(super) timeout: Millis,
     pub(super) config: Rc<ClientConfig>,
 }
 

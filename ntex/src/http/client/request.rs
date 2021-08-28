@@ -10,7 +10,7 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{
     uri, ConnectionType, Method, RequestHead, RequestHeadType, Uri, Version,
 };
-use crate::{time, util::Bytes, Stream};
+use crate::{time::Millis, util::Bytes, Stream};
 
 use super::error::{FreezeRequestError, InvalidUrl};
 use super::frozen::FrozenClientRequest;
@@ -51,7 +51,7 @@ pub struct ClientRequest {
     #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
     response_decompress: bool,
-    timeout: time::Duration,
+    timeout: Millis,
     config: Rc<ClientConfig>,
 }
 
@@ -69,7 +69,7 @@ impl ClientRequest {
             addr: None,
             #[cfg(feature = "cookie")]
             cookies: None,
-            timeout: time::Duration::ZERO,
+            timeout: Millis::ZERO,
             response_decompress: true,
         }
         .method(method)
@@ -313,7 +313,7 @@ impl ClientRequest {
     ///
     /// Request timeout is the total time before a response must be received.
     /// Default value is 5 seconds.
-    pub fn timeout<T: Into<time::Duration>>(mut self, timeout: T) -> Self {
+    pub fn timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.timeout = timeout.into();
         self
     }

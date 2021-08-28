@@ -6,7 +6,7 @@ use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc, task, task::Poll, tim
 
 use slab::Slab;
 
-use crate::rt::time::{sleep_until, Sleep};
+use crate::rt::time_driver::{sleep_until, Sleep};
 use crate::task::LocalWaker;
 
 // Clock divisor for the next level

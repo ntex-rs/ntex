@@ -4,7 +4,7 @@ use crate::codec::{AsyncRead, AsyncWrite};
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::http::{Protocol, Uri};
 use crate::service::{apply_fn, boxed, Service};
-use crate::time;
+use crate::time::{Millis, Seconds};
 use crate::util::timeout::{TimeoutError, TimeoutService};
 use crate::util::{Either, Ready};
 
@@ -30,7 +30,6 @@ type BoxedConnector =
 /// construction that finishes by calling the `.finish()` method.
 ///
 /// ```rust,no_run
-/// use std::time::Duration;
 /// use ntex::http::client::Connector;
 ///
 /// let connector = Connector::default()
@@ -38,10 +37,10 @@ type BoxedConnector =
 ///      .finish();
 /// ```
 pub struct Connector {
-    timeout: time::Duration,
+    timeout: Millis,
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
-    disconnect_timeout: time::Duration,
+    disconnect_timeout: Millis,
     limit: usize,
     connector: BoxedConnector,
     ssl_connector: Option<BoxedConnector>,
@@ -65,10 +64,10 @@ impl Connector {
                     .map_err(ConnectError::from),
             ),
             ssl_connector: None,
-            timeout: time::Duration::from_millis(1_000),
+            timeout: Millis(1_000),
             conn_lifetime: Duration::from_secs(75),
             conn_keep_alive: Duration::from_secs(15),
-            disconnect_timeout: time::Duration::from_millis(3_000),
+            disconnect_timeout: Millis(3_000),
             limit: 100,
         };
 
@@ -104,7 +103,7 @@ impl Connector {
     ///
     /// i.e. max time to connect to remote host including dns name resolution.
     /// Set to 1 second by default.
-    pub fn timeout<T: Into<time::Duration>>(mut self, timeout: T) -> Self {
+    pub fn timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.timeout = timeout.into();
         self
     }
@@ -165,8 +164,8 @@ impl Connector {
     /// the delay between repeated usages of the same connection
     /// exceeds this period, the connection is closed.
     /// Default keep-alive period is 15 seconds.
-    pub fn keep_alive(mut self, dur: Duration) -> Self {
-        self.conn_keep_alive = dur;
+    pub fn keep_alive(mut self, dur: Seconds) -> Self {
+        self.conn_keep_alive = dur.into();
         self
     }
 
@@ -175,8 +174,8 @@ impl Connector {
     /// Connection lifetime is max lifetime of any opened connection
     /// until it is closed regardless of keep-alive period.
     /// Default lifetime period is 75 seconds.
-    pub fn lifetime(mut self, dur: Duration) -> Self {
-        self.conn_lifetime = dur;
+    pub fn lifetime(mut self, dur: Seconds) -> Self {
+        self.conn_lifetime = dur.into();
         self
     }
 
@@ -188,7 +187,7 @@ impl Connector {
     /// To disable timeout set value to 0.
     ///
     /// By default disconnect timeout is set to 3 seconds.
-    pub fn disconnect_timeout<T: Into<time::Duration>>(mut self, timeout: T) -> Self {
+    pub fn disconnect_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.disconnect_timeout = timeout.into();
         self
     }
@@ -266,7 +265,7 @@ impl Connector {
 
 fn connector(
     connector: BoxedConnector,
-    timeout: time::Duration,
+    timeout: Millis,
 ) -> impl Service<
     Request = Connect,
     Response = (Box<dyn Io>, Protocol),

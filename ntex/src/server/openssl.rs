@@ -6,7 +6,7 @@ pub use tokio_openssl::SslStream;
 
 use crate::codec::{AsyncRead, AsyncWrite};
 use crate::service::{Service, ServiceFactory};
-use crate::time::{sleep, Duration, Sleep};
+use crate::time::{sleep, Millis, Sleep};
 use crate::util::{counter::Counter, counter::CounterGuard, Ready};
 
 use super::MAX_SSL_ACCEPT_COUNTER;
@@ -16,7 +16,7 @@ use super::MAX_SSL_ACCEPT_COUNTER;
 /// `openssl` feature enables `Acceptor` type
 pub struct Acceptor<T: AsyncRead + AsyncWrite> {
     acceptor: SslAcceptor,
-    timeout: Duration,
+    timeout: Millis,
     io: PhantomData<T>,
 }
 
@@ -25,7 +25,7 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     pub fn new(acceptor: SslAcceptor) -> Self {
         Acceptor {
             acceptor,
-            timeout: Duration::from_millis(5_000),
+            timeout: Millis(5_000),
             io: PhantomData,
         }
     }
@@ -33,7 +33,7 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     /// Set handshake timeout.
     ///
     /// Default is set to 5 seconds.
-    pub fn timeout<U: Into<Duration>>(mut self, timeout: U) -> Self {
+    pub fn timeout<U: Into<Millis>>(mut self, timeout: U) -> Self {
         self.timeout = timeout.into();
         self
     }
@@ -76,7 +76,7 @@ where
 pub struct AcceptorService<T> {
     acceptor: SslAcceptor,
     conns: Counter,
-    timeout: Duration,
+    timeout: Millis,
     io: PhantomData<T>,
 }
 

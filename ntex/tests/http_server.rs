@@ -1,5 +1,4 @@
-use std::io::{Read, Write};
-use std::{io, net, thread, time::Duration};
+use std::{io, io::Read, io::Write, net};
 
 use futures::future::{self, ok, ready, FutureExt};
 use futures::stream::{once, StreamExt};
@@ -9,7 +8,7 @@ use ntex::http::test::server as test_server;
 use ntex::http::{
     body, header, HttpService, KeepAlive, Method, Request, Response, StatusCode,
 };
-use ntex::rt::time::sleep;
+use ntex::time::sleep;
 use ntex::{service::fn_service, time::Seconds, util::Bytes, web::error};
 
 #[ntex::test]
@@ -58,7 +57,7 @@ async fn test_expect_continue() {
     let srv = test_server(|| {
         HttpService::build()
             .expect(fn_service(|req: Request| async move {
-                sleep(Duration::from_millis(20)).await;
+                sleep(20).await;
                 if req.head().uri.query() == Some("yes=") {
                     Ok(req)
                 } else {
@@ -216,7 +215,7 @@ async fn test_http1_keepalive_timeout() {
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
-    thread::sleep(Duration::from_millis(1100));
+    sleep(1100).await;
 
     let mut data = vec![0; 1024];
     let res = stream.read(&mut data).unwrap();
