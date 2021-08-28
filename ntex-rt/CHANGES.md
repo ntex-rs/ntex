@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.1] - 2021-08-28
+
+* Re-export time as different module
+
 ## [0.3.0] - 2021-08-27
 
 * Do not use/re-export tokio::time::Instant

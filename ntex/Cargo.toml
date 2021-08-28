@@ -44,7 +44,7 @@ http-framework = ["h2", "http", "httparse",
 
 [dependencies]
 ntex-codec = "0.5.0"
-ntex-rt = "0.3.0"
+ntex-rt = "0.3.1"
 ntex-router = "0.5.1"
 ntex-service = "0.2.0-b.0"
 ntex-macros = "0.1.3"
