@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.4] - 2021-08-28
+
+* Reduce timer resolution
+
 ## [0.4.0-b.3] - 2021-08-27
 
 * Add timer service

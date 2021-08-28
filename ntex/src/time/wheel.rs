@@ -23,8 +23,8 @@ const fn lvl_gran(n: u64) -> u64 {
 // Resolution:
 // 0: 1 millis
 // 4: ~17 millis
-//const UNITS: u64 = 4;
-const UNITS: u64 = 0;
+const UNITS: u64 = 4;
+// const UNITS: u64 = 0;
 
 const fn to_units(n: u64) -> u64 {
     n >> UNITS
@@ -70,9 +70,7 @@ impl TimerHandle {
     }
 
     pub fn is_elapsed(&self) -> bool {
-        Timer::with_entry(self.0, |entry| {
-            entry.flags.contains(TimerEntryFlags::ELAPSED)
-        })
+        Timer::with_entry(self.0, |entry| entry.flags.contains(TimerEntryFlags::ELAPSED))
     }
 
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
@@ -170,8 +168,7 @@ impl TimerInner {
     fn add_timer(inner: &Rc<RefCell<Self>>, millis: u64) -> TimerHandle {
         let mut slf = inner.borrow_mut();
         let delta = to_units(
-            (time::Instant::now() + time::Duration::from_millis(millis)
-                - slf.elapsed_instant)
+            (time::Instant::now() + time::Duration::from_millis(millis) - slf.elapsed_instant)
                 .as_millis() as u64,
         );
 
@@ -214,8 +211,7 @@ impl TimerInner {
     fn update_timer(inner: &Rc<RefCell<Self>>, hnd: usize, millis: u64) {
         let mut slf = inner.borrow_mut();
         let delta = to_units(
-            (time::Instant::now() + time::Duration::from_millis(millis)
-                - slf.elapsed_instant)
+            (time::Instant::now() + time::Duration::from_millis(millis) - slf.elapsed_instant)
                 .as_millis() as u64,
         );
 
@@ -288,9 +284,8 @@ impl TimerInner {
             let pos = if occupied == 0 {
                 -1
             } else {
-                let zeros = occupied
-                    .rotate_right((clk & LVL_MASK) as u32)
-                    .trailing_zeros() as usize;
+                let zeros =
+                    occupied.rotate_right((clk & LVL_MASK) as u32).trailing_zeros() as usize;
                 zeros as isize
             };
 
@@ -391,10 +386,7 @@ impl TimerInner {
          */
 
         let expires = (expires2 + lvl_gran(lvl)) >> lvl_shift(lvl);
-        (
-            (lvl_offs(lvl) + (expires & LVL_MASK)) as usize,
-            expires << lvl_shift(lvl),
-        )
+        ((lvl_offs(lvl) + (expires & LVL_MASK)) as usize, expires << lvl_shift(lvl))
     }
 }
 
@@ -483,9 +475,7 @@ impl Future for TimerDriver {
             this.sleep.reset(inner.next_expiry());
             drop(inner);
             return self.poll(cx);
-        } else if inner.flags.contains(Flags::TIMER_ACTIVE)
-            && this.sleep.poll(cx).is_ready()
-        {
+        } else if inner.flags.contains(Flags::TIMER_ACTIVE) && this.sleep.poll(cx).is_ready() {
             drop(inner);
             this = self.as_mut().project();
             let mut inner = this.inner.borrow_mut();
