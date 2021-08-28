@@ -9,6 +9,7 @@ use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Version};
 use ntex::service::{map_config, pipeline_factory, ServiceFactory};
+use ntex::time::Seconds;
 use ntex::web::{self, dev::AppConfig, App, HttpResponse};
 
 fn ssl_acceptor() -> SslAcceptor {
@@ -69,7 +70,7 @@ async fn test_connection_reuse_h2() {
         .finish();
 
     // req 1
-    let request = client.get(srv.surl("/")).timeout(10).send();
+    let request = client.get(srv.surl("/")).timeout(Seconds(10)).send();
     let response = request.await.unwrap();
     assert!(response.status().is_success());
 
