@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.5] - 2021-08-28
+
+* Cleanup timer wheel on driver drop
+
 ## [0.4.0-b.4] - 2021-08-28
 
 * Reduce timer resolution
