@@ -1,19 +1,19 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Instant};
 
 use crate::framed::State;
-use crate::time::sleep;
+use crate::time::{sleep, Duration};
 use crate::util::HashSet;
 
 pub struct Timer(Rc<RefCell<Inner>>);
 
 struct Inner {
-    resolution: u64,
+    resolution: Duration,
     current: Option<Instant>,
     notifications: BTreeMap<Instant, HashSet<State>>,
 }
 
 impl Inner {
-    fn new(resolution: u64) -> Self {
+    fn new(resolution: Duration) -> Self {
         Inner {
             resolution,
             current: None,
@@ -39,13 +39,13 @@ impl Clone for Timer {
 
 impl Default for Timer {
     fn default() -> Self {
-        Timer::with(1_000)
+        Timer::new(Duration::from_millis(1_000))
     }
 }
 
 impl Timer {
     /// Create new timer with resolution in milliseconds
-    pub fn with(resolution: u64) -> Timer {
+    pub fn new(resolution: Duration) -> Timer {
         Timer(Rc::new(RefCell::new(Inner::new(resolution))))
     }
 

@@ -124,7 +124,7 @@ where
         let io = Rc::new(RefCell::new(io));
 
         // slow-request timer
-        if !config.client_timeout.is_zero() {
+        if config.client_timeout.non_zero() {
             expire += std::time::Duration::from(config.client_timeout);
             config.timer_h1.register(expire, expire, &state);
         }
@@ -536,7 +536,7 @@ where
 
     fn reset_keepalive(&mut self) {
         // re-register keep-alive
-        if self.flags.contains(Flags::KEEPALIVE) && !self.config.keep_alive.is_zero() {
+        if self.flags.contains(Flags::KEEPALIVE) && self.config.keep_alive.non_zero() {
             let expire = self.config.timer_h1.now()
                 + std::time::Duration::from(self.config.keep_alive);
             if expire != self.expire {
