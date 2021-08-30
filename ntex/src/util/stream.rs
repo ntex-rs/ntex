@@ -165,7 +165,7 @@ mod tests {
 
     use super::*;
     use crate::util::{next, ByteString, BytesMut};
-    use crate::{channel::mpsc, codec::Encoder, time::sleep, ws};
+    use crate::{channel::mpsc, codec::Encoder, time::sleep, time::Millis, ws};
 
     #[crate::rt_test]
     async fn test_basic() {
@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(data, b"\x81\x04test".as_ref());
 
         drop(tx);
-        sleep(10).await;
+        sleep(Millis(10)).await;
         assert!(next(&mut rx).await.is_none());
 
         assert_eq!(counter.get(), 1);

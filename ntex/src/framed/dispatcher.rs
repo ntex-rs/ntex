@@ -513,7 +513,7 @@ mod tests {
 
     use crate::codec::BytesCodec;
     use crate::testing::Io;
-    use crate::time::sleep;
+    use crate::time::{sleep, Millis};
     use crate::util::Bytes;
 
     use super::*;
@@ -581,7 +581,7 @@ mod tests {
             server,
             BytesCodec,
             crate::fn_service(|msg: DispatchItem<BytesCodec>| async move {
-                sleep(50).await;
+                sleep(Millis(50)).await;
                 if let DispatchItem::Item(msg) = msg {
                     Ok::<_, ()>(Some(msg.freeze()))
                 } else {
@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         st.close();
-        sleep(1100).await;
+        sleep(Millis(1100)).await;
         assert!(client.is_server_dropped());
     }
 
@@ -719,7 +719,7 @@ mod tests {
         let buf = client.read_any();
         assert_eq!(buf, Bytes::from_static(b""));
         client.write("GET /test HTTP/1\r\n\r\n");
-        sleep(25).await;
+        sleep(Millis(25)).await;
 
         // buf must be consumed
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
@@ -729,11 +729,11 @@ mod tests {
         assert_eq!(state.write().with_buf(|buf| buf.len()), 65536);
 
         client.remote_buffer_cap(10240);
-        sleep(50).await;
+        sleep(Millis(50)).await;
         assert_eq!(state.write().with_buf(|buf| buf.len()), 55296);
 
         client.remote_buffer_cap(45056);
-        sleep(50).await;
+        sleep(Millis(50)).await;
         assert_eq!(state.write().with_buf(|buf| buf.len()), 10240);
 
         // backpressure disabled
@@ -782,7 +782,7 @@ mod tests {
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
-        sleep(3000).await;
+        sleep(Millis(3000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();
@@ -808,7 +808,7 @@ mod tests {
             crate::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 handled2.store(true, Relaxed);
                 async move {
-                    sleep(50).await;
+                    sleep(Millis(50)).await;
                     if let DispatchItem::Item(msg) = msg {
                         Ok::<_, ()>(Some(msg.freeze()))
                     } else {
@@ -821,7 +821,7 @@ mod tests {
         crate::rt::spawn(async move {
             let _ = disp.await;
         });
-        sleep(50).await;
+        sleep(Millis(50)).await;
 
         assert!(handled.load(Relaxed));
     }

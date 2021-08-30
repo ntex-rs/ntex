@@ -275,7 +275,7 @@ array_routes!(12, a, b, c, d, e, f, g, h, i, j, k, l);
 #[cfg(test)]
 mod tests {
     use crate::http::{Method, StatusCode};
-    use crate::time::sleep;
+    use crate::time::{sleep, Millis};
     use crate::util::Bytes;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, error, App, DefaultError, HttpResponse};
@@ -297,16 +297,16 @@ mod tests {
                         )
                     }),
                     web::post().to(|| async {
-                        sleep(100).await;
+                        sleep(Millis(100)).await;
                         HttpResponse::Created()
                     }),
                     web::delete().to(|| async {
-                        sleep(100).await;
+                        sleep(Millis(100)).await;
                         Err::<HttpResponse, _>(error::ErrorBadRequest("err"))
                     }),
                 ]))
                 .service(web::resource("/json").route(web::get().to(|| async {
-                    sleep(25).await;
+                    sleep(Millis(25)).await;
                     web::types::Json(MyObject {
                         name: "test".to_string(),
                     })

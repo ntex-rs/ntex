@@ -16,7 +16,7 @@ use ntex::http::header::{
     TRANSFER_ENCODING,
 };
 use ntex::http::{Method, StatusCode};
-use ntex::time::{sleep, Seconds, Sleep};
+use ntex::time::{sleep, Millis, Seconds, Sleep};
 use ntex::util::Bytes;
 
 use ntex::web::middleware::Compress;
@@ -49,7 +49,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 struct TestBody {
     data: Bytes,
     chunk_size: usize,
-    delay: Pin<Box<Sleep>>,
+    delay: Sleep,
 }
 
 impl TestBody {
@@ -57,7 +57,7 @@ impl TestBody {
         TestBody {
             data,
             chunk_size,
-            delay: Box::pin(sleep(std::time::Duration::from_millis(10))),
+            delay: sleep(Millis(10)),
         }
     }
 }
@@ -71,7 +71,7 @@ impl futures::Stream for TestBody {
     ) -> Poll<Option<Self::Item>> {
         ready!(Pin::new(&mut self.delay).poll(cx));
 
-        self.delay = Box::pin(sleep(std::time::Duration::from_millis(10)));
+        self.delay = sleep(Millis(10));
         let chunk_size = std::cmp::min(self.chunk_size, self.data.len());
         let chunk = self.data.split_to(chunk_size);
         if chunk.is_empty() {
@@ -882,7 +882,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     // client request
     let req = srv
         .post("/")
-        .timeout(10_000)
+        .timeout(Millis(10_000))
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
@@ -933,7 +933,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
     // client request
     let req = srv
         .post("/")
-        .timeout(10_000)
+        .timeout(Millis(10_000))
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
@@ -984,7 +984,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
     // client request
     let req = srv
         .post("/")
-        .timeout(10_000)
+        .timeout(Millis(10_000))
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 

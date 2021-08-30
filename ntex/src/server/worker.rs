@@ -31,6 +31,7 @@ pub(super) struct Connection {
     pub(super) token: Token,
 }
 
+const STOP_TIMEOUT: Millis = Millis::ONE_SEC;
 static MAX_CONNS: AtomicUsize = AtomicUsize::new(25600);
 
 /// Sets the maximum per-worker number of concurrent connections.
@@ -344,7 +345,7 @@ impl Future for Worker {
                 if num != 0 {
                     info!("Graceful worker shutdown, {} connections", num);
                     self.state = WorkerState::Shutdown(
-                        sleep(1000),
+                        sleep(STOP_TIMEOUT),
                         sleep(self.shutdown_timeout),
                         Some(result),
                     );
@@ -433,7 +434,7 @@ impl Future for Worker {
                 match t1.poll_elapsed(cx) {
                     Poll::Pending => (),
                     Poll::Ready(_) => {
-                        *t1 = sleep(1000);
+                        *t1 = sleep(STOP_TIMEOUT);
                         let _ = t1.poll_elapsed(cx);
                     }
                 }

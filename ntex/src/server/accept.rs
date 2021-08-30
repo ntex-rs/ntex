@@ -6,7 +6,7 @@ use log::{error, info};
 use slab::Slab;
 
 use crate::rt::System;
-use crate::time::sleep;
+use crate::time::{sleep, Millis};
 
 use super::socket::{Listener, SocketAddr};
 use super::worker::{Connection, WorkerClient};
@@ -15,7 +15,7 @@ use super::{Server, ServerStatus, Token};
 const DELTA: usize = 100;
 const NOTIFY: mio::Token = mio::Token(0);
 const ERR_TIMEOUT: Duration = Duration::from_millis(500);
-const ERR_SLEEP_TIMEOUT: u64 = 525;
+const ERR_SLEEP_TIMEOUT: Millis = Millis(525);
 
 #[derive(Debug)]
 pub(super) enum Command {

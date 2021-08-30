@@ -605,7 +605,7 @@ mod tests {
     use super::*;
     use crate::{
         http::client::Connection, http::Uri, service::fn_service, testing::Io,
-        time::sleep, util::lazy,
+        util::lazy,
     };
 
     #[crate::rt_test]
@@ -662,7 +662,7 @@ mod tests {
         let mut fut = pool.call(req.clone());
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
         drop(fut);
-        sleep(50).await;
+        sleep(Millis(50)).await;
         pool.1.borrow_mut().check_availibility();
         assert!(pool.1.borrow().waiters.is_empty());
 

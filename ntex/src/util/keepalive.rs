@@ -1,8 +1,7 @@
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
-use std::{cell::Cell, convert::Infallible, marker};
+use std::{cell::Cell, convert::Infallible, marker, time::Duration, time::Instant};
 
-use crate::time::{sleep, Sleep};
+use crate::time::{sleep, Millis, Sleep};
 use crate::{util::Ready, Service, ServiceFactory};
 
 use super::time::{LowResTime, LowResTimeService};
@@ -12,7 +11,7 @@ use super::time::{LowResTime, LowResTimeService};
 /// Controls min time between requests.
 pub struct KeepAlive<R, E, F> {
     f: F,
-    ka: Duration,
+    ka: Millis,
     time: LowResTime,
     _t: marker::PhantomData<(R, E)>,
 }
@@ -25,7 +24,7 @@ where
     ///
     /// ka - keep-alive timeout
     /// err - error factory function
-    pub fn new(ka: Duration, time: LowResTime, err: F) -> Self {
+    pub fn new(ka: Millis, time: LowResTime, err: F) -> Self {
         KeepAlive {
             ka,
             time,
@@ -72,7 +71,7 @@ where
 
 pub struct KeepAliveService<R, E, F> {
     f: F,
-    dur: Duration,
+    dur: Millis,
     time: LowResTimeService,
     sleep: Sleep,
     expire: Cell<Instant>,
@@ -83,8 +82,8 @@ impl<R, E, F> KeepAliveService<R, E, F>
 where
     F: Fn() -> E,
 {
-    pub fn new(dur: Duration, time: LowResTimeService, f: F) -> Self {
-        let expire = Cell::new(time.now() + dur);
+    pub fn new(dur: Millis, time: LowResTimeService, f: F) -> Self {
+        let expire = Cell::new(time.now() + Duration::from(dur));
 
         KeepAliveService {
             f,
@@ -114,7 +113,7 @@ where
                     Poll::Ready(Err((self.f)()))
                 } else {
                     let expire = self.expire.get() - Instant::now();
-                    self.sleep.reset(expire.as_millis() as u64);
+                    self.sleep.reset(Millis(expire.as_millis() as u64));
                     let _ = self.sleep.poll_elapsed(cx);
                     Poll::Ready(Ok(()))
                 }
@@ -124,7 +123,7 @@ where
     }
 
     fn call(&self, req: R) -> Self::Future {
-        self.expire.set(self.time.now() + self.dur);
+        self.expire.set(self.time.now() + Duration::from(self.dur));
         Ready::Ok(req)
     }
 }
@@ -133,7 +132,6 @@ where
 mod tests {
     use super::*;
     use crate::service::{Service, ServiceFactory};
-    use crate::time::sleep;
     use crate::util::lazy;
 
     #[derive(Debug, PartialEq)]
@@ -142,7 +140,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_ka() {
         let factory =
-            KeepAlive::new(Duration::from_millis(100), LowResTime::new(10), || TestErr);
+            KeepAlive::new(Millis(100), LowResTime::new(Millis(10)), || TestErr);
         let _ = factory.clone();
 
         let service = factory.new_service(()).await.unwrap();
@@ -150,7 +148,7 @@ mod tests {
         assert_eq!(service.call(1usize).await, Ok(1usize));
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
 
-        sleep(500).await;
+        sleep(Millis(500)).await;
         assert_eq!(
             lazy(|cx| service.poll_ready(cx)).await,
             Poll::Ready(Err(TestErr))

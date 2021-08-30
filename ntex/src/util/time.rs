@@ -209,7 +209,7 @@ mod tests {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap();
 
-        sleep(wait_time).await;
+        sleep(Millis(wait_time)).await;
 
         let second_time = time_service
             .now()
@@ -231,7 +231,7 @@ mod tests {
 
         let first_time = time_service.now();
 
-        sleep(wait_time).await;
+        sleep(Millis(wait_time)).await;
 
         let second_time = time_service.now();
         assert!(second_time - first_time >= Duration::from_millis(wait_time));

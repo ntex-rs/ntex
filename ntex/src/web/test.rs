@@ -18,7 +18,7 @@ use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
 use crate::router::{Path, ResourceDef};
-use crate::time::{sleep, Seconds};
+use crate::time::{sleep, Millis, Seconds};
 use crate::util::{next, Bytes, BytesMut, Extensions, Ready};
 use crate::{
     map_config, rt::System, server::Server, IntoService, IntoServiceFactory, Service,
@@ -735,8 +735,8 @@ where
                 Connector::default()
                     .lifetime(Seconds::ZERO)
                     .keep_alive(Seconds(30))
-                    .timeout(30_000)
-                    .disconnect_timeout(3_000)
+                    .timeout(Millis(30_000))
+                    .disconnect_timeout(Millis(3_000))
                     .openssl(builder.build())
                     .finish()
             }
@@ -744,7 +744,7 @@ where
             {
                 Connector::default()
                     .lifetime(Seconds::ZERO)
-                    .timeout(30_000)
+                    .timeout(Millis(30_000))
                     .finish()
             }
         };
@@ -949,7 +949,7 @@ impl TestServer {
     pub async fn stop(self) {
         self.server.stop(true).await;
         self.system.stop();
-        sleep(100).await;
+        sleep(Millis(100)).await;
     }
 }
 

@@ -17,7 +17,7 @@ use ntex::service::{map_config, pipeline_factory, Service};
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
 use ntex::web::{self, test, App, BodyEncoding, Error, HttpRequest, HttpResponse};
-use ntex::{time::Seconds, util::Bytes};
+use ntex::{time::Millis, time::Seconds, util::Bytes};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -162,7 +162,7 @@ async fn test_form() {
 async fn test_timeout() {
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
-            ntex::time::sleep(2000).await;
+            ntex::time::sleep(Millis(2000)).await;
             HttpResponse::Ok().body(STR)
         })))
     });
@@ -191,7 +191,7 @@ async fn test_timeout() {
 async fn test_timeout_override() {
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
-            ntex::time::sleep(2000).await;
+            ntex::time::sleep(Millis(2000)).await;
             HttpResponse::Ok().body(STR)
         })))
     });
@@ -824,7 +824,7 @@ async fn client_read_until_eof() {
             }
         }
     });
-    ntex::time::sleep(300).await;
+    ntex::time::sleep(Millis(300)).await;
 
     // client request
     let req = Client::build()

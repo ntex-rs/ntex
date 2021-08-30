@@ -740,7 +740,7 @@ mod tests {
     use crate::http::{body, Request, ResponseHead, StatusCode};
     use crate::service::{boxed, fn_service, IntoService};
     use crate::util::{lazy, next, Bytes, BytesMut};
-    use crate::{codec::Decoder, testing::Io, time::sleep};
+    use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis};
 
     const BUFFER_SIZE: usize = 32_768;
 
@@ -823,10 +823,10 @@ mod tests {
             None,
             None,
         );
-        sleep(50).await;
+        sleep(Millis(50)).await;
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
-        sleep(50).await;
+        sleep(Millis(50)).await;
 
         client.local_buffer(|buf| assert_eq!(&buf[..15], b"HTTP/1.0 200 OK"));
         client.close().await;
@@ -842,11 +842,11 @@ mod tests {
         let mut h1 = h1(server, |_| {
             Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
         });
-        sleep(50).await;
+        sleep(Millis(50)).await;
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         assert!(!h1.inner.state.is_open());
-        sleep(50).await;
+        sleep(Millis(50)).await;
 
         client
             .local_buffer(|buf| assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n"));
@@ -897,7 +897,7 @@ mod tests {
         });
 
         client.write("GET /test HTTP/1.1\r\ncontent-length: 5\r\n\r\n");
-        sleep(50).await;
+        sleep(Millis(50)).await;
         client.write("xxxxx");
 
         let mut buf = client.read().await.unwrap();
@@ -921,7 +921,7 @@ mod tests {
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
         spawn_h1(server, |_| async {
-            sleep(100).await;
+            sleep(Millis(100)).await;
             Ok::<_, io::Error>(Response::Ok().finish())
         });
 
@@ -933,7 +933,7 @@ mod tests {
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
         client.write("GET /test HTTP/1.1\r\n\r\n");
-        sleep(50).await;
+        sleep(Millis(50)).await;
         client.write("GET /test HTTP/1.1\r\n\r\n");
 
         let mut buf = client.read().await.unwrap();
@@ -998,10 +998,10 @@ mod tests {
             .collect::<String>();
         client.write("GET /test HTTP/1.1\r\nContent-Length: ");
         client.write(data);
-        sleep(50).await;
+        sleep(Millis(50)).await;
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
-        sleep(50).await;
+        sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         assert!(!h1.inner.state.is_open());
 
@@ -1024,13 +1024,13 @@ mod tests {
                 let _ = next(&mut pl).await.unwrap().unwrap();
                 m.store(true, Ordering::Relaxed);
                 // sleep
-                sleep(999_999_000).await;
+                sleep(Millis(999_999_000)).await;
                 Ok::<_, io::Error>(Response::Ok().finish())
             }
         });
 
         client.write("GET /test HTTP/1.1\r\nContent-Length: 1048576\r\n\r\n");
-        sleep(50).await;
+        sleep(Millis(50)).await;
 
         // buf must be consumed
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
@@ -1040,7 +1040,7 @@ mod tests {
             (0..1_048_576).map(|_| rand::random::<u8>()).collect();
         client.write(random_bytes);
 
-        sleep(50).await;
+        sleep(Millis(50)).await;
         assert!(client.remote_buffer(|buf| buf.len()) > 1_048_576 - BUFFER_SIZE * 3);
         assert!(mark.load(Ordering::Relaxed));
     }
@@ -1083,7 +1083,7 @@ mod tests {
         // do not allow to write to socket
         client.remote_buffer_cap(0);
         client.write("GET /test HTTP/1.1\r\n\r\n");
-        sleep(50).await;
+        sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
         // buf must be consumed
@@ -1096,7 +1096,7 @@ mod tests {
         assert_eq!(state.write().with_buf(|buf| buf.len()), 65629);
 
         client.remote_buffer_cap(65536);
-        sleep(50).await;
+        sleep(Millis(50)).await;
         assert_eq!(state.write().with_buf(|buf| buf.len()), 93);
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
@@ -1138,7 +1138,7 @@ mod tests {
         });
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
-        sleep(50).await;
+        sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
         // http message must be consumed
@@ -1150,7 +1150,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
         client.close().await;
-        sleep(50).await;
+        sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
     }
 
@@ -1165,10 +1165,10 @@ mod tests {
                 Err::<Response<()>, _>(io::Error::new(io::ErrorKind::Other, "error"))
             })
         });
-        sleep(50).await;
+        sleep(Millis(50)).await;
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
-        sleep(50).await;
+        sleep(Millis(50)).await;
         assert!(h1.inner.state.is_io_err());
         let buf = client.local_buffer(|buf| buf.split().freeze());
         assert_eq!(&buf[..28], b"HTTP/1.1 500 Internal Server");

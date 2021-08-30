@@ -7,7 +7,7 @@ use coo_kie::{Cookie, CookieJar};
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::rt::{net::TcpStream, System};
 use crate::server::{Server, StreamServiceFactory};
-use crate::{time::Seconds, util::Bytes};
+use crate::{time::Millis, time::Seconds, util::Bytes};
 
 use super::client::error::WsClientError;
 use super::client::{Client, ClientRequest, ClientResponse, Connector};
@@ -243,13 +243,13 @@ pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
                     .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
                 Connector::default()
-                    .timeout(30_000)
+                    .timeout(Millis(30_000))
                     .openssl(builder.build())
                     .finish()
             }
             #[cfg(not(feature = "openssl"))]
             {
-                Connector::default().timeout(30_000).finish()
+                Connector::default().timeout(Millis(30_000)).finish()
             }
         };
 

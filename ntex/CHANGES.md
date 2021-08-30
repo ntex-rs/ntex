@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.7] - 2021-08-31
+
+* Remove From<u64> for Millis impl
+
 ## [0.4.0-b.6] - 2021-08-30
 
 * More timer wheel cleanups on driver drop

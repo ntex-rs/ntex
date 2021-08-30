@@ -17,7 +17,7 @@ use super::socket::Listener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use super::{Server, ServerCommand, ServerStatus, Token};
 
-const STOP_DELAY: u64 = 300;
+const STOP_DELAY: Millis = Millis(300);
 
 /// Server builder
 pub struct ServerBuilder {
@@ -550,11 +550,11 @@ mod tests {
             let h = start(tx);
             let (srv, addr) = rx.recv().unwrap();
 
-            crate::time::sleep(300).await;
+            crate::time::sleep(Millis(300)).await;
             assert!(net::TcpStream::connect(addr).is_ok());
 
             srv.signal(*sig);
-            crate::time::sleep(300).await;
+            crate::time::sleep(Millis(300)).await;
             assert!(net::TcpStream::connect(addr).is_err());
             let _ = h.join();
         }

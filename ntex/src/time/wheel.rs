@@ -559,7 +559,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_timer() {
         crate::rt::spawn(async {
-            let s = interval(25);
+            let s = interval(Millis(25));
             loop {
                 s.tick().await;
             }

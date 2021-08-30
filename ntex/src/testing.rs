@@ -4,7 +4,7 @@ use std::task::{Context, Poll, Waker};
 use std::{cmp, fmt, io, mem, pin::Pin};
 
 use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
-use crate::time::sleep;
+use crate::time::{sleep, Millis};
 use crate::util::{poll_fn, BytesMut};
 
 #[derive(Default)]
@@ -169,7 +169,7 @@ impl Io {
             remote.read = IoState::Close;
             remote.waker.wake();
         }
-        sleep(35).await;
+        sleep(Millis(35)).await;
     }
 
     /// Add extra data to the remote buffer and notify reader

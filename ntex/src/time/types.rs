@@ -102,36 +102,6 @@ impl ops::Add<Millis> for std::time::Duration {
     }
 }
 
-impl From<u64> for Millis {
-    #[inline]
-    fn from(millis: u64) -> Millis {
-        Millis(millis)
-    }
-}
-
-impl From<u128> for Millis {
-    #[inline]
-    fn from(d: u128) -> Millis {
-        Self(d.try_into().unwrap_or_else(|_| {
-            log::error!("time Duration is too large {:?}", d);
-            1 << 31
-        }))
-    }
-}
-
-impl From<i32> for Millis {
-    #[inline]
-    fn from(d: i32) -> Millis {
-        let millis = if d < 0 {
-            log::error!("time Duration is negative {:?}", d);
-            0
-        } else {
-            d as u64
-        };
-        Self(millis)
-    }
-}
-
 impl From<Seconds> for Millis {
     #[inline]
     fn from(s: Seconds) -> Millis {
