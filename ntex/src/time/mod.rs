@@ -48,11 +48,11 @@ where
 /// Wait 100ms and print "100 ms have elapsed".
 ///
 /// ```
-/// use ntex::time::sleep;
+/// use ntex::time::{sleep, Millis};
 ///
 /// #[ntex::main]
 /// async fn main() {
-///     sleep(100).await;
+///     sleep(Millis(100)).await;
 ///     println!("100 ms have elapsed");
 /// }
 /// ```

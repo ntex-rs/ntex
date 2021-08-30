@@ -31,9 +31,10 @@ type BoxedConnector =
 ///
 /// ```rust,no_run
 /// use ntex::http::client::Connector;
+/// use ntex::time::Millis;
 ///
 /// let connector = Connector::default()
-///      .timeout(5_000)
+///      .timeout(Millis(5_000))
 ///      .finish();
 /// ```
 pub struct Connector {
