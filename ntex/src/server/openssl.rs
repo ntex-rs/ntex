@@ -105,7 +105,7 @@ where
         AcceptorServiceResponse {
             _guard: self.conns.get(),
             io: None,
-            delay: self.timeout.map(|t| sleep(t)),
+            delay: self.timeout.map(sleep),
             io_factory: Some(SslStream::new(ssl, req)),
         }
     }

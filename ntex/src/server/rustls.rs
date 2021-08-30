@@ -103,7 +103,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Service for AcceptorService<T> {
         AcceptorServiceFut {
             _guard: self.conns.get(),
             fut: self.acceptor.accept(req),
-            delay: self.timeout.map(|t| sleep(t)),
+            delay: self.timeout.map(sleep),
         }
     }
 }

@@ -782,7 +782,7 @@ mod tests {
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
-        sleep(3100).await;
+        sleep(3000).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();

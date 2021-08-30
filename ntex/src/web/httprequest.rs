@@ -161,7 +161,7 @@ impl HttpRequest {
         U: IntoIterator<Item = I>,
         I: AsRef<str>,
     {
-        self.0.rmap.url_for(&self, name, elements)
+        self.0.rmap.url_for(self, name, elements)
     }
 
     #[cfg(feature = "url")]

@@ -505,6 +505,9 @@ impl Drop for TimerDriver {
         inner.flags = Flags::empty();
         inner.buckets = buckets;
         inner.occupied = [0; WHEEL_SIZE];
+        inner.next_expiry = u64::MAX;
+        inner.elapsed = 0;
+        inner.elapsed_instant = time::Instant::now();
     }
 }
 

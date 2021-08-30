@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.6] - 2021-08-30
+
+* More timer wheel cleanups on driver drop
+
 ## [0.4.0-b.5] - 2021-08-28
 
 * Cleanup timer wheel on driver drop
