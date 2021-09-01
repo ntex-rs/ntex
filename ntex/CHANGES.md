@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.10] - 2021-09-01
+
+* Fix lowres timer restart
+
 ## [0.4.0-b.9] - 2021-09-01
 
 * More timer wheel cleanups on driver drop

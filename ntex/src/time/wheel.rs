@@ -63,7 +63,7 @@ const ONE_MS: time::Duration = time::Duration::from_millis(1);
 /// Resolution is ~1ms
 #[inline]
 pub fn now() -> time::Instant {
-    TIMER.with(|t| t.0.borrow().now())
+    TIMER.with(|t| t.0.borrow_mut().now(&t.0))
 }
 
 /// Returns the system time corresponding to “now”.
@@ -117,6 +117,7 @@ bitflags::bitflags! {
         const NEEDS_RECALC   = 0b0000_0010;
         const TIMER_ACTIVE   = 0b0000_0100;
         const LOWRES_TIMER   = 0b0000_1000;
+        const LOWRES_DRIVER  = 0b0001_0000;
     }
 }
 
@@ -143,9 +144,7 @@ struct TimerInner {
 
 impl Timer {
     fn new() -> Self {
-        let inner = Rc::new(RefCell::new(TimerInner::new()));
-        LowresTimerDriver::start(&inner);
-        Timer(inner)
+        Timer(Rc::new(RefCell::new(TimerInner::new())))
     }
 
     fn with_entry<F, R>(no: usize, f: F) -> R
@@ -196,14 +195,20 @@ impl TimerInner {
         buckets
     }
 
-    fn now(&self) -> time::Instant {
+    fn now(&mut self, inner: &Rc<RefCell<TimerInner>>) -> time::Instant {
         let cur = self.lowres_time.get();
         if let Some(cur) = cur {
             cur
         } else {
             let now = time::Instant::now();
-            self.lowres_driver.wake();
             self.lowres_time.set(Some(now));
+
+            if self.flags.contains(Flags::LOWRES_DRIVER) {
+                self.lowres_driver.wake();
+            } else {
+                LowresTimerDriver::start(self, inner);
+            }
+
             now
         }
     }
@@ -237,7 +242,7 @@ impl TimerInner {
         }
 
         let delta = to_units(
-            (slf.now() + time::Duration::from_millis(millis) - slf.elapsed_instant)
+            (slf.now(inner) + time::Duration::from_millis(millis) - slf.elapsed_instant)
                 .as_millis() as u64,
         );
 
@@ -285,7 +290,7 @@ impl TimerInner {
         }
 
         let delta = to_units(
-            (slf.now() + time::Duration::from_millis(millis) - slf.elapsed_instant)
+            (slf.now(inner) + time::Duration::from_millis(millis) - slf.elapsed_instant)
                 .as_millis() as u64,
         );
 
@@ -390,9 +395,9 @@ impl TimerInner {
     }
 
     // Get instant of the next expiry
-    fn next_expiry(&self) -> time::Instant {
+    fn next_expiry(&mut self, inner: &Rc<RefCell<Self>>) -> time::Instant {
         let millis = to_millis(self.next_expiry - self.elapsed);
-        self.now() + time::Duration::from_millis(millis)
+        self.now(inner) + time::Duration::from_millis(millis)
     }
 
     fn execute_expired_timers(&mut self, instant: time::Instant) {
@@ -551,7 +556,7 @@ impl TimerDriver {
 
         crate::rt::spawn(TimerDriver {
             inner: cell.clone(),
-            sleep: Box::pin(sleep_until(inner.next_expiry())),
+            sleep: Box::pin(sleep_until(inner.next_expiry(cell))),
         });
     }
 }
@@ -572,7 +577,7 @@ impl Future for TimerDriver {
         if inner.flags.contains(Flags::NEEDS_RECALC) {
             inner.flags.remove(Flags::NEEDS_RECALC);
             inner.flags.insert(Flags::TIMER_ACTIVE);
-            let exp = inner.next_expiry();
+            let exp = inner.next_expiry(&self.inner);
             drop(inner);
             Pin::as_mut(&mut self.sleep).reset(exp);
             return self.poll(cx);
@@ -587,7 +592,7 @@ impl Future for TimerDriver {
                 if let Some(next_expiry) = inner.next_pending_bucket() {
                     inner.next_expiry = next_expiry;
                     inner.flags.insert(Flags::TIMER_ACTIVE);
-                    let exp = inner.next_expiry();
+                    let exp = inner.next_expiry(&self.inner);
                     drop(inner);
                     Pin::as_mut(&mut self.sleep).reset(exp);
                     return self.poll(cx);
@@ -607,9 +612,8 @@ struct LowresTimerDriver {
 }
 
 impl LowresTimerDriver {
-    fn start(cell: &Rc<RefCell<TimerInner>>) {
-        let mut inner = cell.borrow_mut();
-        inner.flags.insert(Flags::LOWRES_TIMER);
+    fn start(slf: &mut TimerInner, cell: &Rc<RefCell<TimerInner>>) {
+        slf.flags.insert(Flags::LOWRES_DRIVER | Flags::LOWRES_TIMER);
 
         crate::rt::spawn(LowresTimerDriver {
             inner: cell.clone(),
