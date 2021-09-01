@@ -466,6 +466,26 @@ impl TimerInner {
             expires << lvl_shift(lvl),
         )
     }
+
+    fn stop_wheel(&mut self) {
+        // mark all old timers as elapsed
+        let mut buckets = mem::take(&mut self.buckets);
+        for b in &mut buckets {
+            for no in b.entries.drain() {
+                self.timers[no].flags.insert(TimerEntryFlags::ELAPSED);
+            }
+        }
+
+        // cleanup info
+        self.flags = Flags::empty();
+        self.buckets = buckets;
+        self.occupied = [0; WHEEL_SIZE];
+        self.next_expiry = u64::MAX;
+        self.elapsed = 0;
+        self.elapsed_instant = time::Instant::now();
+        self.lowres_time.set(None);
+        self.lowres_stime.set(None);
+    }
 }
 
 #[derive(Debug)]
@@ -538,23 +558,7 @@ impl TimerDriver {
 
 impl Drop for TimerDriver {
     fn drop(&mut self) {
-        let mut inner = self.inner.borrow_mut();
-
-        // mark all old timers as elapsed
-        let mut buckets = mem::take(&mut inner.buckets);
-        for b in &mut buckets {
-            for no in b.entries.drain() {
-                inner.timers[no].flags.insert(TimerEntryFlags::ELAPSED);
-            }
-        }
-
-        // cleanup info
-        inner.flags = Flags::empty();
-        inner.buckets = buckets;
-        inner.occupied = [0; WHEEL_SIZE];
-        inner.next_expiry = u64::MAX;
-        inner.elapsed = 0;
-        inner.elapsed_instant = time::Instant::now();
+        self.inner.borrow_mut().stop_wheel();
     }
 }
 
@@ -616,10 +620,7 @@ impl LowresTimerDriver {
 
 impl Drop for LowresTimerDriver {
     fn drop(&mut self) {
-        let mut inner = self.inner.borrow_mut();
-        inner.flags = Flags::empty();
-        inner.lowres_time.set(None);
-        inner.lowres_stime.set(None);
+        self.inner.borrow_mut().stop_wheel();
     }
 }
 

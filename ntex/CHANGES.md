@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.9] - 2021-09-01
+
+* More timer wheel cleanups on driver drop
+
 ## [0.4.0-b.8] - 2021-09-01
 
 * Add `ntex::time::now()` helper, returns low res time.
