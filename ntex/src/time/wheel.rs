@@ -56,11 +56,13 @@ const fn lvl_offs(n: u64) -> u64 {
 const WHEEL_TIMEOUT_CUTOFF: u64 = lvl_start(LVL_DEPTH);
 const WHEEL_TIMEOUT_MAX: u64 = WHEEL_TIMEOUT_CUTOFF - (lvl_gran(LVL_DEPTH - 1));
 const WHEEL_SIZE: usize = (LVL_SIZE as usize) * (LVL_DEPTH as usize);
-const ONE_MS: time::Duration = time::Duration::from_millis(1);
+
+// Low res time resolution
+const LOWRES_RESOLUTION: time::Duration = time::Duration::from_millis(5);
 
 /// Returns an instant corresponding to “now”.
 ///
-/// Resolution is ~1ms
+/// Resolution is ~5ms
 #[inline]
 pub fn now() -> time::Instant {
     TIMER.with(|t| t.0.borrow_mut().now(&t.0))
@@ -68,7 +70,7 @@ pub fn now() -> time::Instant {
 
 /// Returns the system time corresponding to “now”.
 ///
-/// Resolution is ~1ms
+/// Resolution is ~5ms
 #[inline]
 pub fn system_time() -> time::SystemTime {
     TIMER.with(|t| t.0.borrow().system_time())
@@ -617,7 +619,7 @@ impl LowresTimerDriver {
 
         crate::rt::spawn(LowresTimerDriver {
             inner: cell.clone(),
-            sleep: Box::pin(sleep_until(time::Instant::now() + ONE_MS)),
+            sleep: Box::pin(sleep_until(time::Instant::now() + LOWRES_RESOLUTION)),
         });
     }
 }
@@ -647,7 +649,7 @@ impl Future for LowresTimerDriver {
         } else {
             inner.flags.insert(Flags::LOWRES_TIMER);
             drop(inner);
-            Pin::as_mut(&mut self.sleep).reset(time::Instant::now() + ONE_MS);
+            Pin::as_mut(&mut self.sleep).reset(time::Instant::now() + LOWRES_RESOLUTION);
             self.poll(cx)
         }
     }

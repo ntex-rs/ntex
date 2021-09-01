@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.11] - 2021-09-01
+
+* Decrease lowres timer resolution to 5ms
+
 ## [0.4.0-b.10] - 2021-09-01
 
 * Fix lowres timer restart
