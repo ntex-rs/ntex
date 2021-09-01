@@ -1,10 +1,8 @@
 use std::task::{Context, Poll};
 use std::{cell::Cell, convert::Infallible, marker, time::Duration, time::Instant};
 
-use crate::time::{sleep, Millis, Sleep};
+use crate::time::{now, sleep, Millis, Sleep};
 use crate::{util::Ready, Service, ServiceFactory};
-
-use super::time::{LowResTime, LowResTimeService};
 
 /// KeepAlive service factory
 ///
@@ -12,7 +10,6 @@ use super::time::{LowResTime, LowResTimeService};
 pub struct KeepAlive<R, E, F> {
     f: F,
     ka: Millis,
-    time: LowResTime,
     _t: marker::PhantomData<(R, E)>,
 }
 
@@ -24,10 +21,9 @@ where
     ///
     /// ka - keep-alive timeout
     /// err - error factory function
-    pub fn new(ka: Millis, time: LowResTime, err: F) -> Self {
+    pub fn new(ka: Millis, err: F) -> Self {
         KeepAlive {
             ka,
-            time,
             f: err,
             _t: marker::PhantomData,
         }
@@ -42,7 +38,6 @@ where
         KeepAlive {
             f: self.f.clone(),
             ka: self.ka,
-            time: self.time.clone(),
             _t: marker::PhantomData,
         }
     }
@@ -61,18 +56,13 @@ where
     type Future = Ready<Self::Service, Self::InitError>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        Ready::Ok(KeepAliveService::new(
-            self.ka,
-            self.time.timer(),
-            self.f.clone(),
-        ))
+        Ready::Ok(KeepAliveService::new(self.ka, self.f.clone()))
     }
 }
 
 pub struct KeepAliveService<R, E, F> {
     f: F,
     dur: Millis,
-    time: LowResTimeService,
     sleep: Sleep,
     expire: Cell<Instant>,
     _t: marker::PhantomData<(R, E)>,
@@ -82,13 +72,12 @@ impl<R, E, F> KeepAliveService<R, E, F>
 where
     F: Fn() -> E,
 {
-    pub fn new(dur: Millis, time: LowResTimeService, f: F) -> Self {
-        let expire = Cell::new(time.now() + Duration::from(dur));
+    pub fn new(dur: Millis, f: F) -> Self {
+        let expire = Cell::new(now());
 
         KeepAliveService {
             f,
             dur,
-            time,
             expire,
             sleep: sleep(dur),
             _t: marker::PhantomData,
@@ -108,11 +97,12 @@ where
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match self.sleep.poll_elapsed(cx) {
             Poll::Ready(_) => {
-                let now = self.time.now();
-                if self.expire.get() <= now {
+                let now = now();
+                let expire = self.expire.get() + Duration::from(self.dur);
+                if expire <= now {
                     Poll::Ready(Err((self.f)()))
                 } else {
-                    let expire = self.expire.get() - Instant::now();
+                    let expire = expire - now;
                     self.sleep.reset(Millis(expire.as_millis() as u64));
                     let _ = self.sleep.poll_elapsed(cx);
                     Poll::Ready(Ok(()))
@@ -123,7 +113,7 @@ where
     }
 
     fn call(&self, req: R) -> Self::Future {
-        self.expire.set(self.time.now() + Duration::from(self.dur));
+        self.expire.set(now());
         Ready::Ok(req)
     }
 }
@@ -139,8 +129,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_ka() {
-        let factory =
-            KeepAlive::new(Millis(100), LowResTime::new(Millis(10)), || TestErr);
+        let factory = KeepAlive::new(Millis(100), || TestErr);
         let _ = factory.clone();
 
         let service = factory.new_service(()).await.unwrap();

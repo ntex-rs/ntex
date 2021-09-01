@@ -6,12 +6,12 @@ mod types;
 mod wheel;
 
 pub use self::types::{Millis, Seconds};
-pub use self::wheel::TimerHandle;
+pub use self::wheel::{now, system_time, TimerHandle};
 
 /// Waits until `duration` has elapsed.
 ///
 /// No work is performed while awaiting on the sleep future to complete. `Sleep`
-/// operates at 16.5 millisecond granularity and should not be used for tasks that
+/// operates at 16 millisecond granularity and should not be used for tasks that
 /// require high-resolution timers.
 #[inline]
 pub fn sleep<T: Into<Millis>>(dur: T) -> Sleep {
@@ -187,5 +187,62 @@ impl crate::Stream for Interval {
         cx: &mut task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         self.poll_tick(cx).map(|_| Some(()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time;
+
+    /// State Under Test: Two calls of `now()` return the same value if they are done within resolution interval.
+    ///
+    /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
+    #[crate::rt_test]
+    async fn lowres_time_does_not_immediately_change() {
+        assert_eq!(now(), now());
+    }
+
+    /// State Under Test: `now()` updates returned value every ~1ms period.
+    ///
+    /// Expected Behavior: Two calls of `now()` made in subsequent resolution interval return different values
+    /// and second value is greater than the first one at least by a 1ms interval.
+    #[crate::rt_test]
+    async fn lowres_time_updates_after_resolution_interval() {
+        let first_time = now();
+
+        sleep(Millis(25)).await;
+
+        let second_time = now();
+        assert!(second_time - first_time >= time::Duration::from_millis(25));
+    }
+
+    /// State Under Test: Two calls of `system_time()` return the same value if they are done within 1ms interval.
+    ///
+    /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
+    #[crate::rt_test]
+    async fn system_time_service_time_does_not_immediately_change() {
+        assert_eq!(system_time(), system_time());
+    }
+
+    /// State Under Test: `system_time()` updates returned value every 1ms period.
+    ///
+    /// Expected Behavior: Two calls of `system_time()` made in subsequent resolution interval return different values
+    /// and second value is greater than the first one at least by a resolution interval.
+    #[crate::rt_test]
+    async fn system_time_service_time_updates_after_resolution_interval() {
+        let wait_time = 300;
+
+        let first_time = system_time()
+            .duration_since(time::SystemTime::UNIX_EPOCH)
+            .unwrap();
+
+        sleep(Millis(wait_time)).await;
+
+        let second_time = system_time()
+            .duration_since(time::SystemTime::UNIX_EPOCH)
+            .unwrap();
+
+        assert!(second_time - first_time >= time::Duration::from_millis(wait_time));
     }
 }

@@ -1,5 +1,13 @@
 # Changes
 
+## [0.4.0-b.8] - 2021-09-01
+
+* Add `ntex::time::now()` helper, returns low res time.
+
+* Add `ntex::time::system_time()` helper, returns low res system time.
+
+* Removed `LowResTime` and `SystemTime` services
+
 ## [0.4.0-b.7] - 2021-08-31
 
 * Remove From<u64> for Millis impl

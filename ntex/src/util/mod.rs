@@ -5,7 +5,6 @@ pub mod inflight;
 pub mod keepalive;
 pub mod sink;
 pub mod stream;
-pub mod time;
 pub mod timeout;
 pub mod variant;
 

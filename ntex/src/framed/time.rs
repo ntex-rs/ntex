@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Instant};
 
 use crate::framed::State;
-use crate::time::{sleep, Millis};
+use crate::time::{now, sleep, Millis};
 use crate::util::HashSet;
 
 pub struct Timer(Rc<RefCell<Inner>>);
@@ -75,11 +75,11 @@ impl Timer {
         if let Some(cur) = cur {
             cur
         } else {
-            let now = Instant::now();
+            let now_val = now();
             let inner = self.0.clone();
             let interval = {
                 let mut b = inner.borrow_mut();
-                b.current = Some(now);
+                b.current = Some(now_val);
                 b.resolution
             };
 
@@ -87,7 +87,7 @@ impl Timer {
                 sleep(interval).await;
                 let empty = {
                     let mut i = inner.borrow_mut();
-                    let now = i.current.take().unwrap_or_else(Instant::now);
+                    let now = i.current.take().unwrap_or_else(now);
 
                     // notify io dispatcher
                     while let Some(key) = i.notifications.keys().next() {
@@ -109,7 +109,7 @@ impl Timer {
                 }
             });
 
-            now
+            now_val
         }
     }
 }

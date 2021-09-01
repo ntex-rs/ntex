@@ -11,7 +11,7 @@ use crate::http::Protocol;
 use crate::rt::spawn;
 use crate::service::Service;
 use crate::task::LocalWaker;
-use crate::time::{sleep, Millis, Sleep};
+use crate::time::{now, sleep, Millis, Sleep};
 use crate::util::{poll_fn, Bytes, HashMap};
 
 use super::connection::{ConnectionType, IoConnection};
@@ -239,7 +239,7 @@ where
         // check if open connection is available
         // cleanup stale connections at the same time
         if let Some(ref mut connections) = self.available.get_mut(key) {
-            let now = Instant::now();
+            let now = now();
             while let Some(conn) = connections.pop_back() {
                 // check if it still usable
                 if (now - conn.used) > self.conn_keep_alive
@@ -279,7 +279,7 @@ where
             .push_back(AvailableConnection {
                 io,
                 created,
-                used: Instant::now(),
+                used: now(),
             });
         self.check_availibility();
     }
@@ -480,7 +480,7 @@ where
                     // h2 connection is ready
                     let conn = IoConnection::new(
                         ConnectionType::H2(snd),
-                        Instant::now(),
+                        now(),
                         Some(this.guard.take().unwrap().consume()),
                     );
                     if let Err(Ok(conn)) = this.tx.take().unwrap().send(Ok(conn)) {
@@ -517,7 +517,7 @@ where
                 if proto == Protocol::Http1 {
                     let conn = IoConnection::new(
                         ConnectionType::H1(io),
-                        Instant::now(),
+                        now(),
                         Some(this.guard.take().unwrap().consume()),
                     );
                     if let Err(Ok(conn)) = this.tx.take().unwrap().send(Ok(conn)) {
