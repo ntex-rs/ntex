@@ -73,7 +73,7 @@ pub fn now() -> time::Instant {
 /// Resolution is ~5ms
 #[inline]
 pub fn system_time() -> time::SystemTime {
-    TIMER.with(|t| t.0.borrow().system_time())
+    TIMER.with(|t| t.0.borrow_mut().system_time(&t.0))
 }
 
 #[derive(Debug)]
@@ -210,19 +210,23 @@ impl TimerInner {
             } else {
                 LowresTimerDriver::start(self, inner);
             }
-
             now
         }
     }
 
-    fn system_time(&self) -> time::SystemTime {
+    fn system_time(&mut self, inner: &Rc<RefCell<TimerInner>>) -> time::SystemTime {
         let cur = self.lowres_stime.get();
         if let Some(cur) = cur {
             cur
         } else {
             let now = time::SystemTime::now();
-            self.lowres_driver.wake();
             self.lowres_stime.set(Some(now));
+
+            if self.flags.contains(Flags::LOWRES_DRIVER) {
+                self.lowres_driver.wake();
+            } else {
+                LowresTimerDriver::start(self, inner);
+            }
             now
         }
     }
