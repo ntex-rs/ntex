@@ -243,10 +243,12 @@ impl TimerInner {
             return TimerHandle(no);
         }
 
-        let delta = to_units(
-            (slf.now(inner) + time::Duration::from_millis(millis) - slf.elapsed_instant)
-                .as_millis() as u64,
-        );
+        let expire = slf.now(inner) + time::Duration::from_millis(millis);
+        let delta = if expire > slf.elapsed_instant {
+            to_units((expire - slf.elapsed_instant).as_millis() as u64)
+        } else {
+            1
+        };
 
         let (no, bucket_expiry) = {
             let slf = &mut *slf;
@@ -291,10 +293,12 @@ impl TimerInner {
             return;
         }
 
-        let delta = to_units(
-            (slf.now(inner) + time::Duration::from_millis(millis) - slf.elapsed_instant)
-                .as_millis() as u64,
-        );
+        let expire = slf.now(inner) + time::Duration::from_millis(millis);
+        let delta = if expire > slf.elapsed_instant {
+            to_units((expire - slf.elapsed_instant).as_millis() as u64)
+        } else {
+            1
+        };
 
         let bucket_expiry = {
             let slf = &mut *slf;
@@ -659,6 +663,7 @@ impl Future for LowresTimerDriver {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use super::*;
     use crate::time::*;
 
     #[crate::rt_test]

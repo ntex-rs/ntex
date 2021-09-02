@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.12] - 2021-09-02
+
+* Fix race in low res timer
+
 ## [0.4.0-b.11] - 2021-09-01
 
 * Decrease lowres timer resolution to 5ms
