@@ -65,7 +65,7 @@ const LOWRES_RESOLUTION: time::Duration = time::Duration::from_millis(5);
 /// Resolution is ~5ms
 #[inline]
 pub fn now() -> time::Instant {
-    TIMER.with(|t| t.0.borrow_mut().now(&t.0))
+    TIMER.with(|t| t.borrow_mut().now(t))
 }
 
 /// Returns the system time corresponding to “now”.
@@ -73,30 +73,34 @@ pub fn now() -> time::Instant {
 /// Resolution is ~5ms
 #[inline]
 pub fn system_time() -> time::SystemTime {
-    TIMER.with(|t| t.0.borrow_mut().system_time(&t.0))
+    TIMER.with(|t| t.borrow_mut().system_time(t))
 }
 
 #[derive(Debug)]
 pub struct TimerHandle(usize);
 
 impl TimerHandle {
+    /// Createt new timer and return handle
     pub fn new(millis: u64) -> Self {
-        Timer::add_timer(millis)
+        TIMER.with(|t| Timer::add_timer(t, millis))
     }
 
     /// Resets the `TimerHandle` instance to a new deadline.
     pub fn reset(&self, millis: u64) {
-        Timer::update_timer(self.0, millis);
+        TIMER.with(|t| Timer::update_timer(t, self.0, millis))
     }
 
     pub fn is_elapsed(&self) -> bool {
-        Timer::with_entry(self.0, |entry| {
-            entry.flags.contains(TimerEntryFlags::ELAPSED)
+        TIMER.with(|t| {
+            t.borrow_mut().timers[self.0]
+                .flags
+                .contains(TimerEntryFlags::ELAPSED)
         })
     }
 
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
-        Timer::with_entry(self.0, |entry| {
+        TIMER.with(|t| {
+            let entry = &t.borrow_mut().timers[self.0];
             if entry.flags.contains(TimerEntryFlags::ELAPSED) {
                 Poll::Ready(())
             } else {
@@ -109,7 +113,7 @@ impl TimerHandle {
 
 impl Drop for TimerHandle {
     fn drop(&mut self) {
-        Timer::remove_timer(self.0);
+        TIMER.with(|t| t.borrow_mut().remove_timer(self.0));
     }
 }
 
@@ -123,13 +127,11 @@ bitflags::bitflags! {
     }
 }
 
-struct Timer(Rc<RefCell<TimerInner>>);
-
 thread_local! {
-    static TIMER: Timer = Timer::new();
+    static TIMER: Rc<RefCell<Timer>>= Rc::new(RefCell::new(Timer::new()));
 }
 
-struct TimerInner {
+struct Timer {
     timers: Slab<TimerEntry>,
     elapsed: u64,
     elapsed_instant: time::Instant,
@@ -146,33 +148,7 @@ struct TimerInner {
 
 impl Timer {
     fn new() -> Self {
-        Timer(Rc::new(RefCell::new(TimerInner::new())))
-    }
-
-    fn with_entry<F, R>(no: usize, f: F) -> R
-    where
-        F: Fn(&mut TimerEntry) -> R,
-    {
-        TIMER.with(|t| f(&mut t.0.borrow_mut().timers[no]))
-    }
-
-    // Add the timer into the hash bucket
-    fn add_timer(expires: u64) -> TimerHandle {
-        TIMER.with(|t| TimerInner::add_timer(&t.0, expires))
-    }
-
-    fn update_timer(handle: usize, expires: u64) {
-        TIMER.with(|t| TimerInner::update_timer(&t.0, handle, expires));
-    }
-
-    fn remove_timer(handle: usize) {
-        TIMER.with(|t| t.0.borrow_mut().remove_timer(handle));
-    }
-}
-
-impl TimerInner {
-    fn new() -> Self {
-        TimerInner {
+        Timer {
             buckets: Self::create_buckets(),
             timers: Slab::default(),
             elapsed: 0,
@@ -197,7 +173,7 @@ impl TimerInner {
         buckets
     }
 
-    fn now(&mut self, inner: &Rc<RefCell<TimerInner>>) -> time::Instant {
+    fn now(&mut self, inner: &Rc<RefCell<Timer>>) -> time::Instant {
         let cur = self.lowres_time.get();
         if let Some(cur) = cur {
             cur
@@ -214,7 +190,7 @@ impl TimerInner {
         }
     }
 
-    fn system_time(&mut self, inner: &Rc<RefCell<TimerInner>>) -> time::SystemTime {
+    fn system_time(&mut self, inner: &Rc<RefCell<Timer>>) -> time::SystemTime {
         let cur = self.lowres_stime.get();
         if let Some(cur) = cur {
             cur
@@ -555,12 +531,12 @@ impl TimerEntry {
 }
 
 struct TimerDriver {
-    inner: Rc<RefCell<TimerInner>>,
+    inner: Rc<RefCell<Timer>>,
     sleep: Pin<Box<Sleep>>,
 }
 
 impl TimerDriver {
-    fn start(cell: &Rc<RefCell<TimerInner>>) {
+    fn start(cell: &Rc<RefCell<Timer>>) {
         let mut inner = cell.borrow_mut();
         inner.flags.insert(Flags::TIMER_ACTIVE);
 
@@ -617,12 +593,12 @@ impl Future for TimerDriver {
 }
 
 struct LowresTimerDriver {
-    inner: Rc<RefCell<TimerInner>>,
+    inner: Rc<RefCell<Timer>>,
     sleep: Pin<Box<Sleep>>,
 }
 
 impl LowresTimerDriver {
-    fn start(slf: &mut TimerInner, cell: &Rc<RefCell<TimerInner>>) {
+    fn start(slf: &mut Timer, cell: &Rc<RefCell<Timer>>) {
         slf.flags.insert(Flags::LOWRES_DRIVER | Flags::LOWRES_TIMER);
 
         crate::rt::spawn(LowresTimerDriver {
