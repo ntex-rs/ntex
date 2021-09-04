@@ -61,6 +61,10 @@ const WHEEL_SIZE: usize = (LVL_SIZE as usize) * (LVL_DEPTH as usize);
 // Low res time resolution
 const LOWRES_RESOLUTION: Duration = Duration::from_millis(5);
 
+const fn as_millis(dur: Duration) -> u64 {
+    dur.as_secs() * 1_000 + (dur.subsec_millis() as u64)
+}
+
 /// Returns an instant corresponding to “now”.
 ///
 /// Resolution is ~5ms
@@ -121,8 +125,7 @@ impl Drop for TimerHandle {
 bitflags::bitflags! {
     pub struct Flags: u8 {
         const DRIVER_STARTED = 0b0000_0001;
-        const NEEDS_RECALC   = 0b0000_0010;
-        const TIMER_ACTIVE   = 0b0000_0100;
+        const DRIVER_RECALC  = 0b0000_0010;
         const LOWRES_TIMER   = 0b0000_1000;
         const LOWRES_DRIVER  = 0b0001_0000;
     }
@@ -135,16 +138,18 @@ thread_local! {
 struct Timer {
     timers: Slab<TimerEntry>,
     elapsed: u64,
-    elapsed_instant: Instant,
+    elapsed_time: Instant,
     next_expiry: u64,
     flags: Flags,
     driver: LocalWaker,
+    driver_sleep: Pin<Box<Sleep>>,
     buckets: Vec<Bucket>,
     /// Bit field tracking which bucket currently contain entries.
     occupied: [u64; WHEEL_SIZE],
     lowres_time: Cell<Option<Instant>>,
     lowres_stime: Cell<Option<SystemTime>>,
     lowres_driver: LocalWaker,
+    lowres_driver_sleep: Pin<Box<Sleep>>,
 }
 
 impl Timer {
@@ -153,14 +158,16 @@ impl Timer {
             buckets: Self::create_buckets(),
             timers: Slab::default(),
             elapsed: 0,
-            elapsed_instant: Instant::now(),
+            elapsed_time: Instant::now(),
             next_expiry: u64::MAX,
             flags: Flags::empty(),
             driver: LocalWaker::new(),
+            driver_sleep: Box::pin(sleep_until(Instant::now())),
             occupied: [0; WHEEL_SIZE],
             lowres_time: Cell::new(None),
             lowres_stime: Cell::new(None),
             lowres_driver: LocalWaker::new(),
+            lowres_driver_sleep: Box::pin(sleep_until(Instant::now())),
         }
     }
 
@@ -175,8 +182,7 @@ impl Timer {
     }
 
     fn now(&mut self, inner: &Rc<RefCell<Timer>>) -> Instant {
-        let cur = self.lowres_time.get();
-        if let Some(cur) = cur {
+        if let Some(cur) = self.lowres_time.get() {
             cur
         } else {
             let now = Instant::now();
@@ -192,8 +198,7 @@ impl Timer {
     }
 
     fn system_time(&mut self, inner: &Rc<RefCell<Timer>>) -> SystemTime {
-        let cur = self.lowres_stime.get();
-        if let Some(cur) = cur {
+        if let Some(cur) = self.lowres_stime.get() {
             cur
         } else {
             let now = SystemTime::now();
@@ -208,7 +213,7 @@ impl Timer {
         }
     }
 
-    // Add the timer into the hash bucket
+    /// Add the timer into the hash bucket
     fn add_timer(inner: &Rc<RefCell<Self>>, millis: u64) -> TimerHandle {
         let mut slf = inner.borrow_mut();
         if millis == 0 {
@@ -224,11 +229,12 @@ impl Timer {
             return TimerHandle(no);
         }
 
-        let expire = slf.now(inner) + Duration::from_millis(millis);
-        let delta = if expire > slf.elapsed_instant {
-            to_units((expire - slf.elapsed_instant).as_millis() as u64)
+        let now = slf.now(inner);
+        let delta = if now >= slf.elapsed_time {
+            to_units(as_millis(now - slf.elapsed_time) + millis)
         } else {
-            1
+            slf.lowres_time.set(Some(slf.elapsed_time));
+            to_units(millis)
         };
 
         let (no, bucket_expiry) = {
@@ -254,19 +260,18 @@ impl Timer {
         // Check whether new bucket expire earlier
         if bucket_expiry < slf.next_expiry {
             slf.next_expiry = bucket_expiry;
-            if !slf.flags.contains(Flags::DRIVER_STARTED) {
-                slf.flags.insert(Flags::DRIVER_STARTED);
-                drop(slf);
-                TimerDriver::start(inner);
-            } else {
-                slf.flags.insert(Flags::NEEDS_RECALC);
+            if slf.flags.contains(Flags::DRIVER_STARTED) {
+                slf.flags.insert(Flags::DRIVER_RECALC);
                 slf.driver.wake();
+            } else {
+                TimerDriver::start(&mut slf, inner);
             }
         }
 
         TimerHandle(no)
     }
 
+    /// Update existing timer
     fn update_timer(inner: &Rc<RefCell<Self>>, hnd: usize, millis: u64) {
         let mut slf = inner.borrow_mut();
         if millis == 0 {
@@ -274,26 +279,28 @@ impl Timer {
             return;
         }
 
-        let expire = slf.now(inner) + Duration::from_millis(millis);
-        let delta = if expire > slf.elapsed_instant {
-            to_units((expire - slf.elapsed_instant).as_millis() as u64)
+        let now = slf.now(inner);
+        let delta = if now >= slf.elapsed_time {
+            to_units(as_millis(now - slf.elapsed_time) + millis)
         } else {
-            1
+            slf.lowres_time.set(Some(slf.elapsed_time));
+            to_units(millis)
         };
 
         let bucket_expiry = {
             let slf = &mut *slf;
 
-            // calc buckeet
+            // calc bucket
             let (idx, bucket_expiry) = slf.calc_wheel_index(slf.elapsed + delta, delta);
 
             let entry = &mut slf.timers[hnd];
 
-            // do not do anything if  bucket is the same
+            // do not do anything if bucket is the same
             if idx == entry.bucket as usize {
                 return;
             }
 
+            // remove timer entry from current bucket
             if !entry.flags.contains(TimerEntryFlags::ELAPSED) {
                 let b = &mut slf.buckets[entry.bucket as usize];
                 b.entries.remove(entry.bucket_entry);
@@ -302,6 +309,7 @@ impl Timer {
                 }
             }
 
+            // put timer to new bucket
             let bucket = &mut slf.buckets[idx];
             let bucket_entry = bucket.add_entry(hnd);
 
@@ -316,13 +324,11 @@ impl Timer {
         // Check whether new bucket expire earlier
         if bucket_expiry < slf.next_expiry {
             slf.next_expiry = bucket_expiry;
-            if !slf.flags.contains(Flags::DRIVER_STARTED) {
-                slf.flags.insert(Flags::DRIVER_STARTED);
-                drop(slf);
-                TimerDriver::start(inner);
-            } else {
-                slf.flags.insert(Flags::NEEDS_RECALC);
+            if slf.flags.contains(Flags::DRIVER_STARTED) {
+                slf.flags.insert(Flags::DRIVER_RECALC);
                 slf.driver.wake();
+            } else {
+                TimerDriver::start(&mut slf, inner);
             }
         }
     }
@@ -339,7 +345,7 @@ impl Timer {
         }
     }
 
-    // Find next expiration bucket
+    /// Find next expiration bucket
     fn next_pending_bucket(&mut self) -> Option<u64> {
         let mut clk = self.elapsed;
         let mut next = u64::MAX;
@@ -381,14 +387,13 @@ impl Timer {
         }
     }
 
-    // Get instant of the next expiry
+    /// Get next expiry time in millis
     fn next_expiry_ms(&mut self) -> u64 {
         to_millis(self.next_expiry - self.elapsed)
     }
 
     fn execute_expired_timers(&mut self) {
         let mut clk = self.next_expiry;
-        self.elapsed = self.next_expiry;
 
         for lvl in 0..LVL_DEPTH {
             let idx = (clk & LVL_MASK) + lvl * LVL_SIZE;
@@ -439,16 +444,14 @@ impl Timer {
         }
     }
 
-    // Helper function to calculate the bucket index and bucket expiration
+    /// Helper function to calculate the bucket index and bucket expiration
     fn calc_index(expires2: u64, lvl: u64) -> (usize, u64) {
-        /*
-         * The timer wheel has to guarantee that a timer does not fire
-         * early. Early expiry can happen due to:
-         * - Timer is armed at the edge of a tick
-         * - Truncation of the expiry time in the outer wheel levels
-         *
-         * Round up with level granularity to prevent this.
-         */
+        // The timer wheel has to guarantee that a timer does not fire
+        // early. Early expiry can happen due to:
+        // - Timer is armed at the edge of a tick
+        // - Truncation of the expiry time in the outer wheel levels
+        //
+        // Round up with level granularity to prevent this.
 
         let expires = (expires2 + lvl_gran(lvl)) >> lvl_shift(lvl);
         (
@@ -458,7 +461,7 @@ impl Timer {
     }
 
     fn stop_wheel(&mut self) {
-        // mark all old timers as elapsed
+        // mark all timers as elapsed
         let mut buckets = mem::take(&mut self.buckets);
         for b in &mut buckets {
             for no in b.entries.drain() {
@@ -472,7 +475,7 @@ impl Timer {
         self.occupied = [0; WHEEL_SIZE];
         self.next_expiry = u64::MAX;
         self.elapsed = 0;
-        self.elapsed_instant = Instant::now();
+        self.elapsed_time = Instant::now();
         self.lowres_time.set(None);
         self.lowres_stime.set(None);
     }
@@ -529,114 +532,111 @@ impl TimerEntry {
     }
 }
 
-struct TimerDriver {
-    inner: Rc<RefCell<Timer>>,
-    sleep: Pin<Box<Sleep>>,
-}
+struct TimerDriver(Rc<RefCell<Timer>>);
 
 impl TimerDriver {
-    fn start(cell: &Rc<RefCell<Timer>>) {
-        let mut inner = cell.borrow_mut();
-        inner.flags.insert(Flags::TIMER_ACTIVE);
+    fn start(slf: &mut Timer, cell: &Rc<RefCell<Timer>>) {
+        slf.flags.insert(Flags::DRIVER_STARTED);
+        let deadline = Instant::now() + Duration::from_millis(slf.next_expiry_ms());
+        slf.driver_sleep = Box::pin(sleep_until(deadline));
 
-        let deadline = Instant::now() + Duration::from_millis(inner.next_expiry_ms());
-        crate::rt::spawn(TimerDriver {
-            inner: cell.clone(),
-            sleep: Box::pin(sleep_until(deadline)),
-        });
+        crate::rt::spawn(TimerDriver(cell.clone()));
     }
 }
 
 impl Drop for TimerDriver {
     fn drop(&mut self) {
-        self.inner.borrow_mut().stop_wheel();
+        self.0.borrow_mut().stop_wheel();
     }
 }
 
 impl Future for TimerDriver {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        let mut inner = self.inner.borrow_mut();
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        let mut counter = 0;
+        let mut inner = self.0.borrow_mut();
         inner.driver.register(cx.waker());
 
-        if inner.flags.contains(Flags::NEEDS_RECALC) {
-            inner.flags.remove(Flags::NEEDS_RECALC);
-            inner.flags.insert(Flags::TIMER_ACTIVE);
+        if inner.flags.contains(Flags::DRIVER_RECALC) {
+            inner.flags.remove(Flags::DRIVER_RECALC);
             let deadline =
                 Instant::now() + Duration::from_millis(inner.next_expiry_ms());
-            drop(inner);
-            Pin::as_mut(&mut self.sleep).reset(deadline);
-            return self.poll(cx);
-        } else if inner.flags.contains(Flags::TIMER_ACTIVE) {
-            drop(inner);
-            let result = Pin::as_mut(&mut self.sleep).poll(cx).is_ready();
-            if result {
-                let now = self.sleep.deadline();
-                let mut inner = self.inner.borrow_mut();
-                inner.elapsed_instant = now;
+            Pin::as_mut(&mut inner.driver_sleep).reset(deadline);
+        }
+
+        loop {
+            counter += 1;
+
+            if Pin::as_mut(&mut inner.driver_sleep).poll(cx).is_ready() {
+                let now = inner.driver_sleep.deadline();
+                if counter > 2 {
+                    log::error!(
+                        "Nested timer call: {:?}, elapsed: {:?} now: {:?}",
+                        counter,
+                        inner.elapsed_time,
+                        now
+                    );
+                }
+                inner.elapsed = inner.next_expiry;
+                inner.elapsed_time = now;
                 inner.execute_expired_timers();
 
                 if let Some(next_expiry) = inner.next_pending_bucket() {
                     inner.next_expiry = next_expiry;
-                    inner.flags.insert(Flags::TIMER_ACTIVE);
                     let deadline = now + Duration::from_millis(inner.next_expiry_ms());
-                    drop(inner);
-                    Pin::as_mut(&mut self.sleep).reset(deadline);
-                    return self.poll(cx);
+                    Pin::as_mut(&mut inner.driver_sleep).reset(deadline);
+                    continue;
                 } else {
                     inner.next_expiry = u64::MAX;
-                    inner.flags.remove(Flags::TIMER_ACTIVE);
                 }
             }
+            return Poll::Pending;
         }
-        Poll::Pending
     }
 }
 
-struct LowresTimerDriver {
-    inner: Rc<RefCell<Timer>>,
-    sleep: Pin<Box<Sleep>>,
-}
+struct LowresTimerDriver(Rc<RefCell<Timer>>);
 
 impl LowresTimerDriver {
     fn start(slf: &mut Timer, cell: &Rc<RefCell<Timer>>) {
-        slf.flags.insert(Flags::LOWRES_DRIVER | Flags::LOWRES_TIMER);
+        slf.flags.insert(Flags::LOWRES_DRIVER);
+        slf.lowres_driver_sleep =
+            Box::pin(sleep_until(Instant::now() + LOWRES_RESOLUTION));
 
-        crate::rt::spawn(LowresTimerDriver {
-            inner: cell.clone(),
-            sleep: Box::pin(sleep_until(Instant::now() + LOWRES_RESOLUTION)),
-        });
+        crate::rt::spawn(LowresTimerDriver(cell.clone()));
     }
 }
 
 impl Drop for LowresTimerDriver {
     fn drop(&mut self) {
-        self.inner.borrow_mut().stop_wheel();
+        self.0.borrow_mut().stop_wheel();
     }
 }
 
 impl Future for LowresTimerDriver {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        let mut inner = self.inner.borrow_mut();
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.0.borrow_mut();
         inner.lowres_driver.register(cx.waker());
 
-        if inner.flags.contains(Flags::LOWRES_TIMER) {
-            drop(inner);
-            if Pin::as_mut(&mut self.sleep).poll(cx).is_ready() {
-                let mut inner = self.inner.borrow_mut();
-                inner.lowres_time.set(None);
-                inner.lowres_stime.set(None);
-                inner.flags.remove(Flags::LOWRES_TIMER);
+        loop {
+            if inner.flags.contains(Flags::LOWRES_TIMER) {
+                if Pin::as_mut(&mut inner.lowres_driver_sleep)
+                    .poll(cx)
+                    .is_ready()
+                {
+                    inner.lowres_time.set(None);
+                    inner.lowres_stime.set(None);
+                    inner.flags.remove(Flags::LOWRES_TIMER);
+                }
+                return Poll::Pending;
+            } else {
+                inner.flags.insert(Flags::LOWRES_TIMER);
+                Pin::as_mut(&mut inner.lowres_driver_sleep)
+                    .reset(Instant::now() + LOWRES_RESOLUTION);
             }
-            task::Poll::Pending
-        } else {
-            inner.flags.insert(Flags::LOWRES_TIMER);
-            drop(inner);
-            Pin::as_mut(&mut self.sleep).reset(Instant::now() + LOWRES_RESOLUTION);
-            self.poll(cx)
         }
     }
 }
@@ -648,6 +648,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_timer() {
+        env_logger::init();
         crate::rt::spawn(async {
             let s = interval(Millis(25));
             loop {
@@ -661,7 +662,9 @@ mod tests {
         fut2.await;
         let elapsed = Instant::now() - time;
         assert!(
-            elapsed > Duration::from_millis(200) && elapsed < Duration::from_millis(250)
+            elapsed > Duration::from_millis(200) && elapsed < Duration::from_millis(270),
+            "elapsed: {:?}",
+            elapsed
         );
 
         fut1.await;
