@@ -2,7 +2,7 @@ use std::task::{Context, Poll};
 use std::time::{self, Duration, Instant};
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
-use crate::rt::time::sleep;
+use crate::rt::time_driver::sleep_until;
 use crate::service::{Service, ServiceFactory};
 use crate::util::Ready;
 
@@ -79,7 +79,7 @@ impl LowResTimeService {
             };
 
             crate::rt::spawn(async move {
-                sleep(interval).await;
+                sleep_until(Instant::now() + interval).await;
                 inner.borrow_mut().current.take();
             });
             now
@@ -146,7 +146,7 @@ impl SystemTimeService {
             };
 
             crate::rt::spawn(async move {
-                sleep(interval).await;
+                sleep_until(Instant::now() + interval).await;
                 inner.borrow_mut().current.take();
             });
             now
@@ -205,7 +205,7 @@ mod tests {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap();
 
-        sleep(wait_time).await;
+        sleep_until(Instant::now() + wait_time).await;
 
         let second_time = time_service
             .now()
@@ -227,7 +227,7 @@ mod tests {
 
         let first_time = time_service.now();
 
-        sleep(wait_time).await;
+        sleep_until(Instant::now() + wait_time).await;
 
         let second_time = time_service.now();
         assert!(second_time - first_time >= wait_time);

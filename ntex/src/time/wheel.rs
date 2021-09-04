@@ -386,10 +386,9 @@ impl Timer {
         self.now(inner) + time::Duration::from_millis(millis)
     }
 
-    fn execute_expired_timers(&mut self, instant: time::Instant) {
+    fn execute_expired_timers(&mut self) {
         let mut clk = self.next_expiry;
         self.elapsed = self.next_expiry;
-        self.elapsed_instant = instant;
 
         for lvl in 0..LVL_DEPTH {
             let idx = (clk & LVL_MASK) + lvl * LVL_SIZE;
@@ -571,20 +570,28 @@ impl Future for TimerDriver {
             drop(inner);
             let result = Pin::as_mut(&mut self.sleep).poll(cx).is_ready();
             if result {
-                let instant = self.sleep.deadline();
+                let now = self.sleep.deadline();
                 let mut inner = self.inner.borrow_mut();
-                inner.execute_expired_timers(instant);
+                inner.elapsed_instant = now;
+                inner.execute_expired_timers();
 
-                if let Some(next_expiry) = inner.next_pending_bucket() {
-                    inner.next_expiry = next_expiry;
-                    inner.flags.insert(Flags::TIMER_ACTIVE);
-                    let exp = inner.next_expiry(&self.inner);
-                    drop(inner);
-                    Pin::as_mut(&mut self.sleep).reset(exp);
-                    return self.poll(cx);
-                } else {
-                    inner.next_expiry = u64::MAX;
-                    inner.flags.remove(Flags::TIMER_ACTIVE);
+                loop {
+                    if let Some(next_expiry) = inner.next_pending_bucket() {
+                        if inner.next_expiry == next_expiry {
+                            inner.elapsed += 1;
+                            continue;
+                        }
+                        inner.next_expiry = next_expiry;
+                        inner.flags.insert(Flags::TIMER_ACTIVE);
+                        let exp = inner.next_expiry(&self.inner);
+                        drop(inner);
+                        Pin::as_mut(&mut self.sleep).reset(exp);
+                        return self.poll(cx);
+                    } else {
+                        inner.next_expiry = u64::MAX;
+                        inner.flags.remove(Flags::TIMER_ACTIVE);
+                    }
+                    break;
                 }
             }
         }
