@@ -3,7 +3,8 @@
 //! Inspired by linux kernel timers system
 #![allow(arithmetic_overflow)]
 use std::cell::{Cell, RefCell};
-use std::{future::Future, mem, pin::Pin, rc::Rc, task, task::Poll, time};
+use std::time::{Duration, Instant, SystemTime};
+use std::{future::Future, mem, pin::Pin, rc::Rc, task, task::Poll};
 
 use slab::Slab;
 
@@ -58,13 +59,13 @@ const WHEEL_TIMEOUT_MAX: u64 = WHEEL_TIMEOUT_CUTOFF - (lvl_gran(LVL_DEPTH - 1));
 const WHEEL_SIZE: usize = (LVL_SIZE as usize) * (LVL_DEPTH as usize);
 
 // Low res time resolution
-const LOWRES_RESOLUTION: time::Duration = time::Duration::from_millis(5);
+const LOWRES_RESOLUTION: Duration = Duration::from_millis(5);
 
 /// Returns an instant corresponding to “now”.
 ///
 /// Resolution is ~5ms
 #[inline]
-pub fn now() -> time::Instant {
+pub fn now() -> Instant {
     TIMER.with(|t| t.borrow_mut().now(t))
 }
 
@@ -72,7 +73,7 @@ pub fn now() -> time::Instant {
 ///
 /// Resolution is ~5ms
 #[inline]
-pub fn system_time() -> time::SystemTime {
+pub fn system_time() -> SystemTime {
     TIMER.with(|t| t.borrow_mut().system_time(t))
 }
 
@@ -134,15 +135,15 @@ thread_local! {
 struct Timer {
     timers: Slab<TimerEntry>,
     elapsed: u64,
-    elapsed_instant: time::Instant,
+    elapsed_instant: Instant,
     next_expiry: u64,
     flags: Flags,
     driver: LocalWaker,
     buckets: Vec<Bucket>,
     /// Bit field tracking which bucket currently contain entries.
     occupied: [u64; WHEEL_SIZE],
-    lowres_time: Cell<Option<time::Instant>>,
-    lowres_stime: Cell<Option<time::SystemTime>>,
+    lowres_time: Cell<Option<Instant>>,
+    lowres_stime: Cell<Option<SystemTime>>,
     lowres_driver: LocalWaker,
 }
 
@@ -152,7 +153,7 @@ impl Timer {
             buckets: Self::create_buckets(),
             timers: Slab::default(),
             elapsed: 0,
-            elapsed_instant: time::Instant::now(),
+            elapsed_instant: Instant::now(),
             next_expiry: u64::MAX,
             flags: Flags::empty(),
             driver: LocalWaker::new(),
@@ -173,12 +174,12 @@ impl Timer {
         buckets
     }
 
-    fn now(&mut self, inner: &Rc<RefCell<Timer>>) -> time::Instant {
+    fn now(&mut self, inner: &Rc<RefCell<Timer>>) -> Instant {
         let cur = self.lowres_time.get();
         if let Some(cur) = cur {
             cur
         } else {
-            let now = time::Instant::now();
+            let now = Instant::now();
             self.lowres_time.set(Some(now));
 
             if self.flags.contains(Flags::LOWRES_DRIVER) {
@@ -190,12 +191,12 @@ impl Timer {
         }
     }
 
-    fn system_time(&mut self, inner: &Rc<RefCell<Timer>>) -> time::SystemTime {
+    fn system_time(&mut self, inner: &Rc<RefCell<Timer>>) -> SystemTime {
         let cur = self.lowres_stime.get();
         if let Some(cur) = cur {
             cur
         } else {
-            let now = time::SystemTime::now();
+            let now = SystemTime::now();
             self.lowres_stime.set(Some(now));
 
             if self.flags.contains(Flags::LOWRES_DRIVER) {
@@ -223,7 +224,7 @@ impl Timer {
             return TimerHandle(no);
         }
 
-        let expire = slf.now(inner) + time::Duration::from_millis(millis);
+        let expire = slf.now(inner) + Duration::from_millis(millis);
         let delta = if expire > slf.elapsed_instant {
             to_units((expire - slf.elapsed_instant).as_millis() as u64)
         } else {
@@ -273,7 +274,7 @@ impl Timer {
             return;
         }
 
-        let expire = slf.now(inner) + time::Duration::from_millis(millis);
+        let expire = slf.now(inner) + Duration::from_millis(millis);
         let delta = if expire > slf.elapsed_instant {
             to_units((expire - slf.elapsed_instant).as_millis() as u64)
         } else {
@@ -381,9 +382,8 @@ impl Timer {
     }
 
     // Get instant of the next expiry
-    fn next_expiry(&mut self, inner: &Rc<RefCell<Self>>) -> time::Instant {
-        let millis = to_millis(self.next_expiry - self.elapsed);
-        self.now(inner) + time::Duration::from_millis(millis)
+    fn next_expiry_ms(&mut self) -> u64 {
+        to_millis(self.next_expiry - self.elapsed)
     }
 
     fn execute_expired_timers(&mut self) {
@@ -472,7 +472,7 @@ impl Timer {
         self.occupied = [0; WHEEL_SIZE];
         self.next_expiry = u64::MAX;
         self.elapsed = 0;
-        self.elapsed_instant = time::Instant::now();
+        self.elapsed_instant = Instant::now();
         self.lowres_time.set(None);
         self.lowres_stime.set(None);
     }
@@ -539,9 +539,10 @@ impl TimerDriver {
         let mut inner = cell.borrow_mut();
         inner.flags.insert(Flags::TIMER_ACTIVE);
 
+        let deadline = Instant::now() + Duration::from_millis(inner.next_expiry_ms());
         crate::rt::spawn(TimerDriver {
             inner: cell.clone(),
-            sleep: Box::pin(sleep_until(inner.next_expiry(cell))),
+            sleep: Box::pin(sleep_until(deadline)),
         });
     }
 }
@@ -562,9 +563,10 @@ impl Future for TimerDriver {
         if inner.flags.contains(Flags::NEEDS_RECALC) {
             inner.flags.remove(Flags::NEEDS_RECALC);
             inner.flags.insert(Flags::TIMER_ACTIVE);
-            let exp = inner.next_expiry(&self.inner);
+            let deadline =
+                Instant::now() + Duration::from_millis(inner.next_expiry_ms());
             drop(inner);
-            Pin::as_mut(&mut self.sleep).reset(exp);
+            Pin::as_mut(&mut self.sleep).reset(deadline);
             return self.poll(cx);
         } else if inner.flags.contains(Flags::TIMER_ACTIVE) {
             drop(inner);
@@ -575,23 +577,16 @@ impl Future for TimerDriver {
                 inner.elapsed_instant = now;
                 inner.execute_expired_timers();
 
-                loop {
-                    if let Some(next_expiry) = inner.next_pending_bucket() {
-                        if inner.next_expiry == next_expiry {
-                            inner.elapsed += 1;
-                            continue;
-                        }
-                        inner.next_expiry = next_expiry;
-                        inner.flags.insert(Flags::TIMER_ACTIVE);
-                        let exp = inner.next_expiry(&self.inner);
-                        drop(inner);
-                        Pin::as_mut(&mut self.sleep).reset(exp);
-                        return self.poll(cx);
-                    } else {
-                        inner.next_expiry = u64::MAX;
-                        inner.flags.remove(Flags::TIMER_ACTIVE);
-                    }
-                    break;
+                if let Some(next_expiry) = inner.next_pending_bucket() {
+                    inner.next_expiry = next_expiry;
+                    inner.flags.insert(Flags::TIMER_ACTIVE);
+                    let deadline = now + Duration::from_millis(inner.next_expiry_ms());
+                    drop(inner);
+                    Pin::as_mut(&mut self.sleep).reset(deadline);
+                    return self.poll(cx);
+                } else {
+                    inner.next_expiry = u64::MAX;
+                    inner.flags.remove(Flags::TIMER_ACTIVE);
                 }
             }
         }
@@ -610,7 +605,7 @@ impl LowresTimerDriver {
 
         crate::rt::spawn(LowresTimerDriver {
             inner: cell.clone(),
-            sleep: Box::pin(sleep_until(time::Instant::now() + LOWRES_RESOLUTION)),
+            sleep: Box::pin(sleep_until(Instant::now() + LOWRES_RESOLUTION)),
         });
     }
 }
@@ -640,7 +635,7 @@ impl Future for LowresTimerDriver {
         } else {
             inner.flags.insert(Flags::LOWRES_TIMER);
             drop(inner);
-            Pin::as_mut(&mut self.sleep).reset(time::Instant::now() + LOWRES_RESOLUTION);
+            Pin::as_mut(&mut self.sleep).reset(Instant::now() + LOWRES_RESOLUTION);
             self.poll(cx)
         }
     }
@@ -648,8 +643,6 @@ impl Future for LowresTimerDriver {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
     use super::*;
     use crate::time::*;
 

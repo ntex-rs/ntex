@@ -1,9 +1,9 @@
 use std::task::{Context, Poll};
-use std::time::{self, Duration, Instant};
+use std::time::{self, Instant};
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 
-use crate::rt::time_driver::sleep_until;
 use crate::service::{Service, ServiceFactory};
+use crate::time::{sleep, Millis};
 use crate::util::Ready;
 
 #[derive(Clone, Debug)]
@@ -11,12 +11,12 @@ pub struct LowResTime(Rc<RefCell<Inner>>);
 
 #[derive(Debug)]
 struct Inner {
-    resolution: Duration,
+    resolution: Millis,
     current: Option<Instant>,
 }
 
 impl Inner {
-    fn new(resolution: Duration) -> Self {
+    fn new(resolution: Millis) -> Self {
         Inner {
             resolution,
             current: None,
@@ -25,8 +25,9 @@ impl Inner {
 }
 
 impl LowResTime {
-    pub fn with(resolution: Duration) -> LowResTime {
-        LowResTime(Rc::new(RefCell::new(Inner::new(resolution))))
+    /// Create new timer service
+    pub fn new<T: Into<Millis>>(resolution: T) -> LowResTime {
+        LowResTime(Rc::new(RefCell::new(Inner::new(resolution.into()))))
     }
 
     pub fn timer(&self) -> LowResTimeService {
@@ -36,7 +37,7 @@ impl LowResTime {
 
 impl Default for LowResTime {
     fn default() -> Self {
-        LowResTime(Rc::new(RefCell::new(Inner::new(Duration::from_secs(1)))))
+        LowResTime(Rc::new(RefCell::new(Inner::new(Millis(1000)))))
     }
 }
 
@@ -59,8 +60,8 @@ impl ServiceFactory for LowResTime {
 pub struct LowResTimeService(Rc<RefCell<Inner>>);
 
 impl LowResTimeService {
-    pub fn with(resolution: Duration) -> LowResTimeService {
-        LowResTimeService(Rc::new(RefCell::new(Inner::new(resolution))))
+    pub fn new<T: Into<Millis>>(resolution: T) -> LowResTimeService {
+        LowResTimeService(Rc::new(RefCell::new(Inner::new(resolution.into()))))
     }
 
     /// Get current time. This function has to be called from
@@ -79,7 +80,7 @@ impl LowResTimeService {
             };
 
             crate::rt::spawn(async move {
-                sleep_until(Instant::now() + interval).await;
+                sleep(interval).await;
                 inner.borrow_mut().current.take();
             });
             now
@@ -109,12 +110,12 @@ pub struct SystemTime(Rc<RefCell<SystemTimeInner>>);
 
 #[derive(Debug)]
 struct SystemTimeInner {
-    resolution: Duration,
+    resolution: Millis,
     current: Option<time::SystemTime>,
 }
 
 impl SystemTimeInner {
-    fn new(resolution: Duration) -> Self {
+    fn new(resolution: Millis) -> Self {
         SystemTimeInner {
             resolution,
             current: None,
@@ -126,8 +127,11 @@ impl SystemTimeInner {
 pub struct SystemTimeService(Rc<RefCell<SystemTimeInner>>);
 
 impl SystemTimeService {
-    pub fn with(resolution: Duration) -> SystemTimeService {
-        SystemTimeService(Rc::new(RefCell::new(SystemTimeInner::new(resolution))))
+    /// Create new system time service
+    pub fn new<T: Into<Millis>>(resolution: T) -> SystemTimeService {
+        SystemTimeService(Rc::new(RefCell::new(SystemTimeInner::new(
+            resolution.into(),
+        ))))
     }
 
     /// Get current time. This function has to be called from
@@ -146,7 +150,7 @@ impl SystemTimeService {
             };
 
             crate::rt::spawn(async move {
-                sleep_until(Instant::now() + interval).await;
+                sleep(interval).await;
                 inner.borrow_mut().current.take();
             });
             now
@@ -157,7 +161,7 @@ impl SystemTimeService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::lazy;
+    use crate::{time::sleep, util::lazy};
     use std::time::{Duration, SystemTime};
 
     #[crate::rt_test]
@@ -175,7 +179,7 @@ mod tests {
     async fn system_time_service_time_does_not_immediately_change() {
         let resolution = Duration::from_millis(50);
 
-        let time_service = SystemTimeService::with(resolution);
+        let time_service = SystemTimeService::new(resolution);
         assert_eq!(time_service.now(), time_service.now());
     }
 
@@ -185,7 +189,7 @@ mod tests {
     #[crate::rt_test]
     async fn lowres_time_service_time_does_not_immediately_change() {
         let resolution = Duration::from_millis(50);
-        let time_service = LowResTimeService::with(resolution);
+        let time_service = LowResTimeService::new(resolution);
         assert_eq!(time_service.now(), time_service.now());
     }
 
@@ -196,23 +200,23 @@ mod tests {
     #[crate::rt_test]
     async fn system_time_service_time_updates_after_resolution_interval() {
         let resolution = Duration::from_millis(100);
-        let wait_time = Duration::from_millis(300);
+        let wait_time = 300;
 
-        let time_service = SystemTimeService::with(resolution);
+        let time_service = SystemTimeService::new(resolution);
 
         let first_time = time_service
             .now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap();
 
-        sleep_until(Instant::now() + wait_time).await;
+        sleep(Millis(wait_time)).await;
 
         let second_time = time_service
             .now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap();
 
-        assert!(second_time - first_time >= wait_time);
+        assert!(second_time - first_time >= Duration::from_millis(wait_time));
     }
 
     /// State Under Test: `LowResTimeService::now()` updates returned value every resolution period.
@@ -222,14 +226,14 @@ mod tests {
     #[crate::rt_test]
     async fn lowres_time_service_time_updates_after_resolution_interval() {
         let resolution = Duration::from_millis(100);
-        let wait_time = Duration::from_millis(300);
-        let time_service = LowResTimeService::with(resolution);
+        let wait_time = 300;
+        let time_service = LowResTimeService::new(resolution);
 
         let first_time = time_service.now();
 
-        sleep_until(Instant::now() + wait_time).await;
+        sleep(Millis(wait_time)).await;
 
         let second_time = time_service.now();
-        assert!(second_time - first_time >= wait_time);
+        assert!(second_time - first_time >= Duration::from_millis(wait_time));
     }
 }
