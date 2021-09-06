@@ -648,7 +648,6 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_timer() {
-        env_logger::init();
         crate::rt::spawn(async {
             let s = interval(Millis(25));
             loop {

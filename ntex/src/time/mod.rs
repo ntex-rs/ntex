@@ -193,6 +193,7 @@ impl crate::Stream for Interval {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
     use std::time;
 
     /// State Under Test: Two calls of `now()` return the same value if they are done within resolution interval.
@@ -244,5 +245,30 @@ mod tests {
             .unwrap();
 
         assert!(second_time - first_time >= time::Duration::from_millis(wait_time));
+    }
+
+    #[crate::rt_test]
+    async fn test_interval() {
+        let mut int = interval(Millis(250));
+
+        let time = time::Instant::now();
+        int.tick().await;
+        let elapsed = time::Instant::now() - time;
+        assert!(
+            elapsed > time::Duration::from_millis(200)
+                && elapsed < time::Duration::from_millis(300),
+            "elapsed: {:?}",
+            elapsed
+        );
+
+        let time = time::Instant::now();
+        int.next().await;
+        let elapsed = time::Instant::now() - time;
+        assert!(
+            elapsed > time::Duration::from_millis(200)
+                && elapsed < time::Duration::from_millis(300),
+            "elapsed: {:?}",
+            elapsed
+        );
     }
 }
