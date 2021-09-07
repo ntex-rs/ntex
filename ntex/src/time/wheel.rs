@@ -570,8 +570,8 @@ impl Future for TimerDriver {
 
             if Pin::as_mut(&mut inner.driver_sleep).poll(cx).is_ready() {
                 let now = inner.driver_sleep.deadline();
-                if counter > 2 {
-                    log::error!(
+                if counter > 3 {
+                    log::warn!(
                         "Nested timer call: {:?}, elapsed: {:?} now: {:?}",
                         counter,
                         inner.elapsed_time,
@@ -670,7 +670,7 @@ mod tests {
         let elapsed = Instant::now() - time;
         assert!(
             elapsed > Duration::from_millis(1000)
-                && elapsed < Duration::from_millis(1200)
+                && elapsed < Duration::from_millis(1250)
         );
 
         let time = Instant::now();

@@ -62,23 +62,6 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
             V1: ServiceFactory,
             V1::Config: Clone,
         {
-            #[doc(hidden)]
-            /// Convert to a Variant with more request types
-            pub fn and<$name, F>(self, factory: F) -> $fac2_type<V1, $($T,)+ $name>
-            where $name: ServiceFactory<
-                    Config = V1::Config,
-                    Response = V1::Response,
-                    Error = V1::Error,
-                    InitError = V1::InitError>,
-                F: IntoServiceFactory<$name>,
-            {
-                $fac2_type {
-                    A: self.A,
-                    $($T: self.$T,)+
-                    $name: factory.into_factory(),
-                }
-            }
-
             /// Convert to a Variant with more request types
             pub fn $m_name<$name, F>(self, factory: F) -> $fac2_type<V1, $($T,)+ $name>
             where $name: ServiceFactory<
@@ -231,8 +214,8 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
 
 
-        #[doc(hidden)]
         pin_project_lite::pin_project! {
+            #[doc(hidden)]
             pub struct ServiceFactoryResponse<A: ServiceFactory, $($T: ServiceFactory),+> {
                 pub(super) a: Option<A::Service>,
                 pub(super) items: ($(Option<$T::Service>,)+),
@@ -372,8 +355,8 @@ mod tests {
     #[crate::rt_test]
     async fn test_variant() {
         let factory = variant(fn_factory(|| async { Ok::<_, ()>(Srv1) }))
-            .and(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
-            .and(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
+            .v2(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
+            .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
         let service = factory.new_service(&()).await.clone().unwrap();
 

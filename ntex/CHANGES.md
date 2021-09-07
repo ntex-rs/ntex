@@ -1,6 +1,6 @@
 # Changes
 
-## [0.4.0-b.12] - 2021-09-02
+## [0.4.0-b.12] - 2021-09-07
 
 * Fix race in low res timer
 
