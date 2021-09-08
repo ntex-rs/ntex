@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.1] - 2021-09-08
+
+* Fix tight loop in Framed::close() method.
+
 ## [0.5.0] - 2021-06-27
 
 * Use ntex-bytes stead of bytes

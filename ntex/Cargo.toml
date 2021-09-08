@@ -43,7 +43,7 @@ http-framework = ["h2", "http", "httparse",
     "httpdate", "encoding_rs", "mime", "percent-encoding", "serde_json", "serde_urlencoded"]
 
 [dependencies]
-ntex-codec = "0.5.0"
+ntex-codec = "0.5.1"
 ntex-rt = "0.3.1"
 ntex-router = "0.5.1"
 ntex-service = "0.2.0-b.0"

@@ -305,8 +305,8 @@ where
 
             // read until 0 or err
             let mut buf = [0u8; 512];
-            let mut read_buf = tokio::io::ReadBuf::new(&mut buf);
             loop {
+                let mut read_buf = tokio::io::ReadBuf::new(&mut buf);
                 match ready!(Pin::new(&mut self.io).poll_read(cx, &mut read_buf)) {
                     Err(_) | Ok(_) if read_buf.filled().is_empty() => {
                         break;
