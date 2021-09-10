@@ -256,7 +256,7 @@ mod tests {
         let elapsed = time::Instant::now() - time;
         assert!(
             elapsed > time::Duration::from_millis(200)
-                && elapsed < time::Duration::from_millis(300),
+                && elapsed < time::Duration::from_millis(450),
             "elapsed: {:?}",
             elapsed
         );
@@ -266,9 +266,26 @@ mod tests {
         let elapsed = time::Instant::now() - time;
         assert!(
             elapsed > time::Duration::from_millis(200)
-                && elapsed < time::Duration::from_millis(300),
+                && elapsed < time::Duration::from_millis(450),
             "elapsed: {:?}",
             elapsed
         );
+    }
+
+    #[crate::rt_test]
+    async fn test_interval_one_sec() {
+        let int = interval(Millis::ONE_SEC);
+
+        for _i in 0..3 {
+            let time = time::Instant::now();
+            int.tick().await;
+            let elapsed = time::Instant::now() - time;
+            assert!(
+                elapsed > time::Duration::from_millis(1000)
+                    && elapsed < time::Duration::from_millis(1200),
+                "elapsed: {:?}",
+                elapsed
+            );
+        }
     }
 }

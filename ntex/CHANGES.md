@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.13] - 2021-09-12
+
+* Fix update timer wheel bucket calculation
+
 ## [0.4.0-b.12] - 2021-09-07
 
 * Fix race in low res timer
