@@ -98,17 +98,13 @@ impl TimerHandle {
     }
 
     pub fn is_elapsed(&self) -> bool {
-        TIMER.with(|t| {
-            t.borrow_mut().timers[self.0]
-                .flags
-                .contains(TimerEntryFlags::ELAPSED)
-        })
+        TIMER.with(|t| t.borrow_mut().timers[self.0].bucket.is_none())
     }
 
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         TIMER.with(|t| {
-            let entry = &t.borrow_mut().timers[self.0];
-            if entry.flags.contains(TimerEntryFlags::ELAPSED) {
+            let entry = &t.borrow().timers[self.0];
+            if entry.bucket.is_none() {
                 Poll::Ready(())
             } else {
                 entry.task.register(cx.waker());
@@ -224,9 +220,8 @@ impl Timer {
 
             entry.insert(TimerEntry {
                 bucket_entry: 0,
-                bucket: 0,
+                bucket: None,
                 task: LocalWaker::new(),
-                flags: TimerEntryFlags::ELAPSED,
             });
             return TimerHandle(no);
         }
@@ -251,9 +246,8 @@ impl Timer {
 
             entry.insert(TimerEntry {
                 bucket_entry,
-                bucket: idx as u16,
+                bucket: Some(idx as u16),
                 task: LocalWaker::new(),
-                flags: TimerEntryFlags::empty(),
             });
             slf.occupied[bucket.lvl as usize] |= bucket.bit;
             (no, bucket_expiry)
@@ -277,7 +271,7 @@ impl Timer {
     fn update_timer(inner: &Rc<RefCell<Self>>, hnd: usize, millis: u64) {
         let mut slf = inner.borrow_mut();
         if millis == 0 {
-            slf.timers[hnd].flags = TimerEntryFlags::ELAPSED;
+            slf.timers[hnd].bucket = None;
             slf.remove_timer_bucket(hnd);
             return;
         }
@@ -299,25 +293,23 @@ impl Timer {
             let entry = &mut slf.timers[hnd];
 
             // cleanup active timer
-            if !entry.flags.contains(TimerEntryFlags::ELAPSED) {
+            if let Some(bucket) = entry.bucket {
                 // do not do anything if wheel bucket is the same
-                if idx == entry.bucket as usize {
+                if idx == bucket as usize {
                     return;
                 }
 
                 // remove timer entry from current bucket
-                let b = &mut slf.buckets[entry.bucket as usize];
+                let b = &mut slf.buckets[bucket as usize];
                 b.entries.remove(entry.bucket_entry);
                 if b.entries.is_empty() {
                     slf.occupied[b.lvl as usize] &= b.bit_n;
                 }
-            } else {
-                entry.flags = TimerEntryFlags::empty();
             }
 
             // put timer to new bucket
             let bucket = &mut slf.buckets[idx];
-            entry.bucket = idx as u16;
+            entry.bucket = Some(idx as u16);
             entry.bucket_entry = bucket.add_entry(hnd);
 
             slf.occupied[bucket.lvl as usize] |= bucket.bit;
@@ -343,8 +335,8 @@ impl Timer {
 
     fn remove_timer_bucket(&mut self, handle: usize) {
         let entry = &mut self.timers[handle];
-        if !entry.flags.contains(TimerEntryFlags::ELAPSED) {
-            let b = &mut self.buckets[entry.bucket as usize];
+        if let Some(bucket) = entry.bucket {
+            let b = &mut self.buckets[bucket as usize];
             b.entries.remove(entry.bucket_entry);
             if b.entries.is_empty() {
                 self.occupied[b.lvl as usize] &= b.bit_n;
@@ -472,7 +464,7 @@ impl Timer {
         let mut buckets = mem::take(&mut self.buckets);
         for b in &mut buckets {
             for no in b.entries.drain() {
-                self.timers[no].flags.insert(TimerEntryFlags::ELAPSED);
+                self.timers[no].bucket = None;
             }
         }
 
@@ -516,24 +508,17 @@ impl Bucket {
     }
 }
 
-bitflags::bitflags! {
-    pub struct TimerEntryFlags: u8 {
-        const ELAPSED = 0b0000_0001;
-    }
-}
-
 #[derive(Debug)]
 struct TimerEntry {
-    flags: TimerEntryFlags,
-    bucket: u16,
+    bucket: Option<u16>,
     bucket_entry: usize,
     task: LocalWaker,
 }
 
 impl TimerEntry {
     fn complete(&mut self) {
-        if !self.flags.contains(TimerEntryFlags::ELAPSED) {
-            self.flags.insert(TimerEntryFlags::ELAPSED);
+        if self.bucket.is_some() {
+            self.bucket.take();
             self.task.wake();
         }
     }
@@ -639,9 +624,6 @@ impl Future for LowresTimerDriver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::time::*;
-
     #[cfg(not(target_os = "macos"))]
     #[crate::rt_test]
     async fn test_timer() {

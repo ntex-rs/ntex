@@ -282,7 +282,7 @@ mod tests {
             let elapsed = time::Instant::now() - time;
             assert!(
                 elapsed > time::Duration::from_millis(1000)
-                    && elapsed < time::Duration::from_millis(1200),
+                    && elapsed < time::Duration::from_millis(1300),
                 "elapsed: {:?}",
                 elapsed
             );
