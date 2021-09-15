@@ -622,9 +622,11 @@ impl Future for LowresTimerDriver {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
-    #[cfg(not(target_os = "macos"))]
+    use super::*;
+
     #[crate::rt_test]
     async fn test_timer() {
         crate::rt::spawn(async {
