@@ -39,9 +39,9 @@ where
     F: Fn(Req, &S) -> R + Clone,
     R: Future<Output = Result<Res, Err>>,
 {
-    type Transform = Apply<S, F, R, Req, Res, Err>;
+    type Service = Apply<S, F, R, Req, Res, Err>;
 
-    fn new_transform(&self, service: S) -> Self::Transform {
+    fn new_transform(&self, service: S) -> Self::Service {
         apply_fn(service, self.f.clone())
     }
 }

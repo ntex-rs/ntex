@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0] - 2021-09-15
+
+* Refactor Transform trait
+
 ## [0.2.0-b.0] - 2021-08-26
 
 * Simplify Transform trait

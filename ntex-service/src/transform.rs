@@ -81,19 +81,19 @@ where
 /// ```
 pub trait Transform<S> {
     /// The `TransformService` value created by this factory
-    type Transform: Service;
+    type Service: Service;
 
     /// Creates and returns a new Transform component, asynchronously
-    fn new_transform(&self, service: S) -> Self::Transform;
+    fn new_transform(&self, service: S) -> Self::Service;
 }
 
 impl<T, S> Transform<S> for Rc<T>
 where
     T: Transform<S>,
 {
-    type Transform = T::Transform;
+    type Service = T::Service;
 
-    fn new_transform(&self, service: S) -> T::Transform {
+    fn new_transform(&self, service: S) -> T::Service {
         self.as_ref().new_transform(service)
     }
 }
@@ -123,12 +123,12 @@ where
     S: ServiceFactory,
     T: Transform<S::Service>,
 {
-    type Request = <T::Transform as Service>::Request;
-    type Response = <T::Transform as Service>::Response;
-    type Error = <T::Transform as Service>::Error;
+    type Request = <T::Service as Service>::Request;
+    type Response = <T::Service as Service>::Response;
+    type Error = <T::Service as Service>::Error;
 
     type Config = S::Config;
-    type Service = T::Transform;
+    type Service = T::Service;
     type InitError = S::InitError;
     type Future = ApplyTransformFuture<T, S>;
 
@@ -157,7 +157,7 @@ where
     S: ServiceFactory,
     T: Transform<S::Service>,
 {
-    type Output = Result<T::Transform, S::InitError>;
+    type Output = Result<T::Service, S::InitError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
@@ -166,6 +166,21 @@ where
             Poll::Ready(srv) => Poll::Ready(Ok(this.store.0.new_transform(srv))),
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+/// Identity is a transform.
+///
+/// It returns service without modifications.
+#[derive(Debug, Clone, Copy)]
+pub struct Identity;
+
+impl<S: Service> Transform<S> for Identity {
+    type Service = S;
+
+    #[inline]
+    fn new_transform(&self, service: S) -> Self::Service {
+        service
     }
 }
 
@@ -181,9 +196,9 @@ mod tests {
     struct Tr;
 
     impl<S: Service> Transform<S> for Tr {
-        type Transform = Srv<S>;
+        type Service = Srv<S>;
 
-        fn new_transform(&self, service: S) -> Self::Transform {
+        fn new_transform(&self, service: S) -> Self::Service {
             Srv(service)
         }
     }

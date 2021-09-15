@@ -27,7 +27,7 @@ pub use self::fn_service::{
 pub use self::fn_transform::fn_transform;
 pub use self::map_config::{map_config, map_config_service, unit_config};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
-pub use self::transform::{apply, Transform};
+pub use self::transform::{apply, Identity, Transform};
 
 #[doc(hidden)]
 pub use self::apply_cfg::{apply_cfg, apply_cfg_factory};
