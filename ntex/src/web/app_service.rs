@@ -4,8 +4,8 @@ use std::{cell::RefCell, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
+use crate::service::{fn_service, Service, ServiceFactory, Transform};
 use crate::util::Extensions;
-use crate::{fn_service, Service, ServiceFactory};
 
 use super::config::AppConfig;
 use super::error::ErrorRenderer;
@@ -29,19 +29,20 @@ type FnDataFactory =
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes data factories.
-pub struct AppFactory<T, Err: ErrorRenderer>
+pub struct AppFactory<T, S, Err: ErrorRenderer>
 where
-    T: ServiceFactory<
+    S: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     >,
-    T::Future: 'static,
+    S::Future: 'static,
     Err: ErrorRenderer,
 {
-    pub(super) endpoint: T,
+    pub(super) middleware: Rc<T>,
+    pub(super) endpoint: S,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) data: Rc<Vec<Box<dyn DataFactory>>>,
     pub(super) data_factories: Rc<Vec<FnDataFactory>>,
@@ -52,23 +53,29 @@ where
     pub(super) case_insensitive: bool,
 }
 
-impl<T, Err> ServiceFactory for AppFactory<T, Err>
+impl<T, S, Err> ServiceFactory for AppFactory<T, S, Err>
 where
-    T: ServiceFactory<
+    T: Transform<S::Service> + 'static,
+    T::Service: Service<
+        Request = WebRequest<Err>,
+        Response = WebResponse,
+        Error = Err::Container,
+    >,
+    S: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     >,
-    T::Future: 'static,
+    S::Future: 'static,
     Err: ErrorRenderer,
 {
     type Config = AppConfig;
     type Request = Request;
     type Response = WebResponse;
-    type Error = T::Error;
-    type InitError = T::InitError;
+    type Error = S::Error;
+    type InitError = S::InitError;
     type Service = AppFactoryService<T::Service, Err>;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
@@ -127,6 +134,7 @@ where
             .borrow_mut()
             .take()
             .unwrap_or_else(Extensions::new);
+        let middleware = self.middleware.clone();
 
         Box::pin(async move {
             // main service
@@ -145,9 +153,9 @@ where
             }
 
             Ok(AppFactoryService {
-                service,
                 rmap,
                 config,
+                service: middleware.new_transform(service),
                 data: Rc::new(extensions),
                 pool: HttpRequestPool::create(),
                 _t: PhantomData,

@@ -815,10 +815,12 @@ mod tests {
                 }),
                 ExpectHandler,
                 None,
-                Some(boxed::service(crate::into_service(move |(req, _)| {
-                    data2.set(true);
-                    Box::pin(async move { Ok(req) })
-                }))),
+                Some(boxed::service(crate::service::into_service(
+                    move |(req, _)| {
+                        data2.set(true);
+                        Box::pin(async move { Ok(req) })
+                    },
+                ))),
             )),
             None,
             None,

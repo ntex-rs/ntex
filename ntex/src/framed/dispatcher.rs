@@ -580,7 +580,7 @@ mod tests {
         let (disp, _) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::fn_service(|msg: DispatchItem<BytesCodec>| async move {
+            crate::service::fn_service(|msg: DispatchItem<BytesCodec>| async move {
                 sleep(Millis(50)).await;
                 if let DispatchItem::Item(msg) = msg {
                     Ok::<_, ()>(Some(msg.freeze()))
@@ -609,7 +609,7 @@ mod tests {
         let (disp, st) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::fn_service(|msg: DispatchItem<BytesCodec>| async move {
+            crate::service::fn_service(|msg: DispatchItem<BytesCodec>| async move {
                 if let DispatchItem::Item(msg) = msg {
                     Ok::<_, ()>(Some(msg.freeze()))
                 } else {
@@ -645,7 +645,7 @@ mod tests {
         let (disp, state) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::fn_service(|_: DispatchItem<BytesCodec>| async move {
+            crate::service::fn_service(|_: DispatchItem<BytesCodec>| async move {
                 Err::<Option<Bytes>, _>(())
             }),
         );
@@ -686,7 +686,7 @@ mod tests {
         let (disp, state) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::fn_service(move |msg: DispatchItem<BytesCodec>| {
+            crate::service::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 let data = data2.clone();
                 async move {
                     match msg {
@@ -754,7 +754,7 @@ mod tests {
         let (disp, state) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::fn_service(move |msg: DispatchItem<BytesCodec>| {
+            crate::service::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 let data = data2.clone();
                 async move {
                     match msg {
@@ -805,7 +805,7 @@ mod tests {
         let (disp, _) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::fn_service(move |msg: DispatchItem<BytesCodec>| {
+            crate::service::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 handled2.store(true, Relaxed);
                 async move {
                     sleep(Millis(50)).await;

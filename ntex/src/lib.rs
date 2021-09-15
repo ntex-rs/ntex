@@ -46,7 +46,9 @@ pub mod util;
 pub mod web;
 pub mod ws;
 
-pub use self::service::*;
+pub use self::service::{
+    IntoService, IntoServiceFactory, Service, ServiceFactory, Transform,
+};
 
 pub use futures_core::stream::Stream;
 pub use futures_sink::Sink;

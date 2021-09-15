@@ -114,7 +114,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_openssl_connect() {
         let server = crate::server::test_server(|| {
-            crate::fn_service(|_| async { Ok::<_, ()>(()) })
+            crate::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
         let ssl = SslConnector::builder(SslMethod::tls()).unwrap();

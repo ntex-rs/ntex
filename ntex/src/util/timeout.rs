@@ -86,9 +86,9 @@ impl<S> Transform<S> for Timeout
 where
     S: Service,
 {
-    type Transform = TimeoutService<S>;
+    type Service = TimeoutService<S>;
 
-    fn new_transform(&self, service: S) -> Self::Transform {
+    fn new_transform(&self, service: S) -> Self::Service {
         TimeoutService {
             service,
             timeout: self.timeout,

@@ -180,7 +180,7 @@ mod tests {
         let disp = Dispatcher::new(
             decoder,
             encoder,
-            crate::fn_service(move |_| {
+            crate::service::fn_service(move |_| {
                 counter2.set(counter2.get() + 1);
                 async { Ok(Some(ws::Message::Text(ByteString::from_static("test")))) }
             }),

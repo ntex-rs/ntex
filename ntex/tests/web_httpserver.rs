@@ -238,7 +238,7 @@ async fn test_bind_uds() {
     let client = client::Client::build()
         .connector(
             client::Connector::default()
-                .connector(ntex::fn_service(|_| async {
+                .connector(ntex::service::fn_service(|_| async {
                     let stream =
                         ntex::rt::net::UnixStream::connect("/tmp/uds-test").await?;
                     Ok((stream, ntex::http::Protocol::Http1))
@@ -292,7 +292,7 @@ async fn test_listen_uds() {
     let client = client::Client::build()
         .connector(
             client::Connector::default()
-                .connector(ntex::fn_service(|_| async {
+                .connector(ntex::service::fn_service(|_| async {
                     let stream =
                         ntex::rt::net::UnixStream::connect("/tmp/uds-test2").await?;
                     Ok((stream, ntex::http::Protocol::Http1))

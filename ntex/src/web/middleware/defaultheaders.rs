@@ -91,9 +91,9 @@ where
     S: Service<Request = WebRequest<E>, Response = WebResponse>,
     S::Future: 'static,
 {
-    type Transform = DefaultHeadersMiddleware<S, E>;
+    type Service = DefaultHeadersMiddleware<S, E>;
 
-    fn new_transform(&self, service: S) -> Self::Transform {
+    fn new_transform(&self, service: S) -> Self::Service {
         DefaultHeadersMiddleware {
             service,
             inner: self.inner.clone(),

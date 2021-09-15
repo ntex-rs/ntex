@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0] - 2021-09-15
+
+* Refactor web middleware registration and management procedure.
+
 ## [0.4.0-b.13] - 2021-09-12
 
 * Fix update timer wheel bucket calculation

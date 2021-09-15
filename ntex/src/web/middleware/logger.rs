@@ -118,9 +118,9 @@ impl<S, Err> Transform<S> for Logger
 where
     S: Service<Request = WebRequest<Err>, Response = WebResponse>,
 {
-    type Transform = LoggerMiddleware<S>;
+    type Service = LoggerMiddleware<S>;
 
-    fn new_transform(&self, service: S) -> Self::Transform {
+    fn new_transform(&self, service: S) -> Self::Service {
         LoggerMiddleware {
             service,
             inner: self.inner.clone(),

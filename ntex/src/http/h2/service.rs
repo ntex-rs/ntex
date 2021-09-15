@@ -12,12 +12,12 @@ use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::rt::net::TcpStream;
-use crate::time::Millis;
-use crate::util::Bytes;
-use crate::{
+use crate::service::{
     fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
     ServiceFactory,
 };
+use crate::time::Millis;
+use crate::util::Bytes;
 
 use super::dispatcher::Dispatcher;
 
@@ -99,7 +99,7 @@ mod openssl {
     use crate::server::SslError;
 
     use super::*;
-    use crate::{fn_factory, fn_service};
+    use crate::service::{fn_factory, fn_service};
 
     impl<S, B> H2Service<SslStream<TcpStream>, S, B>
     where

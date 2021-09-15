@@ -5,10 +5,11 @@ use std::{
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{apply, apply_fn_factory, pipeline_factory};
-use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
+use crate::service::{apply, pipeline_factory};
+use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::{Either, Extensions, Ready};
 
+use super::app::Stack;
 use super::config::ServiceConfig;
 use super::dev::{WebServiceConfig, WebServiceFactory};
 use super::error::ErrorRenderer;
@@ -58,8 +59,9 @@ type BoxedResponse<Err: ErrorRenderer> =
 ///  * /{project_id}/path2 - `GET` requests
 ///  * /{project_id}/path3 - `HEAD` requests
 ///
-pub struct Scope<Err: ErrorRenderer, T = ScopeEndpoint<Err>> {
+pub struct Scope<Err: ErrorRenderer, T = ScopeEndpoint<Err>, U = Identity> {
     endpoint: T,
+    middleware: U,
     rdef: Vec<String>,
     data: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
@@ -76,6 +78,7 @@ impl<Err: ErrorRenderer> Scope<Err> {
         let fref = Rc::new(RefCell::new(None));
         Scope {
             endpoint: ScopeEndpoint::new(fref.clone()),
+            middleware: Identity,
             rdef: path.patterns(),
             data: None,
             guards: Vec::new(),
@@ -88,7 +91,7 @@ impl<Err: ErrorRenderer> Scope<Err> {
     }
 }
 
-impl<Err, T> Scope<Err, T>
+impl<Err, T, U> Scope<Err, T, U>
 where
     T: ServiceFactory<
         Config = (),
@@ -150,14 +153,14 @@ where
     ///     );
     /// }
     /// ```
-    pub fn data<U: 'static>(self, data: U) -> Self {
+    pub fn data<D: 'static>(self, data: D) -> Self {
         self.app_data(Data::new(data))
     }
 
     /// Set or override application data.
     ///
     /// This method overrides data stored with [`App::app_data()`](#method.app_data)
-    pub fn app_data<U: 'static>(mut self, data: U) -> Self {
+    pub fn app_data<D: 'static>(mut self, data: D) -> Self {
         if self.data.is_none() {
             self.data = Some(Extensions::new());
         }
@@ -290,16 +293,16 @@ where
     /// Default service to be used if no matching route could be found.
     ///
     /// If default resource is not registered, app's default resource is being used.
-    pub fn default_service<F, U>(mut self, f: F) -> Self
+    pub fn default_service<F, S>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<U>,
-        U: ServiceFactory<
+        F: IntoServiceFactory<S>,
+        S: ServiceFactory<
                 Config = (),
                 Request = WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
             > + 'static,
-        U::InitError: fmt::Debug,
+        S::InitError: fmt::Debug,
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
@@ -330,6 +333,7 @@ where
             Error = Err::Container,
             InitError = (),
         >,
+        U,
     >
     where
         F: ServiceFactory<
@@ -351,6 +355,7 @@ where
 
         Scope {
             endpoint,
+            middleware: self.middleware,
             rdef: self.rdef,
             data: self.data,
             guards: self.guards,
@@ -366,98 +371,16 @@ where
     ///
     /// That runs during inbound processing in the request
     /// lifecycle (request -> response), modifying request as
-    /// necessary, across all requests managed by the *Scope*.  Scope-level
+    /// necessary, across all requests managed by the *Scope*. Scope-level
     /// middleware is more limited in what it can modify, relative to Route or
     /// Application level middleware, in that Scope-level middleware can not modify
     /// WebResponse.
     ///
     /// Use middleware when you need to read or modify *every* request in some way.
-    pub fn wrap<M>(
-        self,
-        mw: M,
-    ) -> Scope<
-        Err,
-        impl ServiceFactory<
-            Config = (),
-            Request = WebRequest<Err>,
-            Response = WebResponse,
-            Error = Err::Container,
-            InitError = (),
-        >,
-    >
-    where
-        M: Transform<T::Service>,
-        M::Transform: Service<
-            Request = WebRequest<Err>,
-            Response = WebResponse,
-            Error = Err::Container,
-        >,
-    {
+    pub fn wrap<M>(self, mw: M) -> Scope<Err, T, Stack<U, M>> {
         Scope {
-            endpoint: apply(mw, self.endpoint),
-            rdef: self.rdef,
-            data: self.data,
-            guards: self.guards,
-            services: self.services,
-            default: self.default,
-            external: self.external,
-            factory_ref: self.factory_ref,
-            case_insensitive: self.case_insensitive,
-        }
-    }
-
-    /// Registers middleware, in the form of a closure.
-    ///
-    /// That runs during inbound processing in the request lifecycle (request -> response),
-    /// modifying request as necessary, across all requests managed by the *Scope*.
-    /// Scope-level middleware is more limited in what it can modify, relative
-    /// to Route or Application level middleware, in that Scope-level middleware
-    /// can not modify WebResponse.
-    ///
-    /// ```rust
-    /// use ntex::service::Service;
-    /// use ntex::web;
-    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
-    ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = web::App::new().service(
-    ///         web::scope("/app")
-    ///             .wrap_fn(|req, srv| {
-    ///                 let fut = srv.call(req);
-    ///                 async {
-    ///                     let mut res = fut.await?;
-    ///                     res.headers_mut().insert(
-    ///                        CONTENT_TYPE, HeaderValue::from_static("text/plain"),
-    ///                     );
-    ///                     Ok(res)
-    ///                 }
-    ///             })
-    ///             .route("/index.html", web::get().to(index)));
-    /// }
-    /// ```
-    pub fn wrap_fn<F, R>(
-        self,
-        mw: F,
-    ) -> Scope<
-        Err,
-        impl ServiceFactory<
-            Config = (),
-            Request = WebRequest<Err>,
-            Response = WebResponse,
-            Error = Err::Container,
-            InitError = (),
-        >,
-    >
-    where
-        F: Fn(WebRequest<Err>, &T::Service) -> R + Clone,
-        R: Future<Output = Result<WebResponse, Err::Container>>,
-    {
-        Scope {
-            endpoint: apply_fn_factory(self.endpoint, mw),
+            endpoint: self.endpoint,
+            middleware: Stack::new(self.middleware, mw),
             rdef: self.rdef,
             data: self.data,
             guards: self.guards,
@@ -470,7 +393,7 @@ where
     }
 }
 
-impl<Err, T> WebServiceFactory<Err> for Scope<Err, T>
+impl<Err, T, U> WebServiceFactory<Err> for Scope<Err, T, U>
 where
     T: ServiceFactory<
             Config = (),
@@ -479,6 +402,12 @@ where
             Error = Err::Container,
             InitError = (),
         > + 'static,
+    U: Transform<T::Service> + 'static,
+    U::Service: Service<
+        Request = WebRequest<Err>,
+        Response = WebResponse,
+        Error = Err::Container,
+    >,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<Err>) {
@@ -541,7 +470,7 @@ where
         config.register_service(
             ResourceDef::root_prefix(self.rdef),
             guards,
-            self.endpoint,
+            apply(self.middleware, self.endpoint),
             Some(Rc::new(rmap)),
         )
     }
@@ -1195,34 +1124,6 @@ mod tests {
                         web::resource("/test")
                             .route(web::get().to(|| async { HttpResponse::Ok() })),
                     ),
-            ),
-        )
-        .await;
-
-        let req = TestRequest::with_uri("/app/test").to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get(CONTENT_TYPE).unwrap(),
-            HeaderValue::from_static("0001")
-        );
-    }
-
-    #[crate::rt_test]
-    async fn test_middleware_fn() {
-        let srv = init_service(
-            App::new().service(
-                web::scope("app")
-                    .wrap_fn(|req, srv| {
-                        let fut = srv.call(req);
-                        async move {
-                            let mut res = fut.await?;
-                            res.headers_mut()
-                                .insert(CONTENT_TYPE, HeaderValue::from_static("0001"));
-                            Ok(res)
-                        }
-                    })
-                    .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
             ),
         )
         .await;

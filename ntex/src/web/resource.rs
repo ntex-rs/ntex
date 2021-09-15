@@ -5,8 +5,8 @@ use std::{
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{apply, apply_fn_factory, pipeline_factory};
-use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
+use crate::service::{apply, dev::ApplyTransform, pipeline_factory};
+use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::{Either, Extensions, Ready};
 
 use super::dev::{insert_slesh, WebServiceConfig, WebServiceFactory};
@@ -18,7 +18,7 @@ use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
 use super::route::{IntoRoutes, Route, RouteService};
-use super::types::Data;
+use super::{app::Stack, types::Data};
 
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
@@ -47,8 +47,9 @@ type HttpNewService<Err: ErrorRenderer> =
 ///
 /// If no matching route could be found, *405* response code get returned.
 /// Default behavior could be overriden with `default_resource()` method.
-pub struct Resource<Err: ErrorRenderer, T = ResourceEndpoint<Err>> {
+pub struct Resource<Err: ErrorRenderer, T = ResourceEndpoint<Err>, U = Identity> {
     endpoint: T,
+    middleware: U,
     rdef: Vec<String>,
     name: Option<String>,
     routes: Vec<Route<Err>>,
@@ -67,6 +68,7 @@ impl<Err: ErrorRenderer> Resource<Err> {
             rdef: path.patterns(),
             name: None,
             endpoint: ResourceEndpoint::new(fref.clone()),
+            middleware: Identity,
             factory_ref: fref,
             guards: Vec::new(),
             data: None,
@@ -75,7 +77,7 @@ impl<Err: ErrorRenderer> Resource<Err> {
     }
 }
 
-impl<Err, T> Resource<Err, T>
+impl<Err, T, U> Resource<Err, T, U>
 where
     T: ServiceFactory<
         Config = (),
@@ -163,9 +165,9 @@ where
     /// # async fn post_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
     /// # async fn delete_handler() -> web::HttpResponseBuilder { web::HttpResponse::Ok() }
     /// ```
-    pub fn route<U>(mut self, route: U) -> Self
+    pub fn route<R>(mut self, route: R) -> Self
     where
-        U: IntoRoutes<Err>,
+        R: IntoRoutes<Err>,
     {
         for route in route.routes() {
             self.routes.push(route);
@@ -198,14 +200,14 @@ where
     ///           ));
     /// }
     /// ```
-    pub fn data<U: 'static>(self, data: U) -> Self {
+    pub fn data<D: 'static>(self, data: D) -> Self {
         self.app_data(Data::new(data))
     }
 
     /// Set or override application data.
     ///
     /// This method overrides data stored with [`App::app_data()`](#method.app_data)
-    pub fn app_data<U: 'static>(mut self, data: U) -> Self {
+    pub fn app_data<D: 'static>(mut self, data: D) -> Self {
         if self.data.is_none() {
             self.data = Some(Extensions::new());
         }
@@ -258,6 +260,7 @@ where
             Error = Err::Container,
             InitError = (),
         >,
+        U,
     >
     where
         F: ServiceFactory<
@@ -279,6 +282,7 @@ where
 
         Resource {
             endpoint,
+            middleware: self.middleware,
             rdef: self.rdef,
             name: self.name,
             guards: self.guards,
@@ -296,92 +300,10 @@ where
     /// type (i.e modify response's body).
     ///
     /// **Note**: middlewares get called in opposite order of middlewares registration.
-    pub fn wrap<M>(
-        self,
-        mw: M,
-    ) -> Resource<
-        Err,
-        impl ServiceFactory<
-            Config = (),
-            Request = WebRequest<Err>,
-            Response = WebResponse,
-            Error = Err::Container,
-            InitError = (),
-        >,
-    >
-    where
-        M: Transform<T::Service>,
-        M::Transform: Service<
-            Request = WebRequest<Err>,
-            Response = WebResponse,
-            Error = Err::Container,
-        >,
-    {
+    pub fn wrap<M>(self, mw: M) -> Resource<Err, T, Stack<U, M>> {
         Resource {
-            endpoint: apply(mw, self.endpoint),
-            rdef: self.rdef,
-            name: self.name,
-            guards: self.guards,
-            routes: self.routes,
-            default: self.default,
-            data: self.data,
-            factory_ref: self.factory_ref,
-        }
-    }
-
-    /// Register a resource middleware function.
-    ///
-    /// This function accepts instance of `WebRequest` type and
-    /// mutable reference to the next middleware in chain.
-    ///
-    /// This is similar to `App's` middlewares, but middleware get invoked on resource level.
-    /// Resource level middlewares are not allowed to change response
-    /// type (i.e modify response's body).
-    ///
-    /// ```rust
-    /// use ntex::service::Service;
-    /// use ntex::web::{self, App};
-    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
-    ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::new().service(
-    ///         web::resource("/index.html")
-    ///             .wrap_fn(|req, srv| {
-    ///                 let fut = srv.call(req);
-    ///                 async {
-    ///                     let mut res = fut.await?;
-    ///                     res.headers_mut().insert(
-    ///                        CONTENT_TYPE, HeaderValue::from_static("text/plain"),
-    ///                     );
-    ///                     Ok(res)
-    ///                 }
-    ///             })
-    ///             .route(web::get().to(index)));
-    /// }
-    /// ```
-    pub fn wrap_fn<F, R>(
-        self,
-        mw: F,
-    ) -> Resource<
-        Err,
-        impl ServiceFactory<
-            Config = (),
-            Request = WebRequest<Err>,
-            Response = WebResponse,
-            Error = Err::Container,
-            InitError = (),
-        >,
-    >
-    where
-        F: Fn(WebRequest<Err>, &T::Service) -> R + Clone,
-        R: Future<Output = Result<WebResponse, Err::Container>>,
-    {
-        Resource {
-            endpoint: apply_fn_factory(self.endpoint, mw),
+            middleware: Stack::new(self.middleware, mw),
+            endpoint: self.endpoint,
             rdef: self.rdef,
             name: self.name,
             guards: self.guards,
@@ -395,16 +317,16 @@ where
     /// Default service to be used if no matching route could be found.
     /// By default *405* response get returned. Resource does not use
     /// default handler from `App` or `Scope`.
-    pub fn default_service<F, U>(mut self, f: F) -> Self
+    pub fn default_service<F, S>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<U>,
-        U: ServiceFactory<
+        F: IntoServiceFactory<S>,
+        S: ServiceFactory<
                 Config = (),
                 Request = WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
             > + 'static,
-        U::InitError: fmt::Debug,
+        S::InitError: fmt::Debug,
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
@@ -417,7 +339,7 @@ where
     }
 }
 
-impl<Err, T> WebServiceFactory<Err> for Resource<Err, T>
+impl<Err, T, U> WebServiceFactory<Err> for Resource<Err, T, U>
 where
     T: ServiceFactory<
             Config = (),
@@ -426,6 +348,12 @@ where
             Error = Err::Container,
             InitError = (),
         > + 'static,
+    U: Transform<T::Service> + 'static,
+    U::Service: Service<
+        Request = WebRequest<Err>,
+        Response = WebResponse,
+        Error = Err::Container,
+    >,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<Err>) {
@@ -446,11 +374,23 @@ where
         if let Some(ref mut ext) = self.data {
             config.set_service_data(ext);
         }
-        config.register_service(rdef, guards, self, None)
+
+        *self.factory_ref.borrow_mut() = Some(ResourceFactory {
+            routes: self.routes,
+            data: self.data.map(Rc::new),
+            default: self.default,
+        });
+
+        config.register_service(
+            rdef,
+            guards,
+            apply(self.middleware, self.endpoint),
+            None,
+        )
     }
 }
 
-impl<Err, T> IntoServiceFactory<T> for Resource<Err, T>
+impl<Err, T, U> IntoServiceFactory<ApplyTransform<U, T>> for Resource<Err, T, U>
 where
     T: ServiceFactory<
         Config = (),
@@ -459,16 +399,22 @@ where
         Error = Err::Container,
         InitError = (),
     >,
+    U: Transform<T::Service> + 'static,
+    U::Service: Service<
+        Request = WebRequest<Err>,
+        Response = WebResponse,
+        Error = Err::Container,
+    >,
     Err: ErrorRenderer,
 {
-    fn into_factory(self) -> T {
+    fn into_factory(self) -> ApplyTransform<U, T> {
         *self.factory_ref.borrow_mut() = Some(ResourceFactory {
             routes: self.routes,
             data: self.data.map(Rc::new),
             default: self.default,
         });
 
-        self.endpoint
+        apply(self.middleware, self.endpoint)
     }
 }
 
@@ -579,10 +525,11 @@ mod tests {
     use crate::http::{Method, StatusCode};
     use crate::time::{sleep, Millis};
     use crate::web::middleware::DefaultHeaders;
-    use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, TestRequest};
-    use crate::web::{self, guard, App, DefaultError, HttpResponse};
-    use crate::{fn_service, util::Either, Service};
+    use crate::web::{
+        self, guard, request::WebRequest, App, DefaultError, HttpResponse,
+    };
+    use crate::{service::fn_service, util::Either};
 
     #[crate::rt_test]
     async fn test_filter() {
@@ -616,36 +563,6 @@ mod tests {
                 ),
             )
             .await;
-        let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).unwrap(),
-            HeaderValue::from_static("0001")
-        );
-    }
-
-    #[crate::rt_test]
-    async fn test_middleware_fn() {
-        let srv = init_service(
-            App::new().service(
-                web::resource("/test")
-                    .wrap_fn(|req, srv| {
-                        let fut = srv.call(req);
-                        async {
-                            fut.await.map(|mut res| {
-                                res.headers_mut().insert(
-                                    header::CONTENT_TYPE,
-                                    HeaderValue::from_static("0001"),
-                                );
-                                res
-                            })
-                        }
-                    })
-                    .route(web::get().to(|| async { HttpResponse::Ok() })),
-            ),
-        )
-        .await;
         let req = TestRequest::with_uri("/test").to_request();
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);

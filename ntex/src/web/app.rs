@@ -3,8 +3,8 @@ use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
-use crate::service::{apply, apply_fn_factory, pipeline_factory};
-use crate::service::{IntoServiceFactory, Service, ServiceFactory, Transform};
+use crate::service::{map_config, pipeline_factory};
+use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::{Either, Extensions, Ready};
 
 use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
@@ -24,8 +24,9 @@ type FnDataFactory =
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
-pub struct App<T, Err: ErrorRenderer = DefaultError> {
-    endpoint: T,
+pub struct App<M, S, Err: ErrorRenderer = DefaultError> {
+    middleware: M,
+    endpoint: S,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
     factory_ref: Rc<RefCell<Option<AppRoutingFactory<Err>>>>,
@@ -37,11 +38,12 @@ pub struct App<T, Err: ErrorRenderer = DefaultError> {
     case_insensitive: bool,
 }
 
-impl App<AppEntry<DefaultError>, DefaultError> {
+impl App<Identity, AppEntry<DefaultError>, DefaultError> {
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
         let fref = Rc::new(RefCell::new(None));
         App {
+            middleware: Identity,
             endpoint: AppEntry::new(fref.clone()),
             data: Vec::new(),
             data_factories: Vec::new(),
@@ -56,11 +58,12 @@ impl App<AppEntry<DefaultError>, DefaultError> {
     }
 }
 
-impl<Err: ErrorRenderer> App<AppEntry<Err>, Err> {
+impl<Err: ErrorRenderer> App<Identity, AppEntry<Err>, Err> {
     /// Create application builder with custom error renderer.
     pub fn with(err: Err) -> Self {
         let fref = Rc::new(RefCell::new(None));
         App {
+            middleware: Identity,
             endpoint: AppEntry::new(fref.clone()),
             data: Vec::new(),
             data_factories: Vec::new(),
@@ -75,16 +78,16 @@ impl<Err: ErrorRenderer> App<AppEntry<Err>, Err> {
     }
 }
 
-impl<T, Err> App<T, Err>
+impl<M, S, Err> App<M, S, Err>
 where
-    T: ServiceFactory<
+    S: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     >,
-    T::Future: 'static,
+    S::Future: 'static,
     Err: ErrorRenderer,
 {
     /// Set application data. Application data could be accessed
@@ -359,6 +362,7 @@ where
         self,
         filter: F,
     ) -> App<
+        M,
         impl ServiceFactory<
             Config = (),
             Request = WebRequest<Err>,
@@ -388,6 +392,7 @@ where
 
         App {
             endpoint,
+            middleware: self.middleware,
             data: self.data,
             data_factories: self.data_factories,
             services: self.services,
@@ -410,10 +415,7 @@ where
     ///
     /// Notice that the keyword for registering middleware is `wrap`. As you
     /// register middleware using `wrap` in the App builder,  imagine wrapping
-    /// layers around an inner App.  The first middleware layer exposed to a
-    /// Request is the outermost layer-- the *last* registered in
-    /// the builder chain.  Consequently, the *first* middleware registered
-    /// in the builder chain is the *last* to execute during request processing.
+    /// layers around an inner App.
     ///
     /// ```rust
     /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
@@ -429,90 +431,10 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn wrap<M>(
-        self,
-        mw: M,
-    ) -> App<
-        impl ServiceFactory<
-            Config = (),
-            Request = WebRequest<Err>,
-            Response = WebResponse,
-            Error = Err::Container,
-            InitError = (),
-        >,
-        Err,
-    >
-    where
-        M: Transform<T::Service>,
-        M::Transform: Service<
-            Request = WebRequest<Err>,
-            Response = WebResponse,
-            Error = Err::Container,
-        >,
-    {
+    pub fn wrap<U>(self, mw: U) -> App<Stack<M, U>, S, Err> {
         App {
-            endpoint: apply(mw, self.endpoint),
-            data: self.data,
-            data_factories: self.data_factories,
-            services: self.services,
-            default: self.default,
-            factory_ref: self.factory_ref,
-            external: self.external,
-            extensions: self.extensions,
-            error_renderer: self.error_renderer,
-            case_insensitive: self.case_insensitive,
-        }
-    }
-
-    /// Registers middleware, in the form of a closure, that runs during inbound
-    /// and/or outbound processing in the request lifecycle (request -> response),
-    /// modifying request/response as necessary, across all requests managed by
-    /// the *Application*.
-    ///
-    /// Use middleware when you need to read or modify *every* request or response in some way.
-    ///
-    /// ```rust
-    /// use ntex::{web, Service};
-    /// use ntex::http::header::{CONTENT_TYPE, HeaderValue};
-    ///
-    /// async fn index() -> &'static str {
-    ///     "Welcome!"
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = web::App::new()
-    ///         .wrap_fn(|req, srv| {
-    ///             let fut = srv.call(req);
-    ///             async {
-    ///                 let mut res = fut.await?;
-    ///                 res.headers_mut().insert(
-    ///                    CONTENT_TYPE, HeaderValue::from_static("text/plain"),
-    ///                 );
-    ///                 Ok(res)
-    ///             }
-    ///         })
-    ///         .route("/index.html", web::get().to(index));
-    /// }
-    /// ```
-    pub fn wrap_fn<F, R>(
-        self,
-        mw: F,
-    ) -> App<
-        impl ServiceFactory<
-            Config = (),
-            Request = WebRequest<Err>,
-            Response = WebResponse,
-            Error = Err::Container,
-            InitError = (),
-        >,
-        Err,
-    >
-    where
-        F: Fn(WebRequest<Err>, &T::Service) -> R + Clone,
-        R: Future<Output = Result<WebResponse, Err::Container>>,
-    {
-        App {
-            endpoint: apply_fn_factory(self.endpoint, mw),
+            middleware: Stack::new(self.middleware, mw),
+            endpoint: self.endpoint,
             data: self.data,
             data_factories: self.data_factories,
             services: self.services,
@@ -532,7 +454,26 @@ where
         self.case_insensitive = true;
         self
     }
+}
 
+impl<M, S, Err> App<M, S, Err>
+where
+    M: Transform<S::Service> + 'static,
+    M::Service: Service<
+        Request = WebRequest<Err>,
+        Response = WebResponse,
+        Error = Err::Container,
+    >,
+    S: ServiceFactory<
+        Config = (),
+        Request = WebRequest<Err>,
+        Response = WebResponse,
+        Error = Err::Container,
+        InitError = (),
+    >,
+    S::Future: 'static,
+    Err: ErrorRenderer,
+{
     /// Construct service factory with default `AppConfig`, suitable for `http::HttpService`.
     ///
     /// ```rust,no_run
@@ -557,10 +498,10 @@ where
         Config = (),
         Request = Request,
         Response = WebResponse,
-        Error = T::Error,
-        InitError = T::InitError,
+        Error = S::Error,
+        InitError = S::InitError,
     > {
-        crate::map_config(self.into_factory(), move |_| Default::default())
+        map_config(self.into_factory(), move |_| Default::default())
     }
 
     /// Construct service factory suitable for `http::HttpService`.
@@ -588,27 +529,34 @@ where
         Config = (),
         Request = Request,
         Response = WebResponse,
-        Error = T::Error,
-        InitError = T::InitError,
+        Error = S::Error,
+        InitError = S::InitError,
     > {
-        crate::map_config(self.into_factory(), move |_| cfg.clone())
+        map_config(self.into_factory(), move |_| cfg.clone())
     }
 }
 
-impl<T, Err> IntoServiceFactory<AppFactory<T, Err>> for App<T, Err>
+impl<M, S, Err> IntoServiceFactory<AppFactory<M, S, Err>> for App<M, S, Err>
 where
-    T: ServiceFactory<
+    M: Transform<S::Service> + 'static,
+    M::Service: Service<
+        Request = WebRequest<Err>,
+        Response = WebResponse,
+        Error = Err::Container,
+    >,
+    S: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     >,
-    T::Future: 'static,
+    S::Future: 'static,
     Err: ErrorRenderer,
 {
-    fn into_factory(self) -> AppFactory<T, Err> {
+    fn into_factory(self) -> AppFactory<M, S, Err> {
         AppFactory {
+            middleware: Rc::new(self.middleware),
             data: Rc::new(self.data),
             data_factories: Rc::new(self.data_factories),
             endpoint: self.endpoint,
@@ -622,16 +570,41 @@ where
     }
 }
 
+pub struct Stack<Inner, Outer> {
+    inner: Inner,
+    outer: Outer,
+}
+
+impl<Inner, Outer> Stack<Inner, Outer> {
+    pub(super) fn new(inner: Inner, outer: Outer) -> Self {
+        Stack { inner, outer }
+    }
+}
+
+impl<S, Inner, Outer> Transform<S> for Stack<Inner, Outer>
+where
+    Inner: Transform<S>,
+    Outer: Transform<Inner::Service>,
+{
+    type Service = Outer::Service;
+
+    fn new_transform(&self, service: S) -> Self::Service {
+        self.outer.new_transform(self.inner.new_transform(service))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
-    use crate::web::middleware::DefaultHeaders;
-    use crate::web::request::WebRequest;
+    use crate::service::{fn_service, Service};
+    use crate::util::Bytes;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
-    use crate::web::{self, DefaultError, HttpRequest, HttpResponse};
-    use crate::{fn_service, util::Bytes, Service};
+    use crate::web::{
+        self, middleware::DefaultHeaders, request::WebRequest, DefaultError,
+        HttpRequest, HttpResponse,
+    };
 
     #[crate::rt_test]
     async fn test_default_resource() {
@@ -766,60 +739,6 @@ mod tests {
                     DefaultHeaders::new()
                         .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
                 ),
-        )
-        .await;
-        let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).unwrap(),
-            HeaderValue::from_static("0001")
-        );
-    }
-
-    #[crate::rt_test]
-    async fn test_wrap_fn() {
-        let srv = init_service(
-            App::new()
-                .wrap_fn(|req, srv| {
-                    let fut = srv.call(req);
-                    async move {
-                        let mut res = fut.await?;
-                        res.headers_mut().insert(
-                            header::CONTENT_TYPE,
-                            HeaderValue::from_static("0001"),
-                        );
-                        Ok(res)
-                    }
-                })
-                .service(web::resource("/test").to(|| async { HttpResponse::Ok() })),
-        )
-        .await;
-        let req = TestRequest::with_uri("/test").to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).unwrap(),
-            HeaderValue::from_static("0001")
-        );
-    }
-
-    #[crate::rt_test]
-    async fn test_router_wrap_fn() {
-        let srv = init_service(
-            App::new()
-                .route("/test", web::get().to(|| async { HttpResponse::Ok() }))
-                .wrap_fn(|req, srv| {
-                    let fut = srv.call(req);
-                    async {
-                        let mut res = fut.await?;
-                        res.headers_mut().insert(
-                            header::CONTENT_TYPE,
-                            HeaderValue::from_static("0001"),
-                        );
-                        Ok(res)
-                    }
-                }),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();

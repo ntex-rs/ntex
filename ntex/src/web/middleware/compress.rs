@@ -50,9 +50,9 @@ where
     S: Service<Request = WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
-    type Transform = CompressMiddleware<S, E>;
+    type Service = CompressMiddleware<S, E>;
 
-    fn new_transform(&self, service: S) -> Self::Transform {
+    fn new_transform(&self, service: S) -> Self::Service {
         CompressMiddleware {
             service,
             encoding: self.enc,

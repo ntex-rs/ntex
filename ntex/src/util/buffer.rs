@@ -46,9 +46,9 @@ impl<S, E> Transform<S> for Buffer<E>
 where
     S: Service<Error = E>,
 {
-    type Transform = BufferService<S, E>;
+    type Service = BufferService<S, E>;
 
-    fn new_transform(&self, service: S) -> Self::Transform {
+    fn new_transform(&self, service: S) -> Self::Service {
         BufferService {
             size: self.buf_size,
             inner: Rc::new(Inner {

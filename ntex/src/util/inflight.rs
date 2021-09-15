@@ -28,9 +28,9 @@ impl<S> Transform<S> for InFlight
 where
     S: Service,
 {
-    type Transform = InFlightService<S>;
+    type Service = InFlightService<S>;
 
-    fn new_transform(&self, service: S) -> Self::Transform {
+    fn new_transform(&self, service: S) -> Self::Service {
         InFlightService::new(self.max_inflight, service)
     }
 }

@@ -18,12 +18,12 @@ use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
 use crate::router::{Path, ResourceDef};
+use crate::service::{
+    map_config, IntoService, IntoServiceFactory, Service, ServiceFactory,
+};
 use crate::time::{sleep, Millis, Seconds};
 use crate::util::{next, Bytes, BytesMut, Extensions, Ready};
-use crate::{
-    map_config, rt::System, server::Server, IntoService, IntoServiceFactory, Service,
-    ServiceFactory, Stream,
-};
+use crate::{rt::System, server::Server, Stream};
 
 use crate::web::config::AppConfig;
 use crate::web::dev::{WebRequest, WebResponse};

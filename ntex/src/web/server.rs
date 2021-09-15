@@ -10,11 +10,11 @@ use crate::http::Protocol;
 use crate::http::{
     body::MessageBody, HttpService, KeepAlive, Request, Response, ResponseError,
 };
-#[cfg(unix)]
-use crate::pipeline_factory;
 use crate::server::{Server, ServerBuilder};
+#[cfg(unix)]
+use crate::service::pipeline_factory;
 use crate::time::Seconds;
-use crate::{map_config, IntoServiceFactory, Service, ServiceFactory};
+use crate::{service::map_config, IntoServiceFactory, Service, ServiceFactory};
 
 use super::config::AppConfig;
 

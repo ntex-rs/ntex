@@ -11,10 +11,8 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
-use crate::rt::net::TcpStream;
-use crate::{
-    pipeline_factory, time::Millis, IntoServiceFactory, Service, ServiceFactory,
-};
+use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
+use crate::{rt::net::TcpStream, time::Millis};
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;

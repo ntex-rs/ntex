@@ -626,6 +626,7 @@ impl Future for LowresTimerDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::Millis;
 
     #[crate::rt_test]
     async fn test_timer() {
