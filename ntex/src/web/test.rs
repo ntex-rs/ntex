@@ -26,11 +26,10 @@ use crate::util::{next, Bytes, BytesMut, Extensions, Ready};
 use crate::{rt::System, server::Server, Stream};
 
 use crate::web::config::AppConfig;
-use crate::web::dev::{WebRequest, WebResponse};
 use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::{HttpRequest, HttpRequestPool};
 use crate::web::rmap::ResourceMap;
-use crate::web::{FromRequest, HttpResponse, Responder};
+use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<Err: ErrorRenderer>() -> impl Service<

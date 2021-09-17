@@ -128,8 +128,6 @@ pub mod dev {
     use super::Handler;
     pub use crate::web::config::AppConfig;
     pub use crate::web::info::ConnectionInfo;
-    pub use crate::web::request::WebRequest;
-    pub use crate::web::response::WebResponse;
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::route::IntoRoutes;
     pub use crate::web::service::{

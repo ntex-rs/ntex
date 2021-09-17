@@ -9,8 +9,7 @@ use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
 use crate::service::{Service, Transform};
 use crate::util::{Bytes, Either, HashSet};
-use crate::web::dev::{WebRequest, WebResponse};
-use crate::web::HttpResponse;
+use crate::web::{HttpResponse, WebRequest, WebResponse};
 
 /// `Middleware` for logging request and response info to the terminal.
 ///

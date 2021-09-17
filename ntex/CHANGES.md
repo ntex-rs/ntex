@@ -2,7 +2,7 @@
 
 ## [0.4.0] - 2021-09-15
 
-* Refactor web middleware registration and management procedure.
+* Refactor web middlewares/filters registration and management
 
 ## [0.4.0-b.13] - 2021-09-12
 

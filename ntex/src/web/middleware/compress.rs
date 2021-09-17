@@ -5,9 +5,7 @@ use std::{cmp, future::Future, marker, pin::Pin, str::FromStr};
 use crate::http::encoding::Encoder;
 use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
 use crate::service::{Service, Transform};
-
-use crate::web::dev::{WebRequest, WebResponse};
-use crate::web::{BodyEncoding, ErrorRenderer};
+use crate::web::{BodyEncoding, ErrorRenderer, WebRequest, WebResponse};
 
 #[derive(Debug, Clone)]
 /// `Middleware` for compressing response body.

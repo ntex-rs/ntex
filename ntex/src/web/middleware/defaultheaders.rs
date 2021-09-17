@@ -5,7 +5,7 @@ use std::{convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::R
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::service::{Service, Transform};
-use crate::web::dev::{WebRequest, WebResponse};
+use crate::web::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
 ///

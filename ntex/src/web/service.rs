@@ -155,9 +155,9 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
 /// Create service adapter for a specific path.
 ///
 /// ```rust
-/// use ntex::web::{self, dev, guard, App, HttpResponse, Error, DefaultError};
+/// use ntex::web::{self, guard, App, HttpResponse, Error, DefaultError};
 ///
-/// async fn my_service(req: dev::WebRequest<DefaultError>) -> Result<dev::WebResponse, Error> {
+/// async fn my_service(req: web::WebRequest<DefaultError>) -> Result<web::WebResponse, Error> {
 ///     Ok(req.into_response(HttpResponse::Ok().finish()))
 /// }
 ///
@@ -194,9 +194,9 @@ impl WebServiceAdapter {
     /// Add match guard to a web service.
     ///
     /// ```rust
-    /// use ntex::web::{self, guard, dev, App, DefaultError, Error, HttpResponse};
+    /// use ntex::web::{self, guard, App, DefaultError, Error, HttpResponse};
     ///
-    /// async fn index(req: dev::WebRequest<DefaultError>) -> Result<dev::WebResponse, Error> {
+    /// async fn index(req: web::WebRequest<DefaultError>) -> Result<web::WebResponse, Error> {
     ///     Ok(req.into_response(HttpResponse::Ok().finish()))
     /// }
     ///

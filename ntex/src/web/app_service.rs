@@ -4,7 +4,7 @@ use std::{cell::RefCell, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{fn_service, Service, ServiceFactory, Transform};
+use crate::service::{fn_service, PipelineFactory, Service, ServiceFactory, Transform};
 use crate::util::Extensions;
 
 use super::config::AppConfig;
@@ -29,53 +29,52 @@ type FnDataFactory =
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes data factories.
-pub struct AppFactory<T, S, Err: ErrorRenderer>
+pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
-    S: ServiceFactory<
+    F: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse,
+        Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
     >,
-    S::Future: 'static,
+    F::Future: 'static,
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
-    pub(super) endpoint: S,
+    pub(super) filter: PipelineFactory<F>,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) data: Rc<Vec<Box<dyn DataFactory>>>,
     pub(super) data_factories: Rc<Vec<FnDataFactory>>,
     pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,
     pub(super) default: Option<Rc<HttpNewService<Err>>>,
-    pub(super) factory_ref: Rc<RefCell<Option<AppRoutingFactory<Err>>>>,
     pub(super) external: RefCell<Vec<ResourceDef>>,
     pub(super) case_insensitive: bool,
 }
 
-impl<T, S, Err> ServiceFactory for AppFactory<T, S, Err>
+impl<T, F, Err> ServiceFactory for AppFactory<T, F, Err>
 where
-    T: Transform<S::Service> + 'static,
+    T: Transform<AppService<F::Service, Err>> + 'static,
     T::Service: Service<
         Request = WebRequest<Err>,
         Response = WebResponse,
         Error = Err::Container,
     >,
-    S: ServiceFactory<
+    F: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse,
+        Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
     >,
-    S::Future: 'static,
+    F::Future: 'static,
     Err: ErrorRenderer,
 {
     type Config = AppConfig;
     type Request = Request;
     type Response = WebResponse;
-    type Error = S::Error;
-    type InitError = S::InitError;
+    type Error = Err::Container;
+    type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
@@ -97,36 +96,34 @@ where
         std::mem::take(&mut *self.services.borrow_mut())
             .into_iter()
             .for_each(|mut srv| srv.register(&mut config));
-
-        let mut rmap = ResourceMap::new(ResourceDef::new(""));
-
         let (config, services) = config.into_services();
 
-        // complete pipeline creation
-        *self.factory_ref.borrow_mut() = Some(AppRoutingFactory {
-            default,
-            services: Rc::new(
-                services
-                    .into_iter()
-                    .map(|(mut rdef, srv, guards, nested)| {
-                        rmap.add(&mut rdef, nested);
-                        (rdef, srv, RefCell::new(guards))
-                    })
-                    .collect(),
-            ),
-            case_insensitive: self.case_insensitive,
-        });
-
-        // external resources
+        // resource map
+        let mut rmap = ResourceMap::new(ResourceDef::new(""));
         for mut rdef in std::mem::take(&mut *self.external.borrow_mut()) {
             rmap.add(&mut rdef, None);
+        }
+
+        // complete pipeline creation
+        let services: Vec<_> = services
+            .into_iter()
+            .map(|(mut rdef, srv, guards, nested)| {
+                rmap.add(&mut rdef, nested);
+                (rdef, srv, RefCell::new(guards))
+            })
+            .collect();
+        let default_fut = default.new_service(());
+
+        let mut router = Router::build();
+        if self.case_insensitive {
+            router.case_insensitive();
         }
 
         // complete ResourceMap tree creation
         let rmap = Rc::new(rmap);
         rmap.finish(rmap.clone());
 
-        let fut = self.endpoint.new_service(());
+        let filter_fut = self.filter.new_service(());
         let data = self.data.clone();
         let data_factories = self.data_factories.clone();
         let mut extensions = self
@@ -137,8 +134,23 @@ where
         let middleware = self.middleware.clone();
 
         Box::pin(async move {
+            // create http services
+            for (path, factory, guards) in &mut services.iter() {
+                let service = factory.new_service(()).await?;
+                router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
+            }
+
+            let routing = AppRouting {
+                ready: None,
+                router: router.finish(),
+                default: Some(default_fut.await?),
+            };
+
             // main service
-            let service = fut.await?;
+            let service = AppService {
+                filter: filter_fut.await?,
+                routing: Rc::new(routing),
+            };
 
             // create app data container
             for f in data.iter() {
@@ -245,47 +257,7 @@ where
     }
 }
 
-pub struct AppRoutingFactory<Err: ErrorRenderer> {
-    services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
-    default: Rc<HttpNewService<Err>>,
-    case_insensitive: bool,
-}
-
-impl<Err: ErrorRenderer> ServiceFactory for AppRoutingFactory<Err> {
-    type Config = ();
-    type Request = WebRequest<Err>;
-    type Response = WebResponse;
-    type Error = Err::Container;
-    type InitError = ();
-    type Service = AppRouting<Err>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
-
-    fn new_service(&self, _: ()) -> Self::Future {
-        let services = self.services.clone();
-        let default_fut = self.default.new_service(());
-
-        let mut router = Router::build();
-        if self.case_insensitive {
-            router.case_insensitive();
-        }
-
-        Box::pin(async move {
-            // create http services
-            for (path, factory, guards) in &mut services.iter() {
-                let service = factory.new_service(()).await?;
-                router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
-            }
-
-            Ok(AppRouting {
-                ready: None,
-                router: router.finish(),
-                default: Some(default_fut.await?),
-            })
-        })
-    }
-}
-
-pub struct AppRouting<Err: ErrorRenderer> {
+struct AppRouting<Err: ErrorRenderer> {
     router: Router<HttpService<Err>, Guards>,
     ready: Option<(WebRequest<Err>, ResourceInfo)>,
     default: Option<HttpService<Err>>,
@@ -329,28 +301,80 @@ impl<Err: ErrorRenderer> Service for AppRouting<Err> {
     }
 }
 
-/// Wrapper service for routing
-pub struct AppEntry<Err: ErrorRenderer> {
-    factory: Rc<RefCell<Option<AppRoutingFactory<Err>>>>,
+/// Web app service
+pub struct AppService<F, Err: ErrorRenderer> {
+    filter: F,
+    routing: Rc<AppRouting<Err>>,
 }
 
-impl<Err: ErrorRenderer> AppEntry<Err> {
-    pub fn new(factory: Rc<RefCell<Option<AppRoutingFactory<Err>>>>) -> Self {
-        AppEntry { factory }
-    }
-}
-
-impl<Err: ErrorRenderer> ServiceFactory for AppEntry<Err> {
-    type Config = ();
+impl<F, Err> Service for AppService<F, Err>
+where
+    F: Service<
+        Request = WebRequest<Err>,
+        Response = WebRequest<Err>,
+        Error = Err::Container,
+    >,
+    Err: ErrorRenderer,
+{
     type Request = WebRequest<Err>;
     type Response = WebResponse;
     type Error = Err::Container;
-    type InitError = ();
-    type Service = AppRouting<Err>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future = AppServiceResponse<F, Err>;
 
-    fn new_service(&self, _: ()) -> Self::Future {
-        self.factory.borrow_mut().as_mut().unwrap().new_service(())
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let ready1 = self.filter.poll_ready(cx)?.is_ready();
+        let ready2 = self.routing.poll_ready(cx)?.is_ready();
+        if ready1 && ready2 {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn call(&self, req: WebRequest<Err>) -> Self::Future {
+        AppServiceResponse {
+            filter: self.filter.call(req),
+            routing: self.routing.clone(),
+            endpoint: None,
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    pub struct AppServiceResponse<F: Service, Err: ErrorRenderer> {
+        #[pin]
+        filter: F::Future,
+        routing: Rc<AppRouting<Err>>,
+        endpoint: Option<BoxResponse<Err>>,
+    }
+}
+
+impl<F, Err> Future for AppServiceResponse<F, Err>
+where
+    F: Service<
+        Request = WebRequest<Err>,
+        Response = WebRequest<Err>,
+        Error = Err::Container,
+    >,
+    Err: ErrorRenderer,
+{
+    type Output = Result<WebResponse, Err::Container>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().project();
+
+        if let Some(fut) = this.endpoint.as_mut() {
+            Pin::new(fut).poll(cx)
+        } else {
+            let res = if let Poll::Ready(res) = this.filter.poll(cx) {
+                res?
+            } else {
+                return Poll::Pending;
+            };
+            *this.endpoint = Some(this.routing.call(res));
+            self.poll(cx)
+        }
     }
 }
 

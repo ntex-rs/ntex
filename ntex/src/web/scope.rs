@@ -5,11 +5,11 @@ use std::{
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, ResourceInfo, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{apply, pipeline_factory};
+use crate::service::{pipeline_factory, PipelineFactory};
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::{Either, Extensions, Ready};
 
-use super::app::Stack;
+use super::app::{Filter, Stack};
 use super::config::ServiceConfig;
 use super::dev::{WebServiceConfig, WebServiceFactory};
 use super::error::ErrorRenderer;
@@ -27,7 +27,7 @@ type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
-type BoxedResponse<Err: ErrorRenderer> =
+type BoxResponse<Err: ErrorRenderer> =
     Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
 
 /// Resources scope.
@@ -59,44 +59,41 @@ type BoxedResponse<Err: ErrorRenderer> =
 ///  * /{project_id}/path2 - `GET` requests
 ///  * /{project_id}/path3 - `HEAD` requests
 ///
-pub struct Scope<Err: ErrorRenderer, T = ScopeEndpoint<Err>, U = Identity> {
-    endpoint: T,
-    middleware: U,
+pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
+    middleware: M,
+    filter: PipelineFactory<T>,
     rdef: Vec<String>,
     data: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     guards: Vec<Box<dyn Guard>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
     external: Vec<ResourceDef>,
-    factory_ref: Rc<RefCell<Option<ScopeFactory<Err>>>>,
     case_insensitive: bool,
 }
 
 impl<Err: ErrorRenderer> Scope<Err> {
     /// Create a new scope
     pub fn new<T: IntoPattern>(path: T) -> Scope<Err> {
-        let fref = Rc::new(RefCell::new(None));
         Scope {
-            endpoint: ScopeEndpoint::new(fref.clone()),
             middleware: Identity,
+            filter: pipeline_factory(Filter::new()),
             rdef: path.patterns(),
             data: None,
             guards: Vec::new(),
             services: Vec::new(),
             default: Rc::new(RefCell::new(None)),
             external: Vec::new(),
-            factory_ref: fref,
             case_insensitive: false,
         }
     }
 }
 
-impl<Err, T, U> Scope<Err, T, U>
+impl<Err, M, T> Scope<Err, M, T>
 where
     T: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse,
+        Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
     >,
@@ -321,40 +318,32 @@ where
     /// necessary, across all requests managed by the *Scope*.
     ///
     /// This is similar to `App's` filters, but filter get invoked on scope level.
-    pub fn filter<F>(
+    pub fn filter<U, F>(
         self,
         filter: F,
     ) -> Scope<
         Err,
+        M,
         impl ServiceFactory<
             Config = (),
             Request = WebRequest<Err>,
-            Response = WebResponse,
+            Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         >,
-        U,
     >
     where
-        F: ServiceFactory<
+        U: ServiceFactory<
             Config = (),
             Request = WebRequest<Err>,
-            Response = Either<WebRequest<Err>, WebResponse>,
+            Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         >,
+        F: IntoServiceFactory<U>,
     {
-        let ep = self.endpoint;
-        let endpoint =
-            pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
-                match result {
-                    Either::Left(req) => Either::Left(srv.call(req)),
-                    Either::Right(res) => Either::Right(Ready::Ok(res)),
-                }
-            });
-
         Scope {
-            endpoint,
+            filter: self.filter.and_then(filter.into_factory()),
             middleware: self.middleware,
             rdef: self.rdef,
             data: self.data,
@@ -362,7 +351,6 @@ where
             services: self.services,
             default: self.default,
             external: self.external,
-            factory_ref: self.factory_ref,
             case_insensitive: self.case_insensitive,
         }
     }
@@ -377,33 +365,32 @@ where
     /// WebResponse.
     ///
     /// Use middleware when you need to read or modify *every* request in some way.
-    pub fn wrap<M>(self, mw: M) -> Scope<Err, T, Stack<U, M>> {
+    pub fn wrap<U>(self, mw: U) -> Scope<Err, Stack<M, U>, T> {
         Scope {
-            endpoint: self.endpoint,
             middleware: Stack::new(self.middleware, mw),
+            filter: self.filter,
             rdef: self.rdef,
             data: self.data,
             guards: self.guards,
             services: self.services,
             default: self.default,
             external: self.external,
-            factory_ref: self.factory_ref,
             case_insensitive: self.case_insensitive,
         }
     }
 }
 
-impl<Err, T, U> WebServiceFactory<Err> for Scope<Err, T, U>
+impl<Err, M, T> WebServiceFactory<Err> for Scope<Err, M, T>
 where
     T: ServiceFactory<
             Config = (),
             Request = WebRequest<Err>,
-            Response = WebResponse,
+            Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
-    U: Transform<T::Service> + 'static,
-    U::Service: Service<
+    M: Transform<ScopeService<T::Service, Err>> + 'static,
+    M::Service: Service<
         Request = WebRequest<Err>,
         Response = WebResponse,
         Error = Err::Container,
@@ -436,7 +423,7 @@ where
         }
 
         // complete scope pipeline creation
-        *self.factory_ref.borrow_mut() = Some(ScopeFactory {
+        let router_factory = ScopeRouterFactory {
             data: self.data.take().map(Rc::new),
             default: self.default.clone(),
             case_insensitive: self.case_insensitive,
@@ -457,7 +444,7 @@ where
                     })
                     .collect(),
             ),
-        });
+        };
 
         // get guards
         let guards = if self.guards.is_empty() {
@@ -470,26 +457,151 @@ where
         config.register_service(
             ResourceDef::root_prefix(self.rdef),
             guards,
-            apply(self.middleware, self.endpoint),
+            ScopeServiceFactory {
+                middleware: Rc::new(self.middleware),
+                filter: self.filter,
+                routing: router_factory,
+            },
             Some(Rc::new(rmap)),
         )
     }
 }
 
-struct ScopeFactory<Err: ErrorRenderer> {
+/// Scope service
+struct ScopeServiceFactory<M, F, Err: ErrorRenderer> {
+    middleware: Rc<M>,
+    filter: F,
+    routing: ScopeRouterFactory<Err>,
+}
+
+impl<M, F, Err> ServiceFactory for ScopeServiceFactory<M, F, Err>
+where
+    M: Transform<ScopeService<F::Service, Err>> + 'static,
+    M::Service: Service<
+        Request = WebRequest<Err>,
+        Response = WebResponse,
+        Error = Err::Container,
+    >,
+    F: ServiceFactory<
+            Config = (),
+            Request = WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        > + 'static,
+    Err: ErrorRenderer,
+{
+    type Config = ();
+    type Request = WebRequest<Err>;
+    type Response = WebResponse;
+    type Error = Err::Container;
+    type Service = M::Service;
+    type InitError = ();
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+
+    fn new_service(&self, _: ()) -> Self::Future {
+        let filter_fut = self.filter.new_service(());
+        let routing_fut = self.routing.new_service(());
+        let middleware = self.middleware.clone();
+        Box::pin(async move {
+            Ok(middleware.new_transform(ScopeService {
+                filter: filter_fut.await?,
+                routing: Rc::new(routing_fut.await?),
+            }))
+        })
+    }
+}
+
+pub struct ScopeService<F, Err: ErrorRenderer> {
+    filter: F,
+    routing: Rc<ScopeRouter<Err>>,
+}
+
+impl<F, Err> Service for ScopeService<F, Err>
+where
+    F: Service<
+        Request = WebRequest<Err>,
+        Response = WebRequest<Err>,
+        Error = Err::Container,
+    >,
+    Err: ErrorRenderer,
+{
+    type Request = WebRequest<Err>;
+    type Response = WebResponse;
+    type Error = Err::Container;
+    type Future = ScopeServiceResponse<F, Err>;
+
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let ready1 = self.filter.poll_ready(cx)?.is_ready();
+        let ready2 = self.routing.poll_ready(cx)?.is_ready();
+        if ready1 && ready2 {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn call(&self, req: WebRequest<Err>) -> Self::Future {
+        ScopeServiceResponse {
+            filter: self.filter.call(req),
+            routing: self.routing.clone(),
+            endpoint: None,
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    pub struct ScopeServiceResponse<F: Service, Err: ErrorRenderer> {
+        #[pin]
+        filter: F::Future,
+        routing: Rc<ScopeRouter<Err>>,
+        endpoint: Option<<ScopeRouter<Err> as Service>::Future>,
+    }
+}
+
+impl<F, Err> Future for ScopeServiceResponse<F, Err>
+where
+    F: Service<
+        Request = WebRequest<Err>,
+        Response = WebRequest<Err>,
+        Error = Err::Container,
+    >,
+    Err: ErrorRenderer,
+{
+    type Output = Result<WebResponse, Err::Container>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().project();
+
+        if let Some(fut) = this.endpoint.as_mut() {
+            Pin::new(fut).poll(cx)
+        } else {
+            let res = if let Poll::Ready(res) = this.filter.poll(cx) {
+                res?
+            } else {
+                return Poll::Pending;
+            };
+            *this.endpoint = Some(this.routing.call(res));
+            self.poll(cx)
+        }
+    }
+}
+
+struct ScopeRouterFactory<Err: ErrorRenderer> {
     data: Option<Rc<Extensions>>,
     services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
     case_insensitive: bool,
 }
 
-impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
+impl<Err: ErrorRenderer> ServiceFactory for ScopeRouterFactory<Err> {
     type Config = ();
     type Request = WebRequest<Err>;
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
-    type Service = ScopeService<Err>;
+    type Service = ScopeRouter<Err>;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
@@ -519,7 +631,7 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
                 None
             };
 
-            Ok(ScopeService {
+            Ok(ScopeRouter {
                 data,
                 default,
                 router: router.finish(),
@@ -529,18 +641,18 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeFactory<Err> {
     }
 }
 
-pub struct ScopeService<Err: ErrorRenderer> {
+struct ScopeRouter<Err: ErrorRenderer> {
     data: Option<Rc<Extensions>>,
     router: Router<HttpService<Err>, Vec<Box<dyn Guard>>>,
     default: Option<HttpService<Err>>,
     _ready: Option<(WebRequest<Err>, ResourceInfo)>,
 }
 
-impl<Err: ErrorRenderer> Service for ScopeService<Err> {
+impl<Err: ErrorRenderer> Service for ScopeRouter<Err> {
     type Request = WebRequest<Err>;
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future = Either<BoxedResponse<Err>, Ready<Self::Response, Self::Error>>;
+    type Future = Either<BoxResponse<Err>, Ready<Self::Response, Self::Error>>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -576,38 +688,13 @@ impl<Err: ErrorRenderer> Service for ScopeService<Err> {
     }
 }
 
-#[doc(hidden)]
-pub struct ScopeEndpoint<Err: ErrorRenderer> {
-    factory: Rc<RefCell<Option<ScopeFactory<Err>>>>,
-}
-
-impl<Err: ErrorRenderer> ScopeEndpoint<Err> {
-    fn new(factory: Rc<RefCell<Option<ScopeFactory<Err>>>>) -> Self {
-        ScopeEndpoint { factory }
-    }
-}
-
-impl<Err: ErrorRenderer> ServiceFactory for ScopeEndpoint<Err> {
-    type Config = ();
-    type Request = WebRequest<Err>;
-    type Response = WebResponse;
-    type Error = Err::Container;
-    type InitError = ();
-    type Service = ScopeService<Err>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
-
-    fn new_service(&self, _: ()) -> Self::Future {
-        self.factory.borrow_mut().as_mut().unwrap().new_service(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::http::{Method, StatusCode};
     use crate::service::{fn_service, Service};
-    use crate::util::{Bytes, Either};
+    use crate::util::{Bytes, Ready};
     use crate::web::middleware::DefaultHeaders;
     use crate::web::request::WebRequest;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
@@ -1096,11 +1183,14 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_filter() {
+        let filter = std::rc::Rc::new(std::cell::Cell::new(false));
+        let filter2 = filter.clone();
         let srv = init_service(
             App::new().service(
                 web::scope("app")
-                    .filter(fn_service(|req: WebRequest<_>| async move {
-                        Ok(Either::Right(req.into_response(HttpResponse::NotFound())))
+                    .filter(fn_service(move |req: WebRequest<_>| {
+                        filter2.set(true);
+                        Ready::Ok(req)
                     }))
                     .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
             ),
@@ -1108,7 +1198,8 @@ mod tests {
         .await;
         let req = TestRequest::with_uri("/app/test").to_request();
         let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(filter.get());
     }
 
     #[crate::rt_test]

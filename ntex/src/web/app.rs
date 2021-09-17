@@ -1,13 +1,15 @@
-use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
+use std::{
+    cell::RefCell, fmt, future::Future, marker::PhantomData, pin::Pin, rc::Rc, task,
+};
 
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
-use crate::service::{map_config, pipeline_factory};
+use crate::service::{map_config, pipeline_factory, PipelineFactory};
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
-use crate::util::{Either, Extensions, Ready};
+use crate::util::{Extensions, Ready};
 
-use super::app_service::{AppEntry, AppFactory, AppRoutingFactory};
+use super::app_service::{AppFactory, AppService};
 use super::config::{AppConfig, ServiceConfig};
 use super::request::WebRequest;
 use super::resource::Resource;
@@ -24,12 +26,11 @@ type FnDataFactory =
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
-pub struct App<M, S, Err: ErrorRenderer = DefaultError> {
+pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     middleware: M,
-    endpoint: S,
+    filter: PipelineFactory<F>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
-    factory_ref: Rc<RefCell<Option<AppRoutingFactory<Err>>>>,
     data: Vec<Box<dyn DataFactory>>,
     data_factories: Vec<FnDataFactory>,
     external: Vec<ResourceDef>,
@@ -38,18 +39,16 @@ pub struct App<M, S, Err: ErrorRenderer = DefaultError> {
     case_insensitive: bool,
 }
 
-impl App<Identity, AppEntry<DefaultError>, DefaultError> {
+impl App<Identity, Filter<DefaultError>, DefaultError> {
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
-        let fref = Rc::new(RefCell::new(None));
         App {
             middleware: Identity,
-            endpoint: AppEntry::new(fref.clone()),
+            filter: pipeline_factory(Filter::new()),
             data: Vec::new(),
             data_factories: Vec::new(),
             services: Vec::new(),
             default: None,
-            factory_ref: fref,
             external: Vec::new(),
             extensions: Extensions::new(),
             error_renderer: DefaultError,
@@ -58,18 +57,16 @@ impl App<Identity, AppEntry<DefaultError>, DefaultError> {
     }
 }
 
-impl<Err: ErrorRenderer> App<Identity, AppEntry<Err>, Err> {
+impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
     /// Create application builder with custom error renderer.
     pub fn with(err: Err) -> Self {
-        let fref = Rc::new(RefCell::new(None));
         App {
             middleware: Identity,
-            endpoint: AppEntry::new(fref.clone()),
+            filter: pipeline_factory(Filter::new()),
             data: Vec::new(),
             data_factories: Vec::new(),
             services: Vec::new(),
             default: None,
-            factory_ref: fref,
             external: Vec::new(),
             extensions: Extensions::new(),
             error_renderer: err,
@@ -78,16 +75,16 @@ impl<Err: ErrorRenderer> App<Identity, AppEntry<Err>, Err> {
     }
 }
 
-impl<M, S, Err> App<M, S, Err>
+impl<M, T, Err> App<M, T, Err>
 where
-    S: ServiceFactory<
+    T: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse,
+        Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
     >,
-    S::Future: 'static,
+    T::Future: 'static,
     Err: ErrorRenderer,
 {
     /// Set application data. Application data could be accessed
@@ -358,46 +355,37 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn filter<F>(
+    pub fn filter<S, U>(
         self,
-        filter: F,
+        filter: U,
     ) -> App<
         M,
         impl ServiceFactory<
             Config = (),
             Request = WebRequest<Err>,
-            Response = WebResponse,
+            Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         >,
         Err,
     >
     where
-        F: ServiceFactory<
+        S: ServiceFactory<
             Config = (),
             Request = WebRequest<Err>,
-            Response = Either<WebRequest<Err>, WebResponse>,
+            Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         >,
+        U: IntoServiceFactory<S>,
     {
-        let ep = self.endpoint;
-        let endpoint =
-            pipeline_factory(filter).and_then_apply_fn(ep, move |result, srv| {
-                match result {
-                    Either::Left(req) => Either::Left(srv.call(req)),
-                    Either::Right(res) => Either::Right(Ready::Ok(res)),
-                }
-            });
-
         App {
-            endpoint,
+            filter: self.filter.and_then(filter.into_factory()),
             middleware: self.middleware,
             data: self.data,
             data_factories: self.data_factories,
             services: self.services,
             default: self.default,
-            factory_ref: self.factory_ref,
             external: self.external,
             extensions: self.extensions,
             error_renderer: self.error_renderer,
@@ -431,15 +419,14 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn wrap<U>(self, mw: U) -> App<Stack<M, U>, S, Err> {
+    pub fn wrap<U>(self, mw: U) -> App<Stack<M, U>, T, Err> {
         App {
             middleware: Stack::new(self.middleware, mw),
-            endpoint: self.endpoint,
+            filter: self.filter,
             data: self.data,
             data_factories: self.data_factories,
             services: self.services,
             default: self.default,
-            factory_ref: self.factory_ref,
             external: self.external,
             extensions: self.extensions,
             error_renderer: self.error_renderer,
@@ -456,22 +443,22 @@ where
     }
 }
 
-impl<M, S, Err> App<M, S, Err>
+impl<M, F, Err> App<M, F, Err>
 where
-    M: Transform<S::Service> + 'static,
+    M: Transform<AppService<F::Service, Err>> + 'static,
     M::Service: Service<
         Request = WebRequest<Err>,
         Response = WebResponse,
         Error = Err::Container,
     >,
-    S: ServiceFactory<
+    F: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse,
+        Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
     >,
-    S::Future: 'static,
+    F::Future: 'static,
     Err: ErrorRenderer,
 {
     /// Construct service factory with default `AppConfig`, suitable for `http::HttpService`.
@@ -498,8 +485,8 @@ where
         Config = (),
         Request = Request,
         Response = WebResponse,
-        Error = S::Error,
-        InitError = S::InitError,
+        Error = Err::Container,
+        InitError = (),
     > {
         map_config(self.into_factory(), move |_| Default::default())
     }
@@ -529,41 +516,40 @@ where
         Config = (),
         Request = Request,
         Response = WebResponse,
-        Error = S::Error,
-        InitError = S::InitError,
+        Error = Err::Container,
+        InitError = (),
     > {
         map_config(self.into_factory(), move |_| cfg.clone())
     }
 }
 
-impl<M, S, Err> IntoServiceFactory<AppFactory<M, S, Err>> for App<M, S, Err>
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>> for App<M, F, Err>
 where
-    M: Transform<S::Service> + 'static,
+    M: Transform<AppService<F::Service, Err>> + 'static,
     M::Service: Service<
         Request = WebRequest<Err>,
         Response = WebResponse,
         Error = Err::Container,
     >,
-    S: ServiceFactory<
+    F: ServiceFactory<
         Config = (),
         Request = WebRequest<Err>,
-        Response = WebResponse,
+        Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
     >,
-    S::Future: 'static,
+    F::Future: 'static,
     Err: ErrorRenderer,
 {
-    fn into_factory(self) -> AppFactory<M, S, Err> {
+    fn into_factory(self) -> AppFactory<M, F, Err> {
         AppFactory {
+            filter: self.filter,
             middleware: Rc::new(self.middleware),
             data: Rc::new(self.data),
             data_factories: Rc::new(self.data_factories),
-            endpoint: self.endpoint,
             services: Rc::new(RefCell::new(self.services)),
             external: RefCell::new(self.external),
             default: self.default,
-            factory_ref: self.factory_ref,
             extensions: RefCell::new(Some(self.extensions)),
             case_insensitive: self.case_insensitive,
         }
@@ -593,13 +579,56 @@ where
     }
 }
 
+pub struct Filter<Err>(PhantomData<Err>);
+
+impl<Err: ErrorRenderer> Filter<Err> {
+    pub(super) fn new() -> Self {
+        Filter(PhantomData)
+    }
+}
+
+impl<Err: ErrorRenderer> ServiceFactory for Filter<Err> {
+    type Config = ();
+    type Request = WebRequest<Err>;
+    type Response = WebRequest<Err>;
+    type Error = Err::Container;
+    type InitError = ();
+    type Service = Filter<Err>;
+    type Future = Ready<Filter<Err>, ()>;
+
+    #[inline]
+    fn new_service(&self, _: ()) -> Self::Future {
+        Ready::Ok(Filter(PhantomData))
+    }
+}
+
+impl<Err: ErrorRenderer> Service for Filter<Err> {
+    type Request = WebRequest<Err>;
+    type Response = WebRequest<Err>;
+    type Error = Err::Container;
+    type Future = Ready<WebRequest<Err>, Err::Container>;
+
+    #[inline]
+    fn poll_ready(
+        &self,
+        _: &mut task::Context<'_>,
+    ) -> task::Poll<Result<(), Self::Error>> {
+        task::Poll::Ready(Ok(()))
+    }
+
+    #[inline]
+    fn call(&self, req: Self::Request) -> Self::Future {
+        Ready::Ok(req)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
     use crate::service::{fn_service, Service};
-    use crate::util::Bytes;
+    use crate::util::{Bytes, Ready};
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{
         self, middleware::DefaultHeaders, request::WebRequest, DefaultError,
@@ -697,17 +726,21 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_filter() {
+        let filter = Rc::new(std::cell::Cell::new(false));
+        let filter2 = filter.clone();
         let srv = init_service(
             App::new()
-                .filter(fn_service(|req: WebRequest<_>| async move {
-                    Ok(Either::Right(req.into_response(HttpResponse::NotFound())))
+                .filter(fn_service(move |req: WebRequest<_>| {
+                    filter2.set(true);
+                    Ready::Ok(req)
                 }))
                 .route("/test", web::get().to(|| async { HttpResponse::Ok() })),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();
         let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(filter.get());
     }
 
     #[crate::rt_test]
