@@ -81,7 +81,7 @@ where
 /// ```
 pub trait Transform<S> {
     /// The `TransformService` value created by this factory
-    type Service: Service;
+    type Service;
 
     /// Creates and returns a new Transform component, asynchronously
     fn new_transform(&self, service: S) -> Self::Service;
@@ -122,6 +122,7 @@ impl<T, S> ServiceFactory for ApplyTransform<T, S>
 where
     S: ServiceFactory,
     T: Transform<S::Service>,
+    T::Service: Service,
 {
     type Request = <T::Service as Service>::Request;
     type Response = <T::Service as Service>::Response;

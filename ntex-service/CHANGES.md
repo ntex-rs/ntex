@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.1] - 2021-09-17
+
+* Simplify fn_transform
+
 ## [0.2.0] - 2021-09-15
 
 * Refactor Transform trait
