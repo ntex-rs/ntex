@@ -1,8 +1,10 @@
 # Changes
 
-## [0.4.0] - 2021-09-15
+## [0.4.0] - 2021-09-17
 
 * Refactor web middlewares/filters registration and management
+
+* Use fxhash instead of ahash
 
 ## [0.4.0-b.13] - 2021-09-12
 
