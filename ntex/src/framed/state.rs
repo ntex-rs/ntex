@@ -930,11 +930,14 @@ impl<'a> Read<'a> {
 
     #[inline]
     /// Wake read io task if it is paused
-    pub fn resume(&self) {
+    pub fn resume(&self) -> bool {
         let flags = self.0.flags.get();
         if flags.contains(Flags::RD_PAUSED) {
             self.0.remove_flags(Flags::RD_PAUSED);
             self.0.read_task.wake();
+            true
+        } else {
+            false
         }
     }
 

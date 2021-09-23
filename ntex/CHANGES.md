@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.1] - 2021-09-23
+
+* framed::Read::resume() returns true if it was resumed
+
 ## [0.4.0] - 2021-09-17
 
 * Refactor web middlewares/filters registration and management
