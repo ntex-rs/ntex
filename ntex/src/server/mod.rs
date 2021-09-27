@@ -33,10 +33,13 @@ pub use self::test::{build_test_server, test_server, TestServer};
 #[doc(hidden)]
 pub use self::socket::FromStream;
 
+#[non_exhaustive]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 /// Server readiness status
 pub enum ServerStatus {
     Ready,
     NotReady,
+    WorkerFailed,
 }
 
 /// Socket id token

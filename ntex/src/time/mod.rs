@@ -247,6 +247,7 @@ mod tests {
         assert!(second_time - first_time >= time::Duration::from_millis(wait_time));
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[crate::rt_test]
     async fn test_interval() {
         let mut int = interval(Millis(250));
@@ -272,6 +273,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[crate::rt_test]
     async fn test_interval_one_sec() {
         let int = interval(Millis::ONE_SEC);

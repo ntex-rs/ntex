@@ -128,7 +128,6 @@ impl ServerBuilder {
         self
     }
 
-    #[doc(hidden)]
     /// Set server status handler.
     ///
     /// Server calls this handler on every inner status update.

@@ -1,8 +1,12 @@
 # Changes
 
-## [0.4.1] - 2021-09-23
+## [0.4.1] - 2021-09-27
 
-* framed::Read::resume() returns true if it was resumed
+* server: Send `ServerStatus::WorkerFailed` update if worker is failed
+
+* server: Make `ServerBuilder::status_handler()` public
+
+* framed: Read::resume() returns true if it was paused before
 
 ## [0.4.0] - 2021-09-17
 

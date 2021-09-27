@@ -386,6 +386,7 @@ impl Accept {
                 match self.workers[self.next].send(msg) {
                     Ok(_) => (),
                     Err(tmp) => {
+                        self.update_status(ServerStatus::WorkerFailed);
                         self.srv.worker_faulted(self.workers[self.next].idx);
                         msg = tmp;
                         self.workers.swap_remove(self.next);
@@ -413,6 +414,7 @@ impl Accept {
                         }
                         Err(tmp) => {
                             trace!("Worker failed while processing connection");
+                            self.update_status(ServerStatus::WorkerFailed);
                             self.srv.worker_faulted(self.workers[self.next].idx);
                             msg = tmp;
                             self.workers.swap_remove(self.next);
