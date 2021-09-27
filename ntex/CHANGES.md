@@ -8,6 +8,8 @@
 
 * framed: Read::resume() returns true if it was paused before
 
+* http::client: Do not add content-length header for empty body #56
+
 ## [0.4.0] - 2021-09-17
 
 * Refactor web middlewares/filters registration and management

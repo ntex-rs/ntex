@@ -232,7 +232,7 @@ impl RequestHeadType {
         timeout: Millis,
         config: &ClientConfig,
     ) -> SendClientRequest {
-        self.send_body(addr, response_decompress, timeout, config, Body::Empty)
+        self.send_body(addr, response_decompress, timeout, config, Body::None)
     }
 
     fn set_header_if_none<V>(
