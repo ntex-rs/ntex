@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 
 use log::debug;
-use nanorand::{WyRand, RNG};
+use nanorand::{Rng, WyRand};
 
 use super::proto::{CloseCode, CloseReason, OpCode};
 use super::{mask::apply_mask, ProtocolError};
@@ -77,8 +77,7 @@ impl Parser {
                 return Ok(None);
             }
 
-            let mask =
-                u32::from_le_bytes(TryFrom::try_from(&src[idx..idx + 4]).unwrap());
+            let mask = u32::from_le_bytes(TryFrom::try_from(&src[idx..idx + 4]).unwrap());
             idx += 4;
             Some(mask)
         } else {
@@ -226,18 +225,14 @@ mod tests {
         payload: Bytes,
     }
 
-    fn is_none(
-        frm: &Result<Option<(bool, OpCode, Option<BytesMut>)>, ProtocolError>,
-    ) -> bool {
+    fn is_none(frm: &Result<Option<(bool, OpCode, Option<BytesMut>)>, ProtocolError>) -> bool {
         match *frm {
             Ok(None) => true,
             _ => false,
         }
     }
 
-    fn extract(
-        frm: Result<Option<(bool, OpCode, Option<BytesMut>)>, ProtocolError>,
-    ) -> F {
+    fn extract(frm: Result<Option<(bool, OpCode, Option<BytesMut>)>, ProtocolError>) -> F {
         match frm {
             Ok(Some((finished, opcode, payload))) => F {
                 finished,

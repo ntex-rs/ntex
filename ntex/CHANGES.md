@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.2] - 2021-10-06
+
+* Update to nanorand 0.6.1
+
 ## [0.4.1] - 2021-09-27
 
 * server: Send `ServerStatus::WorkerFailed` update if worker is failed
