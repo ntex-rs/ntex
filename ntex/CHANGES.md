@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.3] - 2021-10-06
+
+* Do not modify lowres time outside of driver task
+
 ## [0.4.2] - 2021-10-06
 
 * Update to nanorand 0.6.1

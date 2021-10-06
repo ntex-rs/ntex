@@ -230,7 +230,7 @@ impl Timer {
         let delta = if now >= slf.elapsed_time {
             to_units(as_millis(now - slf.elapsed_time) + millis)
         } else {
-            slf.lowres_time.set(Some(slf.elapsed_time));
+            slf.elapsed_time = now;
             to_units(millis)
         };
 
@@ -280,7 +280,7 @@ impl Timer {
         let delta = if now >= slf.elapsed_time {
             max(to_units(as_millis(now - slf.elapsed_time) + millis), 1)
         } else {
-            slf.lowres_time.set(Some(slf.elapsed_time));
+            slf.elapsed_time = now;
             max(to_units(millis), 1)
         };
 
