@@ -220,7 +220,7 @@ impl Decoder for Codec {
             Ok(Some((finished, opcode, payload))) => {
                 // handle continuation
                 if !finished {
-                    return match opcode {
+                    match opcode {
                         OpCode::Continue => {
                             if self.flags.get().contains(Flags::R_CONTINUATION) {
                                 Ok(Some(Frame::Continuation(Item::Continue(
@@ -256,45 +256,54 @@ impl Decoder for Codec {
                                 Err(ProtocolError::ContinuationStarted)
                             }
                         }
+                        OpCode::Ping => Ok(Some(Frame::Ping(
+                            payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
+                        ))),
+                        OpCode::Pong => Ok(Some(Frame::Pong(
+                            payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
+                        ))),
+                        OpCode::Bad => Err(ProtocolError::BadOpCode),
                         _ => {
                             error!("Unfinished fragment {:?}", opcode);
                             Err(ProtocolError::ContinuationFragment(opcode))
                         }
-                    };
-                }
-
-                match opcode {
-                    OpCode::Continue => {
-                        if self.flags.get().contains(Flags::R_CONTINUATION) {
-                            self.remove_flags(Flags::R_CONTINUATION);
-                            Ok(Some(Frame::Continuation(Item::Last(
-                                payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
-                            ))))
-                        } else {
-                            Err(ProtocolError::ContinuationNotStarted)
-                        }
                     }
-                    OpCode::Bad => Err(ProtocolError::BadOpCode),
-                    OpCode::Close => {
-                        if let Some(ref pl) = payload {
-                            let close_reason = Parser::parse_close_payload(pl);
-                            Ok(Some(Frame::Close(close_reason)))
-                        } else {
-                            Ok(Some(Frame::Close(None)))
+                } else {
+                    match opcode {
+                        OpCode::Continue => {
+                            if self.flags.get().contains(Flags::R_CONTINUATION) {
+                                self.remove_flags(Flags::R_CONTINUATION);
+                                Ok(Some(Frame::Continuation(Item::Last(
+                                    payload
+                                        .map(|pl| pl.freeze())
+                                        .unwrap_or_else(Bytes::new),
+                                ))))
+                            } else {
+                                Err(ProtocolError::ContinuationNotStarted)
+                            }
                         }
+                        OpCode::Bad => Err(ProtocolError::BadOpCode),
+                        OpCode::Close => {
+                            if let Some(ref pl) = payload {
+                                let close_reason = Parser::parse_close_payload(pl);
+                                Ok(Some(Frame::Close(close_reason)))
+                            } else {
+                                Ok(Some(Frame::Close(None)))
+                            }
+                        }
+                        OpCode::Ping => Ok(Some(Frame::Ping(
+                            payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
+                        ))),
+                        OpCode::Pong => Ok(Some(Frame::Pong(
+                            payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
+                        ))),
+                        OpCode::Binary => Ok(Some(Frame::Binary(
+                            payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
+                        ))),
+                        OpCode::Text => Ok(Some(Frame::Text(
+                            payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
+                        ))),
                     }
-                    OpCode::Ping => Ok(Some(Frame::Ping(
-                        payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
-                    ))),
-                    OpCode::Pong => Ok(Some(Frame::Pong(
-                        payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
-                    ))),
-                    OpCode::Binary => Ok(Some(Frame::Binary(
-                        payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
-                    ))),
-                    OpCode::Text => Ok(Some(Frame::Text(
-                        payload.map(|pl| pl.freeze()).unwrap_or_else(Bytes::new),
-                    ))),
                 }
             }
             Ok(None) => Ok(None),

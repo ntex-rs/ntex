@@ -1,5 +1,11 @@
 # Changes
 
+## [0.4.4] - 2021-10-13
+
+* Use wrapping_add for usize
+
+* Better handling ws control frames
+
 ## [0.4.3] - 2021-10-06
 
 * Do not modify lowres time outside of driver task

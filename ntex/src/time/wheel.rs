@@ -238,7 +238,8 @@ impl Timer {
             let slf = &mut *slf;
 
             // crate timer entry
-            let (idx, bucket_expiry) = slf.calc_wheel_index(slf.elapsed + delta, delta);
+            let (idx, bucket_expiry) =
+                slf.calc_wheel_index(slf.elapsed.wrapping_add(delta), delta);
             let entry = slf.timers.vacant_entry();
             let no = entry.key();
             let bucket = &mut slf.buckets[idx];
@@ -288,7 +289,8 @@ impl Timer {
             let slf = &mut *slf;
 
             // calc bucket
-            let (idx, bucket_expiry) = slf.calc_wheel_index(slf.elapsed + delta, delta);
+            let (idx, bucket_expiry) =
+                slf.calc_wheel_index(slf.elapsed.wrapping_add(delta), delta);
 
             let entry = &mut slf.timers[hnd];
 
@@ -436,7 +438,10 @@ impl Timer {
             // Force expire obscene large timeouts to expire at the
             // capacity limit of the wheel.
             if delta >= WHEEL_TIMEOUT_CUTOFF {
-                Self::calc_index(self.elapsed + WHEEL_TIMEOUT_MAX, LVL_DEPTH - 1)
+                Self::calc_index(
+                    self.elapsed.wrapping_add(WHEEL_TIMEOUT_MAX),
+                    LVL_DEPTH - 1,
+                )
             } else {
                 Self::calc_index(expires, LVL_DEPTH - 1)
             }
