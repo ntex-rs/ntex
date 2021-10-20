@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.5] - 2021-10-20
+
+* framed: Do not poll service for readiness if it failed before
+
 ## [0.4.4] - 2021-10-13
 
 * Use wrapping_add for usize

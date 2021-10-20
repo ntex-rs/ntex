@@ -11,27 +11,31 @@ use crate::util::{poll_fn, Buf, BytesMut, Either};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
-        const DSP_STOP       = 0b0000_0000_0001;
-        const DSP_KEEPALIVE  = 0b0000_0000_0010;
-
         /// io error occured
-        const IO_ERR         = 0b0000_0000_0100;
+        const IO_ERR         = 0b0000_0001;
         /// stop io tasks
-        const IO_STOP        = 0b0000_0000_1000;
+        const IO_STOP        = 0b0000_0010;
         /// shutdown io tasks
-        const IO_SHUTDOWN    = 0b0000_0001_0000;
+        const IO_SHUTDOWN    = 0b0000_0100;
 
         /// pause io read
-        const RD_PAUSED      = 0b0000_0010_0000;
+        const RD_PAUSED      = 0b0000_1000;
         /// new data is available
-        const RD_READY       = 0b0000_0100_0000;
+        const RD_READY       = 0b0001_0000;
         /// read buffer is full
-        const RD_BUF_FULL    = 0b0000_1000_0000;
+        const RD_BUF_FULL    = 0b0010_0000;
 
         /// write buffer is full
-        const WR_BACKPRESSURE = 0b0000_0001_0000_0000;
+        const WR_BACKPRESSURE = 0b0001_0000_0000;
 
-        const ST_DSP_ERR      = 0b0001_0000_0000_0000;
+        /// dispatcher is marked stopped
+        const DSP_STOP       = 0b0001_0000_0000_0000;
+        /// keep-alive timeout occured
+        const DSP_KEEPALIVE  = 0b0010_0000_0000_0000;
+        /// dispatcher returned error
+        const DSP_ERR        = 0b0100_0000_0000_0000;
+        /// dispatcher rediness error
+        const DSP_READY_ERR  = 0b1000_0000_0000_0000;
     }
 }
 
@@ -366,9 +370,15 @@ impl State {
     }
 
     #[inline]
-    /// Check is dispatcher marked stopped
+    /// Check if dispatcher marked stopped
     pub fn is_dispatcher_stopped(&self) -> bool {
         self.0.flags.get().contains(Flags::DSP_STOP)
+    }
+
+    #[inline]
+    /// Check if dispatcher failed readiness check
+    pub fn is_dispatcher_ready_err(&self) -> bool {
+        self.0.flags.get().contains(Flags::DSP_READY_ERR)
     }
 
     #[inline]
@@ -459,6 +469,12 @@ impl State {
     /// Mark dispatcher as stopped
     pub fn dispatcher_stopped(&self) {
         self.insert_flags(Flags::DSP_STOP);
+    }
+
+    #[inline]
+    /// Mark dispatcher as failed readiness check
+    pub fn dispatcher_ready_err(&self) {
+        self.insert_flags(Flags::DSP_READY_ERR);
     }
 
     #[inline]
@@ -858,7 +874,7 @@ impl<'a> Write<'a> {
     {
         let flags = self.0.flags.get();
 
-        if !flags.intersects(Flags::IO_ERR | Flags::ST_DSP_ERR) {
+        if !flags.intersects(Flags::IO_ERR | Flags::DSP_ERR) {
             match item {
                 Ok(Some(item)) => {
                     let mut buf = self.0.get_write_buf();
@@ -874,7 +890,7 @@ impl<'a> Write<'a> {
                     if let Err(err) = codec.encode(item, &mut buf) {
                         log::trace!("Encoder error: {:?}", err);
                         self.0.release_write_buf(buf);
-                        self.0.insert_flags(Flags::DSP_STOP | Flags::ST_DSP_ERR);
+                        self.0.insert_flags(Flags::DSP_STOP | Flags::DSP_ERR);
                         self.0.dispatch_task.wake();
                         return Err(Either::Right(err));
                     } else if is_write_sleep {
@@ -885,7 +901,7 @@ impl<'a> Write<'a> {
                     result
                 }
                 Err(err) => {
-                    self.0.insert_flags(Flags::DSP_STOP | Flags::ST_DSP_ERR);
+                    self.0.insert_flags(Flags::DSP_STOP | Flags::DSP_ERR);
                     self.0.dispatch_task.wake();
                     Err(Either::Left(err))
                 }

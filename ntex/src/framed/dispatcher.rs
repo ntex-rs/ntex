@@ -321,7 +321,9 @@ where
                 // drain service responses
                 DispatcherState::Stop => {
                     // service may relay on poll_ready for response results
-                    let _ = this.service.poll_ready(cx);
+                    if !this.inner.state.is_dispatcher_ready_err() {
+                        let _ = this.service.poll_ready(cx);
+                    }
 
                     if slf.shared.inflight.get() == 0 {
                         slf.st.set(DispatcherState::Shutdown);
@@ -453,6 +455,7 @@ where
                 self.st.set(DispatcherState::Stop);
                 self.error.set(Some(err));
                 self.unregister_keepalive();
+                self.state.dispatcher_ready_err();
                 Poll::Ready(PollService::ServiceError)
             }
         }
@@ -514,7 +517,7 @@ mod tests {
     use crate::codec::BytesCodec;
     use crate::testing::Io;
     use crate::time::{sleep, Millis};
-    use crate::util::Bytes;
+    use crate::util::{Bytes, Ready};
 
     use super::*;
 
@@ -592,6 +595,12 @@ mod tests {
         crate::rt::spawn(async move {
             let _ = disp.await;
         });
+
+        sleep(Millis(25)).await;
+        client.write("GET /test HTTP/1\r\n\r\n");
+
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
@@ -671,6 +680,60 @@ mod tests {
         // close read side
         client.close().await;
         assert!(client.is_server_dropped());
+    }
+
+    #[crate::rt_test]
+    async fn test_err_in_service_ready() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(0);
+        client.write("GET /test HTTP/1\r\n\r\n");
+
+        let counter = Rc::new(Cell::new(0));
+
+        struct Srv(Rc<Cell<usize>>);
+
+        impl Service for Srv {
+            type Request = DispatchItem<BytesCodec>;
+            type Response = Option<Response<BytesCodec>>;
+            type Error = ();
+            type Future = Ready<Option<Response<BytesCodec>>, ()>;
+
+            fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), ()>> {
+                self.0.set(self.0.get() + 1);
+                Poll::Ready(Err(()))
+            }
+
+            fn call(&self, _: DispatchItem<BytesCodec>) -> Self::Future {
+                Ready::Ok(None)
+            }
+        }
+
+        let (disp, state) = Dispatcher::debug(server, BytesCodec, Srv(counter.clone()));
+        state
+            .write()
+            .encode(
+                Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"),
+                &mut BytesCodec,
+            )
+            .unwrap();
+        crate::rt::spawn(async move {
+            let _ = disp.await;
+        });
+
+        // buffer should be flushed
+        client.remote_buffer_cap(1024);
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
+
+        // write side must be closed, dispatcher waiting for read side to close
+        assert!(client.is_closed());
+
+        // close read side
+        client.close().await;
+        assert!(client.is_server_dropped());
+
+        // service must be checked for readiness only once
+        assert_eq!(counter.get(), 1);
     }
 
     #[crate::rt_test]
