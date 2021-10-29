@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.6] - 2021-10-29
+
+* time: fix wheel time calculations
+
 ## [0.4.5] - 2021-10-20
 
 * framed: Do not poll service for readiness if it failed before

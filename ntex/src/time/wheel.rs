@@ -2,7 +2,7 @@
 //!
 //! Inspired by linux kernel timers system
 #![allow(arithmetic_overflow)]
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::time::{Duration, Instant, SystemTime};
 use std::{cmp::max, future::Future, mem, pin::Pin, rc::Rc, task, task::Poll};
 
@@ -136,7 +136,7 @@ thread_local! {
 struct Timer {
     timers: Slab<TimerEntry>,
     elapsed: u64,
-    elapsed_time: Instant,
+    elapsed_time: Option<Instant>,
     next_expiry: u64,
     flags: Flags,
     driver: LocalWaker,
@@ -144,8 +144,8 @@ struct Timer {
     buckets: Vec<Bucket>,
     /// Bit field tracking which bucket currently contain entries.
     occupied: [u64; WHEEL_SIZE],
-    lowres_time: Cell<Option<Instant>>,
-    lowres_stime: Cell<Option<SystemTime>>,
+    lowres_time: Option<Instant>,
+    lowres_stime: Option<SystemTime>,
     lowres_driver: LocalWaker,
     lowres_driver_sleep: Pin<Box<Sleep>>,
 }
@@ -156,14 +156,14 @@ impl Timer {
             buckets: Self::create_buckets(),
             timers: Slab::default(),
             elapsed: 0,
-            elapsed_time: Instant::now(),
+            elapsed_time: None,
             next_expiry: u64::MAX,
             flags: Flags::empty(),
             driver: LocalWaker::new(),
             driver_sleep: Box::pin(sleep_until(Instant::now())),
             occupied: [0; WHEEL_SIZE],
-            lowres_time: Cell::new(None),
-            lowres_stime: Cell::new(None),
+            lowres_time: None,
+            lowres_stime: None,
             lowres_driver: LocalWaker::new(),
             lowres_driver_sleep: Box::pin(sleep_until(Instant::now())),
         }
@@ -180,11 +180,11 @@ impl Timer {
     }
 
     fn now(&mut self, inner: &Rc<RefCell<Timer>>) -> Instant {
-        if let Some(cur) = self.lowres_time.get() {
+        if let Some(cur) = self.lowres_time {
             cur
         } else {
             let now = Instant::now();
-            self.lowres_time.set(Some(now));
+            self.lowres_time = Some(now);
 
             if self.flags.contains(Flags::LOWRES_DRIVER) {
                 self.lowres_driver.wake();
@@ -196,11 +196,11 @@ impl Timer {
     }
 
     fn system_time(&mut self, inner: &Rc<RefCell<Timer>>) -> SystemTime {
-        if let Some(cur) = self.lowres_stime.get() {
+        if let Some(cur) = self.lowres_stime {
             cur
         } else {
             let now = SystemTime::now();
-            self.lowres_stime.set(Some(now));
+            self.lowres_stime = Some(now);
 
             if self.flags.contains(Flags::LOWRES_DRIVER) {
                 self.lowres_driver.wake();
@@ -208,6 +208,16 @@ impl Timer {
                 LowresTimerDriver::start(self, inner);
             }
             now
+        }
+    }
+
+    fn elapsed_time(&mut self) -> Instant {
+        if let Some(elapsed_time) = self.elapsed_time {
+            elapsed_time
+        } else {
+            let elapsed_time = Instant::now();
+            self.elapsed_time = Some(elapsed_time);
+            elapsed_time
         }
     }
 
@@ -227,10 +237,10 @@ impl Timer {
         }
 
         let now = slf.now(inner);
-        let delta = if now >= slf.elapsed_time {
-            to_units(as_millis(now - slf.elapsed_time) + millis)
+        let elapsed_time = slf.elapsed_time();
+        let delta = if now >= elapsed_time {
+            to_units(as_millis(now - elapsed_time) + millis)
         } else {
-            slf.elapsed_time = now;
             to_units(millis)
         };
 
@@ -278,10 +288,10 @@ impl Timer {
         }
 
         let now = slf.now(inner);
-        let delta = if now >= slf.elapsed_time {
-            max(to_units(as_millis(now - slf.elapsed_time) + millis), 1)
+        let elapsed_time = slf.elapsed_time();
+        let delta = if now >= elapsed_time {
+            max(to_units(as_millis(now - elapsed_time) + millis), 1)
         } else {
-            slf.elapsed_time = now;
             max(to_units(millis), 1)
         };
 
@@ -479,9 +489,9 @@ impl Timer {
         self.occupied = [0; WHEEL_SIZE];
         self.next_expiry = u64::MAX;
         self.elapsed = 0;
-        self.elapsed_time = Instant::now();
-        self.lowres_time.set(None);
-        self.lowres_stime.set(None);
+        self.elapsed_time = None;
+        self.lowres_time = None;
+        self.lowres_stime = None;
     }
 }
 
@@ -565,7 +575,7 @@ impl Future for TimerDriver {
             if Pin::as_mut(&mut inner.driver_sleep).poll(cx).is_ready() {
                 let now = inner.driver_sleep.deadline();
                 inner.elapsed = inner.next_expiry;
-                inner.elapsed_time = now;
+                inner.elapsed_time = Some(now);
                 inner.execute_expired_timers();
 
                 if let Some(next_expiry) = inner.next_pending_bucket() {
@@ -575,6 +585,7 @@ impl Future for TimerDriver {
                     continue;
                 } else {
                     inner.next_expiry = u64::MAX;
+                    inner.elapsed_time = None;
                 }
             }
             return Poll::Pending;
@@ -613,8 +624,8 @@ impl Future for LowresTimerDriver {
                     .poll(cx)
                     .is_ready()
                 {
-                    inner.lowres_time.set(None);
-                    inner.lowres_stime.set(None);
+                    inner.lowres_time = None;
+                    inner.lowres_stime = None;
                     inner.flags.remove(Flags::LOWRES_TIMER);
                 }
                 return Poll::Pending;
@@ -627,7 +638,6 @@ impl Future for LowresTimerDriver {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
     use super::*;
