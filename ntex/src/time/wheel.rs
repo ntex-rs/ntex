@@ -640,6 +640,7 @@ impl Future for LowresTimerDriver {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
     use super::*;
