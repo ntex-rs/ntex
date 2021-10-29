@@ -566,8 +566,10 @@ impl Future for TimerDriver {
 
         if inner.flags.contains(Flags::DRIVER_RECALC) {
             inner.flags.remove(Flags::DRIVER_RECALC);
-            let deadline =
-                Instant::now() + Duration::from_millis(inner.next_expiry_ms());
+            let now = Instant::now();
+            let deadline = now
+                + Duration::from_millis(inner.next_expiry_ms())
+                    .saturating_sub(now - inner.elapsed_time());
             Pin::as_mut(&mut inner.driver_sleep).reset(deadline);
         }
 
