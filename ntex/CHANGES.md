@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.7] - 2021-11-02
+
+* h1: allow to override connection type in on-request handler
+
 ## [0.4.6] - 2021-10-29
 
 * time: fix wheel time calculations

@@ -241,6 +241,9 @@ where
                             if let Poll::Ready(result) = Pin::new(fut).poll(cx) {
                                 match result {
                                     Ok(req) => {
+                                        this.inner
+                                            .codec
+                                            .set_ctype(req.head().connection_type());
                                         if req.head().expect() {
                                             // Handle normal requests with EXPECT: 100-Continue` header
                                             Some(CallState::Expect {

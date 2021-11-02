@@ -98,6 +98,10 @@ impl Codec {
         self.flags.get().contains(Flags::KEEPALIVE_ENABLED)
     }
 
+    pub(super) fn set_ctype(&self, ctype: ConnectionType) {
+        self.ctype.set(ctype)
+    }
+
     #[inline]
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
