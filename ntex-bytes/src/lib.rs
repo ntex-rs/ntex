@@ -66,6 +66,11 @@ mod debug;
 mod hex;
 mod string;
 
+pub use self::buf::{
+    BufferAccumulator, BufferPool, BufferSink, BufferSource,
+    BytesAccumulator, BytesPool,
+    Owned, Shared,
+};
 pub use crate::bytes::{Bytes, BytesMut};
 pub use crate::string::ByteString;
 

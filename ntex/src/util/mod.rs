@@ -10,7 +10,12 @@ pub mod variant;
 
 pub use self::extensions::Extensions;
 
-pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
+pub use ntex_bytes::{
+	Buf, BufMut,
+	ByteString,
+	Bytes, BytesMut,
+	BufferPool, BytesPool,
+};
 pub use ntex_util::future::*;
 
 pub type HashMap<K, V> = std::collections::HashMap<K, V, fxhash::FxBuildHasher>;

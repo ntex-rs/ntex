@@ -7,7 +7,7 @@ use slab::Slab;
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::task::LocalWaker;
 use crate::time::Seconds;
-use crate::util::{poll_fn, Buf, BytesMut, Either};
+use crate::util::{poll_fn, BufferPool, BytesPool, Either};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -41,7 +41,7 @@ bitflags::bitflags! {
 
 pub struct State(Rc<IoStateInner>);
 
-pub(crate) struct IoStateInner {
+pub(crate) struct IoStateInner<P = BytesPool> where P: BufferPool {
     flags: Cell<Flags>,
     lw: Cell<u16>,
     read_hw: Cell<u16>,
@@ -51,35 +51,13 @@ pub(crate) struct IoStateInner {
     read_task: LocalWaker,
     write_task: LocalWaker,
     dispatch_task: LocalWaker,
-    read_buf: Cell<Option<BytesMut>>,
-    write_buf: Cell<Option<BytesMut>>,
+    pool: P,
+    read_buf: Cell<Option<P::Owned>>,
+    write_buf: Cell<Option<P::Accumulator>>,
     on_disconnect: RefCell<Slab<Option<LocalWaker>>>,
 }
 
-thread_local!(static R_BYTES_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(16)));
-thread_local!(static W_BYTES_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(16)));
-
-fn release_to_r_pool(mut buf: BytesMut) {
-    R_BYTES_POOL.with(|pool| {
-        let v = &mut pool.borrow_mut();
-        if v.len() < 16 {
-            buf.clear();
-            v.push(buf);
-        }
-    })
-}
-
-fn release_to_w_pool(mut buf: BytesMut) {
-    W_BYTES_POOL.with(|pool| {
-        let v = &mut pool.borrow_mut();
-        if v.len() < 16 {
-            buf.clear();
-            v.push(buf);
-        }
-    })
-}
-
-impl IoStateInner {
+impl<P> IoStateInner<P> where P: BufferPool {
     fn insert_flags(&self, f: Flags) {
         let mut flags = self.flags.get();
         flags.insert(f);
@@ -92,31 +70,19 @@ impl IoStateInner {
         self.flags.set(flags);
     }
 
-    fn get_read_buf(&self) -> BytesMut {
+    async fn get_read_buf(&self) -> P::Owned {
         if let Some(buf) = self.read_buf.take() {
             buf
         } else {
-            R_BYTES_POOL.with(|pool| {
-                if let Some(buf) = pool.borrow_mut().pop() {
-                    buf
-                } else {
-                    BytesMut::with_capacity(self.read_hw.get() as usize)
-                }
-            })
+            self.pool.take(self.read_hw.get() as usize).await
         }
     }
 
-    fn get_write_buf(&self) -> BytesMut {
+    async fn get_write_buf(&self) -> P::Accumulator {
         if let Some(buf) = self.write_buf.take() {
             buf
         } else {
-            W_BYTES_POOL.with(|pool| {
-                if let Some(buf) = pool.borrow_mut().pop() {
-                    buf
-                } else {
-                    BytesMut::with_capacity(self.write_hw.get() as usize)
-                }
-            })
+            P::Accumulator::with_capacity(self.write_hw.get() as usize)
         }
     }
 
@@ -530,9 +496,7 @@ impl State {
             let result = match item {
                 Ok(Some(el)) => Ok(Some(el)),
                 Ok(None) => {
-                    let n = poll_fn(|cx| {
-                        crate::codec::poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
-                    })
+                    let n = crate::codec::read_buf(Pin::new(&mut *io), &mut buf)
                     .await
                     .map_err(Either::Right)?;
                     if n == 0 {

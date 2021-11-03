@@ -1,26 +1,22 @@
-use ntex_bytes::BytesMut;
-use std::rc::Rc;
+use ntex_bytes::{BufferSource, BytesPool};
+use std::future::Future;
 
 /// Trait of helper objects to write out messages as bytes.
-pub trait Encoder {
+pub trait Encoder<P = BytesPool> where P: BufferSource {
     /// The type of items consumed by the `Encoder`
     type Item;
 
     /// The type of encoding errors.
     type Error: std::fmt::Debug;
 
-    /// Encodes a frame into the buffer provided.
-    fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error>;
-}
+    /// The type of future returned by `Encoder::encode`.
+    type EncodeFuture: Future<Output = Result<(), Self::Error>>;
 
-impl<T> Encoder for Rc<T>
-where
-    T: Encoder,
-{
-    type Item = T::Item;
-    type Error = T::Error;
-
-    fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        (**self).encode(item, dst)
-    }
+    /// Encodes a frame into the provided accumulator.
+    fn encode(
+        &mut self,
+        item: Self::Item,
+        pool: &P,
+        dst: &mut P::Accumulator,
+    ) -> Self::EncodeFuture;
 }

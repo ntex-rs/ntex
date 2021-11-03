@@ -1,8 +1,8 @@
-use ntex_bytes::BytesMut;
+use ntex_bytes::{BufferSink, BytesPool};
 use std::rc::Rc;
 
 /// Decoding of frames via buffers.
-pub trait Decoder {
+pub trait Decoder<P = BytesPool> where P: BufferSink {
     /// The type of decoded frames.
     type Item;
 
@@ -14,7 +14,7 @@ pub trait Decoder {
     type Error: std::fmt::Debug;
 
     /// Attempts to decode a frame from the provided buffer of bytes.
-    fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error>;
+    fn decode(&self, src: &mut P::Owned) -> Result<Option<Self::Item>, Self::Error>;
 
     /// A default method available to be called when there are no more bytes
     /// available to be read from the underlying I/O.
@@ -23,7 +23,7 @@ pub trait Decoder {
     /// `Ok(None)` is returned while there is unconsumed data in `buf`.
     /// Typically this doesn't need to be implemented unless the framing
     /// protocol differs near the end of the stream.
-    fn decode_eof(&self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode_eof(&self, buf: &mut P::Owned) -> Result<Option<Self::Item>, Self::Error> {
         match self.decode(buf)? {
             Some(frame) => Ok(Some(frame)),
             None => Ok(None),
@@ -31,18 +31,19 @@ pub trait Decoder {
     }
 }
 
-impl<T> Decoder for Rc<T>
+impl<T, P> Decoder<P> for Rc<T>
 where
-    T: Decoder,
+    T: Decoder<P>,
+    P: BufferSink,
 {
     type Item = T::Item;
     type Error = T::Error;
 
-    fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&self, src: &mut P::Owned) -> Result<Option<Self::Item>, Self::Error> {
         (**self).decode(src)
     }
 
-    fn decode_eof(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode_eof(&self, src: &mut P::Owned) -> Result<Option<Self::Item>, Self::Error> {
         (**self).decode_eof(src)
     }
 }
