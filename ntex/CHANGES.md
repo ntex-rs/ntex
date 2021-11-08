@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.8] - 2021-11-08
+
+* Add Clone impl for connect::ConnectError
+
 ## [0.4.7] - 2021-11-02
 
 * h1: allow to override connection type in on-request handler
