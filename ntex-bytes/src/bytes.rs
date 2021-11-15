@@ -354,6 +354,15 @@ const VEC_POS_OFFSET: usize = 5;
 const MAX_VEC_POS: usize = usize::MAX >> VEC_POS_OFFSET;
 const NOT_VEC_POS_MASK: usize = 0b11111;
 
+// We use high 4 bits as memory pool number
+const POOL_WIDTH: usize = 4;
+#[cfg(target_pointer_width = "64")]
+const POOL_OFFSET: usize = 64 - POOL_WIDTH;
+#[cfg(target_pointer_width = "32")]
+const POOL_OFFSET: usize = 32 - POOL_WIDTH;
+const POOL_MASK: usize = 0b1111 << POOL_OFFSET;
+const POOL_NUM_MASK: usize = !POOL_MASK;
+
 // Bit op constants for extracting the inline length value from the `arc` field.
 const INLINE_LEN_MASK: usize = 0b1111_1100;
 const INLINE_LEN_OFFSET: usize = 2;
@@ -386,36 +395,6 @@ const INLINE_CAP: usize = 4 * 4 - 1;
  */
 
 impl Bytes {
-    /// Creates a new `Bytes` with the specified capacity.
-    ///
-    /// The returned `Bytes` will be able to hold at least `capacity` bytes
-    /// without reallocating. If `capacity` is under `4 * size_of::<usize>() - 1`,
-    /// then `BytesMut` will not allocate.
-    ///
-    /// It is important to note that this function does not specify the length
-    /// of the returned `Bytes`, but only the capacity.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::Bytes;
-    ///
-    /// let mut bytes = Bytes::with_capacity(64);
-    ///
-    /// // `bytes` contains no data, even though there is capacity
-    /// assert_eq!(bytes.len(), 0);
-    ///
-    /// bytes.extend_from_slice(&b"hello world"[..]);
-    ///
-    /// assert_eq!(&bytes[..], b"hello world");
-    /// ```
-    #[inline]
-    pub fn with_capacity(capacity: usize) -> Bytes {
-        Bytes {
-            inner: Inner::with_capacity(capacity),
-        }
-    }
-
     /// Creates a new empty `Bytes`.
     ///
     /// This will not allocate and the returned `Bytes` handle will be empty.
@@ -490,11 +469,11 @@ impl Bytes {
     ///
     /// # Examples
     /// ```
-    /// use ntex_bytes::Bytes;
+    /// use ntex_bytes::{Bytes, BytesMut};
     ///
-    /// assert!(Bytes::with_capacity(4).is_inline());
+    /// assert!(Bytes::from(BytesMut::from(&[0, 0, 0, 0][..])).is_inline());
     /// assert!(!Bytes::from(Vec::with_capacity(4)).is_inline());
-    /// assert!(!Bytes::with_capacity(1024).is_inline());
+    /// assert!(!Bytes::from(&[0; 1024][..]).is_inline());
     /// ```
     pub fn is_inline(&self) -> bool {
         self.inner.is_inline()
@@ -783,92 +762,6 @@ impl Bytes {
         }
     }
 
-    /// Acquires a mutable reference to the owned form of the data.
-    ///
-    /// Clones the data if it is not already owned.
-    pub fn to_mut(&mut self) -> &mut BytesMut {
-        if !self.inner.is_mut_safe() {
-            let new = Self::copy_from_slice(&self[..]);
-            *self = new;
-        }
-        unsafe { &mut *(self as *mut Bytes as *mut BytesMut) }
-    }
-
-    /// Appends given bytes to this object.
-    ///
-    /// If this `Bytes` object has not enough capacity, it is resized first.
-    /// If it is shared (`refcount > 1`), it is copied first.
-    ///
-    /// This operation can be less effective than the similar operation on
-    /// `BytesMut`, especially on small additions.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::Bytes;
-    ///
-    /// let mut buf = Bytes::from("aabb");
-    /// buf.extend_from_slice(b"ccdd");
-    /// buf.extend_from_slice(b"eeff");
-    ///
-    /// assert_eq!(b"aabbccddeeff", &buf[..]);
-    /// ```
-    pub fn extend_from_slice(&mut self, extend: &[u8]) {
-        if extend.is_empty() {
-            return;
-        }
-
-        let new_cap = self
-            .len()
-            .checked_add(extend.len())
-            .expect("capacity overflow");
-
-        let result = match mem::replace(self, Bytes::new()).try_mut() {
-            Ok(mut bytes_mut) => {
-                bytes_mut.extend_from_slice(extend);
-                bytes_mut
-            }
-            Err(bytes) => {
-                let mut bytes_mut = BytesMut::with_capacity(new_cap);
-                bytes_mut.put_slice(&bytes);
-                bytes_mut.put_slice(extend);
-                bytes_mut
-            }
-        };
-
-        let _ = mem::replace(self, result.freeze());
-    }
-
-    /// Combine splitted Bytes objects back as contiguous.
-    ///
-    /// If `Bytes` objects were not contiguous originally, they will be extended.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::Bytes;
-    ///
-    /// let mut buf = Bytes::with_capacity(64);
-    /// buf.extend_from_slice(b"aaabbbcccddd");
-    ///
-    /// let splitted = buf.split_off(6);
-    /// assert_eq!(b"aaabbb", &buf[..]);
-    /// assert_eq!(b"cccddd", &splitted[..]);
-    ///
-    /// buf.unsplit(splitted);
-    /// assert_eq!(b"aaabbbcccddd", &buf[..]);
-    /// ```
-    pub fn unsplit(&mut self, other: Bytes) {
-        if self.is_empty() {
-            *self = other;
-            return;
-        }
-
-        if let Err(other_inner) = self.inner.try_unsplit(other.inner) {
-            self.extend_from_slice(other_inner.as_ref());
-        }
-    }
-
     /// Returns an iterator over the bytes contained by the buffer.
     ///
     /// # Examples
@@ -1153,6 +1046,11 @@ impl BytesMut {
     /// It is important to note that this function does not specify the length
     /// of the returned `BytesMut`, but only the capacity.
     ///
+    /// # Panics
+    ///
+    /// Panics if `capacity` greater than 60bit for 64bit systems
+    /// and 28bit for 32bit systems
+    ///
     /// # Examples
     ///
     /// ```
@@ -1427,6 +1325,11 @@ impl BytesMut {
     /// difference with each additional byte set to `value`. If `new_len` is
     /// less than `len`, the buffer is simply truncated.
     ///
+    /// # Panics
+    ///
+    /// Panics if `new_len` greater than 60bit for 64bit systems
+    /// and 28bit for 32bit systems
+    ///
     /// # Examples
     ///
     /// ```
@@ -1496,6 +1399,11 @@ impl BytesMut {
     /// and the requested capacity is less than or equal to the existing
     /// buffer's capacity, then the current view will be copied to the front of
     /// the buffer and the handle will take ownership of the full buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if new capacity is greater than 60bit for 64bit systems
+    /// and 28bit for 32bit systems
     ///
     /// # Examples
     ///
@@ -1727,6 +1635,7 @@ impl DerefMut for BytesMut {
 }
 
 impl From<Vec<u8>> for BytesMut {
+    #[inline]
     /// Convert a `Vec` into a `BytesMut`
     ///
     /// This constructor may be used to avoid the inlining optimization used by
@@ -1923,6 +1832,9 @@ impl Inner {
     #[inline]
     const fn from_static(bytes: &'static [u8]) -> Inner {
         let ptr = bytes.as_ptr() as *mut u8;
+        if bytes.len() & POOL_MASK != 0 {
+            panic!("Slice length is too large: {}", cap);
+        }
 
         Inner {
             // `arc` won't ever store a pointer. Instead, use it to
@@ -1940,6 +1852,10 @@ impl Inner {
         let len = src.len();
         let cap = src.capacity();
         let ptr = src.as_mut_ptr();
+
+        if cap & POOL_MASK != 0 {
+            panic!("Vector capacity is too large: {}", cap);
+        }
 
         mem::forget(src);
 
@@ -2085,7 +2001,7 @@ impl Inner {
         if self.is_inline() {
             INLINE_CAP
         } else {
-            self.cap
+            self.cap & POOL_NUM_MASK
         }
     }
 
@@ -2431,6 +2347,9 @@ impl Inner {
         // data storage, all of the `Inner` struct fields will be gibberish.
         if kind == KIND_INLINE {
             let new_cap = len + additional;
+            if new_cap & POOL_MASK != 0 {
+                panic!("Vector capacity is too large: {}", new_cap);
+            }
 
             // Promote to a vector
             let mut v = Vec::with_capacity(new_cap);
@@ -2473,6 +2392,11 @@ impl Inner {
                     // can gain capacity back.
                     self.cap += off;
                 } else {
+                    let new_cap = self.cap + additional;
+                    if new_cap & POOL_MASK != 0 {
+                        panic!("Vector capacity is too large: {}", new_cap);
+                    }
+
                     // No space - allocate more
                     let mut v = rebuild_vec(self.ptr, self.len, self.cap, off);
                     v.reserve(additional);
@@ -2498,6 +2422,9 @@ impl Inner {
         //
         // Compute the new capacity
         let mut new_cap = len + additional;
+        if new_cap & POOL_MASK != 0 {
+            panic!("Vector capacity is too large: {}", new_cap);
+        }
         let original_capacity;
         let original_capacity_repr;
 
