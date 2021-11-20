@@ -27,7 +27,7 @@ default = ["http-framework"]
 openssl = ["open-ssl", "tokio-openssl"]
 
 # rustls support
-rustls = ["rust-tls", "webpki", "webpki-roots", "tokio-rustls"]
+rustls = ["rust-tls", "rustls-pemfile", "tokio-rustls", "webpki", "webpki-roots"]
 
 # enable compressison support
 compress = ["flate2", "brotli2"]
@@ -90,9 +90,10 @@ tokio-openssl = { version = "0.6.3", optional = true }
 
 # rustls
 rust-tls = { version = "0.20", package = "rustls", optional = true }
+rustls-pemfile = { version = "0.2", optional = true }
+tokio-rustls = { version = "0.23", optional = true }
 webpki = { version = "0.22", optional = true }
 webpki-roots = { version = "0.22", optional = true }
-tokio-rustls = { version = "0.23", optional = true }
 
 # compression
 brotli2 = { version="0.3.2", optional = true }

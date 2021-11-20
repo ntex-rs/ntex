@@ -102,6 +102,7 @@ impl<T: Address + 'static> Service for RustlsConnector<T> {
 
 #[cfg(test)]
 mod tests {
+    use rust_tls::{OwnedTrustAnchor, RootCertStore};
     use super::*;
     use crate::service::{Service, ServiceFactory};
 
@@ -111,10 +112,18 @@ mod tests {
             crate::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let mut config = ClientConfig::new();
-        config
-            .root_store
-            .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+        let mut cert_store = RootCertStore::empty();
+        cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+            OwnedTrustAnchor::from_subject_spki_name_constraints(
+                ta.subject,
+                ta.spki,
+                ta.name_constraints,
+            )
+        }));
+        let config = ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(cert_store)
+            .with_no_client_auth();
         let factory = RustlsConnector::new(Arc::new(config)).clone();
 
         let srv = factory.new_service(()).await.unwrap();
