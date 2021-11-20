@@ -283,7 +283,7 @@ mod openssl {
 #[cfg(feature = "rustls")]
 mod rustls {
     use super::*;
-    use crate::server::rustls::{Acceptor, ServerConfig, Session, TlsStream};
+    use crate::server::rustls::{Acceptor, ServerConfig, TlsStream};
     use crate::server::SslError;
 
     impl<S, B, X, U> HttpService<TlsStream<TcpStream>, S, B, X, U>
@@ -322,7 +322,7 @@ mod rustls {
             InitError = (),
         > {
             let protos = vec!["h2".to_string().into(), "http/1.1".to_string().into()];
-            config.set_protocols(&protos);
+            config.alpn_protocols = protos;
 
             pipeline_factory(
                 Acceptor::new(config)
@@ -334,7 +334,7 @@ mod rustls {
                 let proto = io
                     .get_ref()
                     .1
-                    .get_alpn_protocol()
+                    .alpn_protocol()
                     .and_then(|protos| {
                         if protos.windows(2).any(|window| window == b"h2") {
                             Some(Protocol::Http2)

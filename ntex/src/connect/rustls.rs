@@ -1,10 +1,9 @@
-use std::{future::Future, io, pin::Pin, sync::Arc, task::Context, task::Poll};
+use std::{convert::TryFrom, future::Future, io, pin::Pin, sync::Arc, task::Context, task::Poll};
 
-pub use rust_tls::Session;
 pub use tokio_rustls::{client::TlsStream, rustls::ClientConfig};
 
 use tokio_rustls::{self, TlsConnector};
-use webpki::DNSNameRef;
+use rust_tls::ServerName;
 
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
@@ -45,12 +44,12 @@ impl<T: Address + 'static> RustlsConnector<T> {
             let io = conn.await?;
             trace!("SSL Handshake start for: {:?}", host);
 
-            let host = DNSNameRef::try_from_ascii_str(&host)
+            let host = ServerName::try_from(host.as_str())
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
-            match TlsConnector::from(config).connect(host, io).await {
+            match TlsConnector::from(config).connect(host.clone(), io).await {
                 Ok(io) => {
-                    trace!("SSL Handshake success: {:?}", host);
+                    trace!("SSL Handshake success: {:?}", &host);
                     Ok(io)
                 }
                 Err(e) => {

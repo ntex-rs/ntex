@@ -42,7 +42,7 @@ mod danger {
             &self,
             _roots: &rust_tls::RootCertStore,
             _presented_certs: &[rust_tls::Certificate],
-            _dns_name: webpki::DNSNameRef<'_>,
+            _dns_name: webpki::DnsNameRef<'_>,
             _ocsp: &[u8],
         ) -> Result<rust_tls::ServerCertVerified, rust_tls::TLSError> {
             Ok(rust_tls::ServerCertVerified::assertion())
@@ -78,7 +78,7 @@ async fn test_connection_reuse_h2() {
     // disable ssl verification
     let mut config = ClientConfig::new();
     let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    config.set_protocols(&protos);
+    config.alpn_protocols = protos;
     config
         .dangerous()
         .set_certificate_verifier(Arc::new(danger::NoCertificateVerification {}));

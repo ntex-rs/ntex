@@ -167,7 +167,7 @@ mod rustls {
             InitError = S::InitError,
         > {
             let protos = vec!["h2".to_string().into()];
-            config.set_protocols(&protos);
+            config.alpn_protocols = protos;
 
             pipeline_factory(
                 Acceptor::new(config)
