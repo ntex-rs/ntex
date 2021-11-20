@@ -1,9 +1,11 @@
-use std::{convert::TryFrom, future::Future, io, pin::Pin, sync::Arc, task::Context, task::Poll};
+use std::{
+    convert::TryFrom, future::Future, io, pin::Pin, sync::Arc, task::Context, task::Poll,
+};
 
 pub use tokio_rustls::{client::TlsStream, rustls::ClientConfig};
 
-use tokio_rustls::{self, TlsConnector};
 use rust_tls::ServerName;
+use tokio_rustls::{self, TlsConnector};
 
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
@@ -102,9 +104,9 @@ impl<T: Address + 'static> Service for RustlsConnector<T> {
 
 #[cfg(test)]
 mod tests {
-    use rust_tls::{OwnedTrustAnchor, RootCertStore};
     use super::*;
     use crate::service::{Service, ServiceFactory};
+    use rust_tls::{OwnedTrustAnchor, RootCertStore};
 
     #[crate::rt_test]
     async fn test_rustls_connect() {
@@ -113,13 +115,15 @@ mod tests {
         });
 
         let mut cert_store = RootCertStore::empty();
-        cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
-            OwnedTrustAnchor::from_subject_spki_name_constraints(
-                ta.subject,
-                ta.spki,
-                ta.name_constraints,
-            )
-        }));
+        cert_store.add_server_trust_anchors(
+            webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+                OwnedTrustAnchor::from_subject_spki_name_constraints(
+                    ta.subject,
+                    ta.spki,
+                    ta.name_constraints,
+                )
+            }),
+        );
         let config = ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(cert_store)
