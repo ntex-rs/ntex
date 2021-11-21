@@ -4,10 +4,8 @@ use std::io::{self, BufReader};
 
 use futures::future::{self, err, ok};
 use futures::stream::{once, Stream, StreamExt};
-use rust_tls::{
-    internal::pemfile::{certs, pkcs8_private_keys},
-    NoClientAuth, ServerConfig as RustlsServerConfig,
-};
+use rust_tls::{Certificate, PrivateKey, ServerConfig as RustlsServerConfig};
+use rustls_pemfile::{certs, pkcs8_private_keys};
 
 use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
@@ -30,13 +28,20 @@ where
 
 fn ssl_acceptor() -> RustlsServerConfig {
     // load ssl keys
-    let mut config = RustlsServerConfig::new(NoClientAuth::new());
+
     let cert_file = &mut BufReader::new(File::open("./tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("./tests/key.pem").unwrap());
-    let cert_chain = certs(cert_file).unwrap();
-    let mut keys = pkcs8_private_keys(key_file).unwrap();
-    config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
-    config
+    let cert_chain = certs(cert_file)
+        .unwrap()
+        .iter()
+        .map(|c| Certificate(c.to_vec()))
+        .collect();
+    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    RustlsServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, keys)
+        .unwrap()
 }
 
 #[ntex::test]

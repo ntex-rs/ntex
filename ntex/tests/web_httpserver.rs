@@ -150,10 +150,8 @@ async fn test_rustls() {
     use std::io::BufReader;
 
     use ntex::web::HttpRequest;
-    use rust_tls::{
-        internal::pemfile::{certs, pkcs8_private_keys},
-        NoClientAuth, ServerConfig as RustlsServerConfig,
-    };
+    use rust_tls::{Certificate, PrivateKey, ServerConfig as RustlsServerConfig};
+    use rustls_pemfile::{certs, pkcs8_private_keys};
 
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
@@ -162,12 +160,19 @@ async fn test_rustls() {
         let mut sys = ntex::rt::System::new("test");
 
         // load ssl keys
-        let mut config = RustlsServerConfig::new(NoClientAuth::new());
         let cert_file = &mut BufReader::new(File::open("./tests/cert.pem").unwrap());
         let key_file = &mut BufReader::new(File::open("./tests/key.pem").unwrap());
-        let cert_chain = certs(cert_file).unwrap();
-        let mut keys = pkcs8_private_keys(key_file).unwrap();
-        config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
+        let cert_chain = certs(cert_file)
+            .unwrap()
+            .iter()
+            .map(|c| Certificate(c.to_vec()))
+            .collect();
+        let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+        let config = RustlsServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(cert_chain, keys)
+            .unwrap();
 
         let srv = sys.exec(|| {
             HttpServer::new(|| {

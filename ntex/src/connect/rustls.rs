@@ -1,10 +1,11 @@
-use std::{future::Future, io, pin::Pin, sync::Arc, task::Context, task::Poll};
+use std::{
+    convert::TryFrom, future::Future, io, pin::Pin, sync::Arc, task::Context, task::Poll,
+};
 
-pub use rust_tls::Session;
 pub use tokio_rustls::{client::TlsStream, rustls::ClientConfig};
 
+use rust_tls::ServerName;
 use tokio_rustls::{self, TlsConnector};
-use webpki::DNSNameRef;
 
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
@@ -45,12 +46,12 @@ impl<T: Address + 'static> RustlsConnector<T> {
             let io = conn.await?;
             trace!("SSL Handshake start for: {:?}", host);
 
-            let host = DNSNameRef::try_from_ascii_str(&host)
+            let host = ServerName::try_from(host.as_str())
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
-            match TlsConnector::from(config).connect(host, io).await {
+            match TlsConnector::from(config).connect(host.clone(), io).await {
                 Ok(io) => {
-                    trace!("SSL Handshake success: {:?}", host);
+                    trace!("SSL Handshake success: {:?}", &host);
                     Ok(io)
                 }
                 Err(e) => {
@@ -105,6 +106,7 @@ impl<T: Address + 'static> Service for RustlsConnector<T> {
 mod tests {
     use super::*;
     use crate::service::{Service, ServiceFactory};
+    use rust_tls::{OwnedTrustAnchor, RootCertStore};
 
     #[crate::rt_test]
     async fn test_rustls_connect() {
@@ -112,10 +114,20 @@ mod tests {
             crate::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let mut config = ClientConfig::new();
-        config
-            .root_store
-            .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+        let mut cert_store = RootCertStore::empty();
+        cert_store.add_server_trust_anchors(
+            webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+                OwnedTrustAnchor::from_subject_spki_name_constraints(
+                    ta.subject,
+                    ta.spki,
+                    ta.name_constraints,
+                )
+            }),
+        );
+        let config = ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(cert_store)
+            .with_no_client_auth();
         let factory = RustlsConnector::new(Arc::new(config)).clone();
 
         let srv = factory.new_service(()).await.unwrap();

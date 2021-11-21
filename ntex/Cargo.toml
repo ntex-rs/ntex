@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.4.8"
+version = "0.4.9"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -27,7 +27,7 @@ default = ["http-framework"]
 openssl = ["open-ssl", "tokio-openssl"]
 
 # rustls support
-rustls = ["rust-tls", "webpki", "webpki-roots", "tokio-rustls"]
+rustls = ["rust-tls", "rustls-pemfile", "tokio-rustls", "webpki", "webpki-roots"]
 
 # enable compressison support
 compress = ["flate2", "brotli2"]
@@ -86,13 +86,14 @@ coo-kie = { version = "0.15", package = "cookie", optional = true }
 
 # openssl
 open-ssl = { version="0.10", package = "openssl", optional = true }
-tokio-openssl = { version = "0.6.2", optional = true }
+tokio-openssl = { version = "0.6.3", optional = true }
 
 # rustls
-rust-tls = { version = "0.19", package = "rustls", optional = true }
-webpki = { version = "0.21", optional = true }
-webpki-roots = { version = "0.21", optional = true }
-tokio-rustls = { version = "0.22", optional = true }
+rust-tls = { version = "0.20", package = "rustls", optional = true }
+rustls-pemfile = { version = "0.2", optional = true }
+tokio-rustls = { version = "0.23", optional = true }
+webpki = { version = "0.22", optional = true }
+webpki-roots = { version = "0.22", optional = true }
 
 # compression
 brotli2 = { version="0.3.2", optional = true }
@@ -103,6 +104,6 @@ env_logger = "0.9"
 rand = "0.8"
 time = "0.2"
 open-ssl = { version="0.10", package = "openssl" }
-rust-tls = { version = "0.19", package="rustls", features = ["dangerous_configuration"]  }
+rust-tls = { version = "0.20", package="rustls", features = ["dangerous_configuration"]  }
 webpki = "0.21"
 futures = "0.3.16"

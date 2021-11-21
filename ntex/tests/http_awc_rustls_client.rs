@@ -35,17 +35,22 @@ fn ssl_acceptor() -> SslAcceptor {
 }
 
 mod danger {
+    use rust_tls::{Certificate, ServerName};
+    use std::time::SystemTime;
+
     pub struct NoCertificateVerification {}
 
-    impl rust_tls::ServerCertVerifier for NoCertificateVerification {
+    impl rust_tls::client::ServerCertVerifier for NoCertificateVerification {
         fn verify_server_cert(
             &self,
-            _roots: &rust_tls::RootCertStore,
-            _presented_certs: &[rust_tls::Certificate],
-            _dns_name: webpki::DNSNameRef<'_>,
-            _ocsp: &[u8],
-        ) -> Result<rust_tls::ServerCertVerified, rust_tls::TLSError> {
-            Ok(rust_tls::ServerCertVerified::assertion())
+            _end_entity: &Certificate,
+            _intermediates: &[Certificate],
+            _server_name: &ServerName,
+            _scts: &mut dyn Iterator<Item = &[u8]>,
+            _ocsp_response: &[u8],
+            _now: SystemTime,
+        ) -> Result<rust_tls::client::ServerCertVerified, rust_tls::TLSError> {
+            Ok(rust_tls::client::ServerCertVerified::assertion())
         }
     }
 }
@@ -76,12 +81,12 @@ async fn test_connection_reuse_h2() {
     });
 
     // disable ssl verification
-    let mut config = ClientConfig::new();
+    let mut config = ClientConfig::builder()
+        .with_safe_defaults()
+        .with_custom_certificate_verifier(Arc::new(danger::NoCertificateVerification {}))
+        .with_no_client_auth();
     let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    config.set_protocols(&protos);
-    config
-        .dangerous()
-        .set_certificate_verifier(Arc::new(danger::NoCertificateVerification {}));
+    config.alpn_protocols = protos;
 
     let client = Client::build()
         .connector(Connector::default().rustls(Arc::new(config)).finish())

@@ -84,12 +84,24 @@ impl Connector {
         }
         #[cfg(all(not(feature = "openssl"), feature = "rustls"))]
         {
+            use rust_tls::{OwnedTrustAnchor, RootCertStore};
+
             let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-            let mut config = ClientConfig::new();
-            config.set_protocols(&protos);
-            config
-                .root_store
-                .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+            let mut cert_store = RootCertStore::empty();
+            cert_store.add_server_trust_anchors(
+                webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+                    OwnedTrustAnchor::from_subject_spki_name_constraints(
+                        ta.subject,
+                        ta.spki,
+                        ta.name_constraints,
+                    )
+                }),
+            );
+            let mut config = ClientConfig::builder()
+                .with_safe_defaults()
+                .with_root_certificates(cert_store)
+                .with_no_client_auth();
+            config.alpn_protocols = protos;
             conn.rustls(Arc::new(config))
         }
         #[cfg(not(any(feature = "openssl", feature = "rustls")))]
@@ -132,14 +144,14 @@ impl Connector {
     #[cfg(feature = "rustls")]
     /// Use rustls connector for secured connections.
     pub fn rustls(self, connector: Arc<ClientConfig>) -> Self {
-        use crate::connect::rustls::{RustlsConnector, Session};
+        use crate::connect::rustls::RustlsConnector;
 
         const H2: &[u8] = b"h2";
         self.secure_connector(RustlsConnector::new(connector).map(|sock| {
             let h2 = sock
                 .get_ref()
                 .1
-                .get_alpn_protocol()
+                .alpn_protocol()
                 .map(|protos| protos.windows(2).any(|w| w == H2))
                 .unwrap_or(false);
             if h2 {

@@ -847,8 +847,8 @@ async fn test_brotli_encoding_large_openssl_h2() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls() {
-    use rust_tls::internal::pemfile::{certs, pkcs8_private_keys};
-    use rust_tls::{NoClientAuth, ServerConfig};
+    use rust_tls::{Certificate, PrivateKey, ServerConfig};
+    use rustls_pemfile::{certs, pkcs8_private_keys};
     use std::fs::File;
     use std::io::BufReader;
 
@@ -859,12 +859,19 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
         .collect::<String>();
 
     // load ssl keys
-    let mut config = ServerConfig::new(NoClientAuth::new());
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = certs(cert_file).unwrap();
-    let mut keys = pkcs8_private_keys(key_file).unwrap();
-    config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
+    let cert_chain = certs(cert_file)
+        .unwrap()
+        .iter()
+        .map(|c| Certificate(c.to_vec()))
+        .collect();
+    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, keys)
+        .unwrap();
 
     let srv = test::server_with(test::config().rustls(config), || {
         App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
@@ -898,8 +905,8 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h1() {
-    use rust_tls::internal::pemfile::{certs, pkcs8_private_keys};
-    use rust_tls::{NoClientAuth, ServerConfig};
+    use rust_tls::{Certificate, PrivateKey, ServerConfig};
+    use rustls_pemfile::{certs, pkcs8_private_keys};
     use std::fs::File;
     use std::io::BufReader;
 
@@ -910,12 +917,19 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
         .collect::<String>();
 
     // load ssl keys
-    let mut config = ServerConfig::new(NoClientAuth::new());
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = certs(cert_file).unwrap();
-    let mut keys = pkcs8_private_keys(key_file).unwrap();
-    config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
+    let cert_chain = certs(cert_file)
+        .unwrap()
+        .iter()
+        .map(|c| Certificate(c.to_vec()))
+        .collect();
+    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, keys)
+        .unwrap();
 
     let srv = test::server_with(test::config().rustls(config).h1(), || {
         App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
@@ -949,8 +963,8 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h2() {
-    use rust_tls::internal::pemfile::{certs, pkcs8_private_keys};
-    use rust_tls::{NoClientAuth, ServerConfig};
+    use rust_tls::{Certificate, PrivateKey, ServerConfig};
+    use rustls_pemfile::{certs, pkcs8_private_keys};
     use std::fs::File;
     use std::io::BufReader;
 
@@ -961,12 +975,19 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
         .collect::<String>();
 
     // load ssl keys
-    let mut config = ServerConfig::new(NoClientAuth::new());
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = certs(cert_file).unwrap();
-    let mut keys = pkcs8_private_keys(key_file).unwrap();
-    config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
+    let cert_chain = certs(cert_file)
+        .unwrap()
+        .iter()
+        .map(|c| Certificate(c.to_vec()))
+        .collect();
+    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let config = ServerConfig::builder()
+        .with_safe_defaults()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, keys)
+        .unwrap();
 
     let srv = test::server_with(test::config().rustls(config).h2(), || {
         App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
