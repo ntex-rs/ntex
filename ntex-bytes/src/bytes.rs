@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize};
 use std::{cmp, fmt, hash, mem, ptr, ptr::NonNull, slice, usize};
 
+use crate::pool::{Pool, PoolId};
 use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};
 
 /// A reference counted contiguous slice of memory.
@@ -366,13 +367,15 @@ const POOL_NUM_MASK: usize = !POOL_MASK;
 // Bit op constants for extracting the inline length value from the `arc` field.
 const INLINE_LEN_MASK: usize = 0b1111_1100;
 const INLINE_LEN_OFFSET: usize = 2;
+// const INLINE_POOL_MASK: usize = 0b1111_0000_0000;
+// const INLINE_POOL_OFFSET: usize = 8;
 
 // Byte offset from the start of `Inner` to where the inline buffer data
 // starts. On little endian platforms, the first byte of the struct is the
 // storage flag, so the data is shifted by a byte. On big endian systems, the
 // data starts at the beginning of the struct.
 #[cfg(target_endian = "little")]
-const INLINE_DATA_OFFSET: isize = 1;
+const INLINE_DATA_OFFSET: isize = 2;
 #[cfg(target_endian = "big")]
 const INLINE_DATA_OFFSET: isize = 0;
 
@@ -384,9 +387,11 @@ const PTR_WIDTH: usize = 32;
 // Inline buffer capacity. This is the size of `Inner` minus 1 byte for the
 // metadata.
 #[cfg(target_pointer_width = "64")]
-const INLINE_CAP: usize = 4 * 8 - 1;
+const INLINE_CAP: usize = 4 * 8 - 2;
 #[cfg(target_pointer_width = "32")]
-const INLINE_CAP: usize = 4 * 4 - 1;
+const INLINE_CAP: usize = 4 * 4 - 2;
+
+const EMPTY: &[u8] = &[];
 
 /*
  *
@@ -411,7 +416,6 @@ impl Bytes {
     pub const fn new() -> Bytes {
         // Make it a named const to work around
         // "unsizing casts are not allowed in const fn"
-        const EMPTY: &[u8] = &[];
         Bytes::from_static(EMPTY)
     }
 
@@ -431,7 +435,7 @@ impl Bytes {
     #[inline]
     pub const fn from_static(bytes: &'static [u8]) -> Bytes {
         Bytes {
-            inner: Inner::from_static(bytes),
+            inner: Inner::from_static(bytes, Pool::default_id()),
         }
     }
 
@@ -723,7 +727,7 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn clear(&mut self) {
-        self.truncate(0);
+        self.inner = Inner::from_static(EMPTY, Pool::default_id());
     }
 
     /// Attempts to convert into a `BytesMut` handle.
@@ -992,44 +996,6 @@ impl<'a> IntoIterator for &'a Bytes {
     }
 }
 
-impl Extend<u8> for Bytes {
-    fn extend<T>(&mut self, iter: T)
-    where
-        T: IntoIterator<Item = u8>,
-    {
-        let iter = iter.into_iter();
-
-        let (lower, upper) = iter.size_hint();
-
-        // Avoid possible conversion into mut if there's nothing to add
-        if let Some(0) = upper {
-            return;
-        }
-
-        let mut bytes_mut = match mem::replace(self, Bytes::new()).try_mut() {
-            Ok(bytes_mut) => bytes_mut,
-            Err(bytes) => {
-                let mut bytes_mut = BytesMut::with_capacity(bytes.len() + lower);
-                bytes_mut.put_slice(&bytes);
-                bytes_mut
-            }
-        };
-
-        bytes_mut.extend(iter);
-
-        let _ = mem::replace(self, bytes_mut.freeze());
-    }
-}
-
-impl<'a> Extend<&'a u8> for Bytes {
-    fn extend<T>(&mut self, iter: T)
-    where
-        T: IntoIterator<Item = &'a u8>,
-    {
-        self.extend(iter.into_iter().copied())
-    }
-}
-
 /*
  *
  * ===== BytesMut =====
@@ -1068,7 +1034,7 @@ impl BytesMut {
     #[inline]
     pub fn with_capacity(capacity: usize) -> BytesMut {
         BytesMut {
-            inner: Inner::with_capacity(capacity),
+            inner: Inner::with_capacity(capacity, Pool::default_id()),
         }
     }
 
@@ -1644,7 +1610,7 @@ impl From<Vec<u8>> for BytesMut {
     #[inline]
     fn from(src: Vec<u8>) -> BytesMut {
         BytesMut {
-            inner: Inner::from_vec(src),
+            inner: Inner::from_vec(src, Pool::default_id()),
         }
     }
 }
@@ -1830,11 +1796,8 @@ impl<'a> Extend<&'a u8> for BytesMut {
 
 impl Inner {
     #[inline]
-    const fn from_static(bytes: &'static [u8]) -> Inner {
+    const fn from_static(bytes: &'static [u8], id: PoolId) -> Inner {
         let ptr = bytes.as_ptr() as *mut u8;
-        if bytes.len() & POOL_MASK != 0 {
-            panic!("Slice length is too large: {}", cap);
-        }
 
         Inner {
             // `arc` won't ever store a pointer. Instead, use it to
@@ -1843,12 +1806,12 @@ impl Inner {
             arc: unsafe { NonNull::new_unchecked(KIND_STATIC as *mut Shared) },
             ptr,
             len: bytes.len(),
-            cap: bytes.len(),
+            cap: id.set(bytes.len()),
         }
     }
 
     #[inline]
-    fn from_vec(mut src: Vec<u8>) -> Inner {
+    fn from_vec(mut src: Vec<u8>, id: PoolId) -> Inner {
         let len = src.len();
         let cap = src.capacity();
         let ptr = src.as_mut_ptr();
@@ -1859,29 +1822,55 @@ impl Inner {
 
         mem::forget(src);
 
+        id.pool().alloc(cap);
         let original_capacity_repr = original_capacity_to_repr(cap);
         let arc = (original_capacity_repr << ORIGINAL_CAPACITY_OFFSET) | KIND_VEC;
 
         Inner {
-            arc: unsafe { NonNull::new_unchecked(arc as *mut Shared) },
             ptr,
             len,
-            cap,
+            cap: id.set(cap),
+            arc: unsafe { NonNull::new_unchecked(arc as *mut Shared) },
         }
     }
 
     #[inline]
-    fn with_capacity(capacity: usize) -> Inner {
+    fn with_capacity(capacity: usize, id: PoolId) -> Inner {
         if capacity <= INLINE_CAP {
             unsafe {
                 // Using uninitialized memory is ~30% faster
                 #[allow(invalid_value, clippy::uninit_assumed_init)]
                 let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
-                inner.arc = NonNull::new_unchecked(KIND_INLINE as *mut Shared);
+                let kind = id.set_inline(KIND_INLINE);
+                inner.arc = NonNull::new_unchecked(kind as *mut Shared);
                 inner
             }
         } else {
-            Inner::from_vec(Vec::with_capacity(capacity))
+            Inner::from_vec(Vec::with_capacity(capacity), id)
+        }
+    }
+
+    #[inline]
+    fn pool(&self) -> &'static Pool {
+        if self.is_inline() {
+            #[cfg(target_endian = "little")]
+            #[inline]
+            fn imp(arc: *mut Shared) -> PoolId {
+                PoolId::get_inline(arc as usize)
+            }
+
+            #[cfg(target_endian = "big")]
+            #[inline]
+            fn imp(arc: *mut Shared) -> usize {
+                unsafe {
+                    let p: *const usize = arc as *const usize;
+                    PoolId::get_inline(*p)
+                }
+            }
+
+            imp(self.arc.as_ptr()).pool()
+        } else {
+            PoolId::get(self.cap).pool()
         }
     }
 
@@ -2242,7 +2231,7 @@ impl Inner {
 
     #[cold]
     unsafe fn shallow_clone_vec(&self, arc: usize, mut_self: bool) -> Inner {
-        // If  the buffer is still tracked in a `Vec<u8>`. It is time to
+        // If the buffer is still tracked in a `Vec<u8>`. It is time to
         // promote the vec to an `Arc`. This could potentially be called
         // concurrently, so some care must be taken.
 
@@ -2355,9 +2344,12 @@ impl Inner {
             let mut v = Vec::with_capacity(new_cap);
             v.extend_from_slice(self.as_ref());
 
+            let cap = v.capacity();
+            self.pool().alloc(cap - self.cap);
+
             self.ptr = v.as_mut_ptr();
             self.len = v.len();
-            self.cap = v.capacity();
+            self.cap = cap;
 
             // Since the minimum capacity is `INLINE_CAP`, don't bother encoding
             // the original capacity as INLINE_CAP
@@ -2725,8 +2717,8 @@ fn test_original_capacity_from_repr() {
     assert_eq!(min_cap * 64, original_capacity_from_repr(7));
 }
 
-unsafe impl Send for Inner {}
-unsafe impl Sync for Inner {}
+//unsafe impl Send for Inner {}
+//unsafe impl Sync for Inner {}
 
 /*
  *
