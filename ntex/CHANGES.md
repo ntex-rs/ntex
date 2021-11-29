@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.10] - 2021-11-29
+
+* Fix potential overflow sub in timer wheel
+
 ## [0.4.9] - 2021-11-20
 
 * Update rustls to 0.20

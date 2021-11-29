@@ -400,7 +400,7 @@ impl Timer {
 
     /// Get next expiry time in millis
     fn next_expiry_ms(&mut self) -> u64 {
-        to_millis(self.next_expiry - self.elapsed)
+        to_millis(self.next_expiry.saturating_sub(self.elapsed))
     }
 
     fn execute_expired_timers(&mut self) {
@@ -567,9 +567,13 @@ impl Future for TimerDriver {
         if inner.flags.contains(Flags::DRIVER_RECALC) {
             inner.flags.remove(Flags::DRIVER_RECALC);
             let now = Instant::now();
-            let deadline = now
-                + Duration::from_millis(inner.next_expiry_ms())
-                    .saturating_sub(now - inner.elapsed_time());
+            let deadline = if let Some(diff) =
+                now.checked_duration_since(inner.elapsed_time())
+            {
+                now + Duration::from_millis(inner.next_expiry_ms()).saturating_sub(diff)
+            } else {
+                now + Duration::from_millis(inner.next_expiry_ms())
+            };
             Pin::as_mut(&mut inner.driver_sleep).reset(deadline);
         }
 
