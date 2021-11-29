@@ -1484,7 +1484,6 @@ impl BytesMut {
         self.inner.set_len(len)
     }
 
-    #[inline]
     /// Reserves capacity for at least `additional` more bytes to be inserted
     /// into the given `BytesMut`.
     ///
@@ -1614,6 +1613,7 @@ impl BytesMut {
     /// assert_eq!(iter.next().map(|b| *b), Some(b'c'));
     /// assert_eq!(iter.next(), None);
     /// ```
+    #[inline]
     pub fn iter(&'_ self) -> std::slice::Iter<'_, u8> {
         self.chunk().iter()
     }
@@ -1713,6 +1713,7 @@ impl Deref for BytesMut {
 }
 
 impl AsMut<[u8]> for BytesMut {
+    #[inline]
     fn as_mut(&mut self) -> &mut [u8] {
         self.inner.as_mut()
     }
@@ -1731,6 +1732,7 @@ impl From<Vec<u8>> for BytesMut {
     /// This constructor may be used to avoid the inlining optimization used by
     /// `with_capacity`.  A `BytesMut` constructed this way will always store
     /// its data on the heap.
+    #[inline]
     fn from(src: Vec<u8>) -> BytesMut {
         BytesMut {
             inner: Inner::from_vec(src),
@@ -1739,6 +1741,7 @@ impl From<Vec<u8>> for BytesMut {
 }
 
 impl From<String> for BytesMut {
+    #[inline]
     fn from(src: String) -> BytesMut {
         BytesMut::from(src.into_bytes())
     }
@@ -1769,30 +1772,35 @@ impl<'a> From<&'a [u8]> for BytesMut {
 }
 
 impl<'a> From<&'a str> for BytesMut {
+    #[inline]
     fn from(src: &'a str) -> BytesMut {
         BytesMut::from(src.as_bytes())
     }
 }
 
 impl From<Bytes> for BytesMut {
+    #[inline]
     fn from(src: Bytes) -> BytesMut {
         src.try_mut().unwrap_or_else(|src| BytesMut::from(&src[..]))
     }
 }
 
 impl PartialEq for BytesMut {
+    #[inline]
     fn eq(&self, other: &BytesMut) -> bool {
         self.inner.as_ref() == other.inner.as_ref()
     }
 }
 
 impl PartialOrd for BytesMut {
+    #[inline]
     fn partial_cmp(&self, other: &BytesMut) -> Option<cmp::Ordering> {
         self.inner.as_ref().partial_cmp(other.inner.as_ref())
     }
 }
 
 impl Ord for BytesMut {
+    #[inline]
     fn cmp(&self, other: &BytesMut) -> cmp::Ordering {
         self.inner.as_ref().cmp(other.inner.as_ref())
     }
@@ -1814,6 +1822,7 @@ impl fmt::Debug for BytesMut {
 }
 
 impl hash::Hash for BytesMut {
+    #[inline]
     fn hash<H>(&self, state: &mut H)
     where
         H: hash::Hasher,
@@ -1824,12 +1833,14 @@ impl hash::Hash for BytesMut {
 }
 
 impl Borrow<[u8]> for BytesMut {
+    #[inline]
     fn borrow(&self) -> &[u8] {
         self.as_ref()
     }
 }
 
 impl BorrowMut<[u8]> for BytesMut {
+    #[inline]
     fn borrow_mut(&mut self) -> &mut [u8] {
         self.as_mut()
     }
@@ -1853,6 +1864,7 @@ impl fmt::Write for BytesMut {
 }
 
 impl Clone for BytesMut {
+    #[inline]
     fn clone(&self) -> BytesMut {
         BytesMut::from(&self[..])
     }
