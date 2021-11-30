@@ -1,11 +1,12 @@
+#![allow(warnings)]
 use std::borrow::{Borrow, BorrowMut};
 use std::iter::{FromIterator, Iterator};
 use std::ops::{Deref, DerefMut, RangeBounds};
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
-use std::sync::atomic::{self, AtomicPtr, AtomicUsize};
-use std::{cmp, fmt, hash, mem, ptr, ptr::NonNull, slice, usize};
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+use std::sync::atomic::{self, AtomicUsize};
+use std::{cmp, fmt, hash, mem, ptr, ptr::NonNull, slice, sync::Arc, usize};
 
-use crate::pool::{Pool, PoolId};
+use crate::pool::{Pool, PoolId, PoolInner};
 use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};
 
 /// A reference counted contiguous slice of memory.
@@ -226,7 +227,7 @@ pub struct BytesMut {
 // * `ptr: *mut u8`
 // * `len: usize`
 // * `cap: usize`
-// * `arc: AtomicPtr<Shared>`
+// * `arc: *mut Shared`
 //
 // ## `ptr: *mut u8`
 //
@@ -252,7 +253,7 @@ pub struct BytesMut {
 //
 // When in "inlined" mode, `cap` is used as part of the inlined buffer.
 //
-// ## `arc: AtomicPtr<Shared>`
+// ## `arc: *mut Shared`
 //
 // When `Inner` is in allocated mode (backed by Vec<u8> or Arc<Vec<u8>>), this
 // will be the pointer to the `Arc` structure tracking the ref count for the
@@ -325,8 +326,14 @@ struct Inner {
 // other shenanigans to make it work.
 struct Shared {
     vec: Vec<u8>,
-    original_capacity_repr: usize,
     ref_count: AtomicUsize,
+    pool: Arc<PoolInner>,
+}
+
+struct SharedVec {
+    cap: usize,
+    ref_count: AtomicUsize,
+    pool: Arc<PoolInner>,
 }
 
 // Buffer storage strategy flags.
@@ -335,40 +342,14 @@ const KIND_INLINE: usize = 0b01;
 const KIND_STATIC: usize = 0b10;
 const KIND_VEC: usize = 0b11;
 const KIND_MASK: usize = 0b11;
+const KIND_UNMASK: usize = !KIND_MASK;
 
-// The max original capacity value. Any `Bytes` allocated with a greater initial
-// capacity will default to this.
-const MAX_ORIGINAL_CAPACITY_WIDTH: usize = 17;
-// The original capacity algorithm will not take effect unless the originally
-// allocated capacity was at least 1kb in size.
-const MIN_ORIGINAL_CAPACITY_WIDTH: usize = 10;
-// The original capacity is stored in powers of 2 starting at 1kb to a max of
-// 64kb. Representing it as such requires only 3 bits of storage.
-const ORIGINAL_CAPACITY_MASK: usize = 0b11100;
-const ORIGINAL_CAPACITY_OFFSET: usize = 2;
-
-// When the storage is in the `Vec` representation, the pointer can be advanced
-// at most this value. This is due to the amount of storage available to track
-// the offset is usize - number of KIND bits and number of ORIGINAL_CAPACITY
-// bits.
-const VEC_POS_OFFSET: usize = 5;
-const MAX_VEC_POS: usize = usize::MAX >> VEC_POS_OFFSET;
-const NOT_VEC_POS_MASK: usize = 0b11111;
-
-// We use high 4 bits as memory pool number
-const POOL_WIDTH: usize = 4;
-#[cfg(target_pointer_width = "64")]
-const POOL_OFFSET: usize = 64 - POOL_WIDTH;
-#[cfg(target_pointer_width = "32")]
-const POOL_OFFSET: usize = 32 - POOL_WIDTH;
-const POOL_MASK: usize = 0b1111 << POOL_OFFSET;
-const POOL_NUM_MASK: usize = !POOL_MASK;
+const MIN_NON_ZERO_CAP: usize = 64;
+const SHARED_VEC_SIZE: usize = mem::size_of::<SharedVec>();
 
 // Bit op constants for extracting the inline length value from the `arc` field.
 const INLINE_LEN_MASK: usize = 0b1111_1100;
 const INLINE_LEN_OFFSET: usize = 2;
-// const INLINE_POOL_MASK: usize = 0b1111_0000_0000;
-// const INLINE_POOL_OFFSET: usize = 8;
 
 // Byte offset from the start of `Inner` to where the inline buffer data
 // starts. On little endian platforms, the first byte of the struct is the
@@ -378,11 +359,6 @@ const INLINE_LEN_OFFSET: usize = 2;
 const INLINE_DATA_OFFSET: isize = 2;
 #[cfg(target_endian = "big")]
 const INLINE_DATA_OFFSET: isize = 0;
-
-#[cfg(target_pointer_width = "64")]
-const PTR_WIDTH: usize = 64;
-#[cfg(target_pointer_width = "32")]
-const PTR_WIDTH: usize = 32;
 
 // Inline buffer capacity. This is the size of `Inner` minus 1 byte for the
 // metadata.
@@ -435,7 +411,7 @@ impl Bytes {
     #[inline]
     pub const fn from_static(bytes: &'static [u8]) -> Bytes {
         Bytes {
-            inner: Inner::from_static(bytes, Pool::default_id()),
+            inner: Inner::from_static(bytes),
         }
     }
 
@@ -485,7 +461,13 @@ impl Bytes {
 
     /// Creates `Bytes` instance from slice, by copying it.
     pub fn copy_from_slice(data: &[u8]) -> Self {
-        BytesMut::from(data).freeze()
+        if data.len() <= INLINE_CAP {
+            Bytes {
+                inner: Inner::from_slice_inline(data),
+            }
+        } else {
+            BytesMut::from(data).freeze()
+        }
     }
 
     /// Returns a slice of self for the provided range.
@@ -531,7 +513,9 @@ impl Bytes {
         assert!(end <= len);
 
         if end - begin <= INLINE_CAP {
-            return Bytes::copy_from_slice(&self[begin..end]);
+            return Bytes {
+                inner: Inner::from_slice_inline(&self[begin..end]),
+            };
         }
 
         let mut ret = self.clone();
@@ -619,7 +603,7 @@ impl Bytes {
         }
 
         Bytes {
-            inner: self.inner.split_off(at),
+            inner: self.inner.split_off(at, true),
         }
     }
 
@@ -658,7 +642,7 @@ impl Bytes {
         }
 
         Bytes {
-            inner: self.inner.split_to(at),
+            inner: self.inner.split_to(at, true),
         }
     }
 
@@ -684,7 +668,7 @@ impl Bytes {
     /// [`split_off`]: #method.split_off
     #[inline]
     pub fn truncate(&mut self, len: usize) {
-        self.inner.truncate(len);
+        self.inner.truncate(len, true);
     }
 
     /// Shortens the buffer to `len` bytes and dropping the rest.
@@ -727,7 +711,7 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn clear(&mut self) {
-        self.inner = Inner::from_static(EMPTY, Pool::default_id());
+        self.inner = Inner::from_static(EMPTY);
     }
 
     /// Attempts to convert into a `BytesMut` handle.
@@ -835,7 +819,7 @@ impl bytes::buf::Buf for Bytes {
 impl Clone for Bytes {
     fn clone(&self) -> Bytes {
         Bytes {
-            inner: unsafe { self.inner.shallow_clone(false) },
+            inner: unsafe { self.inner.shallow_clone() },
         }
     }
 }
@@ -871,6 +855,10 @@ impl From<Vec<u8>> for Bytes {
     fn from(src: Vec<u8>) -> Bytes {
         if src.is_empty() {
             Bytes::new()
+        } else if src.len() <= INLINE_CAP {
+            Bytes {
+                inner: Inner::from_slice_inline(&src),
+            }
         } else {
             BytesMut::from(src).freeze()
         }
@@ -879,7 +867,15 @@ impl From<Vec<u8>> for Bytes {
 
 impl From<String> for Bytes {
     fn from(src: String) -> Bytes {
-        BytesMut::from(src).freeze()
+        if src.is_empty() {
+            Bytes::new()
+        } else if src.bytes().len() <= INLINE_CAP {
+            Bytes {
+                inner: Inner::from_slice_inline(src.as_bytes()),
+            }
+        } else {
+            BytesMut::from(src).freeze()
+        }
     }
 }
 
@@ -901,7 +897,6 @@ impl FromIterator<u8> for BytesMut {
         let (min, maybe_max) = iter.size_hint();
 
         let mut out = BytesMut::with_capacity(maybe_max.unwrap_or(min));
-
         for i in iter {
             out.reserve(1);
             out.put_u8(i);
@@ -1059,7 +1054,7 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn new() -> BytesMut {
-        BytesMut::with_capacity(0)
+        BytesMut::with_capacity(MIN_NON_ZERO_CAP)
     }
 
     /// Returns the number of bytes contained in this `BytesMut`.
@@ -1090,20 +1085,6 @@ impl BytesMut {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
-    }
-
-    /// Return true if the `BytesMut` uses inline allocation
-    ///
-    /// # Examples
-    /// ```
-    /// use ntex_bytes::BytesMut;
-    ///
-    /// assert!(BytesMut::with_capacity(4).is_inline());
-    /// assert!(!BytesMut::from(Vec::with_capacity(4)).is_inline());
-    /// assert!(!BytesMut::with_capacity(1024).is_inline());
-    /// ```
-    pub fn is_inline(&self) -> bool {
-        self.inner.is_inline()
     }
 
     /// Returns the number of bytes the `BytesMut` can hold without reallocating.
@@ -1147,7 +1128,13 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn freeze(self) -> Bytes {
-        Bytes { inner: self.inner }
+        if self.inner.len() <= INLINE_CAP {
+            Bytes {
+                inner: self.inner.to_inline(),
+            }
+        } else {
+            Bytes { inner: self.inner }
+        }
     }
 
     /// Splits the bytes into two at the given index.
@@ -1178,7 +1165,7 @@ impl BytesMut {
     /// Panics if `at > capacity`.
     pub fn split_off(&mut self, at: usize) -> BytesMut {
         BytesMut {
-            inner: self.inner.split_off(at),
+            inner: self.inner.split_off(at, false),
         }
     }
 
@@ -1242,7 +1229,7 @@ impl BytesMut {
         assert!(at <= self.len());
 
         BytesMut {
-            inner: self.inner.split_to(at),
+            inner: self.inner.split_to(at, false),
         }
     }
 
@@ -1267,7 +1254,7 @@ impl BytesMut {
     ///
     /// [`split_off`]: #method.split_off
     pub fn truncate(&mut self, len: usize) {
-        self.inner.truncate(len);
+        self.inner.truncate(len, false);
     }
 
     /// Clears the buffer, removing all data.
@@ -1418,7 +1405,7 @@ impl BytesMut {
             return;
         }
 
-        self.inner.reserve_inner(additional)
+        self.inner.reserve_inner(additional);
     }
 
     /// Appends given bytes to this object.
@@ -1440,36 +1427,6 @@ impl BytesMut {
     #[inline]
     pub fn extend_from_slice(&mut self, extend: &[u8]) {
         self.put_slice(extend);
-    }
-
-    /// Combine splitted BytesMut objects back as contiguous.
-    ///
-    /// If `BytesMut` objects were not contiguous originally, they will be extended.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BytesMut;
-    ///
-    /// let mut buf = BytesMut::with_capacity(64);
-    /// buf.extend_from_slice(b"aaabbbcccddd");
-    ///
-    /// let splitted = buf.split_off(6);
-    /// assert_eq!(b"aaabbb", &buf[..]);
-    /// assert_eq!(b"cccddd", &splitted[..]);
-    ///
-    /// buf.unsplit(splitted);
-    /// assert_eq!(b"aaabbbcccddd", &buf[..]);
-    /// ```
-    pub fn unsplit(&mut self, other: BytesMut) {
-        if self.is_empty() {
-            *self = other;
-            return;
-        }
-
-        if let Err(other_inner) = self.inner.try_unsplit(other.inner) {
-            self.extend_from_slice(other_inner.as_ref());
-        }
     }
 
     /// Returns an iterator over the bytes contained by the buffer.
@@ -1628,20 +1585,10 @@ impl<'a> From<&'a [u8]> for BytesMut {
 
         if len == 0 {
             BytesMut::new()
-        } else if len <= INLINE_CAP {
-            unsafe {
-                #[allow(invalid_value, clippy::uninit_assumed_init)]
-                let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
-
-                // Set inline mask
-                inner.arc = NonNull::new_unchecked(KIND_INLINE as *mut Shared);
-                inner.set_inline_len(len);
-                inner.as_raw()[0..len].copy_from_slice(src);
-
-                BytesMut { inner }
-            }
         } else {
-            BytesMut::from(src.to_vec())
+            let mut bytes = BytesMut::with_capacity(src.len());
+            bytes.extend_from_slice(src);
+            bytes
         }
     }
 }
@@ -1796,7 +1743,7 @@ impl<'a> Extend<&'a u8> for BytesMut {
 
 impl Inner {
     #[inline]
-    const fn from_static(bytes: &'static [u8], id: PoolId) -> Inner {
+    const fn from_static(bytes: &'static [u8]) -> Inner {
         let ptr = bytes.as_ptr() as *mut u8;
 
         Inner {
@@ -1806,71 +1753,85 @@ impl Inner {
             arc: unsafe { NonNull::new_unchecked(KIND_STATIC as *mut Shared) },
             ptr,
             len: bytes.len(),
-            cap: id.set(bytes.len()),
+            cap: bytes.len(),
         }
     }
 
     #[inline]
-    fn from_vec(mut src: Vec<u8>, id: PoolId) -> Inner {
-        let len = src.len();
-        let cap = src.capacity();
-        let ptr = src.as_mut_ptr();
+    fn from_vec(mut vec: Vec<u8>, id: PoolId) -> Inner {
+        let len = vec.len();
+        let cap = vec.capacity();
+        let ptr = vec.as_mut_ptr();
 
-        if cap & POOL_MASK != 0 {
-            panic!("Vector capacity is too large: {}", cap);
-        }
+        // Store data in arc
+        let shared = Box::into_raw(Box::new(Shared {
+            vec,
+            ref_count: AtomicUsize::new(1),
+            pool: id.inner(),
+        }));
 
-        mem::forget(src);
+        // The pointer should be aligned, so this assert should always succeed.
+        debug_assert!(0 == (shared as usize & KIND_MASK));
 
-        id.pool().alloc(cap);
-        let original_capacity_repr = original_capacity_to_repr(cap);
-        let arc = (original_capacity_repr << ORIGINAL_CAPACITY_OFFSET) | KIND_VEC;
-
+        // Create new arc, so atomic operations can be avoided.
         Inner {
             ptr,
             len,
-            cap: id.set(cap),
-            arc: unsafe { NonNull::new_unchecked(arc as *mut Shared) },
+            cap,
+            arc: unsafe { NonNull::new_unchecked(shared) },
         }
     }
 
     #[inline]
     fn with_capacity(capacity: usize, id: PoolId) -> Inner {
-        if capacity <= INLINE_CAP {
-            unsafe {
-                // Using uninitialized memory is ~30% faster
-                #[allow(invalid_value, clippy::uninit_assumed_init)]
-                let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
-                let kind = id.set_inline(KIND_INLINE);
-                inner.arc = NonNull::new_unchecked(kind as *mut Shared);
-                inner
+        Inner::from_slice(capacity, &[], id)
+    }
+
+    #[inline]
+    fn from_slice(cap: usize, src: &[u8], id: PoolId) -> Inner {
+        // Store data in vec
+        let mut vec = Vec::with_capacity(cap + SHARED_VEC_SIZE);
+        unsafe {
+            vec.set_len(SHARED_VEC_SIZE);
+            vec.extend_from_slice(src);
+
+            let len = src.len();
+            let full_cap = vec.capacity();
+            let cap = full_cap - SHARED_VEC_SIZE;
+            let ptr = vec.as_mut_ptr();
+            mem::forget(vec);
+
+            let shared_vec_ptr = ptr as *mut SharedVec;
+            ptr::write(
+                shared_vec_ptr,
+                SharedVec {
+                    cap: full_cap,
+                    ref_count: AtomicUsize::new(1),
+                    pool: id.inner(),
+                },
+            );
+
+            // Create new arc, so atomic operations can be avoided.
+            Inner {
+                len,
+                cap,
+                ptr: ptr.offset(SHARED_VEC_SIZE as isize),
+                arc: NonNull::new_unchecked((ptr as usize ^ KIND_VEC) as *mut Shared),
             }
-        } else {
-            Inner::from_vec(Vec::with_capacity(capacity), id)
         }
     }
 
     #[inline]
-    fn pool(&self) -> &'static Pool {
-        if self.is_inline() {
-            #[cfg(target_endian = "little")]
-            #[inline]
-            fn imp(arc: *mut Shared) -> PoolId {
-                PoolId::get_inline(arc as usize)
-            }
-
-            #[cfg(target_endian = "big")]
-            #[inline]
-            fn imp(arc: *mut Shared) -> usize {
-                unsafe {
-                    let p: *const usize = arc as *const usize;
-                    PoolId::get_inline(*p)
-                }
-            }
-
-            imp(self.arc.as_ptr()).pool()
-        } else {
-            PoolId::get(self.cap).pool()
+    fn from_slice_inline(src: &[u8]) -> Inner {
+        unsafe {
+            // Using uninitialized memory is ~30% faster
+            #[allow(invalid_value, clippy::uninit_assumed_init)]
+            let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
+            inner.arc = NonNull::new_unchecked(KIND_INLINE as *mut Shared);
+            let len = src.len();
+            inner.as_raw()[..len].copy_from_slice(src);
+            inner.set_inline_len(len);
+            inner
         }
     }
 
@@ -1948,6 +1909,20 @@ impl Inner {
     }
 
     #[inline]
+    fn to_inline(&self) -> Inner {
+        unsafe {
+            // Using uninitialized memory is ~30% faster
+            #[allow(invalid_value, clippy::uninit_assumed_init)]
+            let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
+            inner.arc = NonNull::new_unchecked(KIND_INLINE as *mut Shared);
+            let len = self.len();
+            inner.as_raw()[..len].copy_from_slice(self.as_ref());
+            inner.set_inline_len(len);
+            inner
+        }
+    }
+
+    #[inline]
     fn inline_len(&self) -> usize {
         // This is undefind behavior due to a data race, but experimental
         // evidence shows that it works in practice (discussion:
@@ -1990,58 +1965,61 @@ impl Inner {
         if self.is_inline() {
             INLINE_CAP
         } else {
-            self.cap & POOL_NUM_MASK
+            self.cap
         }
     }
 
-    fn split_off(&mut self, at: usize) -> Inner {
-        let mut other = unsafe { self.shallow_clone(true) };
-
-        unsafe {
-            other.set_start(at);
-            self.set_end(at);
-        }
-
-        other
-    }
-
-    fn split_to(&mut self, at: usize) -> Inner {
-        let mut other = unsafe { self.shallow_clone(true) };
-
-        unsafe {
-            other.set_end(at);
-            self.set_start(at);
-        }
-
-        other
-    }
-
-    fn truncate(&mut self, len: usize) {
-        if len <= self.len() {
+    fn split_off(&mut self, at: usize, create_inline: bool) -> Inner {
+        let other = if create_inline && self.len() - at <= INLINE_CAP {
+            Inner::from_slice_inline(&self.as_ref()[at..])
+        } else {
             unsafe {
-                self.set_len(len);
+                let mut other = self.shallow_clone();
+                other.set_start(at);
+                other
+            }
+        };
+        if create_inline && at <= INLINE_CAP {
+            *self = Inner::from_slice_inline(&self.as_ref()[..at]);
+        } else {
+            unsafe {
+                self.set_end(at);
             }
         }
+
+        other
     }
 
-    fn try_unsplit(&mut self, other: Inner) -> Result<(), Inner> {
-        let ptr;
-
-        if other.is_empty() {
-            return Ok(());
-        }
-
-        unsafe {
-            ptr = self.ptr.add(self.len);
-        }
-        if ptr == other.ptr && self.kind() == KIND_ARC && other.kind() == KIND_ARC {
-            // debug_assert_eq!(self.arc.load(Acquire), other.arc.load(Acquire));
-            // Contiguous blocks, just combine directly
-            self.len += other.len;
-            self.cap += other.cap;
-            Ok(())
+    fn split_to(&mut self, at: usize, create_inline: bool) -> Inner {
+        let other = if create_inline && at <= INLINE_CAP {
+            Inner::from_slice_inline(&self.as_ref()[..at])
         } else {
-            Err(other)
+            unsafe {
+                let mut other = self.shallow_clone();
+                other.set_end(at);
+                other
+            }
+        };
+        if create_inline && self.len() - at <= INLINE_CAP {
+            *self = Inner::from_slice_inline(&self.as_ref()[at..]);
+        } else {
+            unsafe {
+                self.set_start(at);
+            }
+        }
+
+        other
+    }
+
+    fn truncate(&mut self, len: usize, create_inline: bool) {
+        if len <= self.len() {
+            if create_inline && len < INLINE_CAP {
+                *self = Inner::from_slice_inline(&self.as_ref()[..len]);
+            } else {
+                unsafe {
+                    self.set_len(len);
+                }
+            }
         }
     }
 
@@ -2056,7 +2034,7 @@ impl Inner {
                 self.set_len(new_len);
             }
         } else {
-            self.truncate(new_len);
+            self.truncate(new_len, false);
         }
     }
 
@@ -2075,7 +2053,6 @@ impl Inner {
             assert!(start <= INLINE_CAP);
 
             let len = self.inline_len();
-
             if len <= start {
                 self.set_inline_len(0);
             } else {
@@ -2095,25 +2072,6 @@ impl Inner {
         } else {
             assert!(start <= self.cap);
 
-            if kind == KIND_VEC {
-                // Setting the start when in vec representation is a little more
-                // complicated. First, we have to track how far ahead the
-                // "start" of the byte buffer from the beginning of the vec. We
-                // also have to ensure that we don't exceed the maximum shift.
-                let (mut pos, prev) = self.uncoordinated_get_vec_pos();
-                pos += start;
-
-                if pos <= MAX_VEC_POS {
-                    self.uncoordinated_set_vec_pos(pos, prev);
-                } else {
-                    // The repr must be upgraded to ARC. This will never happen
-                    // on 64 bit systems and will only happen on 32 bit systems
-                    // when shifting past 134,217,727 bytes. As such, we don't
-                    // worry too much about performance here.
-                    let _ = self.shallow_clone(true);
-                }
-            }
-
             // Updating the start of the view is setting `ptr` to point to the
             // new start and updating the `len` field to reflect the new length
             // of the view.
@@ -2130,8 +2088,6 @@ impl Inner {
     }
 
     unsafe fn set_end(&mut self, end: usize) {
-        debug_assert!(self.is_shared());
-
         // Always check `inline` first, because if the handle is using inline
         // data storage, all of the `Inner` struct fields will be gibberish.
         if self.is_inline() {
@@ -2152,12 +2108,16 @@ impl Inner {
 
         // Always check `inline` first, because if the handle is using inline
         // data storage, all of the `Inner` struct fields will be gibberish.
-        if kind == KIND_INLINE || kind == KIND_VEC {
+        if kind == KIND_INLINE {
             // Inlined buffers can always be mutated as the data is never shared
             // across handles.
             true
         } else if kind == KIND_STATIC {
             false
+        } else if kind == KIND_VEC {
+            // Otherwise, the underlying buffer is potentially shared with other
+            // handles, so the ref_count needs to be checked.
+            unsafe { (*self.shared_vec()).is_unique() }
         } else {
             // Otherwise, the underlying buffer is potentially shared with other
             // handles, so the ref_count needs to be checked.
@@ -2175,7 +2135,7 @@ impl Inner {
     /// the same byte window.
     ///
     /// This function is thread safe.
-    unsafe fn shallow_clone(&self, mut_self: bool) -> Inner {
+    unsafe fn shallow_clone(&self) -> Inner {
         // Always check `inline` first, because if the handle is using inline
         // data storage, all of the `Inner` struct fields will be gibberish.
         //
@@ -2188,12 +2148,12 @@ impl Inner {
             ptr::copy_nonoverlapping(self, inner.as_mut_ptr(), 1);
             inner.assume_init()
         } else {
-            self.shallow_clone_sync(mut_self)
+            self.shallow_clone_sync()
         }
     }
 
     #[cold]
-    unsafe fn shallow_clone_sync(&self, mut_self: bool) -> Inner {
+    unsafe fn shallow_clone_sync(&self) -> Inner {
         // The function requires `&self`, this means that `shallow_clone`
         // could be called concurrently.
         //
@@ -2202,111 +2162,31 @@ impl Inner {
         // `compare_and_swap` that comes later in this function. The goal is
         // to ensure that if `arc` is currently set to point to a `Shared`,
         // that the current thread acquires the associated memory.
-        let slf_arc: &AtomicPtr<Shared> = mem::transmute(&self.arc);
-        let arc = slf_arc.load(Acquire);
+        let arc: *mut Shared = self.arc.as_ptr();
         let kind = arc as usize & KIND_MASK;
 
         if kind == KIND_ARC {
-            self.shallow_clone_arc(arc)
+            let old_size = (*arc).ref_count.fetch_add(1, Relaxed);
+            if old_size == usize::MAX {
+                abort();
+            }
+
+            Inner {
+                arc: NonNull::new_unchecked(arc),
+                ..*self
+            }
         } else {
             assert!(kind == KIND_VEC);
-            self.shallow_clone_vec(arc as usize, mut_self)
-        }
-    }
 
-    unsafe fn shallow_clone_arc(&self, arc: *mut Shared) -> Inner {
-        debug_assert!(arc as usize & KIND_MASK == KIND_ARC);
-
-        let old_size = (*arc).ref_count.fetch_add(1, Relaxed);
-
-        if old_size == usize::MAX {
-            abort();
-        }
-
-        Inner {
-            arc: NonNull::new_unchecked(arc),
-            ..*self
-        }
-    }
-
-    #[cold]
-    unsafe fn shallow_clone_vec(&self, arc: usize, mut_self: bool) -> Inner {
-        // If the buffer is still tracked in a `Vec<u8>`. It is time to
-        // promote the vec to an `Arc`. This could potentially be called
-        // concurrently, so some care must be taken.
-
-        debug_assert!(arc & KIND_MASK == KIND_VEC);
-
-        let original_capacity_repr =
-            (arc as usize & ORIGINAL_CAPACITY_MASK) >> ORIGINAL_CAPACITY_OFFSET;
-
-        // The vec offset cannot be concurrently mutated, so there
-        // should be no danger reading it.
-        let off = (arc as usize) >> VEC_POS_OFFSET;
-
-        // First, allocate a new `Shared` instance containing the
-        // `Vec` fields. It's important to note that `ptr`, `len`,
-        // and `cap` cannot be mutated without having `&mut self`.
-        // This means that these fields will not be concurrently
-        // updated and since the buffer hasn't been promoted to an
-        // `Arc`, those three fields still are the components of the
-        // vector.
-        let shared = Box::new(Shared {
-            vec: rebuild_vec(self.ptr, self.len, self.cap, off),
-            original_capacity_repr,
-            // Initialize refcount to 2. One for this reference, and one
-            // for the new clone that will be returned from
-            // `shallow_clone`.
-            ref_count: AtomicUsize::new(2),
-        });
-
-        let shared = Box::into_raw(shared);
-
-        // The pointer should be aligned, so this assert should
-        // always succeed.
-        debug_assert!(0 == (shared as usize & KIND_MASK));
-
-        // If there are no references to self in other threads,
-        // expensive atomic operations can be avoided.
-        if mut_self {
-            let slf_arc: &AtomicPtr<Shared> = mem::transmute(&self.arc);
-            slf_arc.store(shared, Relaxed);
-            return Inner {
-                arc: NonNull::new_unchecked(shared),
-                ..*self
-            };
-        }
-
-        // Try compare & swapping the pointer into the `arc` field.
-        // `Release` is used synchronize with other threads that
-        // will load the `arc` field.
-        //
-        // If the `compare_exchange` fails, then the thread lost the
-        // race to promote the buffer to shared. The `Acquire`
-        // ordering will synchronize with the `compare_and_swap`
-        // that happened in the other thread and the `Shared`
-        // pointed to by `actual` will be visible.
-        let slf_arc: &AtomicPtr<Shared> = mem::transmute(&self.arc);
-        match slf_arc.compare_exchange(arc as *mut Shared, shared, AcqRel, Acquire) {
-            Ok(actual) => {
-                debug_assert!(actual as usize == arc);
-                // The upgrade was successful, the new handle can be
-                // returned.
-                Inner {
-                    arc: NonNull::new_unchecked(shared),
-                    ..*self
-                }
+            let vec_arc = (arc as usize & KIND_UNMASK) as *mut SharedVec;
+            let old_size = (*vec_arc).ref_count.fetch_add(1, Relaxed);
+            if old_size == usize::MAX {
+                abort();
             }
-            Err(actual) => {
-                // The upgrade failed, a concurrent clone happened. Release
-                // the allocation that was made in this thread, it will not
-                // be needed.
-                let shared = Box::from_raw(shared);
-                mem::forget(*shared);
 
-                // Buffer already promoted to shared storage, so increment ref
-                // count.
-                self.shallow_clone_arc(actual)
+            Inner {
+                arc: NonNull::new_unchecked(arc as *mut Shared),
+                ..*self
             }
         }
     }
@@ -2336,150 +2216,69 @@ impl Inner {
         // data storage, all of the `Inner` struct fields will be gibberish.
         if kind == KIND_INLINE {
             let new_cap = len + additional;
-            if new_cap & POOL_MASK != 0 {
-                panic!("Vector capacity is too large: {}", new_cap);
-            }
 
             // Promote to a vector
-            let mut v = Vec::with_capacity(new_cap);
-            v.extend_from_slice(self.as_ref());
-
-            let cap = v.capacity();
-            self.pool().alloc(cap - self.cap);
-
-            self.ptr = v.as_mut_ptr();
-            self.len = v.len();
-            self.cap = cap;
-
-            // Since the minimum capacity is `INLINE_CAP`, don't bother encoding
-            // the original capacity as INLINE_CAP
-            self.arc = unsafe { NonNull::new_unchecked(KIND_VEC as *mut Shared) };
-
-            mem::forget(v);
+            *self = Inner::from_slice(new_cap, self.as_ref(), PoolId::default());
             return;
         }
 
-        if kind == KIND_VEC {
-            // If there's enough free space before the start of the buffer, then
-            // just copy the data backwards and reuse the already-allocated
-            // space.
-            //
-            // Otherwise, since backed by a vector, use `Vec::reserve`
-            unsafe {
-                let (off, prev) = self.uncoordinated_get_vec_pos();
-
-                // Only reuse space if we stand to gain at least capacity/2
-                // bytes of space back
-                if off >= additional && off >= (self.cap / 2) {
-                    // There's space - reuse it
-                    //
-                    // Just move the pointer back to the start after copying
-                    // data back.
-                    let base_ptr = self.ptr.offset(-(off as isize));
-                    ptr::copy(self.ptr, base_ptr, self.len);
-                    self.ptr = base_ptr;
-                    self.uncoordinated_set_vec_pos(0, prev);
-
-                    // Length stays constant, but since we moved backwards we
-                    // can gain capacity back.
-                    self.cap += off;
-                } else {
-                    let new_cap = self.cap + additional;
-                    if new_cap & POOL_MASK != 0 {
-                        panic!("Vector capacity is too large: {}", new_cap);
-                    }
-
-                    // No space - allocate more
-                    let mut v = rebuild_vec(self.ptr, self.len, self.cap, off);
-                    v.reserve(additional);
-
-                    // Update the info
-                    self.ptr = v.as_mut_ptr().add(off);
-                    self.len = v.len() - off;
-                    self.cap = v.capacity() - off;
-
-                    // Drop the vec reference
-                    mem::forget(v);
-                }
-                return;
-            }
-        }
-
-        let arc = self.arc.as_ptr();
-
-        debug_assert!(kind == KIND_ARC);
-
         // Reserving involves abandoning the currently shared buffer and
         // allocating a new vector with the requested capacity.
-        //
-        // Compute the new capacity
-        let mut new_cap = len + additional;
-        if new_cap & POOL_MASK != 0 {
-            panic!("Vector capacity is too large: {}", new_cap);
-        }
-        let original_capacity;
-        let original_capacity_repr;
+        let new_cap = len + additional;
 
-        unsafe {
-            original_capacity_repr = (*arc).original_capacity_repr;
-            original_capacity = original_capacity_from_repr(original_capacity_repr);
+        if kind == KIND_VEC {
+            let vec = self.shared_vec();
 
-            // First, try to reclaim the buffer. This is possible if the current
-            // handle is the only outstanding handle pointing to the buffer.
-            if (*arc).is_unique() {
-                // This is the only handle to the buffer. It can be reclaimed.
-                // However, before doing the work of copying data, check to make
-                // sure that the vector has enough capacity.
-                let v = &mut (*arc).vec;
+            unsafe {
+                let vec_cap = (*vec).cap - SHARED_VEC_SIZE;
 
-                if v.capacity() >= new_cap {
-                    // The capacity is sufficient, reclaim the buffer
-                    let ptr = v.as_mut_ptr();
+                // First, try to reclaim the buffer. This is possible if the current
+                // handle is the only outstanding handle pointing to the buffer.
+                if (*vec).is_unique() {
+                    if vec_cap >= new_cap {
+                        // The capacity is sufficient, reclaim the buffer
+                        let ptr = (vec as *mut u8).offset(SHARED_VEC_SIZE as isize);
 
-                    ptr::copy(self.ptr, ptr, len);
+                        ptr::copy(self.ptr, ptr, len);
 
-                    self.ptr = ptr;
-                    self.cap = v.capacity();
-
-                    return;
+                        self.ptr = ptr;
+                        self.cap = vec_cap;
+                        return;
+                    }
                 }
-
-                // The vector capacity is not sufficient. The reserve request is
-                // asking for more than the initial buffer capacity. Allocate more
-                // than requested if `new_cap` is not much bigger than the current
-                // capacity.
-                //
-                // There are some situations, using `reserve_exact` that the
-                // buffer capacity could be below `original_capacity`, so do a
-                // check.
-                new_cap =
-                    cmp::max(cmp::max(v.capacity() << 1, new_cap), original_capacity);
-            } else {
-                new_cap = cmp::max(new_cap, original_capacity);
             }
+
+            // Create a new vector storage
+            *self = Inner::from_slice(new_cap, self.as_ref(), PoolId::default());
+        } else {
+            debug_assert!(kind == KIND_ARC);
+
+            let arc = self.arc.as_ptr();
+            unsafe {
+                // First, try to reclaim the buffer. This is possible if the current
+                // handle is the only outstanding handle pointing to the buffer.
+                if (*arc).is_unique() {
+                    // This is the only handle to the buffer. It can be reclaimed.
+                    // However, before doing the work of copying data, check to make
+                    // sure that the vector has enough capacity.
+                    let v = &mut (*arc).vec;
+
+                    if v.capacity() >= new_cap {
+                        // The capacity is sufficient, reclaim the buffer
+                        let ptr = v.as_mut_ptr();
+
+                        ptr::copy(self.ptr, ptr, len);
+
+                        self.ptr = ptr;
+                        self.cap = v.capacity();
+                        return;
+                    }
+                }
+            }
+
+            // Create a new vector storage
+            *self = Inner::from_slice(new_cap, self.as_ref(), PoolId::default());
         }
-
-        // Create a new vector to store the data
-        let mut v = Vec::with_capacity(new_cap);
-
-        // Copy the bytes
-        v.extend_from_slice(self.as_ref());
-
-        // Release the shared handle. This must be done *after* the bytes are
-        // copied.
-        release_shared(arc);
-
-        // Update self
-        self.ptr = v.as_mut_ptr();
-        self.len = v.len();
-        self.cap = v.capacity();
-
-        let arc = (original_capacity_repr << ORIGINAL_CAPACITY_OFFSET) | KIND_VEC;
-
-        self.arc = unsafe { NonNull::new_unchecked(arc as *mut Shared) };
-
-        // Forget the vector handle
-        mem::forget(v);
     }
 
     /// Returns true if the buffer is stored inline
@@ -2500,17 +2299,15 @@ impl Inner {
         kind == KIND_INLINE || kind == KIND_STATIC
     }
 
-    /// Used for `debug_assert` statements. &mut is used to guarantee that it is
-    /// safe to check VEC_KIND
-    #[inline]
-    fn is_shared(&mut self) -> bool {
-        !matches!(self.kind(), KIND_VEC)
-    }
-
     /// Used for `debug_assert` statements
     #[inline]
     fn is_static(&mut self) -> bool {
         matches!(self.kind(), KIND_STATIC)
+    }
+
+    #[inline]
+    fn shared_vec(&self) -> *mut SharedVec {
+        ((self.arc.as_ptr() as usize) & KIND_UNMASK) as *mut SharedVec
     }
 
     #[inline]
@@ -2554,39 +2351,6 @@ impl Inner {
 
         imp(self.arc.as_ptr())
     }
-
-    #[inline]
-    fn uncoordinated_get_vec_pos(&mut self) -> (usize, usize) {
-        // Similar to above, this is a pretty crazed function. This should only
-        // be called when in the KIND_VEC mode. This + the &mut self argument
-        // guarantees that there is no possibility of concurrent calls to this
-        // function.
-        let prev = self.arc.as_ptr() as usize;
-
-        (prev >> VEC_POS_OFFSET, prev)
-    }
-
-    #[inline]
-    fn uncoordinated_set_vec_pos(&mut self, pos: usize, prev: usize) {
-        // Once more... crazy
-        debug_assert!(pos <= MAX_VEC_POS);
-
-        unsafe {
-            self.arc = NonNull::new_unchecked(
-                ((pos << VEC_POS_OFFSET) | (prev & NOT_VEC_POS_MASK)) as *mut Shared,
-            );
-        }
-    }
-}
-
-fn rebuild_vec(ptr: *mut u8, mut len: usize, mut cap: usize, off: usize) -> Vec<u8> {
-    unsafe {
-        let ptr = ptr.offset(-(off as isize));
-        len += off;
-        cap += off;
-
-        Vec::from_raw_parts(ptr, len, cap)
-    }
 }
 
 impl Drop for Inner {
@@ -2594,10 +2358,7 @@ impl Drop for Inner {
         let kind = self.kind();
 
         if kind == KIND_VEC {
-            let (off, _) = self.uncoordinated_get_vec_pos();
-
-            // Vector storage, free the vector
-            let _ = rebuild_vec(self.ptr, self.len, self.cap, off);
+            release_shared_vec(self.shared_vec());
         } else if kind == KIND_ARC {
             release_shared(self.arc.as_ptr());
         }
@@ -2635,6 +2396,39 @@ fn release_shared(ptr: *mut Shared) {
     }
 }
 
+fn release_shared_vec(ptr: *mut SharedVec) {
+    // `Shared` storage... follow the drop steps from Arc.
+    unsafe {
+        if (*ptr).ref_count.fetch_sub(1, Release) != 1 {
+            return;
+        }
+
+        // This fence is needed to prevent reordering of use of the data and
+        // deletion of the data.  Because it is marked `Release`, the decreasing
+        // of the reference count synchronizes with this `Acquire` fence. This
+        // means that use of the data happens before decreasing the reference
+        // count, which happens before this fence, which happens before the
+        // deletion of the data.
+        //
+        // As explained in the [Boost documentation][1],
+        //
+        // > It is important to enforce any possible access to the object in one
+        // > thread (through an existing reference) to *happen before* deleting
+        // > the object in a different thread. This is achieved by a "release"
+        // > operation after dropping a reference (any access to the object
+        // > through this reference must obviously happened before), and an
+        // > "acquire" operation before deleting the object.
+        //
+        // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
+        atomic::fence(Acquire);
+
+        // Drop the data
+        let cap = (*ptr).cap;
+        ptr::drop_in_place(ptr);
+        Vec::from_raw_parts(ptr, 0, cap);
+    }
+}
+
 impl Shared {
     fn is_unique(&self) -> bool {
         // The goal is to check if the current handle is the only handle
@@ -2651,74 +2445,15 @@ impl Shared {
     }
 }
 
-fn original_capacity_to_repr(cap: usize) -> usize {
-    let width =
-        PTR_WIDTH - ((cap >> MIN_ORIGINAL_CAPACITY_WIDTH).leading_zeros() as usize);
-    cmp::min(
-        width,
-        MAX_ORIGINAL_CAPACITY_WIDTH - MIN_ORIGINAL_CAPACITY_WIDTH,
-    )
-}
-
-fn original_capacity_from_repr(repr: usize) -> usize {
-    if repr == 0 {
-        return 0;
-    }
-
-    1 << (repr + (MIN_ORIGINAL_CAPACITY_WIDTH - 1))
-}
-
-#[test]
-fn test_original_capacity_to_repr() {
-    assert_eq!(original_capacity_to_repr(0), 0);
-
-    let max_width = 32;
-
-    for width in 1..(max_width + 1) {
-        let cap = 1 << width - 1;
-
-        let expected = if width < MIN_ORIGINAL_CAPACITY_WIDTH {
-            0
-        } else if width < MAX_ORIGINAL_CAPACITY_WIDTH {
-            width - MIN_ORIGINAL_CAPACITY_WIDTH
-        } else {
-            MAX_ORIGINAL_CAPACITY_WIDTH - MIN_ORIGINAL_CAPACITY_WIDTH
-        };
-
-        assert_eq!(original_capacity_to_repr(cap), expected);
-
-        if width > 1 {
-            assert_eq!(original_capacity_to_repr(cap + 1), expected);
-        }
-
-        //  MIN_ORIGINAL_CAPACITY_WIDTH must be bigger than 7 to pass tests below
-        if width == MIN_ORIGINAL_CAPACITY_WIDTH + 1 {
-            assert_eq!(original_capacity_to_repr(cap - 24), expected - 1);
-            assert_eq!(original_capacity_to_repr(cap + 76), expected);
-        } else if width == MIN_ORIGINAL_CAPACITY_WIDTH + 2 {
-            assert_eq!(original_capacity_to_repr(cap - 1), expected - 1);
-            assert_eq!(original_capacity_to_repr(cap - 48), expected - 1);
-        }
+impl SharedVec {
+    fn is_unique(&self) -> bool {
+        // This is same as Shared::is_unique() but for KIND_VEC
+        self.ref_count.load(Acquire) == 1
     }
 }
 
-#[test]
-fn test_original_capacity_from_repr() {
-    assert_eq!(0, original_capacity_from_repr(0));
-
-    let min_cap = 1 << MIN_ORIGINAL_CAPACITY_WIDTH;
-
-    assert_eq!(min_cap, original_capacity_from_repr(1));
-    assert_eq!(min_cap * 2, original_capacity_from_repr(2));
-    assert_eq!(min_cap * 4, original_capacity_from_repr(3));
-    assert_eq!(min_cap * 8, original_capacity_from_repr(4));
-    assert_eq!(min_cap * 16, original_capacity_from_repr(5));
-    assert_eq!(min_cap * 32, original_capacity_from_repr(6));
-    assert_eq!(min_cap * 64, original_capacity_from_repr(7));
-}
-
-//unsafe impl Send for Inner {}
-//unsafe impl Sync for Inner {}
+unsafe impl Send for Inner {}
+unsafe impl Sync for Inner {}
 
 /*
  *

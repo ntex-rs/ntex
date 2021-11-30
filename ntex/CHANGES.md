@@ -10,7 +10,6 @@
 * Update webpki to 0.22
 * Update webpki-roots to 0.22
 * Update tokio-rustls to 0.23
-* Update tokio-ssl to 0.6.3
 * Adapt code for rustls breaking changes
 
 ## [0.4.8] - 2021-11-08

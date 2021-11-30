@@ -1,5 +1,5 @@
 #![allow(warnings, dead_code)]
-use std::cell::Cell;
+use std::sync::{atomic::AtomicUsize, Arc};
 
 const POOL_WIDTH: usize = 4;
 const POOL_COUNT: usize = 0b10000;
@@ -13,31 +13,41 @@ const POOL_OFFSET: usize = 32 - POOL_WIDTH;
 const POOL_MASK: usize = 0b1111 << POOL_OFFSET;
 const POOL_NUM_MASK: usize = !POOL_MASK;
 
+pub struct Pool {
+    inner: Arc<PoolInner>,
+}
+
+pub(crate) struct PoolInner {
+    id: PoolId,
+    size: AtomicUsize,
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct PoolId(usize);
 
 pub const POOL_0: PoolId = PoolId(0);
-pub const POOL_1: PoolId = PoolId(1 << POOL_OFFSET);
-pub const POOL_2: PoolId = PoolId(2 << POOL_OFFSET);
-pub const POOL_3: PoolId = PoolId(3 << POOL_OFFSET);
-pub const POOL_4: PoolId = PoolId(4 << POOL_OFFSET);
-pub const POOL_5: PoolId = PoolId(5 << POOL_OFFSET);
-pub const POOL_6: PoolId = PoolId(6 << POOL_OFFSET);
-pub const POOL_7: PoolId = PoolId(7 << POOL_OFFSET);
-pub const POOL_8: PoolId = PoolId(8 << POOL_OFFSET);
-pub const POOL_9: PoolId = PoolId(9 << POOL_OFFSET);
-pub const POOL_10: PoolId = PoolId(10 << POOL_OFFSET);
-pub const POOL_11: PoolId = PoolId(11 << POOL_OFFSET);
-pub const POOL_12: PoolId = PoolId(12 << POOL_OFFSET);
-pub const POOL_13: PoolId = PoolId(13 << POOL_OFFSET);
-pub const POOL_14: PoolId = PoolId(14 << POOL_OFFSET);
-pub const POOL_15: PoolId = PoolId(15 << POOL_OFFSET);
-
-pub struct Pool {
-    size: Cell<usize>,
-}
+pub const POOL_1: PoolId = PoolId(1);
+pub const POOL_2: PoolId = PoolId(2);
+pub const POOL_3: PoolId = PoolId(3);
+pub const POOL_4: PoolId = PoolId(4);
+pub const POOL_5: PoolId = PoolId(5);
+pub const POOL_6: PoolId = PoolId(6);
+pub const POOL_7: PoolId = PoolId(7);
+pub const POOL_8: PoolId = PoolId(8);
+pub const POOL_9: PoolId = PoolId(9);
+pub const POOL_10: PoolId = PoolId(10);
+pub const POOL_11: PoolId = PoolId(11);
+pub const POOL_12: PoolId = PoolId(12);
+pub const POOL_13: PoolId = PoolId(13);
+pub const POOL_14: PoolId = PoolId(14);
+pub const POOL_15: PoolId = PoolId(15);
 
 impl PoolId {
+    #[inline]
+    pub(crate) const fn default() -> PoolId {
+        POOL_15
+    }
+
     #[inline]
     pub(crate) const fn get(storage: usize) -> PoolId {
         PoolId(storage & POOL_MASK)
@@ -62,26 +72,30 @@ impl PoolId {
     pub(super) fn pool(&self) -> &'static Pool {
         POOLS.with(|pools| pools[self.0])
     }
+
+    pub(super) fn inner(&self) -> Arc<PoolInner> {
+        POOLS.with(|pools| pools[self.0].inner.clone())
+    }
 }
 
 thread_local! {
     static POOLS: [&'static Pool; POOL_COUNT] = [
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
-        Pool::create(),
+        Pool::create(POOL_0),
+        Pool::create(POOL_1),
+        Pool::create(POOL_2),
+        Pool::create(POOL_3),
+        Pool::create(POOL_4),
+        Pool::create(POOL_5),
+        Pool::create(POOL_6),
+        Pool::create(POOL_7),
+        Pool::create(POOL_8),
+        Pool::create(POOL_9),
+        Pool::create(POOL_10),
+        Pool::create(POOL_11),
+        Pool::create(POOL_12),
+        Pool::create(POOL_13),
+        Pool::create(POOL_14),
+        Pool::create(POOL_15),
     ];
 }
 
@@ -96,8 +110,13 @@ impl Pool {
         POOL_15
     }
 
-    fn create() -> &'static Pool {
-        let pool = Box::new(Pool { size: Cell::new(0) });
+    fn create(id: PoolId) -> &'static Pool {
+        let pool = Box::new(Pool {
+            inner: Arc::new(PoolInner {
+                id,
+                size: AtomicUsize::new(0),
+            }),
+        });
         Box::leak(pool)
     }
 
@@ -107,5 +126,9 @@ impl Pool {
 
     pub(super) fn release(&self, _size: usize) {
         todo!()
+    }
+
+    pub(super) fn inner(&self) -> Arc<PoolInner> {
+        self.inner.clone()
     }
 }
