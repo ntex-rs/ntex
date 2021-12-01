@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
 use std::{cmp, fmt, hash, mem, ptr, ptr::NonNull, slice, usize};
 
-use crate::pool::{PoolId, PoolInner};
+use crate::pool::{PoolId, PoolItem, PoolRef};
 use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};
 
 /// A reference counted contiguous slice of memory.
@@ -326,13 +326,13 @@ struct Inner {
 struct Shared {
     vec: Vec<u8>,
     ref_count: AtomicUsize,
-    pool: PoolInner,
+    pool: PoolItem,
 }
 
 struct SharedVec {
     cap: usize,
     ref_count: AtomicUsize,
-    pool: PoolInner,
+    pool: PoolItem,
 }
 
 // Buffer storage strategy flags.
@@ -466,20 +466,20 @@ impl Bytes {
             }
         } else {
             Bytes {
-                inner: BytesMut::copy_from_slice_in(data, PoolId::DEFAULT).inner,
+                inner: BytesMut::copy_from_slice_in(data, PoolId::DEFAULT.pool()).inner,
             }
         }
     }
 
     /// Creates `Bytes` instance from slice, by copying it.
-    pub fn copy_from_slice_in(data: &[u8], id: PoolId) -> Self {
+    pub fn copy_from_slice_in(data: &[u8], pool: PoolRef) -> Self {
         if data.len() <= INLINE_CAP {
             Bytes {
                 inner: Inner::from_slice_inline(data),
             }
         } else {
             Bytes {
-                inner: BytesMut::copy_from_slice_in(data, id).inner,
+                inner: BytesMut::copy_from_slice_in(data, pool).inner,
             }
         }
     }
@@ -1050,7 +1050,7 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn with_capacity(capacity: usize) -> BytesMut {
-        Self::with_capacity_in(capacity, PoolId::DEFAULT)
+        Self::with_capacity_in(capacity, PoolId::DEFAULT.pool())
     }
 
     /// Creates a new `BytesMut` with the specified capacity and in specified memory pool.
@@ -1060,7 +1060,7 @@ impl BytesMut {
     /// ```
     /// use ntex_bytes::{BytesMut, BufMut, PoolId};
     ///
-    /// let mut bytes = BytesMut::with_capacity_in(64, PoolId::P1);
+    /// let mut bytes = BytesMut::with_capacity_in(64, PoolId::P1.pool());
     ///
     /// // `bytes` contains no data, even though there is capacity
     /// assert_eq!(bytes.len(), 0);
@@ -1071,27 +1071,27 @@ impl BytesMut {
     /// assert!(PoolId::P1.pool().allocated() > 0);
     /// ```
     #[inline]
-    pub fn with_capacity_in(capacity: usize, pid: PoolId) -> BytesMut {
+    pub fn with_capacity_in(capacity: usize, pool: PoolRef) -> BytesMut {
         BytesMut {
-            inner: Inner::with_capacity(capacity, pid.inner()),
+            inner: Inner::with_capacity(capacity, pool.item()),
         }
     }
 
     #[inline]
-    pub(crate) fn with_capacity_in_priv(capacity: usize, inner: PoolInner) -> BytesMut {
+    pub(crate) fn with_capacity_in_priv(capacity: usize, pool: PoolItem) -> BytesMut {
         BytesMut {
-            inner: Inner::with_capacity(capacity, inner),
+            inner: Inner::with_capacity(capacity, pool),
         }
     }
 
     /// Creates a new `BytesMut` from slice, by copying it.
-    pub fn copy_from_slice_in(src: &[u8], id: PoolId) -> Self {
-        let mut bytes = BytesMut::with_capacity_in(src.len(), id);
+    pub fn copy_from_slice_in(src: &[u8], pool: PoolRef) -> Self {
+        let mut bytes = BytesMut::with_capacity_in(src.len(), pool);
         bytes.extend_from_slice(src);
         bytes
     }
 
-    fn copy_from_slice_in_priv(src: &[u8], pool: PoolInner) -> Self {
+    fn copy_from_slice_in_priv(src: &[u8], pool: PoolItem) -> Self {
         let mut bytes = BytesMut::with_capacity_in_priv(src.len(), pool);
         bytes.extend_from_slice(src);
         bytes
@@ -1099,9 +1099,9 @@ impl BytesMut {
 
     #[inline]
     /// Convert a `Vec` into a `BytesMut`
-    pub fn from_vec(src: Vec<u8>, id: PoolId) -> BytesMut {
+    pub fn from_vec(src: Vec<u8>, pool: PoolRef) -> BytesMut {
         BytesMut {
-            inner: Inner::from_vec(src, id.inner()),
+            inner: Inner::from_vec(src, pool.item()),
         }
     }
 
@@ -1521,7 +1521,7 @@ impl BytesMut {
         self.chunk().iter()
     }
 
-    pub(crate) fn move_to_pool(&mut self, pool: PoolInner) {
+    pub(crate) fn move_to_pool(&mut self, pool: PoolItem) {
         self.inner.move_to_pool(pool);
     }
 }
@@ -1641,14 +1641,14 @@ impl From<Vec<u8>> for BytesMut {
     /// `with_capacity`.  A `BytesMut` constructed this way will always store
     /// its data on the heap.
     fn from(src: Vec<u8>) -> BytesMut {
-        BytesMut::from_vec(src, PoolId::DEFAULT)
+        BytesMut::from_vec(src, PoolId::DEFAULT.pool())
     }
 }
 
 impl From<String> for BytesMut {
     #[inline]
     fn from(src: String) -> BytesMut {
-        BytesMut::from_vec(src.into_bytes(), PoolId::DEFAULT)
+        BytesMut::from_vec(src.into_bytes(), PoolId::DEFAULT.pool())
     }
 }
 
@@ -1659,7 +1659,7 @@ impl<'a> From<&'a [u8]> for BytesMut {
         if len == 0 {
             BytesMut::new()
         } else {
-            BytesMut::copy_from_slice_in(src, PoolId::DEFAULT)
+            BytesMut::copy_from_slice_in(src, PoolId::DEFAULT.pool())
         }
     }
 }
@@ -1843,7 +1843,7 @@ impl Inner {
     }
 
     #[inline]
-    fn from_vec(mut vec: Vec<u8>, pool: PoolInner) -> Inner {
+    fn from_vec(mut vec: Vec<u8>, pool: PoolItem) -> Inner {
         let len = vec.len();
         let cap = vec.capacity();
         let ptr = vec.as_mut_ptr();
@@ -1869,12 +1869,12 @@ impl Inner {
     }
 
     #[inline]
-    fn with_capacity(capacity: usize, pool: PoolInner) -> Inner {
+    fn with_capacity(capacity: usize, pool: PoolItem) -> Inner {
         Inner::from_slice(capacity, &[], pool)
     }
 
     #[inline]
-    fn from_slice(cap: usize, src: &[u8], pool: PoolInner) -> Inner {
+    fn from_slice(cap: usize, src: &[u8], pool: PoolItem) -> Inner {
         // Store data in vec
         let mut vec = Vec::with_capacity(cap + SHARED_VEC_SIZE);
         unsafe {
@@ -1928,20 +1928,20 @@ impl Inner {
     }
 
     #[inline]
-    fn pool(&self) -> PoolInner {
+    fn pool(&self) -> PoolItem {
         let kind = self.kind();
 
         if kind == KIND_VEC {
-            unsafe { (*self.shared_vec()).pool.clone() }
+            unsafe { (*self.shared_vec()).pool }
         } else if kind == KIND_ARC {
-            unsafe { (*self.arc.as_ptr()).pool.clone() }
+            unsafe { (*self.arc.as_ptr()).pool }
         } else {
-            PoolId::DEFAULT.inner()
+            PoolId::DEFAULT.item()
         }
     }
 
     #[inline]
-    fn move_to_pool(&mut self, pool: PoolInner) {
+    fn move_to_pool(&mut self, pool: PoolItem) {
         let kind = self.kind();
 
         if kind == KIND_VEC {
@@ -2356,7 +2356,7 @@ impl Inner {
             let new_cap = len + additional;
 
             // Promote to a vector
-            *self = Inner::from_slice(new_cap, self.as_ref(), PoolId::DEFAULT.inner());
+            *self = Inner::from_slice(new_cap, self.as_ref(), PoolId::DEFAULT.item());
             return;
         }
 

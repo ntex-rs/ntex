@@ -1,17 +1,33 @@
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed, Ordering::Release};
-use std::sync::Arc;
+
+use ntex_util::task::LocalWaker;
+use slab::Slab;
 
 use crate::BytesMut;
 
 #[derive(Clone)]
 pub struct Pool {
-    inner: PoolInner,
+    idx: usize,
+    inner: &'static LocalPool,
 }
 
-#[derive(Clone)]
-pub(crate) struct PoolInner(Arc<PoolPriv>);
+#[derive(Copy, Clone)]
+pub struct PoolRef(&'static LocalPool);
 
-struct PoolPriv {
+struct MemoryPool {
+    item: PoolItem,
+    local: &'static LocalPool,
+}
+
+struct LocalPool {
+    item: PoolItem,
+    _slab: Slab<LocalWaker>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PoolItem(&'static PoolPrivate);
+
+struct PoolPrivate {
     id: PoolId,
     size: AtomicUsize,
 }
@@ -38,85 +54,101 @@ impl PoolId {
     pub const DEFAULT: PoolId = PoolId(15);
 
     #[inline]
-    pub fn pool(&self) -> Pool {
-        POOLS.with(|pools| pools[self.0 as usize].clone())
-    }
-
-    pub(super) fn inner(&self) -> PoolInner {
-        POOLS.with(|pools| pools[self.0 as usize].inner.clone())
+    pub fn pool(&self) -> PoolRef {
+        POOLS.with(|pools| PoolRef(pools[self.0 as usize].local))
     }
 
     #[inline]
-    pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
-        POOLS.with(|pools| pools[self.0 as usize].buf_with_capacity(cap))
+    pub(super) fn item(&self) -> PoolItem {
+        POOLS.with(|pools| pools[self.0 as usize].item)
     }
 }
 
 thread_local! {
-    static POOLS: [&'static Pool; 16] = [
-        Pool::create(PoolId::P0),
-        Pool::create(PoolId::P1),
-        Pool::create(PoolId::P2),
-        Pool::create(PoolId::P3),
-        Pool::create(PoolId::P4),
-        Pool::create(PoolId::P5),
-        Pool::create(PoolId::P6),
-        Pool::create(PoolId::P7),
-        Pool::create(PoolId::P8),
-        Pool::create(PoolId::P9),
-        Pool::create(PoolId::P10),
-        Pool::create(PoolId::P11),
-        Pool::create(PoolId::P12),
-        Pool::create(PoolId::P13),
-        Pool::create(PoolId::P14),
-        Pool::create(PoolId::DEFAULT),
+    static POOLS: [MemoryPool; 16] = [
+        MemoryPool::create(PoolId::P0),
+        MemoryPool::create(PoolId::P1),
+        MemoryPool::create(PoolId::P2),
+        MemoryPool::create(PoolId::P3),
+        MemoryPool::create(PoolId::P4),
+        MemoryPool::create(PoolId::P5),
+        MemoryPool::create(PoolId::P6),
+        MemoryPool::create(PoolId::P7),
+        MemoryPool::create(PoolId::P8),
+        MemoryPool::create(PoolId::P9),
+        MemoryPool::create(PoolId::P10),
+        MemoryPool::create(PoolId::P11),
+        MemoryPool::create(PoolId::P12),
+        MemoryPool::create(PoolId::P13),
+        MemoryPool::create(PoolId::P14),
+        MemoryPool::create(PoolId::DEFAULT),
     ];
 }
 
 impl Pool {
-    fn create(id: PoolId) -> &'static Pool {
-        let pool = Box::new(Pool {
-            inner: PoolInner(Arc::new(PoolPriv {
-                id,
-                size: AtomicUsize::new(0),
-            })),
-        });
-        Box::leak(pool)
-    }
-
     #[inline]
     pub fn id(&self) -> PoolId {
-        self.inner.0.id
+        self.inner.item.0.id
     }
 
     #[inline]
     pub fn buf_with_capacity(&self, cap: usize) -> crate::BytesMut {
-        crate::BytesMut::with_capacity_in_priv(cap, self.inner())
+        crate::BytesMut::with_capacity_in_priv(cap, self.inner.item)
     }
 
     #[inline]
     pub fn allocated(&self) -> usize {
-        self.inner.0.size.load(Relaxed)
+        self.inner.item.0.size.load(Relaxed)
     }
 
     #[inline]
     pub fn move_in(&self, buf: &mut crate::BytesMut) {
-        buf.move_to_pool(self.inner.clone());
+        buf.move_to_pool(self.inner.item);
+    }
+}
+
+//impl Default for Pool {
+//    fn default() -> Pool {
+//        POOLS.with(|pools| pools[PoolId::DEFAULT.0 as usize])
+//    }
+//}
+
+impl PoolRef {
+    #[inline]
+    pub fn id(&self) -> PoolId {
+        self.0.item.0.id
     }
 
     #[inline]
-    pub(super) fn inner(&self) -> PoolInner {
-        self.inner.clone()
+    pub fn pool(&self) -> Pool {
+        Pool {
+            idx: 0,
+            inner: self.0,
+        }
+    }
+
+    #[inline]
+    pub fn allocated(&self) -> usize {
+        self.0.item.0.size.load(Relaxed)
+    }
+
+    #[inline]
+    pub fn move_in(&self, buf: &mut BytesMut) {
+        buf.move_to_pool(self.0.item);
+    }
+
+    #[inline]
+    pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
+        BytesMut::with_capacity_in_priv(cap, self.0.item)
+    }
+
+    #[inline]
+    pub(super) fn item(&self) -> PoolItem {
+        self.0.item
     }
 }
 
-impl Default for Pool {
-    fn default() -> Pool {
-        POOLS.with(|pools| pools[PoolId::DEFAULT.0 as usize].clone())
-    }
-}
-
-impl PoolInner {
+impl PoolItem {
     #[inline]
     pub(crate) fn acquire(&self, size: usize) {
         self.0.size.fetch_add(size, Relaxed);
@@ -125,5 +157,21 @@ impl PoolInner {
     #[inline]
     pub(crate) fn release(&self, size: usize) {
         self.0.size.fetch_sub(size, Release);
+    }
+}
+
+impl MemoryPool {
+    fn create(id: PoolId) -> MemoryPool {
+        let item = PoolItem(Box::leak(Box::new(PoolPrivate {
+            id,
+            size: AtomicUsize::new(0),
+        })));
+
+        let local = Box::leak(Box::new(LocalPool {
+            item,
+            _slab: Slab::new(),
+        }));
+
+        MemoryPool { item, local }
     }
 }

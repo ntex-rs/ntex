@@ -12,8 +12,10 @@ categories = ["network-programming", "data-structures"]
 edition = "2018"
 
 [dependencies]
-serde = "1.0.0"
 bytes = "1.0.0"
+serde = "1.0.0"
+slab = "0.4"
+ntex-util = "0.1.1"
 
 [dev-dependencies]
 serde_test = "1.0"
