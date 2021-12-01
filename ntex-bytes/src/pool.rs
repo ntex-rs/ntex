@@ -1,18 +1,26 @@
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed, Ordering::Release};
+use std::task::{Context, Poll};
 
 use ntex_util::task::LocalWaker;
 use slab::Slab;
 
 use crate::BytesMut;
 
-#[derive(Clone)]
 pub struct Pool {
+    #[allow(dead_code)]
     idx: usize,
     inner: &'static LocalPool,
 }
 
 #[derive(Copy, Clone)]
 pub struct PoolRef(&'static LocalPool);
+
+#[derive(Copy, Clone)]
+pub struct BufParams {
+    pub high: u16,
+    pub low: u16,
+}
 
 struct MemoryPool {
     item: PoolItem,
@@ -22,7 +30,13 @@ struct MemoryPool {
 struct LocalPool {
     item: PoolItem,
     _slab: Slab<LocalWaker>,
+    read_wm: Cell<BufParams>,
+    read_cache: RefCell<Vec<BytesMut>>,
+    write_wm: Cell<BufParams>,
+    write_cache: RefCell<Vec<BytesMut>>,
 }
+
+const CACHE_SIZE: usize = 16;
 
 #[derive(Clone, Copy)]
 pub(crate) struct PoolItem(&'static PoolPrivate);
@@ -54,7 +68,15 @@ impl PoolId {
     pub const DEFAULT: PoolId = PoolId(15);
 
     #[inline]
-    pub fn pool(&self) -> PoolRef {
+    pub fn pool(&self) -> Pool {
+        POOLS.with(|pools| Pool {
+            idx: 0,
+            inner: pools[self.0 as usize].local,
+        })
+    }
+
+    #[inline]
+    pub fn pool_ref(&self) -> PoolRef {
         POOLS.with(|pools| PoolRef(pools[self.0 as usize].local))
     }
 
@@ -87,39 +109,41 @@ thread_local! {
 
 impl Pool {
     #[inline]
+    /// Get pool id.
     pub fn id(&self) -> PoolId {
         self.inner.item.0.id
     }
 
     #[inline]
-    pub fn buf_with_capacity(&self, cap: usize) -> crate::BytesMut {
-        crate::BytesMut::with_capacity_in_priv(cap, self.inner.item)
+    /// Get `PoolRef` instance for this pool.
+    pub fn pool_ref(&self) -> PoolRef {
+        PoolRef(self.inner)
     }
 
     #[inline]
-    pub fn allocated(&self) -> usize {
-        self.inner.item.0.size.load(Relaxed)
-    }
-
-    #[inline]
-    pub fn move_in(&self, buf: &mut crate::BytesMut) {
-        buf.move_to_pool(self.inner.item);
+    pub fn poll_ready(&self, _ctx: &mut Context<'_>) -> Poll<()> {
+        Poll::Ready(())
     }
 }
 
-//impl Default for Pool {
-//    fn default() -> Pool {
-//        POOLS.with(|pools| pools[PoolId::DEFAULT.0 as usize])
-//    }
-//}
+impl Clone for Pool {
+    fn clone(&self) -> Pool {
+        Pool {
+            idx: 0,
+            inner: self.inner,
+        }
+    }
+}
 
 impl PoolRef {
     #[inline]
+    /// Get pool id.
     pub fn id(&self) -> PoolId {
         self.0.item.0.id
     }
 
     #[inline]
+    /// Get `Pool` instance for this pool ref.
     pub fn pool(&self) -> Pool {
         Pool {
             idx: 0,
@@ -128,6 +152,7 @@ impl PoolRef {
     }
 
     #[inline]
+    /// Get total number of allocated bytes.
     pub fn allocated(&self) -> usize {
         self.0.item.0.size.load(Relaxed)
     }
@@ -138,13 +163,117 @@ impl PoolRef {
     }
 
     #[inline]
+    /// Creates a new `BytesMut` with the specified capacity.
     pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
         BytesMut::with_capacity_in_priv(cap, self.0.item)
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn read_params(&self) -> BufParams {
+        self.0.read_wm.get()
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn read_params_high(&self) -> usize {
+        self.0.read_wm.get().high as usize
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn set_read_params(self, h: u16, l: u16) -> Self {
+        assert!(l < h);
+        self.0.read_wm.set(BufParams { high: h, low: l });
+        self
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn write_params(&self) -> BufParams {
+        self.0.write_wm.get()
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn write_params_high(&self) -> usize {
+        self.0.write_wm.get().high as usize
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn set_write_params(self, h: u16, l: u16) -> Self {
+        assert!(l < h);
+        self.0.write_wm.set(BufParams { high: h, low: l });
+        self
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn get_read_buf(&self) -> BytesMut {
+        if let Some(buf) = self.0.read_cache.borrow_mut().pop() {
+            buf
+        } else {
+            BytesMut::with_capacity_in_priv(
+                self.0.read_wm.get().high as usize,
+                self.0.item,
+            )
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    /// Release read buffer, buf must be allocated from this pool
+    pub fn release_read_buf(&self, mut buf: BytesMut) {
+        let cap = buf.capacity();
+        let (hw, lw) = self.0.read_wm.get().unpack();
+        if cap > lw && cap <= hw {
+            let v = &mut self.0.read_cache.borrow_mut();
+            if v.len() < CACHE_SIZE {
+                buf.clear();
+                v.push(buf);
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn get_write_buf(&self) -> BytesMut {
+        if let Some(buf) = self.0.write_cache.borrow_mut().pop() {
+            buf
+        } else {
+            BytesMut::with_capacity_in_priv(
+                self.0.write_wm.get().high as usize,
+                self.0.item,
+            )
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    /// Release write buffer, buf must be allocated from this pool
+    pub fn release_write_buf(&self, mut buf: BytesMut) {
+        let cap = buf.capacity();
+        let (hw, lw) = self.0.write_wm.get().unpack();
+        if cap > lw && cap <= hw {
+            let v = &mut self.0.write_cache.borrow_mut();
+            if v.len() < CACHE_SIZE {
+                buf.clear();
+                v.push(buf);
+            }
+        }
     }
 
     #[inline]
     pub(super) fn item(&self) -> PoolItem {
         self.0.item
+    }
+}
+
+impl Default for PoolRef {
+    #[inline]
+    fn default() -> PoolRef {
+        PoolId::DEFAULT.pool_ref()
     }
 }
 
@@ -170,8 +299,25 @@ impl MemoryPool {
         let local = Box::leak(Box::new(LocalPool {
             item,
             _slab: Slab::new(),
+            read_wm: Cell::new(BufParams {
+                high: 4 * 1024,
+                low: 1024,
+            }),
+            read_cache: RefCell::new(Vec::with_capacity(CACHE_SIZE)),
+            write_wm: Cell::new(BufParams {
+                high: 4 * 1024,
+                low: 1024,
+            }),
+            write_cache: RefCell::new(Vec::with_capacity(CACHE_SIZE)),
         }));
 
         MemoryPool { item, local }
+    }
+}
+
+impl BufParams {
+    #[inline]
+    pub fn unpack(self) -> (usize, usize) {
+        (self.high as usize, self.low as usize)
     }
 }

@@ -69,5 +69,7 @@ mod serde;
 mod string;
 
 pub use crate::bytes::{Bytes, BytesMut};
-pub use crate::pool::{Pool, PoolId};
 pub use crate::string::ByteString;
+
+#[doc(hidden)]
+pub use crate::pool::{Pool, PoolId, PoolRef};

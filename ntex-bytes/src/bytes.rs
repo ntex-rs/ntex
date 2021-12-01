@@ -466,7 +466,8 @@ impl Bytes {
             }
         } else {
             Bytes {
-                inner: BytesMut::copy_from_slice_in(data, PoolId::DEFAULT.pool()).inner,
+                inner: BytesMut::copy_from_slice_in(data, PoolId::DEFAULT.pool_ref())
+                    .inner,
             }
         }
     }
@@ -1050,7 +1051,7 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn with_capacity(capacity: usize) -> BytesMut {
-        Self::with_capacity_in(capacity, PoolId::DEFAULT.pool())
+        Self::with_capacity_in(capacity, PoolId::DEFAULT.pool_ref())
     }
 
     /// Creates a new `BytesMut` with the specified capacity and in specified memory pool.
@@ -1641,14 +1642,14 @@ impl From<Vec<u8>> for BytesMut {
     /// `with_capacity`.  A `BytesMut` constructed this way will always store
     /// its data on the heap.
     fn from(src: Vec<u8>) -> BytesMut {
-        BytesMut::from_vec(src, PoolId::DEFAULT.pool())
+        BytesMut::from_vec(src, PoolId::DEFAULT.pool_ref())
     }
 }
 
 impl From<String> for BytesMut {
     #[inline]
     fn from(src: String) -> BytesMut {
-        BytesMut::from_vec(src.into_bytes(), PoolId::DEFAULT.pool())
+        BytesMut::from_vec(src.into_bytes(), PoolId::DEFAULT.pool_ref())
     }
 }
 
@@ -1659,7 +1660,7 @@ impl<'a> From<&'a [u8]> for BytesMut {
         if len == 0 {
             BytesMut::new()
         } else {
-            BytesMut::copy_from_slice_in(src, PoolId::DEFAULT.pool())
+            BytesMut::copy_from_slice_in(src, PoolId::DEFAULT.pool_ref())
         }
     }
 }
@@ -2381,8 +2382,7 @@ impl Inner {
                     self.cap = vec_cap;
                 } else {
                     // Create a new vector storage
-                    *self =
-                        Inner::from_slice(new_cap, self.as_ref(), (*vec).pool.clone());
+                    *self = Inner::from_slice(new_cap, self.as_ref(), (*vec).pool);
                 }
             }
         } else {
@@ -2411,7 +2411,7 @@ impl Inner {
                 }
 
                 // Create a new vector storage
-                *self = Inner::from_slice(new_cap, self.as_ref(), (*arc).pool.clone());
+                *self = Inner::from_slice(new_cap, self.as_ref(), (*arc).pool);
             }
         }
     }

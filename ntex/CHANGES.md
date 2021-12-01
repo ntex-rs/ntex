@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.11] - 2021-12-xx
+
+* framed: Use memory pool
+
 ## [0.4.10] - 2021-11-29
 
 * Fix potential overflow sub in timer wheel

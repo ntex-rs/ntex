@@ -517,7 +517,7 @@ mod tests {
     use crate::codec::BytesCodec;
     use crate::testing::Io;
     use crate::time::{sleep, Millis};
-    use crate::util::{Bytes, Ready};
+    use crate::util::{Bytes, PoolRef, Ready};
 
     use super::*;
 
@@ -774,7 +774,9 @@ mod tests {
                 }
             }),
         );
-        state.set_buffer_params(8 * 1024, 16 * 1024, 1024);
+        let pool = PoolRef::default();
+        pool.set_read_params(8 * 1024, 1024);
+        pool.set_write_params(16 * 1024, 1024);
         crate::rt::spawn(async move {
             let _ = disp.await;
         });
