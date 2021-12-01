@@ -244,7 +244,7 @@ mod tests {
                 opcode,
                 payload: payload
                     .map(|b| b.freeze())
-                    .unwrap_or_else(|| Bytes::from("")),
+                    .unwrap_or_else(Bytes::new),
             },
             _ => unreachable!("error"),
         }

@@ -1,23 +1,17 @@
-#![allow(warnings, dead_code)]
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed, Ordering::Release};
+use std::sync::Arc;
 
-const POOL_WIDTH: usize = 4;
-const POOL_COUNT: usize = 0b10000;
-const POOL_DEFAULT: usize = 0b1111;
+use crate::BytesMut;
 
-#[cfg(target_pointer_width = "64")]
-const POOL_OFFSET: usize = 64 - POOL_WIDTH;
-#[cfg(target_pointer_width = "32")]
-const POOL_OFFSET: usize = 32 - POOL_WIDTH;
-
-const POOL_MASK: usize = 0b1111 << POOL_OFFSET;
-const POOL_NUM_MASK: usize = !POOL_MASK;
-
+#[derive(Clone)]
 pub struct Pool {
-    inner: Arc<PoolInner>,
+    inner: PoolInner,
 }
 
-pub(crate) struct PoolInner {
+#[derive(Clone)]
+pub(crate) struct PoolInner(Arc<PoolPriv>);
+
+struct PoolPriv {
     id: PoolId,
     size: AtomicUsize,
 }
@@ -25,110 +19,111 @@ pub(crate) struct PoolInner {
 #[derive(Copy, Clone, Debug)]
 pub struct PoolId(usize);
 
-pub const POOL_0: PoolId = PoolId(0);
-pub const POOL_1: PoolId = PoolId(1);
-pub const POOL_2: PoolId = PoolId(2);
-pub const POOL_3: PoolId = PoolId(3);
-pub const POOL_4: PoolId = PoolId(4);
-pub const POOL_5: PoolId = PoolId(5);
-pub const POOL_6: PoolId = PoolId(6);
-pub const POOL_7: PoolId = PoolId(7);
-pub const POOL_8: PoolId = PoolId(8);
-pub const POOL_9: PoolId = PoolId(9);
-pub const POOL_10: PoolId = PoolId(10);
-pub const POOL_11: PoolId = PoolId(11);
-pub const POOL_12: PoolId = PoolId(12);
-pub const POOL_13: PoolId = PoolId(13);
-pub const POOL_14: PoolId = PoolId(14);
-pub const POOL_15: PoolId = PoolId(15);
-
 impl PoolId {
-    #[inline]
-    pub(crate) const fn default() -> PoolId {
-        POOL_15
-    }
+    pub const P0: PoolId = PoolId(0);
+    pub const P1: PoolId = PoolId(1);
+    pub const P2: PoolId = PoolId(2);
+    pub const P3: PoolId = PoolId(3);
+    pub const P4: PoolId = PoolId(4);
+    pub const P5: PoolId = PoolId(5);
+    pub const P6: PoolId = PoolId(6);
+    pub const P7: PoolId = PoolId(7);
+    pub const P8: PoolId = PoolId(8);
+    pub const P9: PoolId = PoolId(9);
+    pub const P10: PoolId = PoolId(10);
+    pub const P11: PoolId = PoolId(11);
+    pub const P12: PoolId = PoolId(12);
+    pub const P13: PoolId = PoolId(13);
+    pub const P14: PoolId = PoolId(14);
+    pub const DEFAULT: PoolId = PoolId(15);
 
     #[inline]
-    pub(crate) const fn get(storage: usize) -> PoolId {
-        PoolId(storage & POOL_MASK)
+    pub fn pool(&self) -> Pool {
+        POOLS.with(|pools| pools[self.0].clone())
     }
 
-    #[inline]
-    pub(crate) const fn set(&self, storage: usize) -> usize {
-        storage ^ self.0
-    }
-
-    #[inline]
-    pub(crate) const fn get_inline(storage: usize) -> PoolId {
-        PoolId((storage << POOL_OFFSET - 8) & POOL_MASK)
-    }
-
-    #[inline]
-    pub(crate) const fn set_inline(&self, storage: usize) -> usize {
-        (self.0 >> POOL_OFFSET - 8) ^ storage
-    }
-
-    #[inline]
-    pub(super) fn pool(&self) -> &'static Pool {
-        POOLS.with(|pools| pools[self.0])
-    }
-
-    pub(super) fn inner(&self) -> Arc<PoolInner> {
+    pub(super) fn inner(&self) -> PoolInner {
         POOLS.with(|pools| pools[self.0].inner.clone())
+    }
+
+    #[inline]
+    pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
+        POOLS.with(|pools| pools[self.0].buf_with_capacity(cap))
     }
 }
 
 thread_local! {
-    static POOLS: [&'static Pool; POOL_COUNT] = [
-        Pool::create(POOL_0),
-        Pool::create(POOL_1),
-        Pool::create(POOL_2),
-        Pool::create(POOL_3),
-        Pool::create(POOL_4),
-        Pool::create(POOL_5),
-        Pool::create(POOL_6),
-        Pool::create(POOL_7),
-        Pool::create(POOL_8),
-        Pool::create(POOL_9),
-        Pool::create(POOL_10),
-        Pool::create(POOL_11),
-        Pool::create(POOL_12),
-        Pool::create(POOL_13),
-        Pool::create(POOL_14),
-        Pool::create(POOL_15),
+    static POOLS: [&'static Pool; 16] = [
+        Pool::create(PoolId::P0),
+        Pool::create(PoolId::P1),
+        Pool::create(PoolId::P2),
+        Pool::create(PoolId::P3),
+        Pool::create(PoolId::P4),
+        Pool::create(PoolId::P5),
+        Pool::create(PoolId::P6),
+        Pool::create(PoolId::P7),
+        Pool::create(PoolId::P8),
+        Pool::create(PoolId::P9),
+        Pool::create(PoolId::P10),
+        Pool::create(PoolId::P11),
+        Pool::create(PoolId::P12),
+        Pool::create(PoolId::P13),
+        Pool::create(PoolId::P14),
+        Pool::create(PoolId::DEFAULT),
     ];
 }
 
 impl Pool {
-    #[inline]
-    pub fn default() -> &'static Pool {
-        POOLS.with(|pools| pools[POOL_DEFAULT])
-    }
-
-    #[inline]
-    pub const fn default_id() -> PoolId {
-        POOL_15
-    }
-
     fn create(id: PoolId) -> &'static Pool {
         let pool = Box::new(Pool {
-            inner: Arc::new(PoolInner {
+            inner: PoolInner(Arc::new(PoolPriv {
                 id,
                 size: AtomicUsize::new(0),
-            }),
+            })),
         });
         Box::leak(pool)
     }
 
-    pub(super) fn alloc(&self, _size: usize) {
-        todo!()
+    #[inline]
+    pub fn id(&self) -> PoolId {
+        self.inner.0.id
     }
 
-    pub(super) fn release(&self, _size: usize) {
-        todo!()
+    #[inline]
+    pub fn buf_with_capacity(&self, cap: usize) -> crate::BytesMut {
+        crate::BytesMut::with_capacity_in_priv(cap, self.inner())
     }
 
-    pub(super) fn inner(&self) -> Arc<PoolInner> {
+    #[inline]
+    pub fn allocated(&self) -> usize {
+        self.inner.0.size.load(Relaxed)
+    }
+
+    #[inline]
+    pub fn move_in(&self, buf: &mut crate::BytesMut) {
+        buf.move_to_pool(self.inner.clone());
+    }
+
+    #[inline]
+    pub(super) fn inner(&self) -> PoolInner {
         self.inner.clone()
+    }
+}
+
+impl Default for Pool {
+    fn default() -> Pool {
+        POOLS.with(|pools| pools[PoolId::DEFAULT.0].clone())
+    }
+}
+
+impl PoolInner {
+    #[inline]
+    pub(crate) fn acquire(&self, size: usize) {
+        self.0.size.fetch_add(size, Relaxed);
+    }
+
+    #[inline]
+    pub(crate) fn release(&self, size: usize) {
+        self.0.size.fetch_sub(size, Release);
     }
 }

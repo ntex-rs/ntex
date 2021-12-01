@@ -1,6 +1,6 @@
 //#![deny(warnings, rust_2018_idioms)]
 
-use ntex_bytes::{Buf, BufMut, Bytes, BytesMut};
+use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, PoolId};
 
 const LONG: &'static [u8] = b"mary had a little lamb, little lamb, little lamb";
 const SHORT: &'static [u8] = b"hello world";
@@ -8,6 +8,11 @@ const SHORT: &'static [u8] = b"hello world";
 fn inline_cap() -> usize {
     use std::mem;
     4 * mem::size_of::<usize>() - 1
+}
+
+const fn shared_vec() -> usize {
+    use std::mem;
+    3 * mem::size_of::<usize>()
 }
 
 fn is_sync<T: Sync>() {}
@@ -613,4 +618,34 @@ fn empty_slice_ref_catches_not_an_empty_subset() {
     let slice = &b""[0..0];
 
     bytes.slice_ref(slice);
+}
+
+#[test]
+fn pool() {
+    // Pool
+    let p1 = PoolId::P1.pool();
+    assert_eq!(p1.allocated(), 0);
+    let mut buf = BytesMut::with_capacity_in(1024, PoolId::P1);
+    assert_eq!(p1.allocated(), 1024 + shared_vec());
+    buf.reserve(2048);
+    assert_eq!(p1.allocated(), 2048 + shared_vec());
+    drop(buf);
+    assert_eq!(p1.allocated(), 0);
+
+    // Default pool
+    let p = PoolId::DEFAULT.pool();
+    assert_eq!(p.allocated(), 0);
+    let mut buf = BytesMut::with_capacity(1024);
+    assert_eq!(p.allocated(), 1024 + shared_vec());
+    buf.reserve(2048);
+    assert_eq!(p.allocated(), 2048 + shared_vec());
+    drop(buf);
+    assert_eq!(p.allocated(), 0);
+
+    let mut buf = BytesMut::with_capacity(1024);
+    assert_eq!(p.allocated(), 1024 + shared_vec());
+    assert_eq!(p1.allocated(), 0);
+    p1.move_in(&mut buf);
+    assert_eq!(p.allocated(), 0);
+    assert_eq!(p1.allocated(), 1024 + shared_vec());
 }

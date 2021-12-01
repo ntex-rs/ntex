@@ -1,5 +1,11 @@
 # Changes
 
+## 0.1.5 (2021-12-01)
+
+* Refactor Vec representation
+
+* Introduce memory pools
+
 ## 0.1.4 (2021-06-27)
 
 * Reduce size of Option<Bytes> by using NonNull
