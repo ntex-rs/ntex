@@ -261,6 +261,12 @@ impl State {
     }
 
     #[inline]
+    /// Get memory pool
+    pub fn memory_pool(&self) -> PoolRef {
+        self.0.pool.get()
+    }
+
+    #[inline]
     /// Set memory pool
     pub fn set_memory_pool(&self, pool: PoolRef) {
         if let Some(mut buf) = self.0.read_buf.take() {
@@ -275,6 +281,7 @@ impl State {
     }
 
     #[doc(hidden)]
+    #[deprecated(since = "0.4.11", note = "Use memory pool config")]
     #[inline]
     /// Set read/write buffer sizes
     ///

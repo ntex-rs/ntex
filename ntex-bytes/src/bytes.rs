@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
 use std::{cmp, fmt, hash, mem, ptr, ptr::NonNull, slice, usize};
 
-use crate::pool::{PoolId, PoolItem, PoolRef};
+use crate::pool::{AsPoolRef, PoolId, PoolItem};
 use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};
 
 /// A reference counted contiguous slice of memory.
@@ -473,14 +473,14 @@ impl Bytes {
     }
 
     /// Creates `Bytes` instance from slice, by copying it.
-    pub fn copy_from_slice_in(data: &[u8], pool: PoolRef) -> Self {
+    pub fn copy_from_slice_in<T: AsPoolRef>(data: &[u8], pool: T) -> Self {
         if data.len() <= INLINE_CAP {
             Bytes {
                 inner: Inner::from_slice_inline(data),
             }
         } else {
             Bytes {
-                inner: BytesMut::copy_from_slice_in(data, pool).inner,
+                inner: BytesMut::copy_from_slice_in(data, pool.pool_ref()).inner,
             }
         }
     }
@@ -1061,7 +1061,7 @@ impl BytesMut {
     /// ```
     /// use ntex_bytes::{BytesMut, BufMut, PoolId};
     ///
-    /// let mut bytes = BytesMut::with_capacity_in(64, PoolId::P1.pool());
+    /// let mut bytes = BytesMut::with_capacity_in(64, PoolId::P1);
     ///
     /// // `bytes` contains no data, even though there is capacity
     /// assert_eq!(bytes.len(), 0);
@@ -1069,12 +1069,12 @@ impl BytesMut {
     /// bytes.put(&b"hello world"[..]);
     ///
     /// assert_eq!(&bytes[..], b"hello world");
-    /// assert!(PoolId::P1.pool().allocated() > 0);
+    /// assert!(PoolId::P1.pool_ref().allocated() > 0);
     /// ```
     #[inline]
-    pub fn with_capacity_in(capacity: usize, pool: PoolRef) -> BytesMut {
+    pub fn with_capacity_in<T: AsPoolRef>(capacity: usize, pool: T) -> BytesMut {
         BytesMut {
-            inner: Inner::with_capacity(capacity, pool.item()),
+            inner: Inner::with_capacity(capacity, pool.pool_ref().item()),
         }
     }
 
@@ -1086,8 +1086,8 @@ impl BytesMut {
     }
 
     /// Creates a new `BytesMut` from slice, by copying it.
-    pub fn copy_from_slice_in(src: &[u8], pool: PoolRef) -> Self {
-        let mut bytes = BytesMut::with_capacity_in(src.len(), pool);
+    pub fn copy_from_slice_in<T: AsPoolRef>(src: &[u8], pool: T) -> Self {
+        let mut bytes = BytesMut::with_capacity_in(src.len(), pool.pool_ref());
         bytes.extend_from_slice(src);
         bytes
     }
@@ -1100,9 +1100,9 @@ impl BytesMut {
 
     #[inline]
     /// Convert a `Vec` into a `BytesMut`
-    pub fn from_vec(src: Vec<u8>, pool: PoolRef) -> BytesMut {
+    pub fn from_vec<T: AsPoolRef>(src: Vec<u8>, pool: T) -> BytesMut {
         BytesMut {
-            inner: Inner::from_vec(src, pool.item()),
+            inner: Inner::from_vec(src, pool.pool_ref().item()),
         }
     }
 

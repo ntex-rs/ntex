@@ -623,9 +623,9 @@ fn empty_slice_ref_catches_not_an_empty_subset() {
 #[test]
 fn pool() {
     // Pool
-    let p1 = PoolId::P1.pool();
+    let p1 = PoolId::P1.pool_ref();
     assert_eq!(p1.allocated(), 0);
-    let mut buf = BytesMut::with_capacity_in(1024, PoolId::P1);
+    let mut buf = BytesMut::with_capacity_in(1024, p1);
     assert_eq!(p1.allocated(), 1024 + shared_vec());
     buf.reserve(2048);
     assert_eq!(p1.allocated(), 2048 + shared_vec());
@@ -633,7 +633,7 @@ fn pool() {
     assert_eq!(p1.allocated(), 0);
 
     // Default pool
-    let p = PoolId::DEFAULT.pool();
+    let p = PoolId::DEFAULT.pool_ref();
     assert_eq!(p.allocated(), 0);
     let mut buf = BytesMut::with_capacity(1024);
     assert_eq!(p.allocated(), 1024 + shared_vec());

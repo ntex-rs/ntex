@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed, Ordering::Release};
 use std::task::{Context, Poll};
 
@@ -15,6 +16,10 @@ pub struct Pool {
 
 #[derive(Copy, Clone)]
 pub struct PoolRef(&'static LocalPool);
+
+pub trait AsPoolRef {
+    fn pool_ref(&self) -> PoolRef;
+}
 
 #[derive(Copy, Clone)]
 pub struct BufParams {
@@ -83,6 +88,13 @@ impl PoolId {
     #[inline]
     pub(super) fn item(&self) -> PoolItem {
         POOLS.with(|pools| pools[self.0 as usize].item)
+    }
+}
+
+impl AsPoolRef for PoolId {
+    #[inline]
+    fn pool_ref(&self) -> PoolRef {
+        self.pool_ref()
     }
 }
 
@@ -274,6 +286,22 @@ impl Default for PoolRef {
     #[inline]
     fn default() -> PoolRef {
         PoolId::DEFAULT.pool_ref()
+    }
+}
+
+impl AsPoolRef for PoolRef {
+    #[inline]
+    fn pool_ref(&self) -> PoolRef {
+        *self
+    }
+}
+
+impl fmt::Debug for PoolRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PoolRef")
+            .field("id", &self.id().0)
+            .field("allocated", &self.allocated())
+            .finish()
     }
 }
 
