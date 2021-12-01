@@ -93,11 +93,11 @@ use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};
 ///
 /// # Inline bytes
 ///
-/// As an optimization, when the slice referenced by a `Bytes` or `BytesMut`
-/// handle is small enough [^1], `with_capacity` will avoid the allocation
-/// by inlining the slice directly in the handle. In this case, a clone is no
-/// longer "shallow" and the data will be copied.  Converting from a `Vec` will
-/// never use inlining.
+/// As an optimization, when the slice referenced by a `Bytes` handle is small
+/// enough [^1]. In this case, a clone is no longer "shallow" and the data will
+/// be copied.  Converting from a `Vec` will never use inlining. `BytesMut` does
+/// not support data inlining and always allocates, but during converion to `Bytes`
+/// data from `BytesMut` could be inlined.
 ///
 /// [^1]: Small enough: 31 bytes on 64 bit systems, 15 on 32 bit systems.
 ///
@@ -1640,7 +1640,6 @@ impl From<Vec<u8>> for BytesMut {
     /// This constructor may be used to avoid the inlining optimization used by
     /// `with_capacity`.  A `BytesMut` constructed this way will always store
     /// its data on the heap.
-    #[inline]
     fn from(src: Vec<u8>) -> BytesMut {
         BytesMut::from_vec(src, PoolId::DEFAULT)
     }
@@ -1879,6 +1878,7 @@ impl Inner {
         // Store data in vec
         let mut vec = Vec::with_capacity(cap + SHARED_VEC_SIZE);
         unsafe {
+            #![allow(clippy::uninit_vec)]
             vec.set_len(SHARED_VEC_SIZE);
             vec.extend_from_slice(src);
 
@@ -1903,7 +1903,7 @@ impl Inner {
             Inner {
                 len,
                 cap,
-                ptr: ptr.offset(SHARED_VEC_SIZE as isize),
+                ptr: ptr.add(SHARED_VEC_SIZE),
                 arc: NonNull::new_unchecked((ptr as usize ^ KIND_VEC) as *mut Shared),
             }
         }
@@ -2110,10 +2110,7 @@ impl Inner {
     fn split_off(&mut self, at: usize, create_inline: bool) -> Inner {
         let other = unsafe {
             if create_inline && self.len() - at <= INLINE_CAP {
-                Inner::from_ptr_inline(
-                    self.as_ptr().offset(at as isize),
-                    self.len() - at,
-                )
+                Inner::from_ptr_inline(self.as_ptr().add(at), self.len() - at)
             } else {
                 let mut other = self.shallow_clone();
                 other.set_start(at);
@@ -2143,10 +2140,7 @@ impl Inner {
         };
         unsafe {
             if create_inline && self.len() - at <= INLINE_CAP {
-                *self = Inner::from_ptr_inline(
-                    self.as_ptr().offset(at as isize),
-                    self.len() - at,
-                );
+                *self = Inner::from_ptr_inline(self.as_ptr().add(at), self.len() - at);
             } else {
                 self.set_start(at);
             }
@@ -2378,20 +2372,18 @@ impl Inner {
 
                 // First, try to reclaim the buffer. This is possible if the current
                 // handle is the only outstanding handle pointing to the buffer.
-                if (*vec).is_unique() {
-                    if vec_cap >= new_cap {
-                        // The capacity is sufficient, reclaim the buffer
-                        let ptr = (vec as *mut u8).offset(SHARED_VEC_SIZE as isize);
+                if (*vec).is_unique() && vec_cap >= new_cap {
+                    // The capacity is sufficient, reclaim the buffer
+                    let ptr = (vec as *mut u8).add(SHARED_VEC_SIZE);
+                    ptr::copy(self.ptr, ptr, len);
 
-                        ptr::copy(self.ptr, ptr, len);
-
-                        self.ptr = ptr;
-                        self.cap = vec_cap;
-                        return;
-                    }
+                    self.ptr = ptr;
+                    self.cap = vec_cap;
+                } else {
+                    // Create a new vector storage
+                    *self =
+                        Inner::from_slice(new_cap, self.as_ref(), (*vec).pool.clone());
                 }
-                // Create a new vector storage
-                *self = Inner::from_slice(new_cap, self.as_ref(), (*vec).pool.clone());
             }
         } else {
             debug_assert!(kind == KIND_ARC);

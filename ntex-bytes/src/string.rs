@@ -1,7 +1,7 @@
 //! A UTF-8 encoded read-only string using Bytes as storage.
 use std::{borrow, convert::TryFrom, fmt, hash, ops, slice, str};
 
-use crate::Bytes;
+use crate::{Bytes, BytesMut};
 
 /// An immutable UTF-8 encoded string with [`Bytes`] as a storage.
 #[derive(Clone, Default, Eq, PartialOrd, Ord)]
@@ -242,7 +242,7 @@ impl TryFrom<Bytes> for ByteString {
     }
 }
 
-impl TryFrom<crate::BytesMut> for ByteString {
+impl TryFrom<BytesMut> for ByteString {
     type Error = str::Utf8Error;
 
     #[inline]

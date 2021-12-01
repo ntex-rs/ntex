@@ -17,7 +17,7 @@ struct PoolPriv {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct PoolId(usize);
+pub struct PoolId(u8);
 
 impl PoolId {
     pub const P0: PoolId = PoolId(0);
@@ -39,16 +39,16 @@ impl PoolId {
 
     #[inline]
     pub fn pool(&self) -> Pool {
-        POOLS.with(|pools| pools[self.0].clone())
+        POOLS.with(|pools| pools[self.0 as usize].clone())
     }
 
     pub(super) fn inner(&self) -> PoolInner {
-        POOLS.with(|pools| pools[self.0].inner.clone())
+        POOLS.with(|pools| pools[self.0 as usize].inner.clone())
     }
 
     #[inline]
     pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
-        POOLS.with(|pools| pools[self.0].buf_with_capacity(cap))
+        POOLS.with(|pools| pools[self.0 as usize].buf_with_capacity(cap))
     }
 }
 
@@ -112,7 +112,7 @@ impl Pool {
 
 impl Default for Pool {
     fn default() -> Pool {
-        POOLS.with(|pools| pools[PoolId::DEFAULT.0].clone())
+        POOLS.with(|pools| pools[PoolId::DEFAULT.0 as usize].clone())
     }
 }
 
