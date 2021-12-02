@@ -1,8 +1,8 @@
 # Changes
 
-## [0.4.11] - 2021-12-xx
+## [0.4.11] - 2021-12-02
 
-* framed: Use memory pool
+* framed: Use memory pools
 
 ## [0.4.10] - 2021-11-29
 
