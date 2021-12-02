@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
 use std::{cmp, fmt, hash, mem, ptr, ptr::NonNull, slice, usize};
 
-use crate::pool::{AsPoolRef, PoolId, PoolItem};
+use crate::pool::{AsPoolRef, PoolId, PoolRef};
 use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};
 
 /// A reference counted contiguous slice of memory.
@@ -326,13 +326,13 @@ struct Inner {
 struct Shared {
     vec: Vec<u8>,
     ref_count: AtomicUsize,
-    pool: PoolItem,
+    pool: PoolRef,
 }
 
 struct SharedVec {
     cap: usize,
     ref_count: AtomicUsize,
-    pool: PoolItem,
+    pool: PoolRef,
 }
 
 // Buffer storage strategy flags.
@@ -1074,12 +1074,12 @@ impl BytesMut {
     #[inline]
     pub fn with_capacity_in<T: AsPoolRef>(capacity: usize, pool: T) -> BytesMut {
         BytesMut {
-            inner: Inner::with_capacity(capacity, pool.pool_ref().item()),
+            inner: Inner::with_capacity(capacity, pool.pool_ref()),
         }
     }
 
     #[inline]
-    pub(crate) fn with_capacity_in_priv(capacity: usize, pool: PoolItem) -> BytesMut {
+    pub(crate) fn with_capacity_in_priv(capacity: usize, pool: PoolRef) -> BytesMut {
         BytesMut {
             inner: Inner::with_capacity(capacity, pool),
         }
@@ -1092,7 +1092,7 @@ impl BytesMut {
         bytes
     }
 
-    fn copy_from_slice_in_priv(src: &[u8], pool: PoolItem) -> Self {
+    fn copy_from_slice_in_priv(src: &[u8], pool: PoolRef) -> Self {
         let mut bytes = BytesMut::with_capacity_in_priv(src.len(), pool);
         bytes.extend_from_slice(src);
         bytes
@@ -1102,7 +1102,7 @@ impl BytesMut {
     /// Convert a `Vec` into a `BytesMut`
     pub fn from_vec<T: AsPoolRef>(src: Vec<u8>, pool: T) -> BytesMut {
         BytesMut {
-            inner: Inner::from_vec(src, pool.pool_ref().item()),
+            inner: Inner::from_vec(src, pool.pool_ref()),
         }
     }
 
@@ -1522,7 +1522,7 @@ impl BytesMut {
         self.chunk().iter()
     }
 
-    pub(crate) fn move_to_pool(&mut self, pool: PoolItem) {
+    pub(crate) fn move_to_pool(&mut self, pool: PoolRef) {
         self.inner.move_to_pool(pool);
     }
 }
@@ -1844,7 +1844,7 @@ impl Inner {
     }
 
     #[inline]
-    fn from_vec(mut vec: Vec<u8>, pool: PoolItem) -> Inner {
+    fn from_vec(mut vec: Vec<u8>, pool: PoolRef) -> Inner {
         let len = vec.len();
         let cap = vec.capacity();
         let ptr = vec.as_mut_ptr();
@@ -1870,12 +1870,12 @@ impl Inner {
     }
 
     #[inline]
-    fn with_capacity(capacity: usize, pool: PoolItem) -> Inner {
+    fn with_capacity(capacity: usize, pool: PoolRef) -> Inner {
         Inner::from_slice(capacity, &[], pool)
     }
 
     #[inline]
-    fn from_slice(cap: usize, src: &[u8], pool: PoolItem) -> Inner {
+    fn from_slice(cap: usize, src: &[u8], pool: PoolRef) -> Inner {
         // Store data in vec
         let mut vec = Vec::with_capacity(cap + SHARED_VEC_SIZE);
         unsafe {
@@ -1929,7 +1929,7 @@ impl Inner {
     }
 
     #[inline]
-    fn pool(&self) -> PoolItem {
+    fn pool(&self) -> PoolRef {
         let kind = self.kind();
 
         if kind == KIND_VEC {
@@ -1937,12 +1937,12 @@ impl Inner {
         } else if kind == KIND_ARC {
             unsafe { (*self.arc.as_ptr()).pool }
         } else {
-            PoolId::DEFAULT.item()
+            PoolId::DEFAULT.pool_ref()
         }
     }
 
     #[inline]
-    fn move_to_pool(&mut self, pool: PoolItem) {
+    fn move_to_pool(&mut self, pool: PoolRef) {
         let kind = self.kind();
 
         if kind == KIND_VEC {
@@ -2357,7 +2357,8 @@ impl Inner {
             let new_cap = len + additional;
 
             // Promote to a vector
-            *self = Inner::from_slice(new_cap, self.as_ref(), PoolId::DEFAULT.item());
+            *self =
+                Inner::from_slice(new_cap, self.as_ref(), PoolId::DEFAULT.pool_ref());
             return;
         }
 

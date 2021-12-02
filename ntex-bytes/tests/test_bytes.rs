@@ -1,4 +1,5 @@
 //#![deny(warnings, rust_2018_idioms)]
+use std::task::Poll;
 
 use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, PoolId};
 
@@ -230,7 +231,7 @@ fn split_off_to_loop() {
             let mut bytes = Bytes::from(&s[..]);
             let off = bytes.split_off(i);
             assert_eq!(i, bytes.len());
-            let mut sum = Vec::new();
+            let mut sum: Vec<u8> = Vec::new();
             sum.extend(bytes.iter());
             sum.extend(off.iter());
             assert_eq!(&s[..], &sum[..]);
@@ -239,7 +240,7 @@ fn split_off_to_loop() {
             let mut bytes = BytesMut::from(&s[..]);
             let off = bytes.split_off(i);
             assert_eq!(i, bytes.len());
-            let mut sum = Vec::new();
+            let mut sum: Vec<u8> = Vec::new();
             sum.extend(&bytes);
             sum.extend(&off);
             assert_eq!(&s[..], &sum[..]);
@@ -248,7 +249,7 @@ fn split_off_to_loop() {
             let mut bytes = Bytes::from(&s[..]);
             let off = bytes.split_to(i);
             assert_eq!(i, off.len());
-            let mut sum = Vec::new();
+            let mut sum: Vec<u8> = Vec::new();
             sum.extend(off.iter());
             sum.extend(bytes.iter());
             assert_eq!(&s[..], &sum[..]);
@@ -257,7 +258,7 @@ fn split_off_to_loop() {
             let mut bytes = BytesMut::from(&s[..]);
             let off = bytes.split_to(i);
             assert_eq!(i, off.len());
-            let mut sum = Vec::new();
+            let mut sum: Vec<u8> = Vec::new();
             sum.extend(&off);
             sum.extend(&bytes);
             assert_eq!(&s[..], &sum[..]);
@@ -648,4 +649,53 @@ fn pool() {
     p1.move_in(&mut buf);
     assert_eq!(p.allocated(), 0);
     assert_eq!(p1.allocated(), 1024 + shared_vec());
+}
+
+#[ntex::test]
+async fn pool_usage() {
+    use ntex::{time, util};
+
+    PoolId::set_spawn_fn(|f| {
+        let _ = ntex::rt::spawn(f);
+    });
+
+    let p_ref = PoolId::P1.pool_ref().set_pool_size(10 * 1024);
+    let p1 = p_ref.pool();
+    let p2 = p_ref.pool();
+
+    assert_eq!(Poll::Ready(()), util::lazy(|cx| p1.poll_ready(cx)).await);
+
+    let buf = BytesMut::with_capacity_in(11 * 1024, p_ref);
+    assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
+    assert!(p1.is_pending());
+    assert_eq!(Poll::Pending, util::lazy(|cx| p2.poll_ready(cx)).await);
+    assert!(p2.is_pending());
+    time::sleep(time::Millis(50)).await;
+    drop(buf);
+
+    time::sleep(time::Millis(50)).await;
+    assert!(!p1.is_pending());
+    assert!(!p2.is_pending());
+
+    assert_eq!(Poll::Ready(()), util::lazy(|cx| p1.poll_ready(cx)).await);
+    assert_eq!(Poll::Ready(()), util::lazy(|cx| p2.poll_ready(cx)).await);
+
+    // pool is full
+    let buf = BytesMut::with_capacity_in(11 * 1024, p_ref);
+    assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
+    assert_eq!(Poll::Pending, util::lazy(|cx| p2.poll_ready(cx)).await);
+    drop(buf);
+
+    // pool has some space
+    let buf = BytesMut::with_capacity_in(10100, p_ref);
+    time::sleep(time::Millis(50)).await;
+    assert!(!p1.is_pending());
+    assert!(p2.is_pending());
+
+    // new pools should wait for next update
+    assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
+    drop(buf);
+    time::sleep(time::Millis(50)).await;
+    assert!(!p1.is_pending());
+    assert!(!p2.is_pending());
 }
