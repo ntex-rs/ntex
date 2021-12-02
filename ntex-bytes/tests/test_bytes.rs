@@ -655,11 +655,11 @@ fn pool() {
 async fn pool_usage() {
     use ntex::{time, util};
 
-    PoolId::set_spawn_fn(|f| {
+    PoolId::set_spawn_fn_all(|f| {
         let _ = ntex::rt::spawn(f);
     });
 
-    let p_ref = PoolId::P1.pool_ref().set_pool_size(10 * 1024);
+    let p_ref = PoolId::P1.set_pool_size(10 * 1024);
     let p1 = p_ref.pool();
     let p2 = p_ref.pool();
 

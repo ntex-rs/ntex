@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
 use std::{cmp, fmt, hash, mem, ptr, ptr::NonNull, slice, usize};
 
-use crate::pool::{AsPoolRef, PoolId, PoolRef};
+use crate::pool::{PoolId, PoolRef};
 use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};
 
 /// A reference counted contiguous slice of memory.
@@ -473,14 +473,17 @@ impl Bytes {
     }
 
     /// Creates `Bytes` instance from slice, by copying it.
-    pub fn copy_from_slice_in<T: AsPoolRef>(data: &[u8], pool: T) -> Self {
+    pub fn copy_from_slice_in<T>(data: &[u8], pool: T) -> Self
+    where
+        PoolRef: From<T>,
+    {
         if data.len() <= INLINE_CAP {
             Bytes {
                 inner: Inner::from_slice_inline(data),
             }
         } else {
             Bytes {
-                inner: BytesMut::copy_from_slice_in(data, pool.pool_ref()).inner,
+                inner: BytesMut::copy_from_slice_in(data, pool.into()).inner,
             }
         }
     }
@@ -1072,9 +1075,12 @@ impl BytesMut {
     /// assert!(PoolId::P1.pool_ref().allocated() > 0);
     /// ```
     #[inline]
-    pub fn with_capacity_in<T: AsPoolRef>(capacity: usize, pool: T) -> BytesMut {
+    pub fn with_capacity_in<T>(capacity: usize, pool: T) -> BytesMut
+    where
+        PoolRef: From<T>,
+    {
         BytesMut {
-            inner: Inner::with_capacity(capacity, pool.pool_ref()),
+            inner: Inner::with_capacity(capacity, pool.into()),
         }
     }
 
@@ -1086,8 +1092,11 @@ impl BytesMut {
     }
 
     /// Creates a new `BytesMut` from slice, by copying it.
-    pub fn copy_from_slice_in<T: AsPoolRef>(src: &[u8], pool: T) -> Self {
-        let mut bytes = BytesMut::with_capacity_in(src.len(), pool.pool_ref());
+    pub fn copy_from_slice_in<T>(src: &[u8], pool: T) -> Self
+    where
+        PoolRef: From<T>,
+    {
+        let mut bytes = BytesMut::with_capacity_in(src.len(), pool.into());
         bytes.extend_from_slice(src);
         bytes
     }
@@ -1100,9 +1109,12 @@ impl BytesMut {
 
     #[inline]
     /// Convert a `Vec` into a `BytesMut`
-    pub fn from_vec<T: AsPoolRef>(src: Vec<u8>, pool: T) -> BytesMut {
+    pub fn from_vec<T>(src: Vec<u8>, pool: T) -> BytesMut
+    where
+        PoolRef: From<T>,
+    {
         BytesMut {
-            inner: Inner::from_vec(src, pool.pool_ref()),
+            inner: Inner::from_vec(src, pool.into()),
         }
     }
 

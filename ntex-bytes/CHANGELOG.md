@@ -1,5 +1,9 @@
 # Changes
 
+## 0.1.6 (2021-12-03)
+
+* Better api usability
+
 ## 0.1.5 (2021-12-02)
 
 * Split,freeze,truncate operations produce inline Bytes object if possible

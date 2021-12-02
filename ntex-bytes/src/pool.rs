@@ -19,10 +19,6 @@ pub struct PoolRef(&'static MemoryPool);
 #[derive(Copy, Clone, Debug)]
 pub struct PoolId(u8);
 
-pub trait AsPoolRef {
-    fn pool_ref(&self) -> PoolRef;
-}
-
 #[derive(Copy, Clone)]
 pub struct BufParams {
     pub high: u16,
@@ -94,8 +90,44 @@ impl PoolId {
         POOLS.with(|pools| PoolRef(pools[self.0 as usize]))
     }
 
+    #[inline]
+    /// Set max pool size
+    pub fn set_pool_size(self, size: usize) -> Self {
+        self.pool_ref().set_pool_size(size);
+        self
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn set_read_params(self, h: u16, l: u16) -> Self {
+        self.pool_ref().set_read_params(h, l);
+        self
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn set_write_params(self, h: u16, l: u16) -> Self {
+        self.pool_ref().set_write_params(h, l);
+        self
+    }
+
     /// Set future spawn fn
-    pub fn set_spawn_fn<T>(f: T)
+    pub fn set_spawn_fn<T>(self, f: T) -> Self
+    where
+        T: Fn(Pin<Box<dyn Future<Output = ()>>>) + 'static,
+    {
+        let spawn: Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)> =
+            Rc::new(move |fut| f(fut));
+
+        POOLS.with(move |pools| {
+            *pools[self.0 as usize].spawn.borrow_mut() = Some(spawn.clone());
+        });
+
+        self
+    }
+
+    /// Set future spawn fn to all pools
+    pub fn set_spawn_fn_all<T>(f: T)
     where
         T: Fn(Pin<Box<dyn Future<Output = ()>>>) + 'static,
     {
@@ -107,13 +139,6 @@ impl PoolId {
                 *pool.spawn.borrow_mut() = Some(spawn.clone());
             }
         });
-    }
-}
-
-impl AsPoolRef for PoolId {
-    #[inline]
-    fn pool_ref(&self) -> PoolRef {
-        POOLS.with(|pools| PoolRef(pools[self.0 as usize]))
     }
 }
 
@@ -171,6 +196,7 @@ impl PoolRef {
         BytesMut::with_capacity_in_priv(cap, self)
     }
 
+    #[doc(hidden)]
     #[inline]
     /// Set max pool size
     pub fn set_pool_size(self, size: usize) -> Self {
@@ -329,10 +355,17 @@ impl Default for PoolRef {
     }
 }
 
-impl AsPoolRef for PoolRef {
+impl From<PoolId> for PoolRef {
     #[inline]
-    fn pool_ref(&self) -> PoolRef {
-        *self
+    fn from(pid: PoolId) -> Self {
+        pid.pool_ref()
+    }
+}
+
+impl<'a> From<&'a Pool> for PoolRef {
+    #[inline]
+    fn from(pool: &'a Pool) -> Self {
+        PoolRef(pool.inner)
     }
 }
 
@@ -386,11 +419,26 @@ impl BufParams {
 }
 
 impl Clone for Pool {
+    #[inline]
     fn clone(&self) -> Pool {
         Pool {
             idx: Cell::new(0),
             inner: self.inner,
         }
+    }
+}
+
+impl From<PoolId> for Pool {
+    #[inline]
+    fn from(pid: PoolId) -> Self {
+        pid.pool()
+    }
+}
+
+impl From<PoolRef> for Pool {
+    #[inline]
+    fn from(pref: PoolRef) -> Self {
+        pref.pool()
     }
 }
 
