@@ -12,6 +12,7 @@ categories = ["network-programming", "data-structures"]
 edition = "2018"
 
 [dependencies]
+bitflags = "1.3"
 bytes = "1.0.0"
 serde = "1.0.0"
 futures-core = { version = "0.3.18", default-features = false, features = ["alloc"] }

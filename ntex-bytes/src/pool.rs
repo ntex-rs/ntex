@@ -29,11 +29,19 @@ pub struct BufParams {
     pub low: u16,
 }
 
+bitflags::bitflags! {
+    struct Flags: u8 {
+        const SPAWNED    = 0b0000_0001;
+        const INCREASED  = 0b0000_0010;
+    }
+}
+
 struct MemoryPool {
     id: PoolId,
     waker: AtomicWaker,
     waker_alive: AtomicBool,
     waiters: RefCell<Waiters>,
+    flags: Cell<Flags>,
 
     size: AtomicUsize,
     max_size: Cell<usize>,
@@ -50,7 +58,6 @@ struct MemoryPool {
     write_wm: Cell<BufParams>,
     write_cache: RefCell<Vec<BytesMut>>,
 
-    spawned: Cell<bool>,
     spawn: RefCell<Option<Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)>>>,
 }
 
@@ -172,6 +179,10 @@ impl PoolRef {
         self.0.window_l.set(size);
         self.0.window_h.set(usize::MAX);
         self.0.window_idx.set(0);
+
+        let mut flags = self.0.flags.get();
+        flags.insert(Flags::INCREASED);
+        self.0.flags.set(flags);
 
         // calc windows
         let mut l = size;
@@ -341,6 +352,7 @@ impl MemoryPool {
             waker: AtomicWaker::new(),
             waker_alive: AtomicBool::new(false),
             waiters: RefCell::new(Waiters::new()),
+            flags: Cell::new(Flags::empty()),
 
             size: AtomicUsize::new(0),
             max_size: Cell::new(0),
@@ -361,7 +373,6 @@ impl MemoryPool {
                 low: 1024,
             }),
             write_cache: RefCell::new(Vec::with_capacity(CACHE_SIZE)),
-            spawned: Cell::new(false),
             spawn: RefCell::new(None),
         }))
     }
@@ -451,19 +462,26 @@ impl Pool {
             // register waiter
             if let Some(spawn) = &*self.inner.spawn.borrow() {
                 let idx = self.idx.get();
+                let mut flags = self.inner.flags.get();
                 let mut waiters = self.inner.waiters.borrow_mut();
                 if idx == 0 {
                     self.idx.set(waiters.append(ctx.waker().clone()) + 1);
+
+                    if flags.contains(Flags::INCREASED) {
+                        self.inner
+                            .window_waiters
+                            .set(self.inner.window_waiters.get() + 1);
+                    } else if let Some(waker) = waiters.consume() {
+                        waker.wake();
+                    }
                 } else {
                     waiters.update(idx - 1, ctx.waker().clone());
                 }
-                self.inner
-                    .window_waiters
-                    .set(self.inner.window_waiters.get() + 1);
 
                 // start driver task
-                if !self.inner.spawned.get() {
-                    self.inner.spawned.set(true);
+                if !flags.contains(Flags::SPAWNED) {
+                    flags.insert(Flags::SPAWNED);
+                    self.inner.flags.set(flags);
                     spawn(Box::pin(Driver { pool: self.inner }))
                 }
                 return Poll::Pending;
@@ -532,7 +550,7 @@ impl Future for Driver {
                     pool.window_h.set(windows[0].1);
                     pool.window_idx.set(0);
                     pool.window_waiters.set(0);
-                    pool.spawned.set(false);
+                    pool.flags.set(Flags::INCREASED);
                     return Poll::Ready(());
                 } else {
                     // release 5% of pending waiters
@@ -543,6 +561,7 @@ impl Future for Driver {
                         pool.window_h.set(windows[idx].1);
                         pool.window_idx.set(idx);
                         pool.window_waiters.set(0);
+                        pool.flags.set(Flags::SPAWNED);
                         break;
                     }
                     idx += 1;
@@ -559,6 +578,7 @@ impl Future for Driver {
             pool.window_h.set(windows[idx].1);
             pool.window_idx.set(idx);
             pool.window_waiters.set(0);
+            pool.flags.set(Flags::SPAWNED | Flags::INCREASED);
         }
 
         // register waker
