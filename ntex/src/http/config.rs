@@ -4,7 +4,7 @@ use crate::framed::Timer;
 use crate::http::{Request, Response};
 use crate::service::boxed::BoxService;
 use crate::time::{sleep, Millis, Seconds, Sleep};
-use crate::util::BytesMut;
+use crate::util::{BytesMut, PoolRef};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 /// Server keep-alive setting
@@ -86,6 +86,10 @@ impl ServiceConfig {
             KeepAlive::Disabled => (Millis::ZERO, false),
         };
         let keep_alive = if ka_enabled { keep_alive } else { Millis::ZERO };
+
+        PoolRef::default()
+            .set_read_params(read_hw, lw)
+            .set_write_params(write_hw, lw);
 
         ServiceConfig(Rc::new(Inner {
             keep_alive,

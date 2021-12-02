@@ -1,6 +1,7 @@
-#![deny(warnings, rust_2018_idioms)]
+//#![deny(warnings, rust_2018_idioms)]
+use std::task::Poll;
 
-use ntex_bytes::{Buf, BufMut, Bytes, BytesMut};
+use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, PoolId};
 
 const LONG: &'static [u8] = b"mary had a little lamb, little lamb, little lamb";
 const SHORT: &'static [u8] = b"hello world";
@@ -8,6 +9,11 @@ const SHORT: &'static [u8] = b"hello world";
 fn inline_cap() -> usize {
     use std::mem;
     4 * mem::size_of::<usize>() - 1
+}
+
+const fn shared_vec() -> usize {
+    use std::mem;
+    3 * mem::size_of::<usize>()
 }
 
 fn is_sync<T: Sync>() {}
@@ -109,6 +115,37 @@ fn len() {
 }
 
 #[test]
+fn inline() {
+    let a = Bytes::from("abcdefg".to_string());
+    assert!(a.is_inline());
+
+    let a = BytesMut::from(&b"abcdefg"[..]).freeze();
+    assert!(a.is_inline());
+
+    let a = Bytes::from("".to_string());
+    assert!(a.is_empty());
+
+    let a = BytesMut::from(&b""[..]).freeze();
+    assert!(a.is_inline());
+
+    let mut a = BytesMut::from(vec![b'*'; 35]).freeze();
+    assert!(!a.is_inline());
+
+    let b = a.split_to(8);
+    assert!(b.is_inline());
+    assert!(a.is_inline());
+
+    let mut a = BytesMut::from(vec![b'*'; 35]).freeze();
+    let b = a.split_off(8);
+    assert!(b.is_inline());
+    assert!(a.is_inline());
+
+    let mut a = BytesMut::from(vec![b'*'; 35]).freeze();
+    a.truncate(8);
+    assert!(a.is_inline());
+}
+
+#[test]
 fn index() {
     let a = Bytes::from(&b"hello world"[..]);
     assert_eq!(a[0..5], *b"hello");
@@ -194,7 +231,7 @@ fn split_off_to_loop() {
             let mut bytes = Bytes::from(&s[..]);
             let off = bytes.split_off(i);
             assert_eq!(i, bytes.len());
-            let mut sum = Vec::new();
+            let mut sum: Vec<u8> = Vec::new();
             sum.extend(bytes.iter());
             sum.extend(off.iter());
             assert_eq!(&s[..], &sum[..]);
@@ -203,7 +240,7 @@ fn split_off_to_loop() {
             let mut bytes = BytesMut::from(&s[..]);
             let off = bytes.split_off(i);
             assert_eq!(i, bytes.len());
-            let mut sum = Vec::new();
+            let mut sum: Vec<u8> = Vec::new();
             sum.extend(&bytes);
             sum.extend(&off);
             assert_eq!(&s[..], &sum[..]);
@@ -212,7 +249,7 @@ fn split_off_to_loop() {
             let mut bytes = Bytes::from(&s[..]);
             let off = bytes.split_to(i);
             assert_eq!(i, off.len());
-            let mut sum = Vec::new();
+            let mut sum: Vec<u8> = Vec::new();
             sum.extend(off.iter());
             sum.extend(bytes.iter());
             assert_eq!(&s[..], &sum[..]);
@@ -221,7 +258,7 @@ fn split_off_to_loop() {
             let mut bytes = BytesMut::from(&s[..]);
             let off = bytes.split_to(i);
             assert_eq!(i, off.len());
-            let mut sum = Vec::new();
+            let mut sum: Vec<u8> = Vec::new();
             sum.extend(&off);
             sum.extend(&bytes);
             assert_eq!(&s[..], &sum[..]);
@@ -232,20 +269,20 @@ fn split_off_to_loop() {
 #[test]
 fn split_to_1() {
     // Inline
-    let mut a = Bytes::from(SHORT);
+    let mut a = Bytes::from(&SHORT[..]);
     let b = a.split_to(4);
 
     assert_eq!(SHORT[4..], a);
     assert_eq!(SHORT[..4], b);
 
     // Allocated
-    let mut a = Bytes::from(LONG);
+    let mut a = Bytes::from(Vec::from(LONG));
     let b = a.split_to(4);
 
     assert_eq!(LONG[4..], a);
     assert_eq!(LONG[..4], b);
 
-    let mut a = Bytes::from(LONG);
+    let mut a = Bytes::from(Vec::from(LONG));
     let b = a.split_to(30);
 
     assert_eq!(LONG[30..], a);
@@ -322,77 +359,19 @@ fn fns_defined_for_bytes_mut() {
 
 #[test]
 fn reserve_convert() {
-    // Inline -> Vec
-    let mut bytes = BytesMut::with_capacity(8);
-    bytes.put("hello".as_bytes());
-    bytes.reserve(40);
-    assert_eq!(bytes.capacity(), 45);
-    assert_eq!(bytes, "hello");
-
-    // Inline -> Inline
-    let mut bytes = BytesMut::with_capacity(inline_cap());
-    bytes.put("abcdefghijkl".as_bytes());
-
-    let a = bytes.split_to(10);
-    bytes.reserve(inline_cap() - 3);
-    assert_eq!(inline_cap(), bytes.capacity());
-
-    assert_eq!(bytes, "kl");
-    assert_eq!(a, "abcdefghij");
-
     // Vec -> Vec
     let mut bytes = BytesMut::from(LONG);
     bytes.reserve(64);
     assert_eq!(bytes.capacity(), LONG.len() + 64);
 
     // Arc -> Vec
-    let mut bytes = BytesMut::from(LONG);
+    let mut bytes = BytesMut::from(Vec::from(LONG));
     let a = bytes.split_to(30);
 
     bytes.reserve(128);
     assert!(bytes.capacity() >= bytes.len() + 128);
 
     drop(a);
-}
-
-#[test]
-fn reserve_growth() {
-    let mut bytes = BytesMut::with_capacity(64);
-    bytes.put("hello world".as_bytes());
-    let _ = bytes.split();
-
-    bytes.reserve(65);
-    assert_eq!(bytes.capacity(), 128);
-}
-
-#[test]
-fn reserve_allocates_at_least_original_capacity() {
-    let mut bytes = BytesMut::with_capacity(1024);
-
-    for i in 0..1020 {
-        bytes.put_u8(i as u8);
-    }
-
-    let _other = bytes.split();
-
-    bytes.reserve(16);
-    assert_eq!(bytes.capacity(), 1024);
-}
-
-#[test]
-fn reserve_max_original_capacity_value() {
-    const SIZE: usize = 128 * 1024;
-
-    let mut bytes = BytesMut::with_capacity(SIZE);
-
-    for _ in 0..SIZE {
-        bytes.put_u8(0u8);
-    }
-
-    let _other = bytes.split();
-
-    bytes.reserve(16);
-    assert_eq!(bytes.capacity(), 64 * 1024);
 }
 
 // Without either looking at the internals of the BytesMut or doing weird stuff
@@ -431,7 +410,7 @@ fn reserve_in_arc_unique_doubles() {
 
     assert_eq!(1000, bytes.capacity());
     bytes.reserve(1001);
-    assert_eq!(2000, bytes.capacity());
+    assert_eq!(1001, bytes.capacity());
 }
 
 #[test]
@@ -463,26 +442,9 @@ fn extend_mut() {
 }
 
 #[test]
-fn extend_shr() {
-    let mut bytes = Bytes::new();
-    bytes.extend(LONG);
-    assert_eq!(*bytes, LONG[..]);
-}
-
-#[test]
 fn extend_from_slice_mut() {
     for &i in &[3, 34] {
         let mut bytes = BytesMut::new();
-        bytes.extend_from_slice(&LONG[..i]);
-        bytes.extend_from_slice(&LONG[i..]);
-        assert_eq!(LONG[..], *bytes);
-    }
-}
-
-#[test]
-fn extend_from_slice_shr() {
-    for &i in &[3, 34] {
-        let mut bytes = Bytes::new();
         bytes.extend_from_slice(&LONG[..i]);
         bytes.extend_from_slice(&LONG[i..]);
         assert_eq!(LONG[..], *bytes);
@@ -586,258 +548,6 @@ fn partial_eq_bytesmut() {
 }
 
 #[test]
-fn bytes_unsplit_basic() {
-    let mut buf = Bytes::with_capacity(64);
-    buf.extend_from_slice(b"aaabbbcccddd");
-
-    let splitted = buf.split_off(6);
-    assert_eq!(b"aaabbb", &buf[..]);
-    assert_eq!(b"cccddd", &splitted[..]);
-
-    buf.unsplit(splitted);
-    assert_eq!(b"aaabbbcccddd", &buf[..]);
-}
-
-#[test]
-fn bytes_unsplit_empty_other() {
-    let mut buf = Bytes::with_capacity(64);
-    buf.extend_from_slice(b"aaabbbcccddd");
-
-    // empty other
-    let other = Bytes::new();
-
-    buf.unsplit(other);
-    assert_eq!(b"aaabbbcccddd", &buf[..]);
-}
-
-#[test]
-fn bytes_unsplit_empty_self() {
-    // empty self
-    let mut buf = Bytes::new();
-
-    let mut other = Bytes::with_capacity(64);
-    other.extend_from_slice(b"aaabbbcccddd");
-
-    buf.unsplit(other);
-    assert_eq!(b"aaabbbcccddd", &buf[..]);
-}
-
-#[test]
-fn bytes_unsplit_inline_arc() {
-    let mut buf = Bytes::with_capacity(8); //inline
-    buf.extend_from_slice(b"aaaabbbb");
-
-    let mut buf2 = Bytes::with_capacity(64);
-    buf2.extend_from_slice(b"ccccddddeeee");
-
-    buf2.split_off(8); //arc
-
-    buf.unsplit(buf2);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_unsplit_arc_inline() {
-    let mut buf = Bytes::with_capacity(64);
-    buf.extend_from_slice(b"aaaabbbbeeee");
-
-    buf.split_off(8); //arc
-
-    let mut buf2 = Bytes::with_capacity(8); //inline
-    buf2.extend_from_slice(b"ccccdddd");
-
-    buf.unsplit(buf2);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_unsplit_both_inline() {
-    let mut buf = Bytes::with_capacity(16); //inline
-    buf.extend_from_slice(b"aaaabbbbccccdddd");
-
-    let splitted = buf.split_off(8); // both inline
-    assert_eq!(b"aaaabbbb", &buf[..]);
-    assert_eq!(b"ccccdddd", &splitted[..]);
-
-    buf.unsplit(splitted);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_unsplit_arc_different() {
-    let mut buf = Bytes::with_capacity(64);
-    buf.extend_from_slice(b"aaaabbbbeeee");
-
-    buf.split_off(8); //arc
-
-    let mut buf2 = Bytes::with_capacity(64);
-    buf2.extend_from_slice(b"ccccddddeeee");
-
-    buf2.split_off(8); //arc
-
-    buf.unsplit(buf2);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_unsplit_arc_non_contiguous() {
-    let mut buf = Bytes::with_capacity(64);
-    buf.extend_from_slice(b"aaaabbbbeeeeccccdddd");
-
-    let mut buf2 = buf.split_off(8); //arc
-
-    let buf3 = buf2.split_off(4); //arc
-
-    buf.unsplit(buf3);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_unsplit_two_split_offs() {
-    let mut buf = Bytes::with_capacity(64);
-    buf.extend_from_slice(b"aaaabbbbccccdddd");
-
-    let mut buf2 = buf.split_off(8); //arc
-    let buf3 = buf2.split_off(4); //arc
-
-    buf2.unsplit(buf3);
-    buf.unsplit(buf2);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_unsplit_overlapping_references() {
-    let mut buf = Bytes::with_capacity(64);
-    buf.extend_from_slice(b"abcdefghijklmnopqrstuvwxyz");
-    let mut buf0010 = buf.slice(0..10);
-    let buf1020 = buf.slice(10..20);
-    let buf0515 = buf.slice(5..15);
-    buf0010.unsplit(buf1020);
-    assert_eq!(b"abcdefghijklmnopqrst", &buf0010[..]);
-    assert_eq!(b"fghijklmno", &buf0515[..]);
-}
-
-#[test]
-fn bytes_mut_unsplit_basic() {
-    let mut buf = BytesMut::with_capacity(64);
-    buf.extend_from_slice(b"aaabbbcccddd");
-
-    let splitted = buf.split_off(6);
-    assert_eq!(b"aaabbb", &buf[..]);
-    assert_eq!(b"cccddd", &splitted[..]);
-
-    buf.unsplit(splitted);
-    assert_eq!(b"aaabbbcccddd", &buf[..]);
-}
-
-#[test]
-fn bytes_mut_unsplit_empty_other() {
-    let mut buf = BytesMut::with_capacity(64);
-    buf.extend_from_slice(b"aaabbbcccddd");
-
-    // empty other
-    let other = BytesMut::new();
-
-    buf.unsplit(other);
-    assert_eq!(b"aaabbbcccddd", &buf[..]);
-}
-
-#[test]
-fn bytes_mut_unsplit_empty_self() {
-    // empty self
-    let mut buf = BytesMut::new();
-
-    let mut other = BytesMut::with_capacity(64);
-    other.extend_from_slice(b"aaabbbcccddd");
-
-    buf.unsplit(other);
-    assert_eq!(b"aaabbbcccddd", &buf[..]);
-}
-
-#[test]
-fn bytes_mut_unsplit_inline_arc() {
-    let mut buf = BytesMut::with_capacity(8); //inline
-    buf.extend_from_slice(b"aaaabbbb");
-
-    let mut buf2 = BytesMut::with_capacity(64);
-    buf2.extend_from_slice(b"ccccddddeeee");
-
-    buf2.split_off(8); //arc
-
-    buf.unsplit(buf2);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_mut_unsplit_arc_inline() {
-    let mut buf = BytesMut::with_capacity(64);
-    buf.extend_from_slice(b"aaaabbbbeeee");
-
-    buf.split_off(8); //arc
-
-    let mut buf2 = BytesMut::with_capacity(8); //inline
-    buf2.extend_from_slice(b"ccccdddd");
-
-    buf.unsplit(buf2);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_mut_unsplit_both_inline() {
-    let mut buf = BytesMut::with_capacity(16); //inline
-    buf.extend_from_slice(b"aaaabbbbccccdddd");
-
-    let splitted = buf.split_off(8); // both inline
-    assert_eq!(b"aaaabbbb", &buf[..]);
-    assert_eq!(b"ccccdddd", &splitted[..]);
-
-    buf.unsplit(splitted);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_mut_unsplit_arc_different() {
-    let mut buf = BytesMut::with_capacity(64);
-    buf.extend_from_slice(b"aaaabbbbeeee");
-
-    buf.split_off(8); //arc
-
-    let mut buf2 = BytesMut::with_capacity(64);
-    buf2.extend_from_slice(b"ccccddddeeee");
-
-    buf2.split_off(8); //arc
-
-    buf.unsplit(buf2);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_mut_unsplit_arc_non_contiguous() {
-    let mut buf = BytesMut::with_capacity(64);
-    buf.extend_from_slice(b"aaaabbbbeeeeccccdddd");
-
-    let mut buf2 = buf.split_off(8); //arc
-
-    let buf3 = buf2.split_off(4); //arc
-
-    buf.unsplit(buf3);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
-fn bytes_mut_unsplit_two_split_offs() {
-    let mut buf = BytesMut::with_capacity(64);
-    buf.extend_from_slice(b"aaaabbbbccccdddd");
-
-    let mut buf2 = buf.split_off(8); //arc
-    let buf3 = buf2.split_off(4); //arc
-
-    buf2.unsplit(buf3);
-    buf.unsplit(buf2);
-    assert_eq!(b"aaaabbbbccccdddd", &buf[..]);
-}
-
-#[test]
 fn from_iter_no_size_hint() {
     use std::iter;
 
@@ -909,4 +619,83 @@ fn empty_slice_ref_catches_not_an_empty_subset() {
     let slice = &b""[0..0];
 
     bytes.slice_ref(slice);
+}
+
+#[test]
+fn pool() {
+    // Pool
+    let p1 = PoolId::P1.pool_ref();
+    assert_eq!(p1.allocated(), 0);
+    let mut buf = BytesMut::with_capacity_in(1024, p1);
+    assert_eq!(p1.allocated(), 1024 + shared_vec());
+    buf.reserve(2048);
+    assert_eq!(p1.allocated(), 2048 + shared_vec());
+    drop(buf);
+    assert_eq!(p1.allocated(), 0);
+
+    // Default pool
+    let p = PoolId::DEFAULT.pool_ref();
+    assert_eq!(p.allocated(), 0);
+    let mut buf = BytesMut::with_capacity(1024);
+    assert_eq!(p.allocated(), 1024 + shared_vec());
+    buf.reserve(2048);
+    assert_eq!(p.allocated(), 2048 + shared_vec());
+    drop(buf);
+    assert_eq!(p.allocated(), 0);
+
+    let mut buf = BytesMut::with_capacity(1024);
+    assert_eq!(p.allocated(), 1024 + shared_vec());
+    assert_eq!(p1.allocated(), 0);
+    p1.move_in(&mut buf);
+    assert_eq!(p.allocated(), 0);
+    assert_eq!(p1.allocated(), 1024 + shared_vec());
+}
+
+#[ntex::test]
+async fn pool_usage() {
+    use ntex::{time, util};
+
+    PoolId::set_spawn_fn(|f| {
+        let _ = ntex::rt::spawn(f);
+    });
+
+    let p_ref = PoolId::P1.pool_ref().set_pool_size(10 * 1024);
+    let p1 = p_ref.pool();
+    let p2 = p_ref.pool();
+
+    assert_eq!(Poll::Ready(()), util::lazy(|cx| p1.poll_ready(cx)).await);
+
+    let buf = BytesMut::with_capacity_in(11 * 1024, p_ref);
+    assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
+    assert!(p1.is_pending());
+    assert_eq!(Poll::Pending, util::lazy(|cx| p2.poll_ready(cx)).await);
+    assert!(p2.is_pending());
+    time::sleep(time::Millis(50)).await;
+    drop(buf);
+
+    time::sleep(time::Millis(50)).await;
+    assert!(!p1.is_pending());
+    assert!(!p2.is_pending());
+
+    assert_eq!(Poll::Ready(()), util::lazy(|cx| p1.poll_ready(cx)).await);
+    assert_eq!(Poll::Ready(()), util::lazy(|cx| p2.poll_ready(cx)).await);
+
+    // pool is full
+    let buf = BytesMut::with_capacity_in(11 * 1024, p_ref);
+    assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
+    assert_eq!(Poll::Pending, util::lazy(|cx| p2.poll_ready(cx)).await);
+    drop(buf);
+
+    // pool has some space
+    let buf = BytesMut::with_capacity_in(10100, p_ref);
+    time::sleep(time::Millis(50)).await;
+    assert!(!p1.is_pending());
+    assert!(p2.is_pending());
+
+    // new pools should wait for next update
+    assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
+    drop(buf);
+    time::sleep(time::Millis(50)).await;
+    assert!(!p1.is_pending());
+    assert!(!p2.is_pending());
 }

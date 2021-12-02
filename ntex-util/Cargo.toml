@@ -18,8 +18,8 @@ path = "src/lib.rs"
 [dependencies]
 bitflags = "1.2"
 slab = "0.4"
-futures-core = { version = "0.3.13", default-features = false, features = ["alloc"] }
-futures-sink = { version = "0.3.13", default-features = false, features = ["alloc"] }
+futures-core = { version = "0.3.18", default-features = false, features = ["alloc"] }
+futures-sink = { version = "0.3.18", default-features = false, features = ["alloc"] }
 pin-project-lite = "0.2.6"
 
 [dev-dependencies]

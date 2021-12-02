@@ -52,8 +52,8 @@
 
 #![deny(
     warnings,
-    missing_docs,
-    missing_debug_implementations,
+//    missing_docs,
+//    missing_debug_implementations,
     rust_2018_idioms
 )]
 #![doc(html_root_url = "https://docs.rs/ntex-bytes/")]
@@ -64,9 +64,12 @@ pub use crate::buf::{Buf, BufMut};
 mod bytes;
 mod debug;
 mod hex;
+mod pool;
+mod serde;
 mod string;
 
 pub use crate::bytes::{Bytes, BytesMut};
 pub use crate::string::ByteString;
 
-mod serde;
+#[doc(hidden)]
+pub use crate::pool::{Pool, PoolId, PoolRef};

@@ -8,7 +8,7 @@ use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder};
 use crate::framed::{DispatchItem, Read, ReadTask, State, Timer, Write, WriteTask};
 use crate::service::{IntoService, Service};
 use crate::time::Seconds;
-use crate::util::Either;
+use crate::util::{Either, Pool};
 
 type Response<U> = <U as Encoder>::Item;
 
@@ -43,6 +43,7 @@ where
     ka_updated: Cell<Instant>,
     error: Cell<Option<S::Error>>,
     shared: Rc<DispatcherShared<S, U>>,
+    pool: Pool,
 }
 
 struct DispatcherShared<S, U>
@@ -128,9 +129,7 @@ where
             service: service.into_service(),
             fut: None,
             inner: DispatcherInner {
-                state,
-                timer,
-                ka_timeout,
+                pool: state.memory_pool().pool(),
                 ka_updated: Cell::new(updated),
                 error: Cell::new(None),
                 st: Cell::new(DispatcherState::Processing),
@@ -139,6 +138,9 @@ where
                     error: Cell::new(None),
                     inflight: Cell::new(0),
                 }),
+                state,
+                timer,
+                ka_timeout,
             },
         }
     }
@@ -220,6 +222,12 @@ where
                     slf.handle_result(item, write);
                 }
             }
+        }
+
+        // handle memory pool pressure
+        if slf.pool.poll_ready(cx).is_pending() {
+            read.pause(cx.waker());
+            return Poll::Pending;
         }
 
         loop {
@@ -517,7 +525,7 @@ mod tests {
     use crate::codec::BytesCodec;
     use crate::testing::Io;
     use crate::time::{sleep, Millis};
-    use crate::util::{Bytes, Ready};
+    use crate::util::{Bytes, PoolRef, Ready};
 
     use super::*;
 
@@ -567,6 +575,7 @@ mod tests {
                         state: state.clone(),
                         error: Cell::new(None),
                         st: Cell::new(DispatcherState::Processing),
+                        pool: state.memory_pool().pool(),
                     },
                 },
                 state,
@@ -597,11 +606,10 @@ mod tests {
         });
 
         sleep(Millis(25)).await;
-        client.write("GET /test HTTP/1\r\n\r\n");
-
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
+        client.write("GET /test HTTP/1\r\n\r\n");
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
@@ -774,7 +782,9 @@ mod tests {
                 }
             }),
         );
-        state.set_buffer_params(8 * 1024, 16 * 1024, 1024);
+        let pool = PoolRef::default();
+        pool.set_read_params(8 * 1024, 1024);
+        pool.set_write_params(16 * 1024, 1024);
         crate::rt::spawn(async move {
             let _ = disp.await;
         });

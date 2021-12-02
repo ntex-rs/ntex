@@ -1,5 +1,13 @@
 # Changes
 
+## 0.1.5 (2021-12-02)
+
+* Split,freeze,truncate operations produce inline Bytes object if possible
+
+* Refactor Vec representation
+
+* Introduce memory pools
+
 ## 0.1.4 (2021-06-27)
 
 * Reduce size of Option<Bytes> by using NonNull

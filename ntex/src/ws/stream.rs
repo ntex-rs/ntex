@@ -64,7 +64,7 @@ where
 
         loop {
             if !this.buf.is_empty() {
-                match this.codec.decode(&mut this.buf) {
+                match this.codec.decode(this.buf) {
                     Ok(Some(item)) => return Poll::Ready(Some(Ok(item))),
                     Ok(None) => (),
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),

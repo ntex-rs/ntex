@@ -49,7 +49,7 @@ mod danger {
             _scts: &mut dyn Iterator<Item = &[u8]>,
             _ocsp_response: &[u8],
             _now: SystemTime,
-        ) -> Result<rust_tls::client::ServerCertVerified, rust_tls::TLSError> {
+        ) -> Result<rust_tls::client::ServerCertVerified, rust_tls::Error> {
             Ok(rust_tls::client::ServerCertVerified::assertion())
         }
     }

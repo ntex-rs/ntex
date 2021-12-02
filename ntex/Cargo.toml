@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.4.10"
+version = "0.4.11"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -49,14 +49,14 @@ ntex-router = "0.5.1"
 ntex-service = "0.2.1"
 ntex-macros = "0.1.3"
 ntex-util = "0.1.1"
-ntex-bytes = "0.1.4"
+ntex-bytes = "0.1.5"
 
 base64 = "0.13"
 bitflags = "1.3"
 derive_more = "0.99.14"
 fxhash = "0.2.1"
-futures-core = { version = "0.3.16", default-features = false, features = ["alloc"] }
-futures-sink = { version = "0.3.16", default-features = false, features = ["alloc"] }
+futures-core = { version = "0.3.18", default-features = false, features = ["alloc"] }
+futures-sink = { version = "0.3.18", default-features = false, features = ["alloc"] }
 log = "0.4"
 mio = "0.7.11"
 num_cpus = "1.13"
@@ -86,7 +86,7 @@ coo-kie = { version = "0.15", package = "cookie", optional = true }
 
 # openssl
 open-ssl = { version="0.10", package = "openssl", optional = true }
-tokio-openssl = { version = "0.6.3", optional = true }
+tokio-openssl = { version = "0.6", optional = true }
 
 # rustls
 rust-tls = { version = "0.20", package = "rustls", optional = true }
@@ -97,7 +97,7 @@ webpki-roots = { version = "0.22", optional = true }
 
 # compression
 brotli2 = { version="0.3.2", optional = true }
-flate2 = { version = "1.0.20", optional = true }
+flate2 = { version = "1.0.22", optional = true }
 
 [dev-dependencies]
 env_logger = "0.9"
@@ -106,4 +106,4 @@ time = "0.2"
 open-ssl = { version="0.10", package = "openssl" }
 rust-tls = { version = "0.20", package="rustls", features = ["dangerous_configuration"]  }
 webpki = "0.21"
-futures = "0.3.16"
+futures = "0.3"

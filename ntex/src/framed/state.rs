@@ -7,7 +7,7 @@ use slab::Slab;
 use crate::codec::{AsyncRead, AsyncWrite, Decoder, Encoder, Framed, FramedParts};
 use crate::task::LocalWaker;
 use crate::time::Seconds;
-use crate::util::{poll_fn, Buf, BytesMut, Either};
+use crate::util::{poll_fn, Buf, BytesMut, Either, PoolId, PoolRef};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -43,9 +43,7 @@ pub struct State(Rc<IoStateInner>);
 
 pub(crate) struct IoStateInner {
     flags: Cell<Flags>,
-    lw: Cell<u16>,
-    read_hw: Cell<u16>,
-    write_hw: Cell<u16>,
+    pool: Cell<PoolRef>,
     disconnect_timeout: Cell<Seconds>,
     error: Cell<Option<io::Error>>,
     read_task: LocalWaker,
@@ -54,29 +52,6 @@ pub(crate) struct IoStateInner {
     read_buf: Cell<Option<BytesMut>>,
     write_buf: Cell<Option<BytesMut>>,
     on_disconnect: RefCell<Slab<Option<LocalWaker>>>,
-}
-
-thread_local!(static R_BYTES_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(16)));
-thread_local!(static W_BYTES_POOL: RefCell<Vec<BytesMut>> = RefCell::new(Vec::with_capacity(16)));
-
-fn release_to_r_pool(mut buf: BytesMut) {
-    R_BYTES_POOL.with(|pool| {
-        let v = &mut pool.borrow_mut();
-        if v.len() < 16 {
-            buf.clear();
-            v.push(buf);
-        }
-    })
-}
-
-fn release_to_w_pool(mut buf: BytesMut) {
-    W_BYTES_POOL.with(|pool| {
-        let v = &mut pool.borrow_mut();
-        if v.len() < 16 {
-            buf.clear();
-            v.push(buf);
-        }
-    })
 }
 
 impl IoStateInner {
@@ -96,13 +71,7 @@ impl IoStateInner {
         if let Some(buf) = self.read_buf.take() {
             buf
         } else {
-            R_BYTES_POOL.with(|pool| {
-                if let Some(buf) = pool.borrow_mut().pop() {
-                    buf
-                } else {
-                    BytesMut::with_capacity(self.read_hw.get() as usize)
-                }
-            })
+            self.pool.get().get_read_buf()
         }
     }
 
@@ -110,21 +79,13 @@ impl IoStateInner {
         if let Some(buf) = self.write_buf.take() {
             buf
         } else {
-            W_BYTES_POOL.with(|pool| {
-                if let Some(buf) = pool.borrow_mut().pop() {
-                    buf
-                } else {
-                    BytesMut::with_capacity(self.write_hw.get() as usize)
-                }
-            })
+            self.pool.get().get_write_buf()
         }
     }
 
     fn release_read_buf(&self, buf: BytesMut) {
         if buf.is_empty() {
-            if buf.capacity() > (self.lw.get() as usize) {
-                release_to_r_pool(buf);
-            }
+            self.pool.get().release_read_buf(buf);
         } else {
             self.read_buf.set(Some(buf));
         }
@@ -132,10 +93,7 @@ impl IoStateInner {
 
     fn release_write_buf(&self, buf: BytesMut) {
         if buf.is_empty() {
-            let cap = buf.capacity();
-            if cap > (self.lw.get() as usize) && cap <= self.write_hw.get() as usize {
-                release_to_w_pool(buf);
-            }
+            self.pool.get().release_write_buf(buf);
         } else {
             self.write_buf.set(Some(buf));
         }
@@ -145,16 +103,10 @@ impl IoStateInner {
 impl Drop for IoStateInner {
     fn drop(&mut self) {
         if let Some(buf) = self.read_buf.take() {
-            let cap = buf.capacity();
-            if cap > (self.lw.get() as usize) && cap <= self.read_hw.get() as usize {
-                release_to_r_pool(buf);
-            }
+            self.pool.get().release_read_buf(buf);
         }
         if let Some(buf) = self.write_buf.take() {
-            let cap = buf.capacity();
-            if cap > (self.lw.get() as usize) && cap <= self.write_hw.get() as usize {
-                release_to_w_pool(buf);
-            }
+            self.pool.get().release_write_buf(buf);
         }
     }
 }
@@ -183,12 +135,16 @@ impl State {
     #[inline]
     /// Create `State` instance
     pub fn new() -> Self {
+        Self::with_memory_pool(PoolId::DEFAULT.pool_ref())
+    }
+
+    #[inline]
+    /// Create `State` instance with specific memory pool.
+    pub fn with_memory_pool(pool: PoolRef) -> Self {
         State(Rc::new(IoStateInner {
+            pool: Cell::new(pool),
             flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
-            lw: Cell::new(1024),
-            read_hw: Cell::new(8 * 1024),
-            write_hw: Cell::new(8 * 1024),
             disconnect_timeout: Cell::new(Seconds(1)),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
@@ -202,13 +158,16 @@ impl State {
     #[inline]
     /// Create `State` from Framed
     pub fn from_framed<Io, U>(framed: Framed<Io, U>) -> (Io, U, Self) {
-        let parts = framed.into_parts();
+        let pool = PoolId::DEFAULT.pool_ref();
+        let mut parts = framed.into_parts();
         let read_buf = if !parts.read_buf.is_empty() {
+            pool.move_in(&mut parts.read_buf);
             Cell::new(Some(parts.read_buf))
         } else {
             Cell::new(None)
         };
         let write_buf = if !parts.write_buf.is_empty() {
+            pool.move_in(&mut parts.write_buf);
             Cell::new(Some(parts.write_buf))
         } else {
             Cell::new(None)
@@ -217,11 +176,9 @@ impl State {
         let state = State(Rc::new(IoStateInner {
             read_buf,
             write_buf,
+            pool: Cell::new(pool),
             flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
-            lw: Cell::new(1024),
-            read_hw: Cell::new(8 * 1024),
-            write_hw: Cell::new(8 * 1024),
             disconnect_timeout: Cell::new(Seconds(1)),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
@@ -231,20 +188,19 @@ impl State {
         (parts.io, parts.codec, state)
     }
 
+    #[doc(hidden)]
     #[inline]
     /// Create `State` instance with custom params
     pub fn with_params(
-        max_read_buf_size: u16,
-        max_write_buf_size: u16,
-        min_buf_size: u16,
+        _max_read_buf_size: u16,
+        _max_write_buf_size: u16,
+        _min_buf_size: u16,
         disconnect_timeout: Seconds,
     ) -> Self {
         State(Rc::new(IoStateInner {
+            pool: Cell::new(PoolId::DEFAULT.pool_ref()),
             flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
-            lw: Cell::new(min_buf_size),
-            read_hw: Cell::new(max_read_buf_size),
-            write_hw: Cell::new(max_write_buf_size),
             disconnect_timeout: Cell::new(disconnect_timeout),
             dispatch_task: LocalWaker::new(),
             read_buf: Cell::new(None),
@@ -275,10 +231,8 @@ impl State {
 
     pub(crate) fn keepalive_timeout(&self) {
         let state = self.0.as_ref();
-        let mut flags = state.flags.get();
-        flags.insert(Flags::DSP_KEEPALIVE);
-        state.flags.set(flags);
         state.dispatch_task.wake();
+        state.insert_flags(Flags::DSP_KEEPALIVE);
     }
 
     pub(super) fn get_disconnect_timeout(&self) -> Seconds {
@@ -305,18 +259,37 @@ impl State {
     }
 
     #[inline]
+    /// Get memory pool
+    pub fn memory_pool(&self) -> PoolRef {
+        self.0.pool.get()
+    }
+
+    #[inline]
+    /// Set memory pool
+    pub fn set_memory_pool(&self, pool: PoolRef) {
+        if let Some(mut buf) = self.0.read_buf.take() {
+            pool.move_in(&mut buf);
+            self.0.read_buf.set(Some(buf));
+        }
+        if let Some(mut buf) = self.0.write_buf.take() {
+            pool.move_in(&mut buf);
+            self.0.write_buf.set(Some(buf));
+        }
+        self.0.pool.set(pool)
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "0.4.11", note = "Use memory pool config")]
+    #[inline]
     /// Set read/write buffer sizes
     ///
     /// By default read max buf size is 8kb, write max buf size is 8kb
     pub fn set_buffer_params(
         &self,
-        max_read_buf_size: u16,
-        max_write_buf_size: u16,
-        min_buf_size: u16,
+        _max_read_buf_size: u16,
+        _max_write_buf_size: u16,
+        _min_buf_size: u16,
     ) {
-        self.0.read_hw.set(max_read_buf_size);
-        self.0.write_hw.set(max_write_buf_size);
-        self.0.lw.set(min_buf_size);
     }
 
     #[inline]
@@ -622,7 +595,7 @@ impl State {
         T: AsyncRead + AsyncWrite + Unpin,
     {
         let inner = self.0.as_ref();
-        let lw = inner.lw.get() as usize;
+        let (hw, lw) = inner.pool.get().read_params().unpack();
         let mut buf = inner.get_read_buf();
 
         // read data from socket
@@ -631,7 +604,7 @@ impl State {
             // make sure we've got room
             let remaining = buf.capacity() - buf.len();
             if remaining < lw {
-                buf.reserve((inner.read_hw.get() as usize) - remaining);
+                buf.reserve(hw - remaining);
             }
 
             match crate::codec::poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
@@ -643,7 +616,7 @@ impl State {
                         self.set_io_error(None);
                         return false;
                     } else {
-                        if buf.len() > inner.read_hw.get() as usize {
+                        if buf.len() > hw {
                             log::trace!(
                                 "buffer is too large {}, enable read back-pressure",
                                 buf.len()
@@ -736,7 +709,7 @@ impl State {
         }
 
         // if write buffer is smaller than high watermark value, turn off back-pressure
-        if buf.len() < self.0.write_hw.get() as usize {
+        if buf.len() < self.0.pool.get().write_params_high() {
             let mut flags = self.0.flags.get();
             if flags.contains(Flags::WR_BACKPRESSURE) {
                 flags.remove(Flags::WR_BACKPRESSURE);
@@ -783,7 +756,8 @@ impl<'a> Write<'a> {
     /// Check if write buffer is full
     pub fn is_full(&self) -> bool {
         if let Some(buf) = self.0.read_buf.take() {
-            let result = buf.len() >= self.0.write_hw.get() as usize;
+            let hw = self.0.pool.get().write_params_high();
+            let result = buf.len() >= hw;
             self.0.write_buf.set(Some(buf));
             result
         } else {
@@ -841,11 +815,12 @@ impl<'a> Write<'a> {
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
             let mut buf = self.0.get_write_buf();
             let is_write_sleep = buf.is_empty();
+            let (hw, lw) = self.0.pool.get().write_params().unpack();
 
             // make sure we've got room
             let remaining = buf.capacity() - buf.len();
-            if remaining < self.0.lw.get() as usize {
-                buf.reserve((self.0.write_hw.get() as usize) - remaining);
+            if remaining < lw {
+                buf.reserve(hw - remaining);
             }
 
             // encode item and wake write task
@@ -853,7 +828,7 @@ impl<'a> Write<'a> {
                 if is_write_sleep {
                     self.0.write_task.wake();
                 }
-                buf.len() < self.0.write_hw.get() as usize
+                buf.len() < hw
             });
             self.0.write_buf.set(Some(buf));
             result
@@ -879,11 +854,12 @@ impl<'a> Write<'a> {
                 Ok(Some(item)) => {
                     let mut buf = self.0.get_write_buf();
                     let is_write_sleep = buf.is_empty();
+                    let (hw, lw) = self.0.pool.get().write_params().unpack();
 
                     // make sure we've got room
                     let remaining = buf.capacity() - buf.len();
-                    if remaining < self.0.lw.get() as usize {
-                        buf.reserve((self.0.write_hw.get() as usize) - remaining);
+                    if remaining < lw {
+                        buf.reserve(hw - remaining);
                     }
 
                     // encode item
@@ -896,7 +872,7 @@ impl<'a> Write<'a> {
                     } else if is_write_sleep {
                         self.0.write_task.wake();
                     }
-                    let result = Ok(buf.len() < self.0.write_hw.get() as usize);
+                    let result = Ok(buf.len() < hw);
                     self.0.write_buf.set(Some(buf));
                     result
                 }
@@ -927,7 +903,7 @@ impl<'a> Read<'a> {
     /// Check if read buffer is full
     pub fn is_full(&self) -> bool {
         if let Some(buf) = self.0.read_buf.take() {
-            let result = buf.len() >= self.0.read_hw.get() as usize;
+            let result = buf.len() >= self.0.pool.get().read_params_high();
             self.0.read_buf.set(Some(buf));
             result
         } else {
@@ -983,13 +959,10 @@ impl<'a> Read<'a> {
     where
         U: Decoder,
     {
-        if let Some(mut buf) = self.0.read_buf.take() {
-            let result = codec.decode(&mut buf);
-            self.0.release_read_buf(buf);
-            result
-        } else {
-            codec.decode(&mut BytesMut::new())
-        }
+        let mut buf = self.0.get_read_buf();
+        let result = codec.decode(&mut buf);
+        self.0.release_read_buf(buf);
+        result
     }
 
     /// Get mut access to read buffer
@@ -997,13 +970,10 @@ impl<'a> Read<'a> {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        if let Some(mut buf) = self.0.read_buf.take() {
-            let res = f(&mut buf);
-            self.0.release_read_buf(buf);
-            res
-        } else {
-            f(&mut BytesMut::new())
-        }
+        let mut buf = self.0.get_read_buf();
+        let res = f(&mut buf);
+        self.0.release_read_buf(buf);
+        res
     }
 }
 

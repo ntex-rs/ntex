@@ -242,9 +242,7 @@ mod tests {
             Ok(Some((finished, opcode, payload))) => F {
                 finished,
                 opcode,
-                payload: payload
-                    .map(|b| b.freeze())
-                    .unwrap_or_else(|| Bytes::from("")),
+                payload: payload.map(|b| b.freeze()).unwrap_or_else(Bytes::new),
             },
             _ => unreachable!("error"),
         }
