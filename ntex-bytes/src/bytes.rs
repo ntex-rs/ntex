@@ -483,7 +483,7 @@ impl Bytes {
             }
         } else {
             Bytes {
-                inner: BytesMut::copy_from_slice_in(data, pool.into()).inner,
+                inner: BytesMut::copy_from_slice_in(data, pool).inner,
             }
         }
     }
@@ -1096,7 +1096,7 @@ impl BytesMut {
     where
         PoolRef: From<T>,
     {
-        let mut bytes = BytesMut::with_capacity_in(src.len(), pool.into());
+        let mut bytes = BytesMut::with_capacity_in(src.len(), pool);
         bytes.extend_from_slice(src);
         bytes
     }
