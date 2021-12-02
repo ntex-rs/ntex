@@ -231,10 +231,8 @@ impl State {
 
     pub(crate) fn keepalive_timeout(&self) {
         let state = self.0.as_ref();
-        let mut flags = state.flags.get();
-        flags.insert(Flags::DSP_KEEPALIVE);
-        state.flags.set(flags);
         state.dispatch_task.wake();
+        state.insert_flags(Flags::DSP_KEEPALIVE);
     }
 
     pub(super) fn get_disconnect_timeout(&self) -> Seconds {

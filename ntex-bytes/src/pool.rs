@@ -82,7 +82,7 @@ impl PoolId {
     pub const DEFAULT: PoolId = PoolId(15);
 
     #[inline]
-    pub fn pool(&self) -> Pool {
+    pub fn pool(self) -> Pool {
         POOLS.with(|pools| Pool {
             idx: Cell::new(0),
             inner: pools[self.0 as usize],
@@ -90,7 +90,7 @@ impl PoolId {
     }
 
     #[inline]
-    pub fn pool_ref(&self) -> PoolRef {
+    pub fn pool_ref(self) -> PoolRef {
         POOLS.with(|pools| PoolRef(pools[self.0 as usize]))
     }
 
@@ -113,7 +113,7 @@ impl PoolId {
 impl AsPoolRef for PoolId {
     #[inline]
     fn pool_ref(&self) -> PoolRef {
-        self.pool_ref()
+        POOLS.with(|pools| PoolRef(pools[self.0 as usize]))
     }
 }
 
@@ -141,13 +141,13 @@ thread_local! {
 impl PoolRef {
     #[inline]
     /// Get pool id.
-    pub fn id(&self) -> PoolId {
+    pub fn id(self) -> PoolId {
         self.0.id
     }
 
     #[inline]
     /// Get `Pool` instance for this pool ref.
-    pub fn pool(&self) -> Pool {
+    pub fn pool(self) -> Pool {
         Pool {
             idx: Cell::new(0),
             inner: self.0,
@@ -156,19 +156,19 @@ impl PoolRef {
 
     #[inline]
     /// Get total number of allocated bytes.
-    pub fn allocated(&self) -> usize {
+    pub fn allocated(self) -> usize {
         self.0.size.load(Relaxed)
     }
 
     #[inline]
-    pub fn move_in(&self, buf: &mut BytesMut) {
-        buf.move_to_pool(*self);
+    pub fn move_in(self, buf: &mut BytesMut) {
+        buf.move_to_pool(self);
     }
 
     #[inline]
     /// Creates a new `BytesMut` with the specified capacity.
-    pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
-        BytesMut::with_capacity_in_priv(cap, *self)
+    pub fn buf_with_capacity(self, cap: usize) -> BytesMut {
+        BytesMut::with_capacity_in_priv(cap, self)
     }
 
     #[inline]
@@ -208,13 +208,13 @@ impl PoolRef {
 
     #[doc(hidden)]
     #[inline]
-    pub fn read_params(&self) -> BufParams {
+    pub fn read_params(self) -> BufParams {
         self.0.read_wm.get()
     }
 
     #[doc(hidden)]
     #[inline]
-    pub fn read_params_high(&self) -> usize {
+    pub fn read_params_high(self) -> usize {
         self.0.read_wm.get().high as usize
     }
 
@@ -228,13 +228,13 @@ impl PoolRef {
 
     #[doc(hidden)]
     #[inline]
-    pub fn write_params(&self) -> BufParams {
+    pub fn write_params(self) -> BufParams {
         self.0.write_wm.get()
     }
 
     #[doc(hidden)]
     #[inline]
-    pub fn write_params_high(&self) -> usize {
+    pub fn write_params_high(self) -> usize {
         self.0.write_wm.get().high as usize
     }
 
@@ -248,18 +248,18 @@ impl PoolRef {
 
     #[doc(hidden)]
     #[inline]
-    pub fn get_read_buf(&self) -> BytesMut {
+    pub fn get_read_buf(self) -> BytesMut {
         if let Some(buf) = self.0.read_cache.borrow_mut().pop() {
             buf
         } else {
-            BytesMut::with_capacity_in_priv(self.0.read_wm.get().high as usize, *self)
+            BytesMut::with_capacity_in_priv(self.0.read_wm.get().high as usize, self)
         }
     }
 
     #[doc(hidden)]
     #[inline]
     /// Release read buffer, buf must be allocated from this pool
-    pub fn release_read_buf(&self, mut buf: BytesMut) {
+    pub fn release_read_buf(self, mut buf: BytesMut) {
         let cap = buf.capacity();
         let (hw, lw) = self.0.read_wm.get().unpack();
         if cap > lw && cap <= hw {
@@ -273,18 +273,18 @@ impl PoolRef {
 
     #[doc(hidden)]
     #[inline]
-    pub fn get_write_buf(&self) -> BytesMut {
+    pub fn get_write_buf(self) -> BytesMut {
         if let Some(buf) = self.0.write_cache.borrow_mut().pop() {
             buf
         } else {
-            BytesMut::with_capacity_in_priv(self.0.write_wm.get().high as usize, *self)
+            BytesMut::with_capacity_in_priv(self.0.write_wm.get().high as usize, self)
         }
     }
 
     #[doc(hidden)]
     #[inline]
     /// Release write buffer, buf must be allocated from this pool
-    pub fn release_write_buf(&self, mut buf: BytesMut) {
+    pub fn release_write_buf(self, mut buf: BytesMut) {
         let cap = buf.capacity();
         let (hw, lw) = self.0.write_wm.get().unpack();
         if cap > lw && cap <= hw {
@@ -297,7 +297,7 @@ impl PoolRef {
     }
 
     #[inline]
-    pub(crate) fn acquire(&self, size: usize) {
+    pub(crate) fn acquire(self, size: usize) {
         let prev = self.0.size.fetch_add(size, Relaxed);
         if self.0.waker_alive.load(Relaxed) {
             self.wake_driver(prev + size)
@@ -305,14 +305,14 @@ impl PoolRef {
     }
 
     #[inline]
-    pub(crate) fn release(&self, size: usize) {
+    pub(crate) fn release(self, size: usize) {
         let prev = self.0.size.fetch_sub(size, Relaxed);
         if self.0.waker_alive.load(Relaxed) {
             self.wake_driver(prev - size)
         }
     }
 
-    fn wake_driver(&self, allocated: usize) {
+    fn wake_driver(self, allocated: usize) {
         let l = self.0.window_l.get();
         let h = self.0.window_h.get();
         if allocated < l || allocated > h {
@@ -464,18 +464,19 @@ impl Pool {
                 let idx = self.idx.get();
                 let mut flags = self.inner.flags.get();
                 let mut waiters = self.inner.waiters.borrow_mut();
-                if idx == 0 {
+                let new = if idx == 0 {
                     self.idx.set(waiters.append(ctx.waker().clone()) + 1);
-
-                    if flags.contains(Flags::INCREASED) {
-                        self.inner
-                            .window_waiters
-                            .set(self.inner.window_waiters.get() + 1);
-                    } else if let Some(waker) = waiters.consume() {
-                        waker.wake();
-                    }
+                    true
                 } else {
-                    waiters.update(idx - 1, ctx.waker().clone());
+                    waiters.update(idx - 1, ctx.waker().clone())
+                };
+
+                if flags.contains(Flags::INCREASED) || !new {
+                    self.inner
+                        .window_waiters
+                        .set(self.inner.window_waiters.get() + 1);
+                } else if let Some(waker) = waiters.consume() {
+                    waker.wake();
                 }
 
                 // start driver task
@@ -672,12 +673,12 @@ impl Waiters {
         }
     }
 
-    fn update(&mut self, key: usize, val: Waker) {
+    fn update(&mut self, key: usize, val: Waker) -> bool {
         if let Some(entry) = self.entries.get_mut(key) {
             match entry {
                 Entry::Occupied(ref mut node) => {
                     node.item = val;
-                    return;
+                    return false;
                 }
                 Entry::Consumed => {
                     *entry = Entry::Occupied(Node {
@@ -697,6 +698,7 @@ impl Waiters {
             self.get_node(self.tail).next = key;
         }
         self.tail = key;
+        true
     }
 
     fn remove(&mut self, key: usize) {
