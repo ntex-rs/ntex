@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.7] (2021-12-06)
+
+* Fix dealloc for vec representation
+
 ## [0.1.6] (2021-12-03)
 
 * Better api usability

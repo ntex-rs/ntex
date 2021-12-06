@@ -390,7 +390,7 @@ impl Bytes {
     #[inline]
     pub const fn new() -> Bytes {
         Bytes {
-            inner: Inner::empty(),
+            inner: Inner::empty_inline(),
         }
     }
 
@@ -1846,7 +1846,7 @@ impl Inner {
     }
 
     #[inline]
-    const fn empty() -> Inner {
+    const fn empty_inline() -> Inner {
         Inner {
             arc: unsafe { NonNull::new_unchecked(KIND_INLINE as *mut Shared) },
             ptr: 0 as *mut u8,
@@ -2336,7 +2336,7 @@ impl Inner {
             }
 
             Inner {
-                arc: NonNull::new_unchecked(arc as *mut Shared),
+                arc: NonNull::new_unchecked(arc),
                 ..*self
             }
         }
@@ -2575,7 +2575,7 @@ fn release_shared_vec(ptr: *mut SharedVec) {
         let cap = (*ptr).cap;
         (*ptr).pool.release(cap);
         ptr::drop_in_place(ptr);
-        Vec::from_raw_parts(ptr, 0, cap);
+        Vec::<u8>::from_raw_parts(ptr as *mut u8, 0, cap);
     }
 }
 

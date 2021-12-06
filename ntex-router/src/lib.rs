@@ -13,6 +13,9 @@ pub use self::path::{Path, PathIter};
 pub use self::resource::ResourceDef;
 pub use self::router::{Router, RouterBuilder};
 
+#[doc(hidden)]
+pub struct ResourceInfo;
+
 pub trait Resource<T: ResourcePath> {
     fn path(&self) -> &str;
 
