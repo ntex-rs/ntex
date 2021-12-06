@@ -17,9 +17,10 @@ use super::Token;
 
 pub struct ServiceConfig {
     pub(super) services: Vec<(String, net::TcpListener)>,
-    pub(super) apply: Option<Box<dyn ServiceRuntimeConfiguration + Send>>,
+    pub(super) apply: Box<dyn ServiceRuntimeConfiguration + Send>,
     pub(super) threads: usize,
     pub(super) backlog: i32,
+    applied: bool,
 }
 
 impl ServiceConfig {
@@ -28,7 +29,14 @@ impl ServiceConfig {
             threads,
             backlog,
             services: Vec::new(),
-            apply: None,
+            applied: false,
+            apply: Box::new(ConfigWrapper {
+                f: |_| {
+                    not_configured();
+                    Ready::Ok::<_, &'static str>(())
+                },
+                _t: PhantomData,
+            }),
         }
     }
 
@@ -52,13 +60,21 @@ impl ServiceConfig {
         name: N,
         lst: net::TcpListener,
     ) -> &mut Self {
-        if self.apply.is_none() {
-            let _ = self.apply(not_configured);
+        if !self.applied {
+            self.apply = Box::new(ConfigWrapper {
+                f: |_| {
+                    not_configured();
+                    Ready::Ok::<_, &'static str>(())
+                },
+                _t: PhantomData,
+            });
         }
         self.services.push((name.as_ref().to_string(), lst));
         self
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "0.4.13", note = "Use .on_worker_start() instead")]
     /// Register service configuration function.
     ///
     /// This function get called during worker runtime configuration.
@@ -67,12 +83,16 @@ impl ServiceConfig {
     where
         F: Fn(&mut ServiceRuntime) + Send + Clone + 'static,
     {
-        self.apply_async::<_, Ready<(), &'static str>, &'static str>(move |mut rt| {
-            f(&mut rt);
-            Ready::Ok(())
-        })
+        self.on_worker_start::<_, Ready<(), &'static str>, &'static str>(
+            move |mut rt| {
+                f(&mut rt);
+                Ready::Ok(())
+            },
+        )
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "0.4.13", note = "Use .on_worker_start() instead")]
     /// Register async service configuration function.
     ///
     /// This function get called during worker runtime configuration.
@@ -83,7 +103,22 @@ impl ServiceConfig {
         R: Future<Output = Result<(), E>> + 'static,
         E: fmt::Display + 'static,
     {
-        self.apply = Some(Box::new(ConfigWrapper { f, _t: PhantomData }));
+        self.on_worker_start(f)?;
+        Ok(())
+    }
+
+    /// Register async service configuration function.
+    ///
+    /// This function get called during worker runtime configuration stage.
+    /// It get executed in the worker thread.
+    pub fn on_worker_start<F, R, E>(&mut self, f: F) -> io::Result<()>
+    where
+        F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
+        R: Future<Output = Result<(), E>> + 'static,
+        E: fmt::Display + 'static,
+    {
+        self.applied = true;
+        self.apply = Box::new(ConfigWrapper { f, _t: PhantomData });
         Ok(())
     }
 }
@@ -186,9 +221,9 @@ pub(super) trait ServiceRuntimeConfiguration {
     ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 }
 
-struct ConfigWrapper<F, R, E> {
-    f: F,
-    _t: PhantomData<(R, E)>,
+pub(super) struct ConfigWrapper<F, R, E> {
+    pub(super) f: F,
+    pub(super) _t: PhantomData<(R, E)>,
 }
 
 // SAFETY: we dont store R or E in ConfigWrapper
@@ -220,7 +255,7 @@ where
     }
 }
 
-fn not_configured(_: &mut ServiceRuntime) {
+fn not_configured() {
     error!("Service is not configured");
 }
 

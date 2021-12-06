@@ -9,7 +9,7 @@ use ntex::codec::{BytesCodec, Framed};
 use ntex::rt::net::TcpStream;
 use ntex::server::{Server, TestServer};
 use ntex::service::fn_service;
-use ntex::util::Bytes;
+use ntex::util::{Bytes, Ready};
 
 #[test]
 fn test_bind() {
@@ -227,6 +227,64 @@ fn test_configure_async() {
     assert!(net::TcpStream::connect(addr2).is_ok());
     assert!(net::TcpStream::connect(addr3).is_ok());
     assert_eq!(num.load(Relaxed), 1);
+    sys.stop();
+    let _ = h.join();
+}
+
+#[test]
+fn test_on_worker_start() {
+    let addr1 = TestServer::unused_addr();
+    let addr2 = TestServer::unused_addr();
+    let addr3 = TestServer::unused_addr();
+    let (tx, rx) = mpsc::channel();
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let h = thread::spawn(move || {
+        let num = num2.clone();
+        let num2 = num2.clone();
+        let mut sys = ntex::rt::System::new("test");
+        let srv = sys.exec(|| {
+            Server::build()
+                .disable_signals()
+                .configure(move |cfg| {
+                    let num = num.clone();
+                    let lst = net::TcpListener::bind(addr3).unwrap();
+                    cfg.bind("addr1", addr1)
+                        .unwrap()
+                        .bind("addr2", addr2)
+                        .unwrap()
+                        .listen("addr3", lst)
+                        .apply_async(move |rt| {
+                            let num = num.clone();
+                            async move {
+                                rt.service("addr1", fn_service(|_| ok::<_, ()>(())));
+                                rt.service("addr3", fn_service(|_| ok::<_, ()>(())));
+                                let _ = num.fetch_add(1, Relaxed);
+                                Ok::<_, io::Error>(())
+                            }
+                        })
+                        .unwrap();
+                    Ok::<_, io::Error>(())
+                })
+                .unwrap()
+                .on_worker_start(move |_| {
+                    let _ = num2.fetch_add(1, Relaxed);
+                    Ready::Ok::<_, io::Error>(())
+                })
+                .workers(1)
+                .start()
+        });
+        let _ = tx.send((srv, ntex::rt::System::current()));
+        let _ = sys.run();
+    });
+    let (_, sys) = rx.recv().unwrap();
+    thread::sleep(time::Duration::from_millis(500));
+
+    assert!(net::TcpStream::connect(addr1).is_ok());
+    assert!(net::TcpStream::connect(addr2).is_ok());
+    assert!(net::TcpStream::connect(addr3).is_ok());
+    assert_eq!(num.load(Relaxed), 2);
     sys.stop();
     let _ = h.join();
 }

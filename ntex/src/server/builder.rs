@@ -1,4 +1,6 @@
-use std::{future::Future, io, mem, net, pin::Pin, task::Context, task::Poll};
+use std::{
+    fmt, future::Future, io, marker, mem, net, pin::Pin, task::Context, task::Poll,
+};
 
 use async_channel::{unbounded, Receiver};
 use async_oneshot as oneshot;
@@ -10,7 +12,7 @@ use crate::rt::{net::TcpStream, spawn, System};
 use crate::{time::sleep, time::Millis, util::join_all};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
-use super::config::{ConfiguredService, ServiceConfig};
+use super::config::{ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime};
 use super::service::{Factory, InternalServiceFactory, StreamServiceFactory};
 use super::signals::{Signal, Signals};
 use super::socket::Listener;
@@ -152,18 +154,35 @@ impl ServerBuilder {
 
         f(&mut cfg)?;
 
-        if let Some(apply) = cfg.apply {
-            let mut srv = ConfiguredService::new(apply);
-            for (name, lst) in cfg.services {
-                let token = self.token.next();
-                srv.stream(token, name.clone(), lst.local_addr()?);
-                self.sockets.push((token, name, Listener::from_tcp(lst)));
-            }
-            self.services.push(Box::new(srv));
+        let apply = cfg.apply;
+        let mut srv = ConfiguredService::new(apply);
+        for (name, lst) in cfg.services {
+            let token = self.token.next();
+            srv.stream(token, name.clone(), lst.local_addr()?);
+            self.sockets.push((token, name, Listener::from_tcp(lst)));
         }
+        self.services.push(Box::new(srv));
         self.threads = cfg.threads;
 
         Ok(self)
+    }
+
+    /// Register async service configuration function.
+    ///
+    /// This function get called during worker runtime configuration stage.
+    /// It get executed in the worker thread.
+    pub fn on_worker_start<F, R, E>(mut self, f: F) -> Self
+    where
+        F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
+        R: Future<Output = Result<(), E>> + 'static,
+        E: fmt::Display + 'static,
+    {
+        self.services
+            .push(Box::new(ConfiguredService::new(Box::new(ConfigWrapper {
+                f,
+                _t: marker::PhantomData,
+            }))));
+        self
     }
 
     /// Add new service to the server.

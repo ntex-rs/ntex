@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.13] - 2021-12-07
+
+* server: Rename .apply/.apply_async to .on_worker_start()
+
 ## [0.4.12] - 2021-12-06
 
 * http: Use memory pools
