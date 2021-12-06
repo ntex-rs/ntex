@@ -318,7 +318,7 @@ where
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
-                    .buffer_params(c.read_hw, c.write_hw, c.lw)
+                    .memory_pool(c.pool)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .openssl(acceptor.clone())
             },
@@ -363,7 +363,7 @@ where
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
-                    .buffer_params(c.read_hw, c.write_hw, c.lw)
+                    .memory_pool(c.pool)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .rustls(config.clone())
             },

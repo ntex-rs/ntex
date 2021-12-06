@@ -717,7 +717,6 @@ mod tests {
         let seg2 = Segment::Dynamic {
             pattern: Regex::new("test").unwrap(),
             names: Vec::new(),
-            len: 1,
             tail: false,
         };
         assert!(seg != seg2);
