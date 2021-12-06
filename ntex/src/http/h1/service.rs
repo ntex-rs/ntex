@@ -12,7 +12,7 @@ use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
-use crate::{rt::net::TcpStream, time::Millis};
+use crate::{rt::net::TcpStream, time::Millis, util::Pool};
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;
@@ -326,8 +326,10 @@ where
             let config = Rc::new(DispatcherConfig::new(
                 cfg, service, expect, upgrade, on_request,
             ));
+            let pool = config.pool.into();
 
             Ok(H1ServiceHandler {
+                pool,
                 config,
                 on_connect,
                 _t: marker::PhantomData,
@@ -338,6 +340,7 @@ where
 
 /// `Service` implementation for HTTP1 transport
 pub struct H1ServiceHandler<T, S: Service, B, X: Service, U: Service> {
+    pool: Pool,
     config: Rc<DispatcherConfig<T, S, X, U>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     _t: marker::PhantomData<(T, B)>,
@@ -396,6 +399,8 @@ where
         } else {
             ready
         };
+
+        let ready = self.pool.poll_ready(cx).is_ready() && ready;
 
         if ready {
             task::Poll::Ready(Ok(()))

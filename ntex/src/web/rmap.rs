@@ -10,16 +10,16 @@ use crate::web::httprequest::HttpRequest;
 
 #[derive(Clone, Debug)]
 pub struct ResourceMap {
-    root: ResourceDef,
+    // root: ResourceDef,
     parent: RefCell<Option<Rc<ResourceMap>>>,
     named: HashMap<String, ResourceDef>,
     patterns: Vec<(ResourceDef, Option<Rc<ResourceMap>>)>,
 }
 
 impl ResourceMap {
-    pub fn new(root: ResourceDef) -> Self {
+    pub fn new(_root: ResourceDef) -> Self {
         ResourceMap {
-            root,
+            // root,
             parent: RefCell::new(None),
             named: HashMap::default(),
             patterns: Vec::new(),

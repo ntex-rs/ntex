@@ -12,6 +12,7 @@ use crate::http::response::Response;
 use crate::http::service::HttpService;
 use crate::service::{boxed, IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
+use crate::util::PoolId;
 
 /// A http service builder
 ///
@@ -22,9 +23,7 @@ pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
     client_timeout: Millis,
     client_disconnect: Seconds,
     handshake_timeout: Millis,
-    lw: u16,
-    read_hw: u16,
-    write_hw: u16,
+    pool: PoolId,
     expect: X,
     upgrade: Option<U>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
@@ -40,9 +39,7 @@ impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
             client_timeout: Millis::from_secs(3),
             client_disconnect: Seconds(3),
             handshake_timeout: Millis::from_secs(5),
-            lw: 1024,
-            read_hw: 8 * 1024,
-            write_hw: 8 * 1024,
+            pool: PoolId::P1,
             expect: ExpectHandler,
             upgrade: None,
             on_connect: None,
@@ -116,19 +113,27 @@ where
         self
     }
 
+    /// Set memory pool.
+    ///
+    /// Use specified memory pool for memory allocations. By default P1
+    /// memory pool is used.
+    pub fn memory_pool(mut self, id: PoolId) -> Self {
+        self.pool = id;
+        self
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "0.4.12", note = "Use memory pool config")]
     #[inline]
     /// Set read/write buffer params
     ///
     /// By default read buffer is 8kb, write buffer is 8kb
     pub fn buffer_params(
-        mut self,
-        max_read_buf_size: u16,
-        max_write_buf_size: u16,
-        min_buf_size: u16,
+        self,
+        _max_read_buf_size: u16,
+        _max_write_buf_size: u16,
+        _min_buf_size: u16,
     ) -> Self {
-        self.read_hw = max_read_buf_size;
-        self.write_hw = max_write_buf_size;
-        self.lw = min_buf_size;
         self
     }
 
@@ -151,13 +156,11 @@ where
             client_timeout: self.client_timeout,
             client_disconnect: self.client_disconnect,
             handshake_timeout: self.handshake_timeout,
+            pool: self.pool,
             expect: expect.into_factory(),
             upgrade: self.upgrade,
             on_connect: self.on_connect,
             on_request: self.on_request,
-            lw: self.lw,
-            read_hw: self.read_hw,
-            write_hw: self.write_hw,
             _t: PhantomData,
         }
     }
@@ -184,13 +187,11 @@ where
             client_timeout: self.client_timeout,
             client_disconnect: self.client_disconnect,
             handshake_timeout: self.handshake_timeout,
+            pool: self.pool,
             expect: self.expect,
             upgrade: Some(upgrade.into_factory()),
             on_connect: self.on_connect,
             on_request: self.on_request,
-            lw: self.lw,
-            read_hw: self.read_hw,
-            write_hw: self.write_hw,
             _t: PhantomData,
         }
     }
@@ -239,9 +240,7 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
-            self.lw,
-            self.read_hw,
-            self.write_hw,
+            self.pool,
         );
         H1Service::with_config(cfg, service.into_factory())
             .expect(self.expect)
@@ -265,9 +264,7 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
-            self.lw,
-            self.read_hw,
-            self.write_hw,
+            self.pool,
         );
         H2Service::with_config(cfg, service.into_factory()).on_connect(self.on_connect)
     }
@@ -288,9 +285,7 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
-            self.lw,
-            self.read_hw,
-            self.write_hw,
+            self.pool,
         );
         HttpService::with_config(cfg, service.into_factory())
             .expect(self.expect)

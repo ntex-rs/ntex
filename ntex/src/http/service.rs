@@ -10,7 +10,7 @@ use crate::framed::State;
 use crate::rt::net::TcpStream;
 use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
-use crate::util::Bytes;
+use crate::util::{Bytes, Pool, PoolId};
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
@@ -65,9 +65,7 @@ where
             Millis(5_000),
             Seconds::ZERO,
             Millis(5_000),
-            1024,
-            8 * 1024,
-            8 * 1024,
+            PoolId::P1,
         );
 
         HttpService {
@@ -412,8 +410,10 @@ where
 
             let config =
                 DispatcherConfig::new(cfg, service, expect, upgrade, on_request);
+            let pool = config.pool.into();
 
             Ok(HttpServiceHandler {
+                pool,
                 on_connect,
                 config: Rc::new(config),
                 _t: marker::PhantomData,
@@ -424,6 +424,7 @@ where
 
 /// `Service` implementation for http transport
 pub struct HttpServiceHandler<T, S: Service, B, X: Service, U: Service> {
+    pool: Pool,
     config: Rc<DispatcherConfig<T, S, X, U>>,
     on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
     _t: marker::PhantomData<(T, B, X)>,
@@ -480,6 +481,8 @@ where
         } else {
             ready
         };
+
+        let ready = self.pool.poll_ready(cx).is_ready() && ready;
 
         if ready {
             Poll::Ready(Ok(()))

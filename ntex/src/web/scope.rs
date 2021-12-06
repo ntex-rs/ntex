@@ -3,7 +3,7 @@ use std::{
 };
 
 use crate::http::Response;
-use crate::router::{IntoPattern, ResourceDef, ResourceInfo, Router};
+use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{pipeline_factory, PipelineFactory};
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
@@ -635,7 +635,6 @@ impl<Err: ErrorRenderer> ServiceFactory for ScopeRouterFactory<Err> {
                 data,
                 default,
                 router: router.finish(),
-                _ready: None,
             })
         })
     }
@@ -645,7 +644,6 @@ struct ScopeRouter<Err: ErrorRenderer> {
     data: Option<Rc<Extensions>>,
     router: Router<HttpService<Err>, Vec<Box<dyn Guard>>>,
     default: Option<HttpService<Err>>,
-    _ready: Option<(WebRequest<Err>, ResourceInfo)>,
 }
 
 impl<Err: ErrorRenderer> Service for ScopeRouter<Err> {

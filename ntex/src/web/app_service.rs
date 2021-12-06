@@ -2,7 +2,7 @@ use std::task::{Context, Poll};
 use std::{cell::RefCell, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use crate::http::{Request, Response};
-use crate::router::{Path, ResourceDef, ResourceInfo, Router};
+use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{fn_service, PipelineFactory, Service, ServiceFactory, Transform};
 use crate::util::Extensions;
@@ -141,7 +141,6 @@ where
             }
 
             let routing = AppRouting {
-                ready: None,
                 router: router.finish(),
                 default: Some(default_fut.await?),
             };
@@ -259,7 +258,6 @@ where
 
 struct AppRouting<Err: ErrorRenderer> {
     router: Router<HttpService<Err>, Guards>,
-    ready: Option<(WebRequest<Err>, ResourceInfo)>,
     default: Option<HttpService<Err>>,
 }
 
@@ -271,11 +269,7 @@ impl<Err: ErrorRenderer> Service for AppRouting<Err> {
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.ready.is_none() {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
+        Poll::Ready(Ok(()))
     }
 
     fn call(&self, mut req: WebRequest<Err>) -> Self::Future {

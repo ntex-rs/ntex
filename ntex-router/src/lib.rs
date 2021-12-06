@@ -11,7 +11,7 @@ mod tree;
 pub use self::de::PathDeserializer;
 pub use self::path::{Path, PathIter};
 pub use self::resource::ResourceDef;
-pub use self::router::{ResourceInfo, Router, RouterBuilder};
+pub use self::router::{Router, RouterBuilder};
 
 pub trait Resource<T: ResourcePath> {
     fn path(&self) -> &str;
