@@ -48,7 +48,7 @@ struct MemoryPool {
     window_waiters: Cell<usize>,
     windows: Cell<[(usize, usize); 10]>,
 
-    // io read/write bytesmut cache and params
+    // io read/write cache and params
     read_wm: Cell<BufParams>,
     read_cache: RefCell<Vec<BytesMut>>,
     write_wm: Cell<BufParams>,
@@ -454,6 +454,16 @@ impl Drop for Pool {
     }
 }
 
+impl fmt::Debug for Pool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Pool")
+            .field("id", &self.id().0)
+            .field("allocated", &self.inner.size.load(Relaxed))
+            .field("ready", &!self.is_pending())
+            .finish()
+    }
+}
+
 impl Pool {
     #[inline]
     /// Get pool id.
@@ -491,11 +501,14 @@ impl Pool {
     #[inline]
     pub fn poll_ready(&self, ctx: &mut Context<'_>) -> Poll<()> {
         if self.inner.max_size.get() > 0 {
-            let allocated = self.inner.size.load(Relaxed);
+            let window_l = self.inner.window_l.get();
+            if window_l == 0 {
+                return Poll::Ready(());
+            }
 
             // lower than low
-            let window_l = self.inner.window_l.get();
-            if window_l == 0 || allocated < window_l {
+            let allocated = self.inner.size.load(Relaxed);
+            if allocated < window_l {
                 let idx = self.idx.get();
                 if idx > 0 {
                     // cleanup waiter
@@ -507,7 +520,7 @@ impl Pool {
                 return Poll::Ready(());
             }
 
-            // register waiter
+            // register waiter only if spawn fn is provided
             if let Some(spawn) = &*self.inner.spawn.borrow() {
                 let idx = self.idx.get();
                 let mut flags = self.inner.flags.get();
@@ -519,15 +532,21 @@ impl Pool {
                     waiters.update(idx - 1, ctx.waker().clone())
                 };
 
-                if flags.contains(Flags::INCREASED) || !new {
-                    self.inner
-                        .window_waiters
-                        .set(self.inner.window_waiters.get() + 1);
-                } else if let Some(waker) = waiters.consume() {
-                    waker.wake();
+                // if memory usage has increased since last window change,
+                // block all readyness check. otherwise wake up one existing waiter
+                if new {
+                    if !flags.contains(Flags::INCREASED) {
+                        if let Some(waker) = waiters.consume() {
+                            waker.wake()
+                        }
+                    } else {
+                        self.inner
+                            .window_waiters
+                            .set(self.inner.window_waiters.get() + 1);
+                    }
                 }
 
-                // start driver task
+                // start driver task if needed
                 if !flags.contains(Flags::SPAWNED) {
                     flags.insert(Flags::SPAWNED);
                     self.inner.flags.set(flags);

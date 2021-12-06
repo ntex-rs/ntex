@@ -4,7 +4,7 @@ use crate::framed::Timer;
 use crate::http::{Request, Response};
 use crate::service::boxed::BoxService;
 use crate::time::{sleep, Millis, Seconds, Sleep};
-use crate::util::{BytesMut, PoolRef};
+use crate::util::{BytesMut, PoolId};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 /// Server keep-alive setting
@@ -44,9 +44,7 @@ pub(super) struct Inner {
     pub(super) timer: DateService,
     pub(super) ssl_handshake_timeout: Millis,
     pub(super) timer_h1: Timer,
-    pub(super) lw: u16,
-    pub(super) read_hw: u16,
-    pub(super) write_hw: u16,
+    pub(super) pool: PoolId,
 }
 
 impl Clone for ServiceConfig {
@@ -62,9 +60,7 @@ impl Default for ServiceConfig {
             Millis::ZERO,
             Seconds::ZERO,
             Millis(5_000),
-            1024,
-            8 * 1024,
-            8 * 1024,
+            PoolId::P1,
         )
     }
 }
@@ -76,9 +72,7 @@ impl ServiceConfig {
         client_timeout: Millis,
         client_disconnect: Seconds,
         ssl_handshake_timeout: Millis,
-        lw: u16,
-        read_hw: u16,
-        write_hw: u16,
+        pool: PoolId,
     ) -> ServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (Millis::from(val), true),
@@ -87,19 +81,13 @@ impl ServiceConfig {
         };
         let keep_alive = if ka_enabled { keep_alive } else { Millis::ZERO };
 
-        PoolRef::default()
-            .set_read_params(read_hw, lw)
-            .set_write_params(write_hw, lw);
-
         ServiceConfig(Rc::new(Inner {
             keep_alive,
             ka_enabled,
             client_timeout,
             client_disconnect,
             ssl_handshake_timeout,
-            lw,
-            read_hw,
-            write_hw,
+            pool,
             timer: DateService::new(),
             timer_h1: Timer::default(),
         }))
@@ -118,9 +106,7 @@ pub(super) struct DispatcherConfig<T, S, X, U> {
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
     pub(super) timer_h1: Timer,
-    pub(super) lw: u16,
-    pub(super) read_hw: u16,
-    pub(super) write_hw: u16,
+    pub(super) pool: PoolId,
     pub(super) on_request: Option<OnRequest<T>>,
 }
 
@@ -143,9 +129,7 @@ impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
             ka_enabled: cfg.0.ka_enabled,
             timer: cfg.0.timer.clone(),
             timer_h1: cfg.0.timer_h1.clone(),
-            lw: cfg.0.lw,
-            read_hw: cfg.0.read_hw,
-            write_hw: cfg.0.write_hw,
+            pool: cfg.0.pool,
         }
     }
 

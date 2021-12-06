@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.12] - 2021-12-06
+
+* http: Use memory pools
+
 ## [0.4.11] - 2021-12-02
 
 * framed: Use memory pools

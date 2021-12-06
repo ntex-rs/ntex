@@ -5,7 +5,7 @@ use super::path::PathItem;
 use super::resource::{ResourceDef, Segment};
 use super::{Resource, ResourcePath};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(super) struct Tree {
     key: Vec<Segment>,
     items: Vec<Item>,
@@ -39,15 +39,6 @@ impl Value {
             Value::Slash(v) => *v,
             Value::Prefix(v) => *v,
             Value::PrefixSlash(v) => *v,
-        }
-    }
-}
-
-impl Default for Tree {
-    fn default() -> Tree {
-        Tree {
-            key: Vec::new(),
-            items: Vec::new(),
         }
     }
 }

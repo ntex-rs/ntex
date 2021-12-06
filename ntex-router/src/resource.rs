@@ -56,7 +56,6 @@ pub(crate) enum Segment {
     Dynamic {
         pattern: Regex,
         names: Vec<&'static str>,
-        len: usize,
         tail: bool,
     },
 }
@@ -375,7 +374,6 @@ impl ResourceDef {
                 names,
                 tail,
                 pattern: re,
-                len: 0,
             });
 
             pattern = rem;
@@ -401,7 +399,6 @@ impl ResourceDef {
                     pattern,
                     names: Vec::new(),
                     tail: true,
-                    len: 0,
                 });
             } else {
                 pelems.push(Segment::Static(pattern.to_string()));
@@ -720,7 +717,6 @@ mod tests {
         let seg2 = Segment::Dynamic {
             pattern: Regex::new("test").unwrap(),
             names: Vec::new(),
-            len: 1,
             tail: false,
         };
         assert!(seg != seg2);

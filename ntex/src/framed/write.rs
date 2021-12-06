@@ -15,7 +15,7 @@ enum IoWriteState {
 enum Shutdown {
     None,
     Flushed,
-    Shutdown,
+    Stopping,
 }
 
 /// Write io task
@@ -116,7 +116,7 @@ where
                             match Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx)
                             {
                                 Poll::Ready(Ok(_)) => {
-                                    *st = Shutdown::Shutdown;
+                                    *st = Shutdown::Stopping;
                                     continue;
                                 }
                                 Poll::Ready(Err(_)) => {
@@ -129,7 +129,7 @@ where
                                 _ => (),
                             }
                         }
-                        Shutdown::Shutdown => {
+                        Shutdown::Stopping => {
                             // read until 0 or err
                             let mut buf = [0u8; 512];
                             let mut io = this.io.borrow_mut();

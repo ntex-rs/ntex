@@ -498,7 +498,6 @@ impl Timer {
 #[derive(Debug)]
 struct Bucket {
     lvl: u32,
-    offs: u32,
     bit: u64,
     bit_n: u64,
     entries: Slab<usize>,
@@ -516,7 +515,6 @@ impl Bucket {
         Bucket {
             bit,
             lvl: lvl as u32,
-            offs: offs as u32,
             bit_n: !bit,
             entries: Slab::default(),
         }

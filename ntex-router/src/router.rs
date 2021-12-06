@@ -4,12 +4,6 @@ use super::{IntoPattern, Resource, ResourceDef, ResourcePath};
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct ResourceId(pub u16);
 
-/// Information about current resource
-#[derive(Clone, Debug)]
-pub struct ResourceInfo {
-    resource: ResourceId,
-}
-
 /// Resource router.
 #[derive(Clone)]
 pub struct Router<T, U = ()> {

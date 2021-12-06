@@ -113,12 +113,8 @@ where
         on_connect_data: Option<Box<dyn DataFactory>>,
     ) -> Self {
         let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
-        let state = IoState::with_params(
-            config.read_hw,
-            config.write_hw,
-            config.lw,
-            config.client_disconnect,
-        );
+        let state = IoState::with_memory_pool(config.pool.into());
+        state.set_disconnect_timeout(config.client_disconnect);
 
         let mut expire = config.timer_h1.now();
         let io = Rc::new(RefCell::new(io));
@@ -992,7 +988,7 @@ mod tests {
         let mut h1 = h1(server, |_| {
             Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
         });
-        crate::util::PoolRef::default()
+        crate::util::PoolId::P1
             .set_read_params(15 * 1024, 1024)
             .set_write_params(15 * 1024, 1024);
 
