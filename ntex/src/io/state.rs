@@ -1,5 +1,5 @@
 use std::task::{Context, Poll, Waker};
-use std::{cell::Cell, cell::RefCell, future::Future, hash, io, pin::Pin, rc::Rc};
+use std::{cell::Cell, cell::RefCell, future::Future, hash, io, pin::Pin, ptr, rc::Rc};
 
 use slab::Slab;
 
@@ -87,7 +87,7 @@ impl Eq for IoStateInner {}
 
 impl PartialEq for IoStateInner {
     fn eq(&self, other: &Self) -> bool {
-        (self as *const _ as usize) == (other as *const _ as usize)
+        ptr::eq(self, other)
     }
 }
 

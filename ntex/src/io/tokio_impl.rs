@@ -97,7 +97,7 @@ impl Future for ReadTask {
                 }
 
                 this.state.release_read_buf(buf, new_bytes);
-                return Poll::Pending;
+                Poll::Pending
             }
             Poll::Pending => Poll::Pending,
         }
@@ -175,14 +175,14 @@ impl Future for WriteTask {
                             this.state.disconnect_timeout().map(sleep),
                             Shutdown::None,
                         );
-                        return self.poll(cx);
+                        self.poll(cx)
                     }
                     Poll::Ready(Err(WriteReadiness::Terminate)) => {
                         let _ = Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx);
                         this.state.close(None);
                         Poll::Ready(())
                     }
-                    Poll::Pending => return Poll::Pending,
+                    Poll::Pending => Poll::Pending,
                 }
             }
             IoWriteState::Shutdown(ref mut delay, ref mut st) => {

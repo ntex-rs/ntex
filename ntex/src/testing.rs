@@ -502,7 +502,7 @@ impl Future for ReadTask {
                 }
 
                 this.state.release_read_buf(buf, new_bytes);
-                return Poll::Pending;
+                Poll::Pending
             }
             Poll::Pending => Poll::Pending,
         }
@@ -552,7 +552,7 @@ impl Future for WriteTask {
                             this.state.disconnect_timeout().map(sleep),
                             Shutdown::None,
                         );
-                        return self.poll(cx);
+                        self.poll(cx)
                     }
                     Poll::Ready(Err(WriteReadiness::Terminate)) => {
                         log::trace!("write task is instructed to terminate");
@@ -567,7 +567,7 @@ impl Future for WriteTask {
                         this.state.close(None);
                         Poll::Ready(())
                     }
-                    Poll::Pending => return Poll::Pending,
+                    Poll::Pending => Poll::Pending,
                 }
             }
             IoWriteState::Shutdown(ref mut delay, ref mut st) => {
