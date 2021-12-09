@@ -45,6 +45,8 @@ pub mod util;
 pub mod web;
 pub mod ws;
 
+pub mod io;
+
 pub use self::service::{
     apply_fn, boxed, fn_factory, fn_factory_with_config, fn_service, into_service,
     pipeline, pipeline_factory, IntoService, IntoServiceFactory, Service,

@@ -75,7 +75,7 @@ impl Builder {
         let (stop_tx, stop) = channel();
         let (sys_sender, sys_receiver) = unbounded_channel();
 
-        let system = System::construct(
+        let _system = System::construct(
             sys_sender,
             Arbiter::new_system(local),
             self.stop_on_panic,
@@ -108,7 +108,7 @@ impl Builder {
         });
 
         // system arbiter
-        let system = System::construct(
+        let _system = System::construct(
             sys_sender,
             Arbiter::new_system(rt.local()),
             self.stop_on_panic,
