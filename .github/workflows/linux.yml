@@ -66,7 +66,7 @@ jobs:
         if: matrix.version == '1.53.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
         continue-on-error: true
         run: |
-          cargo tarpaulin --out Xml --all --all-features -- --skip time::
+          cargo tarpaulin --out Xml --all --all-features
 
       - name: Upload to Codecov
         if: matrix.version == '1.53.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')

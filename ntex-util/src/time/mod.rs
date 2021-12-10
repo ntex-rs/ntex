@@ -1,5 +1,4 @@
 //! Utilities for tracking time.
-
 use std::{future::Future, pin::Pin, task, task::Poll};
 
 mod types;
@@ -164,7 +163,7 @@ impl Interval {
 
     #[inline]
     pub async fn tick(&self) {
-        crate::util::poll_fn(|cx| self.poll_tick(cx)).await;
+        crate::future::poll_fn(|cx| self.poll_tick(cx)).await;
     }
 
     #[inline]
@@ -192,24 +191,32 @@ impl crate::Stream for Interval {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use futures::StreamExt;
+    use futures_util::StreamExt;
     use std::time;
+
+    use super::*;
 
     /// State Under Test: Two calls of `now()` return the same value if they are done within resolution interval.
     ///
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn lowres_time_does_not_immediately_change() {
-        assert_eq!(now(), now());
+        crate::set_spawn_fn(|f| {
+            ntex_rt::spawn(f);
+        });
+        assert_eq!(now(), now())
     }
 
     /// State Under Test: `now()` updates returned value every ~1ms period.
     ///
     /// Expected Behavior: Two calls of `now()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a 1ms interval.
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn lowres_time_updates_after_resolution_interval() {
+        crate::set_spawn_fn(|f| {
+            ntex_rt::spawn(f);
+        });
+
         let first_time = now();
 
         sleep(Millis(25)).await;
@@ -221,8 +228,12 @@ mod tests {
     /// State Under Test: Two calls of `system_time()` return the same value if they are done within 1ms interval.
     ///
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn system_time_service_time_does_not_immediately_change() {
+        crate::set_spawn_fn(|f| {
+            ntex_rt::spawn(f);
+        });
+
         assert_eq!(system_time(), system_time());
     }
 
@@ -230,8 +241,12 @@ mod tests {
     ///
     /// Expected Behavior: Two calls of `system_time()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a resolution interval.
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn system_time_service_time_updates_after_resolution_interval() {
+        crate::set_spawn_fn(|f| {
+            ntex_rt::spawn(f);
+        });
+
         let wait_time = 300;
 
         let first_time = system_time()
@@ -247,9 +262,12 @@ mod tests {
         assert!(second_time - first_time >= time::Duration::from_millis(wait_time));
     }
 
-    #[cfg(not(target_os = "macos"))]
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_interval() {
+        crate::set_spawn_fn(|f| {
+            ntex_rt::spawn(f);
+        });
+
         let mut int = interval(Millis(250));
 
         let time = time::Instant::now();
@@ -273,9 +291,12 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "macos"))]
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_interval_one_sec() {
+        crate::set_spawn_fn(|f| {
+            ntex_rt::spawn(f);
+        });
+
         let int = interval(Millis::ONE_SEC);
 
         for _i in 0..3 {

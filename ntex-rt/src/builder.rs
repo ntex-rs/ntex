@@ -87,7 +87,10 @@ impl Builder {
         // start the system arbiter
         let _ = local.spawn_local(arb);
 
-        AsyncSystemRunner { stop, system }
+        AsyncSystemRunner {
+            stop,
+            _system: system,
+        }
     }
 
     fn create_runtime<F>(self, f: F) -> SystemRunner
@@ -98,6 +101,11 @@ impl Builder {
         let (sys_sender, sys_receiver) = unbounded_channel();
 
         let rt = Runtime::new().unwrap();
+
+        // set ntex-util spawn fn
+        ntex_util::set_spawn_fn(|fut| {
+            tokio::task::spawn_local(fut);
+        });
 
         // system arbiter
         let system = System::construct(
@@ -111,14 +119,18 @@ impl Builder {
         // init system arbiter and run configuration method
         rt.block_on(lazy(move |_| f()));
 
-        SystemRunner { rt, stop, system }
+        SystemRunner {
+            rt,
+            stop,
+            _system: system,
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct AsyncSystemRunner {
     stop: Receiver<i32>,
-    system: System,
+    _system: System,
 }
 
 impl AsyncSystemRunner {
@@ -152,7 +164,7 @@ impl AsyncSystemRunner {
 pub struct SystemRunner {
     rt: Runtime,
     stop: Receiver<i32>,
-    system: System,
+    _system: System,
 }
 
 impl SystemRunner {

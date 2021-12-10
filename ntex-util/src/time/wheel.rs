@@ -6,9 +6,9 @@ use std::cell::RefCell;
 use std::time::{Duration, Instant, SystemTime};
 use std::{cmp::max, future::Future, mem, pin::Pin, rc::Rc, task, task::Poll};
 
+use futures_timer::Delay;
 use slab::Slab;
 
-use crate::rt::time_driver::{sleep_until, Sleep};
 use crate::task::LocalWaker;
 
 // Clock divisor for the next level
@@ -140,14 +140,14 @@ struct Timer {
     next_expiry: u64,
     flags: Flags,
     driver: LocalWaker,
-    driver_sleep: Pin<Box<Sleep>>,
+    driver_sleep: Delay,
     buckets: Vec<Bucket>,
     /// Bit field tracking which bucket currently contain entries.
     occupied: [u64; WHEEL_SIZE],
     lowres_time: Option<Instant>,
     lowres_stime: Option<SystemTime>,
     lowres_driver: LocalWaker,
-    lowres_driver_sleep: Pin<Box<Sleep>>,
+    lowres_driver_sleep: Delay,
 }
 
 impl Timer {
@@ -160,12 +160,12 @@ impl Timer {
             next_expiry: u64::MAX,
             flags: Flags::empty(),
             driver: LocalWaker::new(),
-            driver_sleep: Box::pin(sleep_until(Instant::now())),
+            driver_sleep: Delay::new(Duration::ZERO),
             occupied: [0; WHEEL_SIZE],
             lowres_time: None,
             lowres_stime: None,
             lowres_driver: LocalWaker::new(),
-            lowres_driver_sleep: Box::pin(sleep_until(Instant::now())),
+            lowres_driver_sleep: Delay::new(Duration::ZERO),
         }
     }
 
@@ -542,10 +542,9 @@ struct TimerDriver(Rc<RefCell<Timer>>);
 impl TimerDriver {
     fn start(slf: &mut Timer, cell: &Rc<RefCell<Timer>>) {
         slf.flags.insert(Flags::DRIVER_STARTED);
-        let deadline = Instant::now() + Duration::from_millis(slf.next_expiry_ms());
-        slf.driver_sleep = Box::pin(sleep_until(deadline));
+        slf.driver_sleep = Delay::new(Duration::from_millis(slf.next_expiry_ms()));
 
-        crate::rt::spawn(TimerDriver(cell.clone()));
+        crate::spawn(TimerDriver(cell.clone()));
     }
 }
 
@@ -565,27 +564,26 @@ impl Future for TimerDriver {
         if inner.flags.contains(Flags::DRIVER_RECALC) {
             inner.flags.remove(Flags::DRIVER_RECALC);
             let now = Instant::now();
-            let deadline = if let Some(diff) =
-                now.checked_duration_since(inner.elapsed_time())
-            {
-                now + Duration::from_millis(inner.next_expiry_ms()).saturating_sub(diff)
-            } else {
-                now + Duration::from_millis(inner.next_expiry_ms())
-            };
-            Pin::as_mut(&mut inner.driver_sleep).reset(deadline);
+            let deadline =
+                if let Some(diff) = now.checked_duration_since(inner.elapsed_time()) {
+                    Duration::from_millis(inner.next_expiry_ms()).saturating_sub(diff)
+                } else {
+                    Duration::from_millis(inner.next_expiry_ms())
+                };
+            inner.driver_sleep.reset(deadline);
         }
 
         loop {
-            if Pin::as_mut(&mut inner.driver_sleep).poll(cx).is_ready() {
-                let now = inner.driver_sleep.deadline();
+            if Pin::new(&mut inner.driver_sleep).poll(cx).is_ready() {
+                let now = Instant::now();
                 inner.elapsed = inner.next_expiry;
                 inner.elapsed_time = Some(now);
                 inner.execute_expired_timers();
 
                 if let Some(next_expiry) = inner.next_pending_bucket() {
                     inner.next_expiry = next_expiry;
-                    let deadline = now + Duration::from_millis(inner.next_expiry_ms());
-                    Pin::as_mut(&mut inner.driver_sleep).reset(deadline);
+                    let dur = Duration::from_millis(inner.next_expiry_ms());
+                    inner.driver_sleep.reset(dur);
                     continue;
                 } else {
                     inner.next_expiry = u64::MAX;
@@ -602,10 +600,9 @@ struct LowresTimerDriver(Rc<RefCell<Timer>>);
 impl LowresTimerDriver {
     fn start(slf: &mut Timer, cell: &Rc<RefCell<Timer>>) {
         slf.flags.insert(Flags::LOWRES_DRIVER);
-        slf.lowres_driver_sleep =
-            Box::pin(sleep_until(Instant::now() + LOWRES_RESOLUTION));
+        slf.lowres_driver_sleep = Delay::new(LOWRES_RESOLUTION);
 
-        crate::rt::spawn(LowresTimerDriver(cell.clone()));
+        crate::spawn(LowresTimerDriver(cell.clone()));
     }
 }
 
@@ -624,10 +621,7 @@ impl Future for LowresTimerDriver {
 
         loop {
             if inner.flags.contains(Flags::LOWRES_TIMER) {
-                if Pin::as_mut(&mut inner.lowres_driver_sleep)
-                    .poll(cx)
-                    .is_ready()
-                {
+                if Pin::new(&mut inner.lowres_driver_sleep).poll(cx).is_ready() {
                     inner.lowres_time = None;
                     inner.lowres_stime = None;
                     inner.flags.remove(Flags::LOWRES_TIMER);
@@ -635,22 +629,24 @@ impl Future for LowresTimerDriver {
                 return Poll::Pending;
             } else {
                 inner.flags.insert(Flags::LOWRES_TIMER);
-                Pin::as_mut(&mut inner.lowres_driver_sleep)
-                    .reset(Instant::now() + LOWRES_RESOLUTION);
+                inner.lowres_driver_sleep.reset(LOWRES_RESOLUTION);
             }
         }
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::time::{interval, sleep, Millis};
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_timer() {
-        crate::rt::spawn(async {
+        crate::set_spawn_fn(|f| {
+            ntex_rt::spawn(f);
+        });
+
+        crate::spawn(async {
             let s = interval(Millis(25));
             loop {
                 s.tick().await;
@@ -663,7 +659,7 @@ mod tests {
         fut2.await;
         let elapsed = Instant::now() - time;
         assert!(
-            elapsed > Duration::from_millis(200) && elapsed < Duration::from_millis(250),
+            elapsed > Duration::from_millis(200) && elapsed < Duration::from_millis(500),
             "elapsed: {:?}",
             elapsed
         );
@@ -672,7 +668,7 @@ mod tests {
         let elapsed = Instant::now() - time;
         assert!(
             elapsed > Duration::from_millis(1000)
-                && elapsed < Duration::from_millis(1200),
+                && elapsed < Duration::from_millis(3000), // osx
             "elapsed: {:?}",
             elapsed
         );
@@ -681,7 +677,7 @@ mod tests {
         sleep(Millis(25)).await;
         let elapsed = Instant::now() - time;
         assert!(
-            elapsed > Duration::from_millis(20) && elapsed < Duration::from_millis(40)
+            elapsed > Duration::from_millis(20) && elapsed < Duration::from_millis(50)
         );
     }
 }

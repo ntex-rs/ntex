@@ -99,7 +99,7 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
-    #[ntex::test]
+    #[ntex_macros::rt_test2]
     #[allow(clippy::unit_cmp)]
     async fn test_condition() {
         let cond = Condition::new();
@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(waiter2.await, ());
     }
 
-    #[ntex::test]
+    #[ntex_macros::rt_test2]
     async fn test_condition_poll() {
         let cond = Condition::new();
         let waiter = cond.wait();

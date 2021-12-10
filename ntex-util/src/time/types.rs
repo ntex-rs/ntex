@@ -1,19 +1,5 @@
 use std::{convert::TryInto, ops};
 
-// /// A measurement of a monotonically nondecreasing clock. Opaque and useful only with Duration.
-// ///
-// /// Instants are always guaranteed to be no less than any previously
-// /// measured instant when created, and are often useful for tasks such as measuring
-// /// benchmarks or timing how long an operation takes.
-// #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// pub struct Instant(u64);
-
-// impl Instant {
-//     pub fn now() -> Instant {
-//         todo!()
-//     }
-// }
-
 /// A Duration type to represent a span of time.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Millis(pub u64);

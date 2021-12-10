@@ -89,6 +89,11 @@ impl Runtime {
     where
         F: Future,
     {
+        // set ntex-util spawn fn
+        ntex_util::set_spawn_fn(|fut| {
+            crate::spawn(fut);
+        });
+
         self.local.block_on(&self.rt, f)
     }
 }

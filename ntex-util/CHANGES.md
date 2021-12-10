@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.2] - 2021-12-10
+
+* move in ntex::time utils
+
+* replace tokio::time with futures-timer
+
 ## [0.1.1] - 2021-04-11
 
 * next renamed to stream_recv
