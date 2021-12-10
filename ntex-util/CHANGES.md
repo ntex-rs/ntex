@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.2] - 2021-12-xx
+## [0.1.2] - 2021-12-10
 
 * move in ntex::time utils
 

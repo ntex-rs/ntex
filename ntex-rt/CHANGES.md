@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.2] - 2021-12-10
+
+* Set spawn fn to ntex-util
+
 ## [0.3.1] - 2021-08-28
 
 * Re-export time as different module
