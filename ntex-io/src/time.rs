@@ -89,7 +89,7 @@ impl Timer {
 
                         // new tick
                         if i.notifications.is_empty() {
-                            inner.borrow_mut().running = false;
+                            i.running = false;
                             break;
                         }
                     }
