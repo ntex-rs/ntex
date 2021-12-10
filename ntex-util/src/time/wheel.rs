@@ -677,7 +677,9 @@ mod tests {
         sleep(Millis(25)).await;
         let elapsed = Instant::now() - time;
         assert!(
-            elapsed > Duration::from_millis(20) && elapsed < Duration::from_millis(50)
+            elapsed > Duration::from_millis(20) && elapsed < Duration::from_millis(150),
+            "elapsed: {:?}",
+            elapsed
         );
     }
 }
