@@ -87,7 +87,10 @@ impl Builder {
         // start the system arbiter
         let _ = local.spawn_local(arb);
 
-        AsyncSystemRunner { stop, _system: system }
+        AsyncSystemRunner {
+            stop,
+            _system: system,
+        }
     }
 
     fn create_runtime<F>(self, f: F) -> SystemRunner
