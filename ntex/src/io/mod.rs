@@ -1,4 +1,4 @@
-use std::{io, task::Context, task::Poll};
+use std::{fmt, future::Future, io, task::Context, task::Poll};
 
 mod dispatcher;
 mod filter;
@@ -45,10 +45,13 @@ pub trait WriteFilter {
 
 pub trait Filter: ReadFilter + WriteFilter {}
 
-pub trait FilterFactory<F: Filter> {
+pub trait FilterFactory<F: Filter>: Sized {
     type Filter: Filter;
 
-    fn create(inner: F) -> Self::Filter;
+    type Error: fmt::Debug;
+    type Future: Future<Output = Result<IoState<Self::Filter>, Self::Error>>;
+
+    fn create(&self, st: IoState<F>) -> Self::Future;
 }
 
 pub trait IoStream {

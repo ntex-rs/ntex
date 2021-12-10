@@ -1,5 +1,6 @@
-use std::task::{Context, Poll, Waker};
-use std::{cell::Cell, cell::RefCell, future::Future, hash, io, pin::Pin, ptr, rc::Rc};
+use std::cell::{Cell, RefCell};
+use std::task::{Context, Poll};
+use std::{future::Future, hash, io, mem, pin::Pin, ptr, rc::Rc};
 
 use slab::Slab;
 
@@ -10,7 +11,7 @@ use crate::util::{poll_fn, BytesMut, Either, PoolId, PoolRef};
 
 use super::filter::{DefaultFilter, NullFilter};
 use super::tasks::{ReadState, WriteState};
-use super::{Filter, IoStream};
+use super::{Filter, FilterFactory, IoStream};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -42,7 +43,7 @@ bitflags::bitflags! {
     }
 }
 
-pub struct IoState<F = DefaultFilter>(pub(super) Rc<IoStateInner>, Box<F>);
+pub struct IoState<F = DefaultFilter>(pub(super) Rc<IoStateInner>, *mut F);
 
 pub(crate) struct IoStateInner {
     pub(super) flags: Cell<Flags>,
@@ -108,28 +109,6 @@ impl Drop for IoStateInner {
     }
 }
 
-impl<F> IoState<F> {
-    #[inline]
-    /// Set memory pool
-    pub fn set_memory_pool(&self, pool: PoolRef) {
-        if let Some(mut buf) = self.0.read_buf.take() {
-            pool.move_in(&mut buf);
-            self.0.read_buf.set(Some(buf));
-        }
-        if let Some(mut buf) = self.0.write_buf.take() {
-            pool.move_in(&mut buf);
-            self.0.write_buf.set(Some(buf));
-        }
-        self.0.pool.set(pool);
-    }
-
-    #[inline]
-    /// Set io disconnect timeout in secs
-    pub fn set_disconnect_timeout(&self, timeout: Seconds) {
-        self.0.disconnect_timeout.set(timeout);
-    }
-}
-
 impl IoState {
     #[inline]
     /// Create `State` instance
@@ -164,7 +143,29 @@ impl IoState {
         // start io tasks
         io.start(ReadState(inner.clone()), WriteState(inner.clone()));
 
-        IoState(inner, filter)
+        IoState(inner, Box::into_raw(filter))
+    }
+}
+
+impl<F> IoState<F> {
+    #[inline]
+    /// Set memory pool
+    pub fn set_memory_pool(&self, pool: PoolRef) {
+        if let Some(mut buf) = self.0.read_buf.take() {
+            pool.move_in(&mut buf);
+            self.0.read_buf.set(Some(buf));
+        }
+        if let Some(mut buf) = self.0.write_buf.take() {
+            pool.move_in(&mut buf);
+            self.0.write_buf.set(Some(buf));
+        }
+        self.0.pool.set(pool);
+    }
+
+    #[inline]
+    /// Set io disconnect timeout in secs
+    pub fn set_disconnect_timeout(&self, timeout: Seconds) {
+        self.0.disconnect_timeout.set(timeout);
     }
 }
 
@@ -201,10 +202,9 @@ impl<F> IoState<F> {
     }
 
     #[inline]
-    /// Check if io is still active
-    pub fn is_open(&self) -> bool {
-        !self
-            .0
+    /// Check if io stream is closed
+    pub fn is_closed(&self) -> bool {
+        self.0
             .flags
             .get()
             .intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::DSP_STOP)
@@ -213,21 +213,21 @@ impl<F> IoState<F> {
     #[inline]
     /// Stop io tasks
     ///
-    /// Wake dispatcher when read or write task is stopped.
-    pub fn stop_io(&self, waker: &Waker) {
+    /// Wake dispatcher when io tasks are stopped.
+    pub fn stop(&self, cx: &mut Context<'_>) {
         let flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::IO_STOP) {
             self.0.insert_flags(Flags::IO_STOP);
             self.0.read_task.wake();
             self.0.write_task.wake();
-            self.0.dispatch_task.register(waker);
+            self.0.dispatch_task.register(cx.waker());
         }
     }
 
     #[inline]
     /// Gracefully shutdown read and write io tasks
-    pub fn shutdown_io(&self) {
+    pub fn shutdown(&self, cx: &mut Context<'_>) {
         let flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::IO_STOP) {
@@ -235,12 +235,13 @@ impl<F> IoState<F> {
             self.0.insert_flags(Flags::IO_SHUTDOWN);
             self.0.read_task.wake();
             self.0.write_task.wake();
+            self.0.dispatch_task.register(cx.waker());
         }
     }
 
     #[inline]
     /// Take io error if any occured
-    pub fn take_io_error(&self) -> Option<io::Error> {
+    pub fn take_error(&self) -> Option<io::Error> {
         self.0.error.take()
     }
 
@@ -248,12 +249,6 @@ impl<F> IoState<F> {
     /// Reset keep-alive error
     pub fn reset_keepalive(&self) {
         self.0.remove_flags(Flags::DSP_KEEPALIVE)
-    }
-
-    #[inline]
-    /// Wake dispatcher task
-    pub fn wake_dispatcher(&self) {
-        self.0.dispatch_task.wake();
     }
 
     #[inline]
@@ -281,7 +276,7 @@ impl<F> IoState<F> {
     }
 
     #[inline]
-    /// Get writer
+    /// Get write handle, which gives access to write api
     pub fn write_handle(&self) -> WriteHandle {
         WriteHandle(self.0.clone())
     }
@@ -290,7 +285,7 @@ impl<F> IoState<F> {
     /// Gracefully close connection
     ///
     /// First stop dispatcher, then dispatcher stops io tasks
-    pub fn close(&self) {
+    fn _close(&self) {
         self.0.insert_flags(Flags::DSP_STOP);
         self.0.dispatch_task.wake();
     }
@@ -299,7 +294,7 @@ impl<F> IoState<F> {
     /// Force close connection
     ///
     /// Dispatcher does not wait for uncompleted responses, but flushes io buffers.
-    pub fn force_close(&self) {
+    fn force_close(&self) {
         log::trace!("force close framed object");
         self.0.insert_flags(Flags::DSP_STOP | Flags::IO_SHUTDOWN);
         self.0.read_task.wake();
@@ -308,7 +303,7 @@ impl<F> IoState<F> {
     }
 
     #[inline]
-    /// Notify when socket get disconnected
+    /// Notify when io stream get disconnected
     pub fn on_disconnect(&self) -> OnDisconnect {
         OnDisconnect::new(self.0.clone(), self.0.flags.get().contains(Flags::IO_ERR))
     }
@@ -348,7 +343,7 @@ impl<F> IoState<F> {
                     })
                     .await;
                     if self.is_io_err() {
-                        if let Some(err) = self.take_io_error() {
+                        if let Some(err) = self.take_error() {
                             Err(Either::Right(err))
                         } else {
                             Ok(None)
@@ -364,7 +359,7 @@ impl<F> IoState<F> {
     }
 
     #[inline]
-    /// Encode item, send to a peer and then flush
+    /// Encode item, send to a peer
     pub async fn send<U>(
         &self,
         codec: &U,
@@ -433,10 +428,47 @@ impl<F> IoState<F> {
     }
 }
 
+impl<F: Filter> IoState<F> {
+    pub async fn add_filter<T>(self, factory: &T) -> Result<IoState<T::Filter>, T::Error>
+    where
+        T: FilterFactory<F>,
+    {
+        factory.create(self).await
+    }
+
+    pub fn map_filter<T, U>(mut self, map: T) -> IoState<U>
+    where
+        T: FnOnce(F) -> U,
+        U: Filter,
+    {
+        assert!(!self.1.is_null());
+
+        // get current filter
+        let filter = unsafe {
+            let filter = Box::new(map(*Box::from_raw(mem::replace(
+                &mut self.1,
+                std::ptr::null_mut(),
+            ))));
+
+            let filter_ref: &'static dyn Filter = {
+                let filter: &dyn Filter = filter.as_ref();
+                std::mem::transmute(filter)
+            };
+            self.0.filter.replace(filter_ref);
+            filter
+        };
+
+        IoState(self.0.clone(), Box::into_raw(filter))
+    }
+}
+
 impl<F> Drop for IoState<F> {
     fn drop(&mut self) {
-        self.force_close();
-        self.0.filter.set(NullFilter::get());
+        if !self.1.is_null() {
+            self.force_close();
+            self.0.filter.set(NullFilter::get());
+            unsafe { Box::from_raw(mem::replace(&mut self.1, std::ptr::null_mut())) };
+        }
     }
 }
 
@@ -771,7 +803,8 @@ impl Drop for OnDisconnect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{codec::BytesCodec, testing::Io, util::lazy, util::Bytes};
+    use crate::io::{Filter, FilterFactory, ReadFilter, WriteFilter, WriteReadiness};
+    use crate::{codec::BytesCodec, testing::Io, util::lazy, util::Bytes, util::Ready};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -872,5 +905,102 @@ mod tests {
         );
         client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
         assert_eq!(waiter.await, ());
+    }
+
+    #[crate::rt_test]
+    async fn filter() {
+        struct Counter<F> {
+            inner: F,
+            in_bytes: Rc<Cell<usize>>,
+            out_bytes: Rc<Cell<usize>>,
+        }
+        impl<F: ReadFilter + WriteFilter> Filter for Counter<F> {}
+
+        impl<F: ReadFilter> ReadFilter for Counter<F> {
+            fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+                self.inner.poll_read_ready(cx)
+            }
+
+            fn read_closed(&self, err: Option<io::Error>) {
+                self.inner.read_closed(err)
+            }
+
+            fn get_read_buf(&self) -> Option<BytesMut> {
+                self.inner.get_read_buf()
+            }
+
+            fn release_read_buf(&self, buf: BytesMut, new_bytes: usize) {
+                self.in_bytes.set(self.in_bytes.get() + new_bytes);
+                self.inner.release_read_buf(buf, new_bytes);
+            }
+        }
+
+        impl<F: WriteFilter> WriteFilter for Counter<F> {
+            fn poll_write_ready(
+                &self,
+                cx: &mut Context<'_>,
+            ) -> Poll<Result<(), WriteReadiness>> {
+                self.inner.poll_write_ready(cx)
+            }
+
+            fn write_closed(&self, err: Option<io::Error>) {
+                self.inner.write_closed(err)
+            }
+
+            fn get_write_buf(&self) -> Option<BytesMut> {
+                if let Some(buf) = self.inner.get_write_buf() {
+                    self.out_bytes.set(self.out_bytes.get() - buf.len());
+                    Some(buf)
+                } else {
+                    None
+                }
+            }
+
+            fn release_write_buf(&self, buf: BytesMut) {
+                self.out_bytes.set(self.out_bytes.get() + buf.len());
+                self.inner.release_write_buf(buf);
+            }
+        }
+
+        struct CounterFactory(Rc<Cell<usize>>, Rc<Cell<usize>>);
+
+        impl<F: Filter> FilterFactory<F> for CounterFactory {
+            type Filter = Counter<F>;
+
+            type Error = ();
+            type Future = Ready<IoState<Counter<F>>, Self::Error>;
+
+            fn create(&self, st: IoState<F>) -> Self::Future {
+                let in_bytes = self.0.clone();
+                let out_bytes = self.1.clone();
+                Ready::Ok(st.map_filter(|inner| Counter {
+                    inner,
+                    in_bytes,
+                    out_bytes,
+                }))
+            }
+        }
+
+        let in_bytes = Rc::new(Cell::new(0));
+        let out_bytes = Rc::new(Cell::new(0));
+        let factory = CounterFactory(in_bytes.clone(), out_bytes.clone());
+
+        let (client, server) = Io::create();
+        let state = IoState::new(server).add_filter(&factory).await.unwrap();
+
+        client.remote_buffer_cap(1024);
+        client.write(TEXT);
+        let msg = state.next(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(msg, Bytes::from_static(BIN));
+
+        state
+            .send(&BytesCodec, Bytes::from_static(b"test"))
+            .await
+            .unwrap();
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"test"));
+
+        assert_eq!(in_bytes.get(), BIN.len());
+        assert_eq!(out_bytes.get(), 4);
     }
 }

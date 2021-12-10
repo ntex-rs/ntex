@@ -32,9 +32,10 @@ pub fn sleep(duration: Duration) -> Sleep {
     }
 }
 
+#[doc(hidden)]
 /// Creates new [`Interval`] that yields with interval of `period` with the
-/// first tick completing at `start`. The default [`MissedTickBehavior`] is
-/// [`Burst`](MissedTickBehavior::Burst), but this can be configured
+/// first tick completing at `start`. The default `MissedTickBehavior` is
+/// `Burst`, but this can be configured
 /// by calling [`set_missed_tick_behavior`](Interval::set_missed_tick_behavior).
 #[inline]
 pub fn interval_at(start: Instant, period: Duration) -> Interval {

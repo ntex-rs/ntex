@@ -1,12 +1,11 @@
 //! Framed transport dispatcher
 use std::{
     cell::Cell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll, time,
-    time::Instant,
 };
 
 use crate::codec::{Decoder, Encoder};
 use crate::service::{IntoService, Service};
-use crate::time::Seconds;
+use crate::time::{now, Seconds};
 use crate::util::{Either, Pool};
 
 use super::{DispatchItem, IoState, Read, Timer, Write};
@@ -14,7 +13,7 @@ use super::{DispatchItem, IoState, Read, Timer, Write};
 type Response<U> = <U as Encoder>::Item;
 
 pin_project_lite::pin_project! {
-    /// Framed dispatcher - is a future that reads frames from Framed object
+    /// Framed dispatcher - is a future that reads frames from bytes stream
     /// and pass then to the service.
     pub struct Dispatcher<S, U>
     where
@@ -41,7 +40,7 @@ where
     state: IoState,
     timer: Timer,
     ka_timeout: Seconds,
-    ka_updated: Cell<Instant>,
+    ka_updated: Cell<time::Instant>,
     error: Cell<Option<S::Error>>,
     ready_err: Cell<bool>,
     shared: Rc<DispatcherShared<S, U>>,
@@ -100,7 +99,7 @@ where
         service: F,
         timer: Timer,
     ) -> Self {
-        let updated = timer.now();
+        let updated = now();
         let ka_timeout = Seconds(30);
 
         // register keepalive timer
@@ -318,7 +317,7 @@ where
 
                     if slf.shared.inflight.get() == 0 {
                         slf.st.set(DispatcherState::Shutdown);
-                        state.shutdown_io();
+                        state.shutdown(cx);
                     } else {
                         state.register_dispatcher(cx);
                         return Poll::Pending;
@@ -424,7 +423,7 @@ where
                         self.st.set(DispatcherState::Stop);
 
                         // get io error
-                        if let Some(err) = self.state.take_io_error() {
+                        if let Some(err) = self.state.take_error() {
                             PollService::Item(DispatchItem::IoError(err))
                         } else {
                             PollService::ServiceError
@@ -475,7 +474,7 @@ where
     /// update keep-alive timer
     fn update_keepalive(&self) {
         if self.ka_enabled() {
-            let updated = self.timer.now();
+            let updated = now();
             if updated != self.ka_updated.get() {
                 let ka = time::Duration::from(self.ka());
                 self.timer.register(
@@ -551,7 +550,7 @@ mod tests {
             let state = IoState::new(io);
             let timer = Timer::default();
             let ka_timeout = Seconds(1);
-            let ka_updated = timer.now();
+            let ka_updated = now();
             let shared = Rc::new(DispatcherShared {
                 codec: codec,
                 error: Cell::new(None),

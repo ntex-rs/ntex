@@ -1,6 +1,6 @@
 //! Provides abstractions for working with bytes.
 //!
-//! This is fork of bytes crate (https://github.com/tokio-rs/bytes)
+//! This is fork of [bytes crate](https://github.com/tokio-rs/bytes)
 //!
 //! The `ntex-bytes` crate provides an efficient byte buffer structure
 //! ([`Bytes`](struct.Bytes.html)) and traits for working with buffer
