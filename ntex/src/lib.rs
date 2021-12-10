@@ -39,13 +39,10 @@ pub mod framed;
 #[cfg(feature = "http-framework")]
 pub mod http;
 pub mod server;
-pub mod testing;
 pub mod util;
 #[cfg(feature = "http-framework")]
 pub mod web;
 pub mod ws;
-
-pub mod io;
 
 pub use self::service::{
     apply_fn, boxed, fn_factory, fn_factory_with_config, fn_service, into_service,
@@ -79,4 +76,14 @@ pub mod service {
 pub mod time {
     //! Utilities for tracking time.
     pub use ntex_util::time::*;
+}
+
+pub mod io {
+    //! IO streaming utilities.
+    pub use ntex_io::*;
+}
+
+pub mod testing {
+    //! IO testing utilities.
+    pub use ntex_io::testing::*;
 }

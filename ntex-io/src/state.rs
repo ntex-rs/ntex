@@ -2,12 +2,10 @@ use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
 use std::{future::Future, hash, io, mem, pin::Pin, ptr, rc::Rc};
 
+use ntex_bytes::{BytesMut, PoolId, PoolRef};
+use ntex_codec::{Decoder, Encoder};
+use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Seconds};
 use slab::Slab;
-
-use crate::codec::{Decoder, Encoder};
-use crate::task::LocalWaker;
-use crate::time::Seconds;
-use crate::util::{poll_fn, BytesMut, Either, PoolId, PoolRef};
 
 use super::filter::{DefaultFilter, NullFilter};
 use super::tasks::{ReadState, WriteState};
@@ -401,6 +399,7 @@ impl<F> IoState<F> {
     }
 
     #[inline]
+    #[allow(clippy::type_complexity)]
     pub fn poll_next<U>(
         &self,
         codec: &U,
@@ -802,14 +801,18 @@ impl Drop for OnDisconnect {
 
 #[cfg(test)]
 mod tests {
+    use ntex_bytes::Bytes;
+    use ntex_codec::BytesCodec;
+    use ntex_util::future::{lazy, Ready};
+
     use super::*;
-    use crate::io::{Filter, FilterFactory, ReadFilter, WriteFilter, WriteReadiness};
-    use crate::{codec::BytesCodec, testing::Io, util::lazy, util::Bytes, util::Ready};
+    use crate::testing::Io;
+    use crate::{Filter, FilterFactory, ReadFilter, WriteFilter, WriteReadiness};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_utils() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(1024);
@@ -872,7 +875,7 @@ mod tests {
         assert!(state.flags().contains(Flags::IO_SHUTDOWN));
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_on_disconnect() {
         let (client, server) = Io::create();
         let state = IoState::new(server);
@@ -907,7 +910,7 @@ mod tests {
         assert_eq!(waiter.await, ());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn filter() {
         struct Counter<F> {
             inner: F,

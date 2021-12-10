@@ -1,7 +1,7 @@
 use std::{io, rc::Rc, task::Context, task::Poll};
 
-use crate::time::Seconds;
-use crate::util::{BytesMut, PoolRef};
+use ntex_bytes::{BytesMut, PoolRef};
+use ntex_util::time::Seconds;
 
 use super::{state::Flags, state::IoStateInner, WriteReadiness};
 

@@ -87,10 +87,7 @@ impl Builder {
         // start the system arbiter
         let _ = local.spawn_local(arb);
 
-        AsyncSystemRunner {
-            stop,
-            _system: system,
-        }
+        AsyncSystemRunner { stop, _system }
     }
 
     fn create_runtime<F>(self, f: F) -> SystemRunner
@@ -119,11 +116,7 @@ impl Builder {
         // init system arbiter and run configuration method
         rt.block_on(lazy(move |_| f()));
 
-        SystemRunner {
-            rt,
-            stop,
-            _system: system,
-        }
+        SystemRunner { rt, stop, _system }
     }
 }
 

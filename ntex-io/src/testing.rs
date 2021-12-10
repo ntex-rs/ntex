@@ -3,10 +3,12 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::{cmp, fmt, future::Future, io, mem, pin::Pin, rc::Rc};
 
-use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
-use crate::io::{IoStream, ReadState, WriteReadiness, WriteState};
-use crate::time::{sleep, Millis, Sleep};
-use crate::util::{poll_fn, Buf, BufMut, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytesMut};
+use ntex_codec::{AsyncRead, AsyncWrite, ReadBuf};
+use ntex_util::future::poll_fn;
+use ntex_util::time::{sleep, Millis, Sleep};
+
+use crate::{IoStream, ReadState, WriteReadiness, WriteState};
 
 #[derive(Default)]
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
@@ -430,11 +432,11 @@ impl IoStream for Io {
     fn start(self, read: ReadState, write: WriteState) {
         let io = Rc::new(self);
 
-        crate::rt::spawn(ReadTask {
+        ntex_util::spawn(ReadTask {
             io: io.clone(),
             state: read,
         });
-        crate::rt::spawn(WriteTask {
+        ntex_util::spawn(WriteTask {
             io,
             state: write,
             st: IoWriteState::Processing,
@@ -701,7 +703,7 @@ pub(super) fn flush_io(io: &Io, state: &WriteState, cx: &mut Context<'_>) -> Pol
 mod tests {
     use super::*;
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn basic() {
         let (client, server) = Io::create();
         assert_eq!(client.tp, Type::Client);

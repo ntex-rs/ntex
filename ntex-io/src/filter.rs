@@ -1,6 +1,6 @@
 use std::{io, rc::Rc, task::Context, task::Poll};
 
-use crate::util::BytesMut;
+use ntex_bytes::BytesMut;
 
 use super::state::{Flags, IoStateInner};
 use super::{Filter, ReadFilter, WriteFilter, WriteReadiness};

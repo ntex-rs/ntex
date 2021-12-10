@@ -3,10 +3,11 @@ use std::{
     cell::Cell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll, time,
 };
 
-use crate::codec::{Decoder, Encoder};
-use crate::service::{IntoService, Service};
-use crate::time::{now, Seconds};
-use crate::util::{Either, Pool};
+use ntex_bytes::Pool;
+use ntex_codec::{Decoder, Encoder};
+use ntex_service::{IntoService, Service};
+use ntex_util::time::{now, Seconds};
+use ntex_util::{future::Either, spawn};
 
 use super::{DispatchItem, IoState, Read, Timer, Write};
 
@@ -356,7 +357,7 @@ where
 
         let st = self.state.write_handle();
         let shared = self.shared.clone();
-        crate::rt::spawn(async move {
+        spawn(async move {
             let item = fut.await;
             shared.handle_result(item, st.get());
         });
@@ -504,11 +505,13 @@ mod tests {
     use std::sync::{atomic::AtomicBool, atomic::Ordering::Relaxed, Arc, Mutex};
     use std::{cell::RefCell, time::Duration};
 
-    use crate::codec::BytesCodec;
-    use crate::io::{state::Flags, state::IoStateInner, state::Write, IoStream};
+    use ntex_bytes::{Bytes, PoolId, PoolRef};
+    use ntex_codec::BytesCodec;
+    use ntex_util::future::Ready;
+    use ntex_util::time::{sleep, Millis};
+
     use crate::testing::Io;
-    use crate::time::{sleep, Millis};
-    use crate::util::{Bytes, PoolId, PoolRef, Ready};
+    use crate::{state::Flags, state::IoStateInner, state::Write, IoStream};
 
     use super::*;
 
@@ -582,7 +585,7 @@ mod tests {
         }
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_basic() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(1024);
@@ -591,7 +594,7 @@ mod tests {
         let (disp, _) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::service::fn_service(|msg: DispatchItem<BytesCodec>| async move {
+            ntex_service::fn_service(|msg: DispatchItem<BytesCodec>| async move {
                 sleep(Millis(50)).await;
                 if let DispatchItem::Item(msg) = msg {
                     Ok::<_, ()>(Some(msg.freeze()))
@@ -600,7 +603,7 @@ mod tests {
                 }
             }),
         );
-        crate::rt::spawn(async move {
+        spawn(async move {
             let _ = disp.await;
         });
 
@@ -616,7 +619,7 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_sink() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(1024);
@@ -625,7 +628,7 @@ mod tests {
         let (disp, st) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::service::fn_service(|msg: DispatchItem<BytesCodec>| async move {
+            ntex_service::fn_service(|msg: DispatchItem<BytesCodec>| async move {
                 if let DispatchItem::Item(msg) = msg {
                     Ok::<_, ()>(Some(msg.freeze()))
                 } else {
@@ -633,7 +636,7 @@ mod tests {
                 }
             }),
         );
-        crate::rt::spawn(async move {
+        spawn(async move {
             let _ = disp.disconnect_timeout(Seconds(1)).await;
         });
 
@@ -652,7 +655,7 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_err_in_service() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(0);
@@ -661,7 +664,7 @@ mod tests {
         let (disp, state) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::service::fn_service(|_: DispatchItem<BytesCodec>| async move {
+            ntex_service::fn_service(|_: DispatchItem<BytesCodec>| async move {
                 Err::<Option<Bytes>, _>(())
             }),
         );
@@ -672,7 +675,7 @@ mod tests {
                 &mut BytesCodec,
             )
             .unwrap();
-        crate::rt::spawn(async move {
+        spawn(async move {
             let _ = disp.await;
         });
 
@@ -689,7 +692,7 @@ mod tests {
         assert!(client.is_server_dropped());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_err_in_service_ready() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(0);
@@ -723,7 +726,7 @@ mod tests {
                 &mut BytesCodec,
             )
             .unwrap();
-        crate::rt::spawn(async move {
+        spawn(async move {
             let _ = disp.await;
         });
 
@@ -743,7 +746,7 @@ mod tests {
         assert_eq!(counter.get(), 1);
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_write_backpressure() {
         let (client, server) = Io::create();
         // do not allow to write to socket
@@ -756,7 +759,7 @@ mod tests {
         let (disp, state) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::service::fn_service(move |msg: DispatchItem<BytesCodec>| {
+            ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 let data = data2.clone();
                 async move {
                     match msg {
@@ -786,7 +789,7 @@ mod tests {
         pool.set_write_params(16 * 1024, 1024);
         state.set_memory_pool(pool);
 
-        crate::rt::spawn(async move {
+        spawn(async move {
             let _ = disp.await;
         });
 
@@ -815,7 +818,7 @@ mod tests {
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1, 2]);
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_keepalive() {
         let (client, server) = Io::create();
         // do not allow to write to socket
@@ -828,7 +831,7 @@ mod tests {
         let (disp, state) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::service::fn_service(move |msg: DispatchItem<BytesCodec>| {
+            ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 let data = data2.clone();
                 async move {
                     match msg {
@@ -845,7 +848,7 @@ mod tests {
                 }
             }),
         );
-        crate::rt::spawn(async move {
+        spawn(async move {
             let _ = disp
                 .keepalive_timeout(Seconds::ZERO)
                 .keepalive_timeout(Seconds(1))
@@ -866,7 +869,7 @@ mod tests {
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_unhandled_data() {
         let handled = Arc::new(AtomicBool::new(false));
         let handled2 = handled.clone();
@@ -878,7 +881,7 @@ mod tests {
         let (disp, _) = Dispatcher::debug(
             server,
             BytesCodec,
-            crate::service::fn_service(move |msg: DispatchItem<BytesCodec>| {
+            ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 handled2.store(true, Relaxed);
                 async move {
                     sleep(Millis(50)).await;
@@ -891,7 +894,7 @@ mod tests {
             }),
         );
         client.close().await;
-        crate::rt::spawn(async move {
+        spawn(async move {
             let _ = disp.await;
         });
         sleep(Millis(50)).await;
