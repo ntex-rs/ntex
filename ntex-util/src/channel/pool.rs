@@ -177,7 +177,7 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
-    #[ntex::test]
+    #[ntex_macros::rt_test2]
     async fn test_pool() {
         let p = new();
         let (tx, rx) = p.channel();

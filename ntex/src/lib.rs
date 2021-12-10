@@ -40,7 +40,6 @@ pub mod framed;
 pub mod http;
 pub mod server;
 pub mod testing;
-pub mod time;
 pub mod util;
 #[cfg(feature = "http-framework")]
 pub mod web;
@@ -73,4 +72,9 @@ pub mod rt {
 
 pub mod service {
     pub use ntex_service::*;
+}
+
+pub mod time {
+    //! Utilities for tracking time.
+    pub use ntex_util::time::*;
 }
