@@ -24,7 +24,6 @@ ntex-util = "0.1.2"
 ntex-service = "0.2.1"
 log = "0.4"
 pin-project-lite = "0.2"
-slab = "0.4"
 
 [dev-dependencies]
 ntex = "0.4.13"

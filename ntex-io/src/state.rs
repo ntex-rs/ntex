@@ -5,7 +5,6 @@ use std::{future::Future, hash, io, mem, pin::Pin, ptr, rc::Rc};
 use ntex_bytes::{BytesMut, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Seconds};
-use slab::Slab;
 
 use super::filter::{DefaultFilter, NullFilter};
 use super::tasks::{ReadState, WriteState};
@@ -57,7 +56,7 @@ pub(crate) struct IoStateInner {
     pub(super) read_buf: Cell<Option<BytesMut>>,
     pub(super) write_buf: Cell<Option<BytesMut>>,
     pub(super) filter: Cell<&'static dyn Filter>,
-    on_disconnect: RefCell<Slab<Option<LocalWaker>>>,
+    on_disconnect: RefCell<Vec<Option<LocalWaker>>>,
 }
 
 impl IoStateInner {
@@ -74,12 +73,10 @@ impl IoStateInner {
     }
 
     pub(super) fn notify_disconnect(&self) {
-        let mut slab = self.on_disconnect.borrow_mut();
-        for item in slab.iter_mut() {
-            if let Some(waker) = item.1 {
+        let mut on_disconnect = self.on_disconnect.borrow_mut();
+        for item in &mut *on_disconnect {
+            if let Some(waker) = item.take() {
                 waker.wake();
-            } else {
-                *item.1 = Some(LocalWaker::default())
             }
         }
     }
@@ -131,7 +128,7 @@ impl IoState {
             read_buf: Cell::new(None),
             write_buf: Cell::new(None),
             filter: Cell::new(NullFilter::get()),
-            on_disconnect: RefCell::new(Slab::new()),
+            on_disconnect: RefCell::new(Vec::new()),
         });
 
         let filter = Box::new(DefaultFilter::new(inner.clone()));
@@ -771,35 +768,42 @@ pub struct OnDisconnect {
 
 impl OnDisconnect {
     fn new(inner: Rc<IoStateInner>, disconnected: bool) -> Self {
-        let token = inner.on_disconnect.borrow_mut().insert(if disconnected {
-            Some(LocalWaker::default())
+        let token = if disconnected {
+            usize::MAX
         } else {
-            None
-        });
+            let mut on_disconnect = inner.on_disconnect.borrow_mut();
+            let token = on_disconnect.len();
+            on_disconnect.push(Some(LocalWaker::default()));
+            drop(on_disconnect);
+            token
+        };
         Self { token, inner }
     }
 
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let mut on_disconnect = self.inner.on_disconnect.borrow_mut();
-
-        let inner = unsafe { on_disconnect.get_unchecked_mut(self.token) };
-        if inner.is_none() {
-            let waker = LocalWaker::default();
-            waker.register(cx.waker());
-            *inner = Some(waker);
-        } else if !inner.as_mut().unwrap().register(cx.waker()) {
-            return Poll::Ready(());
+        if self.token == usize::MAX {
+            Poll::Ready(())
+        } else {
+            let on_disconnect = self.inner.on_disconnect.borrow();
+            if on_disconnect[self.token].is_some() {
+                on_disconnect[self.token]
+                    .as_ref()
+                    .unwrap()
+                    .register(cx.waker());
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
         }
-        Poll::Pending
     }
 }
 
 impl Clone for OnDisconnect {
     fn clone(&self) -> Self {
-        let token = self.inner.on_disconnect.borrow_mut().insert(None);
-        OnDisconnect {
-            token,
-            inner: self.inner.clone(),
+        if self.token == usize::MAX {
+            OnDisconnect::new(self.inner.clone(), true)
+        } else {
+            OnDisconnect::new(self.inner.clone(), false)
         }
     }
 }
@@ -808,13 +812,15 @@ impl Future for OnDisconnect {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut().poll_ready(cx)
+        self.poll_ready(cx)
     }
 }
 
 impl Drop for OnDisconnect {
     fn drop(&mut self) {
-        self.inner.on_disconnect.borrow_mut().remove(self.token);
+        if self.token != usize::MAX {
+            self.inner.on_disconnect.borrow_mut()[self.token].take();
+        }
     }
 }
 
@@ -832,7 +838,7 @@ mod tests {
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
 
     #[ntex::test]
-    async fn test_utils() {
+    async fn utils() {
         let (client, server) = Io::create();
         client.remote_buffer_cap(1024);
         client.write(TEXT);
@@ -895,7 +901,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_on_disconnect() {
+    async fn on_disconnect() {
         let (client, server) = Io::create();
         let state = IoState::new(server);
         let mut waiter = state.on_disconnect();
