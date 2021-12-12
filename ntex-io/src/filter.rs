@@ -20,7 +20,7 @@ impl ReadFilter for DefaultFilter {
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
         let flags = self.0.flags.get();
 
-        if flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::IO_STOP) {
+        if flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
             Poll::Ready(Err(()))
         } else if flags.intersects(Flags::RD_PAUSED) {
             self.0.read_task.register(cx.waker());
@@ -75,7 +75,7 @@ impl WriteFilter for DefaultFilter {
 
         if flags.contains(Flags::IO_ERR) {
             Poll::Ready(Err(WriteReadiness::Terminate))
-        } else if flags.intersects(Flags::IO_SHUTDOWN | Flags::IO_STOP) {
+        } else if flags.intersects(Flags::IO_SHUTDOWN) {
             Poll::Ready(Err(WriteReadiness::Shutdown))
         } else {
             self.0.write_task.register(cx.waker());

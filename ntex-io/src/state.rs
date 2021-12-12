@@ -15,8 +15,6 @@ bitflags::bitflags! {
     pub struct Flags: u16 {
         /// io error occured
         const IO_ERR          = 0b0000_0000_0000_0001;
-        /// stop io tasks
-        const IO_STOP         = 0b0000_0000_0000_0010;
         /// shutdown io tasks
         const IO_SHUTDOWN     = 0b0000_0000_0000_0100;
 
@@ -214,26 +212,11 @@ impl<F> IoState<F> {
     }
 
     #[inline]
-    /// Stop io tasks
-    ///
-    /// Wake dispatcher when io tasks are stopped.
-    pub fn stop(&self, cx: &mut Context<'_>) {
-        let flags = self.0.flags.get();
-
-        if !flags.intersects(Flags::IO_ERR | Flags::IO_STOP) {
-            self.0.insert_flags(Flags::IO_STOP);
-            self.0.read_task.wake();
-            self.0.write_task.wake();
-            self.0.dispatch_task.register(cx.waker());
-        }
-    }
-
-    #[inline]
     /// Gracefully shutdown read and write io tasks
     pub fn shutdown(&self, cx: &mut Context<'_>) {
         let flags = self.0.flags.get();
 
-        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::IO_STOP) {
+        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
             log::trace!("initiate io shutdown {:?}", flags);
             self.0.insert_flags(Flags::IO_SHUTDOWN);
             self.0.read_task.wake();
@@ -288,7 +271,7 @@ impl<F> IoState<F> {
     /// Gracefully close connection
     ///
     /// First stop dispatcher, then dispatcher stops io tasks
-    fn _close(&self) {
+    pub fn close(&self) {
         self.0.insert_flags(Flags::DSP_STOP);
         self.0.dispatch_task.wake();
     }
