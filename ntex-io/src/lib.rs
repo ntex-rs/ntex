@@ -16,6 +16,8 @@ pub use self::state::{IoState, Read, Write};
 pub use self::tasks::{ReadState, WriteState};
 pub use self::time::Timer;
 
+pub type BoxedIoState = IoState<Box<dyn Filter>>;
+
 pub enum WriteReadiness {
     Shutdown,
     Terminate,

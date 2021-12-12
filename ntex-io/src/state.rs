@@ -41,7 +41,12 @@ bitflags::bitflags! {
     }
 }
 
-pub struct IoState<F = DefaultFilter>(pub(super) Rc<IoStateInner>, *mut F);
+enum FilterItem<F> {
+    Boxed(Box<dyn Filter>),
+    Ptr(*mut F),
+}
+
+pub struct IoState<F = DefaultFilter>(pub(super) Rc<IoStateInner>, FilterItem<F>);
 
 pub(crate) struct IoStateInner {
     pub(super) flags: Cell<Flags>,
@@ -141,7 +146,7 @@ impl IoState {
         // start io tasks
         io.start(ReadState(inner.clone()), WriteState(inner.clone()));
 
-        IoState(inner, Box::into_raw(filter))
+        IoState(inner, FilterItem::Ptr(Box::into_raw(filter)))
     }
 }
 
@@ -428,6 +433,29 @@ impl<F> IoState<F> {
 }
 
 impl<F: Filter> IoState<F> {
+    pub fn into_boxed(mut self) -> crate::BoxedIoState
+    where
+        F: 'static,
+    {
+        // get current filter
+        let filter = unsafe {
+            let item = mem::replace(&mut self.1, FilterItem::Ptr(std::ptr::null_mut()));
+            let filter: Box<dyn Filter> = match item {
+                FilterItem::Boxed(b) => b,
+                FilterItem::Ptr(p) => Box::new(*Box::from_raw(p)),
+            };
+
+            let filter_ref: &'static dyn Filter = {
+                let filter: &dyn Filter = filter.as_ref();
+                std::mem::transmute(filter)
+            };
+            self.0.filter.replace(filter_ref);
+            filter
+        };
+
+        IoState(self.0.clone(), FilterItem::Boxed(filter))
+    }
+
     pub async fn add_filter<T>(self, factory: &T) -> Result<IoState<T::Filter>, T::Error>
     where
         T: FilterFactory<F>,
@@ -440,15 +468,16 @@ impl<F: Filter> IoState<F> {
         T: FnOnce(F) -> U,
         U: Filter,
     {
-        assert!(!self.1.is_null());
-
-        // get current filter
+        // replace current filter
         let filter = unsafe {
-            let filter = Box::new(map(*Box::from_raw(mem::replace(
-                &mut self.1,
-                std::ptr::null_mut(),
-            ))));
-
+            let item = mem::replace(&mut self.1, FilterItem::Ptr(std::ptr::null_mut()));
+            let filter = match item {
+                FilterItem::Boxed(_) => panic!(),
+                FilterItem::Ptr(p) => {
+                    assert!(!p.is_null());
+                    Box::new(map(*Box::from_raw(p)))
+                }
+            };
             let filter_ref: &'static dyn Filter = {
                 let filter: &dyn Filter = filter.as_ref();
                 std::mem::transmute(filter)
@@ -457,16 +486,23 @@ impl<F: Filter> IoState<F> {
             filter
         };
 
-        IoState(self.0.clone(), Box::into_raw(filter))
+        IoState(self.0.clone(), FilterItem::Ptr(Box::into_raw(filter)))
     }
 }
 
 impl<F> Drop for IoState<F> {
     fn drop(&mut self) {
-        if !self.1.is_null() {
+        if let FilterItem::Ptr(p) = self.1 {
+            if p.is_null() {
+                return;
+            }
             self.force_close();
             self.0.filter.set(NullFilter::get());
-            unsafe { Box::from_raw(mem::replace(&mut self.1, std::ptr::null_mut())) };
+            let _ = mem::replace(&mut self.1, FilterItem::Ptr(std::ptr::null_mut()));
+            unsafe { Box::from_raw(p) };
+        } else {
+            self.force_close();
+            self.0.filter.set(NullFilter::get());
         }
     }
 }
@@ -910,80 +946,80 @@ mod tests {
         assert_eq!(waiter.await, ());
     }
 
+    struct Counter<F> {
+        inner: F,
+        in_bytes: Rc<Cell<usize>>,
+        out_bytes: Rc<Cell<usize>>,
+    }
+    impl<F: ReadFilter + WriteFilter> Filter for Counter<F> {}
+
+    impl<F: ReadFilter> ReadFilter for Counter<F> {
+        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+            self.inner.poll_read_ready(cx)
+        }
+
+        fn read_closed(&self, err: Option<io::Error>) {
+            self.inner.read_closed(err)
+        }
+
+        fn get_read_buf(&self) -> Option<BytesMut> {
+            self.inner.get_read_buf()
+        }
+
+        fn release_read_buf(&self, buf: BytesMut, new_bytes: usize) {
+            self.in_bytes.set(self.in_bytes.get() + new_bytes);
+            self.inner.release_read_buf(buf, new_bytes);
+        }
+    }
+
+    impl<F: WriteFilter> WriteFilter for Counter<F> {
+        fn poll_write_ready(
+            &self,
+            cx: &mut Context<'_>,
+        ) -> Poll<Result<(), WriteReadiness>> {
+            self.inner.poll_write_ready(cx)
+        }
+
+        fn write_closed(&self, err: Option<io::Error>) {
+            self.inner.write_closed(err)
+        }
+
+        fn get_write_buf(&self) -> Option<BytesMut> {
+            if let Some(buf) = self.inner.get_write_buf() {
+                self.out_bytes.set(self.out_bytes.get() - buf.len());
+                Some(buf)
+            } else {
+                None
+            }
+        }
+
+        fn release_write_buf(&self, buf: BytesMut) {
+            self.out_bytes.set(self.out_bytes.get() + buf.len());
+            self.inner.release_write_buf(buf);
+        }
+    }
+
+    struct CounterFactory(Rc<Cell<usize>>, Rc<Cell<usize>>);
+
+    impl<F: Filter> FilterFactory<F> for CounterFactory {
+        type Filter = Counter<F>;
+
+        type Error = ();
+        type Future = Ready<IoState<Counter<F>>, Self::Error>;
+
+        fn create(&self, st: IoState<F>) -> Self::Future {
+            let in_bytes = self.0.clone();
+            let out_bytes = self.1.clone();
+            Ready::Ok(st.map_filter(|inner| Counter {
+                inner,
+                in_bytes,
+                out_bytes,
+            }))
+        }
+    }
+
     #[ntex::test]
     async fn filter() {
-        struct Counter<F> {
-            inner: F,
-            in_bytes: Rc<Cell<usize>>,
-            out_bytes: Rc<Cell<usize>>,
-        }
-        impl<F: ReadFilter + WriteFilter> Filter for Counter<F> {}
-
-        impl<F: ReadFilter> ReadFilter for Counter<F> {
-            fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
-                self.inner.poll_read_ready(cx)
-            }
-
-            fn read_closed(&self, err: Option<io::Error>) {
-                self.inner.read_closed(err)
-            }
-
-            fn get_read_buf(&self) -> Option<BytesMut> {
-                self.inner.get_read_buf()
-            }
-
-            fn release_read_buf(&self, buf: BytesMut, new_bytes: usize) {
-                self.in_bytes.set(self.in_bytes.get() + new_bytes);
-                self.inner.release_read_buf(buf, new_bytes);
-            }
-        }
-
-        impl<F: WriteFilter> WriteFilter for Counter<F> {
-            fn poll_write_ready(
-                &self,
-                cx: &mut Context<'_>,
-            ) -> Poll<Result<(), WriteReadiness>> {
-                self.inner.poll_write_ready(cx)
-            }
-
-            fn write_closed(&self, err: Option<io::Error>) {
-                self.inner.write_closed(err)
-            }
-
-            fn get_write_buf(&self) -> Option<BytesMut> {
-                if let Some(buf) = self.inner.get_write_buf() {
-                    self.out_bytes.set(self.out_bytes.get() - buf.len());
-                    Some(buf)
-                } else {
-                    None
-                }
-            }
-
-            fn release_write_buf(&self, buf: BytesMut) {
-                self.out_bytes.set(self.out_bytes.get() + buf.len());
-                self.inner.release_write_buf(buf);
-            }
-        }
-
-        struct CounterFactory(Rc<Cell<usize>>, Rc<Cell<usize>>);
-
-        impl<F: Filter> FilterFactory<F> for CounterFactory {
-            type Filter = Counter<F>;
-
-            type Error = ();
-            type Future = Ready<IoState<Counter<F>>, Self::Error>;
-
-            fn create(&self, st: IoState<F>) -> Self::Future {
-                let in_bytes = self.0.clone();
-                let out_bytes = self.1.clone();
-                Ready::Ok(st.map_filter(|inner| Counter {
-                    inner,
-                    in_bytes,
-                    out_bytes,
-                }))
-            }
-        }
-
         let in_bytes = Rc::new(Cell::new(0));
         let out_bytes = Rc::new(Cell::new(0));
         let factory = CounterFactory(in_bytes.clone(), out_bytes.clone());
@@ -1005,5 +1041,41 @@ mod tests {
 
         assert_eq!(in_bytes.get(), BIN.len());
         assert_eq!(out_bytes.get(), 4);
+    }
+
+    #[ntex::test]
+    async fn boxed_filter() {
+        let in_bytes = Rc::new(Cell::new(0));
+        let out_bytes = Rc::new(Cell::new(0));
+
+        let (client, server) = Io::create();
+        let state = IoState::new(server)
+            .add_filter(&CounterFactory(in_bytes.clone(), out_bytes.clone()))
+            .await
+            .unwrap()
+            .add_filter(&CounterFactory(in_bytes.clone(), out_bytes.clone()))
+            .await
+            .unwrap();
+        let state = state.into_boxed();
+
+        client.remote_buffer_cap(1024);
+        client.write(TEXT);
+        let msg = state.next(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(msg, Bytes::from_static(BIN));
+
+        state
+            .send(&BytesCodec, Bytes::from_static(b"test"))
+            .await
+            .unwrap();
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"test"));
+
+        assert_eq!(in_bytes.get(), BIN.len() * 2);
+        assert_eq!(out_bytes.get(), 8);
+
+        // refs
+        assert_eq!(Rc::strong_count(&in_bytes), 3);
+        drop(state);
+        assert_eq!(Rc::strong_count(&in_bytes), 1);
     }
 }
