@@ -69,8 +69,13 @@ where
                         Poll::Ready(Ok(n)) => {
                             if n == 0 {
                                 log::trace!("io stream is disconnected");
-                                this.state.release_read_buf(buf, new_bytes);
-                                this.state.close(None);
+                                if let Err(e) =
+                                    this.state.release_read_buf(buf, new_bytes)
+                                {
+                                    this.state.close(Some(e));
+                                } else {
+                                    this.state.close(None);
+                                }
                                 return Poll::Ready(());
                             } else {
                                 new_bytes += n;
@@ -81,15 +86,19 @@ where
                         }
                         Poll::Ready(Err(err)) => {
                             log::trace!("read task failed on io {:?}", err);
-                            this.state.release_read_buf(buf, new_bytes);
+                            let _ = this.state.release_read_buf(buf, new_bytes);
                             this.state.close(Some(err));
                             return Poll::Ready(());
                         }
                     }
                 }
 
-                this.state.release_read_buf(buf, new_bytes);
-                Poll::Pending
+                if let Err(e) = this.state.release_read_buf(buf, new_bytes) {
+                    this.state.close(Some(e));
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
             }
             Poll::Pending => Poll::Pending,
         }

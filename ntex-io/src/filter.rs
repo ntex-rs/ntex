@@ -48,7 +48,11 @@ impl ReadFilter for DefaultFilter {
     }
 
     #[inline]
-    fn release_read_buf(&self, buf: BytesMut, new_bytes: usize) {
+    fn release_read_buf(
+        &self,
+        buf: BytesMut,
+        new_bytes: usize,
+    ) -> Result<(), io::Error> {
         if new_bytes > 0 {
             if buf.len() > self.0.pool.get().read_params().high as usize {
                 log::trace!(
@@ -62,6 +66,7 @@ impl ReadFilter for DefaultFilter {
             self.0.dispatch_task.wake();
         }
         self.0.read_buf.set(Some(buf));
+        Ok(())
     }
 }
 
@@ -106,6 +111,7 @@ impl WriteFilter for DefaultFilter {
             pool.release_write_buf(buf);
         } else {
             self.0.write_buf.set(Some(buf));
+            self.0.write_task.wake();
         }
     }
 }
@@ -133,7 +139,9 @@ impl ReadFilter for NullFilter {
         None
     }
 
-    fn release_read_buf(&self, _: BytesMut, _: usize) {}
+    fn release_read_buf(&self, _: BytesMut, _: usize) -> Result<(), io::Error> {
+        Ok(())
+    }
 }
 
 impl WriteFilter for NullFilter {

@@ -433,6 +433,17 @@ impl<F> Io<F> {
 
 impl<F: Filter> Io<F> {
     #[inline]
+    /// Get referece to filter
+    pub fn filter_ref(&self) -> &F {
+        if let FilterItem::Ptr(p) = self.1 {
+            if let Some(r) = unsafe { p.as_ref() } {
+                return r;
+            }
+        }
+        panic!()
+    }
+
+    #[inline]
     pub fn into_boxed(mut self) -> crate::IoBoxed
     where
         F: 'static,
@@ -457,18 +468,18 @@ impl<F: Filter> Io<F> {
     }
 
     #[inline]
-    pub async fn add_filter<T>(self, factory: &T) -> Result<Io<T::Filter>, T::Error>
+    pub fn add_filter<T>(self, factory: T) -> T::Future
     where
         T: FilterFactory<F>,
     {
-        factory.create(self).await
+        factory.create(self)
     }
 
     #[inline]
-    pub fn map_filter<T, U>(mut self, map: T) -> Io<U>
+    pub fn map_filter<T, U>(mut self, map: U) -> Result<Io<T::Filter>, T::Error>
     where
-        T: FnOnce(F) -> U,
-        U: Filter,
+        T: FilterFactory<F>,
+        U: FnOnce(F) -> Result<T::Filter, T::Error>,
     {
         // replace current filter
         let filter = unsafe {
@@ -477,7 +488,7 @@ impl<F: Filter> Io<F> {
                 FilterItem::Boxed(_) => panic!(),
                 FilterItem::Ptr(p) => {
                     assert!(!p.is_null());
-                    Box::new(map(*Box::from_raw(p)))
+                    Box::new(map(*Box::from_raw(p))?)
                 }
             };
             let filter_ref: &'static dyn Filter = {
@@ -488,7 +499,7 @@ impl<F: Filter> Io<F> {
             filter
         };
 
-        Io(self.0.clone(), FilterItem::Ptr(Box::into_raw(filter)))
+        Ok(Io(self.0.clone(), FilterItem::Ptr(Box::into_raw(filter))))
     }
 }
 
@@ -673,6 +684,24 @@ impl<'a> WriteRef<'a> {
         } else {
             Ok(true)
         }
+    }
+
+    #[inline]
+    /// Wake write task and instruct to write all data.
+    ///
+    /// When write task is done it wakes dispatcher.
+    pub fn wait(&self, cx: &mut Context<'_>) {
+        if let Some(buf) = self.0.write_buf.take() {
+            if !buf.is_empty() {
+                self.0.write_buf.set(Some(buf));
+                self.0.write_task.wake();
+            }
+        }
+
+        let mut flags = self.0.flags.get();
+        flags.insert(Flags::WR_WAIT);
+        self.0.flags.set(flags);
+        self.0.dispatch_task.register(cx.waker());
     }
 }
 
@@ -982,9 +1011,13 @@ mod tests {
             self.inner.get_read_buf()
         }
 
-        fn release_read_buf(&self, buf: BytesMut, new_bytes: usize) {
+        fn release_read_buf(
+            &self,
+            buf: BytesMut,
+            new_bytes: usize,
+        ) -> Result<(), io::Error> {
             self.in_bytes.set(self.in_bytes.get() + new_bytes);
-            self.inner.release_read_buf(buf, new_bytes);
+            self.inner.release_read_buf(buf, new_bytes)
         }
     }
 
@@ -1023,14 +1056,19 @@ mod tests {
         type Error = ();
         type Future = Ready<Io<Counter<F>>, Self::Error>;
 
-        fn create(&self, st: Io<F>) -> Self::Future {
+        fn create(self, io: Io<F>) -> Self::Future {
             let in_bytes = self.0.clone();
             let out_bytes = self.1.clone();
-            Ready::Ok(st.map_filter(|inner| Counter {
-                inner,
-                in_bytes,
-                out_bytes,
-            }))
+            Ready::Ok(
+                io.map_filter::<CounterFactory, _>(|inner| {
+                    Ok(Counter {
+                        inner,
+                        in_bytes,
+                        out_bytes,
+                    })
+                })
+                .unwrap(),
+            )
         }
     }
 
@@ -1041,7 +1079,7 @@ mod tests {
         let factory = CounterFactory(in_bytes.clone(), out_bytes.clone());
 
         let (client, server) = IoTest::create();
-        let state = Io::new(server).add_filter(&factory).await.unwrap();
+        let state = Io::new(server).add_filter(factory).await.unwrap();
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
@@ -1066,10 +1104,10 @@ mod tests {
 
         let (client, server) = IoTest::create();
         let state = Io::new(server)
-            .add_filter(&CounterFactory(in_bytes.clone(), out_bytes.clone()))
+            .add_filter(CounterFactory(in_bytes.clone(), out_bytes.clone()))
             .await
             .unwrap()
-            .add_filter(&CounterFactory(in_bytes.clone(), out_bytes.clone()))
+            .add_filter(CounterFactory(in_bytes.clone(), out_bytes.clone()))
             .await
             .unwrap();
         let state = state.into_boxed();

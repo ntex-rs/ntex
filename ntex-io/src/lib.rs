@@ -20,7 +20,7 @@ pub use self::state::{Io, IoRef, ReadRef, WriteRef};
 pub use self::tasks::{ReadState, WriteState};
 pub use self::time::Timer;
 
-pub use self::utils::{from_iostream, into_boxed};
+pub use self::utils::{filter_factory, from_iostream, into_boxed, into_io};
 
 pub type IoBoxed = Io<Box<dyn Filter>>;
 
@@ -37,7 +37,8 @@ pub trait ReadFilter {
 
     fn get_read_buf(&self) -> Option<BytesMut>;
 
-    fn release_read_buf(&self, buf: BytesMut, new_bytes: usize);
+    fn release_read_buf(&self, buf: BytesMut, new_bytes: usize)
+        -> Result<(), io::Error>;
 }
 
 pub trait WriteFilter {
@@ -59,7 +60,7 @@ pub trait FilterFactory<F: Filter>: Sized {
     type Error: fmt::Debug;
     type Future: Future<Output = Result<Io<Self::Filter>, Self::Error>>;
 
-    fn create(&self, st: Io<F>) -> Self::Future;
+    fn create(self, st: Io<F>) -> Self::Future;
 }
 
 pub trait IoStream {

@@ -33,11 +33,16 @@ impl ReadState {
     }
 
     #[inline]
-    pub fn release_read_buf(&self, buf: BytesMut, new_bytes: usize) {
+    pub fn release_read_buf(
+        &self,
+        buf: BytesMut,
+        new_bytes: usize,
+    ) -> Result<(), io::Error> {
         if buf.is_empty() {
             self.0.pool.get().release_read_buf(buf);
+            Ok(())
         } else {
-            self.0.filter.get().release_read_buf(buf, new_bytes);
+            self.0.filter.get().release_read_buf(buf, new_bytes)
         }
     }
 }
