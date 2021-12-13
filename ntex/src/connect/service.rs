@@ -35,9 +35,7 @@ impl<T: Address> Connector<T> {
 
 impl<T> Default for Connector<T> {
     fn default() -> Self {
-        Connector {
-            resolver: Resolver::default(),
-        }
+        Connector::new()
     }
 }
 
