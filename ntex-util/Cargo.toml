@@ -24,8 +24,6 @@ futures-core = { version = "0.3.18", default-features = false, features = ["allo
 futures-sink = { version = "0.3.18", default-features = false, features = ["alloc"] }
 pin-project-lite = "0.2.6"
 
-backtrace = "*"
-
 [dev-dependencies]
 ntex = "0.4.10"
 ntex-rt = "0.3.2"

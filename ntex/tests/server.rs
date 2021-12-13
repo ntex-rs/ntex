@@ -129,6 +129,7 @@ fn test_start() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_configure() {
     let addr1 = TestServer::unused_addr();
     let addr2 = TestServer::unused_addr();
@@ -179,6 +180,7 @@ fn test_configure() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn test_configure_async() {
     let addr1 = TestServer::unused_addr();
     let addr2 = TestServer::unused_addr();
@@ -255,7 +257,7 @@ fn test_on_worker_start() {
                         .bind("addr2", addr2)
                         .unwrap()
                         .listen("addr3", lst)
-                        .apply_async(move |rt| {
+                        .on_worker_start(move |rt| {
                             let num = num.clone();
                             async move {
                                 rt.service("addr1", fn_service(|_| ok::<_, ()>(())));

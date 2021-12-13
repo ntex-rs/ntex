@@ -658,17 +658,19 @@ mod tests {
 
         fut2.await;
         let elapsed = Instant::now() - time;
+        #[cfg(not(target_os = "macos"))]
         assert!(
-            elapsed > Duration::from_millis(200) && elapsed < Duration::from_millis(500),
+            elapsed > Duration::from_millis(200) && elapsed < Duration::from_millis(300),
             "elapsed: {:?}",
             elapsed
         );
 
         fut1.await;
         let elapsed = Instant::now() - time;
+        #[cfg(not(target_os = "macos"))]
         assert!(
             elapsed > Duration::from_millis(1000)
-                && elapsed < Duration::from_millis(3000), // osx
+                && elapsed < Duration::from_millis(1200), // osx
             "elapsed: {:?}",
             elapsed
         );
@@ -676,8 +678,11 @@ mod tests {
         let time = Instant::now();
         sleep(Millis(25)).await;
         let elapsed = Instant::now() - time;
+        #[cfg(not(target_os = "macos"))]
         assert!(
-            elapsed > Duration::from_millis(20) && elapsed < Duration::from_millis(50)
+            elapsed > Duration::from_millis(20) && elapsed < Duration::from_millis(50),
+            "elapsed: {:?}",
+            elapsed
         );
     }
 }

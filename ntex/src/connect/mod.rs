@@ -2,6 +2,7 @@
 use std::future::Future;
 
 mod error;
+mod io;
 mod message;
 mod resolve;
 mod service;
@@ -18,6 +19,7 @@ pub mod rustls;
 use crate::rt::net::TcpStream;
 
 pub use self::error::ConnectError;
+pub use self::io::IoConnector;
 pub use self::message::{Address, Connect};
 pub use self::resolve::Resolver;
 pub use self::service::Connector;

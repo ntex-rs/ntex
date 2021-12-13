@@ -10,6 +10,7 @@ use crate::web::httprequest::HttpRequest;
 
 #[derive(Clone, Debug)]
 pub struct ResourceMap {
+    #[allow(dead_code)]
     root: ResourceDef,
     parent: RefCell<Option<Rc<ResourceMap>>>,
     named: HashMap<String, ResourceDef>,
