@@ -9,7 +9,7 @@ use ntex_service::{IntoService, Service};
 use ntex_util::time::{now, Seconds};
 use ntex_util::{future::Either, spawn};
 
-use super::{DispatchItem, IoState, Read, Timer, Write};
+use super::{DispatchItem, IoBoxed, ReadRef, Timer, WriteRef};
 
 type Response<U> = <U as Encoder>::Item;
 
@@ -38,7 +38,7 @@ where
     U: Encoder + Decoder,
 {
     st: Cell<DispatcherState>,
-    state: IoState,
+    state: IoBoxed,
     timer: Timer,
     ka_timeout: Seconds,
     ka_updated: Cell<time::Instant>,
@@ -95,7 +95,7 @@ where
 {
     /// Construct new `Dispatcher` instance.
     pub fn new<F: IntoService<S>>(
-        state: IoState,
+        state: IoBoxed,
         codec: U,
         service: F,
         timer: Timer,
@@ -169,7 +169,7 @@ where
     U: Encoder + Decoder,
     <U as Encoder>::Item: 'static,
 {
-    fn handle_result(&self, item: Result<S::Response, S::Error>, write: Write<'_>) {
+    fn handle_result(&self, item: Result<S::Response, S::Error>, write: WriteRef<'_>) {
         self.inflight.set(self.inflight.get() - 1);
         match write.encode_result(item, &self.codec) {
             Ok(true) => (),
@@ -355,18 +355,18 @@ where
     fn spawn_service_call(&self, fut: S::Future) {
         self.shared.inflight.set(self.shared.inflight.get() + 1);
 
-        let st = self.state.write_handle();
+        let st = self.state.get_ref();
         let shared = self.shared.clone();
         spawn(async move {
             let item = fut.await;
-            shared.handle_result(item, st.get());
+            shared.handle_result(item, st.write());
         });
     }
 
     fn handle_result(
         &self,
         item: Result<Option<<U as Encoder>::Item>, S::Error>,
-        write: Write<'_>,
+        write: WriteRef<'_>,
     ) {
         match write.encode_result(item, &self.shared.codec) {
             Ok(true) => (),
@@ -384,7 +384,7 @@ where
         &self,
         srv: &S,
         cx: &mut Context<'_>,
-        read: Read<'_>,
+        read: ReadRef<'_>,
     ) -> Poll<PollService<U>> {
         match srv.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
@@ -510,8 +510,8 @@ mod tests {
     use ntex_util::future::Ready;
     use ntex_util::time::{sleep, Millis};
 
-    use crate::testing::Io;
-    use crate::{state::Flags, state::IoStateInner, state::Write, IoStream};
+    use crate::testing::IoTest;
+    use crate::{state::Flags, state::IoStateInner, Io, IoStream, WriteRef};
 
     use super::*;
 
@@ -522,8 +522,8 @@ mod tests {
             self.0.flags.get()
         }
 
-        fn write(&'_ self) -> Write<'_> {
-            Write(self.0.as_ref())
+        fn write(&'_ self) -> WriteRef<'_> {
+            WriteRef(self.0.as_ref())
         }
 
         fn close(&self) {
@@ -550,7 +550,7 @@ mod tests {
             codec: U,
             service: F,
         ) -> (Self, State) {
-            let state = IoState::new(io);
+            let state = Io::new(io);
             let timer = Timer::default();
             let ka_timeout = Seconds(1);
             let ka_updated = now();
@@ -559,7 +559,7 @@ mod tests {
                 error: Cell::new(None),
                 inflight: Cell::new(0),
             });
-            let inner = State(state.0.clone());
+            let inner = State(state.0 .0.clone());
 
             let expire = ka_updated + Duration::from_millis(500);
             timer.register(expire, expire, &state);
@@ -574,7 +574,7 @@ mod tests {
                         ready_err: Cell::new(false),
                         st: Cell::new(DispatcherState::Processing),
                         pool: state.memory_pool().pool(),
-                        state,
+                        state: state.into_boxed(),
                         shared,
                         timer,
                         ka_timeout,
@@ -587,7 +587,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_basic() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
@@ -621,7 +621,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_sink() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
@@ -657,7 +657,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_err_in_service() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
         client.write("GET /test HTTP/1\r\n\r\n");
 
@@ -694,7 +694,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_err_in_service_ready() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
         client.write("GET /test HTTP/1\r\n\r\n");
 
@@ -748,7 +748,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_write_backpressure() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         // do not allow to write to socket
         client.remote_buffer_cap(0);
         client.write("GET /test HTTP/1\r\n\r\n");
@@ -820,7 +820,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_keepalive() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         // do not allow to write to socket
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
@@ -874,7 +874,7 @@ mod tests {
         let handled = Arc::new(AtomicBool::new(false));
         let handled2 = handled.clone();
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 

@@ -5,7 +5,7 @@ use std::{
 use ntex_util::spawn;
 use ntex_util::time::{now, sleep, Millis};
 
-use super::state::{Flags, IoState, IoStateInner};
+use super::state::{Flags, IoRef, IoStateInner};
 
 pub struct Timer(Rc<RefCell<Inner>>);
 
@@ -24,9 +24,9 @@ impl Inner {
         }
     }
 
-    fn unregister(&mut self, expire: Instant, state: &IoState) {
+    fn unregister(&mut self, expire: Instant, io: &IoRef) {
         if let Some(states) = self.notifications.get_mut(&expire) {
-            states.remove(&state.0);
+            states.remove(&io.0);
             if states.is_empty() {
                 self.notifications.remove(&expire);
             }
@@ -52,15 +52,15 @@ impl Timer {
         Timer(Rc::new(RefCell::new(Inner::new(resolution))))
     }
 
-    pub fn register(&self, expire: Instant, previous: Instant, state: &IoState) {
+    pub fn register(&self, expire: Instant, previous: Instant, io: &IoRef) {
         let mut inner = self.0.borrow_mut();
 
-        inner.unregister(previous, state);
+        inner.unregister(previous, io);
         inner
             .notifications
             .entry(expire)
             .or_insert_with(HashSet::default)
-            .insert(state.0.clone());
+            .insert(io.0.clone());
 
         if !inner.running {
             inner.running = true;
@@ -98,7 +98,7 @@ impl Timer {
         }
     }
 
-    pub fn unregister(&self, expire: Instant, state: &IoState) {
-        self.0.borrow_mut().unregister(expire, state);
+    pub fn unregister(&self, expire: Instant, io: &IoRef) {
+        self.0.borrow_mut().unregister(expire, io);
     }
 }

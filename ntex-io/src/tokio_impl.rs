@@ -1,47 +1,44 @@
 use std::task::{Context, Poll};
 use std::{cell::RefCell, future::Future, io, pin::Pin, rc::Rc};
 
-use crate::codec::AsyncWrite;
-use crate::rt::net::TcpStream as TokioTcpStream;
-use crate::time::{sleep, Sleep};
-use crate::util::{Buf, BufMut};
+use ntex_bytes::{Buf, BufMut};
+use ntex_util::time::{sleep, Sleep};
+use tok_io::{io::AsyncRead, io::AsyncWrite, io::ReadBuf};
 
 use super::{IoStream, ReadState, WriteReadiness, WriteState};
 
-pub struct TcpStream(TokioTcpStream);
-
-impl IoStream for TcpStream {
-    fn start(self, read: ReadState, write: WriteState) {
-        let io = Rc::new(RefCell::new(self.0));
-
-        crate::rt::spawn(ReadTask::new(io.clone(), read));
-        crate::rt::spawn(WriteTask::new(io, write));
-    }
-}
-
-impl IoStream for TokioTcpStream {
+impl<T> IoStream for T
+where
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
+{
     fn start(self, read: ReadState, write: WriteState) {
         let io = Rc::new(RefCell::new(self));
 
-        crate::rt::spawn(ReadTask::new(io.clone(), read));
-        crate::rt::spawn(WriteTask::new(io, write));
+        ntex_util::spawn(ReadTask::new(io.clone(), read));
+        ntex_util::spawn(WriteTask::new(io, write));
     }
 }
 
 /// Read io task
-struct ReadTask {
-    io: Rc<RefCell<TokioTcpStream>>,
+struct ReadTask<T> {
+    io: Rc<RefCell<T>>,
     state: ReadState,
 }
 
-impl ReadTask {
+impl<T> ReadTask<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
+{
     /// Create new read io task
-    fn new(io: Rc<RefCell<TokioTcpStream>>, state: ReadState) -> Self {
+    fn new(io: Rc<RefCell<T>>, state: ReadState) -> Self {
         Self { io, state }
     }
 }
 
-impl Future for ReadTask {
+impl<T> Future for ReadTask<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
+{
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -53,8 +50,8 @@ impl Future for ReadTask {
                 Poll::Ready(())
             }
             Poll::Ready(Ok(())) => {
-                let io = this.io.borrow();
                 let pool = this.state.memory_pool();
+                let mut io = this.io.borrow_mut();
                 let mut buf = self.state.get_read_buf();
                 let (hw, lw) = pool.read_params().unpack();
 
@@ -67,8 +64,7 @@ impl Future for ReadTask {
                         buf.reserve(hw - remaining);
                     }
 
-                    let dst = unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [u8]) };
-                    match poll_read_buf(&io, cx, dst) {
+                    match ntex_codec::poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
                         Poll::Pending => break,
                         Poll::Ready(Ok(n)) => {
                             if n == 0 {
@@ -78,10 +74,6 @@ impl Future for ReadTask {
                                 return Poll::Ready(());
                             } else {
                                 new_bytes += n;
-
-                                unsafe {
-                                    buf.advance_mut(n);
-                                }
                                 if buf.len() > hw {
                                     break;
                                 }
@@ -104,23 +96,6 @@ impl Future for ReadTask {
     }
 }
 
-fn poll_read_buf(
-    io: &TokioTcpStream,
-    cx: &mut Context<'_>,
-    buf: &mut [u8],
-) -> Poll<io::Result<usize>> {
-    if io.poll_read_ready(cx)?.is_ready() {
-        match io.try_read(buf) {
-            Ok(0) => Poll::Ready(Ok(0)),
-            Ok(n) => Poll::Ready(Ok(n)),
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
-            Err(e) => Poll::Ready(Err(e)),
-        }
-    } else {
-        Poll::Pending
-    }
-}
-
 #[derive(Debug)]
 enum IoWriteState {
     Processing,
@@ -135,15 +110,18 @@ enum Shutdown {
 }
 
 /// Write io task
-struct WriteTask {
+struct WriteTask<T> {
     st: IoWriteState,
-    io: Rc<RefCell<TokioTcpStream>>,
+    io: Rc<RefCell<T>>,
     state: WriteState,
 }
 
-impl WriteTask {
+impl<T> WriteTask<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
+{
     /// Create new write io task
-    fn new(io: Rc<RefCell<TokioTcpStream>>, state: WriteState) -> Self {
+    fn new(io: Rc<RefCell<T>>, state: WriteState) -> Self {
         Self {
             io,
             state,
@@ -152,7 +130,10 @@ impl WriteTask {
     }
 }
 
-impl Future for WriteTask {
+impl<T> Future for WriteTask<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
+{
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -163,7 +144,7 @@ impl Future for WriteTask {
                 match this.state.poll_ready(cx) {
                     Poll::Ready(Ok(())) => {
                         // flush framed instance
-                        match flush_io(&this.io.borrow(), &this.state, cx) {
+                        match flush_io(&mut *this.io.borrow_mut(), &this.state, cx) {
                             Poll::Pending | Poll::Ready(true) => Poll::Pending,
                             Poll::Ready(false) => Poll::Ready(()),
                         }
@@ -178,6 +159,8 @@ impl Future for WriteTask {
                         self.poll(cx)
                     }
                     Poll::Ready(Err(WriteReadiness::Terminate)) => {
+                        log::trace!("write task is instructed to terminate");
+
                         let _ = Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx);
                         this.state.close(None);
                         Poll::Ready(())
@@ -192,7 +175,7 @@ impl Future for WriteTask {
                     match st {
                         Shutdown::None => {
                             // flush write buffer
-                            match flush_io(&this.io.borrow(), &this.state, cx) {
+                            match flush_io(&mut *this.io.borrow_mut(), &this.state, cx) {
                                 Poll::Ready(true) => {
                                     *st = Shutdown::Flushed;
                                     continue;
@@ -227,15 +210,13 @@ impl Future for WriteTask {
                         Shutdown::Stopping => {
                             // read until 0 or err
                             let mut buf = [0u8; 512];
-                            let io = this.io.borrow();
+                            let mut io = this.io.borrow_mut();
                             loop {
-                                match poll_read_buf(&io, cx, &mut buf) {
-                                    Poll::Ready(Err(e)) => {
-                                        this.state.close(Some(e));
-                                        log::trace!("write task is stopped");
-                                        return Poll::Ready(());
-                                    }
-                                    Poll::Ready(Ok(n)) if n == 0 => {
+                                let mut read_buf = ReadBuf::new(&mut buf);
+                                match Pin::new(&mut *io).poll_read(cx, &mut read_buf) {
+                                    Poll::Ready(Err(_)) | Poll::Ready(Ok(_))
+                                        if read_buf.filled().is_empty() =>
+                                    {
                                         this.state.close(None);
                                         log::trace!("write task is stopped");
                                         return Poll::Ready(());
@@ -263,8 +244,8 @@ impl Future for WriteTask {
 }
 
 /// Flush write buffer to underlying I/O stream.
-pub(super) fn flush_io(
-    io: &TokioTcpStream,
+pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
+    io: &mut T,
     state: &WriteState,
     cx: &mut Context<'_>,
 ) -> Poll<bool> {
@@ -277,46 +258,37 @@ pub(super) fn flush_io(
     let pool = state.memory_pool();
 
     if len != 0 {
+        // log::trace!("flushing framed transport: {:?}", buf);
+
         let mut written = 0;
         while written < len {
-            match io.poll_write_ready(cx) {
-                Poll::Ready(Ok(())) => match io.try_write(&buf[written..]) {
-                    Ok(n) => {
-                        if n == 0 {
-                            log::trace!(
-                                "Disconnected during flush, written {}",
-                                written
-                            );
-                            pool.release_write_buf(buf);
-                            state.close(Some(io::Error::new(
-                                io::ErrorKind::WriteZero,
-                                "failed to write frame to transport",
-                            )));
-                            return Poll::Ready(false);
-                        } else {
-                            written += n
-                        }
-                    }
-                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(e) => {
-                        log::trace!("Error during flush: {}", e);
+            match Pin::new(&mut *io).poll_write(cx, &buf[written..]) {
+                Poll::Pending => break,
+                Poll::Ready(Ok(n)) => {
+                    if n == 0 {
+                        log::trace!("Disconnected during flush, written {}", written);
                         pool.release_write_buf(buf);
-                        state.close(Some(e));
+                        state.close(Some(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "failed to write frame to transport",
+                        )));
                         return Poll::Ready(false);
+                    } else {
+                        written += n
                     }
-                },
+                }
                 Poll::Ready(Err(e)) => {
                     log::trace!("Error during flush: {}", e);
                     pool.release_write_buf(buf);
                     state.close(Some(e));
                     return Poll::Ready(false);
                 }
-                Poll::Pending => break,
             }
         }
+        // log::trace!("flushed {} bytes", written);
 
         // remove written data
-        if written == len {
+        let result = if written == len {
             buf.clear();
             state.release_write_buf(buf);
             Poll::Ready(true)
@@ -324,6 +296,17 @@ pub(super) fn flush_io(
             buf.advance(written);
             state.release_write_buf(buf);
             Poll::Pending
+        };
+
+        // flush
+        match Pin::new(&mut *io).poll_flush(cx) {
+            Poll::Ready(Ok(_)) => result,
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => {
+                log::trace!("error during flush: {}", e);
+                state.close(Some(e));
+                Poll::Ready(false)
+            }
         }
     } else {
         Poll::Ready(true)

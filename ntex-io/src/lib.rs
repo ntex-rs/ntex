@@ -7,17 +7,24 @@ mod filter;
 mod state;
 mod tasks;
 mod time;
+mod utils;
+
+#[cfg(feature = "tokio")]
+mod tokio_impl;
 
 use ntex_bytes::BytesMut;
 use ntex_codec::{Decoder, Encoder};
 
 pub use self::dispatcher::Dispatcher;
-pub use self::state::{IoState, Read, Write};
+pub use self::state::{Io, IoRef, ReadRef, WriteRef};
 pub use self::tasks::{ReadState, WriteState};
 pub use self::time::Timer;
 
-pub type BoxedIoState = IoState<Box<dyn Filter>>;
+pub use self::utils::{from_iostream, into_boxed};
 
+pub type IoBoxed = Io<Box<dyn Filter>>;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum WriteReadiness {
     Shutdown,
     Terminate,
@@ -50,9 +57,9 @@ pub trait FilterFactory<F: Filter>: Sized {
     type Filter: Filter;
 
     type Error: fmt::Debug;
-    type Future: Future<Output = Result<IoState<Self::Filter>, Self::Error>>;
+    type Future: Future<Output = Result<Io<Self::Filter>, Self::Error>>;
 
-    fn create(&self, st: IoState<F>) -> Self::Future;
+    fn create(&self, st: Io<F>) -> Self::Future;
 }
 
 pub trait IoStream {

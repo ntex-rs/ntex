@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
-use std::{future::Future, hash, io, mem, pin::Pin, ptr, rc::Rc};
+use std::{future::Future, hash, io, mem, ops::Deref, pin::Pin, ptr, rc::Rc};
 
 use ntex_bytes::{BytesMut, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
@@ -43,7 +43,10 @@ enum FilterItem<F> {
     Ptr(*mut F),
 }
 
-pub struct IoState<F = DefaultFilter>(pub(super) Rc<IoStateInner>, FilterItem<F>);
+pub struct Io<F = DefaultFilter>(pub(super) IoRef, FilterItem<F>);
+
+#[derive(Clone)]
+pub struct IoRef(pub(super) Rc<IoStateInner>);
 
 pub(crate) struct IoStateInner {
     pub(super) flags: Cell<Flags>,
@@ -60,18 +63,21 @@ pub(crate) struct IoStateInner {
 }
 
 impl IoStateInner {
+    #[inline]
     pub(super) fn insert_flags(&self, f: Flags) {
         let mut flags = self.flags.get();
         flags.insert(f);
         self.flags.set(flags);
     }
 
+    #[inline]
     pub(super) fn remove_flags(&self, f: Flags) {
         let mut flags = self.flags.get();
         flags.remove(f);
         self.flags.set(flags);
     }
 
+    #[inline]
     pub(super) fn notify_disconnect(&self) {
         let mut on_disconnect = self.on_disconnect.borrow_mut();
         for item in &mut *on_disconnect {
@@ -85,18 +91,21 @@ impl IoStateInner {
 impl Eq for IoStateInner {}
 
 impl PartialEq for IoStateInner {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         ptr::eq(self, other)
     }
 }
 
 impl hash::Hash for IoStateInner {
+    #[inline]
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         (self as *const _ as usize).hash(state);
     }
 }
 
 impl Drop for IoStateInner {
+    #[inline]
     fn drop(&mut self) {
         if let Some(buf) = self.read_buf.take() {
             self.pool.get().release_read_buf(buf);
@@ -107,7 +116,7 @@ impl Drop for IoStateInner {
     }
 }
 
-impl IoState {
+impl Io {
     #[inline]
     /// Create `State` instance
     pub fn new<I: IoStream>(io: I) -> Self {
@@ -141,33 +150,60 @@ impl IoState {
         // start io tasks
         io.start(ReadState(inner.clone()), WriteState(inner.clone()));
 
-        IoState(inner, FilterItem::Ptr(Box::into_raw(filter)))
+        Io(IoRef(inner), FilterItem::Ptr(Box::into_raw(filter)))
     }
 }
 
-impl<F> IoState<F> {
+impl<F> Io<F> {
     #[inline]
     /// Set memory pool
     pub fn set_memory_pool(&self, pool: PoolRef) {
-        if let Some(mut buf) = self.0.read_buf.take() {
+        if let Some(mut buf) = self.0 .0.read_buf.take() {
             pool.move_in(&mut buf);
-            self.0.read_buf.set(Some(buf));
+            self.0 .0.read_buf.set(Some(buf));
         }
-        if let Some(mut buf) = self.0.write_buf.take() {
+        if let Some(mut buf) = self.0 .0.write_buf.take() {
             pool.move_in(&mut buf);
-            self.0.write_buf.set(Some(buf));
+            self.0 .0.write_buf.set(Some(buf));
         }
-        self.0.pool.set(pool);
+        self.0 .0.pool.set(pool);
     }
 
     #[inline]
     /// Set io disconnect timeout in secs
     pub fn set_disconnect_timeout(&self, timeout: Seconds) {
-        self.0.disconnect_timeout.set(timeout);
+        self.0 .0.disconnect_timeout.set(timeout);
     }
 }
 
-impl<F> IoState<F> {
+impl<F> Io<F> {
+    #[inline]
+    #[allow(clippy::should_implement_trait)]
+    /// Get IoRef reference
+    pub fn as_ref(&self) -> &IoRef {
+        &self.0
+    }
+
+    #[inline]
+    /// Get instance of IoRef
+    pub fn get_ref(&self) -> IoRef {
+        self.0.clone()
+    }
+
+    #[inline]
+    /// Register dispatcher task
+    pub fn register_dispatcher(&self, cx: &mut Context<'_>) {
+        self.0 .0.dispatch_task.register(cx.waker());
+    }
+
+    #[inline]
+    /// Mark dispatcher as stopped
+    pub fn dispatcher_stopped(&self) {
+        self.0 .0.insert_flags(Flags::DSP_STOP);
+    }
+}
+
+impl IoRef {
     #[inline]
     #[doc(hidden)]
     /// Get current state flags
@@ -235,33 +271,15 @@ impl<F> IoState<F> {
     }
 
     #[inline]
-    /// Register dispatcher task
-    pub fn register_dispatcher(&self, cx: &mut Context<'_>) {
-        self.0.dispatch_task.register(cx.waker());
-    }
-
-    #[inline]
-    /// Mark dispatcher as stopped
-    pub fn dispatcher_stopped(&self) {
-        self.0.insert_flags(Flags::DSP_STOP);
-    }
-
-    #[inline]
     /// Get api for read task
-    pub fn read(&'_ self) -> Read<'_> {
-        Read(self.0.as_ref())
+    pub fn read(&'_ self) -> ReadRef<'_> {
+        ReadRef(self.0.as_ref())
     }
 
     #[inline]
     /// Get api for write task
-    pub fn write(&'_ self) -> Write<'_> {
-        Write(self.0.as_ref())
-    }
-
-    #[inline]
-    /// Get write handle, which gives access to write api
-    pub fn write_handle(&self) -> WriteHandle {
-        WriteHandle(self.0.clone())
+    pub fn write(&'_ self) -> WriteRef<'_> {
+        WriteRef(self.0.as_ref())
     }
 
     #[inline]
@@ -277,7 +295,7 @@ impl<F> IoState<F> {
     /// Force close connection
     ///
     /// Dispatcher does not wait for uncompleted responses, but flushes io buffers.
-    fn force_close(&self) {
+    pub fn force_close(&self) {
         log::trace!("force close framed object");
         self.0.insert_flags(Flags::DSP_STOP | Flags::IO_SHUTDOWN);
         self.0.read_task.wake();
@@ -292,7 +310,7 @@ impl<F> IoState<F> {
     }
 }
 
-impl<F> IoState<F> {
+impl<F> Io<F> {
     #[inline]
     /// Read incoming io stream and decode codec item.
     pub async fn next<U>(
@@ -305,17 +323,18 @@ impl<F> IoState<F> {
         let read = self.read();
 
         loop {
-            let mut buf = self.0.read_buf.take();
+            let mut buf = self.0 .0.read_buf.take();
             let item = if let Some(ref mut buf) = buf {
                 codec.decode(buf)
             } else {
                 Ok(None)
             };
-            self.0.read_buf.set(buf);
+            self.0 .0.read_buf.set(buf);
 
             let result = match item {
                 Ok(Some(el)) => Ok(Some(el)),
                 Ok(None) => {
+                    self.0 .0.remove_flags(Flags::RD_READY);
                     poll_fn(|cx| {
                         if read.is_ready() {
                             Poll::Ready(())
@@ -351,20 +370,20 @@ impl<F> IoState<F> {
     where
         U: Encoder,
     {
-        let filter = self.0.filter.get();
+        let filter = self.0 .0.filter.get();
         let mut buf = filter
             .get_write_buf()
-            .unwrap_or_else(|| self.0.pool.get().get_write_buf());
+            .unwrap_or_else(|| self.0 .0.pool.get().get_write_buf());
         let is_write_sleep = buf.is_empty();
         codec.encode(item, &mut buf).map_err(Either::Left)?;
         filter.release_write_buf(buf);
-        self.0.insert_flags(Flags::WR_WAIT);
+        self.0 .0.insert_flags(Flags::WR_WAIT);
         if is_write_sleep {
-            self.0.write_task.wake();
+            self.0 .0.write_task.wake();
         }
 
         poll_fn(|cx| {
-            if !self.0.flags.get().contains(Flags::WR_WAIT) || self.is_io_err() {
+            if !self.0 .0.flags.get().contains(Flags::WR_WAIT) || self.is_io_err() {
                 Poll::Ready(())
             } else {
                 self.register_dispatcher(cx);
@@ -374,7 +393,7 @@ impl<F> IoState<F> {
         .await;
 
         if self.is_io_err() {
-            let err = self.0.error.take().unwrap_or_else(|| {
+            let err = self.0 .0.error.take().unwrap_or_else(|| {
                 io::Error::new(io::ErrorKind::Other, "Internal error")
             });
             Err(Either::Right(err))
@@ -393,13 +412,13 @@ impl<F> IoState<F> {
     where
         U: Decoder,
     {
-        let mut buf = self.0.read_buf.take();
+        let mut buf = self.0 .0.read_buf.take();
         let item = if let Some(ref mut buf) = buf {
             codec.decode(buf)
         } else {
             Ok(None)
         };
-        self.0.read_buf.set(buf);
+        self.0 .0.read_buf.set(buf);
 
         match item {
             Ok(Some(el)) => Poll::Ready(Ok(Some(el))),
@@ -412,8 +431,9 @@ impl<F> IoState<F> {
     }
 }
 
-impl<F: Filter> IoState<F> {
-    pub fn into_boxed(mut self) -> crate::BoxedIoState
+impl<F: Filter> Io<F> {
+    #[inline]
+    pub fn into_boxed(mut self) -> crate::IoBoxed
     where
         F: 'static,
     {
@@ -429,21 +449,23 @@ impl<F: Filter> IoState<F> {
                 let filter: &dyn Filter = filter.as_ref();
                 std::mem::transmute(filter)
             };
-            self.0.filter.replace(filter_ref);
+            self.0 .0.filter.replace(filter_ref);
             filter
         };
 
-        IoState(self.0.clone(), FilterItem::Boxed(filter))
+        Io(self.0.clone(), FilterItem::Boxed(filter))
     }
 
-    pub async fn add_filter<T>(self, factory: &T) -> Result<IoState<T::Filter>, T::Error>
+    #[inline]
+    pub async fn add_filter<T>(self, factory: &T) -> Result<Io<T::Filter>, T::Error>
     where
         T: FilterFactory<F>,
     {
         factory.create(self).await
     }
 
-    pub fn map_filter<T, U>(mut self, map: T) -> IoState<U>
+    #[inline]
+    pub fn map_filter<T, U>(mut self, map: T) -> Io<U>
     where
         T: FnOnce(F) -> U,
         U: Filter,
@@ -462,46 +484,45 @@ impl<F: Filter> IoState<F> {
                 let filter: &dyn Filter = filter.as_ref();
                 std::mem::transmute(filter)
             };
-            self.0.filter.replace(filter_ref);
+            self.0 .0.filter.replace(filter_ref);
             filter
         };
 
-        IoState(self.0.clone(), FilterItem::Ptr(Box::into_raw(filter)))
+        Io(self.0.clone(), FilterItem::Ptr(Box::into_raw(filter)))
     }
 }
 
-impl<F> Drop for IoState<F> {
+impl<F> Drop for Io<F> {
     fn drop(&mut self) {
+        log::trace!("stopping io stream");
         if let FilterItem::Ptr(p) = self.1 {
             if p.is_null() {
                 return;
             }
             self.force_close();
-            self.0.filter.set(NullFilter::get());
+            self.0 .0.filter.set(NullFilter::get());
             let _ = mem::replace(&mut self.1, FilterItem::Ptr(std::ptr::null_mut()));
             unsafe { Box::from_raw(p) };
         } else {
             self.force_close();
-            self.0.filter.set(NullFilter::get());
+            self.0 .0.filter.set(NullFilter::get());
         }
     }
 }
 
-#[derive(Clone)]
-pub struct WriteHandle(Rc<IoStateInner>);
+impl<F> Deref for Io<F> {
+    type Target = IoRef;
 
-impl WriteHandle {
     #[inline]
-    /// Get api for write task
-    pub fn get(&'_ self) -> Write<'_> {
-        Write(self.0.as_ref())
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
 #[derive(Copy, Clone)]
-pub struct Write<'a>(pub(super) &'a IoStateInner);
+pub struct WriteRef<'a>(pub(super) &'a IoStateInner);
 
-impl<'a> Write<'a> {
+impl<'a> WriteRef<'a> {
     #[inline]
     /// Check if write task is ready
     pub fn is_ready(&self) -> bool {
@@ -539,6 +560,7 @@ impl<'a> Write<'a> {
         }
     }
 
+    #[inline]
     /// Get mut access to write buffer
     pub fn with_buf<F, R>(&self, f: F) -> R
     where
@@ -655,9 +677,9 @@ impl<'a> Write<'a> {
 }
 
 #[derive(Copy, Clone)]
-pub struct Read<'a>(&'a IoStateInner);
+pub struct ReadRef<'a>(&'a IoStateInner);
 
-impl<'a> Read<'a> {
+impl<'a> ReadRef<'a> {
     #[inline]
     /// Check if read buffer has new data
     pub fn is_ready(&self) -> bool {
@@ -733,12 +755,14 @@ impl<'a> Read<'a> {
         let result = if let Some(ref mut buf) = buf {
             codec.decode(buf)
         } else {
+            self.0.remove_flags(Flags::RD_READY);
             Ok(None)
         };
         self.0.read_buf.set(buf);
         result
     }
 
+    #[inline]
     /// Get mut access to read buffer
     pub fn with_buf<F, R>(&self, f: F) -> R
     where
@@ -780,6 +804,8 @@ impl OnDisconnect {
         Self { token, inner }
     }
 
+    #[inline]
+    /// Check if connection is disconnected
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
         if self.token == usize::MAX {
             Poll::Ready(())
@@ -811,6 +837,7 @@ impl Clone for OnDisconnect {
 impl Future for OnDisconnect {
     type Output = ();
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.poll_ready(cx)
     }
@@ -831,7 +858,7 @@ mod tests {
     use ntex_util::future::{lazy, Ready};
 
     use super::*;
-    use crate::testing::Io;
+    use crate::testing::IoTest;
     use crate::{Filter, FilterFactory, ReadFilter, WriteFilter, WriteReadiness};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
@@ -839,11 +866,11 @@ mod tests {
 
     #[ntex::test]
     async fn utils() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write(TEXT);
 
-        let state = IoState::new(server);
+        let state = Io::new(server);
         assert!(!state.read().is_full());
         assert!(!state.write().is_full());
 
@@ -864,9 +891,9 @@ mod tests {
         assert!(state.flags().contains(Flags::IO_ERR));
         assert!(state.flags().contains(Flags::DSP_STOP));
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
-        let state = IoState::new(server);
+        let state = Io::new(server);
 
         client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
         let res = poll_fn(|cx| Poll::Ready(state.poll_next(&BytesCodec, cx))).await;
@@ -876,9 +903,9 @@ mod tests {
             assert!(state.flags().contains(Flags::DSP_STOP));
         }
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
-        let state = IoState::new(server);
+        let state = Io::new(server);
         state
             .send(&BytesCodec, Bytes::from_static(b"test"))
             .await
@@ -892,9 +919,9 @@ mod tests {
         assert!(state.flags().contains(Flags::IO_ERR));
         assert!(state.flags().contains(Flags::DSP_STOP));
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
-        let state = IoState::new(server);
+        let state = Io::new(server);
         state.force_close();
         assert!(state.flags().contains(Flags::DSP_STOP));
         assert!(state.flags().contains(Flags::IO_SHUTDOWN));
@@ -902,8 +929,8 @@ mod tests {
 
     #[ntex::test]
     async fn on_disconnect() {
-        let (client, server) = Io::create();
-        let state = IoState::new(server);
+        let (client, server) = IoTest::create();
+        let state = Io::new(server);
         let mut waiter = state.on_disconnect();
         assert_eq!(
             lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
@@ -924,8 +951,8 @@ mod tests {
             Poll::Ready(())
         );
 
-        let (client, server) = Io::create();
-        let state = IoState::new(server);
+        let (client, server) = IoTest::create();
+        let state = Io::new(server);
         let mut waiter = state.on_disconnect();
         assert_eq!(
             lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
@@ -994,9 +1021,9 @@ mod tests {
         type Filter = Counter<F>;
 
         type Error = ();
-        type Future = Ready<IoState<Counter<F>>, Self::Error>;
+        type Future = Ready<Io<Counter<F>>, Self::Error>;
 
-        fn create(&self, st: IoState<F>) -> Self::Future {
+        fn create(&self, st: Io<F>) -> Self::Future {
             let in_bytes = self.0.clone();
             let out_bytes = self.1.clone();
             Ready::Ok(st.map_filter(|inner| Counter {
@@ -1013,8 +1040,8 @@ mod tests {
         let out_bytes = Rc::new(Cell::new(0));
         let factory = CounterFactory(in_bytes.clone(), out_bytes.clone());
 
-        let (client, server) = Io::create();
-        let state = IoState::new(server).add_filter(&factory).await.unwrap();
+        let (client, server) = IoTest::create();
+        let state = Io::new(server).add_filter(&factory).await.unwrap();
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
@@ -1037,8 +1064,8 @@ mod tests {
         let in_bytes = Rc::new(Cell::new(0));
         let out_bytes = Rc::new(Cell::new(0));
 
-        let (client, server) = Io::create();
-        let state = IoState::new(server)
+        let (client, server) = IoTest::create();
+        let state = Io::new(server)
             .add_filter(&CounterFactory(in_bytes.clone(), out_bytes.clone()))
             .await
             .unwrap()

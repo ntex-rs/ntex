@@ -85,5 +85,5 @@ pub mod io {
 
 pub mod testing {
     //! IO testing utilities.
-    pub use ntex_io::testing::*;
+    pub use ntex_io::testing::IoTest as Io;
 }
