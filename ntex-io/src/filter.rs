@@ -2,7 +2,7 @@ use std::{io, rc::Rc, task::Context, task::Poll};
 
 use ntex_bytes::BytesMut;
 
-use super::state::{Flags, IoStateInner};
+use super::state::{Flags, IoRef, IoStateInner};
 use super::{Filter, ReadFilter, WriteFilter, WriteReadiness};
 
 pub struct DefaultFilter(Rc<IoStateInner>);
@@ -13,7 +13,20 @@ impl DefaultFilter {
     }
 }
 
-impl Filter for DefaultFilter {}
+impl Filter for DefaultFilter {
+    #[inline]
+    fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
+        let mut flags = self.0.flags.get();
+        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+            flags.insert(Flags::IO_SHUTDOWN);
+            self.0.flags.set(flags);
+            self.0.read_task.wake();
+            self.0.write_task.wake();
+        }
+
+        Poll::Ready(Ok(()))
+    }
+}
 
 impl ReadFilter for DefaultFilter {
     #[inline]
@@ -71,12 +84,23 @@ impl WriteFilter for DefaultFilter {
         &self,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), WriteReadiness>> {
-        let flags = self.0.flags.get();
+        let mut flags = self.0.flags.get();
 
         if flags.contains(Flags::IO_ERR) {
             Poll::Ready(Err(WriteReadiness::Terminate))
         } else if flags.intersects(Flags::IO_SHUTDOWN) {
-            Poll::Ready(Err(WriteReadiness::Shutdown))
+            Poll::Ready(Err(WriteReadiness::Shutdown(
+                self.0.disconnect_timeout.get(),
+            )))
+        } else if flags.contains(Flags::IO_FILTERS)
+            && !flags.contains(Flags::IO_FILTERS_TO)
+        {
+            flags.insert(Flags::IO_FILTERS_TO);
+            self.0.flags.set(flags);
+            self.0.write_task.register(cx.waker());
+            Poll::Ready(Err(WriteReadiness::Timeout(
+                self.0.disconnect_timeout.get(),
+            )))
         } else {
             self.0.write_task.register(cx.waker());
             Poll::Ready(Ok(()))
@@ -122,7 +146,11 @@ impl NullFilter {
     }
 }
 
-impl Filter for NullFilter {}
+impl Filter for NullFilter {
+    fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
+        Poll::Ready(Ok(()))
+    }
+}
 
 impl ReadFilter for NullFilter {
     fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), ()>> {

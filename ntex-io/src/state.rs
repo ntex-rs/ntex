@@ -4,7 +4,8 @@ use std::{future::Future, hash, io, mem, ops::Deref, pin::Pin, ptr, rc::Rc};
 
 use ntex_bytes::{BytesMut, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Seconds};
+use ntex_util::time::{Millis, Seconds};
+use ntex_util::{future::poll_fn, future::Either, task::LocalWaker};
 
 use super::filter::{DefaultFilter, NullFilter};
 use super::tasks::{ReadState, WriteState};
@@ -14,8 +15,12 @@ bitflags::bitflags! {
     pub struct Flags: u16 {
         /// io error occured
         const IO_ERR          = 0b0000_0000_0000_0001;
+        /// shuting down filters
+        const IO_FILTERS      = 0b0000_0000_0000_0010;
+        /// shuting down filters timeout
+        const IO_FILTERS_TO   = 0b0000_0000_0000_0100;
         /// shutdown io tasks
-        const IO_SHUTDOWN     = 0b0000_0000_0000_0100;
+        const IO_SHUTDOWN     = 0b0000_0000_0000_1000;
 
         /// pause io read
         const RD_PAUSED       = 0b0000_0000_0000_1000;
@@ -51,7 +56,7 @@ pub struct IoRef(pub(super) Rc<IoStateInner>);
 pub(crate) struct IoStateInner {
     pub(super) flags: Cell<Flags>,
     pub(super) pool: Cell<PoolRef>,
-    pub(super) disconnect_timeout: Cell<Seconds>,
+    pub(super) disconnect_timeout: Cell<Millis>,
     pub(super) error: Cell<Option<io::Error>>,
     pub(super) read_task: LocalWaker,
     pub(super) write_task: LocalWaker,
@@ -98,9 +103,33 @@ impl IoStateInner {
     }
 
     #[inline]
-    /// Check if io error occured in read or write task
     fn is_io_err(&self) -> bool {
         self.flags.get().contains(Flags::IO_ERR)
+    }
+
+    #[inline]
+    pub(super) fn shutdown_filters(&self, st: &IoRef) -> Result<(), io::Error> {
+        let mut flags = self.flags.get();
+        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+            let result = match self.filter.get().shutdown(st) {
+                Poll::Pending => return Ok(()),
+                Poll::Ready(Ok(())) => {
+                    flags.insert(Flags::IO_SHUTDOWN);
+                    Ok(())
+                }
+                Poll::Ready(Err(err)) => {
+                    flags.insert(Flags::IO_ERR);
+                    self.dispatch_task.wake();
+                    Err(err)
+                }
+            };
+            self.flags.set(flags);
+            self.read_task.wake();
+            self.write_task.wake();
+            result
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -146,7 +175,7 @@ impl Io {
             pool: Cell::new(pool),
             flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
-            disconnect_timeout: Cell::new(Seconds(1)),
+            disconnect_timeout: Cell::new(Millis::ONE_SEC),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
@@ -163,10 +192,12 @@ impl Io {
         };
         inner.filter.replace(filter_ref);
 
-        // start io tasks
-        io.start(ReadState(inner.clone()), WriteState(inner.clone()));
+        let io_ref = IoRef(inner);
 
-        Io(IoRef(inner), FilterItem::Ptr(Box::into_raw(filter)))
+        // start io tasks
+        io.start(ReadState(io_ref.clone()), WriteState(io_ref.clone()));
+
+        Io(io_ref, FilterItem::Ptr(Box::into_raw(filter)))
     }
 }
 
@@ -188,7 +219,7 @@ impl<F> Io<F> {
     #[inline]
     /// Set io disconnect timeout in secs
     pub fn set_disconnect_timeout(&self, timeout: Seconds) {
-        self.0 .0.disconnect_timeout.set(timeout);
+        self.0 .0.disconnect_timeout.set(timeout.into());
     }
 }
 
@@ -216,6 +247,25 @@ impl<F> Io<F> {
     /// Mark dispatcher as stopped
     pub fn dispatcher_stopped(&self) {
         self.0 .0.insert_flags(Flags::DSP_STOP);
+    }
+
+    #[inline]
+    /// Gracefully shutdown read and write io tasks
+    pub fn init_shutdown(&self, cx: &mut Context<'_>) {
+        let flags = self.0 .0.flags.get();
+
+        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::IO_FILTERS) {
+            log::trace!("initiate io shutdown {:?}", flags);
+            self.0 .0.insert_flags(Flags::IO_FILTERS);
+            if let Err(err) = self.0 .0.shutdown_filters(&self.0) {
+                self.0 .0.error.set(Some(err));
+                self.0 .0.insert_flags(Flags::IO_ERR);
+            }
+
+            self.0 .0.read_task.wake();
+            self.0 .0.write_task.wake();
+            self.0 .0.dispatch_task.register(cx.waker());
+        }
     }
 }
 
@@ -258,20 +308,6 @@ impl IoRef {
             .flags
             .get()
             .intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::DSP_STOP)
-    }
-
-    #[inline]
-    /// Gracefully shutdown read and write io tasks
-    pub fn shutdown(&self, cx: &mut Context<'_>) {
-        let flags = self.0.flags.get();
-
-        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
-            log::trace!("initiate io shutdown {:?}", flags);
-            self.0.insert_flags(Flags::IO_SHUTDOWN);
-            self.0.read_task.wake();
-            self.0.write_task.wake();
-            self.0.dispatch_task.register(cx.waker());
-        }
     }
 
     #[inline]
@@ -392,6 +428,34 @@ impl<F> Io<F> {
             .await
             .map_err(Either::Right)?;
         Ok(())
+    }
+
+    #[inline]
+    /// Shuts down connection
+    pub async fn shutdown(&self) -> Result<(), io::Error> {
+        if self.flags().intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+            Ok(())
+        } else {
+            poll_fn(|cx| {
+                let flags = self.flags();
+                if !flags.contains(Flags::IO_FILTERS) {
+                    self.init_shutdown(cx);
+                }
+
+                if self.flags().intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+                    if let Some(err) = self.0 .0.error.take() {
+                        Poll::Ready(Err(err))
+                    } else {
+                        Poll::Ready(Ok(()))
+                    }
+                } else {
+                    self.0 .0.insert_flags(Flags::IO_FILTERS);
+                    self.0 .0.dispatch_task.register(cx.waker());
+                    Poll::Pending
+                }
+            })
+            .await
+        }
     }
 
     #[inline]
@@ -785,11 +849,6 @@ impl<'a> ReadRef<'a> {
                 flags.remove(Flags::RD_BUF_FULL);
                 self.0.read_task.wake();
             }
-            if flags.contains(Flags::RD_PAUSED) {
-                log::trace!("read is paused, wake io task");
-                flags.remove(Flags::RD_PAUSED);
-                self.0.read_task.wake();
-            }
             self.0.flags.set(flags);
             self.0.dispatch_task.register(cx.waker());
             Poll::Pending
@@ -982,7 +1041,11 @@ mod tests {
         in_bytes: Rc<Cell<usize>>,
         out_bytes: Rc<Cell<usize>>,
     }
-    impl<F: ReadFilter + WriteFilter> Filter for Counter<F> {}
+    impl<F: ReadFilter + WriteFilter> Filter for Counter<F> {
+        fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     impl<F: ReadFilter> ReadFilter for Counter<F> {
         fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {

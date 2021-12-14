@@ -55,7 +55,27 @@ impl<F: Filter> io::Write for IoInner<F> {
     }
 }
 
-impl<F: Filter> Filter for SslFilter<F> {}
+impl<F: Filter> Filter for SslFilter<F> {
+    fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>> {
+        let ssl_result = self.inner.borrow_mut().shutdown();
+        match ssl_result {
+            Ok(ssl::ShutdownResult::Sent) => Poll::Pending,
+            Ok(ssl::ShutdownResult::Received) => {
+                self.inner.borrow().get_ref().inner.shutdown(st)
+            }
+            Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => Poll::Ready(Ok(())),
+            Err(ref e)
+                if e.code() == ssl::ErrorCode::WANT_READ
+                    || e.code() == ssl::ErrorCode::WANT_WRITE =>
+            {
+                Poll::Pending
+            }
+            Err(e) => Poll::Ready(Err(e
+                .into_io_error()
+                .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e)))),
+        }
+    }
+}
 
 impl<F: Filter> ReadFilter for SslFilter<F> {
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {

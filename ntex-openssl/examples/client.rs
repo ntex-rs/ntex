@@ -30,5 +30,6 @@ async fn main() -> io::Result<()> {
         .await
         .map_err(Either::into_inner)?;
 
-    Ok(())
+    println!("disconnecting");
+    io.shutdown().await
 }

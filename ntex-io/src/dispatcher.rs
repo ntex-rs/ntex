@@ -252,9 +252,10 @@ where
                                         log::trace!("not enough data to decode next frame, register dispatch task");
                                         // service is ready, wake io read task
                                         match read.poll_ready(cx) {
-                                            Poll::Pending => return Poll::Pending,
-                                            Poll::Ready(Ok(Some(()))) => {
-                                                return Poll::Pending
+                                            Poll::Pending
+                                            | Poll::Ready(Ok(Some(()))) => {
+                                                read.resume();
+                                                return Poll::Pending;
                                             }
                                             Poll::Ready(Ok(None)) => {
                                                 DispatchItem::Disconnect(None)
@@ -272,8 +273,18 @@ where
                                 }
                             } else {
                                 // no new events
-                                state.register_dispatcher(cx);
-                                return Poll::Pending;
+                                match read.poll_ready(cx) {
+                                    Poll::Pending | Poll::Ready(Ok(Some(()))) => {
+                                        read.resume();
+                                        return Poll::Pending;
+                                    }
+                                    Poll::Ready(Ok(None)) => {
+                                        DispatchItem::Disconnect(None)
+                                    }
+                                    Poll::Ready(Err(err)) => {
+                                        DispatchItem::Disconnect(Some(err))
+                                    }
+                                }
                             }
                         }
                         PollService::Item(item) => item,
@@ -342,7 +353,7 @@ where
 
                     if slf.shared.inflight.get() == 0 {
                         slf.st.set(DispatcherState::Shutdown);
-                        state.shutdown(cx);
+                        state.init_shutdown(cx);
                     } else {
                         state.register_dispatcher(cx);
                         return Poll::Pending;
@@ -881,7 +892,7 @@ mod tests {
                 .keepalive_timeout(Seconds(1))
                 .await;
         });
-        state.0.disconnect_timeout.set(Seconds(1));
+        state.0.disconnect_timeout.set(Millis::ONE_SEC);
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));

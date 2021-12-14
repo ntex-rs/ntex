@@ -14,6 +14,7 @@ mod tokio_impl;
 
 use ntex_bytes::BytesMut;
 use ntex_codec::{Decoder, Encoder};
+use ntex_util::time::Millis;
 
 pub use self::dispatcher::Dispatcher;
 pub use self::filter::DefaultFilter;
@@ -27,7 +28,8 @@ pub type IoBoxed = Io<Box<dyn Filter>>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum WriteReadiness {
-    Shutdown,
+    Timeout(Millis),
+    Shutdown(Millis),
     Terminate,
 }
 
@@ -53,7 +55,9 @@ pub trait WriteFilter {
     fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error>;
 }
 
-pub trait Filter: ReadFilter + WriteFilter {}
+pub trait Filter: ReadFilter + WriteFilter {
+    fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>>;
+}
 
 pub trait FilterFactory<F: Filter>: Sized {
     type Filter: Filter;
