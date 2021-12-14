@@ -53,17 +53,12 @@ impl ReadFilter for DefaultFilter {
         buf: BytesMut,
         new_bytes: usize,
     ) -> Result<(), io::Error> {
-        if new_bytes > 0 {
-            if buf.len() > self.0.pool.get().read_params().high as usize {
-                log::trace!(
-                    "buffer is too large {}, enable read back-pressure",
-                    buf.len()
-                );
-                self.0.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
-            } else {
-                self.0.insert_flags(Flags::RD_READY);
-            }
-            self.0.dispatch_task.wake();
+        if new_bytes > 0 && buf.len() > self.0.pool.get().read_params().high as usize {
+            log::trace!(
+                "buffer is too large {}, enable read back-pressure",
+                buf.len()
+            );
+            self.0.insert_flags(Flags::RD_BUF_FULL);
         }
         self.0.read_buf.set(Some(buf));
         Ok(())
@@ -105,7 +100,7 @@ impl WriteFilter for DefaultFilter {
     }
 
     #[inline]
-    fn release_write_buf(&self, buf: BytesMut) {
+    fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error> {
         let pool = self.0.pool.get();
         if buf.is_empty() {
             pool.release_write_buf(buf);
@@ -113,6 +108,7 @@ impl WriteFilter for DefaultFilter {
             self.0.write_buf.set(Some(buf));
             self.0.write_task.wake();
         }
+        Ok(())
     }
 }
 
@@ -155,5 +151,7 @@ impl WriteFilter for NullFilter {
         None
     }
 
-    fn release_write_buf(&self, _: BytesMut) {}
+    fn release_write_buf(&self, _: BytesMut) -> Result<(), io::Error> {
+        Ok(())
+    }
 }

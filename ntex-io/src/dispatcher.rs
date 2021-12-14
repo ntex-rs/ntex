@@ -1,6 +1,6 @@
 //! Framed transport dispatcher
 use std::{
-    cell::Cell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll, time,
+    cell::Cell, future::Future, io, pin::Pin, rc::Rc, task::Context, task::Poll, time,
 };
 
 use ntex_bytes::Pool;
@@ -70,6 +70,7 @@ enum DispatcherError<S, U> {
     KeepAlive,
     Encoder(U),
     Service(S),
+    Io(io::Error),
 }
 
 enum PollService<U: Encoder + Decoder> {
@@ -171,10 +172,19 @@ where
 {
     fn handle_result(&self, item: Result<S::Response, S::Error>, write: WriteRef<'_>) {
         self.inflight.set(self.inflight.get() - 1);
-        match write.encode_result(item, &self.codec) {
-            Ok(true) => (),
-            Ok(false) => write.enable_backpressure(None),
-            Err(err) => self.error.set(Some(err.into())),
+        match item {
+            Ok(Some(val)) => match write.encode(val, &self.codec) {
+                Ok(true) => (),
+                Ok(false) => write.enable_backpressure(None),
+                Err(Either::Left(err)) => {
+                    self.error.set(Some(DispatcherError::Encoder(err)))
+                }
+                Err(Either::Right(err)) => {
+                    self.error.set(Some(DispatcherError::Io(err)))
+                }
+            },
+            Err(err) => self.error.set(Some(DispatcherError::Service(err))),
+            Ok(None) => return,
         }
         write.wake_dispatcher();
     }
@@ -217,7 +227,10 @@ where
             match slf.st.get() {
                 DispatcherState::Processing => {
                     let result = match slf.poll_service(this.service, cx, read) {
-                        Poll::Pending => return Poll::Pending,
+                        Poll::Pending => {
+                            let _ = read.poll_ready(cx);
+                            return Poll::Pending;
+                        }
                         Poll::Ready(result) => result,
                     };
 
@@ -237,8 +250,19 @@ where
                                     }
                                     Ok(None) => {
                                         log::trace!("not enough data to decode next frame, register dispatch task");
-                                        read.wake(cx);
-                                        return Poll::Pending;
+                                        // service is ready, wake io read task
+                                        match read.poll_ready(cx) {
+                                            Poll::Pending => return Poll::Pending,
+                                            Poll::Ready(Ok(Some(()))) => {
+                                                return Poll::Pending
+                                            }
+                                            Poll::Ready(Ok(None)) => {
+                                                DispatchItem::Disconnect(None)
+                                            }
+                                            Poll::Ready(Err(err)) => {
+                                                DispatchItem::Disconnect(Some(err))
+                                            }
+                                        }
                                     }
                                     Err(err) => {
                                         slf.st.set(DispatcherState::Stop);
@@ -368,15 +392,19 @@ where
         item: Result<Option<<U as Encoder>::Item>, S::Error>,
         write: WriteRef<'_>,
     ) {
-        match write.encode_result(item, &self.shared.codec) {
-            Ok(true) => (),
-            Ok(false) => write.enable_backpressure(None),
-            Err(Either::Left(err)) => {
-                self.error.set(Some(err));
-            }
-            Err(Either::Right(err)) => {
-                self.shared.error.set(Some(DispatcherError::Encoder(err)))
-            }
+        match item {
+            Ok(Some(item)) => match write.encode(item, &self.shared.codec) {
+                Ok(true) => (),
+                Ok(false) => write.enable_backpressure(None),
+                Err(Either::Left(err)) => {
+                    self.shared.error.set(Some(DispatcherError::Encoder(err)))
+                }
+                Err(Either::Right(err)) => {
+                    self.shared.error.set(Some(DispatcherError::Io(err)))
+                }
+            },
+            Err(err) => self.shared.error.set(Some(DispatcherError::Service(err))),
+            Ok(None) => (),
         }
     }
 
@@ -388,9 +416,6 @@ where
     ) -> Poll<PollService<U>> {
         match srv.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
-                // service is ready, wake io read task
-                read.resume();
-
                 // check keepalive timeout
                 self.check_keepalive();
 
@@ -406,6 +431,9 @@ where
                         }
                         DispatcherError::Encoder(err) => {
                             PollService::Item(DispatchItem::EncoderError(err))
+                        }
+                        DispatcherError::Io(err) => {
+                            PollService::Item(DispatchItem::Disconnect(Some(err)))
                         }
                         DispatcherError::Service(err) => {
                             self.error.set(Some(err));
@@ -425,7 +453,7 @@ where
 
                         // get io error
                         if let Some(err) = self.state.take_error() {
-                            PollService::Item(DispatchItem::IoError(err))
+                            PollService::Item(DispatchItem::Disconnect(Some(err)))
                         } else {
                             PollService::ServiceError
                         }
@@ -803,15 +831,15 @@ mod tests {
 
         // response message
         assert!(!state.write().is_ready());
-        assert_eq!(state.write().with_buf(|buf| buf.len()), 65536);
+        assert_eq!(state.write().with_buf(|buf| buf.len()).unwrap(), 65536);
 
         client.remote_buffer_cap(10240);
         sleep(Millis(50)).await;
-        assert_eq!(state.write().with_buf(|buf| buf.len()), 55296);
+        assert_eq!(state.write().with_buf(|buf| buf.len()).unwrap(), 55296);
 
         client.remote_buffer_cap(45056);
         sleep(Millis(50)).await;
-        assert_eq!(state.write().with_buf(|buf| buf.len()), 10240);
+        assert_eq!(state.write().with_buf(|buf| buf.len()).unwrap(), 10240);
 
         // backpressure disabled
         assert!(state.write().is_ready());
@@ -821,7 +849,6 @@ mod tests {
     #[ntex::test]
     async fn test_keepalive() {
         let (client, server) = IoTest::create();
-        // do not allow to write to socket
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
@@ -854,7 +881,6 @@ mod tests {
                 .keepalive_timeout(Seconds(1))
                 .await;
         });
-
         state.0.disconnect_timeout.set(Seconds(1));
 
         let buf = client.read().await.unwrap();

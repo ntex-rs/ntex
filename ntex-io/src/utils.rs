@@ -125,7 +125,6 @@ where
     }
 
     fn call(&self, req: Io<F>) -> Self::Future {
-        println!("ADD-FILTER");
         req.add_filter(self.filter.clone())
     }
 }

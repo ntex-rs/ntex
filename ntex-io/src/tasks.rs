@@ -42,6 +42,11 @@ impl ReadState {
             self.0.pool.get().release_read_buf(buf);
             Ok(())
         } else {
+            // notify dispatcher
+            if new_bytes > 0 {
+                self.0.insert_flags(Flags::RD_READY);
+                self.0.dispatch_task.wake();
+            }
             self.0.filter.get().release_read_buf(buf, new_bytes)
         }
     }

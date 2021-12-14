@@ -16,6 +16,7 @@ use ntex_bytes::BytesMut;
 use ntex_codec::{Decoder, Encoder};
 
 pub use self::dispatcher::Dispatcher;
+pub use self::filter::DefaultFilter;
 pub use self::state::{Io, IoRef, ReadRef, WriteRef};
 pub use self::tasks::{ReadState, WriteState};
 pub use self::time::Timer;
@@ -49,7 +50,7 @@ pub trait WriteFilter {
 
     fn get_write_buf(&self) -> Option<BytesMut>;
 
-    fn release_write_buf(&self, buf: BytesMut);
+    fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error>;
 }
 
 pub trait Filter: ReadFilter + WriteFilter {}
@@ -80,8 +81,8 @@ pub enum DispatchItem<U: Encoder + Decoder> {
     DecoderError(<U as Decoder>::Error),
     /// Encoder parse error
     EncoderError(<U as Encoder>::Error),
-    /// Unexpected io error
-    IoError(io::Error),
+    /// Socket is disconnected
+    Disconnect(Option<io::Error>),
 }
 
 impl<U> fmt::Debug for DispatchItem<U>
@@ -109,8 +110,8 @@ where
             DispatchItem::DecoderError(ref e) => {
                 write!(fmt, "DispatchItem::DecoderError({:?})", e)
             }
-            DispatchItem::IoError(ref e) => {
-                write!(fmt, "DispatchItem::IoError({:?})", e)
+            DispatchItem::Disconnect(ref e) => {
+                write!(fmt, "DispatchItem::Disconnect({:?})", e)
             }
         }
     }
@@ -129,8 +130,8 @@ mod tests {
         assert!(format!("{:?}", err).contains("DispatchItem::Encoder"));
         let err = T::DecoderError(io::Error::new(io::ErrorKind::Other, "err"));
         assert!(format!("{:?}", err).contains("DispatchItem::Decoder"));
-        let err = T::IoError(io::Error::new(io::ErrorKind::Other, "err"));
-        assert!(format!("{:?}", err).contains("DispatchItem::IoError"));
+        let err = T::Disconnect(Some(io::Error::new(io::ErrorKind::Other, "err")));
+        assert!(format!("{:?}", err).contains("DispatchItem::Disconnect"));
 
         assert!(format!("{:?}", T::WBackPressureEnabled)
             .contains("DispatchItem::WBackPressureEnabled"));

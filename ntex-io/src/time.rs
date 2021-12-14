@@ -5,7 +5,7 @@ use std::{
 use ntex_util::spawn;
 use ntex_util::time::{now, sleep, Millis};
 
-use super::state::{Flags, IoRef, IoStateInner};
+use super::state::{IoRef, IoStateInner};
 
 pub struct Timer(Rc<RefCell<Inner>>);
 
@@ -79,8 +79,7 @@ impl Timer {
                             let key = *key;
                             if key <= now_time {
                                 for st in i.notifications.remove(&key).unwrap() {
-                                    st.dispatch_task.wake();
-                                    st.insert_flags(Flags::DSP_KEEPALIVE);
+                                    st.notify_keepalive();
                                 }
                             } else {
                                 break;
