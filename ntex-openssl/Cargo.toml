@@ -1,0 +1,27 @@
+[package]
+name = "ntex-openssl"
+version = "0.1.0"
+authors = ["ntex contributors <team@ntex.rs>"]
+description = "An implementation of SSL streams for ntex backed by OpenSSL"
+keywords = ["network", "framework", "async", "futures"]
+homepage = "https://ntex.rs"
+repository = "https://github.com/ntex-rs/ntex.git"
+documentation = "https://docs.rs/ntex-openssl/"
+categories = ["network-programming", "asynchronous"]
+license = "MIT"
+edition = "2018"
+
+[lib]
+name = "ntex_openssl"
+path = "src/lib.rs"
+
+[dependencies]
+ntex-bytes = "0.1.7"
+ntex-io = "0.1.0"
+ntex-util = "0.1.2"
+openssl = "0.10.32"
+
+[dev-dependencies]
+ntex = { version = "0.4.14", features = ["openssl"] }
+futures = "0.3"
+env_logger = "0.9"

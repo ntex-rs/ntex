@@ -69,8 +69,13 @@ where
                         Poll::Ready(Ok(n)) => {
                             if n == 0 {
                                 log::trace!("io stream is disconnected");
-                                this.state.release_read_buf(buf, new_bytes);
-                                this.state.close(None);
+                                if let Err(e) =
+                                    this.state.release_read_buf(buf, new_bytes)
+                                {
+                                    this.state.close(Some(e));
+                                } else {
+                                    this.state.close(None);
+                                }
                                 return Poll::Ready(());
                             } else {
                                 new_bytes += n;
@@ -81,15 +86,19 @@ where
                         }
                         Poll::Ready(Err(err)) => {
                             log::trace!("read task failed on io {:?}", err);
-                            this.state.release_read_buf(buf, new_bytes);
+                            let _ = this.state.release_read_buf(buf, new_bytes);
                             this.state.close(Some(err));
                             return Poll::Ready(());
                         }
                     }
                 }
 
-                this.state.release_read_buf(buf, new_bytes);
-                Poll::Pending
+                if let Err(e) = this.state.release_read_buf(buf, new_bytes) {
+                    this.state.close(Some(e));
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
             }
             Poll::Pending => Poll::Pending,
         }
@@ -98,8 +107,8 @@ where
 
 #[derive(Debug)]
 enum IoWriteState {
-    Processing,
-    Shutdown(Option<Sleep>, Shutdown),
+    Processing(Option<Sleep>),
+    Shutdown(Sleep, Shutdown),
 }
 
 #[derive(Debug)]
@@ -125,7 +134,7 @@ where
         Self {
             io,
             state,
-            st: IoWriteState::Processing,
+            st: IoWriteState::Processing(None),
         }
     }
 }
@@ -140,22 +149,41 @@ where
         let mut this = self.as_mut().get_mut();
 
         match this.st {
-            IoWriteState::Processing => {
+            IoWriteState::Processing(ref mut delay) => {
                 match this.state.poll_ready(cx) {
                     Poll::Ready(Ok(())) => {
+                        if let Some(delay) = delay {
+                            if delay.poll_elapsed(cx).is_ready() {
+                                this.state.close(Some(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "Operation timedout",
+                                )));
+                                return Poll::Ready(());
+                            }
+                        }
+
                         // flush framed instance
                         match flush_io(&mut *this.io.borrow_mut(), &this.state, cx) {
                             Poll::Pending | Poll::Ready(true) => Poll::Pending,
                             Poll::Ready(false) => Poll::Ready(()),
                         }
                     }
-                    Poll::Ready(Err(WriteReadiness::Shutdown)) => {
+                    Poll::Ready(Err(WriteReadiness::Timeout(time))) => {
+                        if delay.is_none() {
+                            *delay = Some(sleep(time));
+                        }
+                        self.poll(cx)
+                    }
+                    Poll::Ready(Err(WriteReadiness::Shutdown(time))) => {
                         log::trace!("write task is instructed to shutdown");
 
-                        this.st = IoWriteState::Shutdown(
-                            this.state.disconnect_timeout().map(sleep),
-                            Shutdown::None,
-                        );
+                        let timeout = if let Some(delay) = delay.take() {
+                            delay
+                        } else {
+                            sleep(time)
+                        };
+
+                        this.st = IoWriteState::Shutdown(timeout, Shutdown::None);
                         self.poll(cx)
                     }
                     Poll::Ready(Err(WriteReadiness::Terminate)) => {
@@ -229,10 +257,8 @@ where
                     }
 
                     // disconnect timeout
-                    if let Some(ref delay) = delay {
-                        if delay.poll_elapsed(cx).is_pending() {
-                            return Poll::Pending;
-                        }
+                    if delay.poll_elapsed(cx).is_pending() {
+                        return Poll::Pending;
                     }
                     log::trace!("write task is stopped after delay");
                     this.state.close(None);
@@ -290,11 +316,17 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
         // remove written data
         let result = if written == len {
             buf.clear();
-            state.release_write_buf(buf);
+            if let Err(e) = state.release_write_buf(buf) {
+                state.close(Some(e));
+                return Poll::Ready(false);
+            }
             Poll::Ready(true)
         } else {
             buf.advance(written);
-            state.release_write_buf(buf);
+            if let Err(e) = state.release_write_buf(buf) {
+                state.close(Some(e));
+                return Poll::Ready(false);
+            }
             Poll::Pending
         };
 

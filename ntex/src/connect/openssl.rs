@@ -1,13 +1,15 @@
 use std::{future::Future, io, pin::Pin, task::Context, task::Poll};
 
+use ntex_openssl::{SslConnector as IoSslConnector, SslFilter};
 pub use open_ssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
 pub use tokio_openssl::SslStream;
 
+use crate::io::{DefaultFilter, Io};
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
 use crate::util::Ready;
 
-use super::{Address, Connect, ConnectError, Connector};
+use super::{Address, Connect, ConnectError, Connector, IoConnector as BaseIoConnector};
 
 pub struct OpensslConnector<T> {
     connector: Connector<T>,
@@ -93,6 +95,101 @@ impl<T: Address + 'static> ServiceFactory for OpensslConnector<T> {
 impl<T: Address + 'static> Service for OpensslConnector<T> {
     type Request = Connect<T>;
     type Response = SslStream<TcpStream>;
+    type Error = ConnectError;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+
+    #[inline]
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&self, req: Connect<T>) -> Self::Future {
+        Box::pin(self.connect(req))
+    }
+}
+
+pub struct IoConnector<T> {
+    connector: BaseIoConnector<T>,
+    openssl: SslConnector,
+}
+
+impl<T> IoConnector<T> {
+    /// Construct new OpensslConnectService factory
+    pub fn new(connector: SslConnector) -> Self {
+        IoConnector {
+            connector: BaseIoConnector::default(),
+            openssl: connector,
+        }
+    }
+}
+
+impl<T: Address + 'static> IoConnector<T> {
+    /// Resolve and connect to remote host
+    pub fn connect<U>(
+        &self,
+        message: U,
+    ) -> impl Future<Output = Result<Io<SslFilter<DefaultFilter>>, ConnectError>>
+    where
+        Connect<T>: From<U>,
+    {
+        let message = Connect::from(message);
+        let host = message.host().to_string();
+        let conn = self.connector.call(message);
+        let openssl = self.openssl.clone();
+
+        async move {
+            let io = conn.await?;
+            trace!("SSL Handshake start for: {:?}", host);
+
+            match openssl.configure() {
+                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e).into()),
+                Ok(config) => {
+                    let ssl = config
+                        .into_ssl(&host)
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    match io.add_filter(IoSslConnector::new(ssl)).await {
+                        Ok(io) => {
+                            trace!("SSL Handshake success: {:?}", host);
+                            Ok(io)
+                        }
+                        Err(e) => {
+                            trace!("SSL Handshake error: {:?}", e);
+                            Err(io::Error::new(io::ErrorKind::Other, format!("{}", e))
+                                .into())
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<T> Clone for IoConnector<T> {
+    fn clone(&self) -> Self {
+        IoConnector {
+            connector: self.connector.clone(),
+            openssl: self.openssl.clone(),
+        }
+    }
+}
+
+impl<T: Address + 'static> ServiceFactory for IoConnector<T> {
+    type Request = Connect<T>;
+    type Response = Io<SslFilter<DefaultFilter>>;
+    type Error = ConnectError;
+    type Config = ();
+    type Service = IoConnector<T>;
+    type InitError = ();
+    type Future = Ready<Self::Service, Self::InitError>;
+
+    fn new_service(&self, _: ()) -> Self::Future {
+        Ready::Ok(self.clone())
+    }
+}
+
+impl<T: Address + 'static> Service for IoConnector<T> {
+    type Request = Connect<T>;
+    type Response = Io<SslFilter<DefaultFilter>>;
     type Error = ConnectError;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
