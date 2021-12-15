@@ -1,13 +1,13 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-use std::{cmp, fmt, future::Future, io, mem, pin::Pin, rc::Rc};
+use std::{any, cmp, fmt, future::Future, io, mem, net, pin::Pin, rc::Rc};
 
 use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_util::future::poll_fn;
 use ntex_util::time::{sleep, Millis, Sleep};
 
-use crate::{IoStream, ReadContext, WriteContext, WriteReadiness};
+use crate::{types, Handle, IoStream, ReadContext, WriteContext, WriteReadiness};
 
 #[derive(Default)]
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
@@ -30,6 +30,7 @@ impl fmt::Debug for AtomicWaker {
 #[derive(Debug)]
 pub struct IoTest {
     tp: Type,
+    peer_addr: Option<net::SocketAddr>,
     state: Arc<Cell<State>>,
     local: Arc<Mutex<RefCell<Channel>>>,
     remote: Arc<Mutex<RefCell<Channel>>>,
@@ -102,12 +103,14 @@ impl IoTest {
         (
             IoTest {
                 tp: Type::Client,
+                peer_addr: None,
                 local: local.clone(),
                 remote: remote.clone(),
                 state: state.clone(),
             },
             IoTest {
                 state,
+                peer_addr: None,
                 tp: Type::Server,
                 local: remote,
                 remote: local,
@@ -126,6 +129,12 @@ impl IoTest {
     /// Check if channel is closed from remoote side
     pub fn is_closed(&self) -> bool {
         self.remote.lock().unwrap().borrow().is_closed()
+    }
+
+    /// Set peer addr
+    pub fn set_peer_addr(mut self, addr: net::SocketAddr) -> Self {
+        self.peer_addr = Some(addr);
+        self
     }
 
     /// Set read to Pending state
@@ -317,6 +326,7 @@ impl Clone for IoTest {
             local: self.local.clone(),
             remote: self.remote.clone(),
             state: self.state.clone(),
+            peer_addr: self.peer_addr,
         }
     }
 }
@@ -444,7 +454,7 @@ mod tokio {
 }
 
 impl IoStream for IoTest {
-    fn start(self, read: ReadContext, write: WriteContext) {
+    fn start(self, read: ReadContext, write: WriteContext) -> Box<dyn Handle> {
         let io = Rc::new(self);
 
         ntex_util::spawn(ReadTask {
@@ -452,10 +462,23 @@ impl IoStream for IoTest {
             state: read,
         });
         ntex_util::spawn(WriteTask {
-            io,
+            io: io.clone(),
             state: write,
             st: IoWriteState::Processing(None),
         });
+
+        Box::new(io)
+    }
+}
+
+impl Handle for Rc<IoTest> {
+    fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+        if id == any::TypeId::of::<types::PeerAddr>() {
+            if let Some(addr) = self.peer_addr {
+                return Some(Box::new(addr));
+            }
+        }
+        None
     }
 }
 

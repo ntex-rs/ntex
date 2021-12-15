@@ -7,6 +7,7 @@ mod filter;
 mod state;
 mod tasks;
 mod time;
+pub mod types;
 mod utils;
 
 #[cfg(feature = "tokio")]
@@ -14,7 +15,7 @@ mod tokio_impl;
 
 use ntex_bytes::BytesMut;
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::{channel::oneshot::Receiver, future::Either, time::Millis};
+use ntex_util::time::Millis;
 
 pub use self::dispatcher::Dispatcher;
 pub use self::filter::DefaultFilter;
@@ -58,12 +59,7 @@ pub trait WriteFilter {
 pub trait Filter: ReadFilter + WriteFilter + 'static {
     fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>>;
 
-    fn query(
-        &self,
-        id: TypeId,
-    ) -> Either<Option<Box<dyn Any>>, Receiver<Option<Box<dyn Any>>>> {
-        Either::Left(None)
-    }
+    fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
 }
 
 pub trait FilterFactory<F: Filter>: Sized {
@@ -76,7 +72,11 @@ pub trait FilterFactory<F: Filter>: Sized {
 }
 
 pub trait IoStream {
-    fn start(self, _: ReadContext, _: WriteContext);
+    fn start(self, _: ReadContext, _: WriteContext) -> Box<dyn Handle>;
+}
+
+pub trait Handle {
+    fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
 }
 
 /// Framed transport item

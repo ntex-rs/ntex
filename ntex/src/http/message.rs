@@ -1,12 +1,10 @@
-use std::cell::{Ref, RefCell, RefMut};
-use std::net;
-use std::rc::Rc;
+use std::{cell::Ref, cell::RefCell, cell::RefMut, net, rc::Rc};
 
 use bitflags::bitflags;
 
 use crate::http::header::HeaderMap;
 use crate::http::{header, Method, StatusCode, Uri, Version};
-use crate::io::IoRef;
+use crate::io::{types, IoRef};
 use crate::util::Extensions;
 
 /// Represents various types of connection
@@ -174,9 +172,10 @@ impl RequestHead {
     /// ntex http server, then peer address would be address of this proxy.
     #[inline]
     pub fn peer_addr(&self) -> Option<net::SocketAddr> {
-        // TODO! fix
-        // self.head().peer_addr
-        None
+        self.io
+            .as_ref()
+            .map(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
+            .unwrap_or(None)
     }
 }
 

@@ -1,12 +1,10 @@
 use std::{cell::Ref, cell::RefMut, fmt, mem, net};
 
-use http::{header, Method, Uri, Version};
-
-use crate::http::header::HeaderMap;
+use crate::http::header::{self, HeaderMap};
 use crate::http::httpmessage::HttpMessage;
 use crate::http::message::{Message, RequestHead};
-use crate::http::payload::Payload;
-use crate::io::IoRef;
+use crate::http::{payload::Payload, Method, Uri, Version};
+use crate::io::{types, IoRef};
 use crate::util::Extensions;
 
 /// Request
@@ -139,9 +137,11 @@ impl Request {
     /// ntex http server, then peer address would be address of this proxy.
     #[inline]
     pub fn peer_addr(&self) -> Option<net::SocketAddr> {
-        // TODO! fix
-        // self.head().peer_addr
-        None
+        self.head()
+            .io
+            .as_ref()
+            .map(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
+            .unwrap_or(None)
     }
 
     /// Get request's payload

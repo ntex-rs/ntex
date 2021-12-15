@@ -6,7 +6,7 @@ use std::{
 use h2::server::{self, Handshake};
 
 use crate::codec::{AsyncRead, AsyncWrite};
-use crate::io::{DefaultFilter, Filter, Io, IoRef};
+use crate::io::{types, DefaultFilter, Filter, Io, IoRef};
 use crate::rt::net::TcpStream;
 use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
@@ -438,7 +438,10 @@ where
     }
 
     fn call(&self, io: Self::Request) -> Self::Future {
-        // log::trace!("New http connection protocol {:?}", proto);
+        log::trace!(
+            "New http connection, peer address {:?}",
+            io.query::<types::PeerAddr>().get()
+        );
 
         //match proto {
         //Protocol::Http2 => todo!(),

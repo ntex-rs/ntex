@@ -10,8 +10,7 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
-use crate::io::{Filter, Io, IoRef};
-use crate::rt::net::TcpStream;
+use crate::io::{types, Filter, Io, IoRef};
 use crate::service::{
     fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
     ServiceFactory,
@@ -216,7 +215,10 @@ where
     }
 
     fn call(&self, io: Self::Request) -> Self::Future {
-        // trace!("New http2 connection, peer address: {:?}", addr);
+        log::trace!(
+            "New http2 connection, peer address {:?}",
+            io.query::<types::PeerAddr>().get()
+        );
 
         H2ServiceHandlerResponse {
             state: State::Handshake(

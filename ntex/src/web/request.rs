@@ -1,12 +1,9 @@
-use std::cell::{Ref, RefMut};
-use std::marker::PhantomData;
-use std::rc::Rc;
-use std::{fmt, net};
+use std::{cell::Ref, cell::RefMut, fmt, marker::PhantomData, net, rc::Rc};
 
 use crate::http::{
     header, HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version,
 };
-use crate::io::IoRef;
+use crate::io::{types, IoRef};
 use crate::router::{Path, Resource};
 use crate::util::Extensions;
 
@@ -152,6 +149,21 @@ impl<Err> WebRequest<Err> {
         } else {
             ""
         }
+    }
+
+    /// Peer socket address
+    ///
+    /// Peer address is actual socket address, if proxy is used in front of
+    /// ntex http server, then peer address would be address of this proxy.
+    ///
+    /// To get client connection information `ConnectionInfo` should be used.
+    #[inline]
+    pub fn peer_addr(&self) -> Option<net::SocketAddr> {
+        self.head()
+            .io
+            .as_ref()
+            .map(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
+            .unwrap_or(None)
     }
 
     /// Get *ConnectionInfo* for the current request.

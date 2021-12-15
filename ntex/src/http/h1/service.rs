@@ -9,7 +9,7 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
-use crate::io::{DefaultFilter, Filter, Io, IoRef};
+use crate::io::{types, DefaultFilter, Filter, Io, IoRef};
 use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
 use crate::{time::Millis, util::Pool};
 
@@ -367,6 +367,11 @@ where
     }
 
     fn call(&self, io: Self::Request) -> Self::Future {
+        log::trace!(
+            "New http1 connection, peer address {:?}",
+            io.query::<types::PeerAddr>().get()
+        );
+
         Dispatcher::new(io, self.config.clone())
     }
 }

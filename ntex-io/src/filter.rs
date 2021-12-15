@@ -1,4 +1,4 @@
-use std::{io, rc::Rc, task::Context, task::Poll};
+use std::{any, io, rc::Rc, task::Context, task::Poll};
 
 use ntex_bytes::BytesMut;
 
@@ -25,6 +25,16 @@ impl Filter for DefaultFilter {
         }
 
         Poll::Ready(Ok(()))
+    }
+
+    fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+        if let Some(hnd) = self.0.handle.take() {
+            let res = hnd.query(id);
+            self.0.handle.set(Some(hnd));
+            res
+        } else {
+            None
+        }
     }
 }
 
@@ -139,6 +149,10 @@ impl NullFilter {
 impl Filter for NullFilter {
     fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))
+    }
+
+    fn query(&self, _: any::TypeId) -> Option<Box<dyn any::Any>> {
+        None
     }
 }
 

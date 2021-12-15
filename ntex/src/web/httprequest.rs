@@ -3,7 +3,7 @@ use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 use crate::http::{
     HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
 };
-use crate::io::IoRef;
+use crate::io::{types, IoRef};
 use crate::router::Path;
 use crate::util::{Extensions, Ready};
 
@@ -118,9 +118,9 @@ impl HttpRequest {
     /// ntex http server, then peer address would be address of this proxy.
     #[inline]
     pub fn peer_addr(&self) -> Option<net::SocketAddr> {
-        // TODO! fix
-        // self.head().peer_addr
-        None
+        self.io()
+            .map(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
+            .unwrap_or(None)
     }
 
     /// Get a reference to the Path parameters.

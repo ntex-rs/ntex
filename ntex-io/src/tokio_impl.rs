@@ -1,28 +1,42 @@
 use std::task::{Context, Poll};
-use std::{cell::RefCell, cmp, future::Future, io, pin::Pin, rc::Rc};
+use std::{any, cell::RefCell, cmp, future::Future, io, pin::Pin, rc::Rc};
 
 use ntex_bytes::{Buf, BufMut};
 use ntex_util::time::{sleep, Sleep};
 use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tok_io::net::TcpStream;
 
-use super::{Filter, Io, IoStream, ReadContext, WriteContext, WriteReadiness};
+use super::{
+    types, Filter, Handle, Io, IoStream, ReadContext, WriteContext, WriteReadiness,
+};
 
 impl IoStream for TcpStream {
-    fn start(self, read: ReadContext, write: WriteContext) {
+    fn start(self, read: ReadContext, write: WriteContext) -> Box<dyn Handle> {
         let io = Rc::new(RefCell::new(self));
 
         ntex_util::spawn(ReadTask::new(io.clone(), read));
-        ntex_util::spawn(WriteTask::new(io, write));
+        ntex_util::spawn(WriteTask::new(io.clone(), write));
+        Box::new(io)
     }
 }
 
 #[cfg(unix)]
 impl IoStream for tok_io::net::UnixStream {
-    fn start(self, _read: ReadContext, _write: WriteContext) {
+    fn start(self, _read: ReadContext, _write: WriteContext) -> Box<dyn Handle> {
         let _io = Rc::new(RefCell::new(self));
 
         todo!()
+    }
+}
+
+impl Handle for Rc<RefCell<TcpStream>> {
+    fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+        if id == any::TypeId::of::<types::PeerAddr>() {
+            if let Ok(addr) = self.borrow().peer_addr() {
+                return Some(Box::new(addr));
+            }
+        }
+        None
     }
 }
 

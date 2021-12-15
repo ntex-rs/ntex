@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
-use std::{fmt, future::Future, hash, io, mem, ops::Deref, pin::Pin, ptr, rc::Rc};
+use std::{any, fmt, future::Future, hash, io, mem, ops::Deref, pin::Pin, ptr, rc::Rc};
 
 use ntex_bytes::{BytesMut, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
@@ -9,7 +9,7 @@ use ntex_util::{future::poll_fn, future::Either, task::LocalWaker};
 
 use super::filter::{DefaultFilter, NullFilter};
 use super::tasks::{ReadContext, WriteContext};
-use super::{Filter, FilterFactory, IoStream};
+use super::{types, Filter, FilterFactory, Handle, IoStream};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -66,6 +66,7 @@ pub(crate) struct IoStateInner {
     pub(super) read_buf: Cell<Option<BytesMut>>,
     pub(super) write_buf: Cell<Option<BytesMut>>,
     pub(super) filter: Cell<&'static dyn Filter>,
+    pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     on_disconnect: RefCell<Vec<Option<LocalWaker>>>,
 }
 
@@ -198,6 +199,7 @@ impl Io {
             read_buf: Cell::new(None),
             write_buf: Cell::new(None),
             filter: Cell::new(NullFilter::get()),
+            handle: Cell::new(None),
             on_disconnect: RefCell::new(Vec::new()),
         });
 
@@ -211,7 +213,8 @@ impl Io {
         let io_ref = IoRef(inner);
 
         // start io tasks
-        io.start(ReadContext(io_ref.clone()), WriteContext(io_ref.clone()));
+        let hnd = io.start(ReadContext(io_ref.clone()), WriteContext(io_ref.clone()));
+        io_ref.0.handle.set(Some(hnd));
 
         Io(io_ref, FilterItem::Ptr(Box::into_raw(filter)))
     }
@@ -363,8 +366,12 @@ impl IoRef {
 
     #[inline]
     /// Query specific data
-    pub fn query<T: 'static>(&self) -> Option<T> {
-        todo!()
+    pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
+        if let Some(item) = self.0.filter.get().query(any::TypeId::of::<T>()) {
+            types::QueryItem::new(item)
+        } else {
+            types::QueryItem::empty()
+        }
     }
 }
 
@@ -853,18 +860,17 @@ impl<'a> ReadRef<'a> {
         U: Decoder,
     {
         let mut buf = self.0.read_buf.take();
-        let result = if let Some(ref mut buf) = buf {
-            let result = codec.decode(buf);
+        if let Some(ref mut b) = buf {
+            let result = codec.decode(b);
             if result.as_ref().map(|v| v.is_none()).unwrap_or(false) {
                 self.0.remove_flags(Flags::RD_READY);
             }
+            self.0.read_buf.set(buf);
             result
         } else {
             self.0.remove_flags(Flags::RD_READY);
             Ok(None)
-        };
-        self.0.read_buf.set(buf);
-        result
+        }
     }
 
     #[inline]
