@@ -4,11 +4,11 @@ use std::task::{Context, Poll};
 
 use h2::RecvStream;
 
-//mod dispatcher;
-//mod service;
+mod dispatcher;
+mod service;
 
-//pub use self::dispatcher::Dispatcher;
-//pub use self::service::H2Service;
+pub use self::dispatcher::Dispatcher;
+pub use self::service::H2Service;
 use crate::{http::error::PayloadError, util::Bytes, Stream};
 
 /// H2 receive stream

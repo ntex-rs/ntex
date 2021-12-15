@@ -965,10 +965,7 @@ mod tests {
             .to_http_request();
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
         assert!(req.headers().contains_key(header::DATE));
-        assert_eq!(
-            req.head().peer_addr,
-            Some("127.0.0.1:8081".parse().unwrap())
-        );
+        assert_eq!(req.peer_addr(), Some("127.0.0.1:8081".parse().unwrap()));
         assert_eq!(&req.match_info()["test"], "123");
         assert_eq!(req.version(), Version::HTTP_2);
         let data = req.app_data::<web::types::Data<u64>>().unwrap();

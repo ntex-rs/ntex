@@ -425,7 +425,6 @@ impl IoRef {
         let is_write_sleep = buf.is_empty();
         codec.encode(item, &mut buf).map_err(Either::Left)?;
         filter.release_write_buf(buf).map_err(Either::Right)?;
-        self.0.insert_flags(Flags::WR_WAIT);
         if is_write_sleep {
             self.0.write_task.wake();
         }
@@ -681,7 +680,7 @@ impl<'a> WriteRef<'a> {
     }
 
     #[inline]
-    /// Write item to a buffer and wake up write task
+    /// Encode and write item to a buffer and wake up write task
     ///
     /// Returns write buffer state, false is returned if write buffer if full.
     pub fn encode<U>(
@@ -719,6 +718,36 @@ impl<'a> WriteRef<'a> {
                 self.0.set_error(Some(err));
             }
             result
+        } else {
+            Ok(true)
+        }
+    }
+
+    #[inline]
+    /// Write item to a buffer and wake up write task
+    ///
+    /// Returns write buffer state, false is returned if write buffer if full.
+    pub fn write(&self, src: &[u8]) -> Result<bool, io::Error> {
+        let flags = self.0.flags.get();
+
+        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+            let filter = self.0.filter.get();
+            let mut buf = filter
+                .get_write_buf()
+                .unwrap_or_else(|| self.0.pool.get().get_write_buf());
+            let is_write_sleep = buf.is_empty();
+
+            // write and wake write task
+            buf.extend_from_slice(src);
+            let result = buf.len() < self.0.pool.get().write_params_high();
+            if is_write_sleep {
+                self.0.write_task.wake();
+            }
+
+            if let Err(err) = filter.release_write_buf(buf) {
+                self.0.set_error(Some(err));
+            }
+            Ok(result)
         } else {
             Ok(true)
         }

@@ -167,6 +167,17 @@ impl RequestHead {
     pub(crate) fn set_expect(&mut self) {
         self.flags.insert(Flags::EXPECT);
     }
+
+    /// Peer socket address
+    ///
+    /// Peer address is actual socket address, if proxy is used in front of
+    /// ntex http server, then peer address would be address of this proxy.
+    #[inline]
+    pub fn peer_addr(&self) -> Option<net::SocketAddr> {
+        // TODO! fix
+        // self.head().peer_addr
+        None
+    }
 }
 
 #[derive(Debug)]

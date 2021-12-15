@@ -4,12 +4,12 @@ use crate::http::body::MessageBody;
 use crate::http::config::{KeepAlive, OnRequest, ServiceConfig};
 use crate::http::error::ResponseError;
 use crate::http::h1::{Codec, ExpectHandler, H1Service, UpgradeHandler};
-use crate::io::{Filter, Io, IoRef};
-// use crate::http::h2::H2Service;
+use crate::http::h2::H2Service;
 use crate::http::helpers::{Data, DataFactory};
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::service::HttpService;
+use crate::io::{Filter, Io, IoRef};
 use crate::service::{boxed, IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
 use crate::util::PoolId;
@@ -214,9 +214,8 @@ where
             .on_request(self.on_request)
     }
 
-    // pub fn h2<F, B>(self, service: F) -> H2Service<T, S, B>
     /// Finish service configuration and create *http service* for HTTP/2 protocol.
-    pub fn h2<B, SF>(self, service: SF) -> H1Service<F, S, B, X, U>
+    pub fn h2<B, SF>(self, service: SF) -> H2Service<F, S, B>
     where
         B: MessageBody + 'static,
         SF: IntoServiceFactory<S>,
@@ -233,11 +232,7 @@ where
             self.pool,
         );
 
-        // H2Service::with_config(cfg, service.into_factory()).on_connect(self.on_connect)
-        H1Service::with_config(cfg, service.into_factory())
-            .expect(self.expect)
-            .upgrade(self.upgrade)
-            .on_request(self.on_request)
+        H2Service::with_config(cfg, service.into_factory())
     }
 
     /// Finish service configuration and create `HttpService` instance.

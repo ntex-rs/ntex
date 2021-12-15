@@ -112,6 +112,17 @@ impl HttpRequest {
         self.head().io.as_ref()
     }
 
+    /// Peer socket address
+    ///
+    /// Peer address is actual socket address, if proxy is used in front of
+    /// ntex http server, then peer address would be address of this proxy.
+    #[inline]
+    pub fn peer_addr(&self) -> Option<net::SocketAddr> {
+        // TODO! fix
+        // self.head().peer_addr
+        None
+    }
+
     /// Get a reference to the Path parameters.
     ///
     /// Params is a container for url parameters.

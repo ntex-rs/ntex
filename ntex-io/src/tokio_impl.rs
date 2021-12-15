@@ -1,11 +1,12 @@
 use std::task::{Context, Poll};
-use std::{cell::RefCell, future::Future, io, pin::Pin, rc::Rc};
+use std::{cell::RefCell, cmp, future::Future, io, pin::Pin, rc::Rc};
 
 use ntex_bytes::{Buf, BufMut};
 use ntex_util::time::{sleep, Sleep};
-use tok_io::{io::AsyncRead, io::AsyncWrite, io::ReadBuf, net::TcpStream};
+use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tok_io::net::TcpStream;
 
-use super::{IoStream, ReadContext, WriteContext, WriteReadiness};
+use super::{Filter, Io, IoStream, ReadContext, WriteContext, WriteReadiness};
 
 impl IoStream for TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) {
@@ -338,5 +339,52 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
         }
     } else {
         Poll::Ready(true)
+    }
+}
+
+impl<F: Filter> AsyncRead for Io<F> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let read = self.read();
+        let len = read.with_buf(|src| {
+            let len = cmp::min(src.len(), buf.capacity());
+            buf.put_slice(&src.split_to(len));
+            len
+        });
+
+        if len == 0 && !self.0.is_io_open() {
+            if let Some(err) = self.0.take_error() {
+                return Poll::Ready(Err(err));
+            }
+        }
+        if read.poll_ready(cx)?.is_ready() {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl<F: Filter> AsyncWrite for Io<F> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Poll::Ready(self.write().write(buf).map(|_| buf.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.write().poll_flush(cx, false)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.0.poll_shutdown(cx)
     }
 }

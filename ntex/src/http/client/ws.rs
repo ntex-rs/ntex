@@ -310,7 +310,7 @@ impl WsRequest {
         let fut = self.config.connector.open_tunnel(head.into(), self.addr);
 
         // set request timeout
-        let (head, io, codec) = if self.config.timeout.non_zero() {
+        let (head, io, _) = if self.config.timeout.non_zero() {
             timeout(self.config.timeout, fut)
                 .await
                 .map_err(|_| SendRequestError::Timeout)
