@@ -1,20 +1,18 @@
 #![allow(clippy::type_complexity)]
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::cell::RefCell;
-use std::{cmp, error::Error, future::Future, io, pin::Pin, task::Context, task::Poll};
+use std::{
+    any, cmp, error::Error, future::Future, io, pin::Pin, task::Context, task::Poll,
+};
 
-use ntex_bytes::{BufMut, BytesMut};
+use ntex_bytes::{BufMut, BytesMut, PoolRef};
 use ntex_io::{
     Filter, FilterFactory, Io, IoRef, ReadFilter, WriteFilter, WriteReadiness,
 };
 use ntex_util::{future::poll_fn, time, time::Millis};
-use openssl::ssl::{self, SslStream};
+use tls_openssl::ssl::{self, SslStream};
 
-/// Selected alpn protocol
-pub enum AlpnHttpProtocol {
-    Http1,
-    Http2,
-}
+use super::types;
 
 /// An implementation of SSL streams
 pub struct SslFilter<F> {
@@ -23,6 +21,7 @@ pub struct SslFilter<F> {
 
 struct IoInner<F> {
     inner: F,
+    pool: PoolRef,
     read_buf: Option<BytesMut>,
     write_buf: Option<BytesMut>,
 }
@@ -35,7 +34,7 @@ impl<F: Filter> io::Read for IoInner<F> {
                 Err(io::Error::from(io::ErrorKind::WouldBlock))
             } else {
                 let len = cmp::min(buf.len(), dst.len());
-                dst.copy_from_slice(&buf.split_to(len));
+                dst[..len].copy_from_slice(&buf.split_to(len));
                 Ok(len)
             }
         } else {
@@ -50,7 +49,7 @@ impl<F: Filter> io::Write for IoInner<F> {
             buf.reserve(buf.len());
             buf
         } else {
-            BytesMut::with_capacity(src.len())
+            BytesMut::with_capacity_in(src.len(), self.pool)
         };
         buf.extend_from_slice(src);
         self.inner.release_write_buf(buf)?;
@@ -82,6 +81,25 @@ impl<F: Filter> Filter for SslFilter<F> {
                 .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e)))),
         }
     }
+
+    fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+        if id == any::TypeId::of::<types::HttpProtocol>() {
+            let proto = if let Some(protos) =
+                self.inner.borrow().ssl().selected_alpn_protocol()
+            {
+                if protos.windows(2).any(|window| window == b"h2") {
+                    types::HttpProtocol::Http2
+                } else {
+                    types::HttpProtocol::Http1
+                }
+            } else {
+                types::HttpProtocol::Http1
+            };
+            Some(Box::new(proto))
+        } else {
+            self.inner.borrow().get_ref().inner.query(id)
+        }
+    }
 }
 
 impl<F: Filter> ReadFilter for SslFilter<F> {
@@ -108,36 +126,54 @@ impl<F: Filter> ReadFilter for SslFilter<F> {
         new_bytes: usize,
     ) -> Result<(), io::Error> {
         // store to read_buf
-        self.inner.borrow_mut().get_mut().read_buf = Some(src);
+        let pool = {
+            let mut inner = self.inner.borrow_mut();
+            inner.get_mut().read_buf = Some(src);
+            inner.get_ref().pool
+        };
         if new_bytes == 0 {
             return Ok(());
         }
+        let (hw, lw) = pool.read_params().unpack();
 
+        // get inner filter buffer
         let mut buf =
             if let Some(buf) = self.inner.borrow().get_ref().inner.get_read_buf() {
                 buf
             } else {
-                BytesMut::with_capacity(4096)
+                BytesMut::with_capacity_in(lw, pool)
             };
 
-        let chunk: &mut [u8] = unsafe { std::mem::transmute(&mut *buf.chunk_mut()) };
-        let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
-        let result = match ssl_result {
-            Ok(v) => {
-                unsafe { buf.advance_mut(v) };
-                self.inner
-                    .borrow()
-                    .get_ref()
-                    .inner
-                    .release_read_buf(buf, v)?;
-                Ok(())
+        let mut new_bytes = 0;
+        loop {
+            // make sure we've got room
+            let remaining = buf.remaining_mut();
+            if remaining < lw {
+                buf.reserve(hw - remaining);
             }
-            Err(e) => match e.code() {
-                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => Ok(()),
-                _ => (Err(map_to_ioerr(e))),
-            },
-        };
-        result
+
+            let chunk: &mut [u8] = unsafe { std::mem::transmute(&mut *buf.chunk_mut()) };
+            let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
+            return match ssl_result {
+                Ok(v) => {
+                    unsafe { buf.advance_mut(v) };
+                    new_bytes += v;
+                    continue;
+                }
+                Err(ref e)
+                    if e.code() == ssl::ErrorCode::WANT_READ
+                        || e.code() == ssl::ErrorCode::WANT_WRITE =>
+                {
+                    self.inner
+                        .borrow()
+                        .get_ref()
+                        .inner
+                        .release_read_buf(buf, new_bytes)?;
+                    Ok(())
+                }
+                Err(e) => Err(map_to_ioerr(e)),
+            };
+        }
     }
 }
 
@@ -226,8 +262,10 @@ impl<F: Filter + 'static> FilterFactory<F> for SslAcceptor {
         Box::pin(async move {
             time::timeout(timeout, async {
                 let ssl = ctx_result.map_err(map_to_ioerr)?;
+                let pool = st.memory_pool();
                 let st = st.map_filter::<Self, _>(|inner: F| {
                     let inner = IoInner {
+                        pool,
                         inner,
                         read_buf: None,
                         write_buf: None,
@@ -240,9 +278,7 @@ impl<F: Filter + 'static> FilterFactory<F> for SslAcceptor {
                 })?;
 
                 poll_fn(|cx| {
-                    let _ = st.write().poll_flush(cx, true)?;
                     handle_result(st.filter().inner.borrow_mut().accept(), &st, cx)
-                        .map_err(Into::<Box<dyn Error>>::into)
                 })
                 .await?;
 
@@ -277,8 +313,10 @@ impl<F: Filter + 'static> FilterFactory<F> for SslConnector {
     fn create(self, st: Io<F>) -> Self::Future {
         Box::pin(async move {
             let ssl = self.ssl;
+            let pool = st.memory_pool();
             let st = st.map_filter::<Self, _>(|inner: F| {
                 let inner = IoInner {
+                    pool,
                     inner,
                     read_buf: None,
                     write_buf: None,
@@ -291,9 +329,7 @@ impl<F: Filter + 'static> FilterFactory<F> for SslConnector {
             })?;
 
             poll_fn(|cx| {
-                let _ = st.write().poll_flush(cx, true)?;
                 handle_result(st.filter().inner.borrow_mut().connect(), &st, cx)
-                    .map_err(Into::<Box<dyn Error>>::into)
             })
             .await?;
 
@@ -302,20 +338,29 @@ impl<F: Filter + 'static> FilterFactory<F> for SslConnector {
     }
 }
 
-fn handle_result<T: std::fmt::Debug>(
+fn handle_result<T>(
     result: Result<T, ssl::Error>,
     st: &IoRef,
     cx: &mut Context<'_>,
-) -> Poll<Result<T, ssl::Error>> {
+) -> Poll<Result<T, Box<dyn Error>>> {
     match result {
         Ok(v) => Poll::Ready(Ok(v)),
         Err(e) => match e.code() {
             ssl::ErrorCode::WANT_READ => {
-                let _ = st.read().poll_ready(cx);
+                if let Err(e) = st.read().poll_read_ready(cx) {
+                    let e = e.unwrap_or_else(|| {
+                        io::Error::new(io::ErrorKind::Other, "disconnected")
+                    });
+                    Poll::Ready(Err(e.into()))
+                } else {
+                    Poll::Pending
+                }
+            }
+            ssl::ErrorCode::WANT_WRITE => {
+                let _ = st.write().poll_write_ready(cx, true)?;
                 Poll::Pending
             }
-            ssl::ErrorCode::WANT_WRITE => Poll::Pending,
-            _ => Poll::Ready(Err(e)),
+            _ => Poll::Ready(Err(Box::new(e))),
         },
     }
 }

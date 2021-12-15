@@ -422,23 +422,6 @@ async fn test_h2_service_error() {
 }
 
 #[ntex::test]
-async fn test_h2_on_connect() {
-    let srv = test_server(move || {
-        HttpService::build()
-            .on_connect(|_| 10usize)
-            .h2(|req: Request| {
-                assert!(req.extensions().contains::<usize>());
-                ok::<_, io::Error>(Response::Ok().finish())
-            })
-            .openssl(ssl_acceptor())
-            .map_err(|_| ())
-    });
-
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
-    assert!(response.status().is_success());
-}
-
-#[ntex::test]
 async fn test_ssl_handshake_timeout() {
     use std::io::Read;
 

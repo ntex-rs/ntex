@@ -5,14 +5,13 @@ use std::{convert::TryFrom, fmt, net::SocketAddr, rc::Rc, str};
 use coo_kie::{Cookie, CookieJar};
 use nanorand::{Rng, WyRand};
 
-use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue, AUTHORIZATION};
 use crate::http::{ConnectionType, Payload, RequestHead, StatusCode, Uri};
-use crate::io::{DefaultFilter, DispatchItem, Dispatcher, Filter, Io, IoBoxed};
+use crate::io::{DispatchItem, Dispatcher, IoBoxed};
 use crate::service::{apply_fn, into_service, IntoService, Service};
-use crate::util::Either;
-use crate::{channel::mpsc, rt, time::timeout, util::sink, util::Ready, ws};
+use crate::util::{sink, Either, Ready};
+use crate::{channel::mpsc, rt, time::timeout, ws};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
 
@@ -428,12 +427,21 @@ impl WsConnection {
             mpsc::channel();
 
         rt::spawn(async move {
+            let io = self.io.get_ref();
             let srv = sink::SinkService::new(tx.clone()).map(|_| None);
 
             if let Err(err) = self
                 .start(into_service(move |item| {
+                    let io = io.clone();
+                    let close = matches!(item, ws::Frame::Close(_));
                     let fut = srv.call(Ok::<_, ws::WsError<()>>(item));
-                    async move { fut.await.map_err(|_| ()) }
+                    async move {
+                        let result = fut.await.map_err(|_| ());
+                        if close {
+                            io.close();
+                        }
+                        result
+                    }
                 }))
                 .await
             {

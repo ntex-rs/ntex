@@ -6,13 +6,12 @@
 //! * `rustls` - enables ssl support via `rustls` crate
 //! * `compress` - enables compression support in http and web modules
 //! * `cookie` - enables cookie support in http and web modules
-
-//#![warn(
-// rust_2018_idioms,
-// unreachable_pub,
-// missing_debug_implementations,
-// missing_docs,
-//)]
+#![warn(
+    rust_2018_idioms,
+    unreachable_pub,
+    // missing_debug_implementations,
+    // missing_docs,
+)]
 #![allow(
     type_alias_bounds,
     clippy::type_complexity,
@@ -21,7 +20,6 @@
     clippy::too_many_arguments,
     clippy::new_without_default
 )]
-#![allow(unused_imports)]
 
 #[macro_use]
 extern crate log;
@@ -36,7 +34,6 @@ pub(crate) use ntex_macros::rt_test2 as rt_test;
 
 pub mod channel;
 pub mod connect;
-//pub mod framed;
 #[cfg(feature = "http-framework")]
 pub mod http;
 pub mod server;

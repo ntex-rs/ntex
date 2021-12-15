@@ -1,6 +1,6 @@
 use std::{io, io::Read, io::Write, net};
 
-use futures::future::{self, ok, ready, FutureExt};
+use futures::future::{self, ready, FutureExt};
 use futures::stream::{once, StreamExt};
 use regex::Regex;
 
@@ -20,7 +20,7 @@ async fn test_h1() {
             .disconnect_timeout(Seconds(1))
             .h1(|req: Request| {
                 assert!(req.peer_addr().is_some());
-                future::ok::<_, io::Error>(Response::Ok().finish())
+                Ready::Ok::<_, io::Error>(Response::Ok().finish())
             })
     });
 
@@ -38,7 +38,7 @@ async fn test_h1_2() {
             .finish(|req: Request| {
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), http::Version::HTTP_11);
-                future::ok::<_, io::Error>(Response::Ok().finish())
+                Ready::Ok::<_, io::Error>(Response::Ok().finish())
             })
     });
 
@@ -148,7 +148,7 @@ async fn test_slow_request() {
     let srv = test_server(|| {
         HttpService::build()
             .client_timeout(Seconds(1))
-            .finish(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
+            .finish(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -161,7 +161,7 @@ async fn test_slow_request() {
 #[ntex::test]
 async fn test_http1_malformed_request() {
     let srv = test_server(|| {
-        HttpService::build().h1(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
+        HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -174,7 +174,7 @@ async fn test_http1_malformed_request() {
 #[ntex::test]
 async fn test_http1_keepalive() {
     let srv = test_server(|| {
-        HttpService::build().h1(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
+        HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -194,7 +194,7 @@ async fn test_http1_keepalive_timeout() {
     let srv = test_server(|| {
         HttpService::build()
             .keep_alive(1)
-            .h1(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
+            .h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -212,7 +212,7 @@ async fn test_http1_keepalive_timeout() {
 #[ntex::test]
 async fn test_http1_keepalive_close() {
     let srv = test_server(|| {
-        HttpService::build().h1(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
+        HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -230,7 +230,7 @@ async fn test_http1_keepalive_close() {
 #[ntex::test]
 async fn test_http10_keepalive_default_close() {
     let srv = test_server(|| {
-        HttpService::build().h1(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
+        HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -247,7 +247,7 @@ async fn test_http10_keepalive_default_close() {
 #[ntex::test]
 async fn test_http10_keepalive() {
     let srv = test_server(|| {
-        HttpService::build().h1(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
+        HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -273,7 +273,7 @@ async fn test_http1_keepalive_disabled() {
     let srv = test_server(|| {
         HttpService::build()
             .keep_alive(KeepAlive::Disabled)
-            .h1(|_| future::ok::<_, io::Error>(Response::Ok().finish()))
+            .h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
@@ -305,7 +305,7 @@ async fn test_content_length() {
                 StatusCode::OK,
                 StatusCode::NOT_FOUND,
             ];
-            future::ok::<_, io::Error>(Response::new(statuses[indx]))
+            Ready::Ok::<_, io::Error>(Response::new(statuses[indx]))
         })
     });
 
@@ -358,7 +358,6 @@ async fn test_h1_headers() {
                         TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST ",
                 );
             }
-            println!("SENDING body");
             Ready::Ok::<_, io::Error>(builder.body(data.clone()))
         })
     });
@@ -396,7 +395,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 #[ntex::test]
 async fn test_h1_body() {
     let mut srv = test_server(|| {
-        HttpService::build().h1(|_| ok::<_, io::Error>(Response::Ok().body(STR)))
+        HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
     });
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
@@ -410,7 +409,7 @@ async fn test_h1_body() {
 #[ntex::test]
 async fn test_h1_head_empty() {
     let mut srv = test_server(|| {
-        HttpService::build().h1(|_| ok::<_, io::Error>(Response::Ok().body(STR)))
+        HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
     });
 
     let response = srv.request(http::Method::HEAD, "/").send().await.unwrap();
@@ -433,7 +432,9 @@ async fn test_h1_head_empty() {
 async fn test_h1_head_binary() {
     let mut srv = test_server(|| {
         HttpService::build().h1(|_| {
-            ok::<_, io::Error>(Response::Ok().content_length(STR.len() as u64).body(STR))
+            Ready::Ok::<_, io::Error>(
+                Response::Ok().content_length(STR.len() as u64).body(STR),
+            )
         })
     });
 
@@ -456,7 +457,7 @@ async fn test_h1_head_binary() {
 #[ntex::test]
 async fn test_h1_head_binary2() {
     let srv = test_server(|| {
-        HttpService::build().h1(|_| ok::<_, io::Error>(Response::Ok().body(STR)))
+        HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
     });
 
     let response = srv.request(http::Method::HEAD, "/").send().await.unwrap();
@@ -475,8 +476,8 @@ async fn test_h1_head_binary2() {
 async fn test_h1_body_length() {
     let mut srv = test_server(|| {
         HttpService::build().h1(|_| {
-            let body = once(ok(Bytes::from_static(STR.as_ref())));
-            ok::<_, io::Error>(
+            let body = once(Ready::Ok(Bytes::from_static(STR.as_ref())));
+            Ready::Ok::<_, io::Error>(
                 Response::Ok().body(body::SizedStream::new(STR.len() as u64, body)),
             )
         })
@@ -494,8 +495,8 @@ async fn test_h1_body_length() {
 async fn test_h1_body_chunked_explicit() {
     let mut srv = test_server(|| {
         HttpService::build().h1(|_| {
-            let body = once(ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
-            ok::<_, io::Error>(
+            let body = once(Ready::Ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
+            Ready::Ok::<_, io::Error>(
                 Response::Ok()
                     .header(header::TRANSFER_ENCODING, "chunked")
                     .streaming(body),
@@ -526,8 +527,8 @@ async fn test_h1_body_chunked_explicit() {
 async fn test_h1_body_chunked_implicit() {
     let mut srv = test_server(|| {
         HttpService::build().h1(|_| {
-            let body = once(ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
-            ok::<_, io::Error>(Response::Ok().streaming(body))
+            let body = once(Ready::Ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
+            Ready::Ok::<_, io::Error>(Response::Ok().streaming(body))
         })
     });
 
@@ -553,7 +554,7 @@ async fn test_h1_response_http_error_handling() {
     let mut srv = test_server(|| {
         HttpService::build().h1(fn_service(|_| {
             let broken_header = Bytes::from_static(b"\0\0\0");
-            ok::<_, io::Error>(
+            Ready::Ok::<_, io::Error>(
                 Response::Ok()
                     .header(http::header::CONTENT_TYPE, &broken_header[..])
                     .body(STR),

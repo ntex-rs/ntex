@@ -70,13 +70,21 @@ impl ReadFilter for DefaultFilter {
         buf: BytesMut,
         new_bytes: usize,
     ) -> Result<(), io::Error> {
-        if new_bytes > 0 && buf.len() > self.0.pool.get().read_params().high as usize {
-            log::trace!(
-                "buffer is too large {}, enable read back-pressure",
-                buf.len()
-            );
-            self.0.insert_flags(Flags::RD_BUF_FULL);
+        let mut flags = self.0.flags.get();
+
+        if new_bytes > 0 {
+            if buf.len() > self.0.pool.get().read_params().high as usize {
+                log::trace!(
+                    "buffer is too large {}, enable read back-pressure",
+                    buf.len()
+                );
+                flags.insert(Flags::RD_READY | Flags::RD_BUF_FULL);
+            } else {
+                flags.insert(Flags::RD_READY);
+            }
+            self.0.flags.set(flags);
         }
+
         self.0.read_buf.set(Some(buf));
         Ok(())
     }
@@ -114,6 +122,7 @@ impl WriteFilter for DefaultFilter {
     #[inline]
     fn write_closed(&self, err: Option<io::Error>) {
         self.0.set_error(err);
+        self.0.handle.take();
         self.0.insert_flags(Flags::IO_CLOSED);
         self.0.dispatch_task.wake();
     }

@@ -144,12 +144,15 @@ impl IoTest {
 
     /// Set read to error
     pub fn read_error(&self, err: io::Error) {
-        self.remote.lock().unwrap().borrow_mut().read = IoState::Err(err);
+        let channel = self.remote.lock().unwrap();
+        channel.borrow_mut().read = IoState::Err(err);
+        channel.borrow().waker.wake();
     }
 
     /// Set write error on remote side
     pub fn write_error(&self, err: io::Error) {
         self.local.lock().unwrap().borrow_mut().write = IoState::Err(err);
+        self.remote.lock().unwrap().borrow().waker.wake();
     }
 
     /// Access read buffer.
@@ -454,7 +457,7 @@ mod tokio {
 }
 
 impl IoStream for IoTest {
-    fn start(self, read: ReadContext, write: WriteContext) -> Box<dyn Handle> {
+    fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(self);
 
         ntex_util::spawn(ReadTask {
@@ -467,7 +470,7 @@ impl IoStream for IoTest {
             st: IoWriteState::Processing(None),
         });
 
-        Box::new(io)
+        Some(Box::new(io))
     }
 }
 
@@ -475,7 +478,7 @@ impl Handle for Rc<IoTest> {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
             if let Some(addr) = self.peer_addr {
-                return Some(Box::new(addr));
+                return Some(Box::new(types::PeerAddr(addr)));
             }
         }
         None
@@ -635,6 +638,7 @@ impl Future for WriteTask {
                                     log::trace!(
                                         "write task is closed with err during flush"
                                     );
+                                    this.state.close(None);
                                     return Poll::Ready(());
                                 }
                                 _ => (),

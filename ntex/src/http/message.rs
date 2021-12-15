@@ -172,10 +172,11 @@ impl RequestHead {
     /// ntex http server, then peer address would be address of this proxy.
     #[inline]
     pub fn peer_addr(&self) -> Option<net::SocketAddr> {
-        self.io
-            .as_ref()
-            .map(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
-            .unwrap_or(None)
+        self.io.as_ref().and_then(|io| {
+            io.query::<types::PeerAddr>()
+                .get()
+                .map(types::PeerAddr::into_inner)
+        })
     }
 }
 

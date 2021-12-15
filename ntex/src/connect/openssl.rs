@@ -1,30 +1,41 @@
 use std::{future::Future, io, pin::Pin, task::Context, task::Poll};
 
-use ntex_openssl::{SslConnector as IoSslConnector, SslFilter};
+use ntex_tls::openssl::{SslConnector as IoSslConnector, SslFilter};
 pub use open_ssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
 
 use crate::io::{DefaultFilter, Io};
 use crate::service::{Service, ServiceFactory};
-use crate::util::Ready;
+use crate::util::{PoolId, Ready};
 
-use super::{Address, Connect, ConnectError, Connector};
+use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
-pub struct OpensslConnector<T> {
-    connector: Connector<T>,
+pub struct Connector<T> {
+    connector: BaseConnector<T>,
     openssl: SslConnector,
 }
 
-impl<T> OpensslConnector<T> {
+impl<T> Connector<T> {
     /// Construct new OpensslConnectService factory
     pub fn new(connector: SslConnector) -> Self {
-        OpensslConnector {
-            connector: Connector::default(),
+        Connector {
+            connector: BaseConnector::default(),
             openssl: connector,
+        }
+    }
+
+    /// Set memory pool.
+    ///
+    /// Use specified memory pool for memory allocations. By default P0
+    /// memory pool is used.
+    pub fn memory_pool(self, id: PoolId) -> Self {
+        Self {
+            connector: self.connector.memory_pool(id),
+            openssl: self.openssl,
         }
     }
 }
 
-impl<T: Address + 'static> OpensslConnector<T> {
+impl<T: Address + 'static> Connector<T> {
     /// Resolve and connect to remote host
     pub fn connect<U>(
         &self,
@@ -65,21 +76,21 @@ impl<T: Address + 'static> OpensslConnector<T> {
     }
 }
 
-impl<T> Clone for OpensslConnector<T> {
+impl<T> Clone for Connector<T> {
     fn clone(&self) -> Self {
-        OpensslConnector {
+        Connector {
             connector: self.connector.clone(),
             openssl: self.openssl.clone(),
         }
     }
 }
 
-impl<T: Address + 'static> ServiceFactory for OpensslConnector<T> {
+impl<T: Address + 'static> ServiceFactory for Connector<T> {
     type Request = Connect<T>;
     type Response = Io<SslFilter<DefaultFilter>>;
     type Error = ConnectError;
     type Config = ();
-    type Service = OpensslConnector<T>;
+    type Service = Connector<T>;
     type InitError = ();
     type Future = Ready<Self::Service, Self::InitError>;
 
@@ -88,7 +99,7 @@ impl<T: Address + 'static> ServiceFactory for OpensslConnector<T> {
     }
 }
 
-impl<T: Address + 'static> Service for OpensslConnector<T> {
+impl<T: Address + 'static> Service for Connector<T> {
     type Request = Connect<T>;
     type Response = Io<SslFilter<DefaultFilter>>;
     type Error = ConnectError;
@@ -116,7 +127,7 @@ mod tests {
         });
 
         let ssl = SslConnector::builder(SslMethod::tls()).unwrap();
-        let factory = OpensslConnector::new(ssl.build()).clone();
+        let factory = Connector::new(ssl.build()).clone();
 
         let srv = factory.new_service(()).await.unwrap();
         let result = srv

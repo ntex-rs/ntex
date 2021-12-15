@@ -194,7 +194,7 @@ impl AcceptEncoding {
         let mut encodings: Vec<_> = raw
             .replace(' ', "")
             .split(',')
-            .map(|l| AcceptEncoding::new(l))
+            .map(AcceptEncoding::new)
             .collect();
         encodings.sort();
 

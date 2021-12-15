@@ -1,15 +1,14 @@
 use std::task::{Context, Poll};
-use std::{error::Error, fmt, future::Future, io, marker::PhantomData, pin::Pin};
+use std::{error::Error, future::Future, marker::PhantomData, pin::Pin};
 
-pub use ntex_openssl::SslFilter;
+pub use ntex_tls::openssl::SslFilter;
 pub use open_ssl::ssl::{self, AlpnError, Ssl, SslAcceptor, SslAcceptorBuilder};
 
-use ntex_openssl::SslAcceptor as IoSslAcceptor;
+use ntex_tls::openssl::SslAcceptor as IoSslAcceptor;
 
-use crate::codec::{AsyncRead, AsyncWrite};
 use crate::io::{Filter, FilterFactory, Io};
 use crate::service::{Service, ServiceFactory};
-use crate::time::{sleep, Millis, Sleep};
+use crate::time::Millis;
 use crate::util::{counter::Counter, counter::CounterGuard, Ready};
 
 use super::MAX_SSL_ACCEPT_COUNTER;
@@ -103,7 +102,6 @@ pin_project_lite::pin_project! {
     pub struct AcceptorServiceResponse<F>
     where
         F: Filter,
-        F: 'static,
     {
         #[pin]
         fut: <IoSslAcceptor as FilterFactory<F>>::Future,
@@ -111,7 +109,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<F: Filter + 'static> Future for AcceptorServiceResponse<F> {
+impl<F: Filter> Future for AcceptorServiceResponse<F> {
     type Output = Result<Io<SslFilter<F>>, Box<dyn Error>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

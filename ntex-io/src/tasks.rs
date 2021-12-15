@@ -43,13 +43,12 @@ impl ReadContext {
             Ok(())
         } else {
             let mut flags = self.0 .0.flags.get();
-
-            // notify dispatcher
             if new_bytes > 0 {
                 flags.insert(Flags::RD_READY);
                 self.0 .0.flags.set(flags);
                 self.0 .0.dispatch_task.wake();
             }
+
             self.0 .0.filter.get().release_read_buf(buf, new_bytes)?;
 
             if flags.contains(Flags::IO_FILTERS) {
@@ -97,8 +96,8 @@ impl WriteContext {
             }
         } else {
             // if write buffer is smaller than high watermark value, turn off back-pressure
-            if buf.len() < pool.write_params_high() << 1
-                && flags.contains(Flags::WR_BACKPRESSURE)
+            if flags.contains(Flags::WR_BACKPRESSURE)
+                && buf.len() < pool.write_params_high() << 1
             {
                 flags.remove(Flags::WR_BACKPRESSURE);
                 self.0 .0.flags.set(flags);

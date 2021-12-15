@@ -12,8 +12,8 @@ mod uri;
 #[cfg(feature = "openssl")]
 pub mod openssl;
 
-//#[cfg(feature = "rustls")]
-//pub mod rustls;
+#[cfg(feature = "rustls")]
+pub mod rustls;
 
 pub use self::error::ConnectError;
 pub use self::message::{Address, Connect};

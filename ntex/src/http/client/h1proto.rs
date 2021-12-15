@@ -1,4 +1,4 @@
-use std::{io, io::Write, pin::Pin, task::Context, task::Poll, time::Instant};
+use std::{io::Write, pin::Pin, task::Context, task::Poll, time::Instant};
 
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::error::PayloadError;
@@ -7,8 +7,8 @@ use crate::http::header::{HeaderMap, HeaderValue, HOST};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::{Payload, PayloadStream};
 use crate::io::IoBoxed;
-use crate::util::{next, poll_fn, send, BufMut, Bytes, BytesMut};
-use crate::{Sink, Stream};
+use crate::util::{poll_fn, BufMut, Bytes, BytesMut};
+use crate::Stream;
 
 use super::connection::{Connection, ConnectionType};
 use super::error::{ConnectError, SendRequestError};
@@ -51,15 +51,17 @@ where
         }
     }
 
-    // let io = H1Connection {
-    //     created,
-    //     pool,
-    //     io: Some(io),
-    // };
+    log::trace!(
+        "sending http1 request {:#?} body size: {:?}",
+        head,
+        body.size()
+    );
 
     // send request
     let codec = h1::ClientCodec::default();
     io.send((head, body.size()).into(), &codec).await?;
+
+    log::trace!("http1 request has been sent");
 
     // send request body
     match body.size() {
@@ -69,8 +71,15 @@ where
         }
     };
 
+    log::trace!("reading http1 response");
+
     // read response and init read body
     let head = if let Some(result) = io.next(&codec).await? {
+        log::trace!(
+            "http1 response is received, type: {:?}, response: {:?}",
+            codec.message_type(),
+            result
+        );
         result
     } else {
         return Err(SendRequestError::from(ConnectError::Disconnected));
@@ -120,7 +129,7 @@ where
         match poll_fn(|cx| body.poll_next_chunk(cx)).await {
             Some(result) => {
                 if !wrt.encode(h1::Message::Chunk(Some(result?)), codec)? {
-                    wrt.flush(false).await?;
+                    wrt.write_ready(false).await?;
                 }
             }
             None => {
@@ -129,7 +138,7 @@ where
             }
         }
     }
-    wrt.flush(true).await?;
+    wrt.write_ready(true).await?;
 
     Ok(())
 }

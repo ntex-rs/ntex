@@ -4,16 +4,15 @@ use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc
 
 use h2::client::{Builder, Connection as H2Connection, SendRequest};
 use http::uri::Authority;
+use ntex_tls::types::HttpProtocol;
 
 use crate::channel::pool;
-use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
-use crate::http::Protocol;
 use crate::io::IoBoxed;
 use crate::rt::spawn;
 use crate::service::Service;
 use crate::task::LocalWaker;
-use crate::time::{now, sleep, Millis, Sleep};
-use crate::util::{poll_fn, Bytes, HashMap};
+use crate::time::{now, Millis};
+use crate::util::{Bytes, HashMap};
 
 use super::connection::{Connection, ConnectionType};
 use super::error::ConnectError;
@@ -236,7 +235,9 @@ impl Inner {
                     || (now - conn.created) > self.conn_lifetime
                 {
                     if let ConnectionType::H1(io) = conn.io {
-                        CloseConnection::spawn(io, self.disconnect_timeout);
+                        spawn(async move {
+                            let _ = io.shutdown().await;
+                        });
                     }
                 } else {
                     let io = conn.io;
@@ -280,7 +281,9 @@ impl Inner {
     fn release_close(&mut self, io: ConnectionType) {
         self.acquired -= 1;
         if let ConnectionType::H1(io) = io {
-            CloseConnection::spawn(io, self.disconnect_timeout);
+            spawn(async move {
+                let _ = io.shutdown().await;
+            });
         }
         self.check_availibility();
     }
@@ -351,20 +354,6 @@ where
     }
 }
 
-struct CloseConnection {
-    io: IoBoxed,
-    timeout: Option<Sleep>,
-    shutdown: bool,
-}
-
-impl CloseConnection {
-    fn spawn(io: IoBoxed, timeout: Millis) {
-        spawn(async move {
-            io.shutdown().await;
-        });
-    }
-}
-
 struct OpenConnection<F> {
     fut: F,
     h2: Option<
@@ -372,7 +361,7 @@ struct OpenConnection<F> {
             Box<
                 dyn Future<
                     Output = Result<
-                        (SendRequest<Bytes>, H2Connection<Bytes>),
+                        (SendRequest<Bytes>, H2Connection<IoBoxed, Bytes>),
                         h2::Error,
                     >,
                 >,
@@ -381,6 +370,7 @@ struct OpenConnection<F> {
     >,
     tx: Option<Waiter>,
     guard: Option<OpenGuard>,
+    disconnect_timeout: Millis,
 }
 
 impl<F> OpenConnection<F>
@@ -388,8 +378,11 @@ where
     F: Future<Output = Result<IoBoxed, ConnectError>> + Unpin + 'static,
 {
     fn spawn(key: Key, tx: Waiter, inner: Rc<RefCell<Inner>>, fut: F) {
+        let disconnect_timeout = inner.borrow().disconnect_timeout;
+
         spawn(OpenConnection {
             fut,
+            disconnect_timeout,
             h2: None,
             tx: Some(tx),
             guard: Some(OpenGuard {
@@ -424,7 +417,7 @@ where
                         conn.release()
                     }
                     spawn(async move {
-                        // let _ = connection.await;
+                        let _ = connection.await;
                     });
                     Poll::Ready(())
                 }
@@ -448,24 +441,27 @@ where
                 Poll::Ready(())
             }
             Poll::Ready(Ok(io)) => {
-                trace!("Connection is established");
-                // handle http1 proto
-                //if proto == Protocol::Http1 {
-                let conn = Connection::new(
-                    ConnectionType::H1(io),
-                    now(),
-                    Some(this.guard.take().unwrap().consume()),
-                );
-                if let Err(Ok(conn)) = this.tx.take().unwrap().send(Ok(conn)) {
-                    // waiter is gone, return connection to pool
-                    conn.release()
+                io.set_disconnect_timeout(this.disconnect_timeout);
+
+                // handle http2 proto
+                if io.query::<HttpProtocol>().get() == Some(HttpProtocol::Http2) {
+                    log::trace!("Connection is established, start http2 handshake");
+                    // init http2 handshake
+                    this.h2 = Some(Box::pin(Builder::new().handshake(io)));
+                    self.poll(cx)
+                } else {
+                    log::trace!("Connection is established, init http1 connection");
+                    let conn = Connection::new(
+                        ConnectionType::H1(io),
+                        now(),
+                        Some(this.guard.take().unwrap().consume()),
+                    );
+                    if let Err(Ok(conn)) = this.tx.take().unwrap().send(Ok(conn)) {
+                        // waiter is gone, return connection to pool
+                        conn.release()
+                    }
+                    Poll::Ready(())
                 }
-                Poll::Ready(())
-                // } else {
-                // init http2 handshake
-                // this.h2 = Some(Box::pin(Builder::new().handshake(io)));
-                //    self.poll(cx)
-                //}
             }
             Poll::Pending => Poll::Pending,
         }
@@ -528,8 +524,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        http::client::Connection, http::Uri, service::fn_service, testing::Io,
-        util::lazy,
+        http::Uri, io as nio, service::fn_service, testing::Io, time::sleep, util::lazy,
     };
 
     #[crate::rt_test]
@@ -541,7 +536,7 @@ mod tests {
             fn_service(move |req| {
                 let (client, server) = Io::create();
                 store2.borrow_mut().push((req, server));
-                Box::pin(async move { Ok((client, Protocol::Http1)) })
+                Box::pin(async move { Ok(nio::Io::new(client).into_boxed()) })
             }),
             Duration::from_secs(10),
             Duration::from_secs(10),
@@ -568,7 +563,7 @@ mod tests {
         let conn = pool.call(req.clone()).await.unwrap();
         assert_eq!(store.borrow().len(), 1);
         assert!(format!("{:?}", conn).contains("H1Connection"));
-        assert_eq!(conn.protocol(), Protocol::Http1);
+        assert_eq!(conn.protocol(), HttpProtocol::Http1);
         assert_eq!(pool.1.borrow().acquired, 1);
 
         // pool is full, waiting

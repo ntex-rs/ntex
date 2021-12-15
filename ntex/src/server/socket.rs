@@ -1,7 +1,6 @@
 use std::{convert::TryFrom, fmt, io, net};
 
-use crate::codec::{AsyncRead, AsyncWrite};
-use crate::io::{Io, IoStream};
+use crate::io::Io;
 use crate::rt::net::TcpStream;
 
 pub(crate) enum Listener {
@@ -164,8 +163,8 @@ impl TryFrom<Stream> for Io {
                 use crate::rt::net::UnixStream;
                 use std::os::unix::io::{FromRawFd, IntoRawFd};
                 let fd = IntoRawFd::into_raw_fd(stream);
-                let ud = UnixStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) });
-                todo!()
+                let io = UnixStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) })?;
+                Ok(Io::new(io))
             }
         }
 

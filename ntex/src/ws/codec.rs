@@ -62,6 +62,7 @@ bitflags::bitflags! {
         const SERVER         = 0b0000_0001;
         const R_CONTINUATION = 0b0000_0010;
         const W_CONTINUATION = 0b0000_0100;
+        const CLOSED         = 0b0000_1000;
     }
 }
 
@@ -88,6 +89,11 @@ impl Codec {
     pub fn client_mode(self) -> Self {
         self.remove_flags(Flags::SERVER);
         self
+    }
+
+    /// Check if codec encoded `Close` message
+    pub fn is_closed(&self) -> bool {
+        self.flags.get().contains(Flags::CLOSED)
     }
 
     fn insert_flags(&self, f: Flags) {
@@ -143,11 +149,14 @@ impl Encoder for Codec {
                 true,
                 !self.flags.get().contains(Flags::SERVER),
             ),
-            Message::Close(reason) => Parser::write_close(
-                dst,
-                reason,
-                !self.flags.get().contains(Flags::SERVER),
-            ),
+            Message::Close(reason) => {
+                self.insert_flags(Flags::CLOSED);
+                Parser::write_close(
+                    dst,
+                    reason,
+                    !self.flags.get().contains(Flags::SERVER),
+                )
+            }
             Message::Continuation(cont) => match cont {
                 Item::FirstText(data) => {
                     if self.flags.get().contains(Flags::W_CONTINUATION) {

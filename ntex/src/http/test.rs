@@ -4,9 +4,7 @@ use std::{convert::TryFrom, io, net, str::FromStr, sync::mpsc, thread};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
-use crate::codec::{AsyncRead, AsyncWrite, Framed};
-use crate::io::IoBoxed;
-use crate::rt::{net::TcpStream, System};
+use crate::rt::System;
 use crate::server::{Server, StreamServiceFactory};
 use crate::{time::Millis, time::Seconds, util::Bytes};
 
@@ -132,6 +130,7 @@ impl TestRequest {
         self
     }
 
+    /// Take test request
     pub fn take(&mut self) -> TestRequest {
         TestRequest(self.0.take())
     }
@@ -246,18 +245,18 @@ pub fn server<F: StreamServiceFactory>(factory: F) -> TestServer {
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
                     .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
                 Connector::default()
-                    .timeout(Millis(30_000))
+                    .timeout(Millis(5_000))
                     .openssl(builder.build())
                     .finish()
             }
             #[cfg(not(feature = "openssl"))]
             {
-                Connector::default().timeout(Millis(30_000)).finish()
+                Connector::default().timeout(Millis(5_000)).finish()
             }
         };
 
         Client::build()
-            .timeout(Seconds(30))
+            .timeout(Seconds(5))
             .connector(connector)
             .finish()
     };

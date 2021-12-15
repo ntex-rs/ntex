@@ -1,17 +1,15 @@
 use std::{
-    cell::RefCell, error::Error, fmt, future::Future, marker, net, pin::Pin, rc::Rc,
-    task,
+    cell::RefCell, error::Error, fmt, future::Future, marker, pin::Pin, rc::Rc, task,
 };
 
 use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, OnRequest, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
-use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
-use crate::io::{types, DefaultFilter, Filter, Io, IoRef};
-use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
-use crate::{time::Millis, util::Pool};
+use crate::io::{types, Filter, Io};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory};
+use crate::time::Millis;
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;
@@ -60,9 +58,11 @@ mod openssl {
 
     use crate::server::openssl::{Acceptor, SslAcceptor, SslFilter};
     use crate::server::SslError;
+    use crate::service::pipeline_factory;
 
-    impl<S, B, X, U> H1Service<SslFilter<DefaultFilter>, S, B, X, U>
+    impl<F, S, B, X, U> H1Service<SslFilter<F>, S, B, X, U>
     where
+        F: Filter,
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
@@ -74,13 +74,12 @@ mod openssl {
         X::InitError: fmt::Debug,
         X::Future: 'static,
         U: ServiceFactory<
-            Config = (),
-            Request = (Request, Io<SslFilter<DefaultFilter>>, Codec),
-            Response = (),
-        >,
-        U::Error: fmt::Display + Error + 'static,
+                Config = (),
+                Request = (Request, Io<SslFilter<F>>, Codec),
+                Response = (),
+            > + 'static,
+        U::Error: fmt::Display + Error,
         U::InitError: fmt::Debug,
-        U::Future: 'static,
     {
         /// Create openssl based service
         pub fn openssl(
@@ -88,7 +87,7 @@ mod openssl {
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = Io,
+            Request = Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -104,59 +103,57 @@ mod openssl {
     }
 }
 
-// #[cfg(feature = "rustls")]
-// mod rustls {
-//     use super::*;
-//     use crate::server::rustls::{Acceptor, ServerConfig, TlsStream};
-//     use crate::server::SslError;
-//     use std::fmt;
+#[cfg(feature = "rustls")]
+mod rustls {
+    use std::fmt;
 
-//     impl<S, B, X, U> H1Service<TlsStream<TcpStream>, S, B, X, U>
-//     where
-//         S: ServiceFactory<Config = (), Request = Request>,
-//         S::Error: ResponseError + 'static,
-//         S::InitError: fmt::Debug,
-//         S::Response: Into<Response<B>>,
-//         S::Future: 'static,
-//         B: MessageBody,
-//         X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-//         X::Error: ResponseError + 'static,
-//         X::InitError: fmt::Debug,
-//         X::Future: 'static,
-//         U: ServiceFactory<
-//             Config = (),
-//             Request = (Request, TlsStream<TcpStream>, IoState, Codec),
-//             Response = (),
-//         >,
-//         U::Error: fmt::Display + Error + 'static,
-//         U::InitError: fmt::Debug,
-//         U::Future: 'static,
-//     {
-//         /// Create rustls based service
-//         pub fn rustls(
-//             self,
-//             config: ServerConfig,
-//         ) -> impl ServiceFactory<
-//             Config = (),
-//             Request = TcpStream,
-//             Response = (),
-//             Error = SslError<DispatchError>,
-//             InitError = (),
-//         > {
-//             pipeline_factory(
-//                 Acceptor::new(config)
-//                     .timeout(self.handshake_timeout)
-//                     .map_err(SslError::Ssl)
-//                     .map_init_err(|_| panic!()),
-//             )
-//             .and_then(|io: TlsStream<TcpStream>| async move {
-//                 let peer_addr = io.get_ref().0.peer_addr().ok();
-//                 Ok((io, peer_addr))
-//             })
-//             .and_then(self.map_err(SslError::Service))
-//         }
-//     }
-// }
+    use super::*;
+    use crate::server::rustls::{Acceptor, ServerConfig, TlsFilter};
+    use crate::server::SslError;
+    use crate::service::pipeline_factory;
+
+    impl<F, S, B, X, U> H1Service<TlsFilter<F>, S, B, X, U>
+    where
+        F: Filter,
+        S: ServiceFactory<Config = (), Request = Request>,
+        S::Error: ResponseError + 'static,
+        S::InitError: fmt::Debug,
+        S::Response: Into<Response<B>>,
+        S::Future: 'static,
+        B: MessageBody,
+        X: ServiceFactory<Config = (), Request = Request, Response = Request>,
+        X::Error: ResponseError + 'static,
+        X::InitError: fmt::Debug,
+        X::Future: 'static,
+        U: ServiceFactory<
+                Config = (),
+                Request = (Request, Io<TlsFilter<F>>, Codec),
+                Response = (),
+            > + 'static,
+        U::Error: fmt::Display + Error,
+        U::InitError: fmt::Debug,
+    {
+        /// Create rustls based service
+        pub fn rustls(
+            self,
+            config: ServerConfig,
+        ) -> impl ServiceFactory<
+            Config = (),
+            Request = Io<F>,
+            Response = (),
+            Error = SslError<DispatchError>,
+            InitError = (),
+        > {
+            pipeline_factory(
+                Acceptor::new(config)
+                    .timeout(self.handshake_timeout)
+                    .map_err(SslError::Ssl)
+                    .map_init_err(|_| panic!()),
+            )
+            .and_then(self.map_err(SslError::Service))
+        }
+    }
+}
 
 impl<F, S, B, X, U> H1Service<F, S, B, X, U>
 where
@@ -226,10 +223,10 @@ where
     X::Error: ResponseError + 'static,
     X::InitError: fmt::Debug,
     X::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, Io<F>, Codec), Response = ()>,
-    U::Error: fmt::Display + Error + 'static,
+    U: ServiceFactory<Config = (), Request = (Request, Io<F>, Codec), Response = ()>
+        + 'static,
+    U::Error: fmt::Display + Error,
     U::InitError: fmt::Debug,
-    U::Future: 'static,
 {
     type Config = ();
     type Request = Io<F>;
@@ -265,10 +262,8 @@ where
             let config = Rc::new(DispatcherConfig::new(
                 cfg, service, expect, upgrade, on_request,
             ));
-            let pool = config.pool.into();
 
             Ok(H1ServiceHandler {
-                pool,
                 config,
                 _t: marker::PhantomData,
             })
@@ -278,7 +273,6 @@ where
 
 /// `Service` implementation for HTTP1 transport
 pub struct H1ServiceHandler<F, S: Service, B, X: Service, U: Service> {
-    pool: Pool,
     config: Rc<DispatcherConfig<S, X, U>>,
     _t: marker::PhantomData<(F, B)>,
 }
@@ -292,8 +286,8 @@ where
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, Io<F>, Codec), Response = ()>,
-    U::Error: fmt::Display + Error + 'static,
+    U: Service<Request = (Request, Io<F>, Codec), Response = ()> + 'static,
+    U::Error: fmt::Display + Error,
 {
     type Request = Io<F>;
     type Response = ();
@@ -336,8 +330,6 @@ where
         } else {
             ready
         };
-
-        let ready = self.pool.poll_ready(cx).is_ready() && ready;
 
         if ready {
             task::Poll::Ready(Ok(()))

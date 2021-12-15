@@ -1,15 +1,14 @@
-use std::{fmt, future::Future, pin::Pin, time};
+use std::{fmt, time};
 
 use h2::client::SendRequest;
+use ntex_tls::types::HttpProtocol;
 
-use crate::codec::{AsyncRead, AsyncWrite, Framed};
 use crate::http::body::MessageBody;
 use crate::http::h1::ClientCodec;
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
-use crate::http::Protocol;
 use crate::io::IoBoxed;
-use crate::util::{Bytes, Either, Ready};
+use crate::util::Bytes;
 
 use super::error::SendRequestError;
 use super::pool::Acquired;
@@ -65,11 +64,11 @@ impl Connection {
         (self.io.unwrap(), self.created)
     }
 
-    pub fn protocol(&self) -> Protocol {
+    pub fn protocol(&self) -> HttpProtocol {
         match self.io {
-            Some(ConnectionType::H1(_)) => Protocol::Http1,
-            Some(ConnectionType::H2(_)) => Protocol::Http2,
-            None => Protocol::Http1,
+            Some(ConnectionType::H1(_)) => HttpProtocol::Http1,
+            Some(ConnectionType::H2(_)) => HttpProtocol::Http2,
+            None => HttpProtocol::Unknown,
         }
     }
 

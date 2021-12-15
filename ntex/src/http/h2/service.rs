@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{future::Future, marker::PhantomData, net, pin::Pin, rc::Rc};
+use std::{future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use h2::server::{self, Handshake};
 use log::error;
@@ -7,14 +7,10 @@ use log::error;
 use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
-use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::io::{types, Filter, Io, IoRef};
-use crate::service::{
-    fn_factory, fn_service, pipeline_factory, IntoServiceFactory, Service,
-    ServiceFactory,
-};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::time::Millis;
 use crate::util::Bytes;
 
@@ -54,13 +50,14 @@ where
 
 #[cfg(feature = "openssl")]
 mod openssl {
-    use crate::server::openssl::{Acceptor, SslAcceptor, SslStream};
+    use crate::io::DefaultFilter;
+    use crate::server::openssl::{Acceptor, SslAcceptor, SslFilter};
     use crate::server::SslError;
+    use crate::service::pipeline_factory;
 
     use super::*;
-    use crate::service::{fn_factory, fn_service};
 
-    impl<S, B> H2Service<SslStream<TcpStream>, S, B>
+    impl<S, B> H2Service<SslFilter<DefaultFilter>, S, B>
     where
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: ResponseError + 'static,
@@ -75,25 +72,17 @@ mod openssl {
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = TcpStream,
+            Request = Io,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
         > {
             pipeline_factory(
                 Acceptor::new(acceptor)
-                    .timeout(self.handshake_timeout)
+                    .timeout(self.cfg.0.ssl_handshake_timeout)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(fn_factory(|| async {
-                Ok::<_, S::InitError>(fn_service(
-                    |io: SslStream<TcpStream>| async move {
-                        let peer_addr = io.get_ref().peer_addr().ok();
-                        Ok((io, peer_addr))
-                    },
-                ))
-            }))
             .and_then(self.map_err(SslError::Service))
         }
     }
@@ -102,11 +91,13 @@ mod openssl {
 #[cfg(feature = "rustls")]
 mod rustls {
     use super::*;
-    use crate::server::rustls::{Acceptor, ServerConfig, TlsStream};
+    use crate::server::rustls::{Acceptor, ServerConfig, TlsFilter};
     use crate::server::SslError;
+    use crate::service::pipeline_factory;
 
-    impl<S, B> H2Service<TlsStream<TcpStream>, S, B>
+    impl<F, S, B> H2Service<TlsFilter<F>, S, B>
     where
+        F: Filter,
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: ResponseError + 'static,
         S::Response: Into<Response<B>> + 'static,
@@ -117,31 +108,20 @@ mod rustls {
         /// Create openssl based service
         pub fn rustls(
             self,
-            mut config: ServerConfig,
+            config: ServerConfig,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = TcpStream,
+            Request = Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
         > {
-            let protos = vec!["h2".to_string().into()];
-            config.alpn_protocols = protos;
-
             pipeline_factory(
                 Acceptor::new(config)
                     .timeout(self.handshake_timeout)
                     .map_err(SslError::Ssl)
                     .map_init_err(|_| panic!()),
             )
-            .and_then(fn_factory(|| async {
-                Ok::<_, S::InitError>(fn_service(
-                    |io: TlsStream<TcpStream>| async move {
-                        let peer_addr = io.get_ref().0.peer_addr().ok();
-                        Ok((io, peer_addr))
-                    },
-                ))
-            }))
             .and_then(self.map_err(SslError::Service))
         }
     }
@@ -219,6 +199,7 @@ where
             "New http2 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
         );
+        io.set_disconnect_timeout(self.config.client_disconnect.into());
 
         H2ServiceHandlerResponse {
             state: State::Handshake(

@@ -473,7 +473,7 @@ where
     ///             web::App::new()
     ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))
     ///                 .finish()
-    ///         ).tcp()
+    ///         )
     ///     )?
     ///     .run()
     ///     .await
@@ -503,7 +503,7 @@ where
     ///             web::App::new()
     ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))
     ///                 .with_config(web::dev::AppConfig::default())
-    ///         ).tcp()
+    ///         )
     ///     )?
     ///     .run()
     ///     .await

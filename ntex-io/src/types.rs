@@ -1,6 +1,19 @@
 use std::{any, fmt, marker::PhantomData, net::SocketAddr};
 
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct PeerAddr(pub SocketAddr);
+
+impl PeerAddr {
+    pub fn into_inner(self) -> SocketAddr {
+        self.0
+    }
+}
+
+impl From<SocketAddr> for PeerAddr {
+    fn from(addr: SocketAddr) -> Self {
+        Self(addr)
+    }
+}
 
 impl fmt::Debug for PeerAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -28,7 +41,14 @@ impl<T: any::Any> QueryItem<T> {
         }
     }
 
-    pub fn get(&self) -> Option<&T> {
+    pub fn get(&self) -> Option<T>
+    where
+        T: Copy,
+    {
+        self.item.as_ref().and_then(|v| v.downcast_ref().copied())
+    }
+
+    pub fn get_ref(&self) -> Option<&T> {
         if let Some(ref item) = self.item {
             item.downcast_ref()
         } else {

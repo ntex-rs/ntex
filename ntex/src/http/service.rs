@@ -1,26 +1,21 @@
-use std::{
-    cell, error, fmt, future::Future, marker, net, pin::Pin, rc::Rc, task::Context,
-    task::Poll,
-};
+use std::task::{Context, Poll};
+use std::{cell, error, fmt, future, marker, pin::Pin, rc::Rc};
 
 use h2::server::{self, Handshake};
+use ntex_tls::types::HttpProtocol;
 
-use crate::codec::{AsyncRead, AsyncWrite};
-use crate::io::{types, DefaultFilter, Filter, Io, IoRef};
-use crate::rt::net::TcpStream;
-use crate::service::{pipeline_factory, IntoServiceFactory, Service, ServiceFactory};
+use crate::io::{types, Filter, Io, IoRef};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
-use crate::util::{Bytes, Pool, PoolId};
+use crate::util::Bytes;
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
 use super::config::{DispatcherConfig, KeepAlive, OnRequest, ServiceConfig};
 use super::error::{DispatchError, ResponseError};
-use super::helpers::DataFactory;
 use super::request::Request;
 use super::response::Response;
-//use super::{h1, h2::Dispatcher, Protocol};
-use super::{h1, Protocol};
+use super::{h1, h2::Dispatcher};
 
 /// `ServiceFactory` HTTP1.1/HTTP2 transport implementation
 pub struct HttpService<F, S, B, X = h1::ExpectHandler, U = h1::UpgradeHandler<F>> {
@@ -66,7 +61,6 @@ where
             Millis(5_000),
             Seconds::ZERO,
             Millis(5_000),
-            PoolId::P1,
         );
 
         HttpService {
@@ -165,9 +159,11 @@ mod openssl {
     use super::*;
     use crate::server::openssl::{Acceptor, SslAcceptor, SslFilter};
     use crate::server::SslError;
+    use crate::service::pipeline_factory;
 
-    impl<S, B, X, U> HttpService<SslFilter<DefaultFilter>, S, B, X, U>
+    impl<F, S, B, X, U> HttpService<SslFilter<F>, S, B, X, U>
     where
+        F: Filter,
         S: ServiceFactory<Config = (), Request = Request>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
@@ -181,14 +177,12 @@ mod openssl {
         X::Future: 'static,
         <X::Service as Service>::Future: 'static,
         U: ServiceFactory<
-            Config = (),
-            Request = (Request, Io<SslFilter<DefaultFilter>>, h1::Codec),
-            Response = (),
-        >,
-        U::Error: fmt::Display + error::Error + 'static,
+                Config = (),
+                Request = (Request, Io<SslFilter<F>>, h1::Codec),
+                Response = (),
+            > + 'static,
+        U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
-        U::Future: 'static,
-        <U::Service as Service>::Future: 'static,
     {
         /// Create openssl based service
         pub fn openssl(
@@ -196,7 +190,7 @@ mod openssl {
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = Io<DefaultFilter>,
+            Request = Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -215,10 +209,11 @@ mod openssl {
 #[cfg(feature = "rustls")]
 mod rustls {
     use super::*;
-    use crate::server::rustls::{Acceptor, ServerConfig, TlsStream};
+    use crate::server::rustls::{Acceptor, ServerConfig, TlsFilter};
     use crate::server::SslError;
+    use crate::service::pipeline_factory;
 
-    impl<F, S, B, X, U> HttpService<F, S, B, X, U>
+    impl<F, S, B, X, U> HttpService<TlsFilter<F>, S, B, X, U>
     where
         F: Filter,
         S: ServiceFactory<Config = (), Request = Request>,
@@ -234,14 +229,12 @@ mod rustls {
         X::Future: 'static,
         <X::Service as Service>::Future: 'static,
         U: ServiceFactory<
-            Config = (),
-            Request = (Request, Io<F>, h1::Codec),
-            Response = (),
-        >,
-        U::Error: fmt::Display + error::Error + 'static,
+                Config = (),
+                Request = (Request, Io<TlsFilter<F>>, h1::Codec),
+                Response = (),
+            > + 'static,
+        U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
-        U::Future: 'static,
-        <U::Service as Service>::Future: 'static,
     {
         /// Create openssl based service
         pub fn rustls(
@@ -251,37 +244,16 @@ mod rustls {
             Config = (),
             Request = Io<F>,
             Response = (),
-            //Error = SslError<DispatchError>,
-            Error = DispatchError,
+            Error = SslError<DispatchError>,
             InitError = (),
         > {
-            self
-            // let protos = vec!["h2".to_string().into(), "http/1.1".to_string().into()];
-            // config.alpn_protocols = protos;
-
-            // pipeline_factory(
-            //     Acceptor::new(config)
-            //         .timeout(self.cfg.0.ssl_handshake_timeout)
-            //         .map_err(SslError::Ssl)
-            //         .map_init_err(|_| panic!()),
-            // )
-            // .and_then(|io: TlsStream<TcpStream>| async move {
-            //     let proto = io
-            //         .get_ref()
-            //         .1
-            //         .alpn_protocol()
-            //         .and_then(|protos| {
-            //             if protos.windows(2).any(|window| window == b"h2") {
-            //                 Some(Protocol::Http2)
-            //             } else {
-            //                 None
-            //             }
-            //         })
-            //         .unwrap_or(Protocol::Http1);
-            //     let peer_addr = io.get_ref().0.peer_addr().ok();
-            //     Ok((io, proto, peer_addr))
-            // })
-            // .and_then(self.map_err(SslError::Service))
+            pipeline_factory(
+                Acceptor::new(config)
+                    .timeout(self.cfg.0.ssl_handshake_timeout)
+                    .map_err(SslError::Ssl)
+                    .map_init_err(|_| panic!()),
+            )
+            .and_then(self.map_err(SslError::Service))
         }
     }
 }
@@ -301,11 +273,10 @@ where
     X::InitError: fmt::Debug,
     X::Future: 'static,
     <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, Io<F>, h1::Codec), Response = ()>,
-    U::Error: fmt::Display + error::Error + 'static,
+    U: ServiceFactory<Config = (), Request = (Request, Io<F>, h1::Codec), Response = ()>
+        + 'static,
+    U::Error: fmt::Display + error::Error,
     U::InitError: fmt::Debug,
-    U::Future: 'static,
-    <U::Service as Service>::Future: 'static,
 {
     type Config = ();
     type Request = Io<F>;
@@ -313,7 +284,8 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = HttpServiceHandler<F, S::Service, B, X::Service, U::Service>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future =
+        Pin<Box<dyn future::Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         let fut = self.srv.new_service(());
@@ -342,10 +314,8 @@ where
 
             let config =
                 DispatcherConfig::new(cfg, service, expect, upgrade, on_request);
-            let pool = config.pool.into();
 
             Ok(HttpServiceHandler {
-                pool,
                 config: Rc::new(config),
                 _t: marker::PhantomData,
             })
@@ -355,7 +325,6 @@ where
 
 /// `Service` implementation for http transport
 pub struct HttpServiceHandler<F, S: Service, B, X: Service, U: Service> {
-    pool: Pool,
     config: Rc<DispatcherConfig<S, X, U>>,
     _t: marker::PhantomData<(F, B, X)>,
 }
@@ -370,8 +339,8 @@ where
     B: MessageBody + 'static,
     X: Service<Request = Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, Io<F>, h1::Codec), Response = ()>,
-    U::Error: fmt::Display + error::Error + 'static,
+    U: Service<Request = (Request, Io<F>, h1::Codec), Response = ()> + 'static,
+    U::Error: fmt::Display + error::Error,
 {
     type Request = Io<F>;
     type Response = ();
@@ -412,8 +381,6 @@ where
             ready
         };
 
-        let ready = self.pool.poll_ready(cx).is_ready() && ready;
-
         if ready {
             Poll::Ready(Ok(()))
         } else {
@@ -443,24 +410,23 @@ where
             io.query::<types::PeerAddr>().get()
         );
 
-        //match proto {
-        //Protocol::Http2 => todo!(),
-        // HttpServiceHandlerResponse {
-        //     state: ResponseState::H2Handshake {
-        //         data: Some((
-        //             server::Builder::new().handshake(io),
-        //             self.config.clone(),
-        //             on_connect,
-        //             peer_addr,
-        //         )),
-        //     },
-        // },
-        // Protocol::Http1 =>
-        HttpServiceHandlerResponse {
-            state: ResponseState::H1 {
-                fut: h1::Dispatcher::new(io, self.config.clone()),
-            },
-            // },
+        if io.query::<HttpProtocol>().get() == Some(HttpProtocol::Http2) {
+            io.set_disconnect_timeout(self.config.client_disconnect.into());
+            HttpServiceHandlerResponse {
+                state: ResponseState::H2Handshake {
+                    data: Some((
+                        io.get_ref(),
+                        server::Builder::new().handshake(io),
+                        self.config.clone(),
+                    )),
+                },
+            }
+        } else {
+            HttpServiceHandlerResponse {
+                state: ResponseState::H1 {
+                    fut: h1::Dispatcher::new(io, self.config.clone()),
+                },
+            }
         }
     }
 }
@@ -483,7 +449,7 @@ pin_project_lite::pin_project! {
         U: Service<Request = (Request, Io<F>, h1::Codec), Response = ()>,
         U::Error: fmt::Display,
         U::Error: error::Error,
-        U::Error: 'static,
+        U: 'static,
     {
         #[pin]
         state: ResponseState<F, S, B, X, U>,
@@ -506,22 +472,21 @@ pin_project_lite::pin_project! {
         U: Service<Request = (Request, Io<F>, h1::Codec), Response = ()>,
         U::Error: fmt::Display,
         U::Error: error::Error,
-        U::Error: 'static,
+        U: 'static,
     {
         H1 { #[pin] fut: h1::Dispatcher<F, S, B, X, U> },
-        // H2 { fut: Dispatcher<F, S, B, X, U> },
-        // H2Handshake { data:
-        //     Option<(
-        //         Handshake<T, Bytes>,
-        //         Rc<DispatcherConfig<S, X, U>>,
-        //         Option<Box<dyn DataFactory>>,
-        //         Option<net::SocketAddr>,
-        //     )>,
-        // },
+        H2 { fut: Dispatcher<F, S, B, X, U> },
+        H2Handshake { data:
+                      Option<(
+                          IoRef,
+                Handshake<Io<F>, Bytes>,
+                Rc<DispatcherConfig<S, X, U>>,
+            )>,
+        },
     }
 }
 
-impl<F, S, B, X, U> Future for HttpServiceHandlerResponse<F, S, B, X, U>
+impl<F, S, B, X, U> future::Future for HttpServiceHandlerResponse<F, S, B, X, U>
 where
     F: Filter + 'static,
     S: Service<Request = Request>,
@@ -531,8 +496,8 @@ where
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, Io<F>, h1::Codec), Response = ()>,
-    U::Error: fmt::Display + error::Error + 'static,
+    U: Service<Request = (Request, Io<F>, h1::Codec), Response = ()> + 'static,
+    U::Error: fmt::Display + error::Error,
 {
     type Output = Result<(), DispatchError>;
 
@@ -541,26 +506,26 @@ where
 
         match this.state.project() {
             StateProject::H1 { fut } => fut.poll(cx),
-            // StateProject::H2 { ref mut fut } => Pin::new(fut).poll(cx),
-            // StateProject::H2Handshake { data } => {
-            //     let conn = if let Some(ref mut item) = data {
-            //         match Pin::new(&mut item.0).poll(cx) {
-            //             Poll::Ready(Ok(conn)) => conn,
-            //             Poll::Ready(Err(err)) => {
-            //                 trace!("H2 handshake error: {}", err);
-            //                 return Poll::Ready(Err(err.into()));
-            //             }
-            //             Poll::Pending => return Poll::Pending,
-            //         }
-            //     } else {
-            //         panic!()
-            //     };
-            //     let (_, cfg, on_connect, peer_addr) = data.take().unwrap();
-            //     self.as_mut().project().state.set(ResponseState::H2 {
-            //         fut: Dispatcher::new(cfg, conn, on_connect, None, peer_addr),
-            //     });
-            //     self.poll(cx)
-            // }
+            StateProject::H2 { ref mut fut } => Pin::new(fut).poll(cx),
+            StateProject::H2Handshake { data } => {
+                let conn = if let Some(ref mut item) = data {
+                    match Pin::new(&mut item.1).poll(cx) {
+                        Poll::Ready(Ok(conn)) => conn,
+                        Poll::Ready(Err(err)) => {
+                            trace!("H2 handshake error: {}", err);
+                            return Poll::Ready(Err(err.into()));
+                        }
+                        Poll::Pending => return Poll::Pending,
+                    }
+                } else {
+                    panic!()
+                };
+                let (io, _, cfg) = data.take().unwrap();
+                self.as_mut().project().state.set(ResponseState::H2 {
+                    fut: Dispatcher::new(io, cfg, conn, None),
+                });
+                self.poll(cx)
+            }
         }
     }
 }

@@ -23,7 +23,7 @@ pub use self::state::{Io, IoRef, OnDisconnect, ReadRef, WriteRef};
 pub use self::tasks::{ReadContext, WriteContext};
 pub use self::time::Timer;
 
-pub use self::utils::{filter_factory, from_iostream, into_boxed, into_io};
+pub use self::utils::{filter_factory, into_boxed};
 
 pub type IoBoxed = Io<Box<dyn Filter>>;
 
@@ -72,7 +72,7 @@ pub trait FilterFactory<F: Filter>: Sized {
 }
 
 pub trait IoStream {
-    fn start(self, _: ReadContext, _: WriteContext) -> Box<dyn Handle>;
+    fn start(self, _: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>>;
 }
 
 pub trait Handle {

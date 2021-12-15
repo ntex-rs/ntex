@@ -30,7 +30,6 @@ async fn main() -> io::Result<()> {
                             .body(body),
                     )
                 })
-                .tcp()
         })?
         .run()
         .await

@@ -4,7 +4,6 @@ use h2::{client::SendRequest, SendStream};
 use http::header::{HeaderValue, CONNECTION, CONTENT_LENGTH, TRANSFER_ENCODING};
 use http::{request::Request, Method, Version};
 
-use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::header::HeaderMap;
 use crate::http::message::{RequestHeadType, ResponseHead};
@@ -85,6 +84,7 @@ where
 
     let res = poll_fn(|cx| io.poll_ready(cx)).await;
     if let Err(e) = res {
+        log::trace!("SendRequest readiness failed: {:?}", e);
         release(io, pool, created, e.is_io());
         return Err(SendRequestError::from(e));
     }

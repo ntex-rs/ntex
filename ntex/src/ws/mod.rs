@@ -60,6 +60,9 @@ pub enum ProtocolError {
     /// Unknown continuation fragment
     #[display(fmt = "Unknown continuation fragment.")]
     ContinuationFragment(OpCode),
+    /// IO Error
+    #[display(fmt = "IO Error: {:?}", _0)]
+    Io(io::Error),
 }
 
 impl std::error::Error for ProtocolError {}

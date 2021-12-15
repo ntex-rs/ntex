@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, io, net, pin::Pin, task::Context, task::Poll};
+use std::{future::Future, net, pin::Pin};
 
 use crate::http::body::Body;
 use crate::http::h1::ClientCodec;

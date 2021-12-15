@@ -214,7 +214,7 @@ impl Io {
 
         // start io tasks
         let hnd = io.start(ReadContext(io_ref.clone()), WriteContext(io_ref.clone()));
-        io_ref.0.handle.set(Some(hnd));
+        io_ref.0.handle.set(hnd);
 
         Io(io_ref, FilterItem::Ptr(Box::into_raw(filter)))
     }
@@ -385,33 +385,7 @@ impl IoRef {
     where
         U: Decoder,
     {
-        let read = self.read();
-
-        loop {
-            let mut buf = self.0.read_buf.take();
-            let item = if let Some(ref mut buf) = buf {
-                codec.decode(buf)
-            } else {
-                Ok(None)
-            };
-            self.0.read_buf.set(buf);
-
-            return match item {
-                Ok(Some(el)) => Ok(Some(el)),
-                Ok(None) => {
-                    self.0.remove_flags(Flags::RD_READY);
-                    if poll_fn(|cx| read.poll_ready(cx))
-                        .await
-                        .map_err(Either::Right)?
-                        .is_none()
-                    {
-                        return Ok(None);
-                    }
-                    continue;
-                }
-                Err(err) => Err(Either::Left(err)),
-            };
-        }
+        poll_fn(|cx| self.poll_next(codec, cx)).await
     }
 
     #[inline]
@@ -436,7 +410,7 @@ impl IoRef {
             self.0.write_task.wake();
         }
 
-        poll_fn(|cx| self.write().poll_flush(cx, true))
+        poll_fn(|cx| self.write().poll_write_ready(cx, true))
             .await
             .map_err(Either::Right)?;
         Ok(())
@@ -453,7 +427,6 @@ impl IoRef {
             if !flags.contains(Flags::IO_FILTERS) {
                 self.init_shutdown(cx);
             }
-            self.0.insert_flags(Flags::IO_FILTERS);
 
             if let Some(err) = self.0.error.take() {
                 Poll::Ready(Err(err))
@@ -484,14 +457,11 @@ impl IoRef {
 
         match read.decode(codec) {
             Ok(Some(el)) => Poll::Ready(Ok(Some(el))),
-            Ok(None) => {
-                if let Poll::Ready(res) = read.poll_ready(cx).map_err(Either::Right)? {
-                    if res.is_none() {
-                        return Poll::Ready(Ok(None));
-                    }
-                }
-                Poll::Pending
-            }
+            Ok(None) => match read.poll_read_ready(cx) {
+                Ok(()) => Poll::Pending,
+                Err(Some(e)) => Poll::Ready(Err(Either::Right(e))),
+                Err(None) => Poll::Ready(Ok(None)),
+            },
             Err(err) => Poll::Ready(Err(Either::Left(err))),
         }
     }
@@ -598,22 +568,35 @@ impl<F: Filter> Io<F> {
 
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
-        log::trace!(
-            "io is dropped, force stopping io streams {:?}",
-            self.0.flags()
-        );
         if let FilterItem::Ptr(p) = self.1 {
             if p.is_null() {
                 return;
             }
+            log::trace!(
+                "io is dropped, force stopping io streams {:?}",
+                self.0.flags()
+            );
+
             self.force_close();
             self.0 .0.filter.set(NullFilter::get());
             let _ = mem::replace(&mut self.1, FilterItem::Ptr(std::ptr::null_mut()));
             unsafe { Box::from_raw(p) };
         } else {
+            log::trace!(
+                "io is dropped, force stopping io streams {:?}",
+                self.0.flags()
+            );
             self.force_close();
             self.0 .0.filter.set(NullFilter::get());
         }
+    }
+}
+
+impl fmt::Debug for Io {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Io")
+            .field("open", &!self.is_closed())
+            .finish()
     }
 }
 
@@ -731,7 +714,7 @@ impl<'a> WriteRef<'a> {
     }
 
     #[inline]
-    /// Write item to a buffer and wake up write task
+    /// Write bytes to a buffer and wake up write task
     ///
     /// Returns write buffer state, false is returned if write buffer if full.
     pub fn write(&self, src: &[u8]) -> Result<bool, io::Error> {
@@ -766,7 +749,7 @@ impl<'a> WriteRef<'a> {
     /// If full is true then wake up dispatcher when all data is flushed
     /// otherwise wake up when size of write buffer is lower than
     /// buffer max size.
-    pub fn poll_flush(
+    pub fn poll_write_ready(
         &self,
         cx: &mut Context<'_>,
         full: bool,
@@ -778,31 +761,34 @@ impl<'a> WriteRef<'a> {
             })));
         }
 
-        if full {
-            self.0.insert_flags(Flags::WR_WAIT);
-        } else {
-            self.0.insert_flags(Flags::WR_BACKPRESSURE);
-        }
-
         if let Some(buf) = self.0.write_buf.take() {
-            if !buf.is_empty() {
+            let len = buf.len();
+            if len != 0 {
                 self.0.write_buf.set(Some(buf));
-                self.0.write_task.wake();
-                self.0.dispatch_task.register(cx.waker());
-                return Poll::Pending;
+
+                if full {
+                    self.0.insert_flags(Flags::WR_WAIT);
+                    self.0.dispatch_task.register(cx.waker());
+                    return Poll::Pending;
+                } else if len >= self.0.pool.get().write_params_high() << 1 {
+                    self.0.insert_flags(Flags::WR_BACKPRESSURE);
+                    self.0.dispatch_task.register(cx.waker());
+                    return Poll::Pending;
+                } else {
+                    self.0.remove_flags(Flags::WR_BACKPRESSURE);
+                }
             }
         }
 
-        // self.0.dispatch_task.register(cx.waker());
         Poll::Ready(Ok(()))
     }
 
     #[inline]
     /// Wake write task and instruct to write data.
     ///
-    /// This is async version of .poll_flush() method.
-    pub async fn flush(&self, full: bool) -> Result<(), io::Error> {
-        poll_fn(|cx| self.poll_flush(cx, full)).await
+    /// This is async version of .poll_write_ready() method.
+    pub async fn write_ready(&self, full: bool) -> Result<(), io::Error> {
+        poll_fn(|cx| self.poll_write_ready(cx, full)).await
     }
 }
 
@@ -830,8 +816,6 @@ impl<'a> ReadRef<'a> {
 
     #[inline]
     /// Pause read task
-    ///
-    /// Also register dispatch task
     pub fn pause(&self, cx: &mut Context<'_>) {
         self.0.insert_flags(Flags::RD_PAUSED);
         self.0.dispatch_task.register(cx.waker());
@@ -851,7 +835,10 @@ impl<'a> ReadRef<'a> {
     }
 
     #[inline]
-    /// Attempts to decode a frame from the read buffer.
+    /// Attempts to decode a frame from the read buffer
+    ///
+    /// Read buffer ready state gets cleanup if decoder cannot
+    /// decode any frame.
     pub fn decode<U>(
         &self,
         codec: &U,
@@ -859,18 +846,12 @@ impl<'a> ReadRef<'a> {
     where
         U: Decoder,
     {
-        let mut buf = self.0.read_buf.take();
-        if let Some(ref mut b) = buf {
-            let result = codec.decode(b);
-            if result.as_ref().map(|v| v.is_none()).unwrap_or(false) {
-                self.0.remove_flags(Flags::RD_READY);
-            }
-            self.0.read_buf.set(buf);
-            result
-        } else {
-            self.0.remove_flags(Flags::RD_READY);
-            Ok(None)
+        if let Some(mut buf) = self.0.read_buf.take() {
+            let result = codec.decode(&mut buf);
+            self.0.read_buf.set(Some(buf));
+            return result;
         }
+        Ok(None)
     }
 
     #[inline]
@@ -886,7 +867,6 @@ impl<'a> ReadRef<'a> {
             .unwrap_or_else(|| self.0.pool.get().get_read_buf());
         let res = f(&mut buf);
         if buf.is_empty() {
-            self.0.remove_flags(Flags::RD_READY);
             self.0.pool.get().release_read_buf(buf);
         } else {
             self.0.read_buf.set(Some(buf));
@@ -897,32 +877,29 @@ impl<'a> ReadRef<'a> {
     #[inline]
     /// Wake read task and instruct to read more data
     ///
-    /// Only wakes if back-pressure is enabled on read task
-    /// otherwise read is already awake.
-    pub fn poll_ready(
+    /// Read task is awake only if back-pressure is enabled
+    /// otherwise it is already awake. Buffer read status gets clean up.
+    pub fn poll_read_ready(
         &self,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<Option<()>, io::Error>> {
+    ) -> Result<(), Option<io::Error>> {
         let mut flags = self.0.flags.get();
-        let ready = flags.contains(Flags::RD_READY);
 
         if !self.0.is_io_open() {
-            if let Some(err) = self.0.error.take() {
-                Poll::Ready(Err(err))
-            } else {
-                Poll::Ready(Ok(None))
-            }
-        } else if ready {
-            Poll::Ready(Ok(Some(())))
+            Err(self.0.error.take())
         } else {
             if flags.contains(Flags::RD_BUF_FULL) {
-                log::trace!("read back-pressure is enabled, wake io task");
-                flags.remove(Flags::RD_BUF_FULL);
+                log::trace!("read back-pressure is disabled, wake io task");
+                flags.remove(Flags::RD_READY | Flags::RD_BUF_FULL);
+                self.0.flags.set(flags);
+                self.0.read_task.wake();
+            } else if flags.contains(Flags::RD_READY) {
+                flags.remove(Flags::RD_READY);
+                self.0.flags.set(flags);
                 self.0.read_task.wake();
             }
-            self.0.flags.set(flags);
             self.0.dispatch_task.register(cx.waker());
-            Poll::Pending
+            Ok(())
         }
     }
 }
@@ -1000,6 +977,7 @@ mod tests {
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
     use ntex_util::future::{lazy, Ready};
+    use ntex_util::time::{sleep, Millis};
 
     use super::*;
     use crate::testing::IoTest;
@@ -1024,6 +1002,7 @@ mod tests {
         let res = poll_fn(|cx| Poll::Ready(state.poll_next(&BytesCodec, cx))).await;
         assert!(res.is_pending());
         client.write(TEXT);
+        sleep(Millis(50)).await;
         let res = poll_fn(|cx| Poll::Ready(state.poll_next(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
             assert_eq!(msg.unwrap().unwrap(), Bytes::from_static(BIN));
@@ -1114,6 +1093,10 @@ mod tests {
     impl<F: ReadFilter + WriteFilter + 'static> Filter for Counter<F> {
         fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
             Poll::Ready(Ok(()))
+        }
+
+        fn query(&self, _: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
+            None
         }
     }
 

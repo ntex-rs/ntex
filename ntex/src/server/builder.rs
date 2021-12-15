@@ -8,8 +8,8 @@ use futures_core::Stream;
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::rt::{net::TcpStream, spawn, System};
-use crate::{time::sleep, time::Millis, util::join_all};
+use crate::rt::{spawn, System};
+use crate::{time::sleep, time::Millis, util::join_all, util::PoolId};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime};
@@ -182,6 +182,17 @@ impl ServerBuilder {
                 f,
                 _t: marker::PhantomData,
             }))));
+        self
+    }
+
+    /// Set memory pool for name dservice.
+    ///
+    /// Use specified memory pool for memory allocations. By default P0
+    /// memory pool is used.
+    pub fn memory_pool<N: AsRef<str>>(mut self, name: N, id: PoolId) -> Self {
+        for srv in &mut self.services {
+            srv.set_memory_pool(name.as_ref(), id)
+        }
         self
     }
 

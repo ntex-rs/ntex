@@ -13,11 +13,11 @@ use ntex::http::client::error::{JsonPayloadError, SendRequestError};
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{header, HttpMessage, HttpService};
-use ntex::service::{map_config, pipeline_factory, Service};
+use ntex::service::{map_config, pipeline_factory};
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
 use ntex::web::{self, test, App, BodyEncoding, Error, HttpRequest, HttpResponse};
-use ntex::{time::Millis, time::Seconds, util::Bytes};
+use ntex::{time::sleep, time::Millis, time::Seconds, util::Bytes};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -162,16 +162,13 @@ async fn test_form() {
 async fn test_timeout() {
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
-            ntex::time::sleep(Millis(2000)).await;
+            sleep(Millis(2000)).await;
             HttpResponse::Ok().body(STR)
         })))
     });
 
     let connector = Connector::default()
-        .connector(
-            ntex::connect::Connector::new()
-                .map(|sock| (sock, ntex::http::Protocol::Http1)),
-        )
+        .connector(ntex::connect::Connector::new())
         .timeout(Seconds(15))
         .finish();
 
@@ -191,7 +188,7 @@ async fn test_timeout() {
 async fn test_timeout_override() {
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
-            ntex::time::sleep(Millis(2000)).await;
+            sleep(Millis(2000)).await;
             HttpResponse::Ok().body(STR)
         })))
     });
@@ -809,11 +806,11 @@ async fn client_read_until_eof() {
             }
         }
     });
-    ntex::time::sleep(Millis(300)).await;
+    sleep(Millis(300)).await;
 
     // client request
     let req = Client::build()
-        .timeout(Seconds(30))
+        .timeout(Seconds(5))
         .finish()
         .get(format!("http://{}/", addr).as_str());
     let mut response = req.send().await.unwrap();

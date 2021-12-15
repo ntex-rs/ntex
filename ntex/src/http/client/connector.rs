@@ -1,7 +1,7 @@
 use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
-use crate::http::{Protocol, Uri};
+use crate::http::Uri;
 use crate::io::{Filter, Io, IoBoxed};
 use crate::service::{apply_fn, boxed, Service};
 use crate::time::{Millis, Seconds};
@@ -14,12 +14,10 @@ use super::pool::ConnectionPool;
 use super::Connect;
 
 #[cfg(feature = "openssl")]
-use crate::connect::openssl::SslConnector as OpensslConnector;
+use crate::connect::openssl::SslConnector;
 
-//#[cfg(feature = "rustls")]
-//use crate::connect::rustls::ClientConfig;
-//#[cfg(feature = "rustls")]
-//use std::sync::Arc;
+#[cfg(feature = "rustls")]
+use crate::connect::rustls::ClientConfig;
 
 type BoxedConnector = boxed::BoxService<TcpConnect<Uri>, IoBoxed, ConnectError>;
 
@@ -72,34 +70,34 @@ impl Connector {
         {
             use crate::connect::openssl::SslMethod;
 
-            let mut ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
+            let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
             let _ = ssl
                 .set_alpn_protos(b"\x02h2\x08http/1.1")
                 .map_err(|e| error!("Cannot set ALPN protocol: {:?}", e));
             conn.openssl(ssl.build())
         }
-        // #[cfg(all(not(feature = "openssl"), feature = "rustls"))]
-        // {
-        //     use rust_tls::{OwnedTrustAnchor, RootCertStore};
+        #[cfg(all(not(feature = "openssl"), feature = "rustls"))]
+        {
+            use rust_tls::{OwnedTrustAnchor, RootCertStore};
 
-        //     let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-        //     let mut cert_store = RootCertStore::empty();
-        //     cert_store.add_server_trust_anchors(
-        //         webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
-        //             OwnedTrustAnchor::from_subject_spki_name_constraints(
-        //                 ta.subject,
-        //                 ta.spki,
-        //                 ta.name_constraints,
-        //             )
-        //         }),
-        //     );
-        //     let mut config = ClientConfig::builder()
-        //         .with_safe_defaults()
-        //         .with_root_certificates(cert_store)
-        //         .with_no_client_auth();
-        //     config.alpn_protocols = protos;
-        //     conn.rustls(Arc::new(config))
-        // }
+            let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+            let mut cert_store = RootCertStore::empty();
+            cert_store.add_server_trust_anchors(
+                webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+                    OwnedTrustAnchor::from_subject_spki_name_constraints(
+                        ta.subject,
+                        ta.spki,
+                        ta.name_constraints,
+                    )
+                }),
+            );
+            let mut config = ClientConfig::builder()
+                .with_safe_defaults()
+                .with_root_certificates(cert_store)
+                .with_no_client_auth();
+            config.alpn_protocols = protos;
+            conn.rustls(config)
+        }
         #[cfg(not(any(feature = "openssl", feature = "rustls")))]
         {
             conn
@@ -119,32 +117,19 @@ impl Connector {
 
     #[cfg(feature = "openssl")]
     /// Use openssl connector for secured connections.
-    pub fn openssl(self, connector: OpensslConnector) -> Self {
-        use crate::connect::openssl::OpensslConnector;
+    pub fn openssl(self, connector: SslConnector) -> Self {
+        use crate::connect::openssl::Connector;
 
-        self.secure_connector(OpensslConnector::new(connector))
+        self.secure_connector(Connector::new(connector))
     }
 
-    // #[cfg(feature = "rustls")]
-    // /// Use rustls connector for secured connections.
-    // pub fn rustls(self, connector: Arc<ClientConfig>) -> Self {
-    //     use crate::connect::rustls::RustlsConnector;
+    #[cfg(feature = "rustls")]
+    /// Use rustls connector for secured connections.
+    pub fn rustls(self, connector: ClientConfig) -> Self {
+        use crate::connect::rustls::Connector;
 
-    //     const H2: &[u8] = b"h2";
-    //     self.secure_connector(RustlsConnector::new(connector).map(|sock| {
-    //         let h2 = sock
-    //             .get_ref()
-    //             .1
-    //             .alpn_protocol()
-    //             .map(|protos| protos.windows(2).any(|w| w == H2))
-    //             .unwrap_or(false);
-    //         if h2 {
-    //             (Box::new(sock) as Box<dyn Io>, Protocol::Http2)
-    //         } else {
-    //             (Box::new(sock) as Box<dyn Io>, Protocol::Http1)
-    //         }
-    //     }))
-    // }
+        self.secure_connector(Connector::new(connector))
+    }
 
     /// Set total number of simultaneous connections per type of scheme.
     ///
@@ -190,7 +175,7 @@ impl Connector {
     }
 
     /// Use custom connector to open un-secured connections.
-    pub fn connector<T, U, F>(mut self, connector: T) -> Self
+    pub fn connector<T, F>(mut self, connector: T) -> Self
     where
         T: Service<
                 Request = TcpConnect<Uri>,

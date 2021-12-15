@@ -1,6 +1,6 @@
 use std::{future::Future, rc::Rc};
 
-use crate::io::{Io, IoRef, OnDisconnect};
+use crate::io::{IoRef, OnDisconnect};
 use crate::ws;
 
 pub struct WsSink(Rc<WsSinkInner>);
@@ -23,7 +23,17 @@ impl WsSink {
         let inner = self.0.clone();
 
         async move {
-            inner.io.write().encode(item, &inner.codec)?;
+            let close = match item {
+                ws::Message::Close(_) => inner.codec.is_closed(),
+                _ => false,
+            };
+
+            let wrt = inner.io.write();
+            wrt.write_ready(false).await?;
+            wrt.encode(item, &inner.codec)?;
+            if close {
+                inner.io.close();
+            }
             Ok(())
         }
     }

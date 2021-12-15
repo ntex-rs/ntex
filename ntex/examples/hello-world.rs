@@ -1,10 +1,9 @@
 use std::{env, io};
 
-use futures::future;
 use log::info;
 use ntex::http::header::HeaderValue;
 use ntex::http::{HttpService, Response};
-use ntex::{server::Server, time::Seconds};
+use ntex::{server::Server, time::Seconds, util::Ready};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
@@ -20,9 +19,8 @@ async fn main() -> io::Result<()> {
                     info!("{:?}", _req);
                     let mut res = Response::Ok();
                     res.header("x-head", HeaderValue::from_static("dummy value!"));
-                    future::ok::<_, io::Error>(res.body("Hello world!"))
+                    Ready::Ok::<_, io::Error>(res.body("Hello world!"))
                 })
-                .tcp()
         })?
         .run()
         .await

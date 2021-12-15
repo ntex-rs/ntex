@@ -5,9 +5,8 @@ use std::{
 
 use log::error;
 
-use crate::rt::net::TcpStream;
 use crate::util::{counter::CounterGuard, HashMap, Ready};
-use crate::{io::Io, service};
+use crate::{io::Io, service, util::PoolId};
 
 use super::builder::bind_addr;
 use super::service::{
@@ -73,40 +72,6 @@ impl ServiceConfig {
         self
     }
 
-    #[doc(hidden)]
-    #[deprecated(since = "0.4.13", note = "Use .on_worker_start() instead")]
-    /// Register service configuration function.
-    ///
-    /// This function get called during worker runtime configuration.
-    /// It get executed in the worker thread.
-    pub fn apply<F>(&mut self, f: F) -> io::Result<()>
-    where
-        F: Fn(&mut ServiceRuntime) + Send + Clone + 'static,
-    {
-        self.on_worker_start::<_, Ready<(), &'static str>, &'static str>(
-            move |mut rt| {
-                f(&mut rt);
-                Ready::Ok(())
-            },
-        )
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "0.4.13", note = "Use .on_worker_start() instead")]
-    /// Register async service configuration function.
-    ///
-    /// This function get called during worker runtime configuration.
-    /// It get executed in the worker thread.
-    pub fn apply_async<F, R, E>(&mut self, f: F) -> io::Result<()>
-    where
-        F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
-        R: Future<Output = Result<(), E>> + 'static,
-        E: fmt::Display + 'static,
-    {
-        self.on_worker_start(f)?;
-        Ok(())
-    }
-
     /// Register async service configuration function.
     ///
     /// This function get called during worker runtime configuration stage.
@@ -161,6 +126,8 @@ impl InternalServiceFactory for ConfiguredService {
         })
     }
 
+    fn set_memory_pool(&self, _: &str, _: PoolId) {}
+
     fn create(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
@@ -198,12 +165,13 @@ impl InternalServiceFactory for ConfiguredService {
                     let name = names.remove(&token).unwrap().0;
                     res.push((
                         token,
-                        Box::new(StreamService::new(service::fn_service(
-                            move |_: Io| {
+                        Box::new(StreamService::new(
+                            service::fn_service(move |_: Io| {
                                 error!("Service {:?} is not configured", name);
                                 Ready::<_, ()>::Ok(())
-                            },
-                        ))),
+                            }),
+                            PoolId::P0,
+                        )),
                     ));
                 };
             }
@@ -297,12 +265,28 @@ impl ServiceRuntime {
         T::Service: 'static,
         T::InitError: fmt::Debug,
     {
+        self.service_in(name, PoolId::P0, service)
+    }
+
+    /// Register service with memory pool.
+    ///
+    /// Name of the service must be registered during configuration stage with
+    /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
+    pub fn service_in<T, F>(&self, name: &str, pool: PoolId, service: F)
+    where
+        F: service::IntoServiceFactory<T>,
+        T: service::ServiceFactory<Config = (), Request = Io> + 'static,
+        T::Future: 'static,
+        T::Service: 'static,
+        T::InitError: fmt::Debug,
+    {
         let mut inner = self.0.borrow_mut();
         if let Some(token) = inner.names.get(name) {
             let token = *token;
             inner.services.insert(
                 token,
                 Box::new(ServiceFactory {
+                    pool,
                     inner: service.into_factory(),
                 }),
             );
@@ -334,6 +318,7 @@ type BoxedNewService = Box<
 
 struct ServiceFactory<T> {
     inner: T,
+    pool: PoolId,
 }
 
 impl<T> service::ServiceFactory for ServiceFactory<T>
@@ -353,10 +338,11 @@ where
     type Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
+        let pool = self.pool;
         let fut = self.inner.new_service(());
         Box::pin(async move {
             match fut.await {
-                Ok(s) => Ok(Box::new(StreamService::new(s)) as BoxedServerService),
+                Ok(s) => Ok(Box::new(StreamService::new(s, pool)) as BoxedServerService),
                 Err(e) => {
                     error!("Cannot construct service: {:?}", e);
                     Err(())

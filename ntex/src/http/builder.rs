@@ -1,18 +1,16 @@
-use std::{cell::RefCell, error::Error, fmt, marker::PhantomData, rc::Rc};
+use std::{error::Error, fmt, marker::PhantomData};
 
 use crate::http::body::MessageBody;
 use crate::http::config::{KeepAlive, OnRequest, ServiceConfig};
 use crate::http::error::ResponseError;
 use crate::http::h1::{Codec, ExpectHandler, H1Service, UpgradeHandler};
 use crate::http::h2::H2Service;
-use crate::http::helpers::{Data, DataFactory};
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::service::HttpService;
 use crate::io::{Filter, Io, IoRef};
 use crate::service::{boxed, IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
-use crate::util::PoolId;
 
 /// A http service builder
 ///
@@ -23,7 +21,6 @@ pub struct HttpServiceBuilder<F, S, X = ExpectHandler, U = UpgradeHandler<F>> {
     client_timeout: Millis,
     client_disconnect: Seconds,
     handshake_timeout: Millis,
-    pool: PoolId,
     expect: X,
     upgrade: Option<U>,
     on_request: Option<OnRequest>,
@@ -38,7 +35,6 @@ impl<F, S> HttpServiceBuilder<F, S, ExpectHandler, UpgradeHandler<F>> {
             client_timeout: Millis::from_secs(3),
             client_disconnect: Seconds(3),
             handshake_timeout: Millis::from_secs(5),
-            pool: PoolId::P1,
             expect: ExpectHandler,
             upgrade: None,
             on_request: None,
@@ -112,15 +108,6 @@ where
         self
     }
 
-    /// Set memory pool.
-    ///
-    /// Use specified memory pool for memory allocations. By default P1
-    /// memory pool is used.
-    pub fn memory_pool(mut self, id: PoolId) -> Self {
-        self.pool = id;
-        self
-    }
-
     /// Provide service for `EXPECT: 100-Continue` support.
     ///
     /// Service get called with request that contains `EXPECT` header.
@@ -140,7 +127,6 @@ where
             client_timeout: self.client_timeout,
             client_disconnect: self.client_disconnect,
             handshake_timeout: self.handshake_timeout,
-            pool: self.pool,
             expect: expect.into_factory(),
             upgrade: self.upgrade,
             on_request: self.on_request,
@@ -170,7 +156,6 @@ where
             client_timeout: self.client_timeout,
             client_disconnect: self.client_disconnect,
             handshake_timeout: self.handshake_timeout,
-            pool: self.pool,
             expect: self.expect,
             upgrade: Some(upgrade.into_factory()),
             on_request: self.on_request,
@@ -206,7 +191,6 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
-            self.pool,
         );
         H1Service::with_config(cfg, service.into_factory())
             .expect(self.expect)
@@ -229,7 +213,6 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
-            self.pool,
         );
 
         H2Service::with_config(cfg, service.into_factory())
@@ -251,7 +234,6 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
-            self.pool,
         );
         HttpService::with_config(cfg, service.into_factory())
             .expect(self.expect)

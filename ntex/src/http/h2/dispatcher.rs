@@ -1,26 +1,25 @@
 use std::task::{Context, Poll};
 use std::{
-    convert::TryFrom, future::Future, marker::PhantomData, net, pin::Pin, rc::Rc, time,
+    convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::Rc, time,
 };
 
 use h2::server::{Connection, SendResponse};
 use h2::SendStream;
-use http::header::{HeaderValue, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
 use log::{error, trace};
 
-use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::config::{DateService, DispatcherConfig};
 use crate::http::error::{DispatchError, ResponseError};
-use crate::http::helpers::DataFactory;
-use crate::http::message::ResponseHead;
-use crate::http::payload::Payload;
-use crate::http::request::Request;
-use crate::http::response::Response;
+use crate::http::header::{
+    HeaderValue, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING,
+};
+use crate::http::{
+    message::ResponseHead, payload::Payload, request::Request, response::Response,
+};
 use crate::io::{Filter, Io, IoRef};
+use crate::service::Service;
 use crate::time::{now, Sleep};
 use crate::util::{Bytes, BytesMut};
-use crate::Service;
 
 const CHUNK_SIZE: usize = 16_384;
 
