@@ -193,7 +193,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: StreamServiceFactory<TcpStream>,
+        F: StreamServiceFactory,
         U: net::ToSocketAddrs,
     {
         let sockets = bind_addr(addr, self.backlog)?;
@@ -219,7 +219,7 @@ impl ServerBuilder {
     /// Add new unix domain service to the server.
     pub fn bind_uds<F, U, N>(self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
-        F: StreamServiceFactory<crate::rt::net::UnixStream>,
+        F: StreamServiceFactory,
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
     {
@@ -249,7 +249,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: StreamServiceFactory<crate::rt::net::UnixStream>,
+        F: StreamServiceFactory,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();
@@ -273,7 +273,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: StreamServiceFactory<TcpStream>,
+        F: StreamServiceFactory,
     {
         let token = self.token.next();
         self.services.push(Factory::create(

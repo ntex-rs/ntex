@@ -465,15 +465,12 @@ impl TestRequest {
 
     /// Complete request creation and generate `Request` instance
     pub fn to_request(mut self) -> Request {
-        let mut req = self.req.finish();
-        req.head_mut().peer_addr = self.peer_addr;
-        req
+        self.req.finish()
     }
 
     /// Complete request creation and generate `WebRequest` instance
     pub fn to_srv_request(mut self) -> WebRequest<DefaultError> {
-        let (mut head, payload) = self.req.finish().into_parts();
-        head.peer_addr = self.peer_addr;
+        let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
 
         WebRequest::new(HttpRequest::new(
@@ -494,8 +491,7 @@ impl TestRequest {
 
     /// Complete request creation and generate `HttpRequest` instance
     pub fn to_http_request(mut self) -> HttpRequest {
-        let (mut head, payload) = self.req.finish().into_parts();
-        head.peer_addr = self.peer_addr;
+        let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
 
         HttpRequest::new(
@@ -511,8 +507,7 @@ impl TestRequest {
 
     /// Complete request creation and generate `HttpRequest` and `Payload` instances
     pub fn to_http_parts(mut self) -> (HttpRequest, Payload) {
-        let (mut head, payload) = self.req.finish().into_parts();
-        head.peer_addr = self.peer_addr;
+        let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
 
         let req = HttpRequest::new(
@@ -636,7 +631,6 @@ where
                         HttpService::build()
                             .client_timeout(ctimeout)
                             .h1(map_config(factory(), move |_| cfg.clone()))
-                            .tcp()
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move || {
                         let cfg =
@@ -644,7 +638,6 @@ where
                         HttpService::build()
                             .client_timeout(ctimeout)
                             .h2(map_config(factory(), move |_| cfg.clone()))
-                            .tcp()
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move || {
                         let cfg =
@@ -652,7 +645,6 @@ where
                         HttpService::build()
                             .client_timeout(ctimeout)
                             .finish(map_config(factory(), move |_| cfg.clone()))
-                            .tcp()
                     }),
                 },
                 #[cfg(feature = "openssl")]
@@ -842,8 +834,9 @@ impl TestServerConfig {
     /// Start rustls server
     #[cfg(feature = "rustls")]
     pub fn rustls(mut self, config: rust_tls::ServerConfig) -> Self {
-        self.stream = StreamType::Rustls(config);
-        self
+        //     self.stream = StreamType::Rustls(config);
+        //     self
+        unimplemented!()
     }
 
     /// Set server client timeout in seconds for first request.
@@ -928,19 +921,12 @@ impl TestServer {
     }
 
     /// Connect to websocket server at a given path
-    pub async fn ws_at(
-        &self,
-        path: &str,
-    ) -> Result<ws::WsConnection<impl AsyncRead + AsyncWrite>, WsClientError> {
-        let url = self.url(path);
-        let connect = self.client.ws(url).connect();
-        connect.await
+    pub async fn ws_at(&self, path: &str) -> Result<ws::WsConnection, WsClientError> {
+        self.client.ws(self.url(path)).connect().await
     }
 
     /// Connect to a websocket server
-    pub async fn ws(
-        &self,
-    ) -> Result<ws::WsConnection<impl AsyncRead + AsyncWrite>, WsClientError> {
+    pub async fn ws(&self) -> Result<ws::WsConnection, WsClientError> {
         self.ws_at("/").await
     }
 

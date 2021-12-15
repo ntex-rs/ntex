@@ -46,13 +46,7 @@ impl ReadFilter for DefaultFilter {
 
     #[inline]
     fn read_closed(&self, err: Option<io::Error>) {
-        if err.is_some() {
-            self.0.error.set(err);
-        }
-        self.0.write_task.wake();
-        self.0.dispatch_task.wake();
-        self.0.insert_flags(Flags::IO_ERR | Flags::DSP_STOP);
-        self.0.notify_disconnect();
+        self.0.set_error(err);
     }
 
     #[inline]
@@ -109,13 +103,9 @@ impl WriteFilter for DefaultFilter {
 
     #[inline]
     fn write_closed(&self, err: Option<io::Error>) {
-        if err.is_some() {
-            self.0.error.set(err);
-        }
-        self.0.read_task.wake();
+        self.0.set_error(err);
+        self.0.insert_flags(Flags::IO_CLOSED);
         self.0.dispatch_task.wake();
-        self.0.insert_flags(Flags::IO_ERR | Flags::DSP_STOP);
-        self.0.notify_disconnect();
     }
 
     #[inline]

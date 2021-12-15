@@ -2,19 +2,20 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
 
-use h2::client::{Builder, Connection, SendRequest};
+use h2::client::{Builder, Connection as H2Connection, SendRequest};
 use http::uri::Authority;
 
 use crate::channel::pool;
 use crate::codec::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::http::Protocol;
+use crate::io::IoBoxed;
 use crate::rt::spawn;
 use crate::service::Service;
 use crate::task::LocalWaker;
 use crate::time::{now, sleep, Millis, Sleep};
 use crate::util::{poll_fn, Bytes, HashMap};
 
-use super::connection::{ConnectionType, IoConnection};
+use super::connection::{Connection, ConnectionType};
 use super::error::ConnectError;
 use super::Connect;
 
@@ -29,16 +30,15 @@ impl From<Authority> for Key {
     }
 }
 
-type Waiter<Io> = pool::Sender<Result<IoConnection<Io>, ConnectError>>;
-type WaiterReceiver<Io> = pool::Receiver<Result<IoConnection<Io>, ConnectError>>;
+type Waiter = pool::Sender<Result<Connection, ConnectError>>;
+type WaiterReceiver = pool::Receiver<Result<Connection, ConnectError>>;
 
 /// Connections pool
-pub(super) struct ConnectionPool<T, Io: 'static>(Rc<T>, Rc<RefCell<Inner<Io>>>);
+pub(super) struct ConnectionPool<T>(Rc<T>, Rc<RefCell<Inner>>);
 
-impl<T, Io> ConnectionPool<T, Io>
+impl<T> ConnectionPool<T>
 where
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
-    T: Service<Request = Connect, Response = (Io, Protocol), Error = ConnectError>
+    T: Service<Request = Connect, Response = IoBoxed, Error = ConnectError>
         + Unpin
         + 'static,
     T::Future: Unpin,
@@ -73,35 +73,27 @@ where
     }
 }
 
-impl<T, Io> Drop for ConnectionPool<T, Io>
-where
-    Io: 'static,
-{
+impl<T> Drop for ConnectionPool<T> {
     fn drop(&mut self) {
         self.1.borrow().waker.wake();
     }
 }
 
-impl<T, Io> Clone for ConnectionPool<T, Io>
-where
-    Io: 'static,
-{
+impl<T> Clone for ConnectionPool<T> {
     fn clone(&self) -> Self {
         ConnectionPool(self.0.clone(), self.1.clone())
     }
 }
 
-impl<T, Io> Service for ConnectionPool<T, Io>
+impl<T> Service for ConnectionPool<T>
 where
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
-    T: Service<Request = Connect, Response = (Io, Protocol), Error = ConnectError>
-        + 'static,
+    T: Service<Request = Connect, Response = IoBoxed, Error = ConnectError> + 'static,
     T::Future: Unpin,
 {
     type Request = Connect;
-    type Response = IoConnection<Io>;
+    type Response = Connection;
     type Error = ConnectError;
-    type Future = Pin<Box<dyn Future<Output = Result<IoConnection<Io>, ConnectError>>>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Connection, ConnectError>>>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -127,11 +119,12 @@ where
             };
 
             // acquire connection
-            match poll_fn(|cx| Poll::Ready(inner.borrow_mut().acquire(&key, cx))).await {
+            let result = inner.borrow_mut().acquire(&key);
+            match result {
                 // use existing connection
                 Acquire::Acquired(io, created) => {
                     trace!("Use existing connection for {:?}", req.uri);
-                    Ok(IoConnection::new(
+                    Ok(Connection::new(
                         io,
                         created,
                         Some(Acquired(key, Some(inner))),
@@ -165,31 +158,31 @@ where
     }
 }
 
-enum Acquire<T> {
-    Acquired(ConnectionType<T>, Instant),
+enum Acquire {
+    Acquired(ConnectionType, Instant),
     Available,
     NotAvailable,
 }
 
-struct AvailableConnection<Io> {
-    io: ConnectionType<Io>,
+struct AvailableConnection {
+    io: ConnectionType,
     used: Instant,
     created: Instant,
 }
 
-pub(super) struct Inner<Io> {
+pub(super) struct Inner {
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
     disconnect_timeout: Millis,
     limit: usize,
     acquired: usize,
-    available: HashMap<Key, VecDeque<AvailableConnection<Io>>>,
-    waiters: VecDeque<(Key, Connect, Waiter<Io>)>,
+    available: HashMap<Key, VecDeque<AvailableConnection>>,
+    waiters: VecDeque<(Key, Connect, Waiter)>,
     waker: LocalWaker,
-    pool: pool::Pool<Result<IoConnection<Io>, ConnectError>>,
+    pool: pool::Pool<Result<Connection, ConnectError>>,
 }
 
-impl<Io> Inner<Io> {
+impl Inner {
     fn reserve(&mut self) {
         self.acquired += 1;
     }
@@ -199,12 +192,9 @@ impl<Io> Inner<Io> {
     }
 }
 
-impl<Io> Inner<Io>
-where
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
-{
+impl Inner {
     /// connection is not available, wait
-    fn wait_for(&mut self, connect: Connect) -> WaiterReceiver<Io> {
+    fn wait_for(&mut self, connect: Connect) -> WaiterReceiver {
         let (tx, rx) = self.pool.channel();
         let key: Key = connect.uri.authority().unwrap().clone().into();
         self.waiters.push_back((key, connect, tx));
@@ -226,7 +216,7 @@ where
         }
     }
 
-    fn acquire(&mut self, key: &Key, cx: &mut Context<'_>) -> Acquire<Io> {
+    fn acquire(&mut self, key: &Key) -> Acquire {
         self.cleanup();
 
         // check limits
@@ -249,19 +239,22 @@ where
                         CloseConnection::spawn(io, self.disconnect_timeout);
                     }
                 } else {
-                    let mut io = conn.io;
-                    let mut buf = [0; 2];
-                    let mut read_buf = ReadBuf::new(&mut buf);
-                    if let ConnectionType::H1(ref mut s) = io {
-                        match Pin::new(s).poll_read(cx, &mut read_buf) {
-                            Poll::Pending => (),
-                            Poll::Ready(Ok(_)) if !read_buf.filled().is_empty() => {
-                                if let ConnectionType::H1(io) = io {
-                                    CloseConnection::spawn(io, self.disconnect_timeout);
-                                }
-                                continue;
+                    let io = conn.io;
+                    if let ConnectionType::H1(ref s) = io {
+                        if s.is_closed() {
+                            continue;
+                        }
+                        let is_valid = s.read().with_buf(|buf| {
+                            if buf.is_empty() || (buf.len() == 2 && &buf[..] == b"\r\n")
+                            {
+                                buf.clear();
+                                true
+                            } else {
+                                false
                             }
-                            _ => continue,
+                        });
+                        if !is_valid {
+                            continue;
                         }
                     }
                     return Acquire::Acquired(io, conn.created);
@@ -271,7 +264,7 @@ where
         Acquire::Available
     }
 
-    fn release_conn(&mut self, key: &Key, io: ConnectionType<Io>, created: Instant) {
+    fn release_conn(&mut self, key: &Key, io: ConnectionType, created: Instant) {
         self.acquired -= 1;
         self.available
             .entry(key.clone())
@@ -284,7 +277,7 @@ where
         self.check_availibility();
     }
 
-    fn release_close(&mut self, io: ConnectionType<Io>) {
+    fn release_close(&mut self, io: ConnectionType) {
         self.acquired -= 1;
         if let ConnectionType::H1(io) = io {
             CloseConnection::spawn(io, self.disconnect_timeout);
@@ -300,19 +293,14 @@ where
     }
 }
 
-struct ConnectionPoolSupport<T, Io>
-where
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
-{
+struct ConnectionPoolSupport<T> {
     connector: T,
-    inner: Rc<RefCell<Inner<Io>>>,
+    inner: Rc<RefCell<Inner>>,
 }
 
-impl<T, Io> Future for ConnectionPoolSupport<T, Io>
+impl<T> Future for ConnectionPoolSupport<T>
 where
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
-    T: Service<Request = Connect, Response = (Io, Protocol), Error = ConnectError>
-        + Unpin,
+    T: Service<Request = Connect, Response = IoBoxed, Error = ConnectError> + Unpin,
     T::Future: Unpin + 'static,
 {
     type Output = ();
@@ -337,11 +325,11 @@ where
             };
             let key = key.clone();
 
-            match inner.acquire(&key, cx) {
+            match inner.acquire(&key) {
                 Acquire::NotAvailable => break,
                 Acquire::Acquired(io, created) => {
                     let (key, _, tx) = inner.waiters.pop_front().unwrap();
-                    let _ = tx.send(Ok(IoConnection::new(
+                    let _ = tx.send(Ok(Connection::new(
                         io,
                         created,
                         Some(Acquired(key.clone(), Some(this.inner.clone()))),
@@ -363,94 +351,43 @@ where
     }
 }
 
-struct CloseConnection<T> {
-    io: T,
+struct CloseConnection {
+    io: IoBoxed,
     timeout: Option<Sleep>,
     shutdown: bool,
 }
 
-impl<T> CloseConnection<T>
-where
-    T: AsyncWrite + AsyncRead + Unpin + 'static,
-{
-    fn spawn(io: T, timeout: Millis) {
-        spawn(Self {
-            io,
-            shutdown: false,
-            timeout: timeout.map(sleep),
+impl CloseConnection {
+    fn spawn(io: IoBoxed, timeout: Millis) {
+        spawn(async move {
+            io.shutdown().await;
         });
     }
 }
 
-impl<T> Future for CloseConnection<T>
-where
-    T: AsyncWrite + AsyncRead + Unpin,
-{
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let mut this = self.as_mut();
-
-        // shutdown WRITE side
-        match Pin::new(&mut this.io).poll_shutdown(cx) {
-            Poll::Ready(Ok(())) => this.shutdown = true,
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(Err(_)) => return Poll::Ready(()),
-        }
-
-        // read until 0 or err
-        if let Some(ref timeout) = this.timeout {
-            match timeout.poll_elapsed(cx) {
-                Poll::Ready(_) => (),
-                Poll::Pending => {
-                    let mut buf = [0u8; 512];
-                    let mut read_buf = ReadBuf::new(&mut buf);
-                    loop {
-                        match Pin::new(&mut this.io).poll_read(cx, &mut read_buf) {
-                            Poll::Pending => return Poll::Pending,
-                            Poll::Ready(Err(_)) => return Poll::Ready(()),
-                            Poll::Ready(Ok(_)) => {
-                                if read_buf.filled().is_empty() {
-                                    return Poll::Ready(());
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Poll::Ready(())
-    }
-}
-
-struct OpenConnection<F, Io>
-where
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
-{
+struct OpenConnection<F> {
     fut: F,
     h2: Option<
         Pin<
             Box<
                 dyn Future<
                     Output = Result<
-                        (SendRequest<Bytes>, Connection<Io, Bytes>),
+                        (SendRequest<Bytes>, H2Connection<Bytes>),
                         h2::Error,
                     >,
                 >,
             >,
         >,
     >,
-    tx: Option<Waiter<Io>>,
-    guard: Option<OpenGuard<Io>>,
+    tx: Option<Waiter>,
+    guard: Option<OpenGuard>,
 }
 
-impl<F, Io> OpenConnection<F, Io>
+impl<F> OpenConnection<F>
 where
-    F: Future<Output = Result<(Io, Protocol), ConnectError>> + Unpin + 'static,
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
+    F: Future<Output = Result<IoBoxed, ConnectError>> + Unpin + 'static,
 {
-    fn spawn(key: Key, tx: Waiter<Io>, inner: Rc<RefCell<Inner<Io>>>, fut: F) {
+    fn spawn(key: Key, tx: Waiter, inner: Rc<RefCell<Inner>>, fut: F) {
         spawn(OpenConnection {
             fut,
             h2: None,
@@ -463,10 +400,9 @@ where
     }
 }
 
-impl<F, Io> Future for OpenConnection<F, Io>
+impl<F> Future for OpenConnection<F>
 where
-    F: Future<Output = Result<(Io, Protocol), ConnectError>> + Unpin,
-    Io: AsyncRead + AsyncWrite + Unpin,
+    F: Future<Output = Result<IoBoxed, ConnectError>> + Unpin,
 {
     type Output = ();
 
@@ -478,7 +414,7 @@ where
             return match Pin::new(h2).poll(cx) {
                 Poll::Ready(Ok((snd, connection))) => {
                     // h2 connection is ready
-                    let conn = IoConnection::new(
+                    let conn = Connection::new(
                         ConnectionType::H2(snd),
                         now(),
                         Some(this.guard.take().unwrap().consume()),
@@ -488,7 +424,7 @@ where
                         conn.release()
                     }
                     spawn(async move {
-                        let _ = connection.await;
+                        // let _ = connection.await;
                     });
                     Poll::Ready(())
                 }
@@ -511,52 +447,43 @@ where
                 }
                 Poll::Ready(())
             }
-            Poll::Ready(Ok((io, proto))) => {
+            Poll::Ready(Ok(io)) => {
                 trace!("Connection is established");
                 // handle http1 proto
-                if proto == Protocol::Http1 {
-                    let conn = IoConnection::new(
-                        ConnectionType::H1(io),
-                        now(),
-                        Some(this.guard.take().unwrap().consume()),
-                    );
-                    if let Err(Ok(conn)) = this.tx.take().unwrap().send(Ok(conn)) {
-                        // waiter is gone, return connection to pool
-                        conn.release()
-                    }
-                    Poll::Ready(())
-                } else {
-                    // init http2 handshake
-                    this.h2 = Some(Box::pin(Builder::new().handshake(io)));
-                    self.poll(cx)
+                //if proto == Protocol::Http1 {
+                let conn = Connection::new(
+                    ConnectionType::H1(io),
+                    now(),
+                    Some(this.guard.take().unwrap().consume()),
+                );
+                if let Err(Ok(conn)) = this.tx.take().unwrap().send(Ok(conn)) {
+                    // waiter is gone, return connection to pool
+                    conn.release()
                 }
+                Poll::Ready(())
+                // } else {
+                // init http2 handshake
+                // this.h2 = Some(Box::pin(Builder::new().handshake(io)));
+                //    self.poll(cx)
+                //}
             }
             Poll::Pending => Poll::Pending,
         }
     }
 }
 
-struct OpenGuard<Io>
-where
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
-{
+struct OpenGuard {
     key: Key,
-    inner: Option<Rc<RefCell<Inner<Io>>>>,
+    inner: Option<Rc<RefCell<Inner>>>,
 }
 
-impl<Io> OpenGuard<Io>
-where
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
-{
-    fn consume(mut self) -> Acquired<Io> {
+impl OpenGuard {
+    fn consume(mut self) -> Acquired {
         Acquired(self.key.clone(), self.inner.take())
     }
 }
 
-impl<Io> Drop for OpenGuard<Io>
-where
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
-{
+impl Drop for OpenGuard {
     fn drop(&mut self) {
         if let Some(i) = self.inner.take() {
             let mut inner = i.as_ref().borrow_mut();
@@ -566,20 +493,17 @@ where
     }
 }
 
-pub(super) struct Acquired<T>(Key, Option<Rc<RefCell<Inner<T>>>>);
+pub(super) struct Acquired(Key, Option<Rc<RefCell<Inner>>>);
 
-impl<T> Acquired<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
-{
-    pub(super) fn close(&mut self, conn: IoConnection<T>) {
+impl Acquired {
+    pub(super) fn close(&mut self, conn: Connection) {
         if let Some(inner) = self.1.take() {
             let (io, _) = conn.into_inner();
             inner.as_ref().borrow_mut().release_close(io);
         }
     }
 
-    pub(super) fn release(&mut self, conn: IoConnection<T>) {
+    pub(super) fn release(&mut self, conn: Connection) {
         if let Some(inner) = self.1.take() {
             let (io, created) = conn.into_inner();
             inner
@@ -590,7 +514,7 @@ where
     }
 }
 
-impl<T> Drop for Acquired<T> {
+impl Drop for Acquired {
     fn drop(&mut self) {
         if let Some(inner) = self.1.take() {
             inner.borrow_mut().release();

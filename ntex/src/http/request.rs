@@ -6,6 +6,7 @@ use crate::http::header::HeaderMap;
 use crate::http::httpmessage::HttpMessage;
 use crate::http::message::{Message, RequestHead};
 use crate::http::payload::Payload;
+use crate::io::IoRef;
 use crate::util::Extensions;
 
 /// Request
@@ -126,13 +127,21 @@ impl Request {
         self.head().method == Method::CONNECT
     }
 
+    /// Io reference for current connection
+    #[inline]
+    pub fn io(&self) -> Option<&IoRef> {
+        self.head().io.as_ref()
+    }
+
     /// Peer socket address
     ///
     /// Peer address is actual socket address, if proxy is used in front of
     /// ntex http server, then peer address would be address of this proxy.
     #[inline]
     pub fn peer_addr(&self) -> Option<net::SocketAddr> {
-        self.head().peer_addr
+        // TODO! fix
+        // self.head().peer_addr
+        None
     }
 
     /// Get request's payload

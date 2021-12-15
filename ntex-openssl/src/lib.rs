@@ -10,6 +10,13 @@ use ntex_io::{
 use ntex_util::{future::poll_fn, time, time::Millis};
 use openssl::ssl::{self, SslStream};
 
+/// Selected alpn protocol
+pub enum AlpnHttpProtocol {
+    Http1,
+    Http2,
+}
+
+/// An implementation of SSL streams
 pub struct SslFilter<F> {
     inner: RefCell<SslStream<IoInner<F>>>,
 }
@@ -191,7 +198,7 @@ impl SslAcceptor {
     /// Set handshake timeout.
     ///
     /// Default is set to 5 seconds.
-    pub fn timeout<U: Into<Millis>>(mut self, timeout: U) -> Self {
+    pub fn timeout<U: Into<Millis>>(&mut self, timeout: U) -> &mut Self {
         self.timeout = timeout.into();
         self
     }
@@ -209,7 +216,7 @@ impl Clone for SslAcceptor {
 impl<F: Filter + 'static> FilterFactory<F> for SslAcceptor {
     type Filter = SslFilter<F>;
 
-    type Error = io::Error;
+    type Error = Box<dyn Error>;
     type Future = Pin<Box<dyn Future<Output = Result<Io<Self::Filter>, Self::Error>>>>;
 
     fn create(self, st: Io<F>) -> Self::Future {
@@ -225,8 +232,7 @@ impl<F: Filter + 'static> FilterFactory<F> for SslAcceptor {
                         read_buf: None,
                         write_buf: None,
                     };
-                    let ssl_stream =
-                        ssl::SslStream::new(ssl, inner).map_err(map_to_ioerr)?;
+                    let ssl_stream = ssl::SslStream::new(ssl, inner)?;
 
                     Ok(SslFilter {
                         inner: RefCell::new(ssl_stream),
@@ -234,9 +240,9 @@ impl<F: Filter + 'static> FilterFactory<F> for SslAcceptor {
                 })?;
 
                 poll_fn(|cx| {
-                    let _ = st.write().poll_flush(cx)?;
+                    let _ = st.write().poll_flush(cx, true)?;
                     handle_result(st.filter().inner.borrow_mut().accept(), &st, cx)
-                        .map_err(map_to_ioerr)
+                        .map_err(Into::<Box<dyn Error>>::into)
                 })
                 .await?;
 
@@ -244,7 +250,7 @@ impl<F: Filter + 'static> FilterFactory<F> for SslAcceptor {
             })
             .await
             .map_err(|_| {
-                io::Error::new(io::ErrorKind::TimedOut, "ssl handshake timeout")
+                io::Error::new(io::ErrorKind::TimedOut, "ssl handshake timeout").into()
             })
             .and_then(|item| item)
         })
@@ -265,7 +271,7 @@ impl SslConnector {
 impl<F: Filter + 'static> FilterFactory<F> for SslConnector {
     type Filter = SslFilter<F>;
 
-    type Error = io::Error;
+    type Error = Box<dyn Error>;
     type Future = Pin<Box<dyn Future<Output = Result<Io<Self::Filter>, Self::Error>>>>;
 
     fn create(self, st: Io<F>) -> Self::Future {
@@ -277,8 +283,7 @@ impl<F: Filter + 'static> FilterFactory<F> for SslConnector {
                     read_buf: None,
                     write_buf: None,
                 };
-                let ssl_stream =
-                    ssl::SslStream::new(ssl, inner).map_err(map_to_ioerr)?;
+                let ssl_stream = ssl::SslStream::new(ssl, inner)?;
 
                 Ok(SslFilter {
                     inner: RefCell::new(ssl_stream),
@@ -286,9 +291,9 @@ impl<F: Filter + 'static> FilterFactory<F> for SslConnector {
             })?;
 
             poll_fn(|cx| {
-                let _ = st.write().poll_flush(cx)?;
+                let _ = st.write().poll_flush(cx, true)?;
                 handle_result(st.filter().inner.borrow_mut().connect(), &st, cx)
-                    .map_err(map_to_ioerr)
+                    .map_err(Into::<Box<dyn Error>>::into)
             })
             .await?;
 

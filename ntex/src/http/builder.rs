@@ -1,11 +1,11 @@
 use std::{cell::RefCell, error::Error, fmt, marker::PhantomData, rc::Rc};
 
-use crate::framed::State;
 use crate::http::body::MessageBody;
 use crate::http::config::{KeepAlive, OnRequest, ServiceConfig};
 use crate::http::error::ResponseError;
 use crate::http::h1::{Codec, ExpectHandler, H1Service, UpgradeHandler};
-use crate::http::h2::H2Service;
+use crate::io::{Filter, Io, IoRef};
+// use crate::http::h2::H2Service;
 use crate::http::helpers::{Data, DataFactory};
 use crate::http::request::Request;
 use crate::http::response::Response;
@@ -18,7 +18,7 @@ use crate::util::PoolId;
 ///
 /// This type can be used to construct an instance of `http service` through a
 /// builder-like pattern.
-pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
+pub struct HttpServiceBuilder<F, S, X = ExpectHandler, U = UpgradeHandler<F>> {
     keep_alive: KeepAlive,
     client_timeout: Millis,
     client_disconnect: Seconds,
@@ -26,12 +26,11 @@ pub struct HttpServiceBuilder<T, S, X = ExpectHandler, U = UpgradeHandler<T>> {
     pool: PoolId,
     expect: X,
     upgrade: Option<U>,
-    on_connect: Option<Rc<dyn Fn(&T) -> Box<dyn DataFactory>>>,
-    on_request: Option<OnRequest<T>>,
-    _t: PhantomData<(T, S)>,
+    on_request: Option<OnRequest>,
+    _t: PhantomData<(F, S)>,
 }
 
-impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
+impl<F, S> HttpServiceBuilder<F, S, ExpectHandler, UpgradeHandler<F>> {
     /// Create instance of `ServiceConfigBuilder`
     pub fn new() -> Self {
         HttpServiceBuilder {
@@ -42,15 +41,15 @@ impl<T, S> HttpServiceBuilder<T, S, ExpectHandler, UpgradeHandler<T>> {
             pool: PoolId::P1,
             expect: ExpectHandler,
             upgrade: None,
-            on_connect: None,
             on_request: None,
             _t: PhantomData,
         }
     }
 }
 
-impl<T, S, X, U> HttpServiceBuilder<T, S, X, U>
+impl<F, S, X, U> HttpServiceBuilder<F, S, X, U>
 where
+    F: Filter + 'static,
     S: ServiceFactory<Config = (), Request = Request>,
     S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
@@ -61,7 +60,7 @@ where
     X::InitError: fmt::Debug,
     X::Future: 'static,
     <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, T, State, Codec), Response = ()>,
+    U: ServiceFactory<Config = (), Request = (Request, Io<F>, Codec), Response = ()>,
     U::Error: fmt::Display + Error + 'static,
     U::InitError: fmt::Debug,
     U::Future: 'static,
@@ -122,29 +121,14 @@ where
         self
     }
 
-    #[doc(hidden)]
-    #[deprecated(since = "0.4.12", note = "Use memory pool config")]
-    #[inline]
-    /// Set read/write buffer params
-    ///
-    /// By default read buffer is 8kb, write buffer is 8kb
-    pub fn buffer_params(
-        self,
-        _max_read_buf_size: u16,
-        _max_write_buf_size: u16,
-        _min_buf_size: u16,
-    ) -> Self {
-        self
-    }
-
     /// Provide service for `EXPECT: 100-Continue` support.
     ///
     /// Service get called with request that contains `EXPECT` header.
     /// Service must return request in case of success, in that case
     /// request will be forwarded to main service.
-    pub fn expect<F, X1>(self, expect: F) -> HttpServiceBuilder<T, S, X1, U>
+    pub fn expect<XF, X1>(self, expect: XF) -> HttpServiceBuilder<F, S, X1, U>
     where
-        F: IntoServiceFactory<X1>,
+        XF: IntoServiceFactory<X1>,
         X1: ServiceFactory<Config = (), Request = Request, Response = Request>,
         X1::Error: ResponseError + 'static,
         X1::InitError: fmt::Debug,
@@ -159,7 +143,6 @@ where
             pool: self.pool,
             expect: expect.into_factory(),
             upgrade: self.upgrade,
-            on_connect: self.on_connect,
             on_request: self.on_request,
             _t: PhantomData,
         }
@@ -169,12 +152,12 @@ where
     ///
     /// If service is provided then normal requests handling get halted
     /// and this service get called with original request and framed object.
-    pub fn upgrade<F, U1>(self, upgrade: F) -> HttpServiceBuilder<T, S, X, U1>
+    pub fn upgrade<UF, U1>(self, upgrade: UF) -> HttpServiceBuilder<F, S, X, U1>
     where
-        F: IntoServiceFactory<U1>,
+        UF: IntoServiceFactory<U1>,
         U1: ServiceFactory<
             Config = (),
-            Request = (Request, T, State, Codec),
+            Request = (Request, Io<F>, Codec),
             Response = (),
         >,
         U1::Error: fmt::Display + Error + 'static,
@@ -190,46 +173,29 @@ where
             pool: self.pool,
             expect: self.expect,
             upgrade: Some(upgrade.into_factory()),
-            on_connect: self.on_connect,
             on_request: self.on_request,
             _t: PhantomData,
         }
     }
 
-    /// Set on-connect callback.
-    ///
-    /// It get called once per connection and result of the call
-    /// get stored to the request's extensions.
-    pub fn on_connect<F, I>(mut self, f: F) -> Self
-    where
-        F: Fn(&T) -> I + 'static,
-        I: Clone + 'static,
-    {
-        self.on_connect = Some(Rc::new(move |io| Box::new(Data(f(io)))));
-        self
-    }
-
     /// Set req request callback.
     ///
     /// It get called once per request.
-    pub fn on_request<Filter, F>(mut self, f: F) -> Self
+    pub fn on_request<R, FR>(mut self, f: FR) -> Self
     where
-        F: IntoService<Filter>,
-        Filter: Service<
-                Request = (Request, Rc<RefCell<T>>),
-                Response = Request,
-                Error = Response,
-            > + 'static,
+        FR: IntoService<R>,
+        R: Service<Request = (Request, IoRef), Response = Request, Error = Response>
+            + 'static,
     {
         self.on_request = Some(boxed::service(f.into_service()));
         self
     }
 
     /// Finish service configuration and create *http service* for HTTP/1 protocol.
-    pub fn h1<F, B>(self, service: F) -> H1Service<T, S, B, X, U>
+    pub fn h1<B, SF>(self, service: SF) -> H1Service<F, S, B, X, U>
     where
         B: MessageBody,
-        F: IntoServiceFactory<S>,
+        SF: IntoServiceFactory<S>,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
@@ -245,15 +211,15 @@ where
         H1Service::with_config(cfg, service.into_factory())
             .expect(self.expect)
             .upgrade(self.upgrade)
-            .on_connect(self.on_connect)
             .on_request(self.on_request)
     }
 
+    // pub fn h2<F, B>(self, service: F) -> H2Service<T, S, B>
     /// Finish service configuration and create *http service* for HTTP/2 protocol.
-    pub fn h2<F, B>(self, service: F) -> H2Service<T, S, B>
+    pub fn h2<B, SF>(self, service: SF) -> H1Service<F, S, B, X, U>
     where
         B: MessageBody + 'static,
-        F: IntoServiceFactory<S>,
+        SF: IntoServiceFactory<S>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
@@ -266,14 +232,19 @@ where
             self.handshake_timeout,
             self.pool,
         );
-        H2Service::with_config(cfg, service.into_factory()).on_connect(self.on_connect)
+
+        // H2Service::with_config(cfg, service.into_factory()).on_connect(self.on_connect)
+        H1Service::with_config(cfg, service.into_factory())
+            .expect(self.expect)
+            .upgrade(self.upgrade)
+            .on_request(self.on_request)
     }
 
     /// Finish service configuration and create `HttpService` instance.
-    pub fn finish<F, B>(self, service: F) -> HttpService<T, S, B, X, U>
+    pub fn finish<B, SF>(self, service: SF) -> HttpService<F, S, B, X, U>
     where
         B: MessageBody + 'static,
-        F: IntoServiceFactory<S>,
+        SF: IntoServiceFactory<S>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
@@ -290,7 +261,6 @@ where
         HttpService::with_config(cfg, service.into_factory())
             .expect(self.expect)
             .upgrade(self.upgrade)
-            .on_connect(self.on_connect)
             .on_request(self.on_request)
     }
 }

@@ -1,11 +1,13 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-use std::{cmp, fmt, io, mem};
+use std::{cmp, fmt, future::Future, io, mem, pin::Pin, rc::Rc};
 
-use ntex_bytes::{BufMut, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_util::future::poll_fn;
-use ntex_util::time::{sleep, Millis};
+use ntex_util::time::{sleep, Millis, Sleep};
+
+use crate::{IoStream, ReadContext, WriteContext, WriteReadiness};
 
 #[derive(Default)]
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
@@ -441,138 +443,181 @@ mod tokio {
     }
 }
 
-#[cfg(not(feature = "tokio"))]
-mod non_tokio {
-    impl IoStream for IoTest {
-        fn start(self, read: ReadState, write: WriteState) {
-            let io = Rc::new(self);
+impl IoStream for IoTest {
+    fn start(self, read: ReadContext, write: WriteContext) {
+        let io = Rc::new(self);
 
-            ntex_util::spawn(ReadTask {
-                io: io.clone(),
-                state: read,
-            });
-            ntex_util::spawn(WriteTask {
-                io,
-                state: write,
-                st: IoWriteState::Processing,
-            });
-        }
+        ntex_util::spawn(ReadTask {
+            io: io.clone(),
+            state: read,
+        });
+        ntex_util::spawn(WriteTask {
+            io,
+            state: write,
+            st: IoWriteState::Processing(None),
+        });
     }
+}
 
-    /// Read io task
-    struct ReadTask {
-        io: Rc<IoTest>,
-        state: ReadState,
-    }
+/// Read io task
+struct ReadTask {
+    io: Rc<IoTest>,
+    state: ReadContext,
+}
 
-    impl Future for ReadTask {
-        type Output = ();
+impl Future for ReadTask {
+    type Output = ();
 
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let this = self.as_ref();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_ref();
 
-            match this.state.poll_ready(cx) {
-                Poll::Ready(Err(())) => {
-                    log::trace!("read task is instructed to terminate");
-                    Poll::Ready(())
-                }
-                Poll::Ready(Ok(())) => {
-                    let io = &this.io;
-                    let pool = this.state.memory_pool();
-                    let mut buf = self.state.get_read_buf();
-                    let (hw, lw) = pool.read_params().unpack();
+        match this.state.poll_ready(cx) {
+            Poll::Ready(Err(())) => {
+                log::trace!("read task is instructed to terminate");
+                Poll::Ready(())
+            }
+            Poll::Ready(Ok(())) => {
+                let io = &this.io;
+                let pool = this.state.memory_pool();
+                let mut buf = self.state.get_read_buf();
+                let (hw, lw) = pool.read_params().unpack();
 
-                    // read data from socket
-                    let mut new_bytes = 0;
-                    loop {
-                        // make sure we've got room
-                        let remaining = buf.remaining_mut();
-                        if remaining < lw {
-                            buf.reserve(hw - remaining);
-                        }
-
-                        match io.poll_read_buf(cx, &mut buf) {
-                            Poll::Pending => {
-                                log::trace!("no more data in io stream");
-                                break;
-                            }
-                            Poll::Ready(Ok(n)) => {
-                                if n == 0 {
-                                    log::trace!("io stream is disconnected");
-                                    this.state.release_read_buf(buf, new_bytes);
-                                    this.state.close(None);
-                                    return Poll::Ready(());
-                                } else {
-                                    new_bytes += n;
-                                    if buf.len() > hw {
-                                        break;
-                                    }
-                                }
-                            }
-                            Poll::Ready(Err(err)) => {
-                                log::trace!("read task failed on io {:?}", err);
-                                this.state.release_read_buf(buf, new_bytes);
-                                this.state.close(Some(err));
-                                return Poll::Ready(());
-                            }
-                        }
+                // read data from socket
+                let mut new_bytes = 0;
+                loop {
+                    // make sure we've got room
+                    let remaining = buf.remaining_mut();
+                    if remaining < lw {
+                        buf.reserve(hw - remaining);
                     }
 
-                    this.state.release_read_buf(buf, new_bytes);
-                    Poll::Pending
-                }
-                Poll::Pending => Poll::Pending,
-            }
-        }
-    }
-
-    #[derive(Debug)]
-    enum IoWriteState {
-        Processing,
-        Shutdown(Option<Sleep>, Shutdown),
-    }
-
-    #[derive(Debug)]
-    enum Shutdown {
-        None,
-        Flushed,
-        Stopping,
-    }
-
-    /// Write io task
-    struct WriteTask {
-        st: IoWriteState,
-        io: Rc<IoTest>,
-        state: WriteState,
-    }
-
-    impl Future for WriteTask {
-        type Output = ();
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let mut this = self.as_mut().get_mut();
-
-            match this.st {
-                IoWriteState::Processing => {
-                    match this.state.poll_ready(cx) {
-                        Poll::Ready(Ok(())) => {
-                            // flush framed instance
-                            match flush_io(&this.io, &this.state, cx) {
-                                Poll::Pending | Poll::Ready(true) => Poll::Pending,
-                                Poll::Ready(false) => Poll::Ready(()),
+                    match io.poll_read_buf(cx, &mut buf) {
+                        Poll::Pending => {
+                            log::trace!("no more data in io stream");
+                            break;
+                        }
+                        Poll::Ready(Ok(n)) => {
+                            if n == 0 {
+                                log::trace!("io stream is disconnected");
+                                let _ = this.state.release_read_buf(buf, new_bytes);
+                                this.state.close(None);
+                                return Poll::Ready(());
+                            } else {
+                                new_bytes += n;
+                                if buf.len() > hw {
+                                    break;
+                                }
                             }
                         }
-                        Poll::Ready(Err(WriteReadiness::Shutdown)) => {
-                            log::trace!("write task is instructed to shutdown");
-
-                            this.st = IoWriteState::Shutdown(
-                                this.state.disconnect_timeout().map(sleep),
-                                Shutdown::None,
-                            );
-                            self.poll(cx)
+                        Poll::Ready(Err(err)) => {
+                            log::trace!("read task failed on io {:?}", err);
+                            let _ = this.state.release_read_buf(buf, new_bytes);
+                            this.state.close(Some(err));
+                            return Poll::Ready(());
                         }
-                        Poll::Ready(Err(WriteReadiness::Terminate)) => {
-                            log::trace!("write task is instructed to terminate");
+                    }
+                }
+
+                let _ = this.state.release_read_buf(buf, new_bytes);
+                Poll::Pending
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum IoWriteState {
+    Processing(Option<Sleep>),
+    Shutdown(Option<Sleep>, Shutdown),
+}
+
+#[derive(Debug)]
+enum Shutdown {
+    None,
+    Flushed,
+    Stopping,
+}
+
+/// Write io task
+struct WriteTask {
+    st: IoWriteState,
+    io: Rc<IoTest>,
+    state: WriteContext,
+}
+
+impl Future for WriteTask {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.as_mut().get_mut();
+
+        match this.st {
+            IoWriteState::Processing(ref mut delay) => {
+                match this.state.poll_ready(cx) {
+                    Poll::Ready(Ok(())) => {
+                        // flush framed instance
+                        match flush_io(&this.io, &this.state, cx) {
+                            Poll::Pending | Poll::Ready(true) => Poll::Pending,
+                            Poll::Ready(false) => Poll::Ready(()),
+                        }
+                    }
+                    Poll::Ready(Err(WriteReadiness::Timeout(time))) => {
+                        if delay.is_none() {
+                            *delay = Some(sleep(time));
+                        }
+                        self.poll(cx)
+                    }
+                    Poll::Ready(Err(WriteReadiness::Shutdown(time))) => {
+                        log::trace!("write task is instructed to shutdown");
+
+                        let timeout = if let Some(delay) = delay.take() {
+                            delay
+                        } else {
+                            sleep(time)
+                        };
+
+                        this.st = IoWriteState::Shutdown(Some(timeout), Shutdown::None);
+                        self.poll(cx)
+                    }
+                    Poll::Ready(Err(WriteReadiness::Terminate)) => {
+                        log::trace!("write task is instructed to terminate");
+                        // shutdown WRITE side
+                        this.io
+                            .local
+                            .lock()
+                            .unwrap()
+                            .borrow_mut()
+                            .flags
+                            .insert(Flags::CLOSED);
+                        this.state.close(None);
+                        Poll::Ready(())
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+            IoWriteState::Shutdown(ref mut delay, ref mut st) => {
+                // close WRITE side and wait for disconnect on read side.
+                // use disconnect timeout, otherwise it could hang forever.
+                loop {
+                    match st {
+                        Shutdown::None => {
+                            // flush write buffer
+                            match flush_io(&this.io, &this.state, cx) {
+                                Poll::Ready(true) => {
+                                    *st = Shutdown::Flushed;
+                                    continue;
+                                }
+                                Poll::Ready(false) => {
+                                    log::trace!(
+                                        "write task is closed with err during flush"
+                                    );
+                                    return Poll::Ready(());
+                                }
+                                _ => (),
+                            }
+                        }
+                        Shutdown::Flushed => {
                             // shutdown WRITE side
                             this.io
                                 .local
@@ -581,143 +626,102 @@ mod non_tokio {
                                 .borrow_mut()
                                 .flags
                                 .insert(Flags::CLOSED);
-                            this.state.close(None);
-                            Poll::Ready(())
+                            *st = Shutdown::Stopping;
+                            continue;
                         }
-                        Poll::Pending => Poll::Pending,
-                    }
-                }
-                IoWriteState::Shutdown(ref mut delay, ref mut st) => {
-                    // close WRITE side and wait for disconnect on read side.
-                    // use disconnect timeout, otherwise it could hang forever.
-                    loop {
-                        match st {
-                            Shutdown::None => {
-                                // flush write buffer
-                                match flush_io(&this.io, &this.state, cx) {
-                                    Poll::Ready(true) => {
-                                        *st = Shutdown::Flushed;
-                                        continue;
-                                    }
-                                    Poll::Ready(false) => {
-                                        log::trace!(
-                                            "write task is closed with err during flush"
-                                        );
+                        Shutdown::Stopping => {
+                            // read until 0 or err
+                            let io = &this.io;
+                            loop {
+                                let mut buf = BytesMut::new();
+                                match io.poll_read_buf(cx, &mut buf) {
+                                    Poll::Ready(Err(e)) => {
+                                        this.state.close(Some(e));
+                                        log::trace!("write task is stopped");
                                         return Poll::Ready(());
                                     }
+                                    Poll::Ready(Ok(n)) if n == 0 => {
+                                        this.state.close(None);
+                                        log::trace!("write task is stopped");
+                                        return Poll::Ready(());
+                                    }
+                                    Poll::Pending => break,
                                     _ => (),
                                 }
                             }
-                            Shutdown::Flushed => {
-                                // shutdown WRITE side
-                                this.io
-                                    .local
-                                    .lock()
-                                    .unwrap()
-                                    .borrow_mut()
-                                    .flags
-                                    .insert(Flags::CLOSED);
-                                *st = Shutdown::Stopping;
-                                continue;
-                            }
-                            Shutdown::Stopping => {
-                                // read until 0 or err
-                                let io = &this.io;
-                                loop {
-                                    let mut buf = BytesMut::new();
-                                    match io.poll_read_buf(cx, &mut buf) {
-                                        Poll::Ready(Err(e)) => {
-                                            this.state.close(Some(e));
-                                            log::trace!("write task is stopped");
-                                            return Poll::Ready(());
-                                        }
-                                        Poll::Ready(Ok(n)) if n == 0 => {
-                                            this.state.close(None);
-                                            log::trace!("write task is stopped");
-                                            return Poll::Ready(());
-                                        }
-                                        Poll::Pending => break,
-                                        _ => (),
-                                    }
-                                }
-                            }
                         }
-
-                        // disconnect timeout
-                        if let Some(ref delay) = delay {
-                            if delay.poll_elapsed(cx).is_pending() {
-                                return Poll::Pending;
-                            }
-                        }
-                        log::trace!("write task is stopped after delay");
-                        this.state.close(None);
-                        return Poll::Ready(());
                     }
+
+                    // disconnect timeout
+                    if let Some(ref delay) = delay {
+                        if delay.poll_elapsed(cx).is_pending() {
+                            return Poll::Pending;
+                        }
+                    }
+                    log::trace!("write task is stopped after delay");
+                    this.state.close(None);
+                    return Poll::Ready(());
                 }
             }
         }
     }
+}
 
-    /// Flush write buffer to underlying I/O stream.
-    pub(super) fn flush_io(
-        io: &IoTest,
-        state: &WriteState,
-        cx: &mut Context<'_>,
-    ) -> Poll<bool> {
-        let mut buf = if let Some(buf) = state.get_write_buf() {
-            buf
-        } else {
-            return Poll::Ready(true);
-        };
-        let len = buf.len();
-        let pool = state.memory_pool();
+/// Flush write buffer to underlying I/O stream.
+pub(super) fn flush_io(
+    io: &IoTest,
+    state: &WriteContext,
+    cx: &mut Context<'_>,
+) -> Poll<bool> {
+    let mut buf = if let Some(buf) = state.get_write_buf() {
+        buf
+    } else {
+        return Poll::Ready(true);
+    };
+    let len = buf.len();
 
-        if len != 0 {
-            log::trace!("flushing framed transport: {}", len);
+    if len != 0 {
+        log::trace!("flushing framed transport: {}", len);
 
-            let mut written = 0;
-            while written < len {
-                match io.poll_write_buf(cx, &buf[written..]) {
-                    Poll::Ready(Ok(n)) => {
-                        if n == 0 {
-                            log::trace!(
-                                "disconnected during flush, written {}",
-                                written
-                            );
-                            pool.release_write_buf(buf);
-                            state.close(Some(io::Error::new(
-                                io::ErrorKind::WriteZero,
-                                "failed to write frame to transport",
-                            )));
-                            return Poll::Ready(false);
-                        } else {
-                            written += n
-                        }
-                    }
-                    Poll::Pending => break,
-                    Poll::Ready(Err(e)) => {
-                        log::trace!("error during flush: {}", e);
-                        pool.release_write_buf(buf);
-                        state.close(Some(e));
+        let mut written = 0;
+        while written < len {
+            match io.poll_write_buf(cx, &buf[written..]) {
+                Poll::Ready(Ok(n)) => {
+                    if n == 0 {
+                        log::trace!("disconnected during flush, written {}", written);
+                        let _ = state.release_write_buf(buf);
+                        state.close(Some(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "failed to write frame to transport",
+                        )));
                         return Poll::Ready(false);
+                    } else {
+                        written += n
                     }
                 }
+                Poll::Pending => break,
+                Poll::Ready(Err(e)) => {
+                    log::trace!("error during flush: {}", e);
+                    let _ = state.release_write_buf(buf);
+                    state.close(Some(e));
+                    return Poll::Ready(false);
+                }
             }
-            log::trace!("flushed {} bytes", written);
-
-            // remove written data
-            if written == len {
-                buf.clear();
-                state.release_write_buf(buf);
-                Poll::Ready(true)
-            } else {
-                buf.advance(written);
-                state.release_write_buf(buf);
-                Poll::Pending
-            }
-        } else {
-            Poll::Ready(true)
         }
+        log::trace!("flushed {} bytes", written);
+
+        // remove written data
+        if written == len {
+            buf.clear();
+            let _ = state.release_write_buf(buf);
+            Poll::Ready(true)
+        } else {
+            buf.advance(written);
+            let _ = state.release_write_buf(buf);
+            Poll::Pending
+        }
+    } else {
+        Poll::Ready(true)
     }
 }
 

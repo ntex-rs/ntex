@@ -42,10 +42,8 @@ impl ClientBuilder {
     /// Use custom connector service.
     pub fn connector<T>(mut self, connector: T) -> Self
     where
-        T: Service<Request = Connect, Error = ConnectError> + 'static,
-        T::Response: Connection,
-        <T::Response as Connection>::Future: 'static,
-        T::Future: 'static,
+        T: Service<Request = Connect, Response = Connection, Error = ConnectError>
+            + 'static,
     {
         self.config.connector = Box::new(ConnectorWrapper(connector));
         self

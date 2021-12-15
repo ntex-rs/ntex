@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, io, task::Context, task::Poll};
+use std::{any::Any, any::TypeId, fmt, future::Future, io, task::Context, task::Poll};
 
 pub mod testing;
 
@@ -14,12 +14,12 @@ mod tokio_impl;
 
 use ntex_bytes::BytesMut;
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::time::Millis;
+use ntex_util::{channel::oneshot::Receiver, future::Either, time::Millis};
 
 pub use self::dispatcher::Dispatcher;
 pub use self::filter::DefaultFilter;
-pub use self::state::{Io, IoRef, ReadRef, WriteRef};
-pub use self::tasks::{ReadState, WriteState};
+pub use self::state::{Io, IoRef, OnDisconnect, ReadRef, WriteRef};
+pub use self::tasks::{ReadContext, WriteContext};
 pub use self::time::Timer;
 
 pub use self::utils::{filter_factory, from_iostream, into_boxed, into_io};
@@ -55,8 +55,15 @@ pub trait WriteFilter {
     fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error>;
 }
 
-pub trait Filter: ReadFilter + WriteFilter {
+pub trait Filter: ReadFilter + WriteFilter + 'static {
     fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>>;
+
+    fn query(
+        &self,
+        id: TypeId,
+    ) -> Either<Option<Box<dyn Any>>, Receiver<Option<Box<dyn Any>>>> {
+        Either::Left(None)
+    }
 }
 
 pub trait FilterFactory<F: Filter>: Sized {
@@ -69,7 +76,7 @@ pub trait FilterFactory<F: Filter>: Sized {
 }
 
 pub trait IoStream {
-    fn start(self, _: ReadState, _: WriteState);
+    fn start(self, _: ReadContext, _: WriteContext);
 }
 
 /// Framed transport item

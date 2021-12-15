@@ -1,6 +1,6 @@
 //! Framed transport dispatcher
 use std::{
-    cell::Cell, future::Future, io, pin::Pin, rc::Rc, task::Context, task::Poll, time,
+    cell::Cell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll, time,
 };
 
 use ntex_bytes::Pool;
@@ -70,7 +70,6 @@ enum DispatcherError<S, U> {
     KeepAlive,
     Encoder(U),
     Service(S),
-    Io(io::Error),
 }
 
 enum PollService<U: Encoder + Decoder> {
@@ -157,7 +156,7 @@ where
     ///
     /// By default disconnect timeout is set to 1 seconds.
     pub fn disconnect_timeout(self, val: Seconds) -> Self {
-        self.inner.state.set_disconnect_timeout(val);
+        self.inner.state.set_disconnect_timeout(val.into());
         self
     }
 }
@@ -176,12 +175,7 @@ where
             Ok(Some(val)) => match write.encode(val, &self.codec) {
                 Ok(true) => (),
                 Ok(false) => write.enable_backpressure(None),
-                Err(Either::Left(err)) => {
-                    self.error.set(Some(DispatcherError::Encoder(err)))
-                }
-                Err(Either::Right(err)) => {
-                    self.error.set(Some(DispatcherError::Io(err)))
-                }
+                Err(err) => self.error.set(Some(DispatcherError::Encoder(err))),
             },
             Err(err) => self.error.set(Some(DispatcherError::Service(err))),
             Ok(None) => return,
@@ -407,12 +401,7 @@ where
             Ok(Some(item)) => match write.encode(item, &self.shared.codec) {
                 Ok(true) => (),
                 Ok(false) => write.enable_backpressure(None),
-                Err(Either::Left(err)) => {
-                    self.shared.error.set(Some(DispatcherError::Encoder(err)))
-                }
-                Err(Either::Right(err)) => {
-                    self.shared.error.set(Some(DispatcherError::Io(err)))
-                }
+                Err(err) => self.shared.error.set(Some(DispatcherError::Encoder(err))),
             },
             Err(err) => self.shared.error.set(Some(DispatcherError::Service(err))),
             Ok(None) => (),
@@ -442,9 +431,6 @@ where
                         }
                         DispatcherError::Encoder(err) => {
                             PollService::Item(DispatchItem::EncoderError(err))
-                        }
-                        DispatcherError::Io(err) => {
-                            PollService::Item(DispatchItem::Disconnect(Some(err)))
                         }
                         DispatcherError::Service(err) => {
                             self.error.set(Some(err));

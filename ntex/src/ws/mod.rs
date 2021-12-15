@@ -25,6 +25,7 @@ pub use self::stream::{StreamDecoder, StreamEncoder};
 pub enum WsError<E> {
     Service(E),
     KeepAlive,
+    Disconnected,
     Protocol(ProtocolError),
     Io(io::Error),
 }

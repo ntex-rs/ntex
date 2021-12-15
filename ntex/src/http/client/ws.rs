@@ -6,17 +6,16 @@ use coo_kie::{Cookie, CookieJar};
 use nanorand::{Rng, WyRand};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
-use crate::framed::{DispatchItem, Dispatcher, State};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue, AUTHORIZATION};
 use crate::http::{ConnectionType, Payload, RequestHead, StatusCode, Uri};
+use crate::io::{DefaultFilter, DispatchItem, Dispatcher, Filter, Io, IoBoxed};
 use crate::service::{apply_fn, into_service, IntoService, Service};
 use crate::util::Either;
 use crate::{channel::mpsc, rt, time::timeout, util::sink, util::Ready, ws};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
 
-use super::connect::BoxedSocket;
 use super::error::{InvalidUrl, SendRequestError, WsClientError};
 use super::response::ClientResponse;
 use super::ClientConfig;
@@ -311,7 +310,7 @@ impl WsRequest {
         let fut = self.config.connector.open_tunnel(head.into(), self.addr);
 
         // set request timeout
-        let (head, framed) = if self.config.timeout.non_zero() {
+        let (head, io, codec) = if self.config.timeout.non_zero() {
             timeout(self.config.timeout, fut)
                 .await
                 .map_err(|_| SendRequestError::Timeout)
@@ -377,13 +376,12 @@ impl WsRequest {
         // response and ws io
         Ok(WsConnection::new(
             ClientResponse::new(head, Payload::None),
-            framed.map_codec(|_| {
-                if server_mode {
-                    ws::Codec::new().max_size(max_size)
-                } else {
-                    ws::Codec::new().max_size(max_size).client_mode()
-                }
-            }),
+            io,
+            if server_mode {
+                ws::Codec::new().max_size(max_size)
+            } else {
+                ws::Codec::new().max_size(max_size).client_mode()
+            },
         ))
     }
 }
@@ -403,31 +401,20 @@ impl fmt::Debug for WsRequest {
     }
 }
 
-pub struct WsConnection<Io = BoxedSocket> {
-    io: Io,
-    state: State,
+pub struct WsConnection {
+    io: IoBoxed,
     codec: ws::Codec,
     res: ClientResponse,
 }
 
-impl<Io> WsConnection<Io>
-where
-    Io: AsyncRead + AsyncWrite + Unpin + 'static,
-{
-    fn new(res: ClientResponse, framed: Framed<Io, ws::Codec>) -> Self {
-        let (io, codec, state) = State::from_framed(framed);
-
-        Self {
-            io,
-            state,
-            codec,
-            res,
-        }
+impl WsConnection {
+    fn new(res: ClientResponse, io: IoBoxed, codec: ws::Codec) -> Self {
+        Self { io, codec, res }
     }
 
     /// Get ws sink
     pub fn sink(&self) -> ws::WsSink {
-        ws::WsSink::new(self.state.clone(), self.codec.clone())
+        ws::WsSink::new(self.io.get_ref(), self.codec.clone())
     }
 
     /// Get reference to response
@@ -458,10 +445,10 @@ where
     }
 
     /// Start client websockets service.
-    pub async fn start<T, F>(self, service: F) -> Result<(), ws::WsError<T::Error>>
+    pub async fn start<T, U>(self, service: U) -> Result<(), ws::WsError<T::Error>>
     where
         T: Service<Request = ws::Frame, Response = Option<ws::Message>> + 'static,
-        F: IntoService<T>,
+        U: IntoService<T>,
     {
         let service = apply_fn(
             service.into_service().map_err(ws::WsError::Service),
@@ -475,21 +462,22 @@ where
                 DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
                     Either::Right(Ready::Err(ws::WsError::Protocol(e)))
                 }
-                DispatchItem::IoError(e) => {
+                DispatchItem::Disconnect(Some(e)) => {
                     Either::Right(Ready::Err(ws::WsError::Io(e)))
+                }
+                DispatchItem::Disconnect(None) => {
+                    Either::Right(Ready::Err(ws::WsError::Disconnected))
                 }
             },
         );
 
-        Dispatcher::new(self.io, self.codec, self.state, service, Default::default())
-            .await
+        Dispatcher::new(self.io, self.codec, service, Default::default()).await
     }
 
     /// Consumes the `WsConnection`, returning it'as underlying I/O framed object
     /// and response.
-    pub fn into_inner(self) -> (ClientResponse, Framed<Io, ws::Codec>) {
-        let framed = self.state.into_framed(self.io, self.codec);
-        (self.res, framed)
+    pub fn into_inner(self) -> (ClientResponse, IoBoxed, ws::Codec) {
+        (self.res, self.io, self.codec)
     }
 }
 

@@ -1,8 +1,14 @@
 # Changes
 
+## [0.6.0] - 2021-12-xx
+
+* Removed Framed type
+
+* Removed tokio dependency
+
 ## [0.5.1] - 2021-09-08
 
-* Fix tight loop in Framed::close() method.
+* Fix tight loop in Framed::close() method
 
 ## [0.5.0] - 2021-06-27
 

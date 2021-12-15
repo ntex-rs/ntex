@@ -5,12 +5,15 @@ use std::{convert::TryFrom, io, net, str::FromStr, sync::mpsc, thread};
 use coo_kie::{Cookie, CookieJar};
 
 use crate::codec::{AsyncRead, AsyncWrite, Framed};
+use crate::io::IoBoxed;
 use crate::rt::{net::TcpStream, System};
 use crate::server::{Server, StreamServiceFactory};
 use crate::{time::Millis, time::Seconds, util::Bytes};
 
 use super::client::error::WsClientError;
-use super::client::{Client, ClientRequest, ClientResponse, Connector};
+use super::client::{
+    ws::WsConnection, Client, ClientRequest, ClientResponse, Connector,
+};
 use super::error::{HttpError, PayloadError};
 use super::header::{HeaderMap, HeaderName, HeaderValue};
 use super::payload::Payload;
@@ -207,7 +210,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
+pub fn server<F: StreamServiceFactory>(factory: F) -> TestServer {
     let (tx, rx) = mpsc::channel();
 
     // run server in separate thread
@@ -318,21 +321,12 @@ impl TestServer {
     }
 
     /// Connect to websocket server at a given path
-    pub async fn ws_at(
-        &mut self,
-        path: &str,
-    ) -> Result<Framed<impl AsyncRead + AsyncWrite, crate::ws::Codec>, WsClientError>
-    {
-        let url = self.url(path);
-        let connect = self.client.ws(url).connect();
-        connect.await.map(|ws| ws.into_inner().1)
+    pub async fn ws_at(&mut self, path: &str) -> Result<WsConnection, WsClientError> {
+        self.client.ws(self.url(path)).connect().await
     }
 
     /// Connect to a websocket server
-    pub async fn ws(
-        &mut self,
-    ) -> Result<Framed<impl AsyncRead + AsyncWrite, crate::ws::Codec>, WsClientError>
-    {
+    pub async fn ws(&mut self) -> Result<WsConnection, WsClientError> {
         self.ws_at("/").await
     }
 

@@ -22,6 +22,6 @@ ntex-util = "0.1.2"
 openssl = "0.10.32"
 
 [dev-dependencies]
-ntex = { version = "0.4.14", features = ["openssl"] }
+ntex = { version = "0.5.0", features = ["openssl"] }
 futures = "0.3"
 env_logger = "0.9"

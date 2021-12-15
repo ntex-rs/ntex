@@ -3,6 +3,7 @@ use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 use crate::http::{
     HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
 };
+use crate::io::IoRef;
 use crate::router::Path;
 use crate::util::{Extensions, Ready};
 
@@ -105,6 +106,12 @@ impl HttpRequest {
         }
     }
 
+    /// Io reference for current connection
+    #[inline]
+    pub fn io(&self) -> Option<&IoRef> {
+        self.head().io.as_ref()
+    }
+
     /// Get a reference to the Path parameters.
     ///
     /// Params is a container for url parameters.
@@ -181,17 +188,6 @@ impl HttpRequest {
     /// Get a reference to a `ResourceMap` of current application.
     pub fn resource_map(&self) -> &ResourceMap {
         &self.0.rmap
-    }
-
-    /// Peer socket address
-    ///
-    /// Peer address is actual socket address, if proxy is used in front of
-    /// ntex http server, then peer address would be address of this proxy.
-    ///
-    /// To get client connection information `.connection_info()` should be used.
-    #[inline]
-    pub fn peer_addr(&self) -> Option<net::SocketAddr> {
-        self.head().peer_addr
     }
 
     /// Get *ConnectionInfo* for the current request.

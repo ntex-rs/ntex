@@ -6,8 +6,8 @@ use std::{
 use log::error;
 
 use crate::rt::net::TcpStream;
-use crate::service;
 use crate::util::{counter::CounterGuard, HashMap, Ready};
+use crate::{io::Io, service};
 
 use super::builder::bind_addr;
 use super::service::{
@@ -199,7 +199,7 @@ impl InternalServiceFactory for ConfiguredService {
                     res.push((
                         token,
                         Box::new(StreamService::new(service::fn_service(
-                            move |_: TcpStream| {
+                            move |_: Io| {
                                 error!("Service {:?} is not configured", name);
                                 Ready::<_, ()>::Ok(())
                             },
@@ -292,7 +292,7 @@ impl ServiceRuntime {
     pub fn service<T, F>(&self, name: &str, service: F)
     where
         F: service::IntoServiceFactory<T>,
-        T: service::ServiceFactory<Config = (), Request = TcpStream> + 'static,
+        T: service::ServiceFactory<Config = (), Request = Io> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -338,7 +338,7 @@ struct ServiceFactory<T> {
 
 impl<T> service::ServiceFactory for ServiceFactory<T>
 where
-    T: service::ServiceFactory<Config = (), Request = TcpStream>,
+    T: service::ServiceFactory<Config = (), Request = Io>,
     T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,

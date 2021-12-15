@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::{
     future::Future, marker::PhantomData, net::SocketAddr, pin::Pin, task::Context,
     task::Poll,
@@ -5,12 +6,12 @@ use std::{
 
 use log::error;
 
+use crate::io::Io;
 use crate::service::{Service, ServiceFactory};
 use crate::util::{counter::CounterGuard, Ready};
 use crate::{rt::spawn, time::Millis};
 
-use super::socket::{FromStream, Stream};
-use super::Token;
+use super::{socket::Stream, Token};
 
 /// Server message
 pub(super) enum ServerMessage {
@@ -22,8 +23,8 @@ pub(super) enum ServerMessage {
     ForceShutdown,
 }
 
-pub trait StreamServiceFactory<Stream: FromStream>: Send + Clone + 'static {
-    type Factory: ServiceFactory<Config = (), Request = Stream>;
+pub trait StreamServiceFactory: Send + Clone + 'static {
+    type Factory: ServiceFactory<Config = (), Request = Io>;
 
     fn create(&self) -> Self::Factory;
 }
@@ -57,12 +58,11 @@ impl<T> StreamService<T> {
     }
 }
 
-impl<T, I> Service for StreamService<T>
+impl<T> Service for StreamService<T>
 where
-    T: Service<Request = I>,
+    T: Service<Request = Io>,
     T::Future: 'static,
     T::Error: 'static,
-    I: FromStream,
 {
     type Request = (Option<CounterGuard>, ServerMessage);
     type Response = ();
@@ -82,7 +82,7 @@ where
     fn call(&self, (guard, req): (Option<CounterGuard>, ServerMessage)) -> Self::Future {
         match req {
             ServerMessage::Connect(stream) => {
-                let stream = FromStream::from_stream(stream).map_err(|e| {
+                let stream = stream.try_into().map_err(|e| {
                     error!("Cannot convert to an async io stream: {}", e);
                 });
 
@@ -102,18 +102,16 @@ where
     }
 }
 
-pub(super) struct Factory<F: StreamServiceFactory<Io>, Io: FromStream> {
+pub(super) struct Factory<F: StreamServiceFactory> {
     name: String,
     inner: F,
     token: Token,
     addr: SocketAddr,
-    _t: PhantomData<Io>,
 }
 
-impl<F, Io> Factory<F, Io>
+impl<F> Factory<F>
 where
-    F: StreamServiceFactory<Io>,
-    Io: FromStream + Send + 'static,
+    F: StreamServiceFactory,
 {
     pub(crate) fn create(
         name: String,
@@ -126,15 +124,13 @@ where
             token,
             inner,
             addr,
-            _t: PhantomData,
         })
     }
 }
 
-impl<F, Io> InternalServiceFactory for Factory<F, Io>
+impl<F> InternalServiceFactory for Factory<F>
 where
-    F: StreamServiceFactory<Io>,
-    Io: FromStream + Send + 'static,
+    F: StreamServiceFactory,
 {
     fn name(&self, _: Token) -> &str {
         &self.name
@@ -146,7 +142,6 @@ where
             inner: self.inner.clone(),
             token: self.token,
             addr: self.addr,
-            _t: PhantomData,
         })
     }
 
@@ -187,11 +182,10 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
     }
 }
 
-impl<F, T, I> StreamServiceFactory<I> for F
+impl<F, T> StreamServiceFactory for F
 where
     F: Fn() -> T + Send + Clone + 'static,
-    T: ServiceFactory<Config = (), Request = I>,
-    I: FromStream,
+    T: ServiceFactory<Config = (), Request = Io>,
 {
     type Factory = T;
 

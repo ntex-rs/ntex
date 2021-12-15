@@ -6,6 +6,7 @@ use std::{fmt, net};
 use crate::http::{
     header, HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version,
 };
+use crate::io::IoRef;
 use crate::router::{Path, Resource};
 use crate::util::Extensions;
 
@@ -87,6 +88,12 @@ impl<Err> WebRequest<Err> {
         WebResponse::new(res.into(), self.req)
     }
 
+    /// Io reference for current connection
+    #[inline]
+    pub fn io(&self) -> Option<&IoRef> {
+        self.head().io.as_ref()
+    }
+
     /// This method returns reference to the request head
     #[inline]
     pub fn head(&self) -> &RequestHead {
@@ -145,17 +152,6 @@ impl<Err> WebRequest<Err> {
         } else {
             ""
         }
-    }
-
-    /// Peer socket address
-    ///
-    /// Peer address is actual socket address, if proxy is used in front of
-    /// ntex http server, then peer address would be address of this proxy.
-    ///
-    /// To get client connection information `ConnectionInfo` should be used.
-    #[inline]
-    pub fn peer_addr(&self) -> Option<net::SocketAddr> {
-        self.head().peer_addr
     }
 
     /// Get *ConnectionInfo* for the current request.

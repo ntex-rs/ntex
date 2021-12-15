@@ -3,10 +3,9 @@ use std::sync::{mpsc, Arc};
 use std::{io, io::Read, net, thread, time};
 
 use futures::future::{lazy, ok, FutureExt};
-use futures::SinkExt;
 
-use ntex::codec::{BytesCodec, Framed};
-use ntex::rt::net::TcpStream;
+use ntex::codec::BytesCodec;
+use ntex::io::Io;
 use ntex::server::{Server, TestServer};
 use ntex::service::fn_service;
 use ntex::util::{Bytes, Ready};
@@ -77,9 +76,10 @@ fn test_start() {
                 .backlog(100)
                 .disable_signals()
                 .bind("test", addr, move || {
-                    fn_service(|io: TcpStream| async move {
-                        let mut f = Framed::new(io, BytesCodec);
-                        f.send(Bytes::from_static(b"test")).await.unwrap();
+                    fn_service(|io: Io| async move {
+                        io.send(Bytes::from_static(b"test"), &BytesCodec)
+                            .await
+                            .unwrap();
                         Ok::<_, ()>(())
                     })
                 })

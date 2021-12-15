@@ -4,9 +4,9 @@ use ntex_bytes::{BytesMut, PoolRef};
 
 use super::{state::Flags, IoRef, WriteReadiness};
 
-pub struct ReadState(pub(super) IoRef);
+pub struct ReadContext(pub(super) IoRef);
 
-impl ReadState {
+impl ReadContext {
     #[inline]
     pub fn memory_pool(&self) -> PoolRef {
         self.0 .0.pool.get()
@@ -60,9 +60,9 @@ impl ReadState {
     }
 }
 
-pub struct WriteState(pub(super) IoRef);
+pub struct WriteContext(pub(super) IoRef);
 
-impl WriteState {
+impl WriteContext {
     #[inline]
     pub fn memory_pool(&self) -> PoolRef {
         self.0 .0.pool.get()

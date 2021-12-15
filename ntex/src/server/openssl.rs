@@ -1,10 +1,13 @@
 use std::task::{Context, Poll};
 use std::{error::Error, fmt, future::Future, io, marker::PhantomData, pin::Pin};
 
+pub use ntex_openssl::SslFilter;
 pub use open_ssl::ssl::{self, AlpnError, Ssl, SslAcceptor, SslAcceptorBuilder};
-pub use tokio_openssl::SslStream;
+
+use ntex_openssl::SslAcceptor as IoSslAcceptor;
 
 use crate::codec::{AsyncRead, AsyncWrite};
+use crate::io::{Filter, FilterFactory, Io};
 use crate::service::{Service, ServiceFactory};
 use crate::time::{sleep, Millis, Sleep};
 use crate::util::{counter::Counter, counter::CounterGuard, Ready};
@@ -14,19 +17,17 @@ use super::MAX_SSL_ACCEPT_COUNTER;
 /// Support `TLS` server connections via openssl package
 ///
 /// `openssl` feature enables `Acceptor` type
-pub struct Acceptor<T: AsyncRead + AsyncWrite> {
-    acceptor: SslAcceptor,
-    timeout: Millis,
-    io: PhantomData<T>,
+pub struct Acceptor<F> {
+    acceptor: IoSslAcceptor,
+    _t: PhantomData<F>,
 }
 
-impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
+impl<F> Acceptor<F> {
     /// Create default openssl acceptor service
     pub fn new(acceptor: SslAcceptor) -> Self {
         Acceptor {
-            acceptor,
-            timeout: Millis(5_000),
-            io: PhantomData,
+            acceptor: IoSslAcceptor::new(acceptor),
+            _t: PhantomData,
         }
     }
 
@@ -34,30 +35,26 @@ impl<T: AsyncRead + AsyncWrite> Acceptor<T> {
     ///
     /// Default is set to 5 seconds.
     pub fn timeout<U: Into<Millis>>(mut self, timeout: U) -> Self {
-        self.timeout = timeout.into();
+        self.acceptor.timeout(timeout);
         self
     }
 }
 
-impl<T: AsyncRead + AsyncWrite> Clone for Acceptor<T> {
+impl<F> Clone for Acceptor<F> {
     fn clone(&self) -> Self {
         Self {
             acceptor: self.acceptor.clone(),
-            timeout: self.timeout,
-            io: PhantomData,
+            _t: PhantomData,
         }
     }
 }
 
-impl<T> ServiceFactory for Acceptor<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + fmt::Debug + 'static,
-{
-    type Request = T;
-    type Response = SslStream<T>;
+impl<F: Filter + 'static> ServiceFactory for Acceptor<F> {
+    type Request = Io<F>;
+    type Response = Io<SslFilter<F>>;
     type Error = Box<dyn Error>;
     type Config = ();
-    type Service = AcceptorService<T>;
+    type Service = AcceptorService<F>;
     type InitError = ();
     type Future = Ready<Self::Service, Self::InitError>;
 
@@ -66,28 +63,23 @@ where
             Ready::Ok(AcceptorService {
                 acceptor: self.acceptor.clone(),
                 conns: conns.priv_clone(),
-                timeout: self.timeout,
-                io: PhantomData,
+                _t: PhantomData,
             })
         })
     }
 }
 
-pub struct AcceptorService<T> {
-    acceptor: SslAcceptor,
+pub struct AcceptorService<F> {
+    acceptor: IoSslAcceptor,
     conns: Counter,
-    timeout: Millis,
-    io: PhantomData<T>,
+    _t: PhantomData<F>,
 }
 
-impl<T> Service for AcceptorService<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + fmt::Debug + 'static,
-{
-    type Request = T;
-    type Response = SslStream<T>;
+impl<F: Filter + 'static> Service for AcceptorService<F> {
+    type Request = Io<F>;
+    type Response = Io<SslFilter<F>>;
     type Error = Box<dyn Error>;
-    type Future = AcceptorServiceResponse<T>;
+    type Future = AcceptorServiceResponse<F>;
 
     #[inline]
     fn poll_ready(&self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -100,57 +92,29 @@ where
 
     #[inline]
     fn call(&self, req: Self::Request) -> Self::Future {
-        let ssl = Ssl::new(self.acceptor.context())
-            .expect("Provided SSL acceptor was invalid.");
         AcceptorServiceResponse {
             _guard: self.conns.get(),
-            io: None,
-            delay: self.timeout.map(sleep),
-            io_factory: Some(SslStream::new(ssl, req)),
+            fut: self.acceptor.clone().create(req),
         }
     }
 }
 
-pub struct AcceptorServiceResponse<T>
-where
-    T: AsyncRead,
-    T: AsyncWrite,
-{
-    io: Option<SslStream<T>>,
-    delay: Option<Sleep>,
-    io_factory: Option<Result<SslStream<T>, open_ssl::error::ErrorStack>>,
-    _guard: CounterGuard,
+pin_project_lite::pin_project! {
+    pub struct AcceptorServiceResponse<F>
+    where
+        F: Filter,
+        F: 'static,
+    {
+        #[pin]
+        fut: <IoSslAcceptor as FilterFactory<F>>::Future,
+        _guard: CounterGuard,
+    }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin> Future for AcceptorServiceResponse<T> {
-    type Output = Result<SslStream<T>, Box<dyn Error>>;
+impl<F: Filter + 'static> Future for AcceptorServiceResponse<F> {
+    type Output = Result<Io<SslFilter<F>>, Box<dyn Error>>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut();
-
-        if let Some(ref delay) = this.delay {
-            match delay.poll_elapsed(cx) {
-                Poll::Pending => (),
-                Poll::Ready(_) => {
-                    return Poll::Ready(Err(Box::new(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "ssl handshake timeout",
-                    ))))
-                }
-            }
-        }
-
-        match this.io_factory.take() {
-            Some(Ok(io)) => this.io = Some(io),
-            Some(Err(err)) => return Poll::Ready(Err(Box::new(err))),
-            None => (),
-        }
-
-        let io = this.io.as_mut().unwrap();
-        match Pin::new(io).poll_accept(cx) {
-            Poll::Ready(Ok(_)) => Poll::Ready(Ok(this.io.take().unwrap())),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(Box::new(e))),
-            Poll::Pending => Poll::Pending,
-        }
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.project().fut.poll(cx)
     }
 }

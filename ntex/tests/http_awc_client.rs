@@ -215,15 +215,12 @@ async fn test_connection_reuse() {
             num2.fetch_add(1, Ordering::Relaxed);
             ok(io)
         })
-        .and_then(
-            HttpService::new(map_config(
-                App::new().service(
-                    web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
-                ),
-                |_| AppConfig::default(),
-            ))
-            .tcp(),
-        )
+        .and_then(HttpService::new(map_config(
+            App::new().service(
+                web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
+            ),
+            |_| AppConfig::default(),
+        )))
     });
 
     let client = Client::build().timeout(Seconds(10)).finish();
@@ -253,15 +250,12 @@ async fn test_connection_force_close() {
             num2.fetch_add(1, Ordering::Relaxed);
             ok(io)
         })
-        .and_then(
-            HttpService::new(map_config(
-                App::new().service(
-                    web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
-                ),
-                |_| AppConfig::default(),
-            ))
-            .tcp(),
-        )
+        .and_then(HttpService::new(map_config(
+            App::new().service(
+                web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
+            ),
+            |_| AppConfig::default(),
+        )))
     });
 
     let client = Client::build().timeout(Seconds(10)).finish();
@@ -291,15 +285,12 @@ async fn test_connection_server_close() {
             num2.fetch_add(1, Ordering::Relaxed);
             ok(io)
         })
-        .and_then(
-            HttpService::new(map_config(
-                App::new().service(web::resource("/").route(web::to(|| async {
-                    HttpResponse::Ok().force_close().finish()
-                }))),
-                |_| AppConfig::default(),
-            ))
-            .tcp(),
-        )
+        .and_then(HttpService::new(map_config(
+            App::new().service(web::resource("/").route(web::to(|| async {
+                HttpResponse::Ok().force_close().finish()
+            }))),
+            |_| AppConfig::default(),
+        )))
     });
 
     let client = Client::build().timeout(Seconds(10)).finish();
@@ -329,16 +320,13 @@ async fn test_connection_wait_queue() {
             num2.fetch_add(1, Ordering::Relaxed);
             ok(io)
         })
-        .and_then(
-            HttpService::new(map_config(
-                App::new().service(
-                    web::resource("/")
-                        .route(web::to(|| async { HttpResponse::Ok().body(STR) })),
-                ),
-                |_| AppConfig::default(),
-            ))
-            .tcp(),
-        )
+        .and_then(HttpService::new(map_config(
+            App::new().service(
+                web::resource("/")
+                    .route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+            ),
+            |_| AppConfig::default(),
+        )))
     });
 
     let client = Client::build()
@@ -378,15 +366,12 @@ async fn test_connection_wait_queue_force_close() {
             num2.fetch_add(1, Ordering::Relaxed);
             ok(io)
         })
-        .and_then(
-            HttpService::new(map_config(
-                App::new().service(web::resource("/").route(web::to(|| async {
-                    HttpResponse::Ok().force_close().body(STR)
-                }))),
-                |_| AppConfig::default(),
-            ))
-            .tcp(),
-        )
+        .and_then(HttpService::new(map_config(
+            App::new().service(web::resource("/").route(web::to(|| async {
+                HttpResponse::Ok().force_close().body(STR)
+            }))),
+            |_| AppConfig::default(),
+        )))
     });
 
     let client = Client::build()

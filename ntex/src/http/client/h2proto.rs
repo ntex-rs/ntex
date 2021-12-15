@@ -11,19 +11,18 @@ use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
 use crate::util::{poll_fn, Bytes};
 
-use super::connection::{ConnectionType, IoConnection};
+use super::connection::{Connection, ConnectionType};
 use super::error::SendRequestError;
 use super::pool::Acquired;
 
-pub(super) async fn send_request<T, B>(
+pub(super) async fn send_request<B>(
     mut io: SendRequest<Bytes>,
     head: RequestHeadType,
     body: B,
     created: time::Instant,
-    pool: Option<Acquired<T>>,
+    pool: Option<Acquired>,
 ) -> Result<(ResponseHead, Payload), SendRequestError>
 where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
     B: MessageBody,
 {
     trace!("Sending client request: {:?} {:?}", head, body.size());
@@ -161,17 +160,17 @@ async fn send_body<B: MessageBody>(
 }
 
 // release SendRequest object
-fn release<T: AsyncRead + AsyncWrite + Unpin + 'static>(
+fn release(
     io: SendRequest<Bytes>,
-    pool: Option<Acquired<T>>,
+    pool: Option<Acquired>,
     created: time::Instant,
     close: bool,
 ) {
     if let Some(mut pool) = pool {
         if close {
-            pool.close(IoConnection::new(ConnectionType::H2(io), created, None));
+            pool.close(Connection::new(ConnectionType::H2(io), created, None));
         } else {
-            pool.release(IoConnection::new(ConnectionType::H2(io), created, None));
+            pool.release(Connection::new(ConnectionType::H2(io), created, None));
         }
     }
 }

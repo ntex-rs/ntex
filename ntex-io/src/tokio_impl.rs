@@ -3,15 +3,12 @@ use std::{cell::RefCell, future::Future, io, pin::Pin, rc::Rc};
 
 use ntex_bytes::{Buf, BufMut};
 use ntex_util::time::{sleep, Sleep};
-use tok_io::{io::AsyncRead, io::AsyncWrite, io::ReadBuf};
+use tok_io::{io::AsyncRead, io::AsyncWrite, io::ReadBuf, net::TcpStream};
 
-use super::{IoStream, ReadState, WriteReadiness, WriteState};
+use super::{IoStream, ReadContext, WriteContext, WriteReadiness};
 
-impl<T> IoStream for T
-where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
-{
-    fn start(self, read: ReadState, write: WriteState) {
+impl IoStream for TcpStream {
+    fn start(self, read: ReadContext, write: WriteContext) {
         let io = Rc::new(RefCell::new(self));
 
         ntex_util::spawn(ReadTask::new(io.clone(), read));
@@ -19,26 +16,29 @@ where
     }
 }
 
-/// Read io task
-struct ReadTask<T> {
-    io: Rc<RefCell<T>>,
-    state: ReadState,
+#[cfg(unix)]
+impl IoStream for tok_io::net::UnixStream {
+    fn start(self, _read: ReadContext, _write: WriteContext) {
+        let _io = Rc::new(RefCell::new(self));
+
+        todo!()
+    }
 }
 
-impl<T> ReadTask<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
-{
+/// Read io task
+struct ReadTask {
+    io: Rc<RefCell<TcpStream>>,
+    state: ReadContext,
+}
+
+impl ReadTask {
     /// Create new read io task
-    fn new(io: Rc<RefCell<T>>, state: ReadState) -> Self {
+    fn new(io: Rc<RefCell<TcpStream>>, state: ReadContext) -> Self {
         Self { io, state }
     }
 }
 
-impl<T> Future for ReadTask<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
-{
+impl Future for ReadTask {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -119,18 +119,15 @@ enum Shutdown {
 }
 
 /// Write io task
-struct WriteTask<T> {
+struct WriteTask {
     st: IoWriteState,
-    io: Rc<RefCell<T>>,
-    state: WriteState,
+    io: Rc<RefCell<TcpStream>>,
+    state: WriteContext,
 }
 
-impl<T> WriteTask<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
-{
+impl WriteTask {
     /// Create new write io task
-    fn new(io: Rc<RefCell<T>>, state: WriteState) -> Self {
+    fn new(io: Rc<RefCell<TcpStream>>, state: WriteContext) -> Self {
         Self {
             io,
             state,
@@ -139,10 +136,7 @@ where
     }
 }
 
-impl<T> Future for WriteTask<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
-{
+impl Future for WriteTask {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -272,7 +266,7 @@ where
 /// Flush write buffer to underlying I/O stream.
 pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
     io: &mut T,
-    state: &WriteState,
+    state: &WriteContext,
     cx: &mut Context<'_>,
 ) -> Poll<bool> {
     let mut buf = if let Some(buf) = state.get_write_buf() {
@@ -284,12 +278,14 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
     let pool = state.memory_pool();
 
     if len != 0 {
-        // log::trace!("flushing framed transport: {:?}", buf);
+        //log::trace!("flushing framed transport: {:?}", buf);
 
         let mut written = 0;
         while written < len {
             match Pin::new(&mut *io).poll_write(cx, &buf[written..]) {
-                Poll::Pending => break,
+                Poll::Pending => {
+                    break;
+                }
                 Poll::Ready(Ok(n)) => {
                     if n == 0 {
                         log::trace!("Disconnected during flush, written {}", written);
@@ -311,7 +307,7 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
                 }
             }
         }
-        // log::trace!("flushed {} bytes", written);
+        //log::trace!("flushed {} bytes", written);
 
         // remove written data
         let result = if written == len {

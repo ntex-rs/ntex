@@ -2,8 +2,8 @@ use std::{fmt, io, marker::PhantomData, net, sync::Arc, sync::Mutex};
 
 #[cfg(feature = "openssl")]
 use crate::server::openssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
-#[cfg(feature = "rustls")]
-use crate::server::rustls::ServerConfig as RustlsServerConfig;
+//#[cfg(feature = "rustls")]
+//use crate::server::rustls::ServerConfig as RustlsServerConfig;
 
 #[cfg(unix)]
 use crate::http::Protocol;
@@ -275,7 +275,6 @@ where
                     .disconnect_timeout(c.client_disconnect)
                     .memory_pool(c.pool)
                     .finish(map_config(factory(), move |_| cfg.clone()))
-                    .tcp()
             },
         )?;
         Ok(self)
@@ -326,50 +325,50 @@ where
         Ok(self)
     }
 
-    #[cfg(feature = "rustls")]
-    /// Use listener for accepting incoming tls connection requests
-    ///
-    /// This method sets alpn protocols to "h2" and "http/1.1"
-    pub fn listen_rustls(
-        self,
-        lst: net::TcpListener,
-        config: RustlsServerConfig,
-    ) -> io::Result<Self> {
-        self.listen_rustls_inner(lst, config)
-    }
+    // #[cfg(feature = "rustls")]
+    // /// Use listener for accepting incoming tls connection requests
+    // ///
+    // /// This method sets alpn protocols to "h2" and "http/1.1"
+    // pub fn listen_rustls(
+    //     self,
+    //     lst: net::TcpListener,
+    //     config: RustlsServerConfig,
+    // ) -> io::Result<Self> {
+    //     self.listen_rustls_inner(lst, config)
+    // }
 
-    #[cfg(feature = "rustls")]
-    fn listen_rustls_inner(
-        mut self,
-        lst: net::TcpListener,
-        config: RustlsServerConfig,
-    ) -> io::Result<Self> {
-        let factory = self.factory.clone();
-        let cfg = self.config.clone();
-        let addr = lst.local_addr().unwrap();
+    // #[cfg(feature = "rustls")]
+    // fn listen_rustls_inner(
+    //     mut self,
+    //     lst: net::TcpListener,
+    //     config: RustlsServerConfig,
+    // ) -> io::Result<Self> {
+    //     let factory = self.factory.clone();
+    //     let cfg = self.config.clone();
+    //     let addr = lst.local_addr().unwrap();
 
-        self.builder = self.builder.listen(
-            format!("ntex-web-rustls-service-{}", addr),
-            lst,
-            move || {
-                let c = cfg.lock().unwrap();
-                let cfg = AppConfig::new(
-                    true,
-                    addr,
-                    c.host.clone().unwrap_or_else(|| format!("{}", addr)),
-                );
-                HttpService::build()
-                    .keep_alive(c.keep_alive)
-                    .client_timeout(c.client_timeout)
-                    .disconnect_timeout(c.client_disconnect)
-                    .ssl_handshake_timeout(c.handshake_timeout)
-                    .memory_pool(c.pool)
-                    .finish(map_config(factory(), move |_| cfg.clone()))
-                    .rustls(config.clone())
-            },
-        )?;
-        Ok(self)
-    }
+    //     self.builder = self.builder.listen(
+    //         format!("ntex-web-rustls-service-{}", addr),
+    //         lst,
+    //         move || {
+    //             let c = cfg.lock().unwrap();
+    //             let cfg = AppConfig::new(
+    //                 true,
+    //                 addr,
+    //                 c.host.clone().unwrap_or_else(|| format!("{}", addr)),
+    //             );
+    //             HttpService::build()
+    //                 .keep_alive(c.keep_alive)
+    //                 .client_timeout(c.client_timeout)
+    //                 .disconnect_timeout(c.client_disconnect)
+    //                 .ssl_handshake_timeout(c.handshake_timeout)
+    //                 .memory_pool(c.pool)
+    //                 .finish(map_config(factory(), move |_| cfg.clone()))
+    //                 .rustls(config.clone())
+    //         },
+    //     )?;
+    //     Ok(self)
+    // }
 
     /// The socket address to bind
     ///
@@ -437,21 +436,21 @@ where
         Ok(self)
     }
 
-    #[cfg(feature = "rustls")]
-    /// Start listening for incoming tls connections.
-    ///
-    /// This method sets alpn protocols to "h2" and "http/1.1"
-    pub fn bind_rustls<A: net::ToSocketAddrs>(
-        mut self,
-        addr: A,
-        config: RustlsServerConfig,
-    ) -> io::Result<Self> {
-        let sockets = self.bind2(addr)?;
-        for lst in sockets {
-            self = self.listen_rustls_inner(lst, config.clone())?;
-        }
-        Ok(self)
-    }
+    // #[cfg(feature = "rustls")]
+    // /// Start listening for incoming tls connections.
+    // ///
+    // /// This method sets alpn protocols to "h2" and "http/1.1"
+    // pub fn bind_rustls<A: net::ToSocketAddrs>(
+    //     mut self,
+    //     addr: A,
+    //     config: RustlsServerConfig,
+    // ) -> io::Result<Self> {
+    //     let sockets = self.bind2(addr)?;
+    //     for lst in sockets {
+    //         self = self.listen_rustls_inner(lst, config.clone())?;
+    //     }
+    //     Ok(self)
+    // }
 
     #[cfg(unix)]
     /// Start listening for unix domain connections on existing listener.
@@ -479,16 +478,11 @@ where
                 socket_addr,
                 c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
             );
-            pipeline_factory(|io: UnixStream| {
-                crate::util::Ready::Ok((io, Protocol::Http1, None))
-            })
-            .and_then(
-                HttpService::build()
-                    .keep_alive(c.keep_alive)
-                    .client_timeout(c.client_timeout)
-                    .memory_pool(c.pool)
-                    .finish(map_config(factory(), move |_| config.clone())),
-            )
+            HttpService::build()
+                .keep_alive(c.keep_alive)
+                .client_timeout(c.client_timeout)
+                .memory_pool(c.pool)
+                .finish(map_config(factory(), move |_| config.clone()))
         })?;
         Ok(self)
     }
@@ -520,16 +514,11 @@ where
                     socket_addr,
                     c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
                 );
-                pipeline_factory(|io: UnixStream| {
-                    crate::util::Ready::Ok((io, Protocol::Http1, None))
-                })
-                .and_then(
-                    HttpService::build()
-                        .keep_alive(c.keep_alive)
-                        .client_timeout(c.client_timeout)
-                        .memory_pool(c.pool)
-                        .finish(map_config(factory(), move |_| config.clone())),
-                )
+                HttpService::build()
+                    .keep_alive(c.keep_alive)
+                    .client_timeout(c.client_timeout)
+                    .memory_pool(c.pool)
+                    .finish(map_config(factory(), move |_| config.clone()))
             },
         )?;
         Ok(self)

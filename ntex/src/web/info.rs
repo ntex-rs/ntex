@@ -119,7 +119,9 @@ impl ConnectionInfo {
             }
             if remote.is_none() {
                 // get peeraddr from socketaddr
-                peer = req.peer_addr.map(|addr| format!("{}", addr));
+
+                // TODO! fix
+                // peer = req.peer_addr.map(|addr| format!("{}", addr));
             }
         }
 

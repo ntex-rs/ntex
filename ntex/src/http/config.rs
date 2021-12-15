@@ -1,7 +1,7 @@
-use std::{cell::Cell, cell::RefCell, ptr::copy_nonoverlapping, rc::Rc, time};
+use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time};
 
-use crate::framed::Timer;
 use crate::http::{Request, Response};
+use crate::io::{IoRef, Timer};
 use crate::service::boxed::BoxService;
 use crate::time::{sleep, Millis, Seconds, Sleep};
 use crate::util::{BytesMut, PoolId};
@@ -94,9 +94,9 @@ impl ServiceConfig {
     }
 }
 
-pub(super) type OnRequest<T> = BoxService<(Request, Rc<RefCell<T>>), Request, Response>;
+pub(super) type OnRequest = BoxService<(Request, IoRef), Request, Response>;
 
-pub(super) struct DispatcherConfig<T, S, X, U> {
+pub(super) struct DispatcherConfig<S, X, U> {
     pub(super) service: S,
     pub(super) expect: X,
     pub(super) upgrade: Option<U>,
@@ -107,16 +107,16 @@ pub(super) struct DispatcherConfig<T, S, X, U> {
     pub(super) timer: DateService,
     pub(super) timer_h1: Timer,
     pub(super) pool: PoolId,
-    pub(super) on_request: Option<OnRequest<T>>,
+    pub(super) on_request: Option<OnRequest>,
 }
 
-impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
+impl<S, X, U> DispatcherConfig<S, X, U> {
     pub(super) fn new(
         cfg: ServiceConfig,
         service: S,
         expect: X,
         upgrade: Option<U>,
-        on_request: Option<OnRequest<T>>,
+        on_request: Option<OnRequest>,
     ) -> Self {
         DispatcherConfig {
             service,
@@ -147,10 +147,6 @@ impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
     pub(super) fn keep_alive_expire(&self) -> Option<time::Instant> {
         self.keep_alive
             .map(|t| self.timer.now() + time::Duration::from(t))
-    }
-
-    pub(super) fn now(&self) -> time::Instant {
-        self.timer.now()
     }
 }
 
