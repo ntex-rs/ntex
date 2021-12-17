@@ -259,6 +259,8 @@ where
                     }
                 }
                 State::ReadRequest => {
+                    log::trace!("trying to read http message");
+
                     // stop dispatcher
                     if this.inner.state.is_dispatcher_stopped() {
                         log::trace!("dispatcher is instructed to stop");
@@ -358,7 +360,7 @@ where
                                 }
                             }
                             Ok(None) => {
-                                log::trace!("not enough data to decode next frame, register dispatch task");
+                                log::trace!("not enough data to decode http message");
 
                                 // if io error occured or connection is not keep-alive
                                 // then disconnect

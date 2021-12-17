@@ -1,38 +1,11 @@
 use std::{convert::TryFrom, fmt, io, net};
 
-use crate::io::Io;
-use crate::rt::net::TcpStream;
+use crate::{io::Io, rt::net::TcpStream};
 
 pub(crate) enum Listener {
-    Tcp(mio::net::TcpListener),
+    Tcp(net::TcpListener),
     #[cfg(unix)]
-    Uds(mio::net::UnixListener),
-}
-
-pub(crate) enum SocketAddr {
-    Tcp(net::SocketAddr),
-    #[cfg(unix)]
-    Uds(mio::net::SocketAddr),
-}
-
-impl fmt::Display for SocketAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            SocketAddr::Tcp(ref addr) => write!(f, "{}", addr),
-            #[cfg(unix)]
-            SocketAddr::Uds(ref addr) => write!(f, "{:?}", addr),
-        }
-    }
-}
-
-impl fmt::Debug for SocketAddr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            SocketAddr::Tcp(ref addr) => write!(f, "{:?}", addr),
-            #[cfg(unix)]
-            SocketAddr::Uds(ref addr) => write!(f, "{:?}", addr),
-        }
-    }
+    Uds(std::os::unix::net::UnixListener),
 }
 
 impl fmt::Debug for Listener {
@@ -57,16 +30,42 @@ impl fmt::Display for Listener {
     }
 }
 
+pub(crate) enum SocketAddr {
+    Tcp(net::SocketAddr),
+    #[cfg(unix)]
+    Uds(std::os::unix::net::SocketAddr),
+}
+
+impl fmt::Display for SocketAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            SocketAddr::Tcp(ref addr) => write!(f, "{}", addr),
+            #[cfg(unix)]
+            SocketAddr::Uds(ref addr) => write!(f, "{:?}", addr),
+        }
+    }
+}
+
+impl fmt::Debug for SocketAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            SocketAddr::Tcp(ref addr) => write!(f, "{:?}", addr),
+            #[cfg(unix)]
+            SocketAddr::Uds(ref addr) => write!(f, "{:?}", addr),
+        }
+    }
+}
+
 impl Listener {
     pub(super) fn from_tcp(lst: net::TcpListener) -> Self {
         let _ = lst.set_nonblocking(true);
-        Listener::Tcp(mio::net::TcpListener::from_std(lst))
+        Listener::Tcp(lst)
     }
 
     #[cfg(unix)]
     pub(super) fn from_uds(lst: std::os::unix::net::UnixListener) -> Self {
         let _ = lst.set_nonblocking(true);
-        Listener::Uds(mio::net::UnixListener::from_std(lst))
+        Listener::Uds(lst)
     }
 
     pub(crate) fn local_addr(&self) -> SocketAddr {
@@ -88,52 +87,47 @@ impl Listener {
             }
         }
     }
-}
 
-impl mio::event::Source for Listener {
-    #[inline]
-    fn register(
-        &mut self,
-        poll: &mio::Registry,
-        token: mio::Token,
-        interest: mio::Interest,
-    ) -> io::Result<()> {
+    pub(crate) fn remove_source(&self) {
         match *self {
-            Listener::Tcp(ref mut lst) => lst.register(poll, token, interest),
+            Listener::Tcp(_) => (),
             #[cfg(unix)]
-            Listener::Uds(ref mut lst) => lst.register(poll, token, interest),
-        }
-    }
-
-    #[inline]
-    fn reregister(
-        &mut self,
-        poll: &mio::Registry,
-        token: mio::Token,
-        interest: mio::Interest,
-    ) -> io::Result<()> {
-        match *self {
-            Listener::Tcp(ref mut lst) => lst.reregister(poll, token, interest),
-            #[cfg(unix)]
-            Listener::Uds(ref mut lst) => lst.reregister(poll, token, interest),
-        }
-    }
-
-    #[inline]
-    fn deregister(&mut self, poll: &mio::Registry) -> io::Result<()> {
-        match *self {
-            Listener::Tcp(ref mut lst) => lst.deregister(poll),
-            #[cfg(unix)]
-            Listener::Uds(ref mut lst) => {
-                let res = lst.deregister(poll);
-
+            Listener::Uds(ref lst) => {
                 // cleanup file path
                 if let Ok(addr) = lst.local_addr() {
                     if let Some(path) = addr.as_pathname() {
                         let _ = std::fs::remove_file(path);
                     }
                 }
-                res
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+mod listener_impl {
+    use super::*;
+    use std::os::unix::io::{AsRawFd, RawFd};
+
+    impl AsRawFd for Listener {
+        fn as_raw_fd(&self) -> RawFd {
+            match *self {
+                Listener::Tcp(ref lst) => lst.as_raw_fd(),
+                Listener::Uds(ref lst) => lst.as_raw_fd(),
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+mod listener_impl {
+    use super::*;
+    use std::os::windows::io::{AsRawSocket, RawSocket};
+
+    impl AsRawSocket for Listener {
+        fn as_raw_socket(&self) -> RawSocket {
+            match *self {
+                Listener::Tcp(ref lst) => lst.as_raw_socket(),
             }
         }
     }
@@ -141,42 +135,26 @@ impl mio::event::Source for Listener {
 
 #[derive(Debug)]
 pub enum Stream {
-    Tcp(mio::net::TcpStream),
+    Tcp(net::TcpStream),
     #[cfg(unix)]
-    Uds(mio::net::UnixStream),
+    Uds(std::os::unix::net::UnixStream),
 }
 
 impl TryFrom<Stream> for Io {
     type Error = io::Error;
 
     fn try_from(sock: Stream) -> Result<Self, Self::Error> {
-        #[cfg(unix)]
         match sock {
             Stream::Tcp(stream) => {
-                use std::os::unix::io::{FromRawFd, IntoRawFd};
-                let fd = IntoRawFd::into_raw_fd(stream);
-                let io = TcpStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) })?;
-                io.set_nodelay(true)?;
-                Ok(Io::new(io))
+                stream.set_nonblocking(true)?;
+                stream.set_nodelay(true)?;
+                Ok(Io::new(TcpStream::from_std(stream)?))
             }
+            #[cfg(unix)]
             Stream::Uds(stream) => {
                 use crate::rt::net::UnixStream;
-                use std::os::unix::io::{FromRawFd, IntoRawFd};
-                let fd = IntoRawFd::into_raw_fd(stream);
-                let io = UnixStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) })?;
-                Ok(Io::new(io))
-            }
-        }
-
-        #[cfg(windows)]
-        match sock {
-            Stream::Tcp(stream) => {
-                use std::os::windows::io::{FromRawSocket, IntoRawSocket};
-                let fd = IntoRawSocket::into_raw_socket(stream);
-                let io =
-                    TcpStream::from_std(unsafe { FromRawSocket::from_raw_socket(fd) })?;
-                io.set_nodelay(true)?;
-                Ok(Io::new(io))
+                stream.set_nonblocking(true)?;
+                Ok(Io::new(UnixStream::from_std(stream)?))
             }
         }
     }
@@ -198,8 +176,7 @@ mod tests {
         let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
         socket.set_reuse_address(true).unwrap();
         socket.bind(&SockAddr::from(addr)).unwrap();
-        let tcp = net::TcpListener::from(socket);
-        let lst = Listener::Tcp(mio::net::TcpListener::from_std(tcp));
+        let lst = Listener::Tcp(net::TcpListener::from(socket));
         assert!(format!("{:?}", lst).contains("TcpListener"));
         assert!(format!("{}", lst).contains("127.0.0.1"));
     }
@@ -211,7 +188,6 @@ mod tests {
 
         let _ = std::fs::remove_file("/tmp/sock.xxxxx");
         if let Ok(lst) = UnixListener::bind("/tmp/sock.xxxxx") {
-            let lst = mio::net::UnixListener::from_std(lst);
             let addr = lst.local_addr().expect("Couldn't get local address");
             let a = SocketAddr::Uds(addr);
             assert!(format!("{:?}", a).contains("/tmp/sock.xxxxx"));

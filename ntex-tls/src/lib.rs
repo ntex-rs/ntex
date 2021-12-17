@@ -1,7 +1,6 @@
 //! An implementations of SSL streams for ntex ecosystem
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-mod counter;
 pub mod types;
 
 #[cfg(feature = "openssl")]
@@ -9,6 +8,8 @@ pub mod openssl;
 
 #[cfg(feature = "rustls")]
 pub mod rustls;
+
+mod counter;
 
 /// Sets the maximum per-worker concurrent ssl connection establish process.
 ///

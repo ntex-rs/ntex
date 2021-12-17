@@ -4,6 +4,7 @@ use futures::future::{self, ready, FutureExt};
 use futures::stream::{once, StreamExt};
 use regex::Regex;
 
+use ntex::http::header::{HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
 use ntex::http::{
     body, header, HttpService, KeepAlive, Method, Request, Response, StatusCode,
@@ -115,7 +116,7 @@ async fn test_chunked_payload() {
     let returned_size = {
         let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
         let _ = stream
-            .write_all(b"POST /test HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n");
+            .write_all(b"POST /test HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n");
 
         for chunk_size in chunk_sizes.iter() {
             let mut bytes = Vec::new();
@@ -289,11 +290,6 @@ async fn test_http1_keepalive_disabled() {
 
 #[ntex::test]
 async fn test_content_length() {
-    use ntex::http::{
-        header::{HeaderName, HeaderValue},
-        StatusCode,
-    };
-
     let srv = test_server(|| {
         HttpService::build().h1(|req: Request| {
             let indx: usize = req.uri().path()[1..].parse().unwrap();

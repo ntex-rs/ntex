@@ -1,9 +1,8 @@
 use std::{
-    io, sync::mpsc as sync_mpsc, sync::Arc, thread, time::Duration, time::Instant,
+    cell::Cell, io, sync::mpsc, sync::Arc, thread, time::Duration, time::Instant,
 };
 
-use log::{error, info};
-use slab::Slab;
+use polling::{Event, Poller};
 
 use crate::rt::System;
 use crate::time::{sleep, Millis};
@@ -12,16 +11,14 @@ use super::socket::{Listener, SocketAddr};
 use super::worker::{Connection, WorkerClient};
 use super::{Server, ServerStatus, Token};
 
-const DELTA: usize = 100;
-const NOTIFY: mio::Token = mio::Token(0);
 const ERR_TIMEOUT: Duration = Duration::from_millis(500);
 const ERR_SLEEP_TIMEOUT: Millis = Millis(525);
 
 #[derive(Debug)]
 pub(super) enum Command {
+    Stop,
     Pause,
     Resume,
-    Stop,
     Worker(WorkerClient),
     Timer,
     WorkerAvailable,
@@ -31,43 +28,41 @@ struct ServerSocketInfo {
     addr: SocketAddr,
     token: Token,
     sock: Listener,
-    timeout: Option<Instant>,
+    registered: Cell<bool>,
+    timeout: Cell<Option<Instant>>,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct AcceptNotify(Arc<mio::Waker>, sync_mpsc::Sender<Command>);
+pub(super) struct AcceptNotify(Arc<Poller>, mpsc::Sender<Command>);
 
 impl AcceptNotify {
-    pub(super) fn new(waker: Arc<mio::Waker>, tx: sync_mpsc::Sender<Command>) -> Self {
+    pub(super) fn new(waker: Arc<Poller>, tx: mpsc::Sender<Command>) -> Self {
         AcceptNotify(waker, tx)
     }
 
     pub(super) fn send(&self, cmd: Command) {
         let _ = self.1.send(cmd);
-        let _ = self.0.wake();
+        let _ = self.0.notify();
     }
 }
 
 pub(super) struct AcceptLoop {
     notify: AcceptNotify,
-    inner: Option<(sync_mpsc::Receiver<Command>, mio::Poll, Server)>,
+    inner: Option<(mpsc::Receiver<Command>, Arc<Poller>, Server)>,
     status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
 }
 
 impl AcceptLoop {
     pub(super) fn new(srv: Server) -> AcceptLoop {
-        // Create a poll instance
-        let poll = mio::Poll::new()
-            .map_err(|e| panic!("Cannot create mio::Poll {}", e))
-            .unwrap();
-
-        let (tx, rx) = sync_mpsc::channel();
-        let waker = Arc::new(
-            mio::Waker::new(poll.registry(), NOTIFY)
-                .map_err(|e| panic!("Cannot create mio::Waker {}", e))
+        // Create a poller instance
+        let poll = Arc::new(
+            Poller::new()
+                .map_err(|e| panic!("Cannot create Polller {}", e))
                 .unwrap(),
         );
-        let notify = AcceptNotify::new(waker, tx);
+
+        let (tx, rx) = mpsc::channel();
+        let notify = AcceptNotify::new(poll.clone(), tx);
 
         AcceptLoop {
             notify,
@@ -115,9 +110,9 @@ impl AcceptLoop {
 }
 
 struct Accept {
-    poll: mio::Poll,
-    rx: sync_mpsc::Receiver<Command>,
-    sockets: Slab<ServerSocketInfo>,
+    poller: Arc<Poller>,
+    rx: mpsc::Receiver<Command>,
+    sockets: Vec<ServerSocketInfo>,
     workers: Vec<WorkerClient>,
     srv: Server,
     notify: AcceptNotify,
@@ -126,23 +121,10 @@ struct Accept {
     status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
 }
 
-/// This function defines errors that are per-connection. Which basically
-/// means that if we get this error from `accept()` system call it means
-/// next connection might be ready to be accepted.
-///
-/// All other errors will incur a timeout before next `accept()` is performed.
-/// The timeout is useful to handle resource exhaustion errors like ENFILE
-/// and EMFILE. Otherwise, could enter into tight loop.
-fn connection_error(e: &io::Error) -> bool {
-    e.kind() == io::ErrorKind::ConnectionRefused
-        || e.kind() == io::ErrorKind::ConnectionAborted
-        || e.kind() == io::ErrorKind::ConnectionReset
-}
-
 impl Accept {
     fn start(
-        rx: sync_mpsc::Receiver<Command>,
-        poll: mio::Poll,
+        rx: mpsc::Receiver<Command>,
+        poller: Arc<Poller>,
         socks: Vec<(Token, Listener)>,
         srv: Server,
         workers: Vec<WorkerClient>,
@@ -156,45 +138,33 @@ impl Accept {
             .name("ntex-server accept loop".to_owned())
             .spawn(move || {
                 System::set_current(sys);
-                Accept::new(rx, poll, socks, workers, srv, notify, status_handler).poll()
+                Accept::new(rx, poller, socks, workers, srv, notify, status_handler)
+                    .poll()
             });
     }
 
     fn new(
-        rx: sync_mpsc::Receiver<Command>,
-        poll: mio::Poll,
+        rx: mpsc::Receiver<Command>,
+        poller: Arc<Poller>,
         socks: Vec<(Token, Listener)>,
         workers: Vec<WorkerClient>,
         srv: Server,
         notify: AcceptNotify,
         status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) -> Accept {
-        // Start accept
-        let mut sockets = Slab::new();
-        for (hnd_token, mut lst) in socks.into_iter() {
-            let addr = lst.local_addr();
-            let entry = sockets.vacant_entry();
-            let token = entry.key();
-
-            // Start listening for incoming connections
-            if let Err(err) = poll.registry().register(
-                &mut lst,
-                mio::Token(token + DELTA),
-                mio::Interest::READABLE,
-            ) {
-                panic!("Cannot register io: {}", err);
-            }
-
-            entry.insert(ServerSocketInfo {
-                addr,
+        let mut sockets = Vec::new();
+        for (hnd_token, lst) in socks.into_iter() {
+            sockets.push(ServerSocketInfo {
+                addr: lst.local_addr(),
                 sock: lst,
                 token: hnd_token,
-                timeout: None,
+                registered: Cell::new(false),
+                timeout: Cell::new(None),
             });
         }
 
         Accept {
-            poll,
+            poller,
             rx,
             sockets,
             workers,
@@ -213,62 +183,105 @@ impl Accept {
     }
 
     fn poll(&mut self) {
-        trace!("Starting server accept loop");
+        log::trace!("Starting server accept loop");
+
+        // Add all sources
+        for (idx, info) in self.sockets.iter().enumerate() {
+            log::info!("Starting socket listener on {}", info.addr);
+            self.add_source(idx);
+        }
 
         // Create storage for events
-        let mut events = mio::Events::with_capacity(128);
+        let mut events = Vec::with_capacity(128);
 
         loop {
-            if let Err(e) = self.poll.poll(&mut events, None) {
-                match e.kind() {
-                    std::io::ErrorKind::Interrupted => {
-                        continue;
-                    }
-                    _ => {
-                        panic!("Poll error: {}", e);
-                    }
+            if let Err(e) = self.poller.wait(&mut events, None) {
+                if e.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                } else {
+                    panic!("Cannot wait for events in poller: {}", e)
                 }
             }
 
             for event in events.iter() {
-                let token = event.token();
-                match token {
-                    NOTIFY => {
-                        if !self.process_cmd() {
-                            return;
-                        }
-                    }
-                    _ => {
-                        let token = usize::from(token);
-                        if token < DELTA {
-                            continue;
-                        }
-                        self.accept(token - DELTA);
-                    }
+                let readd = self.accept(event.key);
+                if readd {
+                    self.add_source(event.key);
                 }
             }
+
+            if !self.process_cmd() {
+                break;
+            }
+
+            events.clear();
+        }
+
+        // cleanup
+        for info in &self.sockets {
+            info.sock.remove_source()
+        }
+    }
+
+    fn add_source(&self, idx: usize) {
+        let info = &self.sockets[idx];
+
+        loop {
+            // try to register poller source
+            let result = if info.registered.get() {
+                self.poller.modify(&info.sock, Event::readable(idx))
+            } else {
+                self.poller.add(&info.sock, Event::readable(idx))
+            };
+            if let Err(err) = result {
+                if err.kind() == io::ErrorKind::WouldBlock {
+                    continue;
+                }
+                log::error!("Cannot register socket listener: {}", err);
+
+                // sleep after error
+                info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));
+
+                let notify = self.notify.clone();
+                System::current().arbiter().spawn(Box::pin(async move {
+                    sleep(ERR_SLEEP_TIMEOUT).await;
+                    notify.send(Command::Timer);
+                }));
+            } else {
+                info.registered.set(true);
+            }
+
+            break;
+        }
+    }
+
+    fn remove_source(&self, key: usize) {
+        let info = &self.sockets[key];
+
+        let result = if info.registered.get() {
+            self.poller.modify(&info.sock, Event::none(key))
+        } else {
+            return;
+        };
+
+        // stop listening for incoming connections
+        if let Err(err) = result {
+            log::error!("Cannot stop socket listener for {} err: {}", info.addr, err);
         }
     }
 
     fn process_timer(&mut self) {
         let now = Instant::now();
-        for (token, info) in self.sockets.iter_mut() {
-            if let Some(inst) = info.timeout.take() {
-                if now > inst {
-                    if !self.backpressure {
-                        if let Err(err) = self.poll.registry().register(
-                            &mut info.sock,
-                            mio::Token(token + DELTA),
-                            mio::Interest::READABLE,
-                        ) {
-                            error!("Cannot register server socket {}", err);
-                        } else {
-                            info!("Resume accepting connections on {}", info.addr);
-                        }
-                    }
-                } else {
-                    info.timeout = Some(inst);
-                    break;
+        for key in 0..self.sockets.len() {
+            let info = &mut self.sockets[key];
+            if let Some(inst) = info.timeout.get() {
+                if now > inst && !self.backpressure {
+                    log::info!(
+                        "Resuming socket listener on {} after timeout",
+                        info.addr
+                    );
+                    info.timeout.take();
+                    self.add_source(key);
                 }
             }
         }
@@ -278,44 +291,33 @@ impl Accept {
         loop {
             match self.rx.try_recv() {
                 Ok(cmd) => match cmd {
-                    Command::Pause => {
-                        for (_, info) in self.sockets.iter_mut() {
-                            if let Err(err) =
-                                self.poll.registry().deregister(&mut info.sock)
-                            {
-                                error!("Cannot deregister server socket {}", err);
-                            } else {
-                                info!("Paused accepting connections on {}", info.addr);
-                            }
-                        }
-                        self.update_status(ServerStatus::NotReady);
-                    }
-                    Command::Resume => {
-                        for (token, info) in self.sockets.iter_mut() {
-                            if let Err(err) = self.poll.registry().register(
-                                &mut info.sock,
-                                mio::Token(token + DELTA),
-                                mio::Interest::READABLE,
-                            ) {
-                                error!("Cannot resume socket accept process: {}", err);
-                            } else {
-                                info!(
-                                    "Accepting connections on {} has been resumed",
-                                    info.addr
-                                );
-                            }
-                        }
-                        self.update_status(ServerStatus::Ready);
-                    }
                     Command::Stop => {
-                        for (_, info) in self.sockets.iter_mut() {
-                            trace!("Stopping socket listener: {}", info.addr);
-                            let _ = self.poll.registry().deregister(&mut info.sock);
+                        log::trace!("Stopping accept loop");
+                        for (key, info) in self.sockets.iter().enumerate() {
+                            log::info!("Stopping socket listener on {}", info.addr);
+                            self.remove_source(key);
                         }
                         self.update_status(ServerStatus::NotReady);
                         return false;
                     }
+                    Command::Pause => {
+                        log::trace!("Pausing accept loop");
+                        for (key, info) in self.sockets.iter().enumerate() {
+                            log::info!("Stopping socket listener on {}", info.addr);
+                            self.remove_source(key);
+                        }
+                        self.update_status(ServerStatus::NotReady);
+                    }
+                    Command::Resume => {
+                        log::trace!("Resuming accept loop");
+                        for (key, info) in self.sockets.iter().enumerate() {
+                            log::info!("Resuming socket listener on {}", info.addr);
+                            self.add_source(key);
+                        }
+                        self.update_status(ServerStatus::Ready);
+                    }
                     Command::Worker(worker) => {
+                        log::trace!("Adding new worker to accept loop");
                         self.backpressure(false);
                         self.workers.push(worker);
                     }
@@ -323,14 +325,16 @@ impl Accept {
                         self.process_timer();
                     }
                     Command::WorkerAvailable => {
+                        log::trace!("Worker is available");
                         self.backpressure(false);
                     }
                 },
                 Err(err) => match err {
-                    sync_mpsc::TryRecvError::Empty => break,
-                    sync_mpsc::TryRecvError::Disconnected => {
-                        for (_, info) in self.sockets.iter_mut() {
-                            let _ = self.poll.registry().deregister(&mut info.sock);
+                    mpsc::TryRecvError::Empty => break,
+                    mpsc::TryRecvError::Disconnected => {
+                        for (key, info) in self.sockets.iter().enumerate() {
+                            log::info!("Stopping socket listener on {}", info.addr);
+                            self.remove_source(key);
                         }
                         return false;
                     }
@@ -350,36 +354,32 @@ impl Accept {
         if self.backpressure {
             if !on {
                 self.backpressure = false;
-                for (token, info) in self.sockets.iter_mut() {
-                    if info.timeout.is_some() {
-                        // socket will re-register itself after timeout
-                        continue;
-                    }
-                    if let Err(err) = self.poll.registry().register(
-                        &mut info.sock,
-                        mio::Token(token + DELTA),
-                        mio::Interest::READABLE,
-                    ) {
-                        error!("Cannot resume socket accept process: {}", err);
-                    } else {
-                        info!("Accepting connections on {} has been resumed", info.addr);
+                for (key, info) in self.sockets.iter().enumerate() {
+                    if info.timeout.get().is_none() {
+                        // socket with timeout will re-register itself after timeout
+                        log::info!(
+                            "Resuming socket listener on {} after back-pressure",
+                            info.addr
+                        );
+                        self.add_source(key);
                     }
                 }
             }
         } else if on {
             self.backpressure = true;
-            for (_, info) in self.sockets.iter_mut() {
+            for key in 0..self.sockets.len() {
                 // disable err timeout
+                let info = &mut self.sockets[key];
                 if info.timeout.take().is_none() {
-                    trace!("Enabling backpressure for {}", info.addr);
-                    let _ = self.poll.registry().deregister(&mut info.sock);
+                    log::trace!("Enabling back-pressure for {}", info.addr);
+                    self.remove_source(key);
                 }
             }
         }
     }
 
     fn accept_one(&mut self, mut msg: Connection) {
-        trace!("Accepting connection: {:?}", msg.io);
+        log::trace!("Accepting connection: {:?}", msg.io);
 
         if self.backpressure {
             while !self.workers.is_empty() {
@@ -391,7 +391,7 @@ impl Accept {
                         msg = tmp;
                         self.workers.swap_remove(self.next);
                         if self.workers.is_empty() {
-                            error!("No workers");
+                            log::error!("No workers");
                             return;
                         } else if self.workers.len() <= self.next {
                             self.next = 0;
@@ -413,13 +413,13 @@ impl Accept {
                             return;
                         }
                         Err(tmp) => {
-                            trace!("Worker failed while processing connection");
+                            log::trace!("Worker failed while processing connection");
                             self.update_status(ServerStatus::WorkerFailed);
                             self.srv.worker_faulted(self.workers[self.next].idx);
                             msg = tmp;
                             self.workers.swap_remove(self.next);
                             if self.workers.is_empty() {
-                                error!("No workers");
+                                log::error!("No workers");
                                 self.backpressure(true);
                                 return;
                             } else if self.workers.len() <= self.next {
@@ -432,13 +432,13 @@ impl Accept {
                 self.next = (self.next + 1) % self.workers.len();
             }
             // enable backpressure
-            trace!("No available workers, enable back-pressure");
+            log::trace!("No available workers, enable back-pressure");
             self.backpressure(true);
             self.accept_one(msg);
         }
     }
 
-    fn accept(&mut self, token: usize) {
+    fn accept(&mut self, token: usize) -> bool {
         loop {
             let msg = if let Some(info) = self.sockets.get_mut(token) {
                 match info.sock.accept() {
@@ -446,32 +446,41 @@ impl Accept {
                         io,
                         token: info.token,
                     },
-                    Ok(None) => return,
-                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return,
+                    Ok(None) => return true,
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return true,
                     Err(ref e) if connection_error(e) => continue,
                     Err(e) => {
-                        error!("Error accepting connection: {}", e);
-                        if let Err(err) = self.poll.registry().deregister(&mut info.sock)
-                        {
-                            error!("Cannot deregister server socket {}", err);
-                        }
+                        log::error!("Error accepting socket: {}", e);
 
                         // sleep after error
-                        info.timeout = Some(Instant::now() + ERR_TIMEOUT);
+                        info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));
 
                         let notify = self.notify.clone();
                         System::current().arbiter().spawn(Box::pin(async move {
                             sleep(ERR_SLEEP_TIMEOUT).await;
                             notify.send(Command::Timer);
                         }));
-                        return;
+                        return false;
                     }
                 }
             } else {
-                return;
+                return false;
             };
 
             self.accept_one(msg);
         }
     }
+}
+
+/// This function defines errors that are per-connection. Which basically
+/// means that if we get this error from `accept()` system call it means
+/// next connection might be ready to be accepted.
+///
+/// All other errors will incur a timeout before next `accept()` is performed.
+/// The timeout is useful to handle resource exhaustion errors like ENFILE
+/// and EMFILE. Otherwise, could enter into tight loop.
+fn connection_error(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::ConnectionRefused
+        || e.kind() == io::ErrorKind::ConnectionAborted
+        || e.kind() == io::ErrorKind::ConnectionReset
 }
