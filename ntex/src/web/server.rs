@@ -1,20 +1,16 @@
 use std::{fmt, io, marker::PhantomData, net, sync::Arc, sync::Mutex};
 
 #[cfg(feature = "openssl")]
-use crate::server::openssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
+use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
-use crate::server::rustls::ServerConfig as RustlsServerConfig;
+use tls_rustls::ServerConfig as RustlsServerConfig;
 
-#[cfg(unix)]
-use crate::http::Protocol;
 use crate::http::{
     body::MessageBody, HttpService, KeepAlive, Request, Response, ResponseError,
 };
 use crate::server::{Server, ServerBuilder};
-#[cfg(unix)]
-use crate::service::pipeline_factory;
+use crate::time::Seconds;
 use crate::{service::map_config, IntoServiceFactory, Service, ServiceFactory};
-use crate::{time::Seconds, util::PoolId};
 
 use super::config::AppConfig;
 
@@ -24,7 +20,6 @@ struct Config {
     client_timeout: Seconds,
     client_disconnect: Seconds,
     handshake_timeout: Seconds,
-    pool: PoolId,
 }
 
 /// An HTTP Server.
@@ -84,7 +79,6 @@ where
                 client_timeout: Seconds(5),
                 client_disconnect: Seconds(5),
                 handshake_timeout: Seconds(5),
-                pool: PoolId::P1,
             })),
             backlog: 1024,
             builder: ServerBuilder::default(),
@@ -135,7 +129,7 @@ where
     ///
     /// By default max connections is set to a 256.
     pub fn maxconnrate(self, num: usize) -> Self {
-        crate::server::max_concurrent_ssl_accept(num);
+        ntex_tls::max_concurrent_ssl_accept(num);
         self
     }
 
@@ -225,30 +219,6 @@ where
         self
     }
 
-    /// Set memory pool.
-    ///
-    /// Use specified memory pool for memory allocations. By default P1
-    /// memory pool is used.
-    pub fn memory_pool(self, id: PoolId) -> Self {
-        self.config.lock().unwrap().pool = id;
-        self
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "0.4.12", note = "Use memory pool config")]
-    #[inline]
-    /// Set read/write buffer params
-    ///
-    /// By default read buffer is 8kb, write buffer is 8kb
-    pub fn buffer_params(
-        self,
-        _max_read_buf_size: u16,
-        _max_write_buf_size: u16,
-        _min_buf_size: u16,
-    ) -> Self {
-        self
-    }
-
     /// Use listener for accepting incoming connection requests
     ///
     /// HttpServer does not change any configuration for TcpListener,
@@ -273,9 +243,7 @@ where
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
-                    .memory_pool(c.pool)
                     .finish(map_config(factory(), move |_| cfg.clone()))
-                    .tcp()
             },
         )?;
         Ok(self)
@@ -318,7 +286,6 @@ where
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
-                    .memory_pool(c.pool)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .openssl(acceptor.clone())
             },
@@ -363,7 +330,6 @@ where
                     .client_timeout(c.client_timeout)
                     .disconnect_timeout(c.client_disconnect)
                     .ssl_handshake_timeout(c.handshake_timeout)
-                    .memory_pool(c.pool)
                     .finish(map_config(factory(), move |_| cfg.clone()))
                     .rustls(config.clone())
             },
@@ -461,8 +427,6 @@ where
         mut self,
         lst: std::os::unix::net::UnixListener,
     ) -> io::Result<Self> {
-        use crate::rt::net::UnixStream;
-
         let cfg = self.config.clone();
         let factory = self.factory.clone();
         let socket_addr = net::SocketAddr::new(
@@ -479,16 +443,10 @@ where
                 socket_addr,
                 c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
             );
-            pipeline_factory(|io: UnixStream| {
-                crate::util::Ready::Ok((io, Protocol::Http1, None))
-            })
-            .and_then(
-                HttpService::build()
-                    .keep_alive(c.keep_alive)
-                    .client_timeout(c.client_timeout)
-                    .memory_pool(c.pool)
-                    .finish(map_config(factory(), move |_| config.clone())),
-            )
+            HttpService::build()
+                .keep_alive(c.keep_alive)
+                .client_timeout(c.client_timeout)
+                .finish(map_config(factory(), move |_| config.clone()))
         })?;
         Ok(self)
     }
@@ -501,8 +459,6 @@ where
     where
         A: AsRef<std::path::Path>,
     {
-        use crate::rt::net::UnixStream;
-
         let cfg = self.config.clone();
         let factory = self.factory.clone();
         let socket_addr = net::SocketAddr::new(
@@ -520,16 +476,10 @@ where
                     socket_addr,
                     c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
                 );
-                pipeline_factory(|io: UnixStream| {
-                    crate::util::Ready::Ok((io, Protocol::Http1, None))
-                })
-                .and_then(
-                    HttpService::build()
-                        .keep_alive(c.keep_alive)
-                        .client_timeout(c.client_timeout)
-                        .memory_pool(c.pool)
-                        .finish(map_config(factory(), move |_| config.clone())),
-                )
+                HttpService::build()
+                    .keep_alive(c.keep_alive)
+                    .client_timeout(c.client_timeout)
+                    .finish(map_config(factory(), move |_| config.clone()))
             },
         )?;
         Ok(self)

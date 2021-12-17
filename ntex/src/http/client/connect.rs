@@ -1,14 +1,22 @@
-use std::{fmt, future::Future, io, net, pin::Pin, task::Context, task::Poll};
+use std::{future::Future, net, pin::Pin};
 
-use crate::codec::{AsyncRead, AsyncWrite, Framed, ReadBuf};
 use crate::http::body::Body;
 use crate::http::h1::ClientCodec;
 use crate::http::{RequestHeadType, ResponseHead};
+use crate::io::IoBoxed;
 use crate::Service;
 
 use super::error::{ConnectError, SendRequestError};
 use super::response::ClientResponse;
 use super::{Connect as ClientConnect, Connection};
+
+pub(crate) type TunnelFuture = Pin<
+    Box<
+        dyn Future<
+            Output = Result<(ResponseHead, IoBoxed, ClientCodec), SendRequestError>,
+        >,
+    >,
+>;
 
 pub(super) struct ConnectorWrapper<T>(pub(crate) T);
 
@@ -25,25 +33,12 @@ pub(super) trait Connect {
         &self,
         head: RequestHeadType,
         addr: Option<net::SocketAddr>,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                Output = Result<
-                    (ResponseHead, Framed<BoxedSocket, ClientCodec>),
-                    SendRequestError,
-                >,
-            >,
-        >,
-    >;
+    ) -> TunnelFuture;
 }
 
 impl<T> Connect for ConnectorWrapper<T>
 where
-    T: Service<Request = ClientConnect, Error = ConnectError>,
-    T::Response: Connection,
-    <T::Response as Connection>::Io: 'static,
-    <T::Response as Connection>::Future: 'static,
-    <T::Response as Connection>::TunnelFuture: 'static,
+    T: Service<Request = ClientConnect, Response = Connection, Error = ConnectError>,
     T::Future: 'static,
 {
     fn send_request(
@@ -73,16 +68,7 @@ where
         &self,
         head: RequestHeadType,
         addr: Option<net::SocketAddr>,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                Output = Result<
-                    (ResponseHead, Framed<BoxedSocket, ClientCodec>),
-                    SendRequestError,
-                >,
-            >,
-        >,
-    > {
+    ) -> TunnelFuture {
         // connect to the host
         let fut = self.0.call(ClientConnect {
             uri: head.as_ref().uri.clone(),
@@ -93,69 +79,7 @@ where
             let connection = fut.await?;
 
             // send request
-            let (head, framed) = connection.open_tunnel(head).await?;
-
-            let framed = framed.map_io(|io| BoxedSocket(Box::new(Socket(io))));
-            Ok((head, framed))
+            connection.open_tunnel(head).await
         })
-    }
-}
-
-trait AsyncSocket {
-    fn as_read(&self) -> &(dyn AsyncRead + Unpin);
-    fn as_read_mut(&mut self) -> &mut (dyn AsyncRead + Unpin);
-    fn as_write(&mut self) -> &mut (dyn AsyncWrite + Unpin);
-}
-
-struct Socket<T: AsyncRead + AsyncWrite + Unpin>(T);
-
-impl<T: AsyncRead + AsyncWrite + Unpin> AsyncSocket for Socket<T> {
-    fn as_read(&self) -> &(dyn AsyncRead + Unpin) {
-        &self.0
-    }
-    fn as_read_mut(&mut self) -> &mut (dyn AsyncRead + Unpin) {
-        &mut self.0
-    }
-    fn as_write(&mut self) -> &mut (dyn AsyncWrite + Unpin) {
-        &mut self.0
-    }
-}
-
-pub struct BoxedSocket(Box<dyn AsyncSocket>);
-
-impl fmt::Debug for BoxedSocket {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "BoxedSocket")
-    }
-}
-
-impl AsyncRead for BoxedSocket {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(self.get_mut().0.as_read_mut()).poll_read(cx, buf)
-    }
-}
-
-impl AsyncWrite for BoxedSocket {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(self.get_mut().0.as_write()).poll_write(cx, buf)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(self.get_mut().0.as_write()).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(self.get_mut().0.as_write()).poll_shutdown(cx)
     }
 }

@@ -497,7 +497,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::rt::net::TcpStream;
+    use crate::io::Io;
     use crate::server::service::Factory;
     use crate::service::{Service, ServiceFactory};
     use crate::util::{lazy, Ready};
@@ -516,7 +516,7 @@ mod tests {
     }
 
     impl ServiceFactory for SrvFactory {
-        type Request = TcpStream;
+        type Request = Io;
         type Response = ();
         type Error = ();
         type Service = Srv;
@@ -538,7 +538,7 @@ mod tests {
     }
 
     impl Service for Srv {
-        type Request = TcpStream;
+        type Request = Io;
         type Response = ();
         type Error = ();
         type Future = Ready<(), ()>;
@@ -562,7 +562,7 @@ mod tests {
             }
         }
 
-        fn call(&self, _: TcpStream) -> Self::Future {
+        fn call(&self, _: Io) -> Self::Future {
             Ready::Ok(())
         }
     }

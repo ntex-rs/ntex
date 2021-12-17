@@ -38,10 +38,3 @@ pub use self::service::HttpService;
 // re-exports
 pub use http::uri::{self, Uri};
 pub use http::{Method, StatusCode, Version};
-
-/// Http protocol
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Protocol {
-    Http1,
-    Http2,
-}

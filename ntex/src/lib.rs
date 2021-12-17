@@ -6,7 +6,6 @@
 //! * `rustls` - enables ssl support via `rustls` crate
 //! * `compress` - enables compression support in http and web modules
 //! * `cookie` - enables cookie support in http and web modules
-
 #![warn(
     rust_2018_idioms,
     unreachable_pub,
@@ -35,7 +34,6 @@ pub(crate) use ntex_macros::rt_test2 as rt_test;
 
 pub mod channel;
 pub mod connect;
-pub mod framed;
 #[cfg(feature = "http-framework")]
 pub mod http;
 pub mod server;
@@ -86,4 +84,9 @@ pub mod io {
 pub mod testing {
     //! IO testing utilities.
     pub use ntex_io::testing::IoTest as Io;
+}
+
+pub mod tls {
+    //! TLS support for ntex ecosystem.
+    pub use ntex_tls::*;
 }

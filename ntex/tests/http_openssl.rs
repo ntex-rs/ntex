@@ -3,7 +3,7 @@ use std::io;
 
 use futures::future::{err, ok, ready};
 use futures::stream::{once, Stream, StreamExt};
-use open_ssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
+use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 
 use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
@@ -419,23 +419,6 @@ async fn test_h2_service_error() {
     // read response
     let bytes = srv.load_body(response).await.unwrap();
     assert_eq!(bytes, Bytes::from_static(b"error"));
-}
-
-#[ntex::test]
-async fn test_h2_on_connect() {
-    let srv = test_server(move || {
-        HttpService::build()
-            .on_connect(|_| 10usize)
-            .h2(|req: Request| {
-                assert!(req.extensions().contains::<usize>());
-                ok::<_, io::Error>(Response::Ok().finish())
-            })
-            .openssl(ssl_acceptor())
-            .map_err(|_| ())
-    });
-
-    let response = srv.srequest(Method::GET, "/").send().await.unwrap();
-    assert!(response.status().is_success());
 }
 
 #[ntex::test]

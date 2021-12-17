@@ -1,6 +1,8 @@
 # Changes
 
-## [0.4.14] - 2021-12-xx
+## [0.5.0-b.0] - 2021-12-xx
+
+* Migrate io to ntex-io
 
 * Move ntex::time to ntex-util crate
 

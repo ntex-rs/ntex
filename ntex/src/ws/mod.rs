@@ -25,6 +25,7 @@ pub use self::stream::{StreamDecoder, StreamEncoder};
 pub enum WsError<E> {
     Service(E),
     KeepAlive,
+    Disconnected,
     Protocol(ProtocolError),
     Io(io::Error),
 }
@@ -59,6 +60,9 @@ pub enum ProtocolError {
     /// Unknown continuation fragment
     #[display(fmt = "Unknown continuation fragment.")]
     ContinuationFragment(OpCode),
+    /// IO Error
+    #[display(fmt = "IO Error: {:?}", _0)]
+    Io(io::Error),
 }
 
 impl std::error::Error for ProtocolError {}

@@ -1,11 +1,9 @@
-use std::cell::{Ref, RefMut};
-use std::marker::PhantomData;
-use std::rc::Rc;
-use std::{fmt, net};
+use std::{cell::Ref, cell::RefMut, fmt, marker::PhantomData, net, rc::Rc};
 
 use crate::http::{
     header, HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version,
 };
+use crate::io::{types, IoRef};
 use crate::router::{Path, Resource};
 use crate::util::Extensions;
 
@@ -87,6 +85,12 @@ impl<Err> WebRequest<Err> {
         WebResponse::new(res.into(), self.req)
     }
 
+    /// Io reference for current connection
+    #[inline]
+    pub fn io(&self) -> Option<&IoRef> {
+        self.head().io.as_ref()
+    }
+
     /// This method returns reference to the request head
     #[inline]
     pub fn head(&self) -> &RequestHead {
@@ -155,7 +159,11 @@ impl<Err> WebRequest<Err> {
     /// To get client connection information `ConnectionInfo` should be used.
     #[inline]
     pub fn peer_addr(&self) -> Option<net::SocketAddr> {
-        self.head().peer_addr
+        self.head()
+            .io
+            .as_ref()
+            .map(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
+            .unwrap_or(None)
     }
 
     /// Get *ConnectionInfo* for the current request.

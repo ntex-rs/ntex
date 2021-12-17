@@ -37,7 +37,7 @@ use crate::server::{Server, ServerBuilder, StreamServiceFactory};
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn test_server<F: StreamServiceFactory<TcpStream>>(factory: F) -> TestServer {
+pub fn test_server<F: StreamServiceFactory>(factory: F) -> TestServer {
     let (tx, rx) = mpsc::channel();
 
     // run server in separate thread

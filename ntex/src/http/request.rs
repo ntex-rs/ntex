@@ -1,11 +1,10 @@
 use std::{cell::Ref, cell::RefMut, fmt, mem, net};
 
-use http::{header, Method, Uri, Version};
-
-use crate::http::header::HeaderMap;
+use crate::http::header::{self, HeaderMap};
 use crate::http::httpmessage::HttpMessage;
 use crate::http::message::{Message, RequestHead};
-use crate::http::payload::Payload;
+use crate::http::{payload::Payload, Method, Uri, Version};
+use crate::io::{types, IoRef};
 use crate::util::Extensions;
 
 /// Request
@@ -126,13 +125,23 @@ impl Request {
         self.head().method == Method::CONNECT
     }
 
+    /// Io reference for current connection
+    #[inline]
+    pub fn io(&self) -> Option<&IoRef> {
+        self.head().io.as_ref()
+    }
+
     /// Peer socket address
     ///
     /// Peer address is actual socket address, if proxy is used in front of
     /// ntex http server, then peer address would be address of this proxy.
     #[inline]
     pub fn peer_addr(&self) -> Option<net::SocketAddr> {
-        self.head().peer_addr
+        self.head().io.as_ref().and_then(|io| {
+            io.query::<types::PeerAddr>()
+                .get()
+                .map(types::PeerAddr::into_inner)
+        })
     }
 
     /// Get request's payload

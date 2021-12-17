@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, io, task::Context, task::Poll};
+use std::{any::Any, any::TypeId, fmt, future::Future, io, task::Context, task::Poll};
 
 pub mod testing;
 
@@ -7,6 +7,7 @@ mod filter;
 mod state;
 mod tasks;
 mod time;
+pub mod types;
 mod utils;
 
 #[cfg(feature = "tokio")]
@@ -18,11 +19,11 @@ use ntex_util::time::Millis;
 
 pub use self::dispatcher::Dispatcher;
 pub use self::filter::DefaultFilter;
-pub use self::state::{Io, IoRef, ReadRef, WriteRef};
-pub use self::tasks::{ReadState, WriteState};
+pub use self::state::{Io, IoRef, OnDisconnect, ReadRef, WriteRef};
+pub use self::tasks::{ReadContext, WriteContext};
 pub use self::time::Timer;
 
-pub use self::utils::{filter_factory, from_iostream, into_boxed, into_io};
+pub use self::utils::{filter_factory, into_boxed};
 
 pub type IoBoxed = Io<Box<dyn Filter>>;
 
@@ -55,8 +56,10 @@ pub trait WriteFilter {
     fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error>;
 }
 
-pub trait Filter: ReadFilter + WriteFilter {
+pub trait Filter: ReadFilter + WriteFilter + 'static {
     fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>>;
+
+    fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
 }
 
 pub trait FilterFactory<F: Filter>: Sized {
@@ -69,7 +72,11 @@ pub trait FilterFactory<F: Filter>: Sized {
 }
 
 pub trait IoStream {
-    fn start(self, _: ReadState, _: WriteState);
+    fn start(self, _: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>>;
+}
+
+pub trait Handle {
+    fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
 }
 
 /// Framed transport item

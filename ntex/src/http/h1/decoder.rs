@@ -322,7 +322,7 @@ impl MessageType for ResponseHead {
                         Err(ParseError::TooLarge)
                     } else {
                         Ok(None)
-                    }
+                    };
                 }
             }
         };

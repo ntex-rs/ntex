@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use futures::future::ok;
-use open_ssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use rust_tls::ClientConfig;
+use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+use tls_rustls::ClientConfig;
 
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
@@ -27,7 +27,7 @@ fn ssl_acceptor() -> SslAcceptor {
         if protos.windows(3).any(|window| window == H2) {
             Ok(b"h2")
         } else {
-            Err(open_ssl::ssl::AlpnError::NOACK)
+            Err(tls_openssl::ssl::AlpnError::NOACK)
         }
     });
     builder.set_alpn_protos(b"\x02h2").unwrap();
@@ -35,12 +35,12 @@ fn ssl_acceptor() -> SslAcceptor {
 }
 
 mod danger {
-    use rust_tls::{Certificate, ServerName};
     use std::time::SystemTime;
+    use tls_rustls::{Certificate, ServerName};
 
     pub struct NoCertificateVerification {}
 
-    impl rust_tls::client::ServerCertVerifier for NoCertificateVerification {
+    impl tls_rustls::client::ServerCertVerifier for NoCertificateVerification {
         fn verify_server_cert(
             &self,
             _end_entity: &Certificate,
@@ -49,8 +49,8 @@ mod danger {
             _scts: &mut dyn Iterator<Item = &[u8]>,
             _ocsp_response: &[u8],
             _now: SystemTime,
-        ) -> Result<rust_tls::client::ServerCertVerified, rust_tls::Error> {
-            Ok(rust_tls::client::ServerCertVerified::assertion())
+        ) -> Result<tls_rustls::client::ServerCertVerified, tls_rustls::Error> {
+            Ok(tls_rustls::client::ServerCertVerified::assertion())
         }
     }
 }
@@ -89,7 +89,7 @@ async fn test_connection_reuse_h2() {
     config.alpn_protocols = protos;
 
     let client = Client::build()
-        .connector(Connector::default().rustls(Arc::new(config)).finish())
+        .connector(Connector::default().rustls(config).finish())
         .finish();
 
     // req 1

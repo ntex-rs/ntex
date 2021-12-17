@@ -1,13 +1,10 @@
 use std::io;
 
-use futures::{future::ok, SinkExt, StreamExt};
-
-use ntex::framed::{DispatchItem, Dispatcher, State};
 use ntex::http::test::server as test_server;
 use ntex::http::ws::handshake_response;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
-use ntex::rt::net::TcpStream;
-use ntex::{util::ByteString, util::Bytes, ws};
+use ntex::io::{DispatchItem, Dispatcher, Io};
+use ntex::{util::ByteString, util::Bytes, util::Ready, ws};
 
 async fn ws_service(
     msg: DispatchItem<ws::Codec>,
@@ -31,61 +28,58 @@ async fn ws_service(
 async fn test_simple() {
     let mut srv = test_server(|| {
         HttpService::build()
-            .upgrade(
-                |(req, io, state, mut codec): (Request, TcpStream, State, h1::Codec)| {
-                    async move {
-                        let res = handshake_response(req.head()).finish();
+            .upgrade(|(req, io, codec): (Request, Io, h1::Codec)| {
+                async move {
+                    let res = handshake_response(req.head()).finish();
 
-                        // send handshake respone
-                        state
-                            .write()
-                            .encode(
-                                h1::Message::Item((res.drop_body(), BodySize::None)),
-                                &mut codec,
-                            )
-                            .unwrap();
-
-                        // start websocket service
-                        Dispatcher::new(
-                            io,
-                            ws::Codec::default(),
-                            state,
-                            ws_service,
-                            Default::default(),
+                    // send handshake respone
+                    io.write()
+                        .encode(
+                            h1::Message::Item((res.drop_body(), BodySize::None)),
+                            &codec,
                         )
-                        .await
-                    }
-                },
-            )
-            .finish(|_| ok::<_, io::Error>(Response::NotFound()))
-            .tcp()
+                        .unwrap();
+
+                    // start websocket service
+                    Dispatcher::new(
+                        io.into_boxed(),
+                        ws::Codec::default(),
+                        ws_service,
+                        Default::default(),
+                    )
+                    .await
+                }
+            })
+            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
     });
 
     // client service
-    let mut framed = srv.ws().await.unwrap();
-    framed
-        .send(ws::Message::Text(ByteString::from_static("text")))
+    let (_, io, codec) = srv.ws().await.unwrap().into_inner();
+    io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
         .await
         .unwrap();
-    let item = framed.next().await.unwrap().unwrap();
+    let item = io.next(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
 
-    framed
-        .send(ws::Message::Binary("text".into()))
+    io.send(ws::Message::Binary("text".into()), &codec)
         .await
         .unwrap();
-    let item = framed.next().await.unwrap().unwrap();
+    let item = io.next(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 
-    framed.send(ws::Message::Ping("text".into())).await.unwrap();
-    let item = framed.next().await.unwrap().unwrap();
-    assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
-
-    framed
-        .send(ws::Message::Close(Some(ws::CloseCode::Normal.into())))
+    io.send(ws::Message::Ping("text".into()), &codec)
         .await
         .unwrap();
+    let item = io.next(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
 
-    let item = framed.next().await.unwrap().unwrap();
+    io.send(
+        ws::Message::Close(Some(ws::CloseCode::Normal.into())),
+        &codec,
+    )
+    .await
+    .unwrap();
+
+    let item = io.next(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Normal.into())));
 }

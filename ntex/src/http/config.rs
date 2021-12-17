@@ -1,10 +1,10 @@
-use std::{cell::Cell, cell::RefCell, ptr::copy_nonoverlapping, rc::Rc, time};
+use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time};
 
-use crate::framed::Timer;
 use crate::http::{Request, Response};
+use crate::io::{IoRef, Timer};
 use crate::service::boxed::BoxService;
 use crate::time::{sleep, Millis, Seconds, Sleep};
-use crate::util::{BytesMut, PoolId};
+use crate::util::BytesMut;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 /// Server keep-alive setting
@@ -44,7 +44,6 @@ pub(super) struct Inner {
     pub(super) timer: DateService,
     pub(super) ssl_handshake_timeout: Millis,
     pub(super) timer_h1: Timer,
-    pub(super) pool: PoolId,
 }
 
 impl Clone for ServiceConfig {
@@ -60,7 +59,6 @@ impl Default for ServiceConfig {
             Millis::ZERO,
             Seconds::ZERO,
             Millis(5_000),
-            PoolId::P1,
         )
     }
 }
@@ -72,7 +70,6 @@ impl ServiceConfig {
         client_timeout: Millis,
         client_disconnect: Seconds,
         ssl_handshake_timeout: Millis,
-        pool: PoolId,
     ) -> ServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (Millis::from(val), true),
@@ -87,16 +84,15 @@ impl ServiceConfig {
             client_timeout,
             client_disconnect,
             ssl_handshake_timeout,
-            pool,
             timer: DateService::new(),
             timer_h1: Timer::default(),
         }))
     }
 }
 
-pub(super) type OnRequest<T> = BoxService<(Request, Rc<RefCell<T>>), Request, Response>;
+pub(super) type OnRequest = BoxService<(Request, IoRef), Request, Response>;
 
-pub(super) struct DispatcherConfig<T, S, X, U> {
+pub(super) struct DispatcherConfig<S, X, U> {
     pub(super) service: S,
     pub(super) expect: X,
     pub(super) upgrade: Option<U>,
@@ -106,17 +102,16 @@ pub(super) struct DispatcherConfig<T, S, X, U> {
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
     pub(super) timer_h1: Timer,
-    pub(super) pool: PoolId,
-    pub(super) on_request: Option<OnRequest<T>>,
+    pub(super) on_request: Option<OnRequest>,
 }
 
-impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
+impl<S, X, U> DispatcherConfig<S, X, U> {
     pub(super) fn new(
         cfg: ServiceConfig,
         service: S,
         expect: X,
         upgrade: Option<U>,
-        on_request: Option<OnRequest<T>>,
+        on_request: Option<OnRequest>,
     ) -> Self {
         DispatcherConfig {
             service,
@@ -129,7 +124,6 @@ impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
             ka_enabled: cfg.0.ka_enabled,
             timer: cfg.0.timer.clone(),
             timer_h1: cfg.0.timer_h1.clone(),
-            pool: cfg.0.pool,
         }
     }
 
@@ -147,10 +141,6 @@ impl<T, S, X, U> DispatcherConfig<T, S, X, U> {
     pub(super) fn keep_alive_expire(&self) -> Option<time::Instant> {
         self.keep_alive
             .map(|t| self.timer.now() + time::Duration::from(t))
-    }
-
-    pub(super) fn now(&self) -> time::Instant {
-        self.timer.now()
     }
 }
 

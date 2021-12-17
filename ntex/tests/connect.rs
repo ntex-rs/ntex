@@ -1,10 +1,8 @@
 use std::io;
 
-use futures::SinkExt;
-
-use ntex::codec::{BytesCodec, Framed};
+use ntex::codec::BytesCodec;
 use ntex::connect::Connect;
-use ntex::rt::net::TcpStream;
+use ntex::io::{types::PeerAddr, Io};
 use ntex::server::test_server;
 use ntex::service::{fn_service, Service, ServiceFactory};
 use ntex::util::Bytes;
@@ -13,9 +11,10 @@ use ntex::util::Bytes;
 #[ntex::test]
 async fn test_string() {
     let srv = test_server(|| {
-        fn_service(|io: TcpStream| async {
-            let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await.unwrap();
+        fn_service(|io: Io| async move {
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
+                .await
+                .unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -23,16 +22,17 @@ async fn test_string() {
     let conn = ntex::connect::Connector::default();
     let addr = format!("localhost:{}", srv.addr().port());
     let con = conn.call(addr.into()).await.unwrap();
-    assert_eq!(con.peer_addr().unwrap(), srv.addr());
+    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_string() {
     let srv = test_server(|| {
-        fn_service(|io: TcpStream| async {
-            let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await.unwrap();
+        fn_service(|io: Io| async move {
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
+                .await
+                .unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -40,15 +40,16 @@ async fn test_rustls_string() {
     let conn = ntex::connect::Connector::default();
     let addr = format!("localhost:{}", srv.addr().port());
     let con = conn.call(addr.into()).await.unwrap();
-    assert_eq!(con.peer_addr().unwrap(), srv.addr());
+    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
 #[ntex::test]
 async fn test_static_str() {
     let srv = test_server(|| {
-        fn_service(|io: TcpStream| async {
-            let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await.unwrap();
+        fn_service(|io: Io| async move {
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
+                .await
+                .unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -56,7 +57,7 @@ async fn test_static_str() {
     let conn = ntex::connect::Connector::new();
 
     let con = conn.call(Connect::with("10", srv.addr())).await.unwrap();
-    assert_eq!(con.peer_addr().unwrap(), srv.addr());
+    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 
     let connect = Connect::new("127.0.0.1".to_owned());
     let conn = ntex::connect::Connector::new();
@@ -67,9 +68,10 @@ async fn test_static_str() {
 #[ntex::test]
 async fn test_new_service() {
     let srv = test_server(|| {
-        fn_service(|io: TcpStream| async {
-            let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await.unwrap();
+        fn_service(|io: Io| async move {
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
+                .await
+                .unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -77,7 +79,7 @@ async fn test_new_service() {
     let factory = ntex::connect::Connector::new();
     let conn = factory.new_service(()).await.unwrap();
     let con = conn.call(Connect::with("10", srv.addr())).await.unwrap();
-    assert_eq!(con.peer_addr().unwrap(), srv.addr());
+    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
 #[cfg(feature = "openssl")]
@@ -86,9 +88,10 @@ async fn test_uri() {
     use std::convert::TryFrom;
 
     let srv = test_server(|| {
-        fn_service(|io: TcpStream| async {
-            let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await.unwrap();
+        fn_service(|io: Io| async move {
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
+                .await
+                .unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -98,7 +101,7 @@ async fn test_uri() {
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
             .unwrap();
     let con = conn.call(addr.into()).await.unwrap();
-    assert_eq!(con.peer_addr().unwrap(), srv.addr());
+    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
 #[cfg(feature = "rustls")]
@@ -107,9 +110,10 @@ async fn test_rustls_uri() {
     use std::convert::TryFrom;
 
     let srv = test_server(|| {
-        fn_service(|io: TcpStream| async {
-            let mut framed = Framed::new(io, BytesCodec);
-            framed.send(Bytes::from_static(b"test")).await.unwrap();
+        fn_service(|io: Io| async move {
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
+                .await
+                .unwrap();
             Ok::<_, io::Error>(())
         })
     });
@@ -119,5 +123,5 @@ async fn test_rustls_uri() {
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
             .unwrap();
     let con = conn.call(addr.into()).await.unwrap();
-    assert_eq!(con.peer_addr().unwrap(), srv.addr());
+    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }

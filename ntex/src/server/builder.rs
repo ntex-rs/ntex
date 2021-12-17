@@ -8,8 +8,8 @@ use futures_core::Stream;
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::rt::{net::TcpStream, spawn, System};
-use crate::{time::sleep, time::Millis, util::join_all};
+use crate::rt::{spawn, System};
+use crate::{time::sleep, time::Millis, util::join_all, util::PoolId};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime};
@@ -185,6 +185,17 @@ impl ServerBuilder {
         self
     }
 
+    /// Set memory pool for name dservice.
+    ///
+    /// Use specified memory pool for memory allocations. By default P0
+    /// memory pool is used.
+    pub fn memory_pool<N: AsRef<str>>(mut self, name: N, id: PoolId) -> Self {
+        for srv in &mut self.services {
+            srv.set_memory_pool(name.as_ref(), id)
+        }
+        self
+    }
+
     /// Add new service to the server.
     pub fn bind<F, U, N: AsRef<str>>(
         mut self,
@@ -193,7 +204,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: StreamServiceFactory<TcpStream>,
+        F: StreamServiceFactory,
         U: net::ToSocketAddrs,
     {
         let sockets = bind_addr(addr, self.backlog)?;
@@ -219,7 +230,7 @@ impl ServerBuilder {
     /// Add new unix domain service to the server.
     pub fn bind_uds<F, U, N>(self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
-        F: StreamServiceFactory<crate::rt::net::UnixStream>,
+        F: StreamServiceFactory,
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
     {
@@ -249,7 +260,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: StreamServiceFactory<crate::rt::net::UnixStream>,
+        F: StreamServiceFactory,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();
@@ -273,7 +284,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: StreamServiceFactory<TcpStream>,
+        F: StreamServiceFactory,
     {
         let token = self.token.next();
         self.services.push(Factory::create(

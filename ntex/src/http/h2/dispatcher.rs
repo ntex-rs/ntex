@@ -1,55 +1,53 @@
 use std::task::{Context, Poll};
 use std::{
-    convert::TryFrom, future::Future, marker::PhantomData, net, pin::Pin, rc::Rc, time,
+    convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::Rc, time,
 };
 
 use h2::server::{Connection, SendResponse};
 use h2::SendStream;
-use http::header::{HeaderValue, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
 use log::{error, trace};
 
-use crate::codec::{AsyncRead, AsyncWrite};
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::config::{DateService, DispatcherConfig};
 use crate::http::error::{DispatchError, ResponseError};
-use crate::http::helpers::DataFactory;
-use crate::http::message::ResponseHead;
-use crate::http::payload::Payload;
-use crate::http::request::Request;
-use crate::http::response::Response;
-use crate::time::Sleep;
+use crate::http::header::{
+    HeaderValue, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING,
+};
+use crate::http::{
+    message::ResponseHead, payload::Payload, request::Request, response::Response,
+};
+use crate::io::{Filter, Io, IoRef};
+use crate::service::Service;
+use crate::time::{now, Sleep};
 use crate::util::{Bytes, BytesMut};
-use crate::Service;
 
 const CHUNK_SIZE: usize = 16_384;
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/2 protocol
-    pub struct Dispatcher<T, S: Service<Request = Request>, B: MessageBody, X, U> {
-        config: Rc<DispatcherConfig<T, S, X, U>>,
-        connection: Connection<T, Bytes>,
-        on_connect: Option<Box<dyn DataFactory>>,
-        peer_addr: Option<net::SocketAddr>,
+    pub struct Dispatcher<F, S: Service<Request = Request>, B: MessageBody, X, U> {
+        io: IoRef,
+        config: Rc<DispatcherConfig<S, X, U>>,
+        connection: Connection<Io<F>, Bytes>,
         ka_expire: time::Instant,
         ka_timer: Option<Sleep>,
         _t: PhantomData<B>,
     }
 }
 
-impl<T, S, B, X, U> Dispatcher<T, S, B, X, U>
+impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    F: Filter,
     S: Service<Request = Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     pub(in crate::http) fn new(
-        config: Rc<DispatcherConfig<T, S, X, U>>,
-        connection: Connection<T, Bytes>,
-        on_connect: Option<Box<dyn DataFactory>>,
+        io: IoRef,
+        config: Rc<DispatcherConfig<S, X, U>>,
+        connection: Connection<Io<F>, Bytes>,
         timeout: Option<Sleep>,
-        peer_addr: Option<net::SocketAddr>,
     ) -> Self {
         // keep-alive timer
         let (ka_expire, ka_timer) = if let Some(delay) = timeout {
@@ -61,14 +59,13 @@ where
                 config.timer.now() + std::time::Duration::from(config.keep_alive);
             (expire, Some(delay))
         } else {
-            (config.now(), None)
+            (now(), None)
         };
 
         Dispatcher {
+            io,
             config,
-            peer_addr,
             connection,
-            on_connect,
             ka_expire,
             ka_timer,
             _t: PhantomData,
@@ -76,9 +73,9 @@ where
     }
 }
 
-impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
+impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    F: Filter,
     S: Service<Request = Request>,
     S::Error: ResponseError + 'static,
     S::Future: 'static,
@@ -115,12 +112,7 @@ where
                     head.method = parts.method;
                     head.version = parts.version;
                     head.headers = parts.headers.into();
-                    head.peer_addr = this.peer_addr;
-
-                    // set on_connect data
-                    if let Some(ref on_connect) = this.on_connect {
-                        on_connect.set(&mut req.extensions_mut());
-                    }
+                    head.io = Some(this.io.clone());
 
                     crate::rt::spawn(ServiceResponse {
                         state: ServiceResponseState::ServiceCall {

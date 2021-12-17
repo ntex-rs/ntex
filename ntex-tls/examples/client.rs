@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::{codec, connect, util::Bytes, util::Either};
-use openssl::ssl::{self, SslMethod, SslVerifyMode};
+use tls_openssl::ssl::{self, SslMethod, SslVerifyMode};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
@@ -13,10 +13,9 @@ async fn main() -> io::Result<()> {
     // load ssl keys
     let mut builder = ssl::SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
-    let connector = builder.build();
 
-    // start server
-    let connector = connect::openssl::IoConnector::new(connector);
+    // openssl connector
+    let connector = connect::openssl::Connector::new(builder.build());
 
     let io = connector.connect("127.0.0.1:8443").await.unwrap();
     println!("Connected to ssl server");

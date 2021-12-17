@@ -1,20 +1,15 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{
-    cell::RefCell, error::Error, fmt, future::Future, marker, net, pin::Pin, rc::Rc,
-    time,
-};
+use std::{error::Error, fmt, future::Future, marker, pin::Pin, rc::Rc, time};
 
-use crate::codec::{AsyncRead, AsyncWrite};
-use crate::framed::{ReadTask, State as IoState, WriteTask};
+use crate::io::{Filter, Io, IoRef};
 use crate::service::Service;
-use crate::util::Bytes;
+use crate::{time::now, util::Bytes};
 
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, ParseError, PayloadError, ResponseError};
-use crate::http::helpers::DataFactory;
 use crate::http::request::Request;
 use crate::http::response::Response;
 
@@ -37,45 +32,47 @@ bitflags::bitflags! {
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
-    pub struct Dispatcher<T, S: Service, B, X: Service, U: Service> {
+    pub struct Dispatcher<F, S: Service, B, X: Service, U: Service> {
         #[pin]
-        call: CallState<S, X, U>,
+        call: CallState<S, X>,
         st: State<B>,
-        inner: DispatcherInner<T, S, B, X, U>,
+        inner: DispatcherInner<F, S, B, X, U>,
     }
 }
 
+#[derive(derive_more::Display)]
 enum State<B> {
     Call,
     ReadRequest,
     ReadPayload,
-    SendPayload { body: ResponseBody<B> },
+    #[display(fmt = "State::SendPayload")]
+    SendPayload {
+        body: ResponseBody<B>,
+    },
+    #[display(fmt = "State::Upgrade")]
     Upgrade(Option<Request>),
     Stop,
 }
 
 pin_project_lite::pin_project! {
     #[project = CallStateProject]
-    enum CallState<S: Service, X: Service, U: Service> {
+    enum CallState<S: Service, X: Service> {
         None,
         Service { #[pin] fut: S::Future },
         Expect { #[pin] fut: X::Future },
-        Upgrade { #[pin] fut: U::Future },
         Filter { fut: Pin<Box<dyn Future<Output = Result<Request, Response>>>> }
     }
 }
 
-struct DispatcherInner<T, S, B, X, U> {
-    io: Option<Rc<RefCell<T>>>,
+struct DispatcherInner<F, S, B, X, U> {
+    io: Option<Io<F>>,
     flags: Flags,
     codec: Codec,
-    config: Rc<DispatcherConfig<T, S, X, U>>,
-    state: IoState,
+    state: IoRef,
+    config: Rc<DispatcherConfig<S, X, U>>,
     expire: time::Instant,
     error: Option<DispatchError>,
     payload: Option<(PayloadDecoder, PayloadSender)>,
-    peer_addr: Option<net::SocketAddr>,
-    on_connect_data: Option<Box<dyn DataFactory>>,
     _t: marker::PhantomData<(S, B)>,
 }
 
@@ -93,41 +90,33 @@ enum WritePayloadStatus<B> {
     Continue,
 }
 
-impl<T, S, B, X, U> Dispatcher<T, S, B, X, U>
+impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
+    F: Filter + 'static,
     S: Service<Request = Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: ResponseError,
-    U: Service<Request = (Request, T, IoState, Codec), Response = ()>,
+    U: Service<Request = (Request, Io<F>, Codec), Response = ()> + 'static,
     U::Error: Error + fmt::Display,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(
-        io: T,
-        config: Rc<DispatcherConfig<T, S, X, U>>,
-        peer_addr: Option<net::SocketAddr>,
-        on_connect_data: Option<Box<dyn DataFactory>>,
+        io: Io<F>,
+        config: Rc<DispatcherConfig<S, X, U>>,
     ) -> Self {
+        let mut expire = now();
+        let state = io.get_ref();
         let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
-        let state = IoState::with_memory_pool(config.pool.into());
-        state.set_disconnect_timeout(config.client_disconnect);
-
-        let mut expire = config.timer_h1.now();
-        let io = Rc::new(RefCell::new(io));
+        io.set_disconnect_timeout(config.client_disconnect.into());
 
         // slow-request timer
         if config.client_timeout.non_zero() {
-            expire += std::time::Duration::from(config.client_timeout);
+            expire += time::Duration::from(config.client_timeout);
             config.timer_h1.register(expire, expire, &state);
         }
-
-        // start support io tasks
-        crate::rt::spawn(ReadTask::new(io.clone(), state.clone()));
-        crate::rt::spawn(WriteTask::new(io.clone(), state.clone()));
 
         Dispatcher {
             call: CallState::None,
@@ -138,28 +127,26 @@ where
                 error: None,
                 payload: None,
                 codec,
-                config,
                 state,
+                config,
                 expire,
-                peer_addr,
-                on_connect_data,
                 _t: marker::PhantomData,
             },
         }
     }
 }
 
-impl<T, S, B, X, U> Future for Dispatcher<T, S, B, X, U>
+impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
 where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
+    F: Filter,
     S: Service<Request = Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request = Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, T, IoState, Codec), Response = ()>,
-    U::Error: Error + fmt::Display + 'static,
+    U: Service<Request = (Request, Io<F>, Codec), Response = ()> + 'static,
+    U::Error: Error + fmt::Display,
 {
     type Output = Result<(), DispatchError>;
 
@@ -170,7 +157,6 @@ where
             match this.st {
                 State::Call => {
                     let next = match this.call.project() {
-                        // handle SERVICE call
                         CallStateProject::Service { fut } => {
                             match fut.poll(cx) {
                                 Poll::Ready(result) => match result {
@@ -198,15 +184,21 @@ where
                         CallStateProject::Expect { fut } => match fut.poll(cx) {
                             Poll::Ready(result) => match result {
                                 Ok(req) => {
-                                    this.inner.state.write().with_buf(|buf| {
-                                        buf.extend_from_slice(
-                                            b"HTTP/1.1 100 Continue\r\n\r\n",
-                                        )
-                                    });
-                                    if this.inner.flags.contains(Flags::UPGRADE) {
-                                        this.inner.state.stop_io(cx.waker());
+                                    let result =
+                                        this.inner.state.write().with_buf(|buf| {
+                                            buf.extend_from_slice(
+                                                b"HTTP/1.1 100 Continue\r\n\r\n",
+                                            )
+                                        });
+                                    if result.is_err() {
+                                        *this.st = State::Stop;
+                                        this.inner.unregister_keepalive();
+                                        this = self.as_mut().project();
+                                        continue;
+                                    } else if this.inner.flags.contains(Flags::UPGRADE) {
                                         *this.st = State::Upgrade(Some(req));
-                                        return Poll::Pending;
+                                        this = self.as_mut().project();
+                                        continue;
                                     } else {
                                         Some(CallState::Service {
                                             fut: this.inner.config.service.call(req),
@@ -226,12 +218,6 @@ where
                                 return Poll::Pending;
                             }
                         },
-                        CallStateProject::Upgrade { fut } => {
-                            return fut.poll(cx).map_err(|e| {
-                                error!("Upgrade handler error: {}", e);
-                                DispatchError::Upgrade(Box::new(e))
-                            });
-                        }
                         // handle FILTER call
                         CallStateProject::Filter { fut } => {
                             if let Poll::Ready(result) = Pin::new(fut).poll(cx) {
@@ -277,6 +263,7 @@ where
                     if this.inner.state.is_dispatcher_stopped() {
                         log::trace!("dispatcher is instructed to stop");
                         *this.st = State::Stop;
+                        this.inner.unregister_keepalive();
                         continue;
                     }
 
@@ -292,7 +279,7 @@ where
                             log::trace!("keep-alive timeout, close connection");
                         }
                         *this.st = State::Stop;
-
+                        this.inner.unregister_keepalive();
                         continue;
                     }
 
@@ -307,7 +294,7 @@ where
                                     req,
                                     pl
                                 );
-                                req.head_mut().peer_addr = this.inner.peer_addr;
+                                req.head_mut().io = Some(this.inner.state.clone());
 
                                 // configure request payload
                                 let upgrade = match pl {
@@ -340,18 +327,10 @@ where
                                     );
                                 }
 
-                                // set on_connect data
-                                if let Some(ref on_connect) = this.inner.on_connect_data
-                                {
-                                    on_connect.set(&mut req.extensions_mut());
-                                }
-
                                 if upgrade {
                                     // Handle UPGRADE request
                                     log::trace!("prep io for upgrade handler");
-                                    this.inner.state.stop_io(cx.waker());
                                     *this.st = State::Upgrade(Some(req));
-                                    return Poll::Pending;
                                 } else {
                                     *this.st = State::Call;
                                     this.call.set(
@@ -361,11 +340,7 @@ where
                                             CallState::Filter {
                                                 fut: f.call((
                                                     req,
-                                                    this.inner
-                                                        .io
-                                                        .as_ref()
-                                                        .unwrap()
-                                                        .clone(),
+                                                    this.inner.state.clone(),
                                                 )),
                                             }
                                         } else if req.head().expect() {
@@ -390,13 +365,14 @@ where
                                 if this.inner.flags.contains(Flags::STARTED)
                                     && (!this.inner.flags.contains(Flags::KEEPALIVE)
                                         || !this.inner.codec.keepalive_enabled()
-                                        || this.inner.state.is_io_err())
+                                        || !this.inner.state.is_io_open())
                                 {
                                     *this.st = State::Stop;
-                                    this.inner.state.dispatcher_stopped();
+                                    this.inner.unregister_keepalive();
+                                    this.inner.state.stop_dispatcher();
                                     continue;
                                 }
-                                this.inner.state.read().wake(cx.waker());
+                                let _ = read.poll_read_ready(cx);
                                 return Poll::Pending;
                             }
                             Err(err) => {
@@ -416,16 +392,18 @@ where
                             && !this.inner.flags.contains(Flags::KEEPALIVE)
                         {
                             *this.st = State::Stop;
+                            this.inner.unregister_keepalive();
                             continue;
                         }
-                        this.inner.state.register_dispatcher(cx.waker());
+                        let _ = read.poll_read_ready(cx);
                         return Poll::Pending;
                     }
                 }
                 // consume request's payload
                 State::ReadPayload => {
-                    if this.inner.state.is_io_err() {
+                    if !this.inner.state.is_io_open() {
                         *this.st = State::Stop;
+                        this.inner.unregister_keepalive();
                     } else {
                         loop {
                             match this.inner.poll_read_payload(cx) {
@@ -437,7 +415,10 @@ where
                                         State::ReadRequest
                                     }
                                 }
-                                ReadPayloadStatus::Dropped => *this.st = State::Stop,
+                                ReadPayloadStatus::Dropped => {
+                                    *this.st = State::Stop;
+                                    this.inner.unregister_keepalive();
+                                }
                             }
                             break;
                         }
@@ -445,8 +426,9 @@ where
                 }
                 // send response body
                 State::SendPayload { ref mut body } => {
-                    if this.inner.state.is_io_err() {
+                    if !this.inner.state.is_io_open() {
                         *this.st = State::Stop;
+                        this.inner.unregister_keepalive();
                     } else {
                         this.inner.poll_read_payload(cx);
 
@@ -459,7 +441,7 @@ where
                                     this.inner
                                         .state
                                         .write()
-                                        .enable_backpressure(Some(cx.waker()));
+                                        .enable_backpressure(Some(cx));
                                     return Poll::Pending;
                                 }
                                 WritePayloadStatus::Continue => (),
@@ -470,50 +452,48 @@ where
                 }
                 // stop io tasks and call upgrade service
                 State::Upgrade(ref mut req) => {
-                    // check if all io tasks have been stopped
-                    let io = if Rc::strong_count(this.inner.io.as_ref().unwrap()) == 1 {
-                        if let Ok(io) = Rc::try_unwrap(this.inner.io.take().unwrap()) {
-                            io.into_inner()
-                        } else {
-                            return Poll::Ready(Err(DispatchError::InternalError));
-                        }
-                    } else {
-                        // wait next task stop
-                        this.inner.state.register_dispatcher(cx.waker());
-                        return Poll::Pending;
-                    };
                     log::trace!("initate upgrade handling");
 
+                    let io = this.inner.io.take().unwrap();
                     let req = req.take().unwrap();
                     *this.st = State::Call;
-                    this.inner.state.reset_io_stop();
 
                     // Handle UPGRADE request
-                    this.call.set(CallState::Upgrade {
-                        fut: this.inner.config.upgrade.as_ref().unwrap().call((
+                    crate::rt::spawn(
+                        this.inner.config.upgrade.as_ref().unwrap().call((
                             req,
                             io,
-                            this.inner.state.clone(),
                             this.inner.codec.clone(),
                         )),
-                    });
+                    );
+                    return Poll::Ready(Ok(()));
                 }
                 // prepare to shutdown
                 State::Stop => {
-                    this.inner.state.shutdown_io();
-                    this.inner.unregister_keepalive();
+                    if this
+                        .inner
+                        .io
+                        .as_ref()
+                        .unwrap()
+                        .poll_shutdown(cx)?
+                        .is_ready()
+                    {
+                        // get io error
+                        if this.inner.error.is_none() {
+                            this.inner.error =
+                                this.inner.state.take_error().map(DispatchError::Io);
+                        }
 
-                    // get io error
-                    if this.inner.error.is_none() {
-                        this.inner.error =
-                            this.inner.state.take_io_error().map(DispatchError::Io);
-                    }
-
-                    return Poll::Ready(if let Some(err) = this.inner.error.take() {
-                        Err(err)
+                        return Poll::Ready(
+                            if let Some(err) = this.inner.error.take() {
+                                Err(err)
+                            } else {
+                                Ok(())
+                            },
+                        );
                     } else {
-                        Ok(())
-                    });
+                        return Poll::Pending;
+                    }
                 }
             }
         }
@@ -536,8 +516,7 @@ where
     fn reset_keepalive(&mut self) {
         // re-register keep-alive
         if self.flags.contains(Flags::KEEPALIVE) && self.config.keep_alive.non_zero() {
-            let expire = self.config.timer_h1.now()
-                + std::time::Duration::from(self.config.keep_alive);
+            let expire = now() + time::Duration::from(self.config.keep_alive);
             if expire != self.expire {
                 self.config
                     .timer_h1
@@ -571,11 +550,11 @@ where
     }
 
     fn send_response(&mut self, msg: Response<()>, body: ResponseBody<B>) -> State<B> {
-        trace!("Sending response: {:?} body: {:?}", msg, body.size());
+        trace!("sending response: {:?} body: {:?}", msg, body.size());
         // we dont need to process responses if socket is disconnected
         // but we still want to handle requests with app service
         // so we skip response processing for droppped connection
-        if !self.state.is_io_err() {
+        if self.state.is_io_open() {
             let result = self
                 .state
                 .write()
@@ -617,7 +596,7 @@ where
     ) -> WritePayloadStatus<B> {
         match item {
             Some(Ok(item)) => {
-                trace!("Got response chunk: {:?}", item.len());
+                trace!("got response chunk: {:?}", item.len());
                 match self
                     .state
                     .write()
@@ -637,7 +616,7 @@ where
                 }
             }
             None => {
-                trace!("Response payload eof");
+                trace!("response payload eof");
                 if let Err(err) =
                     self.state.write().encode(Message::Chunk(None), &self.codec)
                 {
@@ -653,7 +632,7 @@ where
                 }
             }
             Some(Err(e)) => {
-                trace!("Error during response body poll: {:?}", e);
+                trace!("error during response body poll: {:?}", e);
                 self.error = Some(DispatchError::ResponsePayload(e));
                 WritePayloadStatus::Next(State::Stop)
             }
@@ -683,16 +662,17 @@ where
                                 if !updated {
                                     return ReadPayloadStatus::Done;
                                 }
+                                let _ = read.poll_read_ready(cx);
                                 break;
                             }
                             Ok(None) => {
-                                if self.state.is_io_err() {
+                                if !self.state.is_io_open() {
                                     payload.1.set_error(PayloadError::EncodingCorrupted);
                                     self.payload = None;
                                     self.error = Some(ParseError::Incomplete.into());
                                     return ReadPayloadStatus::Dropped;
                                 } else {
-                                    read.wake(cx.waker());
+                                    let _ = read.poll_read_ready(cx);
                                     break;
                                 }
                             }
@@ -737,6 +717,7 @@ mod tests {
     use crate::http::config::{DispatcherConfig, ServiceConfig};
     use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
     use crate::http::{body, Request, ResponseHead, StatusCode};
+    use crate::io::{self as nio, DefaultFilter};
     use crate::service::{boxed, fn_service, IntoService};
     use crate::util::{lazy, next, Bytes, BytesMut};
     use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis};
@@ -747,7 +728,7 @@ mod tests {
     pub(crate) fn h1<F, S, B>(
         stream: Io,
         service: F,
-    ) -> Dispatcher<Io, S, B, ExpectHandler, UpgradeHandler<Io>>
+    ) -> Dispatcher<DefaultFilter, S, B, ExpectHandler, UpgradeHandler<DefaultFilter>>
     where
         F: IntoService<S>,
         S: Service<Request = Request>,
@@ -756,7 +737,7 @@ mod tests {
         B: MessageBody,
     {
         Dispatcher::new(
-            stream,
+            nio::Io::new(stream),
             Rc::new(DispatcherConfig::new(
                 ServiceConfig::default(),
                 service.into_service(),
@@ -764,8 +745,6 @@ mod tests {
                 None,
                 None,
             )),
-            None,
-            None,
         )
     }
 
@@ -777,20 +756,22 @@ mod tests {
         S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
     {
-        crate::rt::spawn(
-            Dispatcher::<Io, S, B, ExpectHandler, UpgradeHandler<Io>>::new(
-                stream,
-                Rc::new(DispatcherConfig::new(
-                    ServiceConfig::default(),
-                    service.into_service(),
-                    ExpectHandler,
-                    None,
-                    None,
-                )),
+        crate::rt::spawn(Dispatcher::<
+            DefaultFilter,
+            S,
+            B,
+            ExpectHandler,
+            UpgradeHandler<DefaultFilter>,
+        >::new(
+            nio::Io::new(stream),
+            Rc::new(DispatcherConfig::new(
+                ServiceConfig::default(),
+                service.into_service(),
+                ExpectHandler,
                 None,
                 None,
-            ),
-        );
+            )),
+        ));
     }
 
     fn load(decoder: &mut ClientCodec, buf: &mut BytesMut) -> ResponseHead {
@@ -805,8 +786,8 @@ mod tests {
 
         let data = Rc::new(Cell::new(false));
         let data2 = data.clone();
-        let mut h1 = Dispatcher::<_, _, _, _, UpgradeHandler<Io>>::new(
-            server,
+        let mut h1 = Dispatcher::<_, _, _, _, UpgradeHandler<DefaultFilter>>::new(
+            nio::Io::new(server),
             Rc::new(DispatcherConfig::new(
                 ServiceConfig::default(),
                 fn_service(|_| {
@@ -821,11 +802,11 @@ mod tests {
                     },
                 ))),
             )),
-            None,
-            None,
         );
         sleep(Millis(50)).await;
+        let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await;
 
+        sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         sleep(Millis(50)).await;
 
@@ -844,9 +825,12 @@ mod tests {
             Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
         });
         sleep(Millis(50)).await;
+        // required because io shutdown is async oper
+        let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready();
+        sleep(Millis(50)).await;
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
-        assert!(!h1.inner.state.is_open());
+        assert!(h1.inner.state.is_closed());
         sleep(Millis(50)).await;
 
         client
@@ -855,7 +839,7 @@ mod tests {
         client.close().await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         // assert!(h1.inner.flags.contains(Flags::SHUTDOWN_IO));
-        assert!(h1.inner.state.is_io_err());
+        assert!(!h1.inner.state.is_io_open());
     }
 
     #[crate::rt_test]
@@ -891,6 +875,7 @@ mod tests {
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
+
         spawn_h1(server, |mut req: Request| async move {
             let mut p = req.take_payload();
             while let Some(_) = next(&mut p).await {}
@@ -988,9 +973,14 @@ mod tests {
         let mut h1 = h1(server, |_| {
             Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
         });
-        crate::util::PoolId::P1
+        crate::util::PoolId::P0
             .set_read_params(15 * 1024, 1024)
             .set_write_params(15 * 1024, 1024);
+        h1.inner
+            .io
+            .as_ref()
+            .unwrap()
+            .set_memory_pool(crate::util::PoolId::P0.pool_ref());
 
         let mut decoder = ClientCodec::default();
 
@@ -1005,8 +995,11 @@ mod tests {
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
+        // required because io shutdown is async oper
+        let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await;
+        sleep(Millis(50)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
-        assert!(!h1.inner.state.is_open());
+        assert!(h1.inner.state.is_closed());
 
         let mut buf = client.read().await.unwrap();
         assert_eq!(load(&mut decoder, &mut buf).status, StatusCode::BAD_REQUEST);
@@ -1096,11 +1089,11 @@ mod tests {
         assert_eq!(num.load(Ordering::Relaxed), 65_536);
 
         // response message + chunking encoding
-        assert_eq!(state.write().with_buf(|buf| buf.len()), 65629);
+        assert_eq!(state.write().with_buf(|buf| buf.len()).unwrap(), 65629);
 
         client.remote_buffer_cap(65536);
         sleep(Millis(50)).await;
-        assert_eq!(state.write().with_buf(|buf| buf.len()), 93);
+        assert_eq!(state.write().with_buf(|buf| buf.len()).unwrap(), 93);
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(num.load(Ordering::Relaxed), 65_536 * 2);
@@ -1169,10 +1162,13 @@ mod tests {
             })
         });
         sleep(Millis(50)).await;
+        // required because io shutdown is async oper
+        let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready();
+        sleep(Millis(50)).await;
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         sleep(Millis(50)).await;
-        assert!(h1.inner.state.is_io_err());
+        assert!(!h1.inner.state.is_io_open());
         let buf = client.local_buffer(|buf| buf.split().freeze());
         assert_eq!(&buf[..28], b"HTTP/1.1 500 Internal Server");
         assert_eq!(&buf[buf.len() - 5..], b"error");

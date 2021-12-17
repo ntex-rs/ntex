@@ -1,6 +1,4 @@
-use std::{
-    error::Error as StdError, marker::PhantomData, pin::Pin, task::Context, task::Poll,
-};
+use std::{error, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
 
@@ -12,8 +10,9 @@ use crate::web::{HttpRequest, HttpResponse};
 use crate::{channel::mpsc, rt, util::Bytes, ws, Sink, Stream};
 
 pub type WebSocketsSink =
-    ws::StreamEncoder<mpsc::Sender<Result<Bytes, Box<dyn StdError>>>>;
+    ws::StreamEncoder<mpsc::Sender<Result<Bytes, Box<dyn error::Error>>>>;
 
+// TODO: fix close frame handling
 /// Do websocket handshake and start websockets service.
 pub async fn start<T, F, S, Err>(
     req: HttpRequest,
@@ -22,17 +21,14 @@ pub async fn start<T, F, S, Err>(
 ) -> Result<HttpResponse, Err>
 where
     T: ServiceFactory<
-        Config = WebSocketsSink,
-        Request = Frame,
-        Response = Option<Message>,
-    >,
-    T::Error: StdError + 'static,
-    T::InitError: 'static,
-    T::Service: 'static,
+            Config = WebSocketsSink,
+            Request = Frame,
+            Response = Option<Message>,
+        > + 'static,
+    T::Error: error::Error,
     F: IntoServiceFactory<T>,
     S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
-    Err: From<T::InitError>,
-    Err: From<HandshakeError>,
+    Err: From<T::InitError> + From<HandshakeError>,
 {
     let (tx, rx) = mpsc::channel();
 
@@ -49,20 +45,17 @@ pub async fn start_with<T, F, S, Err, Tx, Rx>(
 ) -> Result<HttpResponse, Err>
 where
     T: ServiceFactory<
-        Config = ws::StreamEncoder<Tx>,
-        Request = Frame,
-        Response = Option<Message>,
-    >,
-    T::Error: StdError + 'static,
-    T::InitError: 'static,
-    T::Service: 'static,
+            Config = ws::StreamEncoder<Tx>,
+            Request = Frame,
+            Response = Option<Message>,
+        > + 'static,
+    T::Error: error::Error,
     F: IntoServiceFactory<T>,
     S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
-    Err: From<T::InitError>,
-    Err: From<HandshakeError>,
-    Tx: Sink<Result<Bytes, Box<dyn StdError>>> + Clone + Unpin + 'static,
-    Tx::Error: StdError,
-    Rx: Stream<Item = Result<Bytes, Box<dyn StdError>>> + Unpin + 'static,
+    Err: From<T::InitError> + From<HandshakeError>,
+    Tx: Sink<Result<Bytes, Box<dyn error::Error>>> + Clone + Unpin + 'static,
+    Tx::Error: error::Error,
+    Rx: Stream<Item = Result<Bytes, Box<dyn error::Error>>> + Unpin + 'static,
 {
     // ws handshake
     let mut res = handshake(req.head())?;
@@ -76,7 +69,7 @@ where
         .new_service(sink.clone())
         .await?
         .map_err(|e| {
-            let e: Box<dyn StdError> = Box::new(e);
+            let e: Box<dyn error::Error> = Box::new(e);
             e
         });
 
@@ -107,9 +100,9 @@ pin_project_lite::pin_project! {
 impl<S, I, E> Stream for MapStream<S, I, E>
 where
     S: Stream<Item = Result<I, E>>,
-    E: StdError + 'static,
+    E: error::Error + 'static,
 {
-    type Item = Result<I, Box<dyn StdError>>;
+    type Item = Result<I, Box<dyn error::Error>>;
 
     fn poll_next(
         self: Pin<&mut Self>,

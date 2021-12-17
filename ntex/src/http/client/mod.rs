@@ -34,7 +34,6 @@ mod test;
 pub mod ws;
 
 pub use self::builder::ClientBuilder;
-pub use self::connect::BoxedSocket;
 pub use self::connection::Connection;
 pub use self::connector::Connector;
 pub use self::frozen::{FrozenClientRequest, FrozenSendBuilder};
@@ -47,7 +46,7 @@ use crate::http::error::HttpError;
 use crate::http::{HeaderMap, Method, RequestHead, Uri};
 use crate::time::Millis;
 
-use self::connect::{Connect as InnerConnect, ConnectorWrapper};
+use self::connect::{Connect as HttpConnect, ConnectorWrapper};
 
 #[derive(Clone)]
 pub struct Connect {
@@ -76,7 +75,7 @@ pub struct Connect {
 pub struct Client(Rc<ClientConfig>);
 
 pub(self) struct ClientConfig {
-    pub(self) connector: Box<dyn InnerConnect>,
+    pub(self) connector: Box<dyn HttpConnect>,
     pub(self) headers: HeaderMap,
     pub(self) timeout: Millis,
 }

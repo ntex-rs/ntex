@@ -1,4 +1,4 @@
-use std::{io, rc::Rc, task::Context, task::Poll};
+use std::{any, io, rc::Rc, task::Context, task::Poll};
 
 use ntex_bytes::BytesMut;
 
@@ -26,6 +26,16 @@ impl Filter for DefaultFilter {
 
         Poll::Ready(Ok(()))
     }
+
+    fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+        if let Some(hnd) = self.0.handle.take() {
+            let res = hnd.query(id);
+            self.0.handle.set(Some(hnd));
+            res
+        } else {
+            None
+        }
+    }
 }
 
 impl ReadFilter for DefaultFilter {
@@ -46,13 +56,7 @@ impl ReadFilter for DefaultFilter {
 
     #[inline]
     fn read_closed(&self, err: Option<io::Error>) {
-        if err.is_some() {
-            self.0.error.set(err);
-        }
-        self.0.write_task.wake();
-        self.0.dispatch_task.wake();
-        self.0.insert_flags(Flags::IO_ERR | Flags::DSP_STOP);
-        self.0.notify_disconnect();
+        self.0.set_error(err);
     }
 
     #[inline]
@@ -66,13 +70,21 @@ impl ReadFilter for DefaultFilter {
         buf: BytesMut,
         new_bytes: usize,
     ) -> Result<(), io::Error> {
-        if new_bytes > 0 && buf.len() > self.0.pool.get().read_params().high as usize {
-            log::trace!(
-                "buffer is too large {}, enable read back-pressure",
-                buf.len()
-            );
-            self.0.insert_flags(Flags::RD_BUF_FULL);
+        let mut flags = self.0.flags.get();
+
+        if new_bytes > 0 {
+            if buf.len() > self.0.pool.get().read_params().high as usize {
+                log::trace!(
+                    "buffer is too large {}, enable read back-pressure",
+                    buf.len()
+                );
+                flags.insert(Flags::RD_READY | Flags::RD_BUF_FULL);
+            } else {
+                flags.insert(Flags::RD_READY);
+            }
+            self.0.flags.set(flags);
         }
+
         self.0.read_buf.set(Some(buf));
         Ok(())
     }
@@ -109,13 +121,10 @@ impl WriteFilter for DefaultFilter {
 
     #[inline]
     fn write_closed(&self, err: Option<io::Error>) {
-        if err.is_some() {
-            self.0.error.set(err);
-        }
-        self.0.read_task.wake();
+        self.0.set_error(err);
+        self.0.handle.take();
+        self.0.insert_flags(Flags::IO_CLOSED);
         self.0.dispatch_task.wake();
-        self.0.insert_flags(Flags::IO_ERR | Flags::DSP_STOP);
-        self.0.notify_disconnect();
     }
 
     #[inline]
@@ -149,6 +158,10 @@ impl NullFilter {
 impl Filter for NullFilter {
     fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))
+    }
+
+    fn query(&self, _: any::TypeId) -> Option<Box<dyn any::Any>> {
+        None
     }
 }
 

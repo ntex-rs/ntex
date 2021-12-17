@@ -1,14 +1,16 @@
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, future::Future, io, net::SocketAddr, pin::Pin};
 
+use crate::io::Io;
 use crate::rt::net::TcpStream;
 use crate::service::{Service, ServiceFactory};
-use crate::util::{Either, Ready};
+use crate::util::{Either, PoolId, PoolRef, Ready};
 
 use super::{Address, Connect, ConnectError, Resolver};
 
 pub struct Connector<T> {
     resolver: Resolver<T>,
+    pool: PoolRef,
 }
 
 impl<T> Connector<T> {
@@ -16,7 +18,17 @@ impl<T> Connector<T> {
     pub fn new() -> Self {
         Connector {
             resolver: Resolver::new(),
+            pool: PoolId::P0.pool_ref(),
         }
+    }
+
+    /// Set memory pool.
+    ///
+    /// Use specified memory pool for memory allocations. By default P0
+    /// memory pool is used.
+    pub fn memory_pool(mut self, id: PoolId) -> Self {
+        self.pool = id.pool_ref();
+        self
     }
 }
 
@@ -25,11 +37,14 @@ impl<T: Address> Connector<T> {
     pub fn connect<U>(
         &self,
         message: U,
-    ) -> impl Future<Output = Result<TcpStream, ConnectError>>
+    ) -> impl Future<Output = Result<Io, ConnectError>>
     where
         Connect<T>: From<U>,
     {
-        ConnectServiceResponse::new(self.resolver.call(message.into()))
+        ConnectServiceResponse {
+            state: ConnectState::Resolve(self.resolver.call(message.into())),
+            pool: self.pool,
+        }
     }
 }
 
@@ -43,13 +58,14 @@ impl<T> Clone for Connector<T> {
     fn clone(&self) -> Self {
         Connector {
             resolver: self.resolver.clone(),
+            pool: self.pool,
         }
     }
 }
 
 impl<T: Address> ServiceFactory for Connector<T> {
     type Request = Connect<T>;
-    type Response = TcpStream;
+    type Response = Io;
     type Error = ConnectError;
     type Config = ();
     type Service = Connector<T>;
@@ -64,7 +80,7 @@ impl<T: Address> ServiceFactory for Connector<T> {
 
 impl<T: Address> Service for Connector<T> {
     type Request = Connect<T>;
-    type Response = TcpStream;
+    type Response = Io;
     type Error = ConnectError;
     type Future = ConnectServiceResponse<T>;
 
@@ -87,18 +103,20 @@ enum ConnectState<T: Address> {
 #[doc(hidden)]
 pub struct ConnectServiceResponse<T: Address> {
     state: ConnectState<T>,
+    pool: PoolRef,
 }
 
 impl<T: Address> ConnectServiceResponse<T> {
     pub(super) fn new(fut: <Resolver<T> as Service>::Future) -> Self {
-        ConnectServiceResponse {
+        Self {
             state: ConnectState::Resolve(fut),
+            pool: PoolId::P0.pool_ref(),
         }
     }
 }
 
 impl<T: Address> Future for ConnectServiceResponse<T> {
-    type Output = Result<TcpStream, ConnectError>;
+    type Output = Result<Io, ConnectError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.state {
@@ -126,7 +144,12 @@ impl<T: Address> Future for ConnectServiceResponse<T> {
                     }
                 }
             },
-            ConnectState::Connect(ref mut fut) => Pin::new(fut).poll(cx),
+            ConnectState::Connect(ref mut fut) => match Pin::new(fut).poll(cx)? {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(stream) => {
+                    Poll::Ready(Ok(Io::with_memory_pool(stream, self.pool)))
+                }
+            },
         }
     }
 }

@@ -1,6 +1,6 @@
-use std::{fmt, io, net};
+use std::{convert::TryFrom, fmt, io, net};
 
-use crate::codec::{AsyncRead, AsyncWrite};
+use crate::io::Io;
 use crate::rt::net::TcpStream;
 
 pub(crate) enum Listener {
@@ -146,32 +146,29 @@ pub enum Stream {
     Uds(mio::net::UnixStream),
 }
 
-pub trait FromStream: AsyncRead + AsyncWrite + Sized {
-    fn from_stream(stream: Stream) -> io::Result<Self>;
-}
+impl TryFrom<Stream> for Io {
+    type Error = io::Error;
 
-#[cfg(unix)]
-impl FromStream for TcpStream {
-    fn from_stream(sock: Stream) -> io::Result<Self> {
+    fn try_from(sock: Stream) -> Result<Self, Self::Error> {
+        #[cfg(unix)]
         match sock {
             Stream::Tcp(stream) => {
                 use std::os::unix::io::{FromRawFd, IntoRawFd};
                 let fd = IntoRawFd::into_raw_fd(stream);
                 let io = TcpStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) })?;
                 io.set_nodelay(true)?;
-                Ok(io)
+                Ok(Io::new(io))
             }
-            #[cfg(unix)]
-            Stream::Uds(_) => {
-                panic!("Should not happen, bug in server impl");
+            Stream::Uds(stream) => {
+                use crate::rt::net::UnixStream;
+                use std::os::unix::io::{FromRawFd, IntoRawFd};
+                let fd = IntoRawFd::into_raw_fd(stream);
+                let io = UnixStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) })?;
+                Ok(Io::new(io))
             }
         }
-    }
-}
 
-#[cfg(windows)]
-impl FromStream for TcpStream {
-    fn from_stream(sock: Stream) -> io::Result<Self> {
+        #[cfg(windows)]
         match sock {
             Stream::Tcp(stream) => {
                 use std::os::windows::io::{FromRawSocket, IntoRawSocket};
@@ -179,26 +176,7 @@ impl FromStream for TcpStream {
                 let io =
                     TcpStream::from_std(unsafe { FromRawSocket::from_raw_socket(fd) })?;
                 io.set_nodelay(true)?;
-                Ok(io)
-            }
-            #[cfg(unix)]
-            Stream::Uds(_) => {
-                panic!("Should not happen, bug in server impl");
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-impl FromStream for crate::rt::net::UnixStream {
-    fn from_stream(sock: Stream) -> io::Result<Self> {
-        match sock {
-            Stream::Tcp(_) => panic!("Should not happen, bug in server impl"),
-            Stream::Uds(stream) => {
-                use crate::rt::net::UnixStream;
-                use std::os::unix::io::{FromRawFd, IntoRawFd};
-                let fd = IntoRawFd::into_raw_fd(stream);
-                UnixStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) })
+                Ok(Io::new(io))
             }
         }
     }

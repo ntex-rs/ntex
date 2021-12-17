@@ -1,11 +1,10 @@
-use std::cell::{Ref, RefCell, RefMut};
-use std::net;
-use std::rc::Rc;
+use std::{cell::Ref, cell::RefCell, cell::RefMut, net, rc::Rc};
 
 use bitflags::bitflags;
 
 use crate::http::header::HeaderMap;
 use crate::http::{header, Method, StatusCode, Uri, Version};
+use crate::io::{types, IoRef};
 use crate::util::Extensions;
 
 /// Represents various types of connection
@@ -45,19 +44,19 @@ pub struct RequestHead {
     pub version: Version,
     pub headers: HeaderMap,
     pub extensions: RefCell<Extensions>,
-    pub peer_addr: Option<net::SocketAddr>,
+    pub io: Option<IoRef>,
     pub(super) flags: Flags,
 }
 
 impl Default for RequestHead {
     fn default() -> RequestHead {
         RequestHead {
+            io: None,
             uri: Uri::default(),
             method: Method::default(),
             version: Version::HTTP_11,
             headers: HeaderMap::with_capacity(16),
             flags: Flags::empty(),
-            peer_addr: None,
             extensions: RefCell::new(Extensions::new()),
         }
     }
@@ -65,6 +64,7 @@ impl Default for RequestHead {
 
 impl Head for RequestHead {
     fn clear(&mut self) {
+        self.io = None;
         self.flags = Flags::empty();
         self.headers.clear();
         self.extensions.get_mut().clear();
@@ -164,6 +164,19 @@ impl RequestHead {
     #[inline]
     pub(crate) fn set_expect(&mut self) {
         self.flags.insert(Flags::EXPECT);
+    }
+
+    /// Peer socket address
+    ///
+    /// Peer address is actual socket address, if proxy is used in front of
+    /// ntex http server, then peer address would be address of this proxy.
+    #[inline]
+    pub fn peer_addr(&self) -> Option<net::SocketAddr> {
+        self.io.as_ref().and_then(|io| {
+            io.query::<types::PeerAddr>()
+                .get()
+                .map(types::PeerAddr::into_inner)
+        })
     }
 }
 

@@ -2,7 +2,7 @@ use std::io;
 
 use percent_encoding::{AsciiSet, CONTROLS};
 
-use crate::util::{BytesMut, Extensions};
+use crate::util::BytesMut;
 
 pub(crate) struct Writer<'a>(pub(crate) &'a mut BytesMut);
 
@@ -13,18 +13,6 @@ impl<'a> io::Write for Writer<'a> {
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
-    }
-}
-
-pub(crate) trait DataFactory {
-    fn set(&self, ext: &mut Extensions);
-}
-
-pub(crate) struct Data<T>(pub(crate) T);
-
-impl<T: Clone + 'static> DataFactory for Data<T> {
-    fn set(&self, ext: &mut Extensions) {
-        ext.insert(self.0.clone())
     }
 }
 
