@@ -68,11 +68,16 @@ async fn test_connection_reuse_h2() {
         .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
 
     let client = Client::build()
-        .connector(Connector::default().openssl(builder.build()).finish())
+        .connector(
+            Connector::default()
+                .timeout(Seconds(30))
+                .openssl(builder.build())
+                .finish(),
+        )
         .finish();
 
     // req 1
-    let request = client.get(srv.surl("/")).timeout(Seconds(10)).send();
+    let request = client.get(srv.surl("/")).timeout(Seconds(30)).send();
     let response = request.await.unwrap();
     assert!(response.status().is_success());
 

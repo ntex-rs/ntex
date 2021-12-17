@@ -144,33 +144,17 @@ impl TryFrom<Stream> for Io {
     type Error = io::Error;
 
     fn try_from(sock: Stream) -> Result<Self, Self::Error> {
-        #[cfg(unix)]
         match sock {
             Stream::Tcp(stream) => {
-                use std::os::unix::io::{FromRawFd, IntoRawFd};
-                let fd = IntoRawFd::into_raw_fd(stream);
-                let io = TcpStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) })?;
-                io.set_nodelay(true)?;
-                Ok(Io::new(io))
+                stream.set_nonblocking(true)?;
+                stream.set_nodelay(true)?;
+                Ok(Io::new(TcpStream::from_std(stream)?))
             }
+            #[cfg(unix)]
             Stream::Uds(stream) => {
                 use crate::rt::net::UnixStream;
-                use std::os::unix::io::{FromRawFd, IntoRawFd};
-                let fd = IntoRawFd::into_raw_fd(stream);
-                let io = UnixStream::from_std(unsafe { FromRawFd::from_raw_fd(fd) })?;
-                Ok(Io::new(io))
-            }
-        }
-
-        #[cfg(windows)]
-        match sock {
-            Stream::Tcp(stream) => {
-                use std::os::windows::io::{FromRawSocket, IntoRawSocket};
-                let fd = IntoRawSocket::into_raw_socket(stream);
-                let io =
-                    TcpStream::from_std(unsafe { FromRawSocket::from_raw_socket(fd) })?;
-                io.set_nodelay(true)?;
-                Ok(Io::new(io))
+                stream.set_nonblocking(true)?;
+                Ok(Io::new(UnixStream::from_std(stream)?))
             }
         }
     }
@@ -192,8 +176,7 @@ mod tests {
         let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
         socket.set_reuse_address(true).unwrap();
         socket.bind(&SockAddr::from(addr)).unwrap();
-        let tcp = net::TcpListener::from(socket);
-        let lst = Listener::Tcp(mio::net::TcpListener::from_std(tcp));
+        let lst = Listener::Tcp(net::TcpListener::from(socket));
         assert!(format!("{:?}", lst).contains("TcpListener"));
         assert!(format!("{}", lst).contains("127.0.0.1"));
     }
@@ -205,7 +188,6 @@ mod tests {
 
         let _ = std::fs::remove_file("/tmp/sock.xxxxx");
         if let Ok(lst) = UnixListener::bind("/tmp/sock.xxxxx") {
-            let lst = mio::net::UnixListener::from_std(lst);
             let addr = lst.local_addr().expect("Couldn't get local address");
             let a = SocketAddr::Uds(addr);
             assert!(format!("{:?}", a).contains("/tmp/sock.xxxxx"));

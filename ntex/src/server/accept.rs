@@ -17,6 +17,7 @@ const ERR_SLEEP_TIMEOUT: Millis = Millis(525);
 #[derive(Debug)]
 pub(super) enum Command {
     Stop,
+    Pause,
     Resume,
     Worker(WorkerClient),
     Timer,
@@ -27,6 +28,7 @@ struct ServerSocketInfo {
     addr: SocketAddr,
     token: Token,
     sock: Listener,
+    registered: Cell<bool>,
     timeout: Cell<Option<Instant>>,
 }
 
@@ -156,6 +158,7 @@ impl Accept {
                 addr: lst.local_addr(),
                 sock: lst,
                 token: hnd_token,
+                registered: Cell::new(false),
                 timeout: Cell::new(None),
             });
         }
@@ -196,7 +199,7 @@ impl Accept {
                 if e.kind() == io::ErrorKind::Interrupted {
                     continue;
                 } else {
-                    panic!("Cannot register event source in poller: {}", e)
+                    panic!("Cannot wait for events in poller: {}", e)
                 }
             }
 
@@ -208,8 +211,15 @@ impl Accept {
             }
 
             if !self.process_cmd() {
-                return;
+                break;
             }
+
+            events.clear();
+        }
+
+        // cleanup
+        for info in &self.sockets {
+            info.sock.remove_source()
         }
     }
 
@@ -217,8 +227,13 @@ impl Accept {
         let info = &self.sockets[idx];
 
         loop {
-            // Start listening for incoming connections
-            if let Err(err) = self.poller.add(&info.sock, Event::readable(idx)) {
+            // try to register poller source
+            let result = if info.registered.get() {
+                self.poller.modify(&info.sock, Event::readable(idx))
+            } else {
+                self.poller.add(&info.sock, Event::readable(idx))
+            };
+            if let Err(err) = result {
                 if err.kind() == io::ErrorKind::WouldBlock {
                     continue;
                 }
@@ -232,6 +247,8 @@ impl Accept {
                     sleep(ERR_SLEEP_TIMEOUT).await;
                     notify.send(Command::Timer);
                 }));
+            } else {
+                info.registered.set(true);
             }
 
             break;
@@ -241,12 +258,16 @@ impl Accept {
     fn remove_source(&self, key: usize) {
         let info = &self.sockets[key];
 
+        let result = if info.registered.get() {
+            self.poller.modify(&info.sock, Event::none(key))
+        } else {
+            return;
+        };
+
         // stop listening for incoming connections
-        if let Err(err) = self.poller.add(&info.sock, Event::none(key)) {
+        if let Err(err) = result {
             log::error!("Cannot stop socket listener for {} err: {}", info.addr, err);
         }
-
-        info.sock.remove_source();
     }
 
     fn process_timer(&mut self) {
@@ -271,6 +292,7 @@ impl Accept {
             match self.rx.try_recv() {
                 Ok(cmd) => match cmd {
                     Command::Stop => {
+                        log::trace!("Stopping accept loop");
                         for (key, info) in self.sockets.iter().enumerate() {
                             log::info!("Stopping socket listener on {}", info.addr);
                             self.remove_source(key);
@@ -278,7 +300,16 @@ impl Accept {
                         self.update_status(ServerStatus::NotReady);
                         return false;
                     }
+                    Command::Pause => {
+                        log::trace!("Pausing accept loop");
+                        for (key, info) in self.sockets.iter().enumerate() {
+                            log::info!("Stopping socket listener on {}", info.addr);
+                            self.remove_source(key);
+                        }
+                        self.update_status(ServerStatus::NotReady);
+                    }
                     Command::Resume => {
+                        log::trace!("Resuming accept loop");
                         for (key, info) in self.sockets.iter().enumerate() {
                             log::info!("Resuming socket listener on {}", info.addr);
                             self.add_source(key);
@@ -286,6 +317,7 @@ impl Accept {
                         self.update_status(ServerStatus::Ready);
                     }
                     Command::Worker(worker) => {
+                        log::trace!("Adding new worker to accept loop");
                         self.backpressure(false);
                         self.workers.push(worker);
                     }
@@ -293,6 +325,7 @@ impl Accept {
                         self.process_timer();
                     }
                     Command::WorkerAvailable => {
+                        log::trace!("Worker is available");
                         self.backpressure(false);
                     }
                 },

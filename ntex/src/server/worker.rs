@@ -573,8 +573,8 @@ mod tests {
         let (_tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
         let (sync_tx, _sync_rx) = std::sync::mpsc::channel();
-        let poll = mio::Poll::new().unwrap();
-        let waker = Arc::new(mio::Waker::new(poll.registry(), mio::Token(1)).unwrap());
+        let poll = Arc::new(polling::Poller::new().unwrap());
+        let waker = poll.clone();
         let avail =
             WorkerAvailability::new(AcceptNotify::new(waker.clone(), sync_tx.clone()));
 

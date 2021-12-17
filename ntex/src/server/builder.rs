@@ -353,7 +353,7 @@ impl ServerBuilder {
     fn handle_cmd(&mut self, item: ServerCommand) {
         match item {
             ServerCommand::Pause(mut tx) => {
-                self.accept.send(Command::Stop);
+                self.accept.send(Command::Pause);
                 let _ = tx.send(());
             }
             ServerCommand::Resume(mut tx) => {

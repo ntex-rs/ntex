@@ -724,9 +724,9 @@ where
                     .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
                 Connector::default()
                     .lifetime(Seconds::ZERO)
-                    .keep_alive(Seconds(10))
-                    .timeout(Millis(10_000))
-                    .disconnect_timeout(Millis(3_000))
+                    .keep_alive(Seconds(30))
+                    .timeout(Millis(30_000))
+                    .disconnect_timeout(Millis(5_000))
                     .openssl(builder.build())
                     .finish()
             }
@@ -734,14 +734,14 @@ where
             {
                 Connector::default()
                     .lifetime(Seconds::ZERO)
-                    .timeout(Millis(10_000))
+                    .timeout(Millis(30_000))
                     .finish()
             }
         };
 
         Client::build()
             .connector(connector)
-            .timeout(Seconds(10))
+            .timeout(Seconds(30))
             .finish()
     };
 

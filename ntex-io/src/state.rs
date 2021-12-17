@@ -894,6 +894,7 @@ impl<'a> ReadRef<'a> {
                 self.0.flags.set(flags);
                 self.0.read_task.wake();
             } else if flags.contains(Flags::RD_READY) {
+                log::trace!("waking up io read task");
                 flags.remove(Flags::RD_READY);
                 self.0.flags.set(flags);
                 self.0.read_task.wake();
