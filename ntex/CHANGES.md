@@ -6,6 +6,8 @@
 
 * Move ntex::time to ntex-util crate
 
+* Replace mio with poller for accept loop
+
 ## [0.4.13] - 2021-12-07
 
 * server: Rename .apply/.apply_async to .on_worker_start()

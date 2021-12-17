@@ -7,7 +7,7 @@ use ntex::{server::Server, time::Seconds, util::Ready};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
-    env::set_var("RUST_LOG", "hello_world=info");
+    env::set_var("RUST_LOG", "ntex=trace,hello_world=info");
     env_logger::init();
 
     Server::build()
