@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.14] - 2021-12-17
+
+* depend on minor version of futures crate
+
 ## [0.4.13] - 2021-12-07
 
 * server: Rename .apply/.apply_async to .on_worker_start()
