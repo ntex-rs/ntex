@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use futures::future::ok;
-use open_ssl::ssl::{SslAcceptor, SslConnector, SslFiletype, SslMethod, SslVerifyMode};
+use tls_openssl::ssl::{
+    AlpnError, SslAcceptor, SslConnector, SslFiletype, SslMethod, SslVerifyMode,
+};
 
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
@@ -26,7 +28,7 @@ fn ssl_acceptor() -> SslAcceptor {
         if protos.windows(3).any(|window| window == H2) {
             Ok(b"h2")
         } else {
-            Err(open_ssl::ssl::AlpnError::NOACK)
+            Err(AlpnError::NOACK)
         }
     });
     builder.set_alpn_protos(b"\x02h2").unwrap();

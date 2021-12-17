@@ -237,7 +237,7 @@ pub fn server<F: StreamServiceFactory>(factory: F) -> TestServer {
         let connector = {
             #[cfg(feature = "openssl")]
             {
-                use open_ssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+                use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
                 let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
                 builder.set_verify(SslVerifyMode::NONE);

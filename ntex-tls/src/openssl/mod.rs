@@ -12,6 +12,9 @@ use ntex_io::{
 use ntex_util::{future::poll_fn, time, time::Millis};
 use tls_openssl::ssl::{self, SslStream};
 
+mod accept;
+pub use self::accept::{Acceptor, AcceptorService};
+
 use super::types;
 
 /// An implementation of SSL streams

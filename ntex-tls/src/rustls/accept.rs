@@ -1,17 +1,15 @@
 use std::task::{Context, Poll};
 use std::{error::Error, future::Future, marker::PhantomData, pin::Pin};
 
-pub use ntex_tls::rustls::{TlsAcceptor, TlsFilter};
-pub use rust_tls::ServerConfig;
-pub use webpki_roots::TLS_SERVER_ROOTS;
+use tls_rust::ServerConfig;
+use webpki_roots::TLS_SERVER_ROOTS;
 
-use crate::io::{Filter, FilterFactory, Io};
-use crate::service::{Service, ServiceFactory};
-use crate::time::Millis;
-use crate::util::counter::{Counter, CounterGuard};
-use crate::util::Ready;
+use ntex_io::{Filter, FilterFactory, Io};
+use ntex_service::{Service, ServiceFactory};
+use ntex_util::{future::Ready, time::Millis};
 
-use super::MAX_SSL_ACCEPT_COUNTER;
+use super::{TlsAcceptor, TlsFilter};
+use crate::{counter::Counter, counter::CounterGuard, MAX_SSL_ACCEPT_COUNTER};
 
 /// Support `SSL` connections via rustls package
 ///
@@ -62,7 +60,7 @@ impl<F: Filter> ServiceFactory for Acceptor<F> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ready::Ok(AcceptorService {
                 acceptor: self.inner.clone(),
-                conns: conns.priv_clone(),
+                conns: conns.clone(),
                 io: PhantomData,
             })
         })

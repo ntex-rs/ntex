@@ -156,8 +156,10 @@ where
 
 #[cfg(feature = "openssl")]
 mod openssl {
+    use ntex_tls::openssl::{Acceptor, SslFilter};
+    use tls_openssl::ssl::SslAcceptor;
+
     use super::*;
-    use crate::server::openssl::{Acceptor, SslAcceptor, SslFilter};
     use crate::server::SslError;
     use crate::service::pipeline_factory;
 
@@ -208,10 +210,11 @@ mod openssl {
 
 #[cfg(feature = "rustls")]
 mod rustls {
+    use ntex_tls::rustls::{Acceptor, TlsFilter};
+    use tls_rustls::ServerConfig;
+
     use super::*;
-    use crate::server::rustls::{Acceptor, ServerConfig, TlsFilter};
-    use crate::server::SslError;
-    use crate::service::pipeline_factory;
+    use crate::{server::SslError, service::pipeline_factory};
 
     impl<F, S, B, X, U> HttpService<TlsFilter<F>, S, B, X, U>
     where

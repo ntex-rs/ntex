@@ -14,6 +14,9 @@ use tls_rust::{ClientConfig, ServerConfig, ServerName};
 
 use super::types;
 
+mod accept;
+pub use accept::{Acceptor, AcceptorService};
+
 /// An implementation of SSL streams
 pub struct TlsFilter<F> {
     inner: F,

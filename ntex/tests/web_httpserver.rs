@@ -1,8 +1,7 @@
-use std::sync::mpsc;
-use std::{thread, time::Duration};
+use std::{sync::mpsc, thread, time::Duration};
 
 #[cfg(feature = "openssl")]
-use open_ssl::ssl::SslAcceptorBuilder;
+use tls_openssl::ssl::SslAcceptorBuilder;
 
 use ntex::web::{self, App, HttpResponse, HttpServer};
 use ntex::{io::Io, server::TestServer, time::Seconds};
@@ -63,7 +62,7 @@ async fn test_run() {
 
 #[cfg(feature = "openssl")]
 fn ssl_acceptor() -> std::io::Result<SslAcceptorBuilder> {
-    use open_ssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
+    use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
     // load ssl keys
     let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
@@ -78,7 +77,7 @@ fn ssl_acceptor() -> std::io::Result<SslAcceptorBuilder> {
 
 #[cfg(feature = "openssl")]
 fn client() -> ntex::http::client::Client {
-    use open_ssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+    use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
     let _ = builder
@@ -148,12 +147,11 @@ async fn test_openssl() {
 #[ntex::test]
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 async fn test_rustls() {
-    use std::fs::File;
-    use std::io::BufReader;
+    use std::{fs::File, io::BufReader};
 
     use ntex::web::HttpRequest;
-    use rust_tls::{Certificate, PrivateKey, ServerConfig as RustlsServerConfig};
     use rustls_pemfile::{certs, pkcs8_private_keys};
+    use tls_rustls::{Certificate, PrivateKey, ServerConfig as RustlsServerConfig};
 
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();

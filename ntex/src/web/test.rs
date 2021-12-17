@@ -715,7 +715,7 @@ where
         let connector = {
             #[cfg(feature = "openssl")]
             {
-                use open_ssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+                use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
                 let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
                 builder.set_verify(SslVerifyMode::NONE);
@@ -724,8 +724,8 @@ where
                     .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
                 Connector::default()
                     .lifetime(Seconds::ZERO)
-                    .keep_alive(Seconds(30))
-                    .timeout(Millis(30_000))
+                    .keep_alive(Seconds(10))
+                    .timeout(Millis(10_000))
                     .disconnect_timeout(Millis(3_000))
                     .openssl(builder.build())
                     .finish()
@@ -734,14 +734,14 @@ where
             {
                 Connector::default()
                     .lifetime(Seconds::ZERO)
-                    .timeout(Millis(30_000))
+                    .timeout(Millis(10_000))
                     .finish()
             }
         };
 
         Client::build()
             .connector(connector)
-            .timeout(Seconds(30))
+            .timeout(Seconds(10))
             .finish()
     };
 
@@ -773,9 +773,9 @@ enum HttpVer {
 enum StreamType {
     Tcp,
     #[cfg(feature = "openssl")]
-    Openssl(open_ssl::ssl::SslAcceptor),
+    Openssl(tls_openssl::ssl::SslAcceptor),
     #[cfg(feature = "rustls")]
-    Rustls(rust_tls::ServerConfig),
+    Rustls(tls_rustls::ServerConfig),
 }
 
 impl fmt::Debug for StreamType {
@@ -825,14 +825,14 @@ impl TestServerConfig {
 
     /// Start openssl server
     #[cfg(feature = "openssl")]
-    pub fn openssl(mut self, acceptor: open_ssl::ssl::SslAcceptor) -> Self {
+    pub fn openssl(mut self, acceptor: tls_openssl::ssl::SslAcceptor) -> Self {
         self.stream = StreamType::Openssl(acceptor);
         self
     }
 
     /// Start rustls server
     #[cfg(feature = "rustls")]
-    pub fn rustls(mut self, config: rust_tls::ServerConfig) -> Self {
+    pub fn rustls(mut self, config: tls_rustls::ServerConfig) -> Self {
         self.stream = StreamType::Rustls(config);
         self
     }

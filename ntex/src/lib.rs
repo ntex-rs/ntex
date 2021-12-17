@@ -85,3 +85,8 @@ pub mod testing {
     //! IO testing utilities.
     pub use ntex_io::testing::IoTest as Io;
 }
+
+pub mod tls {
+    //! TLS support for ntex ecosystem.
+    pub use ntex_tls::*;
+}

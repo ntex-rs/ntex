@@ -1,7 +1,7 @@
 use std::{convert::TryFrom, future::Future, io, pin::Pin, task::Context, task::Poll};
 
 pub use ntex_tls::rustls::TlsFilter;
-pub use rust_tls::{ClientConfig, ServerName};
+pub use tls_rustls::{ClientConfig, ServerName};
 
 use ntex_tls::rustls::TlsConnector;
 
@@ -113,9 +113,10 @@ impl<T: Address + 'static> Service for Connector<T> {
 
 #[cfg(test)]
 mod tests {
+    use tls_rustls::{OwnedTrustAnchor, RootCertStore};
+
     use super::*;
     use crate::service::{Service, ServiceFactory};
-    use rust_tls::{OwnedTrustAnchor, RootCertStore};
 
     #[crate::rt_test]
     async fn test_rustls_connect() {

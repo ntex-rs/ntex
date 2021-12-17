@@ -105,12 +105,12 @@ impl WebResponseError<DefaultError> for FormError {}
 
 #[cfg(feature = "openssl")]
 /// `InternalServerError` for `openssl::ssl::Error`
-impl WebResponseError<DefaultError> for crate::connect::openssl::SslError {}
+impl WebResponseError<DefaultError> for tls_openssl::ssl::Error {}
 
 #[cfg(feature = "openssl")]
 /// `InternalServerError` for `openssl::ssl::HandshakeError`
 impl<T: fmt::Debug + 'static> WebResponseError<DefaultError>
-    for open_ssl::ssl::HandshakeError<T>
+    for tls_openssl::ssl::HandshakeError<T>
 {
 }
 

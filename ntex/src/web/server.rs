@@ -1,9 +1,9 @@
 use std::{fmt, io, marker::PhantomData, net, sync::Arc, sync::Mutex};
 
 #[cfg(feature = "openssl")]
-use crate::server::openssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
+use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
-use crate::server::rustls::ServerConfig as RustlsServerConfig;
+use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::http::{
     body::MessageBody, HttpService, KeepAlive, Request, Response, ResponseError,
@@ -129,7 +129,7 @@ where
     ///
     /// By default max connections is set to a 256.
     pub fn maxconnrate(self, num: usize) -> Self {
-        crate::server::max_concurrent_ssl_accept(num);
+        ntex_tls::max_concurrent_ssl_accept(num);
         self
     }
 

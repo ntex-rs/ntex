@@ -3,7 +3,7 @@ use std::io;
 
 use futures::future::{err, ok, ready};
 use futures::stream::{once, Stream, StreamExt};
-use open_ssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
+use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 
 use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};

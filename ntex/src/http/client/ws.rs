@@ -421,6 +421,7 @@ impl WsConnection {
         &self.res
     }
 
+    // TODO: fix close frame handling
     /// Start client websockets with `SinkService` and `mpsc::Receiver<Frame>`
     pub fn start_default(self) -> mpsc::Receiver<Result<ws::Frame, ws::WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, ws::WsError<()>>>) =

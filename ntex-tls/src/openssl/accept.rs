@@ -1,17 +1,15 @@
 use std::task::{Context, Poll};
 use std::{error::Error, future::Future, marker::PhantomData, pin::Pin};
 
-pub use ntex_tls::openssl::SslFilter;
-pub use open_ssl::ssl::{self, AlpnError, Ssl, SslAcceptor, SslAcceptorBuilder};
+use ntex_io::{Filter, FilterFactory, Io};
+use ntex_service::{Service, ServiceFactory};
+use ntex_util::{future::Ready, time::Millis};
+use tls_openssl::ssl::SslAcceptor;
 
-use ntex_tls::openssl::SslAcceptor as IoSslAcceptor;
+use crate::counter::{Counter, CounterGuard};
+use crate::MAX_SSL_ACCEPT_COUNTER;
 
-use crate::io::{Filter, FilterFactory, Io};
-use crate::service::{Service, ServiceFactory};
-use crate::time::Millis;
-use crate::util::{counter::Counter, counter::CounterGuard, Ready};
-
-use super::MAX_SSL_ACCEPT_COUNTER;
+use super::{SslAcceptor as IoSslAcceptor, SslFilter};
 
 /// Support `TLS` server connections via openssl package
 ///
@@ -48,7 +46,7 @@ impl<F> Clone for Acceptor<F> {
     }
 }
 
-impl<F: Filter + 'static> ServiceFactory for Acceptor<F> {
+impl<F: Filter> ServiceFactory for Acceptor<F> {
     type Request = Io<F>;
     type Response = Io<SslFilter<F>>;
     type Error = Box<dyn Error>;
@@ -61,28 +59,31 @@ impl<F: Filter + 'static> ServiceFactory for Acceptor<F> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ready::Ok(AcceptorService {
                 acceptor: self.acceptor.clone(),
-                conns: conns.priv_clone(),
+                conns: conns.clone(),
                 _t: PhantomData,
             })
         })
     }
 }
 
+/// Support `TLS` server connections via openssl package
+///
+/// `openssl` feature enables `Acceptor` type
 pub struct AcceptorService<F> {
     acceptor: IoSslAcceptor,
     conns: Counter,
     _t: PhantomData<F>,
 }
 
-impl<F: Filter + 'static> Service for AcceptorService<F> {
+impl<F: Filter> Service for AcceptorService<F> {
     type Request = Io<F>;
     type Response = Io<SslFilter<F>>;
     type Error = Box<dyn Error>;
     type Future = AcceptorServiceResponse<F>;
 
     #[inline]
-    fn poll_ready(&self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.conns.available(ctx) {
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        if self.conns.available(cx) {
             Poll::Ready(Ok(()))
         } else {
             Poll::Pending

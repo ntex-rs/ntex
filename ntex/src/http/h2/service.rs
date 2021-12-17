@@ -2,7 +2,6 @@ use std::task::{Context, Poll};
 use std::{future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use h2::server::{self, Handshake};
-use log::error;
 
 use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, ServiceConfig};
@@ -50,20 +49,21 @@ where
 
 #[cfg(feature = "openssl")]
 mod openssl {
-    use crate::io::DefaultFilter;
-    use crate::server::openssl::{Acceptor, SslAcceptor, SslFilter};
+    use ntex_tls::openssl::{Acceptor, SslFilter};
+    use tls_openssl::ssl::SslAcceptor;
+
+    use crate::io::Filter;
     use crate::server::SslError;
     use crate::service::pipeline_factory;
 
     use super::*;
 
-    impl<S, B> H2Service<SslFilter<DefaultFilter>, S, B>
+    impl<F, S, B> H2Service<SslFilter<F>, S, B>
     where
-        S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: ResponseError + 'static,
-        S::Response: Into<Response<B>> + 'static,
-        S::Future: 'static,
-        <S::Service as Service>::Future: 'static,
+        F: Filter,
+        S: ServiceFactory<Config = (), Request = Request> + 'static,
+        S::Error: ResponseError,
+        S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
     {
         /// Create ssl based service
@@ -72,7 +72,7 @@ mod openssl {
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
             Config = (),
-            Request = Io,
+            Request = Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
@@ -90,10 +90,11 @@ mod openssl {
 
 #[cfg(feature = "rustls")]
 mod rustls {
+    use ntex_tls::rustls::{Acceptor, TlsFilter};
+    use tls_rustls::ServerConfig;
+
     use super::*;
-    use crate::server::rustls::{Acceptor, ServerConfig, TlsFilter};
-    use crate::server::SslError;
-    use crate::service::pipeline_factory;
+    use crate::{server::SslError, service::pipeline_factory};
 
     impl<F, S, B> H2Service<TlsFilter<F>, S, B>
     where
@@ -184,7 +185,7 @@ where
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.config.service.poll_ready(cx).map_err(|e| {
-            error!("Service readiness error: {:?}", e);
+            log::error!("Service readiness error: {:?}", e);
             DispatchError::Service(Box::new(e))
         })
     }
