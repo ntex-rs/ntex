@@ -8,13 +8,12 @@ use futures_core::Stream;
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::rt::{spawn, System};
+use crate::rt::{spawn, Signal, System};
 use crate::{time::sleep, time::Millis, util::join_all, util::PoolId};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime};
 use super::service::{Factory, InternalServiceFactory, StreamServiceFactory};
-use super::signals::{Signal, Signals};
 use super::socket::Listener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use super::{Server, ServerCommand, ServerStatus, Token};
@@ -332,7 +331,7 @@ impl ServerBuilder {
 
             // handle signals
             if !self.no_signals {
-                spawn(Signals::new(self.server.clone()));
+                spawn(signals(self.server.clone()));
             }
 
             // start http server actor
@@ -489,6 +488,21 @@ impl Future for ServerBuilder {
     }
 }
 
+async fn signals(srv: Server) {
+    loop {
+        if let Some(rx) = crate::rt::signal() {
+            if let Ok(sig) = rx.await {
+                srv.signal(sig);
+            } else {
+                return;
+            }
+        } else {
+            log::info!("Signals are not supported by current runtime");
+            return;
+        }
+    }
+}
+
 pub(super) fn bind_addr<S: net::ToSocketAddrs>(
     addr: S,
     backlog: i32,
@@ -543,51 +557,6 @@ pub(crate) fn create_tcp_listener(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::{signals, Server, TestServer};
-    use crate::service::fn_service;
-
-    #[cfg(unix)]
-    #[crate::rt_test]
-    async fn test_signals() {
-        use std::{net, sync::mpsc, thread};
-
-        fn start(tx: mpsc::Sender<(Server, net::SocketAddr)>) -> thread::JoinHandle<()> {
-            thread::spawn(move || {
-                let sys = crate::rt::System::new("test");
-                let addr = TestServer::unused_addr();
-                let srv = sys.exec(move || {
-                    crate::server::build()
-                        .workers(1)
-                        .disable_signals()
-                        .bind("test", addr, move || {
-                            fn_service(|_| async { Ok::<_, ()>(()) })
-                        })
-                        .unwrap()
-                        .start()
-                });
-                let _ = tx.send((srv, addr));
-                let _ = sys.run();
-            })
-        }
-
-        for sig in &[
-            signals::Signal::Int,
-            signals::Signal::Term,
-            signals::Signal::Quit,
-        ] {
-            let (tx, rx) = mpsc::channel();
-            let h = start(tx);
-            let (srv, addr) = rx.recv().unwrap();
-
-            crate::time::sleep(Millis(300)).await;
-            assert!(net::TcpStream::connect(addr).is_ok());
-
-            srv.signal(*sig);
-            crate::time::sleep(Millis(300)).await;
-            assert!(net::TcpStream::connect(addr).is_err());
-            let _ = h.join();
-        }
-    }
 
     #[test]
     fn test_bind_addr() {

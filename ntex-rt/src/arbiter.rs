@@ -7,9 +7,6 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
 use ntex_util::Stream;
 
-//use tok_io::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-//use tok_io::sync::oneshot::{channel, error::RecvError, Sender};
-
 use crate::{system::System, Runtime};
 
 thread_local!(

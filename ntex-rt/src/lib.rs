@@ -14,20 +14,6 @@ mod tokio;
 #[cfg(feature = "tokio")]
 pub use self::tokio::*;
 
-/// Asynchronous signal handling
-pub mod signal {
-    #[cfg(unix)]
-    pub mod unix {
-        pub use tok_io::signal::unix::*;
-    }
-    pub use tok_io::signal::ctrl_c;
-}
-
-/// Task management.
-pub mod task {
-    pub use tok_io::task::{spawn_blocking, yield_now, JoinError, JoinHandle};
-}
-
 pub trait Runtime {
     /// Spawn a future onto the single-threaded runtime.
     fn spawn(&self, future: Pin<Box<dyn Future<Output = ()>>>);
@@ -35,4 +21,17 @@ pub trait Runtime {
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
     fn block_on(&self, f: Pin<Box<dyn Future<Output = ()>>>);
+}
+
+/// Different types of process signals
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum Signal {
+    /// SIGHUP
+    Hup,
+    /// SIGINT
+    Int,
+    /// SIGTERM
+    Term,
+    /// SIGQUIT
+    Quit,
 }

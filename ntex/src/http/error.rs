@@ -9,7 +9,6 @@ pub use http::Error as HttpError;
 
 use crate::http::body::Body;
 use crate::http::response::Response;
-use crate::rt::task::JoinError;
 use crate::util::{BytesMut, Either};
 
 /// Error that can be converted to `Response`
@@ -244,8 +243,8 @@ pub enum BlockingError<E: fmt::Debug> {
 
 impl<E: fmt::Debug> std::error::Error for BlockingError<E> {}
 
-impl From<JoinError> for PayloadError {
-    fn from(_: JoinError) -> Self {
+impl From<crate::rt::JoinError> for PayloadError {
+    fn from(_: crate::rt::JoinError) -> Self {
         PayloadError::Io(io::Error::new(
             io::ErrorKind::Other,
             "Operation is canceled",

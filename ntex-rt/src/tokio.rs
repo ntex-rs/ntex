@@ -1,11 +1,15 @@
-use std::{future::Future, io, net, net::SocketAddr, path::Path, pin::Pin};
+use std::future::Future;
+use std::task::{Context, Poll};
+use std::{cell::RefCell, io, mem, net, net::SocketAddr, path::Path, pin::Pin, rc::Rc};
 
+use async_oneshot as oneshot;
 use ntex_bytes::PoolRef;
 use ntex_io::Io;
 use ntex_util::future::lazy;
+pub use tok_io::task::{spawn_blocking, JoinError, JoinHandle};
 use tok_io::{runtime, task::LocalSet};
 
-use crate::Runtime;
+use crate::{Runtime, Signal};
 
 /// Create new single-threaded tokio runtime.
 pub fn create_runtime() -> Box<dyn Runtime> {
@@ -97,6 +101,26 @@ where
     })
 }
 
+thread_local! {
+    static SRUN: RefCell<bool> = RefCell::new(false);
+    static SHANDLERS: Rc<RefCell<Vec<oneshot::Sender<Signal>>>> = Default::default();
+}
+
+/// Register signal handler.
+///
+/// Signals are handled by oneshots, you have to re-register
+/// after each signal.
+pub fn signal() -> Option<oneshot::Receiver<Signal>> {
+    if !SRUN.with(|v| *v.borrow()) {
+        spawn(Signals::new());
+    }
+    SHANDLERS.with(|handlers| {
+        let (tx, rx) = oneshot::oneshot();
+        handlers.borrow_mut().push(tx);
+        Some(rx)
+    })
+}
+
 /// Single-threaded tokio runtime.
 #[derive(Debug)]
 struct TokioRuntime {
@@ -130,5 +154,86 @@ impl Runtime for TokioRuntime {
         });
 
         self.local.block_on(&self.rt, f);
+    }
+}
+
+struct Signals {
+    #[cfg(not(unix))]
+    signal: Pin<Box<dyn Future<Output = io::Result<()>>>>,
+    #[cfg(unix)]
+    signals: Vec<(Signal, tok_io::signal::unix::Signal)>,
+}
+
+impl Signals {
+    pub(super) fn new() -> Signals {
+        SRUN.with(|h| *h.borrow_mut() = true);
+
+        #[cfg(not(unix))]
+        {
+            Signals {
+                signal: Box::pin(tok_io::signal::ctrl_c()),
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            use tok_io::signal::unix;
+
+            let sig_map = [
+                (unix::SignalKind::interrupt(), Signal::Int),
+                (unix::SignalKind::hangup(), Signal::Hup),
+                (unix::SignalKind::terminate(), Signal::Term),
+                (unix::SignalKind::quit(), Signal::Quit),
+            ];
+
+            let mut signals = Vec::new();
+            for (kind, sig) in sig_map.iter() {
+                match unix::signal(*kind) {
+                    Ok(stream) => signals.push((*sig, stream)),
+                    Err(e) => log::error!(
+                        "Cannot initialize stream handler for {:?} err: {}",
+                        sig,
+                        e
+                    ),
+                }
+            }
+
+            Signals { signals }
+        }
+    }
+}
+
+impl Drop for Signals {
+    fn drop(&mut self) {
+        SRUN.with(|h| *h.borrow_mut() = false);
+    }
+}
+
+impl Future for Signals {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        #[cfg(not(unix))]
+        {
+            if self.signal.as_mut().poll(cx).is_ready() {
+                let handlers = SHANDLERS.with(|h| mem::take(&mut *h.borrow_mut()));
+                for mut sender in handlers {
+                    let _ = sender.send(Signal::Int);
+                }
+            }
+            Poll::Pending
+        }
+        #[cfg(unix)]
+        {
+            for (sig, fut) in self.signals.iter_mut() {
+                if Pin::new(fut).poll_recv(cx).is_ready() {
+                    let handlers = SHANDLERS.with(|h| mem::take(&mut *h.borrow_mut()));
+                    for mut sender in handlers {
+                        let _ = sender.send(*sig);
+                    }
+                }
+            }
+            Poll::Pending
+        }
     }
 }

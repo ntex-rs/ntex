@@ -261,7 +261,7 @@ where
     I: Send + 'static,
     E: Send + std::fmt::Debug + 'static,
 {
-    match ntex_rt::task::spawn_blocking(f).await {
+    match crate::rt::spawn_blocking(f).await {
         Ok(res) => res.map_err(BlockingError::Error),
         Err(_) => Err(BlockingError::Canceled),
     }
