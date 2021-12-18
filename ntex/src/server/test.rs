@@ -3,7 +3,8 @@ use std::{io, net, sync::mpsc, thread};
 
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::rt::{net::TcpStream, System};
+use crate::io::Io;
+use crate::rt::{tcp_connect, System};
 use crate::server::{Server, ServerBuilder, StreamServiceFactory};
 
 /// Start test server
@@ -42,7 +43,7 @@ pub fn test_server<F: StreamServiceFactory>(factory: F) -> TestServer {
 
     // run server in separate thread
     thread::spawn(move || {
-        let mut sys = System::new("ntex-test-server");
+        let sys = System::new("ntex-test-server");
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
@@ -73,7 +74,7 @@ where
 
     // run server in separate thread
     thread::spawn(move || {
-        let mut sys = System::new("ntex-test-server");
+        let sys = System::new("ntex-test-server");
 
         sys.exec(|| {
             factory(Server::build())
@@ -105,9 +106,9 @@ impl TestServer {
         self.addr
     }
 
-    /// Connect to server, return TcpStream
-    pub async fn connect(&self) -> io::Result<TcpStream> {
-        TcpStream::connect(self.addr).await
+    /// Connect to server, return Io
+    pub async fn connect(&self) -> io::Result<Io> {
+        tcp_connect(self.addr).await
     }
 
     /// Stop http server

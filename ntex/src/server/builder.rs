@@ -553,9 +553,9 @@ mod tests {
 
         fn start(tx: mpsc::Sender<(Server, net::SocketAddr)>) -> thread::JoinHandle<()> {
             thread::spawn(move || {
-                let mut sys = crate::rt::System::new("test");
+                let sys = crate::rt::System::new("test");
                 let addr = TestServer::unused_addr();
-                let srv = sys.exec(|| {
+                let srv = sys.exec(move || {
                     crate::server::build()
                         .workers(1)
                         .disable_signals()

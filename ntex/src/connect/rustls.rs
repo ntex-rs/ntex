@@ -141,7 +141,7 @@ mod tests {
         let factory = Connector::new(config).clone();
 
         let srv = factory.new_service(()).await.unwrap();
-        let result = srv
+        let _result = srv
             .call(Connect::new("www.rust-lang.org").set_addr(Some(server.addr())))
             .await;
 

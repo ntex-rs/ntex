@@ -1,6 +1,5 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{cell::RefCell, io};
-use tokio::sync::mpsc::UnboundedSender;
+use std::{cell::RefCell, io, sync::atomic::AtomicUsize, sync::atomic::Ordering};
+use tok_io::sync::mpsc::UnboundedSender;
 
 use super::arbiter::{Arbiter, SystemCommand};
 use super::builder::{Builder, SystemRunner};
@@ -49,7 +48,7 @@ impl System {
     /// Create new system.
     ///
     /// This method panics if it can not create tokio runtime
-    pub fn new<T: Into<String>>(name: T) -> SystemRunner {
+    pub fn new(name: &str) -> SystemRunner {
         Self::build().name(name).finish()
     }
 

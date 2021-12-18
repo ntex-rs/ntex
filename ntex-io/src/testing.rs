@@ -37,7 +37,7 @@ pub struct IoTest {
 }
 
 bitflags::bitflags! {
-    struct Flags: u8 {
+    struct IoTestFlags: u8 {
         const FLUSHED = 0b0000_0001;
         const CLOSED  = 0b0000_0010;
     }
@@ -61,35 +61,35 @@ struct State {
 struct Channel {
     buf: BytesMut,
     buf_cap: usize,
-    flags: Flags,
+    flags: IoTestFlags,
     waker: AtomicWaker,
-    read: IoState,
-    write: IoState,
+    read: IoTestState,
+    write: IoTestState,
 }
 
 impl Channel {
     fn is_closed(&self) -> bool {
-        self.flags.contains(Flags::CLOSED)
+        self.flags.contains(IoTestFlags::CLOSED)
     }
 }
 
-impl Default for Flags {
+impl Default for IoTestFlags {
     fn default() -> Self {
-        Flags::empty()
+        IoTestFlags::empty()
     }
 }
 
 #[derive(Debug)]
-enum IoState {
+enum IoTestState {
     Ok,
     Pending,
     Close,
     Err(io::Error),
 }
 
-impl Default for IoState {
+impl Default for IoTestState {
     fn default() -> Self {
-        IoState::Ok
+        IoTestState::Ok
     }
 }
 
@@ -139,19 +139,19 @@ impl IoTest {
 
     /// Set read to Pending state
     pub fn read_pending(&self) {
-        self.remote.lock().unwrap().borrow_mut().read = IoState::Pending;
+        self.remote.lock().unwrap().borrow_mut().read = IoTestState::Pending;
     }
 
     /// Set read to error
     pub fn read_error(&self, err: io::Error) {
         let channel = self.remote.lock().unwrap();
-        channel.borrow_mut().read = IoState::Err(err);
+        channel.borrow_mut().read = IoTestState::Err(err);
         channel.borrow().waker.wake();
     }
 
     /// Set write error on remote side
     pub fn write_error(&self, err: io::Error) {
-        self.local.lock().unwrap().borrow_mut().write = IoState::Err(err);
+        self.local.lock().unwrap().borrow_mut().write = IoTestState::Err(err);
         self.remote.lock().unwrap().borrow().waker.wake();
     }
 
@@ -180,7 +180,7 @@ impl IoTest {
         {
             let guard = self.remote.lock().unwrap();
             let mut remote = guard.borrow_mut();
-            remote.read = IoState::Close;
+            remote.read = IoTestState::Close;
             remote.waker.wake();
             log::trace!("close remote socket");
         }
@@ -256,13 +256,13 @@ impl IoTest {
         }
 
         match mem::take(&mut ch.read) {
-            IoState::Ok => Poll::Pending,
-            IoState::Close => {
-                ch.read = IoState::Close;
+            IoTestState::Ok => Poll::Pending,
+            IoTestState::Close => {
+                ch.read = IoTestState::Close;
                 Poll::Ready(Ok(0))
             }
-            IoState::Pending => Poll::Pending,
-            IoState::Err(e) => Poll::Ready(Err(e)),
+            IoTestState::Pending => Poll::Pending,
+            IoTestState::Err(e) => Poll::Ready(Err(e)),
         }
     }
 
@@ -275,12 +275,12 @@ impl IoTest {
         let mut ch = guard.borrow_mut();
 
         match mem::take(&mut ch.write) {
-            IoState::Ok => {
+            IoTestState::Ok => {
                 let cap = cmp::min(buf.len(), ch.buf_cap);
                 if cap > 0 {
                     ch.buf.extend(&buf[..cap]);
                     ch.buf_cap -= cap;
-                    ch.flags.remove(Flags::FLUSHED);
+                    ch.flags.remove(IoTestFlags::FLUSHED);
                     ch.waker.wake();
                     Poll::Ready(Ok(cap))
                 } else {
@@ -297,8 +297,8 @@ impl IoTest {
                     Poll::Pending
                 }
             }
-            IoState::Close => Poll::Ready(Ok(0)),
-            IoState::Pending => {
+            IoTestState::Close => Poll::Ready(Ok(0)),
+            IoTestState::Pending => {
                 *self
                     .local
                     .lock()
@@ -311,7 +311,7 @@ impl IoTest {
                     .borrow_mut() = Some(cx.waker().clone());
                 Poll::Pending
             }
-            IoState::Err(e) => Poll::Ready(Err(e)),
+            IoTestState::Err(e) => Poll::Ready(Err(e)),
         }
     }
 }
@@ -346,125 +346,15 @@ impl Drop for IoTest {
     }
 }
 
-#[cfg(feature = "tokio")]
-mod tokio {
-    use std::task::{Context, Poll};
-    use std::{cmp, io, mem, pin::Pin};
-
-    use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
-
-    use super::{Flags, IoState, IoTest};
-
-    impl AsyncRead for IoTest {
-        fn poll_read(
-            self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &mut ReadBuf<'_>,
-        ) -> Poll<io::Result<()>> {
-            let guard = self.local.lock().unwrap();
-            let mut ch = guard.borrow_mut();
-            *ch.waker.0.lock().unwrap().borrow_mut() = Some(cx.waker().clone());
-
-            if !ch.buf.is_empty() {
-                let size = std::cmp::min(ch.buf.len(), buf.remaining());
-                let b = ch.buf.split_to(size);
-                buf.put_slice(&b);
-                return Poll::Ready(Ok(()));
-            }
-
-            match mem::take(&mut ch.read) {
-                IoState::Ok => Poll::Pending,
-                IoState::Close => {
-                    ch.read = IoState::Close;
-                    Poll::Ready(Ok(()))
-                }
-                IoState::Pending => Poll::Pending,
-                IoState::Err(e) => Poll::Ready(Err(e)),
-            }
-        }
-    }
-
-    impl AsyncWrite for IoTest {
-        fn poll_write(
-            self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &[u8],
-        ) -> Poll<io::Result<usize>> {
-            let guard = self.remote.lock().unwrap();
-            let mut ch = guard.borrow_mut();
-
-            match mem::take(&mut ch.write) {
-                IoState::Ok => {
-                    let cap = cmp::min(buf.len(), ch.buf_cap);
-                    if cap > 0 {
-                        ch.buf.extend(&buf[..cap]);
-                        ch.buf_cap -= cap;
-                        ch.flags.remove(Flags::FLUSHED);
-                        ch.waker.wake();
-                        Poll::Ready(Ok(cap))
-                    } else {
-                        *self
-                            .local
-                            .lock()
-                            .unwrap()
-                            .borrow_mut()
-                            .waker
-                            .0
-                            .lock()
-                            .unwrap()
-                            .borrow_mut() = Some(cx.waker().clone());
-                        Poll::Pending
-                    }
-                }
-                IoState::Close => Poll::Ready(Ok(0)),
-                IoState::Pending => {
-                    *self
-                        .local
-                        .lock()
-                        .unwrap()
-                        .borrow_mut()
-                        .waker
-                        .0
-                        .lock()
-                        .unwrap()
-                        .borrow_mut() = Some(cx.waker().clone());
-                    Poll::Pending
-                }
-                IoState::Err(e) => Poll::Ready(Err(e)),
-            }
-        }
-
-        fn poll_flush(
-            self: Pin<&mut Self>,
-            _: &mut Context<'_>,
-        ) -> Poll<io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn poll_shutdown(
-            self: Pin<&mut Self>,
-            _: &mut Context<'_>,
-        ) -> Poll<io::Result<()>> {
-            self.local
-                .lock()
-                .unwrap()
-                .borrow_mut()
-                .flags
-                .insert(Flags::CLOSED);
-            Poll::Ready(Ok(()))
-        }
-    }
-}
-
 impl IoStream for IoTest {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(self);
 
-        ntex_util::spawn(ReadTask {
+        crate::rt::spawn(ReadTask {
             io: io.clone(),
             state: read,
         });
-        ntex_util::spawn(WriteTask {
+        crate::rt::spawn(WriteTask {
             io: io.clone(),
             state: write,
             st: IoWriteState::Processing(None),
@@ -615,7 +505,7 @@ impl Future for WriteTask {
                             .unwrap()
                             .borrow_mut()
                             .flags
-                            .insert(Flags::CLOSED);
+                            .insert(IoTestFlags::CLOSED);
                         this.state.close(None);
                         Poll::Ready(())
                     }
@@ -652,7 +542,7 @@ impl Future for WriteTask {
                                 .unwrap()
                                 .borrow_mut()
                                 .flags
-                                .insert(Flags::CLOSED);
+                                .insert(IoTestFlags::CLOSED);
                             *st = Shutdown::Stopping;
                             continue;
                         }
@@ -749,6 +639,113 @@ pub(super) fn flush_io(
         }
     } else {
         Poll::Ready(true)
+    }
+}
+
+#[cfg(any(feature = "tokio", feature = "tokio-traits"))]
+mod tokio_impl {
+    use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+    use super::*;
+
+    impl AsyncRead for IoTest {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            let guard = self.local.lock().unwrap();
+            let mut ch = guard.borrow_mut();
+            *ch.waker.0.lock().unwrap().borrow_mut() = Some(cx.waker().clone());
+
+            if !ch.buf.is_empty() {
+                let size = std::cmp::min(ch.buf.len(), buf.remaining());
+                let b = ch.buf.split_to(size);
+                buf.put_slice(&b);
+                return Poll::Ready(Ok(()));
+            }
+
+            match mem::take(&mut ch.read) {
+                IoTestState::Ok => Poll::Pending,
+                IoTestState::Close => {
+                    ch.read = IoTestState::Close;
+                    Poll::Ready(Ok(()))
+                }
+                IoTestState::Pending => Poll::Pending,
+                IoTestState::Err(e) => Poll::Ready(Err(e)),
+            }
+        }
+    }
+
+    impl AsyncWrite for IoTest {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let guard = self.remote.lock().unwrap();
+            let mut ch = guard.borrow_mut();
+
+            match mem::take(&mut ch.write) {
+                IoTestState::Ok => {
+                    let cap = cmp::min(buf.len(), ch.buf_cap);
+                    if cap > 0 {
+                        ch.buf.extend(&buf[..cap]);
+                        ch.buf_cap -= cap;
+                        ch.flags.remove(IoTestFlags::FLUSHED);
+                        ch.waker.wake();
+                        Poll::Ready(Ok(cap))
+                    } else {
+                        *self
+                            .local
+                            .lock()
+                            .unwrap()
+                            .borrow_mut()
+                            .waker
+                            .0
+                            .lock()
+                            .unwrap()
+                            .borrow_mut() = Some(cx.waker().clone());
+                        Poll::Pending
+                    }
+                }
+                IoTestState::Close => Poll::Ready(Ok(0)),
+                IoTestState::Pending => {
+                    *self
+                        .local
+                        .lock()
+                        .unwrap()
+                        .borrow_mut()
+                        .waker
+                        .0
+                        .lock()
+                        .unwrap()
+                        .borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+                IoTestState::Err(e) => Poll::Ready(Err(e)),
+            }
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+        ) -> Poll<io::Result<()>> {
+            self.local
+                .lock()
+                .unwrap()
+                .borrow_mut()
+                .flags
+                .insert(IoTestFlags::CLOSED);
+            Poll::Ready(Ok(()))
+        }
     }
 }
 

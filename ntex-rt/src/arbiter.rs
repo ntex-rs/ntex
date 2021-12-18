@@ -3,12 +3,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, thread};
 
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot::{channel, error::RecvError, Sender};
-use tokio::task::LocalSet;
+use tok_io::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tok_io::sync::oneshot::{channel, error::RecvError, Sender};
 
-use super::runtime::Runtime;
-use super::system::System;
+use crate::{system::System, Runtime};
 
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = RefCell::new(None);
@@ -38,27 +36,27 @@ impl fmt::Debug for Arbiter {
     }
 }
 
+impl Default for Arbiter {
+    fn default() -> Arbiter {
+        Arbiter::new()
+    }
+}
+
 impl Clone for Arbiter {
     fn clone(&self) -> Self {
         Self::with_sender(self.sender.clone())
     }
 }
 
-impl Default for Arbiter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Arbiter {
-    pub(super) fn new_system(local: &LocalSet) -> Self {
+    pub(super) fn new_system(rt: &Box<dyn Runtime>) -> Self {
         let (tx, rx) = unbounded_channel();
 
         let arb = Arbiter::with_sender(tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         STORAGE.with(|cell| cell.borrow_mut().clear());
 
-        local.spawn_local(ArbiterController { stop: None, rx });
+        rt.spawn(Box::pin(ArbiterController { stop: None, rx }));
 
         arb
     }
@@ -89,7 +87,7 @@ impl Arbiter {
         let handle = thread::Builder::new()
             .name(name.clone())
             .spawn(move || {
-                let rt = Runtime::new().expect("Cannot create Runtime");
+                let rt = crate::create_runtime();
                 let arb = Arbiter::with_sender(arb_tx);
 
                 let (stop, stop_rx) = channel();
@@ -98,10 +96,10 @@ impl Arbiter {
                 System::set_current(sys);
 
                 // start arbiter controller
-                rt.spawn(ArbiterController {
+                rt.spawn(Box::pin(ArbiterController {
                     stop: Some(stop),
                     rx: arb_rx,
-                });
+                }));
                 ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
 
                 // register arbiter
@@ -110,7 +108,9 @@ impl Arbiter {
                     .send(SystemCommand::RegisterArbiter(id, arb));
 
                 // run loop
-                let _ = rt.block_on(stop_rx);
+                rt.block_on(Box::pin(async move {
+                    let _ = stop_rx.await;
+                }));
 
                 // unregister arbiter
                 let _ = System::current()
@@ -265,7 +265,7 @@ impl Future for ArbiterController {
                         return Poll::Ready(());
                     }
                     ArbiterCommand::Execute(fut) => {
-                        tokio::task::spawn_local(fut);
+                        tok_io::task::spawn(fut);
                     }
                     ArbiterCommand::ExecuteFn(f) => {
                         f.call_box();

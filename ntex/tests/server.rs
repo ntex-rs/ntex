@@ -16,8 +16,8 @@ fn test_bind() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let mut sys = ntex::rt::System::new("test");
-        let srv = sys.exec(|| {
+        let sys = ntex::rt::System::new("test");
+        let srv = sys.exec(move || {
             Server::build()
                 .workers(1)
                 .disable_signals()
@@ -42,9 +42,9 @@ fn test_listen() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let mut sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
         let lst = net::TcpListener::bind(addr).unwrap();
-        sys.exec(|| {
+        sys.exec(move || {
             Server::build()
                 .disable_signals()
                 .workers(1)
@@ -70,8 +70,8 @@ fn test_start() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let mut sys = ntex::rt::System::new("test");
-        let srv = sys.exec(|| {
+        let sys = ntex::rt::System::new("test");
+        let srv = sys.exec(move || {
             Server::build()
                 .backlog(100)
                 .disable_signals()
@@ -140,8 +140,8 @@ fn test_on_worker_start() {
     let h = thread::spawn(move || {
         let num = num2.clone();
         let num2 = num2.clone();
-        let mut sys = ntex::rt::System::new("test");
-        let srv = sys.exec(|| {
+        let sys = ntex::rt::System::new("test");
+        let srv = sys.exec(move || {
             Server::build()
                 .disable_signals()
                 .configure(move |cfg| {
@@ -196,7 +196,7 @@ fn test_panic_in_worker() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let mut sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
         let counter = counter2.clone();
         let srv = sys.exec(move || {
             let counter = counter.clone();
@@ -215,7 +215,7 @@ fn test_panic_in_worker() {
                 .start()
         });
         let _ = tx.send((srv.clone(), ntex::rt::System::current()));
-        sys.exec(move || ntex_rt::spawn(srv.map(|_| ())));
+        sys.exec(move || ntex::rt::spawn(srv.map(|_| ())));
         let _ = sys.run();
     });
     let (_, sys) = rx.recv().unwrap();

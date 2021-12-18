@@ -4,7 +4,7 @@ use std::{sync::mpsc, thread, time::Duration};
 use tls_openssl::ssl::SslAcceptorBuilder;
 
 use ntex::web::{self, App, HttpResponse, HttpServer};
-use ntex::{io::Io, server::TestServer, time::Seconds};
+use ntex::{rt, server::TestServer, time::Seconds};
 
 #[cfg(unix)]
 #[ntex::test]
@@ -13,9 +13,9 @@ async fn test_run() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let mut sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
 
-        let srv = sys.exec(|| {
+        let srv = sys.exec(move || {
             HttpServer::new(|| {
                 App::new().service(
                     web::resource("/")
@@ -104,10 +104,10 @@ async fn test_openssl() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let mut sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
         let builder = ssl_acceptor().unwrap();
 
-        let srv = sys.exec(|| {
+        let srv = sys.exec(move || {
             HttpServer::new(|| {
                 App::new().service(web::resource("/").route(web::to(
                     |req: HttpRequest| async move {
@@ -157,7 +157,7 @@ async fn test_rustls() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let mut sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
 
         // load ssl keys
         let cert_file = &mut BufReader::new(File::open("./tests/cert.pem").unwrap());
@@ -174,7 +174,7 @@ async fn test_rustls() {
             .with_single_cert(cert_chain, keys)
             .unwrap();
 
-        let srv = sys.exec(|| {
+        let srv = sys.exec(move || {
             HttpServer::new(|| {
                 App::new().service(web::resource("/").route(web::to(
                     |req: HttpRequest| async move {
@@ -215,9 +215,9 @@ async fn test_bind_uds() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let mut sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
 
-        let srv = sys.exec(|| {
+        let srv = sys.exec(move || {
             HttpServer::new(|| {
                 App::new().service(
                     web::resource("/")
@@ -244,9 +244,7 @@ async fn test_bind_uds() {
         .connector(
             client::Connector::default()
                 .connector(ntex::service::fn_service(|_| async {
-                    let stream =
-                        ntex::rt::net::UnixStream::connect("/tmp/uds-test").await?;
-                    Ok(Io::new(stream))
+                    Ok(rt::unix_connect("/tmp/uds-test").await?)
                 }))
                 .finish(),
         )
@@ -267,7 +265,7 @@ async fn test_listen_uds() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let mut sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test");
 
         let srv = sys.exec(|| {
             let lst = std::os::unix::net::UnixListener::bind("/tmp/uds-test2").unwrap();
@@ -298,9 +296,7 @@ async fn test_listen_uds() {
         .connector(
             client::Connector::default()
                 .connector(ntex::service::fn_service(|_| async {
-                    let stream =
-                        ntex::rt::net::UnixStream::connect("/tmp/uds-test2").await?;
-                    Ok(Io::new(stream))
+                    Ok(rt::unix_connect("/tmp/uds-test2").await?)
                 }))
                 .finish(),
         )
