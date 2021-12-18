@@ -34,11 +34,9 @@ pub(crate) use ntex_macros::rt_test2 as rt_test;
 
 pub mod channel;
 pub mod connect;
-#[cfg(feature = "http-framework")]
 pub mod http;
 pub mod server;
 pub mod util;
-#[cfg(feature = "http-framework")]
 pub mod web;
 pub mod ws;
 
