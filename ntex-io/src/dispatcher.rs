@@ -339,7 +339,6 @@ where
 
                     if slf.shared.inflight.get() == 0 {
                         slf.st.set(DispatcherState::Shutdown);
-                        state.init_shutdown(cx);
                     } else {
                         state.register_dispatcher(cx);
                         return Poll::Pending;

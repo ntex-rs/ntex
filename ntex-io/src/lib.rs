@@ -43,8 +43,7 @@ pub trait ReadFilter {
 
     fn get_read_buf(&self) -> Option<BytesMut>;
 
-    fn release_read_buf(&self, buf: BytesMut, new_bytes: usize)
-        -> Result<(), io::Error>;
+    fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> Result<bool, io::Error>;
 }
 
 pub trait WriteFilter {
@@ -55,7 +54,7 @@ pub trait WriteFilter {
 
     fn get_write_buf(&self) -> Option<BytesMut>;
 
-    fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error>;
+    fn release_write_buf(&self, buf: BytesMut) -> Result<bool, io::Error>;
 }
 
 pub trait Filter: ReadFilter + WriteFilter + 'static {

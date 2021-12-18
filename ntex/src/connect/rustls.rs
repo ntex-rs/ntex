@@ -20,7 +20,7 @@ pub struct Connector<T> {
 impl<T> Connector<T> {
     pub fn new(config: ClientConfig) -> Self {
         Connector {
-            inner: TlsConnector::new(config),
+            inner: TlsConnector::new(std::sync::Arc::new(config)),
             connector: BaseConnector::default(),
         }
     }
@@ -55,8 +55,9 @@ impl<T: Address + 'static> Connector<T> {
             let io = conn.await?;
             trace!("SSL Handshake start for: {:?}", host);
 
-            let _host = ServerName::try_from(host.as_str())
+            let host = ServerName::try_from(host.as_str())
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+            let connector = connector.server_name(host.clone());
 
             match io.add_filter(connector).await {
                 Ok(io) => {

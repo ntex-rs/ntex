@@ -847,14 +847,12 @@ async fn test_brotli_encoding_large_openssl_h2() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
-// TODO fix
-#[ignore]
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls() {
+    use std::{fs::File, io::BufReader};
+
     use rustls_pemfile::{certs, pkcs8_private_keys};
-    use std::fs::File;
-    use std::io::BufReader;
     use tls_rustls::{Certificate, PrivateKey, ServerConfig};
 
     let data = rand::thread_rng()
@@ -907,8 +905,6 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
-// TODO fix
-#[ignore]
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h1() {
@@ -967,8 +963,6 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
     assert_eq!(bytes, Bytes::from(data));
 }
 
-// TODO fix
-#[ignore]
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h2() {

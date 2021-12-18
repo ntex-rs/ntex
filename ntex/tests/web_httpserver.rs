@@ -142,8 +142,6 @@ async fn test_openssl() {
     sys.stop();
 }
 
-// TODO! fix
-#[ignore]
 #[ntex::test]
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 async fn test_rustls() {

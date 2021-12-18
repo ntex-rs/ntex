@@ -49,7 +49,7 @@ impl<F: Filter> io::Read for IoInner<F> {
 impl<F: Filter> io::Write for IoInner<F> {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
         let mut buf = if let Some(mut buf) = self.inner.get_write_buf() {
-            buf.reserve(buf.len());
+            buf.reserve(src.len());
             buf
         } else {
             BytesMut::with_capacity_in(src.len(), self.pool)
@@ -127,7 +127,7 @@ impl<F: Filter> ReadFilter for SslFilter<F> {
         &self,
         src: BytesMut,
         new_bytes: usize,
-    ) -> Result<(), io::Error> {
+    ) -> Result<bool, io::Error> {
         // store to read_buf
         let pool = {
             let mut inner = self.inner.borrow_mut();
@@ -135,7 +135,7 @@ impl<F: Filter> ReadFilter for SslFilter<F> {
             inner.get_ref().pool
         };
         if new_bytes == 0 {
-            return Ok(());
+            return Ok(false);
         }
         let (hw, lw) = pool.read_params().unpack();
 
@@ -171,8 +171,7 @@ impl<F: Filter> ReadFilter for SslFilter<F> {
                         .borrow()
                         .get_ref()
                         .inner
-                        .release_read_buf(buf, new_bytes)?;
-                    Ok(())
+                        .release_read_buf(buf, new_bytes)
                 }
                 Err(e) => Err(map_to_ioerr(e)),
             };
@@ -201,7 +200,7 @@ impl<F: Filter> WriteFilter for SslFilter<F> {
         None
     }
 
-    fn release_write_buf(&self, mut buf: BytesMut) -> Result<(), io::Error> {
+    fn release_write_buf(&self, mut buf: BytesMut) -> Result<bool, io::Error> {
         let ssl_result = self.inner.borrow_mut().ssl_write(&buf);
         let result = match ssl_result {
             Ok(v) => {
@@ -209,11 +208,11 @@ impl<F: Filter> WriteFilter for SslFilter<F> {
                     buf.split_to(v);
                     self.inner.borrow_mut().get_mut().write_buf = Some(buf);
                 }
-                Ok(())
+                Ok(false)
             }
             Err(e) => match e.code() {
-                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => Ok(()),
-                _ => (Err(map_to_ioerr(e))),
+                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => Ok(false),
+                _ => Err(map_to_ioerr(e)),
             },
         };
         result
@@ -266,7 +265,7 @@ impl<F: Filter + 'static> FilterFactory<F> for SslAcceptor {
             time::timeout(timeout, async {
                 let ssl = ctx_result.map_err(map_to_ioerr)?;
                 let pool = st.memory_pool();
-                let st = st.map_filter::<Self, _>(|inner: F| {
+                let st = st.map_filter(|inner: F| {
                     let inner = IoInner {
                         pool,
                         inner,
@@ -275,7 +274,7 @@ impl<F: Filter + 'static> FilterFactory<F> for SslAcceptor {
                     };
                     let ssl_stream = ssl::SslStream::new(ssl, inner)?;
 
-                    Ok(SslFilter {
+                    Ok::<_, Box<dyn Error>>(SslFilter {
                         inner: RefCell::new(ssl_stream),
                     })
                 })?;
@@ -317,7 +316,7 @@ impl<F: Filter + 'static> FilterFactory<F> for SslConnector {
         Box::pin(async move {
             let ssl = self.ssl;
             let pool = st.memory_pool();
-            let st = st.map_filter::<Self, _>(|inner: F| {
+            let st = st.map_filter(|inner: F| {
                 let inner = IoInner {
                     pool,
                     inner,
@@ -326,7 +325,7 @@ impl<F: Filter + 'static> FilterFactory<F> for SslConnector {
                 };
                 let ssl_stream = ssl::SslStream::new(ssl, inner)?;
 
-                Ok(SslFilter {
+                Ok::<_, Box<dyn Error>>(SslFilter {
                     inner: RefCell::new(ssl_stream),
                 })
             })?;

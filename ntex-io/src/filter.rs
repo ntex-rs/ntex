@@ -69,7 +69,7 @@ impl ReadFilter for DefaultFilter {
         &self,
         buf: BytesMut,
         new_bytes: usize,
-    ) -> Result<(), io::Error> {
+    ) -> Result<bool, io::Error> {
         let mut flags = self.0.flags.get();
 
         if new_bytes > 0 {
@@ -86,7 +86,7 @@ impl ReadFilter for DefaultFilter {
         }
 
         self.0.read_buf.set(Some(buf));
-        Ok(())
+        Ok(false)
     }
 }
 
@@ -133,7 +133,7 @@ impl WriteFilter for DefaultFilter {
     }
 
     #[inline]
-    fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error> {
+    fn release_write_buf(&self, buf: BytesMut) -> Result<bool, io::Error> {
         let pool = self.0.pool.get();
         if buf.is_empty() {
             pool.release_write_buf(buf);
@@ -141,7 +141,7 @@ impl WriteFilter for DefaultFilter {
             self.0.write_buf.set(Some(buf));
             self.0.write_task.wake();
         }
-        Ok(())
+        Ok(false)
     }
 }
 
@@ -176,8 +176,8 @@ impl ReadFilter for NullFilter {
         None
     }
 
-    fn release_read_buf(&self, _: BytesMut, _: usize) -> Result<(), io::Error> {
-        Ok(())
+    fn release_read_buf(&self, _: BytesMut, _: usize) -> Result<bool, io::Error> {
+        Ok(true)
     }
 }
 
@@ -192,7 +192,7 @@ impl WriteFilter for NullFilter {
         None
     }
 
-    fn release_write_buf(&self, _: BytesMut) -> Result<(), io::Error> {
-        Ok(())
+    fn release_write_buf(&self, _: BytesMut) -> Result<bool, io::Error> {
+        Ok(true)
     }
 }

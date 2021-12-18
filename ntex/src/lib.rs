@@ -32,7 +32,6 @@ pub use ntex_macros::{rt_main as main, rt_test as test};
 #[cfg(test)]
 pub(crate) use ntex_macros::rt_test2 as rt_test;
 
-//pub mod channel;
 pub mod connect;
 pub mod http;
 pub mod server;

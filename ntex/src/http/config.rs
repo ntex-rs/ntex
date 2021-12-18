@@ -23,6 +23,12 @@ impl From<usize> for KeepAlive {
     }
 }
 
+impl From<Seconds> for KeepAlive {
+    fn from(keepalive: Seconds) -> Self {
+        KeepAlive::Timeout(keepalive)
+    }
+}
+
 impl From<Option<usize>> for KeepAlive {
     fn from(keepalive: Option<usize>) -> Self {
         if let Some(keepalive) = keepalive {
@@ -56,8 +62,8 @@ impl Default for ServiceConfig {
     fn default() -> Self {
         Self::new(
             KeepAlive::Timeout(Seconds(5)),
-            Millis::ZERO,
-            Seconds::ZERO,
+            Millis(1_000),
+            Seconds::ONE,
             Millis(5_000),
         )
     }

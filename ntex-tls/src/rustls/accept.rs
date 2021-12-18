@@ -1,8 +1,7 @@
 use std::task::{Context, Poll};
-use std::{error::Error, future::Future, marker::PhantomData, pin::Pin};
+use std::{future::Future, io, marker::PhantomData, pin::Pin, sync::Arc};
 
 use tls_rust::ServerConfig;
-use webpki_roots::TLS_SERVER_ROOTS;
 
 use ntex_io::{Filter, FilterFactory, Io};
 use ntex_service::{Service, ServiceFactory};
@@ -21,7 +20,7 @@ pub struct Acceptor<F> {
 
 impl<F> Acceptor<F> {
     /// Create rustls based `Acceptor` service factory
-    pub fn new(config: ServerConfig) -> Self {
+    pub fn new(config: Arc<ServerConfig>) -> Self {
         Acceptor {
             inner: TlsAcceptor::new(config),
             _t: PhantomData,
@@ -37,6 +36,12 @@ impl<F> Acceptor<F> {
     }
 }
 
+impl<F> From<ServerConfig> for Acceptor<F> {
+    fn from(cfg: ServerConfig) -> Self {
+        Self::new(Arc::new(cfg))
+    }
+}
+
 impl<F> Clone for Acceptor<F> {
     fn clone(&self) -> Self {
         Self {
@@ -49,7 +54,7 @@ impl<F> Clone for Acceptor<F> {
 impl<F: Filter> ServiceFactory for Acceptor<F> {
     type Request = Io<F>;
     type Response = Io<TlsFilter<F>>;
-    type Error = Box<dyn Error>;
+    type Error = io::Error;
     type Service = AcceptorService<F>;
 
     type Config = ();
@@ -77,7 +82,7 @@ pub struct AcceptorService<F> {
 impl<F: Filter> Service for AcceptorService<F> {
     type Request = Io<F>;
     type Response = Io<TlsFilter<F>>;
-    type Error = Box<dyn Error>;
+    type Error = io::Error;
     type Future = AcceptorServiceFut<F>;
 
     #[inline]
@@ -110,7 +115,7 @@ pin_project_lite::pin_project! {
 }
 
 impl<F: Filter> Future for AcceptorServiceFut<F> {
-    type Output = Result<Io<TlsFilter<F>>, Box<dyn Error>>;
+    type Output = Result<Io<TlsFilter<F>>, io::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.project().fut.poll(cx)

@@ -49,10 +49,12 @@ impl ReadContext {
                 self.0 .0.dispatch_task.wake();
             }
 
-            self.0 .0.filter.get().release_read_buf(buf, new_bytes)?;
+            let close = self.0 .0.filter.get().release_read_buf(buf, new_bytes)?;
 
             if flags.contains(Flags::IO_FILTERS) {
                 self.0 .0.shutdown_filters(&self.0)?;
+            } else if close {
+                self.0 .0.init_shutdown(None, &self.0);
             }
             Ok(())
         }
