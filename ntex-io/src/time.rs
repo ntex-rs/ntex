@@ -2,10 +2,10 @@ use std::{
     cell::RefCell, collections::BTreeMap, collections::HashSet, rc::Rc, time::Instant,
 };
 
-use ntex_util::spawn;
 use ntex_util::time::{now, sleep, Millis};
 
-use super::state::{IoRef, IoStateInner};
+use crate::rt::spawn;
+use crate::state::{IoRef, IoStateInner};
 
 pub struct Timer(Rc<RefCell<Inner>>);
 

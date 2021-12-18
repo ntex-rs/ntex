@@ -1,8 +1,8 @@
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, future::Future, io, net::SocketAddr, pin::Pin};
 
-use crate::io::Io;
-use crate::rt::net::TcpStream;
+use crate::io::{types, Io};
+use crate::rt::tcp_connect_in;
 use crate::service::{Service, ServiceFactory};
 use crate::util::{Either, PoolId, PoolRef, Ready};
 
@@ -128,7 +128,7 @@ impl<T: Address> Future for ConnectServiceResponse<T> {
 
                     if let Some(addr) = addr {
                         self.state = ConnectState::Connect(TcpConnectorResponse::new(
-                            req, port, addr,
+                            req, port, addr, self.pool,
                         ));
                         self.poll(cx)
                     } else if let Some(addr) = req.addr() {
@@ -136,6 +136,7 @@ impl<T: Address> Future for ConnectServiceResponse<T> {
                             req,
                             addr.port(),
                             Either::Left(addr),
+                            self.pool,
                         ));
                         self.poll(cx)
                     } else {
@@ -144,12 +145,7 @@ impl<T: Address> Future for ConnectServiceResponse<T> {
                     }
                 }
             },
-            ConnectState::Connect(ref mut fut) => match Pin::new(fut).poll(cx)? {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(stream) => {
-                    Poll::Ready(Ok(Io::with_memory_pool(stream, self.pool)))
-                }
-            },
+            ConnectState::Connect(ref mut fut) => Pin::new(fut).poll(cx),
         }
     }
 }
@@ -159,7 +155,8 @@ struct TcpConnectorResponse<T> {
     req: Option<T>,
     port: u16,
     addrs: Option<VecDeque<SocketAddr>>,
-    stream: Option<Pin<Box<dyn Future<Output = Result<TcpStream, io::Error>>>>>,
+    stream: Option<Pin<Box<dyn Future<Output = Result<Io, io::Error>>>>>,
+    pool: PoolRef,
 }
 
 impl<T: Address> TcpConnectorResponse<T> {
@@ -167,6 +164,7 @@ impl<T: Address> TcpConnectorResponse<T> {
         req: T,
         port: u16,
         addr: Either<SocketAddr, VecDeque<SocketAddr>>,
+        pool: PoolRef,
     ) -> TcpConnectorResponse<T> {
         trace!(
             "TCP connector - connecting to {:?} port:{}",
@@ -177,13 +175,15 @@ impl<T: Address> TcpConnectorResponse<T> {
         match addr {
             Either::Left(addr) => TcpConnectorResponse {
                 req: Some(req),
-                port,
                 addrs: None,
-                stream: Some(Box::pin(TcpStream::connect(addr))),
+                stream: Some(tcp_connect_in(addr, pool)),
+                pool,
+                port,
             },
             Either::Right(addrs) => TcpConnectorResponse {
-                req: Some(req),
                 port,
+                pool,
+                req: Some(req),
                 addrs: Some(addrs),
                 stream: None,
             },
@@ -202,7 +202,7 @@ impl<T: Address> TcpConnectorResponse<T> {
 }
 
 impl<T: Address> Future for TcpConnectorResponse<T> {
-    type Output = Result<TcpStream, ConnectError>;
+    type Output = Result<Io, ConnectError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -212,16 +212,11 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
             if let Some(new) = this.stream.as_mut() {
                 match new.as_mut().poll(cx) {
                     Poll::Ready(Ok(sock)) => {
-                        if let Err(err) = sock.set_nodelay(true) {
-                            if !this.can_continue(&err) {
-                                return Poll::Ready(Err(err.into()));
-                            }
-                        }
-
                         let req = this.req.take().unwrap();
                         trace!(
                             "TCP connector - successfully connected to connecting to {:?} - {:?}",
-                            req.host(), sock.peer_addr()
+                            req.host(),
+                            sock.query::<types::PeerAddr>().get()
                         );
                         return Poll::Ready(Ok(sock));
                     }
@@ -236,7 +231,7 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
 
             // try to connect
             let addr = this.addrs.as_mut().unwrap().pop_front().unwrap();
-            this.stream = Some(Box::pin(TcpStream::connect(addr)));
+            this.stream = Some(tcp_connect_in(addr, this.pool));
         }
     }
 }

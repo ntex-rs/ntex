@@ -18,22 +18,23 @@ path = "src/lib.rs"
 [features]
 default = ["tokio"]
 
-# tokio support
-tokio = ["tok-io"]
+# tokio traits support
+tokio-traits = ["tok-io/net"]
+
+# tokio runtime support
+tokio = ["tok-io/net"]
 
 [dependencies]
 bitflags = "1.3"
 fxhash = "0.2.1"
-ntex-codec = "0.5.1"
+ntex-codec = "0.6.0"
 ntex-bytes = "0.1.7"
 ntex-util = "0.1.2"
 ntex-service = "0.2.1"
 log = "0.4"
 pin-project-lite = "0.2"
 
-tok-io = { version = "1", package = "tokio", default-features = false, features = ["net"], optional = true }
-
-backtrace = "*"
+tok-io = { version = "1", package = "tokio", default-features = false, optional = true }
 
 [dev-dependencies]
 ntex = "0.5.0-b.0"

@@ -41,7 +41,7 @@ impl<T: Address> Resolver<T> {
                     format!("{}:{}", req.host(), req.port())
                 };
 
-                let fut = crate::rt::task::spawn_blocking(move || {
+                let fut = crate::rt::spawn_blocking(move || {
                     net::ToSocketAddrs::to_socket_addrs(&host)
                 });
 

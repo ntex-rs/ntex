@@ -1,13 +1,11 @@
-use std::{borrow::Cow, future::Future, io};
+use std::{cell::RefCell, future::Future, io, rc::Rc};
 
+use async_channel::unbounded;
+use async_oneshot as oneshot;
 use ntex_util::future::lazy;
-use tokio::sync::mpsc::unbounded_channel;
-use tokio::sync::oneshot::{channel, Receiver};
-use tokio::task::LocalSet;
 
-use super::arbiter::{Arbiter, SystemArbiter};
-use super::runtime::Runtime;
-use super::system::System;
+use crate::arbiter::{Arbiter, SystemArbiter};
+use crate::{create_runtime, Runtime, System};
 
 /// Builder struct for a ntex runtime.
 ///
@@ -16,8 +14,7 @@ use super::system::System;
 /// run a function in its context.
 pub struct Builder {
     /// Name of the System. Defaults to "ntex" if unset.
-    name: Cow<'static, str>,
-
+    name: String,
     /// Whether the Arbiter will stop the whole System on uncaught panic. Defaults to false.
     stop_on_panic: bool,
 }
@@ -25,14 +22,14 @@ pub struct Builder {
 impl Builder {
     pub(super) fn new() -> Self {
         Builder {
-            name: Cow::Borrowed("ntex"),
+            name: "ntex".into(),
             stop_on_panic: false,
         }
     }
 
     /// Sets the name of the System.
-    pub fn name<T: Into<String>>(mut self, name: T) -> Self {
-        self.name = Cow::Owned(name.into());
+    pub fn name<N: AsRef<str>>(mut self, name: N) -> Self {
+        self.name = name.as_ref().into();
         self
     }
 
@@ -52,15 +49,6 @@ impl Builder {
         self.create_runtime(|| {})
     }
 
-    /// Create new System that can run asynchronously.
-    /// This method could be used to run ntex system in existing tokio
-    /// runtime.
-    ///
-    /// This method panics if it cannot start the system arbiter
-    pub fn finish_with(self, local: &LocalSet) -> AsyncSystemRunner {
-        self.create_async_runtime(local)
-    }
-
     /// This function will start tokio runtime and will finish once the
     /// `System::stop()` message get called.
     /// Function `f` get called within tokio runtime context.
@@ -71,92 +59,34 @@ impl Builder {
         self.create_runtime(f).run()
     }
 
-    fn create_async_runtime(self, local: &LocalSet) -> AsyncSystemRunner {
-        let (stop_tx, stop) = channel();
-        let (sys_sender, sys_receiver) = unbounded_channel();
-
-        let _system = System::construct(
-            sys_sender,
-            Arbiter::new_system(local),
-            self.stop_on_panic,
-        );
-
-        // system arbiter
-        let arb = SystemArbiter::new(stop_tx, sys_receiver);
-
-        // start the system arbiter
-        let _ = local.spawn_local(arb);
-
-        AsyncSystemRunner { stop, _system }
-    }
-
     fn create_runtime<F>(self, f: F) -> SystemRunner
     where
         F: FnOnce() + 'static,
     {
-        let (stop_tx, stop) = channel();
-        let (sys_sender, sys_receiver) = unbounded_channel();
+        let (stop_tx, stop) = oneshot::oneshot();
+        let (sys_sender, sys_receiver) = unbounded();
 
-        let rt = Runtime::new().unwrap();
-
-        // set ntex-util spawn fn
-        ntex_util::set_spawn_fn(|fut| {
-            tokio::task::spawn_local(fut);
-        });
+        let rt = create_runtime();
 
         // system arbiter
-        let _system = System::construct(
-            sys_sender,
-            Arbiter::new_system(rt.local()),
-            self.stop_on_panic,
-        );
+        let _system =
+            System::construct(sys_sender, Arbiter::new_system(&rt), self.stop_on_panic);
         let arb = SystemArbiter::new(stop_tx, sys_receiver);
-        rt.spawn(arb);
+        rt.spawn(Box::pin(arb));
 
         // init system arbiter and run configuration method
-        rt.block_on(lazy(move |_| f()));
+        let runner = SystemRunner { rt, stop, _system };
+        runner.block_on(lazy(move |_| f()));
 
-        SystemRunner { rt, stop, _system }
-    }
-}
-
-#[derive(Debug)]
-pub struct AsyncSystemRunner {
-    stop: Receiver<i32>,
-    _system: System,
-}
-
-impl AsyncSystemRunner {
-    /// This function will start event loop and returns a future that
-    /// resolves once the `System::stop()` function is called.
-    pub fn run(self) -> impl Future<Output = Result<(), io::Error>> + Send {
-        let AsyncSystemRunner { stop, .. } = self;
-
-        // run loop
-        async move {
-            match stop.await {
-                Ok(code) => {
-                    if code != 0 {
-                        Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("Non-zero exit code: {}", code),
-                        ))
-                    } else {
-                        Ok(())
-                    }
-                }
-                Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
-            }
-        }
+        runner
     }
 }
 
 /// Helper object that runs System's event loop
 #[must_use = "SystemRunner must be run"]
-#[derive(Debug)]
 pub struct SystemRunner {
-    rt: Runtime,
-    stop: Receiver<i32>,
+    rt: Box<dyn Runtime>,
+    stop: oneshot::Receiver<i32>,
     _system: System,
 }
 
@@ -167,7 +97,7 @@ impl SystemRunner {
         let SystemRunner { rt, stop, .. } = self;
 
         // run loop
-        match rt.block_on(stop) {
+        match block_on(&rt, stop).take() {
             Ok(code) => {
                 if code != 0 {
                     Err(io::Error::new(
@@ -178,27 +108,53 @@ impl SystemRunner {
                     Ok(())
                 }
             }
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Closed")),
         }
     }
 
     /// Execute a future and wait for result.
     #[inline]
-    pub fn block_on<F, O>(&mut self, fut: F) -> O
+    pub fn block_on<F, R>(&self, fut: F) -> R
     where
-        F: Future<Output = O>,
+        F: Future<Output = R> + 'static,
+        R: 'static,
     {
-        self.rt.block_on(fut)
+        block_on(&self.rt, fut).take()
     }
 
     /// Execute a function with enabled executor.
     #[inline]
-    pub fn exec<F, R>(&mut self, f: F) -> R
+    pub fn exec<F, R>(&self, f: F) -> R
     where
-        F: FnOnce() -> R,
+        F: FnOnce() -> R + 'static,
+        R: 'static,
     {
-        self.rt.block_on(lazy(|_| f()))
+        self.block_on(lazy(|_| f()))
     }
+}
+
+pub struct BlockResult<T>(Rc<RefCell<Option<T>>>);
+
+impl<T> BlockResult<T> {
+    pub fn take(self) -> T {
+        self.0.borrow_mut().take().unwrap()
+    }
+}
+
+#[inline]
+#[allow(clippy::borrowed_box)]
+fn block_on<F, R>(rt: &Box<dyn Runtime>, fut: F) -> BlockResult<R>
+where
+    F: Future<Output = R> + 'static,
+    R: 'static,
+{
+    let result = Rc::new(RefCell::new(None));
+    let result_inner = result.clone();
+    rt.block_on(Box::pin(async move {
+        let r = fut.await;
+        *result_inner.borrow_mut() = Some(r);
+    }));
+    BlockResult(result)
 }
 
 #[cfg(test)]
@@ -213,19 +169,12 @@ mod tests {
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .build()
-                .unwrap();
-            let local = tokio::task::LocalSet::new();
-
-            let runner = crate::System::build()
-                .stop_on_panic(true)
-                .finish_with(&local);
+            let runner = crate::System::build().stop_on_panic(true).finish();
 
             tx.send(System::current()).unwrap();
-            let _ = rt.block_on(local.run_until(runner.run()));
+            let _ = runner.run();
         });
-        let mut s = System::new("test");
+        let s = System::new("test");
 
         let sys = rx.recv().unwrap();
         let id = sys.id();

@@ -1,15 +1,13 @@
 //! Framed transport dispatcher
-use std::{
-    cell::Cell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll, time,
-};
+use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll, time};
 
 use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::{IntoService, Service};
+use ntex_util::future::Either;
 use ntex_util::time::{now, Seconds};
-use ntex_util::{future::Either, spawn};
 
-use super::{DispatchItem, IoBoxed, ReadRef, Timer, WriteRef};
+use super::{rt::spawn, DispatchItem, IoBoxed, ReadRef, Timer, WriteRef};
 
 type Response<U> = <U as Encoder>::Item;
 
@@ -178,7 +176,7 @@ where
     }
 }
 
-impl<S, U> Future for Dispatcher<S, U>
+impl<S, U> future::Future for Dispatcher<S, U>
 where
     S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,

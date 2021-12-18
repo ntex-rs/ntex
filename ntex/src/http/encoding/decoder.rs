@@ -6,7 +6,7 @@ use flate2::write::{GzDecoder, ZlibDecoder};
 use super::Writer;
 use crate::http::error::PayloadError;
 use crate::http::header::{ContentEncoding, HeaderMap, CONTENT_ENCODING};
-use crate::rt::task::{spawn_blocking, JoinHandle};
+use crate::rt::{spawn_blocking, JoinHandle};
 use crate::{util::Bytes, Stream};
 
 const INPLACE: usize = 2049;

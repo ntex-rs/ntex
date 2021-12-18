@@ -1,12 +1,12 @@
 use std::task::{Context, Poll};
-use std::{any, cell::RefCell, cmp, future::Future, io, pin::Pin, rc::Rc};
+use std::{any, cell::RefCell, cmp, future::Future, io, mem, pin::Pin, rc::Rc};
 
-use ntex_bytes::{Buf, BufMut};
+use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_util::time::{sleep, Sleep};
 use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tok_io::net::TcpStream;
 
-use super::{
+use crate::{
     types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, WriteContext,
     WriteReadiness,
 };
@@ -71,7 +71,7 @@ impl Future for ReadTask {
                         buf.reserve(hw - remaining);
                     }
 
-                    match ntex_codec::poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
+                    match poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
                         Poll::Pending => break,
                         Poll::Ready(Ok(n)) => {
                             if n == 0 {
@@ -505,8 +505,7 @@ mod unixstream {
                             buf.reserve(hw - remaining);
                         }
 
-                        match ntex_codec::poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
-                        {
+                        match poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
                             Poll::Pending => break,
                             Poll::Ready(Ok(n)) => {
                                 if n == 0 {
@@ -698,4 +697,36 @@ mod unixstream {
             }
         }
     }
+}
+
+pub fn poll_read_buf<T: AsyncRead>(
+    io: Pin<&mut T>,
+    cx: &mut Context<'_>,
+    buf: &mut BytesMut,
+) -> Poll<io::Result<usize>> {
+    if !buf.has_remaining_mut() {
+        return Poll::Ready(Ok(0));
+    }
+
+    let n = {
+        let dst =
+            unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [mem::MaybeUninit<u8>]) };
+        let mut buf = ReadBuf::uninit(dst);
+        let ptr = buf.filled().as_ptr();
+        if io.poll_read(cx, &mut buf)?.is_pending() {
+            return Poll::Pending;
+        }
+
+        // Ensure the pointer does not change from under us
+        assert_eq!(ptr, buf.filled().as_ptr());
+        buf.filled().len()
+    };
+
+    // Safety: This is guaranteed to be the number of initialized (and read)
+    // bytes due to the invariants provided by `ReadBuf::filled`.
+    unsafe {
+        buf.advance_mut(n);
+    }
+
+    Poll::Ready(Ok(n))
 }

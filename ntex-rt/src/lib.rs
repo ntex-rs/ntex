@@ -1,82 +1,37 @@
 //! A runtime implementation that runs everything on the current thread.
-use ntex_util::future::lazy;
-use std::future::Future;
+use std::{future::Future, pin::Pin};
 
 mod arbiter;
 mod builder;
-mod runtime;
 mod system;
-
-mod time;
-
-#[doc(hidden)]
-pub mod time_driver {
-    pub use super::time::*;
-}
 
 pub use self::arbiter::Arbiter;
 pub use self::builder::{Builder, SystemRunner};
-pub use self::runtime::Runtime;
 pub use self::system::System;
 
-/// Spawn a future on the current thread. This does not create a new Arbiter
-/// or Arbiter address, it is simply a helper for spawning futures on the current
-/// thread.
-///
-/// # Panics
-///
-/// This function panics if ntex system is not running.
-#[inline]
-pub fn spawn<F>(f: F) -> self::task::JoinHandle<F::Output>
-where
-    F: Future + 'static,
-{
-    tokio::task::spawn_local(f)
+#[cfg(feature = "tokio")]
+mod tokio;
+#[cfg(feature = "tokio")]
+pub use self::tokio::*;
+
+pub trait Runtime {
+    /// Spawn a future onto the single-threaded runtime.
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()>>>);
+
+    /// Runs the provided future, blocking the current thread until the future
+    /// completes.
+    fn block_on(&self, f: Pin<Box<dyn Future<Output = ()>>>);
 }
 
-/// Executes a future on the current thread. This does not create a new Arbiter
-/// or Arbiter address, it is simply a helper for executing futures on the current
-/// thread.
-///
-/// # Panics
-///
-/// This function panics if ntex system is not running.
-#[inline]
-pub fn spawn_fn<F, R>(f: F) -> tokio::task::JoinHandle<R::Output>
-where
-    F: FnOnce() -> R + 'static,
-    R: Future + 'static,
-{
-    tokio::task::spawn_local(async move {
-        let r = lazy(|_| f()).await;
-        r.await
-    })
-}
-
-/// Asynchronous signal handling
-pub mod signal {
-    #[cfg(unix)]
-    pub mod unix {
-        pub use tokio::signal::unix::*;
-    }
-    pub use tokio::signal::ctrl_c;
-}
-
-/// TCP/UDP/Unix bindings
-pub mod net {
-    pub use tokio::net::UdpSocket;
-    pub use tokio::net::{TcpListener, TcpStream};
-
-    #[cfg(unix)]
-    pub mod unix {
-        pub use tokio::net::{UnixDatagram, UnixListener, UnixStream};
-    }
-
-    #[cfg(unix)]
-    pub use self::unix::*;
-}
-
-/// Task management.
-pub mod task {
-    pub use tokio::task::{spawn_blocking, yield_now, JoinError, JoinHandle};
+/// Different types of process signals
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum Signal {
+    /// SIGHUP
+    Hup,
+    /// SIGINT
+    Int,
+    /// SIGTERM
+    Term,
+    /// SIGQUIT
+    Quit,
 }

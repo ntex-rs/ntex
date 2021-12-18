@@ -611,7 +611,7 @@ where
 
     // run server in separate thread
     thread::spawn(move || {
-        let mut sys = System::new("ntex-test-server");
+        let sys = System::new("ntex-test-server");
 
         let cfg = cfg.clone();
         let factory = factory.clone();
@@ -619,7 +619,7 @@ where
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
-        let srv = sys.exec(|| {
+        let srv = sys.exec(move || {
             let builder = Server::build().workers(1).disable_signals();
 
             match cfg.stream {

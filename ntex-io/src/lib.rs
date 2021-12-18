@@ -1,17 +1,19 @@
 use std::{any::Any, any::TypeId, fmt, future::Future, io, task::Context, task::Poll};
 
 pub mod testing;
+pub mod types;
 
 mod dispatcher;
 mod filter;
 mod state;
 mod tasks;
 mod time;
-pub mod types;
 mod utils;
 
-#[cfg(feature = "tokio")]
+#[cfg(any(feature = "tokio-traits", feature = "tokio"))]
 mod tokio_impl;
+#[cfg(any(feature = "tokio"))]
+mod tokio_rt;
 
 use ntex_bytes::BytesMut;
 use ntex_codec::{Decoder, Encoder};
@@ -126,6 +128,13 @@ where
             }
         }
     }
+}
+
+pub mod rt {
+    //! async runtime helpers
+
+    #[cfg(feature = "tokio")]
+    pub use crate::tokio_rt::*;
 }
 
 #[cfg(test)]

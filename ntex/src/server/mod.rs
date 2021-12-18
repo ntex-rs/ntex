@@ -8,7 +8,6 @@ mod accept;
 mod builder;
 mod config;
 mod service;
-mod signals;
 mod socket;
 mod test;
 mod worker;
@@ -57,7 +56,7 @@ enum ServerCommand {
     WorkerFaulted(usize),
     Pause(oneshot::Sender<()>),
     Resume(oneshot::Sender<()>),
-    Signal(signals::Signal),
+    Signal(crate::rt::Signal),
     /// Whether to try and shut down gracefully
     Stop {
         graceful: bool,
@@ -81,7 +80,7 @@ impl Server {
         ServerBuilder::default()
     }
 
-    fn signal(&self, sig: signals::Signal) {
+    fn signal(&self, sig: crate::rt::Signal) {
         let _ = self.0.try_send(ServerCommand::Signal(sig));
     }
 

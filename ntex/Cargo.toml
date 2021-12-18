@@ -43,15 +43,16 @@ http-framework = ["h2", "http", "httparse",
     "httpdate", "encoding_rs", "mime", "percent-encoding", "serde_json", "serde_urlencoded"]
 
 [dependencies]
-ntex-codec = "0.5.1"
-ntex-rt = "0.3.2"
+ntex-codec = "0.6.0"
 ntex-router = "0.5.1"
 ntex-service = "0.2.1"
 ntex-macros = "0.1.3"
 ntex-util = "0.1.2"
 ntex-bytes = "0.1.7"
-ntex-io = { version = "0.1", features = ["tokio"] }
+ntex-io = "0.1"
 ntex-tls = "0.1"
+
+ntex-rt = { version = "0.4.0-b.0", default-features = false, features = ["tokio"] }
 
 base64 = "0.13"
 bitflags = "1.3"

@@ -1,6 +1,6 @@
 use std::{convert::TryFrom, fmt, io, net};
 
-use crate::{io::Io, rt::net::TcpStream};
+use crate::{io::Io, rt};
 
 pub(crate) enum Listener {
     Tcp(net::TcpListener),
@@ -145,17 +145,9 @@ impl TryFrom<Stream> for Io {
 
     fn try_from(sock: Stream) -> Result<Self, Self::Error> {
         match sock {
-            Stream::Tcp(stream) => {
-                stream.set_nonblocking(true)?;
-                stream.set_nodelay(true)?;
-                Ok(Io::new(TcpStream::from_std(stream)?))
-            }
+            Stream::Tcp(stream) => rt::from_tcp_stream(stream),
             #[cfg(unix)]
-            Stream::Uds(stream) => {
-                use crate::rt::net::UnixStream;
-                stream.set_nonblocking(true)?;
-                Ok(Io::new(UnixStream::from_std(stream)?))
-            }
+            Stream::Uds(stream) => rt::from_unix_stream(stream),
         }
     }
 }

@@ -7,7 +7,7 @@ use flate2::write::{GzEncoder, ZlibEncoder};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::{ContentEncoding, HeaderValue, CONTENT_ENCODING};
 use crate::http::{ResponseHead, StatusCode};
-use crate::rt::task::{spawn_blocking, JoinHandle};
+use crate::rt::{spawn_blocking, JoinHandle};
 use crate::util::Bytes;
 
 use super::Writer;
