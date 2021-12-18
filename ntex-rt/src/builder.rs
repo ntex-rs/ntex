@@ -1,8 +1,8 @@
 use std::{cell::RefCell, future::Future, io, rc::Rc};
 
+use async_channel::unbounded;
+use async_oneshot as oneshot;
 use ntex_util::future::lazy;
-use tok_io::sync::mpsc::unbounded_channel;
-use tok_io::sync::oneshot::{channel, Receiver};
 
 use crate::arbiter::{Arbiter, SystemArbiter};
 use crate::{create_runtime, Runtime, System};
@@ -63,8 +63,8 @@ impl Builder {
     where
         F: FnOnce() + 'static,
     {
-        let (stop_tx, stop) = channel();
-        let (sys_sender, sys_receiver) = unbounded_channel();
+        let (stop_tx, stop) = oneshot::oneshot();
+        let (sys_sender, sys_receiver) = unbounded();
 
         let rt = create_runtime();
 
@@ -86,7 +86,7 @@ impl Builder {
 #[must_use = "SystemRunner must be run"]
 pub struct SystemRunner {
     rt: Box<dyn Runtime>,
-    stop: Receiver<i32>,
+    stop: oneshot::Receiver<i32>,
     _system: System,
 }
 
@@ -108,7 +108,7 @@ impl SystemRunner {
                     Ok(())
                 }
             }
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Closed")),
         }
     }
 
@@ -142,6 +142,7 @@ impl<T> BlockResult<T> {
 }
 
 #[inline]
+#[allow(clippy::borrowed_box)]
 fn block_on<F, R>(rt: &Box<dyn Runtime>, fut: F) -> BlockResult<R>
 where
     F: Future<Output = R> + 'static,
@@ -168,19 +169,12 @@ mod tests {
         let (tx, rx) = mpsc::channel();
 
         thread::spawn(move || {
-            let rt = tok_io::runtime::Builder::new_current_thread()
-                .build()
-                .unwrap();
-            let local = tok_io::task::LocalSet::new();
-
-            let runner = crate::System::build()
-                .stop_on_panic(true)
-                .finish_with(&local);
+            let runner = crate::System::build().stop_on_panic(true).finish();
 
             tx.send(System::current()).unwrap();
-            let _ = rt.block_on(local.run_until(runner.run()));
+            let _ = runner.run();
         });
-        let mut s = System::new("test");
+        let s = System::new("test");
 
         let sys = rx.recv().unwrap();
         let id = sys.id();

@@ -1,5 +1,5 @@
+use async_channel::Sender;
 use std::{cell::RefCell, io, sync::atomic::AtomicUsize, sync::atomic::Ordering};
-use tok_io::sync::mpsc::UnboundedSender;
 
 use super::arbiter::{Arbiter, SystemCommand};
 use super::builder::{Builder, SystemRunner};
@@ -10,7 +10,7 @@ static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[derive(Clone, Debug)]
 pub struct System {
     id: usize,
-    sys: UnboundedSender<SystemCommand>,
+    sys: Sender<SystemCommand>,
     arbiter: Arbiter,
     stop_on_panic: bool,
 }
@@ -22,7 +22,7 @@ thread_local!(
 impl System {
     /// Constructs new system and sets it as current
     pub(super) fn construct(
-        sys: UnboundedSender<SystemCommand>,
+        sys: Sender<SystemCommand>,
         arbiter: Arbiter,
         stop_on_panic: bool,
     ) -> Self {
@@ -80,10 +80,10 @@ impl System {
 
     /// Stop the system with a particular exit code.
     pub fn stop_with_code(&self, code: i32) {
-        let _ = self.sys.send(SystemCommand::Exit(code));
+        let _ = self.sys.try_send(SystemCommand::Exit(code));
     }
 
-    pub(super) fn sys(&self) -> &UnboundedSender<SystemCommand> {
+    pub(super) fn sys(&self) -> &Sender<SystemCommand> {
         &self.sys
     }
 

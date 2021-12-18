@@ -3,8 +3,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, thread};
 
-use tok_io::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tok_io::sync::oneshot::{channel, error::RecvError, Sender};
+use async_channel::{unbounded, Receiver, Sender};
+use async_oneshot as oneshot;
+use ntex_util::Stream;
+
+//use tok_io::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+//use tok_io::sync::oneshot::{channel, error::RecvError, Sender};
 
 use crate::{system::System, Runtime};
 
@@ -26,7 +30,7 @@ pub(super) enum ArbiterCommand {
 /// and futures. When an Arbiter is created, it spawns a new OS thread, and
 /// hosts an event loop. Some Arbiter functions execute on the current thread.
 pub struct Arbiter {
-    sender: UnboundedSender<ArbiterCommand>,
+    sender: Sender<ArbiterCommand>,
     thread_handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -49,8 +53,9 @@ impl Clone for Arbiter {
 }
 
 impl Arbiter {
+    #[allow(clippy::borrowed_box)]
     pub(super) fn new_system(rt: &Box<dyn Runtime>) -> Self {
-        let (tx, rx) = unbounded_channel();
+        let (tx, rx) = unbounded();
 
         let arb = Arbiter::with_sender(tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
@@ -72,7 +77,7 @@ impl Arbiter {
 
     /// Stop arbiter from continuing it's event loop.
     pub fn stop(&self) {
-        let _ = self.sender.send(ArbiterCommand::Stop);
+        let _ = self.sender.try_send(ArbiterCommand::Stop);
     }
 
     /// Spawn new thread and run event loop in spawned thread.
@@ -81,7 +86,7 @@ impl Arbiter {
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
         let name = format!("ntex-rt:worker:{}", id);
         let sys = System::current();
-        let (arb_tx, arb_rx) = unbounded_channel();
+        let (arb_tx, arb_rx) = unbounded();
         let arb_tx2 = arb_tx.clone();
 
         let handle = thread::Builder::new()
@@ -90,7 +95,7 @@ impl Arbiter {
                 let rt = crate::create_runtime();
                 let arb = Arbiter::with_sender(arb_tx);
 
-                let (stop, stop_rx) = channel();
+                let (stop, stop_rx) = oneshot::oneshot();
                 STORAGE.with(|cell| cell.borrow_mut().clear());
 
                 System::set_current(sys);
@@ -105,7 +110,7 @@ impl Arbiter {
                 // register arbiter
                 let _ = System::current()
                     .sys()
-                    .send(SystemCommand::RegisterArbiter(id, arb));
+                    .try_send(SystemCommand::RegisterArbiter(id, arb));
 
                 // run loop
                 rt.block_on(Box::pin(async move {
@@ -115,7 +120,7 @@ impl Arbiter {
                 // unregister arbiter
                 let _ = System::current()
                     .sys()
-                    .send(SystemCommand::UnregisterArbiter(id));
+                    .try_send(SystemCommand::UnregisterArbiter(id));
             })
             .unwrap_or_else(|err| {
                 panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err)
@@ -132,21 +137,23 @@ impl Arbiter {
     where
         F: Future<Output = ()> + Send + Unpin + 'static,
     {
-        let _ = self.sender.send(ArbiterCommand::Execute(Box::new(future)));
+        let _ = self
+            .sender
+            .try_send(ArbiterCommand::Execute(Box::new(future)));
     }
 
     /// Send a function to the Arbiter's thread. This function will be executed asynchronously.
     /// A future is created, and when resolved will contain the result of the function sent
     /// to the Arbiters thread.
-    pub fn exec<F, R>(&self, f: F) -> impl Future<Output = Result<R, RecvError>>
+    pub fn exec<F, R>(&self, f: F) -> impl Future<Output = Result<R, oneshot::Closed>>
     where
         F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static,
+        R: Sync + Send + 'static,
     {
-        let (tx, rx) = channel();
+        let (mut tx, rx) = oneshot::oneshot();
         let _ = self
             .sender
-            .send(ArbiterCommand::ExecuteFn(Box::new(move || {
+            .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {
                 if !tx.is_closed() {
                     let _ = tx.send(f());
                 }
@@ -162,7 +169,7 @@ impl Arbiter {
     {
         let _ = self
             .sender
-            .send(ArbiterCommand::ExecuteFn(Box::new(move || {
+            .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {
                 f();
             })));
     }
@@ -215,7 +222,7 @@ impl Arbiter {
         })
     }
 
-    fn with_sender(sender: UnboundedSender<ArbiterCommand>) -> Self {
+    fn with_sender(sender: Sender<ArbiterCommand>) -> Self {
         Self {
             sender,
             thread_handle: None,
@@ -233,8 +240,8 @@ impl Arbiter {
 }
 
 struct ArbiterController {
-    stop: Option<Sender<i32>>,
-    rx: UnboundedReceiver<ArbiterCommand>,
+    stop: Option<oneshot::Sender<i32>>,
+    rx: Receiver<ArbiterCommand>,
 }
 
 impl Drop for ArbiterController {
@@ -255,11 +262,11 @@ impl Future for ArbiterController {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            match Pin::new(&mut self.rx).poll_recv(cx) {
+            match Pin::new(&mut self.rx).poll_next(cx) {
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Ready(Some(item)) => match item {
                     ArbiterCommand::Stop => {
-                        if let Some(stop) = self.stop.take() {
+                        if let Some(mut stop) = self.stop.take() {
                             let _ = stop.send(0);
                         };
                         return Poll::Ready(());
@@ -286,15 +293,15 @@ pub(super) enum SystemCommand {
 
 #[derive(Debug)]
 pub(super) struct SystemArbiter {
-    stop: Option<Sender<i32>>,
-    commands: UnboundedReceiver<SystemCommand>,
+    stop: Option<oneshot::Sender<i32>>,
+    commands: Receiver<SystemCommand>,
     arbiters: HashMap<usize, Arbiter>,
 }
 
 impl SystemArbiter {
     pub(super) fn new(
-        stop: Sender<i32>,
-        commands: UnboundedReceiver<SystemCommand>,
+        stop: oneshot::Sender<i32>,
+        commands: Receiver<SystemCommand>,
     ) -> Self {
         SystemArbiter {
             commands,
@@ -309,7 +316,7 @@ impl Future for SystemArbiter {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            match Pin::new(&mut self.commands).poll_recv(cx) {
+            match Pin::new(&mut self.commands).poll_next(cx) {
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Ready(Some(cmd)) => match cmd {
                     SystemCommand::Exit(code) => {
@@ -318,7 +325,7 @@ impl Future for SystemArbiter {
                             arb.stop();
                         }
                         // stop event loop
-                        if let Some(stop) = self.stop.take() {
+                        if let Some(mut stop) = self.stop.take() {
                             let _ = stop.send(code);
                         }
                     }
