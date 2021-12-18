@@ -17,6 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 bitflags = "1.2"
+fxhash = "0.2.1"
 log = "0.4"
 slab = "0.4"
 futures-timer = "3.0.2"

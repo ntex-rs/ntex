@@ -9,6 +9,9 @@ pub mod time;
 pub use futures_core::{ready, Stream};
 pub use futures_sink::Sink;
 
+pub type HashMap<K, V> = std::collections::HashMap<K, V, fxhash::FxBuildHasher>;
+pub type HashSet<V> = std::collections::HashSet<V, fxhash::FxBuildHasher>;
+
 thread_local! {
     #[allow(clippy::type_complexity)]
     static SPAWNER: RefCell<Box<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)>> = RefCell::new(Box::new(|_| {
