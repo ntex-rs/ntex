@@ -34,7 +34,7 @@ ntex-service = "0.2.1"
 log = "0.4"
 pin-project-lite = "0.2"
 
-tok-io = { version = "1", package = "tokio", default-features = false, optional = true }
+tok-io = { version = "1", package = "tokio", default-features = false, features = ["net", "rt"], optional = true }
 
 [dev-dependencies]
 ntex = "0.5.0-b.0"

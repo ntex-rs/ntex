@@ -1,10 +1,10 @@
 # Changes
 
-## [0.6.0] - 2021-12-xx
+## [0.6.0] - 2021-12-18
 
-* Removed Framed type
+* Remove Framed type
 
-* Removed tokio dependency
+* Remove tokio dependency
 
 ## [0.5.1] - 2021-09-08
 

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.3] - 2021-12-18
+
+* move ntex::channel::mpsc
+
 ## [0.1.2] - 2021-12-10
 
 * move in ntex::time utils

@@ -32,7 +32,7 @@ pub use ntex_macros::{rt_main as main, rt_test as test};
 #[cfg(test)]
 pub(crate) use ntex_macros::rt_test2 as rt_test;
 
-pub mod channel;
+//pub mod channel;
 pub mod connect;
 pub mod http;
 pub mod server;
@@ -48,6 +48,7 @@ pub use self::service::{
 
 pub use futures_core::stream::Stream;
 pub use futures_sink::Sink;
+pub use ntex_util::channel;
 pub use ntex_util::task;
 
 pub mod codec {

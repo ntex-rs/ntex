@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.8] (2021-12-18)
+
+* Remove futures patch dependency
+
 ## [0.1.7] (2021-12-06)
 
 * Fix dealloc for vec representation
