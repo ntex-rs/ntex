@@ -852,7 +852,7 @@ async fn test_brotli_encoding_large_openssl_h2() {
 async fn test_reading_deflate_encoding_large_random_rustls() {
     use std::{fs::File, io::BufReader};
 
-    use rustls_pemfile::{certs, pkcs8_private_keys};
+    use rustls_pemfile::{certs, rsa_private_keys};
     use tls_rustls::{Certificate, PrivateKey, ServerConfig};
 
     let data = rand::thread_rng()
@@ -869,7 +869,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
         .iter()
         .map(|c| Certificate(c.to_vec()))
         .collect();
-    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let keys = PrivateKey(rsa_private_keys(key_file).unwrap().remove(0));
     let config = ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
@@ -908,7 +908,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h1() {
-    use rustls_pemfile::{certs, pkcs8_private_keys};
+    use rustls_pemfile::{certs, rsa_private_keys};
     use std::fs::File;
     use std::io::BufReader;
     use tls_rustls::{Certificate, PrivateKey, ServerConfig};
@@ -927,7 +927,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
         .iter()
         .map(|c| Certificate(c.to_vec()))
         .collect();
-    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let keys = PrivateKey(rsa_private_keys(key_file).unwrap().remove(0));
     let config = ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
@@ -968,7 +968,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
 async fn test_reading_deflate_encoding_large_random_rustls_h2() {
     use std::{fs::File, io::BufReader};
 
-    use rustls_pemfile::{certs, pkcs8_private_keys};
+    use rustls_pemfile::{certs, rsa_private_keys};
     use tls_rustls::{Certificate, PrivateKey, ServerConfig};
 
     let data = rand::thread_rng()
@@ -985,7 +985,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
         .iter()
         .map(|c| Certificate(c.to_vec()))
         .collect();
-    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let keys = PrivateKey(rsa_private_keys(key_file).unwrap().remove(0));
     let config = ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
