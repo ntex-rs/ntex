@@ -65,7 +65,7 @@ pub(crate) struct IoStateInner {
     pub(super) dispatch_task: LocalWaker,
     pub(super) read_buf: Cell<Option<BytesMut>>,
     pub(super) write_buf: Cell<Option<BytesMut>>,
-    pub(super) filter: Cell<&'static dyn Filter>,
+    filter: Cell<&'static dyn Filter>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     on_disconnect: RefCell<Vec<Option<LocalWaker>>>,
 }
@@ -225,7 +225,7 @@ impl Io {
             on_disconnect: RefCell::new(Vec::new()),
         });
 
-        let filter = Box::new(DefaultFilter::new(inner.clone()));
+        let filter = Box::new(DefaultFilter::new(IoRef(inner.clone())));
         let filter_ref: &'static dyn Filter = unsafe {
             let filter: &dyn Filter = filter.as_ref();
             std::mem::transmute(filter)
@@ -291,6 +291,18 @@ impl IoRef {
     /// Get current state flags
     pub fn flags(&self) -> Flags {
         self.0.flags.get()
+    }
+
+    #[inline]
+    /// Set flags
+    pub(crate) fn set_flags(&self, flags: Flags) {
+        self.0.flags.set(flags)
+    }
+
+    #[inline]
+    /// Get memory pool
+    pub(crate) fn filter(&self) -> &dyn Filter {
+        self.0.filter.get()
     }
 
     #[inline]
@@ -389,7 +401,7 @@ impl IoRef {
     #[inline]
     /// Query specific data
     pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
-        if let Some(item) = self.0.filter.get().query(any::TypeId::of::<T>()) {
+        if let Some(item) = self.filter().query(any::TypeId::of::<T>()) {
             types::QueryItem::new(item)
         } else {
             types::QueryItem::empty()
@@ -420,10 +432,10 @@ impl IoRef {
     where
         U: Encoder,
     {
-        let filter = self.0.filter.get();
+        let filter = self.filter();
         let mut buf = filter
             .get_write_buf()
-            .unwrap_or_else(|| self.0.pool.get().get_write_buf());
+            .unwrap_or_else(|| self.memory_pool().get_write_buf());
 
         let is_write_sleep = buf.is_empty();
         codec.encode(item, &mut buf).map_err(Either::Left)?;
@@ -626,7 +638,7 @@ impl<'a> WriteRef<'a> {
     /// Check if write buffer is full
     pub fn is_full(&self) -> bool {
         if let Some(buf) = self.0 .0.read_buf.take() {
-            let hw = self.0 .0.pool.get().write_params_high();
+            let hw = self.0.memory_pool().write_params_high();
             let result = buf.len() >= hw;
             self.0 .0.write_buf.set(Some(buf));
             result
@@ -659,19 +671,16 @@ impl<'a> WriteRef<'a> {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        let filter = self.0 .0.filter.get();
+        let filter = self.0.filter();
         let mut buf = filter
             .get_write_buf()
-            .unwrap_or_else(|| self.0 .0.pool.get().get_write_buf());
+            .unwrap_or_else(|| self.0.memory_pool().get_write_buf());
         if buf.is_empty() {
             self.0 .0.write_task.wake();
         }
 
         let result = f(&mut buf);
-        let close = filter.release_write_buf(buf)?;
-        if close {
-            self.0 .0.init_shutdown(None, self.0);
-        }
+        filter.release_write_buf(buf)?;
         Ok(result)
     }
 
@@ -690,12 +699,12 @@ impl<'a> WriteRef<'a> {
         let flags = self.0 .0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
-            let filter = self.0 .0.filter.get();
+            let filter = self.0.filter();
             let mut buf = filter
                 .get_write_buf()
-                .unwrap_or_else(|| self.0 .0.pool.get().get_write_buf());
+                .unwrap_or_else(|| self.0.memory_pool().get_write_buf());
             let is_write_sleep = buf.is_empty();
-            let (hw, lw) = self.0 .0.pool.get().write_params().unpack();
+            let (hw, lw) = self.0.memory_pool().write_params().unpack();
 
             // make sure we've got room
             let remaining = buf.capacity() - buf.len();
@@ -710,15 +719,8 @@ impl<'a> WriteRef<'a> {
                 }
                 buf.len() < hw
             });
-            match filter.release_write_buf(buf) {
-                Err(err) => {
-                    self.0 .0.set_error(Some(err));
-                }
-                Ok(close) => {
-                    if close {
-                        self.0 .0.init_shutdown(None, self.0);
-                    }
-                }
+            if let Err(err) = filter.release_write_buf(buf) {
+                self.0 .0.set_error(Some(err));
             }
             result
         } else {
@@ -734,15 +736,15 @@ impl<'a> WriteRef<'a> {
         let flags = self.0 .0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
-            let filter = self.0 .0.filter.get();
+            let filter = self.0.filter();
             let mut buf = filter
                 .get_write_buf()
-                .unwrap_or_else(|| self.0 .0.pool.get().get_write_buf());
+                .unwrap_or_else(|| self.0.memory_pool().get_write_buf());
             let is_write_sleep = buf.is_empty();
 
             // write and wake write task
             buf.extend_from_slice(src);
-            let result = buf.len() < self.0 .0.pool.get().write_params_high();
+            let result = buf.len() < self.0.memory_pool().write_params_high();
             if is_write_sleep {
                 self.0 .0.write_task.wake();
             }
@@ -783,7 +785,7 @@ impl<'a> WriteRef<'a> {
                     self.0 .0.insert_flags(Flags::WR_WAIT);
                     self.0 .0.dispatch_task.register(cx.waker());
                     return Poll::Pending;
-                } else if len >= self.0 .0.pool.get().write_params_high() << 1 {
+                } else if len >= self.0.memory_pool().write_params_high() << 1 {
                     self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
                     self.0 .0.dispatch_task.register(cx.waker());
                     return Poll::Pending;
@@ -828,7 +830,7 @@ impl<'a> ReadRef<'a> {
     /// Check if read buffer is full
     pub fn is_full(&self) -> bool {
         if let Some(buf) = self.0 .0.read_buf.take() {
-            let result = buf.len() >= self.0 .0.pool.get().read_params_high();
+            let result = buf.len() >= self.0.memory_pool().read_params_high();
             self.0 .0.read_buf.set(Some(buf));
             result
         } else {
@@ -887,10 +889,10 @@ impl<'a> ReadRef<'a> {
              .0
             .read_buf
             .take()
-            .unwrap_or_else(|| self.0 .0.pool.get().get_read_buf());
+            .unwrap_or_else(|| self.0.memory_pool().get_read_buf());
         let res = f(&mut buf);
         if buf.is_empty() {
-            self.0 .0.pool.get().release_read_buf(buf);
+            self.0.memory_pool().release_read_buf(buf);
         } else {
             self.0 .0.read_buf.set(Some(buf));
         }
@@ -1005,7 +1007,7 @@ mod tests {
 
     use super::*;
     use crate::testing::IoTest;
-    use crate::{Filter, FilterFactory, ReadFilter, WriteFilter, WriteReadiness};
+    use crate::{Filter, FilterFactory, WriteReadiness};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -1114,7 +1116,7 @@ mod tests {
         in_bytes: Rc<Cell<usize>>,
         out_bytes: Rc<Cell<usize>>,
     }
-    impl<F: ReadFilter + WriteFilter + 'static> Filter for Counter<F> {
+    impl<F: Filter> Filter for Counter<F> {
         fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
             Poll::Ready(Ok(()))
         }
@@ -1122,15 +1124,13 @@ mod tests {
         fn query(&self, _: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
             None
         }
-    }
 
-    impl<F: ReadFilter> ReadFilter for Counter<F> {
         fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
             self.inner.poll_read_ready(cx)
         }
 
-        fn read_closed(&self, err: Option<io::Error>) {
-            self.inner.read_closed(err)
+        fn closed(&self, err: Option<io::Error>) {
+            self.inner.closed(err)
         }
 
         fn get_read_buf(&self) -> Option<BytesMut> {
@@ -1145,18 +1145,12 @@ mod tests {
             self.in_bytes.set(self.in_bytes.get() + new_bytes);
             self.inner.release_read_buf(buf, new_bytes)
         }
-    }
 
-    impl<F: WriteFilter> WriteFilter for Counter<F> {
         fn poll_write_ready(
             &self,
             cx: &mut Context<'_>,
         ) -> Poll<Result<(), WriteReadiness>> {
             self.inner.poll_write_ready(cx)
-        }
-
-        fn write_closed(&self, err: Option<io::Error>) {
-            self.inner.write_closed(err)
         }
 
         fn get_write_buf(&self) -> Option<BytesMut> {
@@ -1186,8 +1180,8 @@ mod tests {
             let in_bytes = self.0.clone();
             let out_bytes = self.1.clone();
             Ready::Ok(
-                io.map_filter::<CounterFactory, _>(|inner| {
-                    Ok(Counter {
+                io.map_filter(|inner| {
+                    Ok::<_, ()>(Counter {
                         inner,
                         in_bytes,
                         out_bytes,

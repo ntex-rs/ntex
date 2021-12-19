@@ -36,31 +36,25 @@ pub enum WriteReadiness {
     Terminate,
 }
 
-pub trait ReadFilter {
+pub trait Filter: 'static {
+    fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>>;
+
+    fn closed(&self, err: Option<io::Error>);
+
+    fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
+
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>>;
 
-    fn read_closed(&self, err: Option<io::Error>);
-
-    fn get_read_buf(&self) -> Option<BytesMut>;
-
-    fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> Result<bool, io::Error>;
-}
-
-pub trait WriteFilter {
     fn poll_write_ready(&self, cx: &mut Context<'_>)
         -> Poll<Result<(), WriteReadiness>>;
 
-    fn write_closed(&self, err: Option<io::Error>);
+    fn get_read_buf(&self) -> Option<BytesMut>;
 
     fn get_write_buf(&self) -> Option<BytesMut>;
 
-    fn release_write_buf(&self, buf: BytesMut) -> Result<bool, io::Error>;
-}
+    fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> Result<(), io::Error>;
 
-pub trait Filter: ReadFilter + WriteFilter + 'static {
-    fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>>;
-
-    fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
+    fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error>;
 }
 
 pub trait FilterFactory<F: Filter>: Sized {
