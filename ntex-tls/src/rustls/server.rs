@@ -4,12 +4,11 @@ use std::sync::Arc;
 use std::{any, cell::RefCell, cmp, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesMut, PoolRef};
-use ntex_io::{Filter, Io, IoRef, ReadFilter, WriteFilter, WriteReadiness};
+use ntex_io::{Filter, Io, IoRef, WriteReadiness};
 use ntex_util::{future::poll_fn, time, time::Millis};
 use tls_rust::{ServerConfig, ServerConnection};
 
-use super::TlsFilter;
-use crate::types;
+use crate::{rustls::TlsFilter, types};
 
 /// An implementation of SSL streams
 pub struct TlsServerFilter<F> {
@@ -25,6 +24,7 @@ struct IoInner<F> {
 }
 
 impl<F: Filter> Filter for TlsServerFilter<F> {
+    #[inline]
     fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>> {
         self.inner.borrow().inner.shutdown(st)
     }
@@ -50,17 +50,26 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
             self.inner.borrow().inner.query(id)
         }
     }
-}
 
-impl<F: Filter> ReadFilter for TlsServerFilter<F> {
+    #[inline]
+    fn closed(&self, err: Option<io::Error>) {
+        self.inner.borrow().inner.closed(err)
+    }
+
+    #[inline]
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
         self.inner.borrow().inner.poll_read_ready(cx)
     }
 
-    fn read_closed(&self, err: Option<io::Error>) {
-        self.inner.borrow().inner.read_closed(err)
+    #[inline]
+    fn poll_write_ready(
+        &self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), WriteReadiness>> {
+        self.inner.borrow().inner.poll_write_ready(cx)
     }
 
+    #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
         if let Some(buf) = self.inner.borrow_mut().read_buf.take() {
             if !buf.is_empty() {
@@ -70,18 +79,24 @@ impl<F: Filter> ReadFilter for TlsServerFilter<F> {
         None
     }
 
-    fn release_read_buf(
-        &self,
-        mut src: BytesMut,
-        _nb: usize,
-    ) -> Result<bool, io::Error> {
+    #[inline]
+    fn get_write_buf(&self) -> Option<BytesMut> {
+        if let Some(buf) = self.inner.borrow_mut().write_buf.take() {
+            if !buf.is_empty() {
+                return Some(buf);
+            }
+        }
+        None
+    }
+
+    fn release_read_buf(&self, mut src: BytesMut, _nb: usize) -> Result<(), io::Error> {
         let mut session = self.session.borrow_mut();
         if session.is_handshaking() {
             self.inner.borrow_mut().read_buf = Some(src);
-            Ok(false)
+            Ok(())
         } else {
             if src.is_empty() {
-                return Ok(false);
+                return Ok(());
             }
             let mut inner = self.inner.borrow_mut();
             let (hw, lw) = inner.pool.read_params().unpack();
@@ -127,30 +142,8 @@ impl<F: Filter> ReadFilter for TlsServerFilter<F> {
             inner.inner.release_read_buf(buf, new_bytes)
         }
     }
-}
 
-impl<F: Filter> WriteFilter for TlsServerFilter<F> {
-    fn poll_write_ready(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), WriteReadiness>> {
-        self.inner.borrow().inner.poll_write_ready(cx)
-    }
-
-    fn write_closed(&self, err: Option<io::Error>) {
-        self.inner.borrow().inner.read_closed(err)
-    }
-
-    fn get_write_buf(&self) -> Option<BytesMut> {
-        if let Some(buf) = self.inner.borrow_mut().write_buf.take() {
-            if !buf.is_empty() {
-                return Some(buf);
-            }
-        }
-        None
-    }
-
-    fn release_write_buf(&self, mut src: BytesMut) -> Result<bool, io::Error> {
+    fn release_write_buf(&self, mut src: BytesMut) -> Result<(), io::Error> {
         let mut session = self.session.borrow_mut();
         let mut inner = self.inner.borrow_mut();
         let mut io = Wrapper(&mut *inner);
@@ -171,7 +164,7 @@ impl<F: Filter> WriteFilter for TlsServerFilter<F> {
             self.inner.borrow_mut().write_buf = Some(src);
         }
 
-        Ok(false)
+        Ok(())
     }
 }
 

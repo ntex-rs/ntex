@@ -4,9 +4,7 @@ use std::sync::Arc;
 use std::{any, future::Future, io, pin::Pin, task::Context, task::Poll};
 
 use ntex_bytes::BytesMut;
-use ntex_io::{
-    Filter, FilterFactory, Io, IoRef, ReadFilter, WriteFilter, WriteReadiness,
-};
+use ntex_io::{Filter, FilterFactory, Io, IoRef, WriteReadiness};
 use ntex_util::time::Millis;
 use tls_rust::{ClientConfig, ServerConfig, ServerName};
 
@@ -69,9 +67,16 @@ impl<F: Filter> Filter for TlsFilter<F> {
             InnerTlsFilter::Client(ref f) => f.query(id),
         }
     }
-}
 
-impl<F: Filter> ReadFilter for TlsFilter<F> {
+    #[inline]
+    fn closed(&self, err: Option<io::Error>) {
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.closed(err),
+            InnerTlsFilter::Client(ref f) => f.closed(err),
+        }
+    }
+
+    #[inline]
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.poll_read_ready(cx),
@@ -79,29 +84,7 @@ impl<F: Filter> ReadFilter for TlsFilter<F> {
         }
     }
 
-    fn read_closed(&self, err: Option<io::Error>) {
-        match self.inner {
-            InnerTlsFilter::Server(ref f) => f.read_closed(err),
-            InnerTlsFilter::Client(ref f) => f.read_closed(err),
-        }
-    }
-
-    fn get_read_buf(&self) -> Option<BytesMut> {
-        match self.inner {
-            InnerTlsFilter::Server(ref f) => f.get_read_buf(),
-            InnerTlsFilter::Client(ref f) => f.get_read_buf(),
-        }
-    }
-
-    fn release_read_buf(&self, src: BytesMut, nb: usize) -> Result<bool, io::Error> {
-        match self.inner {
-            InnerTlsFilter::Server(ref f) => f.release_read_buf(src, nb),
-            InnerTlsFilter::Client(ref f) => f.release_read_buf(src, nb),
-        }
-    }
-}
-
-impl<F: Filter> WriteFilter for TlsFilter<F> {
+    #[inline]
     fn poll_write_ready(
         &self,
         cx: &mut Context<'_>,
@@ -112,13 +95,15 @@ impl<F: Filter> WriteFilter for TlsFilter<F> {
         }
     }
 
-    fn write_closed(&self, err: Option<io::Error>) {
+    #[inline]
+    fn get_read_buf(&self) -> Option<BytesMut> {
         match self.inner {
-            InnerTlsFilter::Server(ref f) => f.write_closed(err),
-            InnerTlsFilter::Client(ref f) => f.write_closed(err),
+            InnerTlsFilter::Server(ref f) => f.get_read_buf(),
+            InnerTlsFilter::Client(ref f) => f.get_read_buf(),
         }
     }
 
+    #[inline]
     fn get_write_buf(&self) -> Option<BytesMut> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.get_write_buf(),
@@ -126,7 +111,16 @@ impl<F: Filter> WriteFilter for TlsFilter<F> {
         }
     }
 
-    fn release_write_buf(&self, src: BytesMut) -> Result<bool, io::Error> {
+    #[inline]
+    fn release_read_buf(&self, src: BytesMut, nb: usize) -> Result<(), io::Error> {
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.release_read_buf(src, nb),
+            InnerTlsFilter::Client(ref f) => f.release_read_buf(src, nb),
+        }
+    }
+
+    #[inline]
+    fn release_write_buf(&self, src: BytesMut) -> Result<(), io::Error> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.release_write_buf(src),
             InnerTlsFilter::Client(ref f) => f.release_write_buf(src),
