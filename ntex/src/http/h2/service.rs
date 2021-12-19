@@ -109,7 +109,7 @@ mod rustls {
         /// Create openssl based service
         pub fn rustls(
             self,
-            config: ServerConfig,
+            mut config: ServerConfig,
         ) -> impl ServiceFactory<
             Config = (),
             Request = Io<F>,
@@ -117,10 +117,13 @@ mod rustls {
             Error = SslError<DispatchError>,
             InitError = S::InitError,
         > {
+            let protos = vec!["h2".to_string().into()];
+            config.alpn_protocols = protos;
+
             pipeline_factory(
-                Acceptor::new(config)
+                Acceptor::from(config)
                     .timeout(self.handshake_timeout)
-                    .map_err(SslError::Ssl)
+                    .map_err(|e| SslError::Ssl(Box::new(e)))
                     .map_init_err(|_| panic!()),
             )
             .and_then(self.map_err(SslError::Service))

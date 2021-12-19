@@ -94,16 +94,13 @@ async fn test_connection_reuse_h2() {
 
     // req 1
     let _response = client.get(srv.surl("/")).send().await;
-
-    // let response = request.await.unwrap();
     // assert!(response.status().is_success());
 
     // req 2
     let _response = client.post(srv.surl("/")).send().await;
-    // let response = req.send().await.unwrap();
     //assert!(response.status().is_success());
     //assert_eq!(response.version(), Version::HTTP_2);
 
     // one connection
-    // assert_eq!(num.load(Ordering::Relaxed), 1);
+    //assert_eq!(num.load(Ordering::Relaxed), 1);
 }

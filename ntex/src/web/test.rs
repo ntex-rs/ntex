@@ -1186,33 +1186,6 @@ mod tests {
         assert_eq!(srv.load_body(res).await.unwrap(), Bytes::new());
     }
 
-    // TODO!
-    // #[crate::rt_test]
-    // async fn test_h2_tcp() {
-    //     let srv = server_with(TestServerConfig::default().h2(), || {
-    //         App::new().service(
-    //             web::resource("/").route(web::get().to(|| async { HttpResponse::Ok() })),
-    //         )
-    //     });
-
-    //     let client = Client::build()
-    //         .connector(
-    //             Connector::default()
-    //                 .secure_connector(Service::map(
-    //                     crate::connect::Connector::default(),
-    //                     |stream| stream,
-    //                 ))
-    //                 .finish(),
-    //         )
-    //         .timeout(Seconds(30))
-    //         .finish();
-
-    //     let url = format!("https://localhost:{}/", srv.addr.port());
-    //     let response = client.get(url).send().await.unwrap();
-    //     assert_eq!(response.version(), Version::HTTP_2);
-    //     assert!(response.status().is_success());
-    // }
-
     #[cfg(feature = "cookie")]
     #[test]
     fn test_response_cookies() {

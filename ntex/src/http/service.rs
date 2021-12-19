@@ -59,7 +59,7 @@ where
         let cfg = ServiceConfig::new(
             KeepAlive::Timeout(Seconds(5)),
             Millis(5_000),
-            Seconds::ZERO,
+            Seconds::ONE,
             Millis(5_000),
         );
 
@@ -242,7 +242,7 @@ mod rustls {
         /// Create openssl based service
         pub fn rustls(
             self,
-            config: ServerConfig,
+            mut config: ServerConfig,
         ) -> impl ServiceFactory<
             Config = (),
             Request = Io<F>,
@@ -250,10 +250,13 @@ mod rustls {
             Error = SslError<DispatchError>,
             InitError = (),
         > {
+            let protos = vec!["h2".to_string().into(), "http/1.1".to_string().into()];
+            config.alpn_protocols = protos;
+
             pipeline_factory(
-                Acceptor::new(config)
+                Acceptor::from(config)
                     .timeout(self.cfg.0.ssl_handshake_timeout)
-                    .map_err(SslError::Ssl)
+                    .map_err(|e| SslError::Ssl(Box::new(e)))
                     .map_init_err(|_| panic!()),
             )
             .and_then(self.map_err(SslError::Service))

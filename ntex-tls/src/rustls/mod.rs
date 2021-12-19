@@ -1,77 +1,130 @@
-#![allow(dead_code, unused_imports, clippy::type_complexity)]
+#![allow(clippy::type_complexity)]
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::sync::Arc;
-use std::{
-    any, cmp, error::Error, future::Future, io, pin::Pin, task::Context, task::Poll,
-};
+use std::{any, future::Future, io, pin::Pin, task::Context, task::Poll};
 
-use ntex_bytes::{BufMut, BytesMut};
-use ntex_io::{
-    Filter, FilterFactory, Io, IoRef, ReadFilter, WriteFilter, WriteReadiness,
-};
-use ntex_util::{future::Ready, time::Millis};
+use ntex_bytes::BytesMut;
+use ntex_io::{Filter, FilterFactory, Io, IoRef, WriteReadiness};
+use ntex_util::time::Millis;
 use tls_rust::{ClientConfig, ServerConfig, ServerName};
 
-use super::types;
-
 mod accept;
+mod client;
+mod server;
 pub use accept::{Acceptor, AcceptorService};
+
+use self::client::TlsClientFilter;
+use self::server::TlsServerFilter;
 
 /// An implementation of SSL streams
 pub struct TlsFilter<F> {
-    inner: F,
+    inner: InnerTlsFilter<F>,
+}
+
+enum InnerTlsFilter<F> {
+    Server(TlsServerFilter<F>),
+    Client(TlsClientFilter<F>),
+}
+
+impl<F> TlsFilter<F> {
+    fn new_server(server: TlsServerFilter<F>) -> Self {
+        TlsFilter {
+            inner: InnerTlsFilter::Server(server),
+        }
+    }
+    fn new_client(client: TlsClientFilter<F>) -> Self {
+        TlsFilter {
+            inner: InnerTlsFilter::Client(client),
+        }
+    }
+    fn server(&self) -> &TlsServerFilter<F> {
+        match self.inner {
+            InnerTlsFilter::Server(ref server) => server,
+            _ => unreachable!(),
+        }
+    }
+    fn client(&self) -> &TlsClientFilter<F> {
+        match self.inner {
+            InnerTlsFilter::Client(ref server) => server,
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl<F: Filter> Filter for TlsFilter<F> {
+    #[inline]
     fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>> {
-        self.inner.shutdown(st)
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.shutdown(st),
+            InnerTlsFilter::Client(ref f) => f.shutdown(st),
+        }
     }
 
+    #[inline]
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        self.inner.query(id)
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.query(id),
+            InnerTlsFilter::Client(ref f) => f.query(id),
+        }
     }
-}
 
-impl<F: Filter> ReadFilter for TlsFilter<F> {
+    #[inline]
+    fn closed(&self, err: Option<io::Error>) {
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.closed(err),
+            InnerTlsFilter::Client(ref f) => f.closed(err),
+        }
+    }
+
+    #[inline]
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
-        self.inner.poll_read_ready(cx)
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.poll_read_ready(cx),
+            InnerTlsFilter::Client(ref f) => f.poll_read_ready(cx),
+        }
     }
 
-    fn read_closed(&self, err: Option<io::Error>) {
-        self.inner.read_closed(err)
-    }
-
-    fn get_read_buf(&self) -> Option<BytesMut> {
-        self.inner.get_read_buf()
-    }
-
-    fn release_read_buf(
-        &self,
-        src: BytesMut,
-        new_bytes: usize,
-    ) -> Result<(), io::Error> {
-        self.inner.release_read_buf(src, new_bytes)
-    }
-}
-
-impl<F: Filter> WriteFilter for TlsFilter<F> {
+    #[inline]
     fn poll_write_ready(
         &self,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), WriteReadiness>> {
-        self.inner.poll_write_ready(cx)
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.poll_write_ready(cx),
+            InnerTlsFilter::Client(ref f) => f.poll_write_ready(cx),
+        }
     }
 
-    fn write_closed(&self, err: Option<io::Error>) {
-        self.inner.read_closed(err)
+    #[inline]
+    fn get_read_buf(&self) -> Option<BytesMut> {
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.get_read_buf(),
+            InnerTlsFilter::Client(ref f) => f.get_read_buf(),
+        }
     }
 
+    #[inline]
     fn get_write_buf(&self) -> Option<BytesMut> {
-        self.inner.get_write_buf()
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.get_write_buf(),
+            InnerTlsFilter::Client(ref f) => f.get_write_buf(),
+        }
     }
 
-    fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error> {
-        self.inner.release_write_buf(buf)
+    #[inline]
+    fn release_read_buf(&self, src: BytesMut, nb: usize) -> Result<(), io::Error> {
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.release_read_buf(src, nb),
+            InnerTlsFilter::Client(ref f) => f.release_read_buf(src, nb),
+        }
+    }
+
+    #[inline]
+    fn release_write_buf(&self, src: BytesMut) -> Result<(), io::Error> {
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.release_write_buf(src),
+            InnerTlsFilter::Client(ref f) => f.release_write_buf(src),
+        }
     }
 }
 
@@ -82,9 +135,9 @@ pub struct TlsAcceptor {
 
 impl TlsAcceptor {
     /// Create openssl acceptor filter factory
-    pub fn new(cfg: ServerConfig) -> Self {
+    pub fn new(cfg: Arc<ServerConfig>) -> Self {
         TlsAcceptor {
-            cfg: Arc::new(cfg),
+            cfg,
             timeout: Millis(5_000),
         }
     }
@@ -95,6 +148,12 @@ impl TlsAcceptor {
     pub fn timeout<U: Into<Millis>>(&mut self, timeout: U) -> &mut Self {
         self.timeout = timeout.into();
         self
+    }
+}
+
+impl From<ServerConfig> for TlsAcceptor {
+    fn from(cfg: ServerConfig) -> Self {
+        Self::new(Arc::new(cfg))
     }
 }
 
@@ -110,12 +169,14 @@ impl Clone for TlsAcceptor {
 impl<F: Filter + 'static> FilterFactory<F> for TlsAcceptor {
     type Filter = TlsFilter<F>;
 
-    type Error = Box<dyn Error>;
-    type Future = Ready<Io<Self::Filter>, Self::Error>;
+    type Error = io::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Io<Self::Filter>, io::Error>>>>;
 
     fn create(self, st: Io<F>) -> Self::Future {
-        st.map_filter::<Self, _>(|inner: F| Ok(TlsFilter { inner }))
-            .into()
+        let cfg = self.cfg.clone();
+        let timeout = self.timeout;
+
+        Box::pin(async move { TlsServerFilter::create(st, cfg, timeout).await })
     }
 }
 
@@ -125,8 +186,16 @@ pub struct TlsConnector {
 
 impl TlsConnector {
     /// Create openssl connector filter factory
-    pub fn new(cfg: ClientConfig) -> Self {
-        TlsConnector { cfg: Arc::new(cfg) }
+    pub fn new(cfg: Arc<ClientConfig>) -> Self {
+        TlsConnector { cfg }
+    }
+
+    /// Set server name
+    pub fn server_name(self, server_name: ServerName) -> TlsConnectorConfigured {
+        TlsConnectorConfigured {
+            server_name,
+            cfg: self.cfg,
+        }
     }
 }
 
@@ -138,14 +207,30 @@ impl Clone for TlsConnector {
     }
 }
 
-impl<F: Filter + 'static> FilterFactory<F> for TlsConnector {
+pub struct TlsConnectorConfigured {
+    cfg: Arc<ClientConfig>,
+    server_name: ServerName,
+}
+
+impl Clone for TlsConnectorConfigured {
+    fn clone(&self) -> Self {
+        Self {
+            cfg: self.cfg.clone(),
+            server_name: self.server_name.clone(),
+        }
+    }
+}
+
+impl<F: Filter + 'static> FilterFactory<F> for TlsConnectorConfigured {
     type Filter = TlsFilter<F>;
 
-    type Error = Box<dyn Error>;
-    type Future = Ready<Io<Self::Filter>, Self::Error>;
+    type Error = io::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Io<Self::Filter>, io::Error>>>>;
 
     fn create(self, st: Io<F>) -> Self::Future {
-        st.map_filter::<Self, _>(|inner| Ok(TlsFilter { inner }))
-            .into()
+        let cfg = self.cfg;
+        let server_name = self.server_name;
+
+        Box::pin(async move { TlsClientFilter::create(st, cfg, server_name).await })
     }
 }

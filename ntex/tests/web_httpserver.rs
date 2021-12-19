@@ -142,15 +142,13 @@ async fn test_openssl() {
     sys.stop();
 }
 
-// TODO! fix
-#[ignore]
 #[ntex::test]
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 async fn test_rustls() {
     use std::{fs::File, io::BufReader};
 
     use ntex::web::HttpRequest;
-    use rustls_pemfile::{certs, pkcs8_private_keys};
+    use rustls_pemfile::{certs, rsa_private_keys};
     use tls_rustls::{Certificate, PrivateKey, ServerConfig as RustlsServerConfig};
 
     let addr = TestServer::unused_addr();
@@ -167,7 +165,7 @@ async fn test_rustls() {
             .iter()
             .map(|c| Certificate(c.to_vec()))
             .collect();
-        let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+        let keys = PrivateKey(rsa_private_keys(key_file).unwrap().remove(0));
         let config = RustlsServerConfig::builder()
             .with_safe_defaults()
             .with_no_client_auth()

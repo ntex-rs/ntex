@@ -230,10 +230,10 @@ impl<T> SendError<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{util::lazy, util::next, Stream};
+    use crate::{future::lazy, future::next, Stream};
     use futures_sink::Sink;
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_mpsc() {
         let (tx, mut rx) = channel();
         assert!(format!("{:?}", tx).contains("Sender"));
@@ -282,7 +282,7 @@ mod tests {
         assert_eq!(err.into_inner(), "test");
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_sink() {
         let (mut tx, mut rx) = channel();
         lazy(|cx| {
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(next(&mut rx).await, None);
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_close() {
         let (tx, rx) = channel::<()>();
         assert!(!tx.is_closed());

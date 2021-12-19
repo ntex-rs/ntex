@@ -170,6 +170,7 @@ impl Future for WriteTask {
                         }
                     }
                     Poll::Ready(Err(WriteReadiness::Timeout(time))) => {
+                        log::trace!("initiate timeout delay for {:?}", time);
                         if delay.is_none() {
                             *delay = Some(sleep(time));
                         }

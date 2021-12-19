@@ -146,9 +146,9 @@ mod rustls {
             InitError = (),
         > {
             pipeline_factory(
-                Acceptor::new(config)
+                Acceptor::from(config)
                     .timeout(self.handshake_timeout)
-                    .map_err(SslError::Ssl)
+                    .map_err(|e| SslError::Ssl(Box::new(e)))
                     .map_init_err(|_| panic!()),
             )
             .and_then(self.map_err(SslError::Service))

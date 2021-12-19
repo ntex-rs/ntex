@@ -339,7 +339,6 @@ where
 
                     if slf.shared.inflight.get() == 0 {
                         slf.st.set(DispatcherState::Shutdown);
-                        state.init_shutdown(cx);
                     } else {
                         state.register_dispatcher(cx);
                         return Poll::Pending;
@@ -528,28 +527,28 @@ mod tests {
     use ntex_util::time::{sleep, Millis};
 
     use crate::testing::IoTest;
-    use crate::{state::Flags, state::IoStateInner, Io, IoStream, WriteRef};
+    use crate::{state::Flags, Io, IoRef, IoStream, WriteRef};
 
     use super::*;
 
-    pub(crate) struct State(Rc<IoStateInner>);
+    pub(crate) struct State(IoRef);
 
     impl State {
         fn flags(&self) -> Flags {
-            self.0.flags.get()
+            self.0.flags()
         }
 
         fn write(&'_ self) -> WriteRef<'_> {
-            WriteRef(self.0.as_ref())
+            WriteRef(&self.0)
         }
 
         fn close(&self) {
-            self.0.insert_flags(Flags::DSP_STOP);
-            self.0.dispatch_task.wake();
+            self.0 .0.insert_flags(Flags::DSP_STOP);
+            self.0 .0.dispatch_task.wake();
         }
 
         fn set_memory_pool(&self, pool: PoolRef) {
-            self.0.pool.set(pool);
+            self.0 .0.pool.set(pool);
         }
     }
 
@@ -573,7 +572,7 @@ mod tests {
                 error: Cell::new(None),
                 inflight: Cell::new(0),
             });
-            let inner = State(state.0 .0.clone());
+            let inner = State(state.get_ref());
 
             let expire = ka_updated + Duration::from_millis(500);
             timer.register(expire, expire, &state);
@@ -873,7 +872,7 @@ mod tests {
                 .keepalive_timeout(Seconds(1))
                 .await;
         });
-        state.0.disconnect_timeout.set(Millis::ONE_SEC);
+        state.0 .0.disconnect_timeout.set(Millis::ONE_SEC);
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));

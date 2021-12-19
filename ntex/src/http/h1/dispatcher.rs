@@ -722,7 +722,7 @@ mod tests {
     use crate::io::{self as nio, DefaultFilter};
     use crate::service::{boxed, fn_service, IntoService};
     use crate::util::{lazy, next, Bytes, BytesMut};
-    use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis};
+    use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis, time::Seconds};
 
     const BUFFER_SIZE: usize = 32_768;
 
@@ -738,10 +738,16 @@ mod tests {
         S::Response: Into<Response<B>>,
         B: MessageBody,
     {
+        let config = ServiceConfig::new(
+            Seconds(5).into(),
+            Millis(1_000),
+            Seconds::ZERO,
+            Millis(5_000),
+        );
         Dispatcher::new(
             nio::Io::new(stream),
             Rc::new(DispatcherConfig::new(
-                ServiceConfig::default(),
+                config,
                 service.into_service(),
                 ExpectHandler,
                 None,
@@ -788,10 +794,16 @@ mod tests {
 
         let data = Rc::new(Cell::new(false));
         let data2 = data.clone();
+        let config = ServiceConfig::new(
+            Seconds(5).into(),
+            Millis(1_000),
+            Seconds::ZERO,
+            Millis(5_000),
+        );
         let mut h1 = Dispatcher::<_, _, _, _, UpgradeHandler<DefaultFilter>>::new(
             nio::Io::new(server),
             Rc::new(DispatcherConfig::new(
-                ServiceConfig::default(),
+                config,
                 fn_service(|_| {
                     Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
                 }),
