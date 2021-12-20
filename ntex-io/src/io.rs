@@ -408,18 +408,25 @@ impl<F> Io<F> {
             self.0 .0.write_task.wake();
         }
 
-        poll_fn(|cx| self.poll_write_ready(cx, true))
+        poll_fn(|cx| self.poll_flush(cx, true))
             .await
             .map_err(Either::Right)?;
         Ok(())
     }
 
     #[inline]
-    /// Wake write task and instruct to write data.
+    /// Wake write task and instruct to flush data.
     ///
-    /// This is async version of .poll_write_ready() method.
+    /// This is async version of .poll_flush() method.
+    pub async fn flush(&self, full: bool) -> Result<(), io::Error> {
+        poll_fn(|cx| self.poll_flush(cx, full)).await
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
+    #[inline]
     pub async fn write_ready(&self, full: bool) -> Result<(), io::Error> {
-        poll_fn(|cx| self.poll_write_ready(cx, full)).await
+        poll_fn(|cx| self.poll_flush(cx, full)).await
     }
 
     #[inline]
@@ -431,16 +438,12 @@ impl<F> Io<F> {
 
 impl<F> Io<F> {
     #[inline]
-    /// Wake write task and instruct to write data.
+    /// Wake write task and instruct to flush data.
     ///
-    /// If full is true then wake up dispatcher when all data is flushed
+    /// If `full` is true then wake up dispatcher when all data is flushed
     /// otherwise wake up when size of write buffer is lower than
     /// buffer max size.
-    pub fn poll_write_ready(
-        &self,
-        cx: &mut Context<'_>,
-        full: bool,
-    ) -> Poll<io::Result<()>> {
+    pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         // check io error
         if !self.0 .0.is_io_open() {
             return Poll::Ready(Err(self.0 .0.error.take().unwrap_or_else(|| {
@@ -468,6 +471,17 @@ impl<F> Io<F> {
         }
 
         Poll::Ready(Ok(()))
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
+    #[inline]
+    pub fn poll_write_ready(
+        &self,
+        cx: &mut Context<'_>,
+        full: bool,
+    ) -> Poll<io::Result<()>> {
+        self.poll_flush(cx, full)
     }
 
     #[inline]

@@ -128,7 +128,7 @@ where
         match poll_fn(|cx| body.poll_next_chunk(cx)).await {
             Some(result) => {
                 if !io.encode(h1::Message::Chunk(Some(result?)), codec)? {
-                    io.write_ready(false).await?;
+                    io.flush(false).await?;
                 }
             }
             None => {
@@ -137,7 +137,7 @@ where
             }
         }
     }
-    io.write_ready(true).await?;
+    io.flush(true).await?;
 
     Ok(())
 }
