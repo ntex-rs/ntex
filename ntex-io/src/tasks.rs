@@ -2,7 +2,7 @@ use std::{io, task::Context, task::Poll};
 
 use ntex_bytes::{BytesMut, PoolRef};
 
-use super::{state::Flags, IoRef, WriteReadiness};
+use super::{io::Flags, IoRef, WriteReadiness};
 
 pub struct ReadContext(pub(super) IoRef);
 
@@ -45,6 +45,7 @@ impl ReadContext {
                 flags.insert(Flags::RD_READY);
                 self.0.set_flags(flags);
                 self.0 .0.dispatch_task.wake();
+                log::trace!("new {} bytes available, wakeup dispatcher", new_bytes);
             }
 
             self.0.filter().release_read_buf(buf, new_bytes)?;

@@ -355,21 +355,17 @@ impl<F: Filter> AsyncRead for Io<F> {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let read = self.read();
-        let len = read.with_buf(|src| {
+        let len = self.with_read_buf(|src| {
             let len = cmp::min(src.len(), buf.capacity());
             buf.put_slice(&src.split_to(len));
             len
         });
 
         if len == 0 {
-            match read.poll_read_ready(cx) {
-                Ok(()) => Poll::Pending,
-                Err(Some(e)) => Poll::Ready(Err(e)),
-                Err(None) => Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "disconnected",
-                ))),
+            match self.poll_read_ready(cx) {
+                Poll::Pending | Poll::Ready(Some(Ok(()))) => Poll::Pending,
+                Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
+                Poll::Ready(None) => Poll::Ready(Ok(())),
             }
         } else {
             Poll::Ready(Ok(()))
@@ -383,18 +379,18 @@ impl<F: Filter> AsyncWrite for Io<F> {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.write().write(buf).map(|_| buf.len()))
+        Poll::Ready(self.write(buf).map(|_| buf.len()))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.write().poll_write_ready(cx, false)
+        self.poll_write_ready(cx, false)
     }
 
     fn poll_shutdown(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>> {
-        self.0.poll_shutdown(cx)
+        Io::poll_shutdown(&*self, cx)
     }
 }
 
@@ -404,21 +400,17 @@ impl AsyncRead for IoBoxed {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let read = self.read();
-        let len = read.with_buf(|src| {
+        let len = self.with_read_buf(|src| {
             let len = cmp::min(src.len(), buf.capacity());
             buf.put_slice(&src.split_to(len));
             len
         });
 
         if len == 0 {
-            match read.poll_read_ready(cx) {
-                Ok(()) => Poll::Pending,
-                Err(Some(e)) => Poll::Ready(Err(e)),
-                Err(None) => Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "disconnected",
-                ))),
+            match self.poll_read_ready(cx) {
+                Poll::Pending | Poll::Ready(Some(Ok(()))) => Poll::Pending,
+                Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
+                Poll::Ready(None) => Poll::Ready(Ok(())),
             }
         } else {
             Poll::Ready(Ok(()))
@@ -432,18 +424,18 @@ impl AsyncWrite for IoBoxed {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.write().write(buf).map(|_| buf.len()))
+        Poll::Ready(self.write(buf).map(|_| buf.len()))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.write().poll_write_ready(cx, false)
+        self.poll_write_ready(cx, false)
     }
 
     fn poll_shutdown(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>> {
-        self.0.poll_shutdown(cx)
+        Self::poll_shutdown(&*self, cx)
     }
 }
 

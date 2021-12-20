@@ -28,9 +28,7 @@ impl WsSink {
                 _ => false,
             };
 
-            let wrt = inner.io.write();
-            wrt.write_ready(false).await?;
-            wrt.encode(item, &inner.codec)?;
+            inner.io.encode(item, &inner.codec)?;
             if close {
                 inner.io.close();
             }

@@ -15,10 +15,10 @@ async fn main() -> io::Result<()> {
     // load ssl keys
     let mut builder = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
     builder
-        .set_private_key_file("../tests/key.pem", SslFiletype::PEM)
+        .set_private_key_file("./examples/key.pem", SslFiletype::PEM)
         .unwrap();
     builder
-        .set_certificate_chain_file("../tests/cert.pem")
+        .set_certificate_chain_file("./examples/cert.pem")
         .unwrap();
     let acceptor = builder.build();
 
@@ -30,17 +30,17 @@ async fn main() -> io::Result<()> {
                     println!("New client is connected");
                     loop {
                         match io.next(&codec::BytesCodec).await {
-                            Ok(Some(msg)) => {
+                            Some(Ok(msg)) => {
                                 println!("Got message: {:?}", msg);
                                 io.send(msg.freeze(), &codec::BytesCodec)
                                     .await
                                     .map_err(Either::into_inner)?;
                             }
-                            Ok(None) => break,
-                            Err(e) => {
+                            Some(Err(e)) => {
                                 println!("Got error: {:?}", e);
                                 break;
                             }
+                            None => break,
                         }
                     }
                     println!("Client is disconnected");

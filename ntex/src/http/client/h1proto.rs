@@ -52,7 +52,7 @@ where
     }
 
     log::trace!(
-        "sending http1 request {:#?} body size: {:?}",
+        "sending http1 request {:?} body size: {:?}",
         head,
         body.size()
     );
@@ -74,9 +74,10 @@ where
     log::trace!("reading http1 response");
 
     // read response and init read body
-    let head = if let Some(result) = io.next(&codec).await? {
+    let head = if let Some(result) = io.next(&codec).await {
+        let result = result?;
         log::trace!(
-            "http1 response is received, type: {:?}, response: {:?}",
+            "http1 response is received, type: {:?}, response: {:#?}",
             codec.message_type(),
             result
         );
@@ -107,8 +108,8 @@ pub(super) async fn open_tunnel(
     io.send((head, BodySize::None).into(), &codec).await?;
 
     // read response
-    if let Some(head) = io.next(&codec).await? {
-        Ok((head, io, codec))
+    if let Some(head) = io.next(&codec).await {
+        Ok((head?, io, codec))
     } else {
         Err(SendRequestError::from(ConnectError::Disconnected))
     }
@@ -123,22 +124,20 @@ pub(super) async fn send_body<B>(
 where
     B: MessageBody,
 {
-    let wrt = io.write();
-
     loop {
         match poll_fn(|cx| body.poll_next_chunk(cx)).await {
             Some(result) => {
-                if !wrt.encode(h1::Message::Chunk(Some(result?)), codec)? {
-                    wrt.write_ready(false).await?;
+                if !io.encode(h1::Message::Chunk(Some(result?)), codec)? {
+                    io.write_ready(false).await?;
                 }
             }
             None => {
-                wrt.encode(h1::Message::Chunk(None), codec)?;
+                io.encode(h1::Message::Chunk(None), codec)?;
                 break;
             }
         }
     }
-    wrt.write_ready(true).await?;
+    io.write_ready(true).await?;
 
     Ok(())
 }
@@ -174,8 +173,7 @@ impl Stream for PlStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
-
-        match this.io.as_ref().unwrap().poll_next(&this.codec, cx)? {
+        match this.io.as_ref().unwrap().poll_read_next(&this.codec, cx)? {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(chunk)) => {
                 if let Some(chunk) = chunk {
@@ -198,7 +196,7 @@ fn release_connection(
     created: Instant,
     mut pool: Option<Acquired>,
 ) {
-    if force_close || io.is_closed() || io.read().with_buf(|buf| !buf.is_empty()) {
+    if force_close || io.is_closed() || io.with_read_buf(|buf| !buf.is_empty()) {
         if let Some(mut pool) = pool.take() {
             pool.close(Connection::new(ConnectionType::H1(io), created, None));
         }

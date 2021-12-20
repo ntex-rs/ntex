@@ -27,7 +27,7 @@ async fn main() -> io::Result<()> {
     let resp = io
         .next(&codec::BytesCodec)
         .await
-        .map_err(Either::into_inner)?;
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "disconnected"))?;
 
     println!("disconnecting");
     io.shutdown().await

@@ -49,17 +49,17 @@ async fn main() -> io::Result<()> {
 
                     loop {
                         match io.next(&codec::BytesCodec).await {
-                            Ok(Some(msg)) => {
+                            Some(Ok(msg)) => {
                                 println!("Got message: {:?}", msg);
                                 io.send(msg.freeze(), &codec::BytesCodec)
                                     .await
                                     .map_err(Either::into_inner)?;
                             }
-                            Ok(None) => break,
-                            Err(e) => {
+                            Some(Err(e)) => {
                                 println!("Got error: {:?}", e);
                                 break;
                             }
+                            None => break,
                         }
                     }
                     println!("Client is disconnected");

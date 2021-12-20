@@ -46,8 +46,7 @@ impl Service for WsService {
         let fut = async move {
             let res = handshake(req.head()).unwrap().message_body(());
 
-            io.write()
-                .encode((res, body::BodySize::None).into(), &codec)
+            io.encode((res, body::BodySize::None).into(), &codec)
                 .unwrap();
 
             Dispatcher::new(io.into_boxed(), ws::Codec::new(), service, Timer::default())

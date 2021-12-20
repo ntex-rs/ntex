@@ -4,15 +4,14 @@ use std::{
 
 use ntex_util::time::{now, sleep, Millis};
 
-use crate::rt::spawn;
-use crate::state::{IoRef, IoStateInner};
+use crate::{io::IoState, rt::spawn, IoRef};
 
 pub struct Timer(Rc<RefCell<Inner>>);
 
 struct Inner {
     running: bool,
     resolution: Millis,
-    notifications: BTreeMap<Instant, HashSet<Rc<IoStateInner>, fxhash::FxBuildHasher>>,
+    notifications: BTreeMap<Instant, HashSet<Rc<IoState>, fxhash::FxBuildHasher>>,
 }
 
 impl Inner {
