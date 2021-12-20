@@ -6,7 +6,7 @@ use ntex_bytes::{BytesMut, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Millis};
 
-use super::filter::{DefaultFilter, NullFilter};
+use super::filter::{Base, NullFilter};
 use super::tasks::{ReadContext, WriteContext};
 use super::{Filter, FilterFactory, Handle, IoStream};
 
@@ -49,7 +49,7 @@ enum FilterItem<F> {
     Ptr(*mut F),
 }
 
-pub struct Io<F = DefaultFilter>(pub(super) IoRef, FilterItem<F>);
+pub struct Io<F = Base>(pub(super) IoRef, FilterItem<F>);
 
 #[derive(Clone)]
 pub struct IoRef(pub(super) Rc<IoState>);
@@ -222,7 +222,7 @@ impl Io {
             on_disconnect: RefCell::new(Vec::new()),
         });
 
-        let filter = Box::new(DefaultFilter::new(IoRef(inner.clone())));
+        let filter = Box::new(Base::new(IoRef(inner.clone())));
         let filter_ref: &'static dyn Filter = unsafe {
             let filter: &dyn Filter = filter.as_ref();
             std::mem::transmute(filter)
