@@ -383,7 +383,7 @@ impl<F: Filter> AsyncWrite for Io<F> {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.poll_write_ready(cx, false)
+        Io::poll_flush(&*self, cx, false)
     }
 
     fn poll_shutdown(
@@ -428,7 +428,7 @@ impl AsyncWrite for IoBoxed {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.poll_write_ready(cx, false)
+        Self::poll_flush(&*self, cx, false)
     }
 
     fn poll_shutdown(
@@ -648,8 +648,8 @@ mod unixstream {
                                     }
                                     Poll::Ready(Err(e)) => {
                                         log::trace!(
-                                        "write task is closed with err during shutdown"
-                                    );
+                                            "write task is closed with err during shutdown"
+                                        );
                                         this.state.close(Some(e));
                                         return Poll::Ready(());
                                     }

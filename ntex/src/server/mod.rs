@@ -12,6 +12,12 @@ mod socket;
 mod test;
 mod worker;
 
+#[cfg(feature = "openssl")]
+pub use ntex_tls::openssl;
+
+#[cfg(feature = "rustls")]
+pub use ntex_tls::rustls;
+
 pub(crate) use self::builder::create_tcp_listener;
 pub use self::builder::ServerBuilder;
 pub use self::config::{Configuration, RuntimeConfiguration, ServiceConfig};

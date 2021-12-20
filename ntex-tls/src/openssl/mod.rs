@@ -350,7 +350,7 @@ fn handle_result<T, F>(
                 Poll::Pending
             }
             ssl::ErrorCode::WANT_WRITE => {
-                let _ = io.poll_write_ready(cx, true)?;
+                let _ = io.poll_flush(cx, true)?;
                 Poll::Pending
             }
             _ => Poll::Ready(Err(Box::new(e))),
