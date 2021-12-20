@@ -4,8 +4,9 @@ use std::{convert::TryFrom, io, net, str::FromStr, sync::mpsc, thread};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
-use crate::rt::System;
-use crate::server::{Server, StreamServiceFactory};
+use crate::{
+    io::Io, rt::System, server::Server, server::ServiceConfig, service::ServiceFactory,
+};
 use crate::{time::Millis, time::Seconds, util::Bytes};
 
 use super::client::error::WsClientError;
@@ -209,7 +210,11 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server<F: StreamServiceFactory>(factory: F) -> TestServer {
+pub fn server<F, R>(factory: F) -> TestServer
+where
+    F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+    R: ServiceFactory<Config = (), Request = Io>,
+{
     let (tx, rx) = mpsc::channel();
 
     // run server in separate thread
@@ -223,7 +228,7 @@ pub fn server<F: StreamServiceFactory>(factory: F) -> TestServer {
                 .listen("test", tcp, factory)?
                 .workers(1)
                 .disable_signals()
-                .start();
+                .run();
             Ok::<_, io::Error>(())
         })?;
 

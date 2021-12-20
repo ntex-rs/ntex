@@ -3,9 +3,9 @@ use std::{io, net, sync::mpsc, thread};
 
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::io::Io;
 use crate::rt::{tcp_connect, System};
-use crate::server::{Server, ServerBuilder, StreamServiceFactory};
+use crate::server::{Server, ServerBuilder, ServiceConfig};
+use crate::{io::Io, service::ServiceFactory};
 
 /// Start test server
 ///
@@ -38,7 +38,11 @@ use crate::server::{Server, ServerBuilder, StreamServiceFactory};
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn test_server<F: StreamServiceFactory>(factory: F) -> TestServer {
+pub fn test_server<F, R>(factory: F) -> TestServer
+where
+    F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+    R: ServiceFactory<Config = (), Request = Io>,
+{
     let (tx, rx) = mpsc::channel();
 
     // run server in separate thread
@@ -52,7 +56,7 @@ pub fn test_server<F: StreamServiceFactory>(factory: F) -> TestServer {
                 .listen("test", tcp, factory)?
                 .workers(1)
                 .disable_signals()
-                .start();
+                .run();
             Ok::<_, io::Error>(())
         })?;
 
@@ -77,10 +81,7 @@ where
         let sys = System::new("ntex-test-server");
 
         sys.exec(|| {
-            factory(Server::build())
-                .workers(1)
-                .disable_signals()
-                .start();
+            factory(Server::build()).workers(1).disable_signals().run();
         });
 
         tx.send(System::current()).unwrap();

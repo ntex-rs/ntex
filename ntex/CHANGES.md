@@ -4,6 +4,8 @@
 
 * Refactor http/1 dispatcher
 
+* Refactor Server service configuration
+
 ## [0.5.0-b.0] - 2021-12-19
 
 * Migrate io to ntex-io
