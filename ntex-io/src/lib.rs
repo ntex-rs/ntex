@@ -24,7 +24,7 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Millis;
 
 pub use self::dispatcher::Dispatcher;
-pub use self::filter::DefaultFilter;
+pub use self::filter::Base;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::tasks::{ReadContext, WriteContext};
 pub use self::time::Timer;

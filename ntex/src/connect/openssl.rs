@@ -3,7 +3,7 @@ use std::{future::Future, io, pin::Pin, task::Context, task::Poll};
 use ntex_tls::openssl::{SslConnector as IoSslConnector, SslFilter};
 pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
 
-use crate::io::{DefaultFilter, Io};
+use crate::io::{Base, Io};
 use crate::service::{Service, ServiceFactory};
 use crate::util::{PoolId, Ready};
 
@@ -40,7 +40,7 @@ impl<T: Address + 'static> Connector<T> {
     pub fn connect<U>(
         &self,
         message: U,
-    ) -> impl Future<Output = Result<Io<SslFilter<DefaultFilter>>, ConnectError>>
+    ) -> impl Future<Output = Result<Io<SslFilter<Base>>, ConnectError>>
     where
         Connect<T>: From<U>,
     {
@@ -87,7 +87,7 @@ impl<T> Clone for Connector<T> {
 
 impl<T: Address + 'static> ServiceFactory for Connector<T> {
     type Request = Connect<T>;
-    type Response = Io<SslFilter<DefaultFilter>>;
+    type Response = Io<SslFilter<Base>>;
     type Error = ConnectError;
     type Config = ();
     type Service = Connector<T>;
@@ -101,7 +101,7 @@ impl<T: Address + 'static> ServiceFactory for Connector<T> {
 
 impl<T: Address + 'static> Service for Connector<T> {
     type Request = Connect<T>;
-    type Response = Io<SslFilter<DefaultFilter>>;
+    type Response = Io<SslFilter<Base>>;
     type Error = ConnectError;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 

@@ -5,15 +5,15 @@ use ntex_bytes::BytesMut;
 use super::io::Flags;
 use super::{Filter, IoRef, WriteReadiness};
 
-pub struct DefaultFilter(IoRef);
+pub struct Base(IoRef);
 
-impl DefaultFilter {
+impl Base {
     pub(crate) fn new(inner: IoRef) -> Self {
-        DefaultFilter(inner)
+        Base(inner)
     }
 }
 
-impl Filter for DefaultFilter {
+impl Filter for Base {
     #[inline]
     fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
         let mut flags = self.0.flags();
