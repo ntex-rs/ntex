@@ -21,9 +21,9 @@ fn test_bind() {
             Server::build()
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, move || fn_service(|_| ok::<_, ()>(())))
+                .bind("test", addr, move |_| fn_service(|_| ok::<_, ()>(())))
                 .unwrap()
-                .start()
+                .run()
         });
         let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
@@ -48,9 +48,9 @@ fn test_listen() {
             Server::build()
                 .disable_signals()
                 .workers(1)
-                .listen("test", lst, move || fn_service(|_| ok::<_, ()>(())))
+                .listen("test", lst, move |_| fn_service(|_| ok::<_, ()>(())))
                 .unwrap()
-                .start()
+                .run()
         });
         let _ = tx.send(ntex::rt::System::current());
         let _ = sys.run();
@@ -65,7 +65,7 @@ fn test_listen() {
 
 #[test]
 #[cfg(unix)]
-fn test_start() {
+fn test_run() {
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
 
@@ -75,7 +75,7 @@ fn test_start() {
             Server::build()
                 .backlog(100)
                 .disable_signals()
-                .bind("test", addr, move || {
+                .bind("test", addr, move |_| {
                     fn_service(|io: Io| async move {
                         io.send(Bytes::from_static(b"test"), &BytesCodec)
                             .await
@@ -84,7 +84,7 @@ fn test_start() {
                     })
                 })
                 .unwrap()
-                .start()
+                .run()
         });
 
         let _ = tx.send((srv, ntex::rt::System::current()));
@@ -170,7 +170,7 @@ fn test_on_worker_start() {
                     Ready::Ok::<_, io::Error>(())
                 })
                 .workers(1)
-                .start()
+                .run()
         });
         let _ = tx.send((srv, ntex::rt::System::current()));
         let _ = sys.run();
@@ -203,7 +203,7 @@ fn test_panic_in_worker() {
             Server::build()
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, move || {
+                .bind("test", addr, move |_| {
                     let counter = counter.clone();
                     fn_service(move |_| {
                         counter.fetch_add(1, Relaxed);
@@ -212,7 +212,7 @@ fn test_panic_in_worker() {
                     })
                 })
                 .unwrap()
-                .start()
+                .run()
         });
         let _ = tx.send((srv.clone(), ntex::rt::System::current()));
         sys.exec(move || ntex::rt::spawn(srv.map(|_| ())));

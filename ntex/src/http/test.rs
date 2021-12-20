@@ -4,9 +4,7 @@ use std::{convert::TryFrom, io, net, str::FromStr, sync::mpsc, thread};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
-use crate::{
-    io::Io, rt::System, server::Server, server::ServiceConfig, service::ServiceFactory,
-};
+use crate::{io::Io, rt::System, server::Server, service::ServiceFactory};
 use crate::{time::Millis, time::Seconds, util::Bytes};
 
 use super::client::error::WsClientError;
@@ -212,7 +210,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 /// ```
 pub fn server<F, R>(factory: F) -> TestServer
 where
-    F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+    F: Fn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Config = (), Request = Io>,
 {
     let (tx, rx) = mpsc::channel();
@@ -225,7 +223,7 @@ where
 
         sys.exec(|| {
             Server::build()
-                .listen("test", tcp, factory)?
+                .listen("test", tcp, move |_| factory())?
                 .workers(1)
                 .disable_signals()
                 .run();

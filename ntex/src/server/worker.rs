@@ -592,7 +592,7 @@ mod tests {
             vec![Factory::create(
                 "test".to_string(),
                 Token(0),
-                move || f.clone(),
+                move |_| f.clone(),
                 "127.0.0.1:8080".parse().unwrap(),
             )],
             avail.clone(),
@@ -664,7 +664,7 @@ mod tests {
             vec![Factory::create(
                 "test".to_string(),
                 Token(0),
-                move || f.clone(),
+                move |_| f.clone(),
                 "127.0.0.1:8080".parse().unwrap(),
             )],
             avail.clone(),

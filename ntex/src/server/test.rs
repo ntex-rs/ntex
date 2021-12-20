@@ -4,7 +4,7 @@ use std::{io, net, sync::mpsc, thread};
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::rt::{tcp_connect, System};
-use crate::server::{Server, ServerBuilder, ServiceConfig};
+use crate::server::{Server, ServerBuilder};
 use crate::{io::Io, service::ServiceFactory};
 
 /// Start test server
@@ -40,7 +40,7 @@ use crate::{io::Io, service::ServiceFactory};
 /// ```
 pub fn test_server<F, R>(factory: F) -> TestServer
 where
-    F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+    F: Fn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Config = (), Request = Io>,
 {
     let (tx, rx) = mpsc::channel();
@@ -53,7 +53,7 @@ where
 
         sys.exec(|| {
             Server::build()
-                .listen("test", tcp, factory)?
+                .listen("test", tcp, move |_| factory())?
                 .workers(1)
                 .disable_signals()
                 .run();
