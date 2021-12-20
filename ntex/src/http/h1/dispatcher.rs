@@ -696,7 +696,7 @@ mod tests {
     use crate::http::config::{DispatcherConfig, ServiceConfig};
     use crate::http::h1::{ClientCodec, ExpectHandler, UpgradeHandler};
     use crate::http::{body, Request, ResponseHead, StatusCode};
-    use crate::io::{self as nio, DefaultFilter};
+    use crate::io::{self as nio, Base};
     use crate::service::{boxed, fn_service, IntoService};
     use crate::util::{lazy, next, Bytes, BytesMut};
     use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis, time::Seconds};
@@ -707,7 +707,7 @@ mod tests {
     pub(crate) fn h1<F, S, B>(
         stream: Io,
         service: F,
-    ) -> Dispatcher<DefaultFilter, S, B, ExpectHandler, UpgradeHandler<DefaultFilter>>
+    ) -> Dispatcher<Base, S, B, ExpectHandler, UpgradeHandler<Base>>
     where
         F: IntoService<S>,
         S: Service<Request = Request>,
@@ -741,22 +741,18 @@ mod tests {
         S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
     {
-        crate::rt::spawn(Dispatcher::<
-            DefaultFilter,
-            S,
-            B,
-            ExpectHandler,
-            UpgradeHandler<DefaultFilter>,
-        >::new(
-            nio::Io::new(stream),
-            Rc::new(DispatcherConfig::new(
-                ServiceConfig::default(),
-                service.into_service(),
-                ExpectHandler,
-                None,
-                None,
-            )),
-        ));
+        crate::rt::spawn(
+            Dispatcher::<Base, S, B, ExpectHandler, UpgradeHandler<Base>>::new(
+                nio::Io::new(stream),
+                Rc::new(DispatcherConfig::new(
+                    ServiceConfig::default(),
+                    service.into_service(),
+                    ExpectHandler,
+                    None,
+                    None,
+                )),
+            ),
+        );
     }
 
     fn load(decoder: &mut ClientCodec, buf: &mut BytesMut) -> ResponseHead {
@@ -777,7 +773,7 @@ mod tests {
             Seconds::ZERO,
             Millis(5_000),
         );
-        let mut h1 = Dispatcher::<_, _, _, _, UpgradeHandler<DefaultFilter>>::new(
+        let mut h1 = Dispatcher::<_, _, _, _, UpgradeHandler<Base>>::new(
             nio::Io::new(server),
             Rc::new(DispatcherConfig::new(
                 config,
