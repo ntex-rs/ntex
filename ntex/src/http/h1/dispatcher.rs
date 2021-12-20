@@ -4,7 +4,7 @@ use std::{error::Error, fmt, future::Future, marker, pin::Pin, rc::Rc, time};
 
 use crate::io::{Filter, Io, IoRef};
 use crate::service::Service;
-use crate::{time::now, util::Bytes};
+use crate::{time::now, util::ready, util::Bytes, util::Either};
 
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -74,14 +74,6 @@ struct DispatcherInner<F, S, B, X, U> {
     error: Option<DispatchError>,
     payload: Option<(PayloadDecoder, PayloadSender)>,
     _t: marker::PhantomData<(S, B)>,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum ReadPayloadStatus {
-    Done,
-    Updated,
-    Pending,
-    Dropped,
 }
 
 enum WritePayloadStatus<B> {
@@ -171,9 +163,15 @@ where
                                 Poll::Pending => {
                                     // we might need to read more data into a request payload
                                     // (ie service future can wait for payload data)
-                                    if this.inner.poll_read_payload(cx)
-                                        != ReadPayloadStatus::Updated
-                                    {
+                                    if this.inner.payload.is_some() {
+                                        if let Err(e) =
+                                            ready!(this.inner.poll_read_payload(cx))
+                                        {
+                                            *this.st = State::Stop;
+                                            this.inner.unregister_keepalive();
+                                            this.inner.error = Some(e);
+                                        }
+                                    } else {
                                         return Poll::Pending;
                                     }
                                 }
@@ -185,7 +183,7 @@ where
                             Poll::Ready(result) => match result {
                                 Ok(req) => {
                                     let result =
-                                        this.inner.state.write().with_buf(|buf| {
+                                        this.inner.state.with_write_buf(|buf| {
                                             buf.extend_from_slice(
                                                 b"HTTP/1.1 100 Continue\r\n\r\n",
                                             )
@@ -262,7 +260,7 @@ where
                     log::trace!("trying to read http message");
 
                     // stop dispatcher
-                    if this.inner.state.is_dispatcher_stopped() {
+                    if this.inner.io().is_dispatcher_stopped() {
                         log::trace!("dispatcher is instructed to stop");
                         *this.st = State::Stop;
                         this.inner.unregister_keepalive();
@@ -285,165 +283,136 @@ where
                         continue;
                     }
 
-                    let read = this.inner.state.read();
+                    let io = this.inner.io();
 
                     // decode incoming bytes stream
-                    if read.is_ready() {
-                        match read.decode(&this.inner.codec) {
-                            Ok(Some((mut req, pl))) => {
-                                log::trace!(
-                                    "http message is received: {:?} and payload {:?}",
-                                    req,
-                                    pl
-                                );
-                                req.head_mut().io = Some(this.inner.state.clone());
+                    match io.poll_read_next(&this.inner.codec, cx) {
+                        Poll::Ready(Some(Ok((mut req, pl)))) => {
+                            log::trace!(
+                                "http message is received: {:?} and payload {:?}",
+                                req,
+                                pl
+                            );
+                            req.head_mut().io = Some(io.get_ref());
 
-                                // configure request payload
-                                let upgrade = match pl {
-                                    PayloadType::None => false,
-                                    PayloadType::Payload(decoder) => {
+                            // configure request payload
+                            let upgrade = match pl {
+                                PayloadType::None => false,
+                                PayloadType::Payload(decoder) => {
+                                    let (ps, pl) = Payload::create(false);
+                                    req.replace_payload(http::Payload::H1(pl));
+                                    this.inner.payload = Some((decoder, ps));
+                                    false
+                                }
+                                PayloadType::Stream(decoder) => {
+                                    if this.inner.config.upgrade.is_none() {
                                         let (ps, pl) = Payload::create(false);
                                         req.replace_payload(http::Payload::H1(pl));
                                         this.inner.payload = Some((decoder, ps));
                                         false
+                                    } else {
+                                        this.inner.flags.insert(Flags::UPGRADE);
+                                        true
                                     }
-                                    PayloadType::Stream(decoder) => {
-                                        if this.inner.config.upgrade.is_none() {
-                                            let (ps, pl) = Payload::create(false);
-                                            req.replace_payload(http::Payload::H1(pl));
-                                            this.inner.payload = Some((decoder, ps));
-                                            false
-                                        } else {
-                                            this.inner.flags.insert(Flags::UPGRADE);
-                                            true
+                                }
+                            };
+
+                            // unregister slow-request timer
+                            if !this.inner.flags.contains(Flags::STARTED) {
+                                this.inner.flags.insert(Flags::STARTED);
+                                this.inner
+                                    .config
+                                    .timer_h1
+                                    .unregister(this.inner.expire, &this.inner.state);
+                            }
+
+                            if upgrade {
+                                // Handle UPGRADE request
+                                log::trace!("prep io for upgrade handler");
+                                *this.st = State::Upgrade(Some(req));
+                            } else {
+                                *this.st = State::Call;
+                                this.call.set(
+                                    if let Some(ref f) = this.inner.config.on_request {
+                                        // Handle filter fut
+                                        CallState::Filter {
+                                            fut: f.call((req, this.inner.state.clone())),
                                         }
-                                    }
-                                };
-
-                                // unregister slow-request timer
-                                if !this.inner.flags.contains(Flags::STARTED) {
-                                    this.inner.flags.insert(Flags::STARTED);
-                                    this.inner.config.timer_h1.unregister(
-                                        this.inner.expire,
-                                        &this.inner.state,
-                                    );
-                                }
-
-                                if upgrade {
-                                    // Handle UPGRADE request
-                                    log::trace!("prep io for upgrade handler");
-                                    *this.st = State::Upgrade(Some(req));
-                                } else {
-                                    *this.st = State::Call;
-                                    this.call.set(
-                                        if let Some(ref f) = this.inner.config.on_request
-                                        {
-                                            // Handle filter fut
-                                            CallState::Filter {
-                                                fut: f.call((
-                                                    req,
-                                                    this.inner.state.clone(),
-                                                )),
-                                            }
-                                        } else if req.head().expect() {
-                                            // Handle normal requests with EXPECT: 100-Continue` header
-                                            CallState::Expect {
-                                                fut: this.inner.config.expect.call(req),
-                                            }
-                                        } else {
-                                            // Handle normal requests
-                                            CallState::Service {
-                                                fut: this.inner.config.service.call(req),
-                                            }
-                                        },
-                                    );
-                                }
-                            }
-                            Ok(None) => {
-                                log::trace!("not enough data to decode http message");
-
-                                // if io error occured or connection is not keep-alive
-                                // then disconnect
-                                if this.inner.flags.contains(Flags::STARTED)
-                                    && (!this.inner.flags.contains(Flags::KEEPALIVE)
-                                        || !this.inner.codec.keepalive_enabled()
-                                        || !this.inner.state.is_io_open())
-                                {
-                                    *this.st = State::Stop;
-                                    this.inner.unregister_keepalive();
-                                    this.inner.state.stop_dispatcher();
-                                    continue;
-                                }
-                                let _ = read.poll_read_ready(cx);
-                                return Poll::Pending;
-                            }
-                            Err(err) => {
-                                // Malformed requests, respond with 400
-                                log::trace!("malformed request: {:?}", err);
-                                let (res, body) =
-                                    Response::BadRequest().finish().into_parts();
-                                this.inner.error = Some(DispatchError::Parse(err));
-                                *this.st =
-                                    this.inner.send_response(res, body.into_body());
-                                continue;
+                                    } else if req.head().expect() {
+                                        // Handle normal requests with EXPECT: 100-Continue` header
+                                        CallState::Expect {
+                                            fut: this.inner.config.expect.call(req),
+                                        }
+                                    } else {
+                                        // Handle normal requests
+                                        CallState::Service {
+                                            fut: this.inner.config.service.call(req),
+                                        }
+                                    },
+                                );
                             }
                         }
-                    } else {
-                        // if connection is not keep-alive then disconnect
-                        if this.inner.flags.contains(Flags::STARTED)
-                            && !this.inner.flags.contains(Flags::KEEPALIVE)
-                        {
+                        Poll::Ready(Some(Err(Either::Left(err)))) => {
+                            // Malformed requests, respond with 400
+                            log::trace!("malformed request: {:?}", err);
+                            let (res, body) =
+                                Response::BadRequest().finish().into_parts();
+                            this.inner.error = Some(DispatchError::Parse(err));
+                            *this.st = this.inner.send_response(res, body.into_body());
+                        }
+                        Poll::Ready(Some(Err(Either::Right(err)))) => {
+                            log::trace!("peer is gone with {:?}", err);
+                            // peer is gone
                             *this.st = State::Stop;
                             this.inner.unregister_keepalive();
-                            continue;
+                            this.inner.state.stop_dispatcher();
+                            return Poll::Ready(Err(DispatchError::Disconnect(Some(
+                                err,
+                            ))));
                         }
-                        let _ = read.poll_read_ready(cx);
-                        return Poll::Pending;
+                        Poll::Ready(None) => {
+                            log::trace!("peer is gone");
+                            // peer is gone
+                            this.inner.unregister_keepalive();
+                            this.inner.state.stop_dispatcher();
+                            return Poll::Ready(Err(DispatchError::Disconnect(None)));
+                        }
+                        Poll::Pending => {
+                            log::trace!("not enough data to decode http message");
+                            return Poll::Pending;
+                        }
                     }
                 }
                 // consume request's payload
-                State::ReadPayload => {
-                    if !this.inner.state.is_io_open() {
-                        *this.st = State::Stop;
-                        this.inner.unregister_keepalive();
-                    } else {
-                        loop {
-                            match this.inner.poll_read_payload(cx) {
-                                ReadPayloadStatus::Updated => continue,
-                                ReadPayloadStatus::Pending => return Poll::Pending,
-                                ReadPayloadStatus::Done => {
-                                    *this.st = {
-                                        this.inner.reset_keepalive();
-                                        State::ReadRequest
-                                    }
-                                }
-                                ReadPayloadStatus::Dropped => {
-                                    *this.st = State::Stop;
-                                    this.inner.unregister_keepalive();
-                                }
-                            }
-                            break;
-                        }
+                State::ReadPayload => match ready!(this.inner.poll_read_payload(cx)) {
+                    Ok(()) => {
+                        *this.st = this.inner.switch_to_read_request();
                     }
-                }
+                    Err(e) => {
+                        *this.st = State::Stop;
+                        this.inner.error = Some(e);
+                        this.inner.unregister_keepalive();
+                    }
+                },
                 // send response body
                 State::SendPayload { ref mut body } => {
                     if !this.inner.state.is_io_open() {
                         *this.st = State::Stop;
+                        this.inner.error = Some(this.inner.state.take_error().into());
+                        this.inner.unregister_keepalive();
+                    } else if let Poll::Ready(Err(e)) = this.inner.poll_read_payload(cx)
+                    {
+                        *this.st = State::Stop;
+                        this.inner.error = Some(e);
                         this.inner.unregister_keepalive();
                     } else {
-                        this.inner.poll_read_payload(cx);
-
                         match body.poll_next_chunk(cx) {
                             Poll::Ready(item) => match this.inner.send_payload(item) {
                                 WritePayloadStatus::Next(st) => {
                                     *this.st = st;
                                 }
                                 WritePayloadStatus::Pause => {
-                                    this.inner
-                                        .state
-                                        .write()
-                                        .enable_backpressure(Some(cx));
+                                    this.inner.io().enable_write_backpressure(cx);
                                     return Poll::Pending;
                                 }
                                 WritePayloadStatus::Continue => (),
@@ -454,7 +423,7 @@ where
                 }
                 // stop io tasks and call upgrade service
                 State::Upgrade(ref mut req) => {
-                    log::trace!("initate upgrade handling");
+                    log::trace!("switching to upgrade service");
 
                     let io = this.inner.io.take().unwrap();
                     let req = req.take().unwrap();
@@ -482,8 +451,9 @@ where
                     {
                         // get io error
                         if this.inner.error.is_none() {
-                            this.inner.error =
-                                this.inner.state.take_error().map(DispatchError::Io);
+                            this.inner.error = Some(DispatchError::Disconnect(
+                                this.inner.state.take_error(),
+                            ));
                         }
 
                         return Poll::Ready(
@@ -509,6 +479,22 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
+    fn io(&self) -> &Io<T> {
+        self.io.as_ref().unwrap()
+    }
+
+    fn switch_to_read_request(&mut self) -> State<B> {
+        // connection is not keep-alive, disconnect
+        if !self.flags.contains(Flags::KEEPALIVE) || !self.codec.keepalive_enabled() {
+            self.unregister_keepalive();
+            self.state.stop_dispatcher();
+            State::Stop
+        } else {
+            self.reset_keepalive();
+            State::ReadRequest
+        }
+    }
+
     fn unregister_keepalive(&mut self) {
         if self.flags.contains(Flags::KEEPALIVE) {
             self.config.timer_h1.unregister(self.expire, &self.state);
@@ -524,7 +510,7 @@ where
                     .timer_h1
                     .register(expire, self.expire, &self.state);
                 self.expire = expire;
-                self.state.reset_keepalive();
+                self.io().reset_keepalive();
             }
         }
     }
@@ -558,8 +544,7 @@ where
         // so we skip response processing for droppped connection
         if self.state.is_io_open() {
             let result = self
-                .state
-                .write()
+                .io()
                 .encode(Message::Item((msg, body.size())), &self.codec)
                 .map_err(|err| {
                     if let Some(mut payload) = self.payload.take() {
@@ -580,8 +565,7 @@ where
                         } else if self.payload.is_some() {
                             State::ReadPayload
                         } else {
-                            self.reset_keepalive();
-                            State::ReadRequest
+                            self.switch_to_read_request()
                         }
                     }
                     _ => State::SendPayload { body },
@@ -599,11 +583,7 @@ where
         match item {
             Some(Ok(item)) => {
                 trace!("got response chunk: {:?}", item.len());
-                match self
-                    .state
-                    .write()
-                    .encode(Message::Chunk(Some(item)), &self.codec)
-                {
+                match self.io().encode(Message::Chunk(Some(item)), &self.codec) {
                     Err(err) => {
                         self.error = Some(DispatchError::Encode(err));
                         WritePayloadStatus::Next(State::Stop)
@@ -619,9 +599,7 @@ where
             }
             None => {
                 trace!("response payload eof");
-                if let Err(err) =
-                    self.state.write().encode(Message::Chunk(None), &self.codec)
-                {
+                if let Err(err) = self.io().encode(Message::Chunk(None), &self.codec) {
                     self.error = Some(DispatchError::Encode(err));
                     WritePayloadStatus::Next(State::Stop)
                 } else if self.flags.contains(Flags::SENDPAYLOAD_AND_STOP) {
@@ -630,7 +608,7 @@ where
                     WritePayloadStatus::Next(State::ReadPayload)
                 } else {
                     self.reset_keepalive();
-                    WritePayloadStatus::Next(State::ReadRequest)
+                    WritePayloadStatus::Next(self.switch_to_read_request())
                 }
             }
             Some(Err(e)) => {
@@ -642,68 +620,67 @@ where
     }
 
     /// Process request's payload
-    fn poll_read_payload(&mut self, cx: &mut Context<'_>) -> ReadPayloadStatus {
+    fn poll_read_payload(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), DispatchError>> {
         // check if payload data is required
         if let Some(ref mut payload) = self.payload {
             match payload.1.poll_data_required(cx) {
                 PayloadStatus::Read => {
-                    let read = self.state.read();
+                    let io = self.io.as_ref().unwrap();
 
                     // read request payload
                     let mut updated = false;
                     loop {
-                        let item = read.decode(&payload.0);
-                        match item {
-                            Ok(Some(PayloadItem::Chunk(chunk))) => {
+                        match io.poll_read_next(&payload.0, cx) {
+                            Poll::Ready(Some(Ok(PayloadItem::Chunk(chunk)))) => {
                                 updated = true;
                                 payload.1.feed_data(chunk);
                             }
-                            Ok(Some(PayloadItem::Eof)) => {
+                            Poll::Ready(Some(Ok(PayloadItem::Eof))) => {
                                 payload.1.feed_eof();
                                 self.payload = None;
                                 if !updated {
-                                    return ReadPayloadStatus::Done;
+                                    return Poll::Ready(Ok(()));
                                 }
-                                let _ = read.poll_read_ready(cx);
                                 break;
                             }
-                            Ok(None) => {
-                                if !self.state.is_io_open() {
-                                    payload.1.set_error(PayloadError::EncodingCorrupted);
-                                    self.payload = None;
-                                    self.error = Some(ParseError::Incomplete.into());
-                                    return ReadPayloadStatus::Dropped;
-                                } else {
-                                    let _ = read.poll_read_ready(cx);
-                                    break;
-                                }
-                            }
-                            Err(e) => {
+                            Poll::Ready(None) => {
                                 payload.1.set_error(PayloadError::EncodingCorrupted);
                                 self.payload = None;
-                                self.error = Some(DispatchError::Parse(e));
-                                return ReadPayloadStatus::Dropped;
+                                return Poll::Ready(Err(ParseError::Incomplete.into()));
                             }
+                            Poll::Ready(Some(Err(e))) => {
+                                payload.1.set_error(PayloadError::EncodingCorrupted);
+                                self.payload = None;
+                                return Poll::Ready(Err(match e {
+                                    Either::Left(e) => DispatchError::Parse(e),
+                                    Either::Right(e) => {
+                                        DispatchError::Disconnect(Some(e))
+                                    }
+                                }));
+                            }
+                            Poll::Pending => break,
                         }
                     }
                     if updated {
-                        ReadPayloadStatus::Updated
+                        Poll::Ready(Ok(()))
                     } else {
-                        ReadPayloadStatus::Pending
+                        Poll::Pending
                     }
                 }
-                PayloadStatus::Pause => ReadPayloadStatus::Pending,
+                PayloadStatus::Pause => Poll::Pending,
                 PayloadStatus::Dropped => {
                     // service call is not interested in payload
                     // wait until future completes and then close
                     // connection
                     self.payload = None;
-                    self.error = Some(DispatchError::PayloadIsNotConsumed);
-                    ReadPayloadStatus::Dropped
+                    Poll::Ready(Err(DispatchError::PayloadIsNotConsumed))
                 }
             }
         } else {
-            ReadPayloadStatus::Done
+            Poll::Ready(Ok(()))
         }
     }
 }
@@ -852,7 +829,6 @@ mod tests {
 
         client.close().await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
-        // assert!(h1.inner.flags.contains(Flags::SHUTDOWN_IO));
         assert!(!h1.inner.state.is_io_open());
     }
 
@@ -865,14 +841,14 @@ mod tests {
             Ok::<_, io::Error>(Response::Ok().finish())
         });
 
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test1 HTTP/1.1\r\n\r\n");
 
         let mut buf = client.read().await.unwrap();
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
-        client.write("GET /test HTTP/1.1\r\n\r\n");
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test2 HTTP/1.1\r\n\r\n");
+        client.write("GET /test3 HTTP/1.1\r\n\r\n");
 
         let mut buf = client.read().await.unwrap();
         assert!(load(&mut decoder, &mut buf).status.is_success());
@@ -896,7 +872,7 @@ mod tests {
             Ok::<_, io::Error>(Response::Ok().finish())
         });
 
-        client.write("GET /test HTTP/1.1\r\ncontent-length: 5\r\n\r\n");
+        client.write("GET /test1 HTTP/1.1\r\ncontent-length: 5\r\n\r\n");
         sleep(Millis(50)).await;
         client.write("xxxxx");
 
@@ -904,7 +880,7 @@ mod tests {
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
-        client.write("GET /test HTTP/1.1\r\n\r\n");
+        client.write("GET /test2 HTTP/1.1\r\n\r\n");
 
         let mut buf = client.read().await.unwrap();
         assert!(load(&mut decoder, &mut buf).status.is_success());
@@ -1103,11 +1079,11 @@ mod tests {
         assert_eq!(num.load(Ordering::Relaxed), 65_536);
 
         // response message + chunking encoding
-        assert_eq!(state.write().with_buf(|buf| buf.len()).unwrap(), 65629);
+        assert_eq!(state.with_write_buf(|buf| buf.len()).unwrap(), 65629);
 
         client.remote_buffer_cap(65536);
         sleep(Millis(50)).await;
-        assert_eq!(state.write().with_buf(|buf| buf.len()).unwrap(), 93);
+        assert_eq!(state.with_write_buf(|buf| buf.len()).unwrap(), 93);
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(num.load(Ordering::Relaxed), 65_536 * 2);

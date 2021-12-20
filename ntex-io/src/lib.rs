@@ -1,11 +1,15 @@
-use std::{any::Any, any::TypeId, fmt, future::Future, io, task::Context, task::Poll};
+use std::{
+    any::Any, any::TypeId, fmt, future::Future, io::Error as IoError, task::Context,
+    task::Poll,
+};
 
 pub mod testing;
 pub mod types;
 
 mod dispatcher;
 mod filter;
-mod state;
+mod io;
+mod ioref;
 mod tasks;
 mod time;
 mod utils;
@@ -21,7 +25,7 @@ use ntex_util::time::Millis;
 
 pub use self::dispatcher::Dispatcher;
 pub use self::filter::DefaultFilter;
-pub use self::state::{Io, IoRef, OnDisconnect, ReadRef, WriteRef};
+pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::tasks::{ReadContext, WriteContext};
 pub use self::time::Timer;
 
@@ -37,9 +41,9 @@ pub enum WriteReadiness {
 }
 
 pub trait Filter: 'static {
-    fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>>;
+    fn shutdown(&self, st: &IoRef) -> Poll<Result<(), IoError>>;
 
-    fn closed(&self, err: Option<io::Error>);
+    fn closed(&self, err: Option<IoError>);
 
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
 
@@ -52,9 +56,9 @@ pub trait Filter: 'static {
 
     fn get_write_buf(&self) -> Option<BytesMut>;
 
-    fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> Result<(), io::Error>;
+    fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> Result<(), IoError>;
 
-    fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error>;
+    fn release_write_buf(&self, buf: BytesMut) -> Result<(), IoError>;
 }
 
 pub trait FilterFactory<F: Filter>: Sized {
@@ -88,7 +92,7 @@ pub enum DispatchItem<U: Encoder + Decoder> {
     /// Encoder parse error
     EncoderError(<U as Encoder>::Error),
     /// Socket is disconnected
-    Disconnect(Option<io::Error>),
+    Disconnect(Option<IoError>),
 }
 
 impl<U> fmt::Debug for DispatchItem<U>
@@ -134,6 +138,7 @@ pub mod rt {
 mod tests {
     use super::*;
     use ntex_codec::BytesCodec;
+    use std::io;
 
     #[test]
     fn test_fmt() {

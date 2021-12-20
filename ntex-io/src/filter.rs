@@ -2,8 +2,8 @@ use std::{any, io, task::Context, task::Poll};
 
 use ntex_bytes::BytesMut;
 
-use super::state::{Flags, IoRef};
-use super::{Filter, WriteReadiness};
+use super::io::Flags;
+use super::{Filter, IoRef, WriteReadiness};
 
 pub struct DefaultFilter(IoRef);
 

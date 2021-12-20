@@ -409,7 +409,10 @@ impl Future for ReadTask {
 
                     match io.poll_read_buf(cx, &mut buf) {
                         Poll::Pending => {
-                            log::trace!("no more data in io stream");
+                            log::trace!(
+                                "no more data in io stream, read: {:?}",
+                                new_bytes
+                            );
                             break;
                         }
                         Poll::Ready(Ok(n)) => {

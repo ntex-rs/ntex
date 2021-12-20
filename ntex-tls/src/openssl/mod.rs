@@ -7,7 +7,7 @@ use std::{
 
 use ntex_bytes::{BufMut, BytesMut, PoolRef};
 use ntex_io::{Filter, FilterFactory, Io, IoRef, WriteReadiness};
-use ntex_util::{future::poll_fn, time, time::Millis};
+use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_openssl::ssl::{self, SslStream};
 
 mod accept;
@@ -331,26 +331,26 @@ impl<F: Filter + 'static> FilterFactory<F> for SslConnector {
     }
 }
 
-fn handle_result<T>(
+fn handle_result<T, F>(
     result: Result<T, ssl::Error>,
-    st: &IoRef,
+    io: &Io<F>,
     cx: &mut Context<'_>,
 ) -> Poll<Result<T, Box<dyn Error>>> {
     match result {
         Ok(v) => Poll::Ready(Ok(v)),
         Err(e) => match e.code() {
             ssl::ErrorCode::WANT_READ => {
-                if let Err(e) = st.read().poll_read_ready(cx) {
-                    let e = e.unwrap_or_else(|| {
-                        io::Error::new(io::ErrorKind::Other, "disconnected")
-                    });
-                    Poll::Ready(Err(e.into()))
-                } else {
-                    Poll::Pending
-                }
+                match ready!(io.poll_read_ready(cx)) {
+                    None => Err::<_, Box<dyn Error>>(
+                        io::Error::new(io::ErrorKind::Other, "disconnected").into(),
+                    ),
+                    Some(Err(err)) => Err(err.into()),
+                    _ => Ok(()),
+                }?;
+                Poll::Pending
             }
             ssl::ErrorCode::WANT_WRITE => {
-                let _ = st.write().poll_write_ready(cx, true)?;
+                let _ = io.poll_write_ready(cx, true)?;
                 Poll::Pending
             }
             _ => Poll::Ready(Err(Box::new(e))),

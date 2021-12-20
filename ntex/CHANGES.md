@@ -1,6 +1,10 @@
 # Changes
 
-## [0.5.0-b.0] - 2021-12-xx
+## [0.5.0-b.1] - 2021-12-20
+
+* Refactor http/1 dispatcher
+
+## [0.5.0-b.0] - 2021-12-19
 
 * Migrate io to ntex-io
 

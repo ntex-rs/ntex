@@ -166,10 +166,9 @@ pub enum DispatchError {
     /// Upgrade service error
     Upgrade(Box<dyn std::error::Error>),
 
-    /// An `io::Error` that occurred while trying to read or write to a network
-    /// stream.
-    #[display(fmt = "IO error: {}", _0)]
-    Io(io::Error),
+    /// Peer is disconnected, error indicates that peer is disconnected because of it
+    #[display(fmt = "Disconnect: {:?}", _0)]
+    Disconnect(Option<io::Error>),
 
     /// Http request parse error.
     #[display(fmt = "Parse error: {}", _0)]
@@ -214,6 +213,12 @@ pub enum DispatchError {
 }
 
 impl std::error::Error for DispatchError {}
+
+impl From<io::Error> for DispatchError {
+    fn from(err: io::Error) -> Self {
+        DispatchError::Disconnect(Some(err))
+    }
+}
 
 /// A set of error that can occure during parsing content type
 #[derive(PartialEq, Debug, Display)]

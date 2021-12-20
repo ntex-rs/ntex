@@ -7,7 +7,7 @@ use ntex_service::{IntoService, Service};
 use ntex_util::future::Either;
 use ntex_util::time::{now, Seconds};
 
-use super::{rt::spawn, DispatchItem, IoBoxed, ReadRef, Timer, WriteRef};
+use super::{rt::spawn, DispatchItem, IoBoxed, IoRef, Timer};
 
 type Response<U> = <U as Encoder>::Item;
 
@@ -33,8 +33,8 @@ where
     S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
+    io: IoBoxed,
     st: Cell<DispatcherState>,
-    state: IoBoxed,
     timer: Timer,
     ka_timeout: Seconds,
     ka_updated: Cell<time::Instant>,
@@ -90,7 +90,7 @@ where
 {
     /// Construct new `Dispatcher` instance.
     pub fn new<F: IntoService<S>>(
-        state: IoBoxed,
+        io: IoBoxed,
         codec: U,
         service: F,
         timer: Timer,
@@ -100,13 +100,13 @@ where
 
         // register keepalive timer
         let expire = updated + time::Duration::from(ka_timeout);
-        timer.register(expire, expire, &state);
+        timer.register(expire, expire, &io);
 
         Dispatcher {
             service: service.into_service(),
             fut: None,
             inner: DispatcherInner {
-                pool: state.memory_pool().pool(),
+                pool: io.memory_pool().pool(),
                 ka_updated: Cell::new(updated),
                 error: Cell::new(None),
                 ready_err: Cell::new(false),
@@ -116,7 +116,7 @@ where
                     error: Cell::new(None),
                     inflight: Cell::new(0),
                 }),
-                state,
+                io,
                 timer,
                 ka_timeout,
             },
@@ -132,10 +132,10 @@ where
         // register keepalive timer
         let prev = self.inner.ka_updated.get() + time::Duration::from(self.inner.ka());
         if timeout.is_zero() {
-            self.inner.timer.unregister(prev, &self.inner.state);
+            self.inner.timer.unregister(prev, &self.inner.io);
         } else {
             let expire = self.inner.ka_updated.get() + time::Duration::from(timeout);
-            self.inner.timer.register(expire, prev, &self.inner.state);
+            self.inner.timer.register(expire, prev, &self.inner.io);
         }
         self.inner.ka_timeout = timeout;
 
@@ -151,7 +151,7 @@ where
     ///
     /// By default disconnect timeout is set to 1 seconds.
     pub fn disconnect_timeout(self, val: Seconds) -> Self {
-        self.inner.state.set_disconnect_timeout(val.into());
+        self.inner.io.set_disconnect_timeout(val.into());
         self
     }
 }
@@ -161,18 +161,18 @@ where
     S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Encoder + Decoder + 'static,
 {
-    fn handle_result(&self, item: Result<S::Response, S::Error>, write: WriteRef<'_>) {
+    fn handle_result(&self, item: Result<S::Response, S::Error>, io: &IoRef) {
         self.inflight.set(self.inflight.get() - 1);
         match item {
-            Ok(Some(val)) => match write.encode(val, &self.codec) {
+            Ok(Some(val)) => match io.encode(val, &self.codec) {
                 Ok(true) => (),
-                Ok(false) => write.enable_backpressure(None),
+                Ok(false) => io.enable_write_backpressure(),
                 Err(err) => self.error.set(Some(DispatcherError::Encoder(err))),
             },
             Err(err) => self.error.set(Some(DispatcherError::Service(err))),
             Ok(None) => return,
         }
-        write.wake_dispatcher();
+        io.wake_dispatcher();
     }
 }
 
@@ -186,9 +186,8 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
         let slf = &this.inner;
-        let state = &slf.state;
-        let read = state.read();
-        let write = state.write();
+        let io = &slf.io;
+        let ioref = io.as_ref();
 
         // handle service response future
         if let Some(fut) = this.fut.as_mut().as_pin_mut() {
@@ -197,78 +196,57 @@ where
                 Poll::Ready(item) => {
                     this.fut.set(None);
                     slf.shared.inflight.set(slf.shared.inflight.get() - 1);
-                    slf.handle_result(item, write);
+                    slf.handle_result(item, ioref);
                 }
             }
         }
 
         // handle memory pool pressure
         if slf.pool.poll_ready(cx).is_pending() {
-            read.pause(cx);
+            io.pause(cx);
             return Poll::Pending;
         }
 
         loop {
             match slf.st.get() {
                 DispatcherState::Processing => {
-                    let result = match slf.poll_service(this.service, cx, read) {
-                        Poll::Pending => {
-                            if let Err(err) = read.poll_read_ready(cx) {
-                                log::error!(
-                                    "io error while service is in pending state: {:?}",
-                                    err
-                                );
-                                return Poll::Ready(Ok(()));
-                            }
-                            return Poll::Pending;
-                        }
-                        Poll::Ready(result) => result,
+                    let result = if let Poll::Ready(result) =
+                        slf.poll_service(this.service, cx, io)
+                    {
+                        result
+                    } else {
+                        return Poll::Pending;
                     };
 
                     let item = match result {
                         PollService::Ready => {
-                            if !write.is_ready() {
+                            if !io.is_write_ready() {
                                 // instruct write task to notify dispatcher when data is flushed
-                                write.enable_backpressure(Some(cx));
+                                io.enable_write_backpressure(cx);
                                 slf.st.set(DispatcherState::Backpressure);
                                 DispatchItem::WBackPressureEnabled
-                            } else if read.is_ready() {
+                            } else {
                                 // decode incoming bytes if buffer is ready
-                                match read.decode(&slf.shared.codec) {
-                                    Ok(Some(el)) => {
+                                match io.poll_read_next(&slf.shared.codec, cx) {
+                                    Poll::Ready(Some(Ok(el))) => {
                                         slf.update_keepalive();
                                         DispatchItem::Item(el)
                                     }
-                                    Ok(None) => {
-                                        log::trace!("not enough data to decode next frame, register dispatch task");
-                                        // service is ready, wake io read task
-                                        match read.poll_read_ready(cx) {
-                                            Ok(()) => {
-                                                read.resume();
-                                                return Poll::Pending;
-                                            }
-                                            Err(None) => DispatchItem::Disconnect(None),
-                                            Err(Some(err)) => {
-                                                DispatchItem::Disconnect(Some(err))
-                                            }
-                                        }
-                                    }
-                                    Err(err) => {
+                                    Poll::Ready(Some(Err(Either::Left(err)))) => {
                                         slf.st.set(DispatcherState::Stop);
                                         slf.unregister_keepalive();
                                         DispatchItem::DecoderError(err)
                                     }
-                                }
-                            } else {
-                                // no new events
-                                match read.poll_read_ready(cx) {
-                                    Ok(()) => {
-                                        read.resume();
-                                        return Poll::Pending;
-                                    }
-                                    Err(None) => DispatchItem::Disconnect(None),
-                                    Err(Some(err)) => {
+                                    Poll::Ready(Some(Err(Either::Right(err)))) => {
+                                        slf.st.set(DispatcherState::Stop);
+                                        slf.unregister_keepalive();
                                         DispatchItem::Disconnect(Some(err))
+                                    }
+                                    Poll::Ready(None) => DispatchItem::Disconnect(None),
+                                    Poll::Pending => {
+                                        log::trace!("not enough data to decode next frame, register dispatch task");
+                                        io.resume();
+                                        return Poll::Pending;
                                     }
                                 }
                             }
@@ -284,7 +262,7 @@ where
                         match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
                             Poll::Ready(res) => {
                                 this.fut.set(None);
-                                slf.handle_result(res, write);
+                                slf.handle_result(res, ioref);
                             }
                             Poll::Pending => {
                                 slf.shared.inflight.set(slf.shared.inflight.get() + 1)
@@ -296,13 +274,13 @@ where
                 }
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
-                    let result = match slf.poll_service(this.service, cx, read) {
+                    let result = match slf.poll_service(this.service, cx, io) {
                         Poll::Ready(result) => result,
                         Poll::Pending => return Poll::Pending,
                     };
                     let item = match result {
                         PollService::Ready => {
-                            if write.is_ready() {
+                            if io.is_write_ready() {
                                 slf.st.set(DispatcherState::Processing);
                                 DispatchItem::WBackPressureDisabled
                             } else {
@@ -320,7 +298,7 @@ where
                         match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
                             Poll::Ready(res) => {
                                 this.fut.set(None);
-                                slf.handle_result(res, write);
+                                slf.handle_result(res, ioref);
                             }
                             Poll::Pending => {
                                 slf.shared.inflight.set(slf.shared.inflight.get() + 1)
@@ -338,11 +316,14 @@ where
                     }
 
                     if slf.shared.inflight.get() == 0 {
-                        slf.st.set(DispatcherState::Shutdown);
+                        if io.poll_shutdown(cx).is_ready() {
+                            slf.st.set(DispatcherState::Shutdown);
+                            continue;
+                        }
                     } else {
-                        state.register_dispatcher(cx);
-                        return Poll::Pending;
+                        slf.io.register_dispatcher(cx);
                     }
+                    return Poll::Pending;
                 }
                 // shutdown service
                 DispatcherState::Shutdown => {
@@ -375,23 +356,23 @@ where
     fn spawn_service_call(&self, fut: S::Future) {
         self.shared.inflight.set(self.shared.inflight.get() + 1);
 
-        let st = self.state.get_ref();
+        let st = self.io.get_ref();
         let shared = self.shared.clone();
         spawn(async move {
             let item = fut.await;
-            shared.handle_result(item, st.write());
+            shared.handle_result(item, &st);
         });
     }
 
     fn handle_result(
         &self,
         item: Result<Option<<U as Encoder>::Item>, S::Error>,
-        write: WriteRef<'_>,
+        io: &IoRef,
     ) {
         match item {
-            Ok(Some(item)) => match write.encode(item, &self.shared.codec) {
+            Ok(Some(item)) => match io.encode(item, &self.shared.codec) {
                 Ok(true) => (),
-                Ok(false) => write.enable_backpressure(None),
+                Ok(false) => io.enable_write_backpressure(),
                 Err(err) => self.shared.error.set(Some(DispatcherError::Encoder(err))),
             },
             Err(err) => self.shared.error.set(Some(DispatcherError::Service(err))),
@@ -403,7 +384,7 @@ where
         &self,
         srv: &S,
         cx: &mut Context<'_>,
-        read: ReadRef<'_>,
+        io: &IoBoxed,
     ) -> Poll<PollService<U>> {
         match srv.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
@@ -428,19 +409,19 @@ where
                             PollService::ServiceError
                         }
                     }
-                } else if self.state.is_dispatcher_stopped() {
+                } else if self.io.is_dispatcher_stopped() {
                     log::trace!("dispatcher is instructed to stop");
 
                     self.unregister_keepalive();
 
                     // process unhandled data
-                    if let Ok(Some(el)) = read.decode(&self.shared.codec) {
+                    if let Ok(Some(el)) = io.decode(&self.shared.codec) {
                         PollService::Item(DispatchItem::Item(el))
                     } else {
                         self.st.set(DispatcherState::Stop);
 
                         // get io error
-                        if let Some(err) = self.state.take_error() {
+                        if let Some(err) = self.io.take_error() {
                             PollService::Item(DispatchItem::Disconnect(Some(err)))
                         } else {
                             PollService::ServiceError
@@ -453,7 +434,7 @@ where
             // pause io read task
             Poll::Pending => {
                 log::trace!("service is not ready, register dispatch task");
-                read.pause(cx);
+                io.pause(cx);
                 Poll::Pending
             }
             // handle service readiness error
@@ -478,7 +459,7 @@ where
 
     /// check keepalive timeout
     fn check_keepalive(&self) {
-        if self.state.is_keepalive() {
+        if self.io.is_keepalive() {
             log::trace!("keepalive timeout");
             if let Some(err) = self.shared.error.take() {
                 self.shared.error.set(Some(err));
@@ -494,11 +475,8 @@ where
             let updated = now();
             if updated != self.ka_updated.get() {
                 let ka = time::Duration::from(self.ka());
-                self.timer.register(
-                    updated + ka,
-                    self.ka_updated.get() + ka,
-                    &self.state,
-                );
+                self.timer
+                    .register(updated + ka, self.ka_updated.get() + ka, &self.io);
                 self.ka_updated.set(updated);
             }
         }
@@ -509,7 +487,7 @@ where
         if self.ka_enabled() {
             self.timer.unregister(
                 self.ka_updated.get() + time::Duration::from(self.ka()),
-                &self.state,
+                &self.io,
             );
         }
     }
@@ -527,7 +505,7 @@ mod tests {
     use ntex_util::time::{sleep, Millis};
 
     use crate::testing::IoTest;
-    use crate::{state::Flags, Io, IoRef, IoStream, WriteRef};
+    use crate::{io::Flags, Io, IoRef, IoStream};
 
     use super::*;
 
@@ -538,8 +516,8 @@ mod tests {
             self.0.flags()
         }
 
-        fn write(&'_ self) -> WriteRef<'_> {
-            WriteRef(&self.0)
+        fn io(&self) -> &IoRef {
+            &self.0
         }
 
         fn close(&self) {
@@ -587,7 +565,7 @@ mod tests {
                         ready_err: Cell::new(false),
                         st: Cell::new(DispatcherState::Processing),
                         pool: state.memory_pool().pool(),
-                        state: state.into_boxed(),
+                        io: state.into_boxed(),
                         shared,
                         timer,
                         ka_timeout,
@@ -634,7 +612,6 @@ mod tests {
 
     #[ntex::test]
     async fn test_sink() {
-        env_logger::init();
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
@@ -658,7 +635,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
         assert!(st
-            .write()
+            .io()
             .encode(Bytes::from_static(b"test"), &mut BytesCodec)
             .is_ok());
         let buf = client.read().await.unwrap();
@@ -684,7 +661,7 @@ mod tests {
             }),
         );
         state
-            .write()
+            .io()
             .encode(
                 Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"),
                 &mut BytesCodec,
@@ -737,7 +714,7 @@ mod tests {
 
         let (disp, state) = Dispatcher::debug(server, BytesCodec, Srv(counter.clone()));
         state
-            .write()
+            .io()
             .encode(
                 Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"),
                 &mut BytesCodec,
@@ -821,19 +798,19 @@ mod tests {
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
 
         // response message
-        assert!(!state.write().is_ready());
-        assert_eq!(state.write().with_buf(|buf| buf.len()).unwrap(), 65536);
+        assert!(!state.io().is_write_ready());
+        assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 65536);
 
         client.remote_buffer_cap(10240);
         sleep(Millis(50)).await;
-        assert_eq!(state.write().with_buf(|buf| buf.len()).unwrap(), 55296);
+        assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 55296);
 
         client.remote_buffer_cap(45056);
         sleep(Millis(50)).await;
-        assert_eq!(state.write().with_buf(|buf| buf.len()).unwrap(), 10240);
+        assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 10240);
 
         // backpressure disabled
-        assert!(state.write().is_ready());
+        assert!(state.io().is_write_ready());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1, 2]);
     }
 

@@ -5,7 +5,7 @@ use std::{any, cell::RefCell, cmp, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesMut, PoolRef};
 use ntex_io::{Filter, Io, IoRef, WriteReadiness};
-use ntex_util::{future::poll_fn, time, time::Millis};
+use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_rust::{ServerConfig, ServerConnection};
 
 use crate::{rustls::TlsFilter, types};
@@ -91,14 +91,15 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
 
     fn release_read_buf(&self, mut src: BytesMut, _nb: usize) -> Result<(), io::Error> {
         let mut session = self.session.borrow_mut();
+        let mut inner = self.inner.borrow_mut();
+
         if session.is_handshaking() {
-            self.inner.borrow_mut().read_buf = Some(src);
+            inner.read_buf = Some(src);
             Ok(())
         } else {
             if src.is_empty() {
                 return Ok(());
             }
-            let mut inner = self.inner.borrow_mut();
             let (hw, lw) = inner.pool.read_params().unpack();
 
             // get inner filter buffer
@@ -161,9 +162,8 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
         }
 
         if !src.is_empty() {
-            self.inner.borrow_mut().write_buf = Some(src);
+            inner.write_buf = Some(src);
         }
-
         Ok(())
     }
 }
@@ -206,17 +206,17 @@ impl<'a, F: Filter> io::Write for Wrapper<'a, F> {
 
 impl<F: Filter> TlsServerFilter<F> {
     pub(crate) async fn create(
-        st: Io<F>,
+        io: Io<F>,
         cfg: Arc<ServerConfig>,
         timeout: Millis,
     ) -> Result<Io<TlsFilter<F>>, io::Error> {
         time::timeout(timeout, async {
-            let pool = st.memory_pool();
+            let pool = io.memory_pool();
             let session = match ServerConnection::new(cfg) {
                 Ok(session) => session,
                 Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
             };
-            let st = st.map_filter(|inner: F| {
+            let io = io.map_filter(|inner: F| {
                 let inner = IoInner {
                     pool,
                     inner,
@@ -230,59 +230,51 @@ impl<F: Filter> TlsServerFilter<F> {
                 }))
             })?;
 
-            let filter = st.filter();
-            let read = st.read();
-
+            let filter = io.filter();
             loop {
                 let (result, wants_read) = {
                     let mut session = filter.server().session.borrow_mut();
                     let mut inner = filter.server().inner.borrow_mut();
-                    let mut io = Wrapper(&mut *inner);
-                    let result = session.complete_io(&mut io);
+                    let mut wrp = Wrapper(&mut *inner);
+                    let result = session.complete_io(&mut wrp);
                     let wants_read = session.wants_read();
 
                     if session.wants_write() {
                         loop {
-                            let n = session.write_tls(&mut io)?;
+                            let n = session.write_tls(&mut wrp)?;
                             if n == 0 {
                                 break;
                             }
                         }
                     }
-                    if result.is_ok() && wants_read {
-                        poll_fn(|cx| {
-                            read.poll_read_ready(cx).map_err(|e| {
-                                e.unwrap_or_else(|| {
-                                    io::Error::new(io::ErrorKind::Other, "disconnected")
-                                })
-                            })?;
-                            Poll::Ready(Ok::<_, io::Error>(()))
-                        })
-                        .await?;
-                    }
                     (result, wants_read)
                 };
+                if result.is_ok() && wants_read {
+                    poll_fn(|cx| {
+                        match ready!(io.poll_read_ready(cx)) {
+                            None => {
+                                Err(io::Error::new(io::ErrorKind::Other, "disconnected"))
+                            }
+                            Some(Err(e)) => Err(e),
+                            _ => Ok(()),
+                        }?;
+                        Poll::Ready(Ok::<_, io::Error>(()))
+                    })
+                    .await?;
+                }
                 match result {
-                    Ok(_) => return Ok(st),
+                    Ok(_) => return Ok(io),
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                        if wants_read {
-                            read.take_readiness();
-                        }
                         poll_fn(|cx| {
                             let read_ready = if wants_read {
-                                if read.is_ready() {
-                                    true
-                                } else {
-                                    read.poll_read_ready(cx).map_err(|e| {
-                                        e.unwrap_or_else(|| {
-                                            io::Error::new(
-                                                io::ErrorKind::Other,
-                                                "disconnected",
-                                            )
-                                        })
-                                    })?;
-                                    false
-                                }
+                                match ready!(io.poll_read_ready(cx)) {
+                                    None => Err(io::Error::new(
+                                        io::ErrorKind::Other,
+                                        "disconnected",
+                                    )),
+                                    Some(Err(e)) => Err(e),
+                                    Some(Ok(_)) => Ok(true),
+                                }?
                             } else {
                                 true
                             };
