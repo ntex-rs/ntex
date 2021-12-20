@@ -624,21 +624,21 @@ where
 
             match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, move || {
+                    HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{}", local_addr));
                         HttpService::build()
                             .client_timeout(ctimeout)
                             .h1(map_config(factory(), move |_| cfg.clone()))
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, move || {
+                    HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{}", local_addr));
                         HttpService::build()
                             .client_timeout(ctimeout)
                             .h2(map_config(factory(), move |_| cfg.clone()))
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, move || {
+                    HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{}", local_addr));
                         HttpService::build()
@@ -648,7 +648,7 @@ where
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, move || {
+                    HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
@@ -656,7 +656,7 @@ where
                             .h1(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, move || {
+                    HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
@@ -664,7 +664,7 @@ where
                             .h2(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, move || {
+                    HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
@@ -675,7 +675,7 @@ where
                 },
                 #[cfg(feature = "rustls")]
                 StreamType::Rustls(config) => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, move || {
+                    HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
@@ -683,7 +683,7 @@ where
                             .h1(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, move || {
+                    HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
@@ -691,7 +691,7 @@ where
                             .h2(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, move || {
+                    HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
@@ -702,7 +702,7 @@ where
                 },
             }
             .unwrap()
-            .start()
+            .run()
         });
 
         tx.send((System::current(), srv, local_addr)).unwrap();

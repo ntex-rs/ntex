@@ -37,7 +37,7 @@ async fn main() -> io::Result<()> {
 
     // start server
     server::ServerBuilder::new()
-        .bind("basic", "127.0.0.1:8443", move || {
+        .bind("basic", "127.0.0.1:8443", move |_| {
             HttpService::build()
                 .client_timeout(Seconds(1))
                 .disconnect_timeout(Seconds(1))

@@ -8,12 +8,16 @@ use futures_core::Stream;
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
+use crate::io::Io;
 use crate::rt::{spawn, Signal, System};
-use crate::{time::sleep, time::Millis, util::join_all, util::PoolId};
+use crate::service::ServiceFactory;
+use crate::{time::sleep, time::Millis, util::join_all};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
-use super::config::{ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime};
-use super::service::{Factory, InternalServiceFactory, StreamServiceFactory};
+use super::config::{
+    ConfigWrapper, Configuration, ConfiguredService, RuntimeConfiguration, ServiceConfig,
+};
+use super::service::{Factory, InternalServiceFactory};
 use super::socket::Listener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
 use super::{Server, ServerCommand, ServerStatus, Token};
@@ -147,9 +151,9 @@ impl ServerBuilder {
     /// different module or even library.
     pub fn configure<F>(mut self, f: F) -> io::Result<ServerBuilder>
     where
-        F: Fn(&mut ServiceConfig) -> io::Result<()>,
+        F: Fn(&mut Configuration) -> io::Result<()>,
     {
-        let mut cfg = ServiceConfig::new(self.threads, self.backlog);
+        let mut cfg = Configuration::new(self.threads, self.backlog);
 
         f(&mut cfg)?;
 
@@ -172,7 +176,7 @@ impl ServerBuilder {
     /// It get executed in the worker thread.
     pub fn on_worker_start<F, R, E>(mut self, f: F) -> Self
     where
-        F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
+        F: Fn(RuntimeConfiguration) -> R + Send + Clone + 'static,
         R: Future<Output = Result<(), E>> + 'static,
         E: fmt::Display + 'static,
     {
@@ -184,27 +188,17 @@ impl ServerBuilder {
         self
     }
 
-    /// Set memory pool for name dservice.
-    ///
-    /// Use specified memory pool for memory allocations. By default P0
-    /// memory pool is used.
-    pub fn memory_pool<N: AsRef<str>>(mut self, name: N, id: PoolId) -> Self {
-        for srv in &mut self.services {
-            srv.set_memory_pool(name.as_ref(), id)
-        }
-        self
-    }
-
     /// Add new service to the server.
-    pub fn bind<F, U, N: AsRef<str>>(
+    pub fn bind<F, U, N: AsRef<str>, R>(
         mut self,
         name: N,
         addr: U,
         factory: F,
     ) -> io::Result<Self>
     where
-        F: StreamServiceFactory,
         U: net::ToSocketAddrs,
+        F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+        R: ServiceFactory<Config = (), Request = Io>,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
@@ -227,11 +221,12 @@ impl ServerBuilder {
 
     #[cfg(all(unix))]
     /// Add new unix domain service to the server.
-    pub fn bind_uds<F, U, N>(self, name: N, addr: U, factory: F) -> io::Result<Self>
+    pub fn bind_uds<F, U, N, R>(self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
-        F: StreamServiceFactory,
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
+        F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+        R: ServiceFactory<Config = (), Request = Io>,
     {
         use std::os::unix::net::UnixListener;
 
@@ -252,14 +247,15 @@ impl ServerBuilder {
     /// Add new unix domain service to the server.
     /// Useful when running as a systemd service and
     /// a socket FD can be acquired using the systemd crate.
-    pub fn listen_uds<F, N: AsRef<str>>(
+    pub fn listen_uds<F, N: AsRef<str>, R>(
         mut self,
         name: N,
         lst: std::os::unix::net::UnixListener,
         factory: F,
     ) -> io::Result<Self>
     where
-        F: StreamServiceFactory,
+        F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+        R: ServiceFactory<Config = (), Request = Io>,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();
@@ -276,14 +272,15 @@ impl ServerBuilder {
     }
 
     /// Add new service to the server.
-    pub fn listen<F, N: AsRef<str>>(
+    pub fn listen<F, N: AsRef<str>, R>(
         mut self,
         name: N,
         lst: net::TcpListener,
         factory: F,
     ) -> io::Result<Self>
     where
-        F: StreamServiceFactory,
+        F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+        R: ServiceFactory<Config = (), Request = Io>,
     {
         let token = self.token.next();
         self.services.push(Factory::create(
@@ -295,11 +292,6 @@ impl ServerBuilder {
         self.sockets
             .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
         Ok(self)
-    }
-
-    #[doc(hidden)]
-    pub fn start(self) -> Server {
-        self.run()
     }
 
     /// Starts processing incoming connections and return server controller.

@@ -468,7 +468,7 @@ where
     ///
     /// #[ntex::main]
     /// async fn main() -> std::io::Result<()> {
-    ///     server::build().bind("http", "127.0.0.1:0", ||
+    ///     server::build().bind("http", "127.0.0.1:0", |_|
     ///         http::HttpService::build().finish(
     ///             web::App::new()
     ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))
@@ -498,7 +498,7 @@ where
     ///
     /// #[ntex::main]
     /// async fn main() -> std::io::Result<()> {
-    ///     server::build().bind("http", "127.0.0.1:0", ||
+    ///     server::build().bind("http", "127.0.0.1:0", |_|
     ///         http::HttpService::build().finish(
     ///             web::App::new()
     ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))

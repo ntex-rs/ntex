@@ -1,7 +1,5 @@
 use std::convert::TryInto;
-use std::{
-    cell::Cell, future::Future, net::SocketAddr, pin::Pin, task::Context, task::Poll,
-};
+use std::{future::Future, net::SocketAddr, pin::Pin, task::Context, task::Poll};
 
 use log::error;
 
@@ -10,7 +8,7 @@ use crate::service::{Service, ServiceFactory};
 use crate::util::{counter::CounterGuard, Pool, PoolId, Ready};
 use crate::{rt::spawn, time::Millis};
 
-use super::{socket::Stream, Token};
+use super::{socket::Stream, ServiceConfig, Token};
 
 /// Server message
 pub(super) enum ServerMessage {
@@ -22,18 +20,16 @@ pub(super) enum ServerMessage {
     ForceShutdown,
 }
 
-pub trait StreamServiceFactory: Send + Clone + 'static {
+pub(super) trait StreamServiceFactory: Send + Clone + 'static {
     type Factory: ServiceFactory<Config = (), Request = Io>;
 
-    fn create(&self) -> Self::Factory;
+    fn create(&self, _: ServiceConfig) -> Self::Factory;
 }
 
 pub(super) trait InternalServiceFactory: Send {
     fn name(&self, token: Token) -> &str;
 
     fn clone_factory(&self) -> Box<dyn InternalServiceFactory>;
-
-    fn set_memory_pool(&self, name: &str, pool: PoolId);
 
     fn create(
         &self,
@@ -120,7 +116,6 @@ pub(super) struct Factory<F: StreamServiceFactory> {
     inner: F,
     token: Token,
     addr: SocketAddr,
-    pool: Cell<PoolId>,
 }
 
 impl<F> Factory<F>
@@ -138,7 +133,6 @@ where
             token,
             inner,
             addr,
-            pool: Cell::new(PoolId::P0),
         })
     }
 }
@@ -157,14 +151,7 @@ where
             inner: self.inner.clone(),
             token: self.token,
             addr: self.addr,
-            pool: self.pool.clone(),
         })
-    }
-
-    fn set_memory_pool(&self, name: &str, pool: PoolId) {
-        if self.name == name {
-            self.pool.set(pool)
-        }
     }
 
     fn create(
@@ -172,14 +159,14 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
     {
         let token = self.token;
-        let pool = self.pool.get();
-        let fut = self.inner.create().new_service(());
+        let cfg = ServiceConfig::default();
+        let fut = self.inner.create(cfg.clone()).new_service(());
 
         Box::pin(async move {
             match fut.await {
                 Ok(inner) => {
                     let service: BoxedServerService =
-                        Box::new(StreamService::new(inner, pool));
+                        Box::new(StreamService::new(inner, cfg.0.pool.get()));
                     Ok(vec![(token, service)])
                 }
                 Err(_) => Err(()),
@@ -197,10 +184,6 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
         self.as_ref().clone_factory()
     }
 
-    fn set_memory_pool(&self, name: &str, pool: PoolId) {
-        self.as_ref().set_memory_pool(name, pool)
-    }
-
     fn create(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
@@ -211,13 +194,13 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 
 impl<F, T> StreamServiceFactory for F
 where
-    F: Fn() -> T + Send + Clone + 'static,
+    F: Fn(ServiceConfig) -> T + Send + Clone + 'static,
     T: ServiceFactory<Config = (), Request = Io>,
 {
     type Factory = T;
 
     #[inline]
-    fn create(&self) -> T {
-        (self)()
+    fn create(&self, cfg: ServiceConfig) -> T {
+        (self)(cfg)
     }
 }

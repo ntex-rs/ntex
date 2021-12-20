@@ -9,8 +9,8 @@ use crate::http::{
     body::MessageBody, HttpService, KeepAlive, Request, Response, ResponseError,
 };
 use crate::server::{Server, ServerBuilder};
-use crate::time::Seconds;
 use crate::{service::map_config, IntoServiceFactory, Service, ServiceFactory};
+use crate::{time::Seconds, util::PoolId};
 
 use super::config::AppConfig;
 
@@ -20,6 +20,7 @@ struct Config {
     client_timeout: Seconds,
     client_disconnect: Seconds,
     handshake_timeout: Seconds,
+    pool: PoolId,
 }
 
 /// An HTTP Server.
@@ -79,6 +80,7 @@ where
                 client_timeout: Seconds(5),
                 client_disconnect: Seconds(5),
                 handshake_timeout: Seconds(5),
+                pool: PoolId::P0,
             })),
             backlog: 1024,
             builder: ServerBuilder::default(),
@@ -219,6 +221,14 @@ where
         self
     }
 
+    /// Set memory pool.
+    ///
+    /// Use specified memory pool for memory allocations.
+    pub fn memory_pool(&mut self, id: PoolId) -> &mut Self {
+        self.config.lock().unwrap().pool = id;
+        self
+    }
+
     /// Use listener for accepting incoming connection requests
     ///
     /// HttpServer does not change any configuration for TcpListener,
@@ -231,13 +241,14 @@ where
         self.builder = self.builder.listen(
             format!("ntex-web-service-{}", addr),
             lst,
-            move || {
+            move |r| {
                 let c = cfg.lock().unwrap();
                 let cfg = AppConfig::new(
                     false,
                     addr,
                     c.host.clone().unwrap_or_else(|| format!("{}", addr)),
                 );
+                r.memory_pool(c.pool);
 
                 HttpService::build()
                     .keep_alive(c.keep_alive)
@@ -274,13 +285,15 @@ where
         self.builder = self.builder.listen(
             format!("ntex-web-service-{}", addr),
             lst,
-            move || {
+            move |r| {
                 let c = cfg.lock().unwrap();
                 let cfg = AppConfig::new(
                     true,
                     addr,
                     c.host.clone().unwrap_or_else(|| format!("{}", addr)),
                 );
+                r.memory_pool(c.pool);
+
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
@@ -318,13 +331,15 @@ where
         self.builder = self.builder.listen(
             format!("ntex-web-rustls-service-{}", addr),
             lst,
-            move || {
+            move |r| {
                 let c = cfg.lock().unwrap();
                 let cfg = AppConfig::new(
                     true,
                     addr,
                     c.host.clone().unwrap_or_else(|| format!("{}", addr)),
                 );
+                r.memory_pool(c.pool);
+
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
@@ -436,13 +451,15 @@ where
 
         let addr = format!("ntex-web-service-{:?}", lst.local_addr()?);
 
-        self.builder = self.builder.listen_uds(addr, lst, move || {
+        self.builder = self.builder.listen_uds(addr, lst, move |r| {
             let c = cfg.lock().unwrap();
             let config = AppConfig::new(
                 false,
                 socket_addr,
                 c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
             );
+            r.memory_pool(c.pool);
+
             HttpService::build()
                 .keep_alive(c.keep_alive)
                 .client_timeout(c.client_timeout)
@@ -469,13 +486,15 @@ where
         self.builder = self.builder.bind_uds(
             format!("ntex-web-service-{:?}", addr.as_ref()),
             addr,
-            move || {
+            move |r| {
                 let c = cfg.lock().unwrap();
                 let config = AppConfig::new(
                     false,
                     socket_addr,
                     c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
                 );
+                r.memory_pool(c.pool);
+
                 HttpService::build()
                     .keep_alive(c.keep_alive)
                     .client_timeout(c.client_timeout)
@@ -520,7 +539,7 @@ where
     /// }
     /// ```
     pub fn run(self) -> Server {
-        self.builder.start()
+        self.builder.run()
     }
 }
 
