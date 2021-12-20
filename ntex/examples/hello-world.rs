@@ -11,7 +11,7 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     Server::build()
-        .bind("hello-world", "127.0.0.1:8080", || {
+        .bind("hello-world", "127.0.0.1:8080", |_| {
             HttpService::build()
                 .client_timeout(Seconds(1))
                 .disconnect_timeout(Seconds(1))
