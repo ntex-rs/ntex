@@ -126,26 +126,19 @@ impl IoRef {
     #[inline]
     /// Check if write buffer is full
     pub fn is_write_buf_full(&self) -> bool {
-        if let Some(buf) = self.0.read_buf.take() {
-            let hw = self.memory_pool().write_params_high();
-            let result = buf.len() >= hw;
-            self.0.write_buf.set(Some(buf));
-            result
-        } else {
-            false
-        }
+        let len = self
+            .0
+            .with_write_buf(|buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
+        len >= self.memory_pool().write_params_high()
     }
 
     #[inline]
     /// Check if read buffer is full
     pub fn is_read_buf_full(&self) -> bool {
-        if let Some(buf) = self.0.read_buf.take() {
-            let result = buf.len() >= self.memory_pool().read_params_high();
-            self.0.read_buf.set(Some(buf));
-            result
-        } else {
-            false
-        }
+        let len = self
+            .0
+            .with_read_buf(false, |buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
+        len >= self.memory_pool().read_params_high()
     }
 
     #[inline]
@@ -167,9 +160,6 @@ impl IoRef {
         let mut buf = filter
             .get_write_buf()
             .unwrap_or_else(|| self.memory_pool().get_write_buf());
-        if buf.is_empty() {
-            self.0.write_task.wake();
-        }
 
         let result = f(&mut buf);
         filter.release_write_buf(buf)?;
@@ -182,18 +172,13 @@ impl IoRef {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        let mut buf = self
-            .0
-            .read_buf
-            .take()
-            .unwrap_or_else(|| self.memory_pool().get_read_buf());
-        let res = f(&mut buf);
-        if buf.is_empty() {
-            self.memory_pool().release_read_buf(buf);
-        } else {
-            self.0.read_buf.set(Some(buf));
-        }
-        res
+        self.0.with_read_buf(true, |buf| {
+            // set buf
+            if buf.is_none() {
+                *buf = Some(self.memory_pool().get_read_buf());
+            }
+            f(buf.as_mut().unwrap())
+        })
     }
 
     #[inline]
@@ -252,12 +237,9 @@ impl IoRef {
     where
         U: Decoder,
     {
-        if let Some(mut buf) = self.0.read_buf.take() {
-            let result = codec.decode(&mut buf);
-            self.0.read_buf.set(Some(buf));
-            return result;
-        }
-        Ok(None)
+        self.0.with_read_buf(false, |buf| {
+            buf.as_mut().map(|b| codec.decode(b)).unwrap_or(Ok(None))
+        })
     }
 
     #[inline]
@@ -325,20 +307,20 @@ mod tests {
         assert!(!state.is_read_buf_full());
         assert!(!state.is_write_buf_full());
 
-        let msg = state.next(&BytesCodec).await.unwrap().unwrap();
+        let msg = state.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
 
-        let res = poll_fn(|cx| Poll::Ready(state.poll_read_next(&BytesCodec, cx))).await;
+        let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         assert!(res.is_pending());
         client.write(TEXT);
         sleep(Millis(50)).await;
-        let res = poll_fn(|cx| Poll::Ready(state.poll_read_next(&BytesCodec, cx))).await;
+        let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
             assert_eq!(msg.unwrap().unwrap(), Bytes::from_static(BIN));
         }
 
         client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
-        let msg = state.next(&BytesCodec).await;
+        let msg = state.recv(&BytesCodec).await;
         assert!(msg.unwrap().is_err());
         assert!(state.flags().contains(Flags::IO_ERR));
         assert!(state.flags().contains(Flags::DSP_STOP));
@@ -348,7 +330,7 @@ mod tests {
         let state = Io::new(server);
 
         client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
-        let res = poll_fn(|cx| Poll::Ready(state.poll_read_next(&BytesCodec, cx))).await;
+        let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
             assert!(msg.unwrap().is_err());
             assert!(state.flags().contains(Flags::IO_ERR));
@@ -506,7 +488,7 @@ mod tests {
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
-        let msg = state.next(&BytesCodec).await.unwrap().unwrap();
+        let msg = state.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
 
         state
@@ -537,7 +519,7 @@ mod tests {
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
-        let msg = state.next(&BytesCodec).await.unwrap().unwrap();
+        let msg = state.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
 
         state

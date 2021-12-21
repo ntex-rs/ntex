@@ -74,7 +74,7 @@ where
     log::trace!("reading http1 response");
 
     // read response and init read body
-    let head = if let Some(result) = io.next(&codec).await {
+    let head = if let Some(result) = io.recv(&codec).await {
         let result = result?;
         log::trace!(
             "http1 response is received, type: {:?}, response: {:#?}",
@@ -108,7 +108,7 @@ pub(super) async fn open_tunnel(
     io.send((head, BodySize::None).into(), &codec).await?;
 
     // read response
-    if let Some(head) = io.next(&codec).await {
+    if let Some(head) = io.recv(&codec).await {
         Ok((head?, io, codec))
     } else {
         Err(SendRequestError::from(ConnectError::Disconnected))
@@ -173,7 +173,7 @@ impl Stream for PlStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
-        match this.io.as_ref().unwrap().poll_read_next(&this.codec, cx)? {
+        match this.io.as_ref().unwrap().poll_recv(&this.codec, cx)? {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(chunk)) => {
                 if let Some(chunk) = chunk {

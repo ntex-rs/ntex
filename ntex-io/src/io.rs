@@ -167,6 +167,37 @@ impl IoState {
             Ok(())
         }
     }
+
+    #[inline]
+    pub(super) fn with_read_buf<Fn, Ret>(&self, release: bool, f: Fn) -> Ret
+    where
+        Fn: FnOnce(&mut Option<BytesMut>) -> Ret,
+    {
+        let buf = self.read_buf.as_ptr();
+        let ref_buf = unsafe { buf.as_mut().unwrap() };
+        let result = f(ref_buf);
+
+        // release buffer
+        if release {
+            if let Some(ref buf) = ref_buf {
+                if buf.is_empty() {
+                    let buf = mem::take(ref_buf).unwrap();
+                    self.pool.get().release_read_buf(buf);
+                }
+            }
+        }
+        result
+    }
+
+    #[inline]
+    pub(super) fn with_write_buf<Fn, Ret>(&self, f: Fn) -> Ret
+    where
+        Fn: FnOnce(&mut Option<BytesMut>) -> Ret,
+    {
+        let buf = self.write_buf.as_ptr();
+        let ref_buf = unsafe { buf.as_mut().unwrap() };
+        f(ref_buf)
+    }
 }
 
 impl Eq for IoState {}
@@ -376,14 +407,29 @@ impl<F: Filter> Io<F> {
 impl<F> Io<F> {
     #[inline]
     /// Read incoming io stream and decode codec item.
-    pub async fn next<U>(
+    pub async fn recv<U>(
         &self,
         codec: &U,
     ) -> Option<Result<U::Item, Either<U::Error, io::Error>>>
     where
         U: Decoder,
     {
-        poll_fn(|cx| self.poll_read_next(codec, cx)).await
+        poll_fn(|cx| self.poll_recv(codec, cx)).await
+    }
+
+    #[inline]
+    /// Pause read task
+    pub fn pause(&self) {
+        self.0 .0.insert_flags(Flags::RD_PAUSED);
+    }
+
+    #[inline]
+    /// Wake read io ask if it is paused
+    pub fn resume(&self) {
+        if self.flags().contains(Flags::RD_PAUSED) {
+            self.0 .0.remove_flags(Flags::RD_PAUSED);
+            self.0 .0.read_task.wake();
+        }
     }
 
     #[inline]
@@ -400,13 +446,8 @@ impl<F> Io<F> {
         let mut buf = filter
             .get_write_buf()
             .unwrap_or_else(|| self.memory_pool().get_write_buf());
-
-        let is_write_sleep = buf.is_empty();
         codec.encode(item, &mut buf).map_err(Either::Left)?;
         filter.release_write_buf(buf).map_err(Either::Right)?;
-        if is_write_sleep {
-            self.0 .0.write_task.wake();
-        }
 
         poll_fn(|cx| self.poll_flush(cx, true))
             .await
@@ -422,66 +463,10 @@ impl<F> Io<F> {
         poll_fn(|cx| self.poll_flush(cx, full)).await
     }
 
-    #[doc(hidden)]
-    #[deprecated]
-    #[inline]
-    pub async fn write_ready(&self, full: bool) -> Result<(), io::Error> {
-        poll_fn(|cx| self.poll_flush(cx, full)).await
-    }
-
     #[inline]
     /// Shut down connection
     pub async fn shutdown(&self) -> Result<(), io::Error> {
         poll_fn(|cx| self.poll_shutdown(cx)).await
-    }
-}
-
-impl<F> Io<F> {
-    #[inline]
-    /// Wake write task and instruct to flush data.
-    ///
-    /// If `full` is true then wake up dispatcher when all data is flushed
-    /// otherwise wake up when size of write buffer is lower than
-    /// buffer max size.
-    pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
-        // check io error
-        if !self.0 .0.is_io_open() {
-            return Poll::Ready(Err(self.0 .0.error.take().unwrap_or_else(|| {
-                io::Error::new(io::ErrorKind::Other, "disconnected")
-            })));
-        }
-
-        if let Some(buf) = self.0 .0.write_buf.take() {
-            let len = buf.len();
-            if len != 0 {
-                self.0 .0.write_buf.set(Some(buf));
-
-                if full {
-                    self.0 .0.insert_flags(Flags::WR_WAIT);
-                    self.0 .0.dispatch_task.register(cx.waker());
-                    return Poll::Pending;
-                } else if len >= self.0.memory_pool().write_params_high() << 1 {
-                    self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
-                    self.0 .0.dispatch_task.register(cx.waker());
-                    return Poll::Pending;
-                } else {
-                    self.0 .0.remove_flags(Flags::WR_BACKPRESSURE);
-                }
-            }
-        }
-
-        Poll::Ready(Ok(()))
-    }
-
-    #[doc(hidden)]
-    #[deprecated]
-    #[inline]
-    pub fn poll_write_ready(
-        &self,
-        cx: &mut Context<'_>,
-        full: bool,
-    ) -> Poll<io::Result<()>> {
-        self.poll_flush(cx, full)
     }
 
     #[inline]
@@ -525,7 +510,10 @@ impl<F> Io<F> {
 
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub fn poll_read_next<U>(
+    /// Decode codec item from incoming bytes stream.
+    ///
+    /// Wake read task and request to read more data if data is not enough for decoding.
+    pub fn poll_recv<U>(
         &self,
         codec: &U,
         cx: &mut Context<'_>,
@@ -541,6 +529,69 @@ impl<F> Io<F> {
                 Poll::Ready(None) => Poll::Ready(None),
             },
             Err(err) => Poll::Ready(Some(Err(Either::Left(err)))),
+        }
+    }
+
+    #[inline]
+    /// Wake write task and instruct to flush data.
+    ///
+    /// If `full` is true then wake up dispatcher when all data is flushed
+    /// otherwise wake up when size of write buffer is lower than
+    /// buffer max size.
+    pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
+        // check io error
+        if !self.0 .0.is_io_open() {
+            return Poll::Ready(Err(self.0 .0.error.take().unwrap_or_else(|| {
+                io::Error::new(io::ErrorKind::Other, "disconnected")
+            })));
+        }
+
+        if let Some(buf) = self.0 .0.write_buf.take() {
+            let len = buf.len();
+            if len != 0 {
+                self.0 .0.write_buf.set(Some(buf));
+
+                if full {
+                    self.0 .0.insert_flags(Flags::WR_WAIT);
+                    self.0 .0.dispatch_task.register(cx.waker());
+                    return Poll::Pending;
+                } else if len >= self.0.memory_pool().write_params_high() << 1 {
+                    self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
+                    self.0 .0.dispatch_task.register(cx.waker());
+                    return Poll::Pending;
+                } else {
+                    self.0 .0.remove_flags(Flags::WR_BACKPRESSURE);
+                }
+            }
+        }
+
+        Poll::Ready(Ok(()))
+    }
+
+    #[inline]
+    /// Wait until write task flushes data to io stream
+    ///
+    /// Write task must be waken up separately.
+    pub fn poll_write_backpressure(&self, cx: &mut Context<'_>) -> Poll<()> {
+        if !self.is_io_open() {
+            Poll::Ready(())
+        } else if self.flags().contains(Flags::WR_BACKPRESSURE) {
+            self.0 .0.dispatch_task.register(cx.waker());
+            Poll::Pending
+        } else {
+            let len = self
+                .0
+                 .0
+                .with_write_buf(|buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
+            let hw = self.memory_pool().write_params_high();
+            if len >= hw {
+                log::trace!("enable write back-pressure");
+                self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
+                self.0 .0.dispatch_task.register(cx.waker());
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
         }
     }
 
@@ -565,30 +616,55 @@ impl<F> Io<F> {
         }
     }
 
+    #[doc(hidden)]
+    #[deprecated]
     #[inline]
-    /// Pause read task
-    pub fn pause(&self, cx: &mut Context<'_>) {
-        self.0 .0.insert_flags(Flags::RD_PAUSED);
-        self.0 .0.dispatch_task.register(cx.waker());
+    pub async fn next<U>(
+        &self,
+        codec: &U,
+    ) -> Option<Result<U::Item, Either<U::Error, io::Error>>>
+    where
+        U: Decoder,
+    {
+        self.recv(codec).await
     }
 
+    #[doc(hidden)]
+    #[deprecated]
     #[inline]
-    /// Wake read io task if it is paused
-    pub fn resume(&self) -> bool {
-        let flags = self.0 .0.flags.get();
-        if flags.contains(Flags::RD_PAUSED) {
-            self.0 .0.remove_flags(Flags::RD_PAUSED);
-            self.0 .0.read_task.wake();
-            true
-        } else {
-            false
-        }
+    pub async fn write_ready(&self, full: bool) -> Result<(), io::Error> {
+        poll_fn(|cx| self.poll_flush(cx, full)).await
     }
 
+    #[doc(hidden)]
+    #[deprecated]
     #[inline]
-    /// Wait until write task flushes data to io stream
-    ///
-    /// Write task must be waken up separately.
+    pub fn poll_write_ready(
+        &self,
+        cx: &mut Context<'_>,
+        full: bool,
+    ) -> Poll<io::Result<()>> {
+        self.poll_flush(cx, full)
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
+    #[inline]
+    #[allow(clippy::type_complexity)]
+    pub fn poll_read_next<U>(
+        &self,
+        codec: &U,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<U::Item, Either<U::Error, io::Error>>>>
+    where
+        U: Decoder,
+    {
+        self.poll_recv(codec, cx)
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
+    #[inline]
     pub fn enable_write_backpressure(&self, cx: &mut Context<'_>) {
         log::trace!("enable write back-pressure for dispatcher");
         self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);

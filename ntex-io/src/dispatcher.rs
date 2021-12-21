@@ -4,8 +4,8 @@ use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll, time}
 use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::{IntoService, Service};
-use ntex_util::future::Either;
 use ntex_util::time::{now, Seconds};
+use ntex_util::{future::Either, ready};
 
 use super::{rt::spawn, DispatchItem, IoBoxed, IoRef, Timer};
 
@@ -203,50 +203,46 @@ where
 
         // handle memory pool pressure
         if slf.pool.poll_ready(cx).is_pending() {
-            io.pause(cx);
+            io.pause();
             return Poll::Pending;
         }
 
         loop {
             match slf.st.get() {
                 DispatcherState::Processing => {
-                    let result = if let Poll::Ready(result) =
-                        slf.poll_service(this.service, cx, io)
-                    {
-                        result
-                    } else {
-                        return Poll::Pending;
-                    };
-
-                    let item = match result {
+                    let item = match ready!(slf.poll_service(this.service, cx, io)) {
                         PollService::Ready => {
-                            if !io.is_write_ready() {
-                                // instruct write task to notify dispatcher when data is flushed
-                                io.enable_write_backpressure(cx);
-                                slf.st.set(DispatcherState::Backpressure);
-                                DispatchItem::WBackPressureEnabled
-                            } else {
-                                // decode incoming bytes if buffer is ready
-                                match io.poll_read_next(&slf.shared.codec, cx) {
-                                    Poll::Ready(Some(Ok(el))) => {
-                                        slf.update_keepalive();
-                                        DispatchItem::Item(el)
-                                    }
-                                    Poll::Ready(Some(Err(Either::Left(err)))) => {
-                                        slf.st.set(DispatcherState::Stop);
-                                        slf.unregister_keepalive();
-                                        DispatchItem::DecoderError(err)
-                                    }
-                                    Poll::Ready(Some(Err(Either::Right(err)))) => {
-                                        slf.st.set(DispatcherState::Stop);
-                                        slf.unregister_keepalive();
-                                        DispatchItem::Disconnect(Some(err))
-                                    }
-                                    Poll::Ready(None) => DispatchItem::Disconnect(None),
-                                    Poll::Pending => {
-                                        log::trace!("not enough data to decode next frame, register dispatch task");
-                                        io.resume();
-                                        return Poll::Pending;
+                            match io.poll_write_backpressure(cx) {
+                                Poll::Pending => {
+                                    // instruct write task to notify dispatcher when data is flushed
+                                    slf.st.set(DispatcherState::Backpressure);
+                                    DispatchItem::WBackPressureEnabled
+                                }
+                                Poll::Ready(()) => {
+                                    // decode incoming bytes if buffer is ready
+                                    match io.poll_recv(&slf.shared.codec, cx) {
+                                        Poll::Ready(Some(Ok(el))) => {
+                                            slf.update_keepalive();
+                                            DispatchItem::Item(el)
+                                        }
+                                        Poll::Ready(Some(Err(Either::Left(err)))) => {
+                                            slf.st.set(DispatcherState::Stop);
+                                            slf.unregister_keepalive();
+                                            DispatchItem::DecoderError(err)
+                                        }
+                                        Poll::Ready(Some(Err(Either::Right(err)))) => {
+                                            slf.st.set(DispatcherState::Stop);
+                                            slf.unregister_keepalive();
+                                            DispatchItem::Disconnect(Some(err))
+                                        }
+                                        Poll::Ready(None) => {
+                                            DispatchItem::Disconnect(None)
+                                        }
+                                        Poll::Pending => {
+                                            log::trace!("not enough data to decode next frame, register dispatch task");
+                                            io.resume();
+                                            return Poll::Pending;
+                                        }
                                     }
                                 }
                             }
@@ -274,13 +270,10 @@ where
                 }
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
-                    let result = match slf.poll_service(this.service, cx, io) {
-                        Poll::Ready(result) => result,
-                        Poll::Pending => return Poll::Pending,
-                    };
+                    let result = ready!(slf.poll_service(this.service, cx, io));
                     let item = match result {
                         PollService::Ready => {
-                            if io.is_write_ready() {
+                            if slf.io.poll_write_backpressure(cx).is_ready() {
                                 slf.st.set(DispatcherState::Processing);
                                 DispatchItem::WBackPressureDisabled
                             } else {
@@ -308,7 +301,7 @@ where
                         slf.spawn_service_call(this.service.call(item));
                     }
                 }
-                // drain service responses
+                // drain service responses and shutdown io
                 DispatcherState::Stop => {
                     // service may relay on poll_ready for response results
                     if !this.inner.ready_err.get() {
@@ -434,7 +427,7 @@ where
             // pause io read task
             Poll::Pending => {
                 log::trace!("service is not ready, register dispatch task");
-                io.pause(cx);
+                io.pause();
                 Poll::Pending
             }
             // handle service readiness error

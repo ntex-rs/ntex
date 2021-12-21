@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.0-b.2] - 2021-12-xx
+
+* Refactor write back-pressure for http1
+
 ## [0.5.0-b.1] - 2021-12-20
 
 * Refactor http/1 dispatcher

@@ -76,12 +76,6 @@ struct DispatcherInner<F, S, B, X, U> {
     _t: marker::PhantomData<(S, B)>,
 }
 
-enum WritePayloadStatus<B> {
-    Next(State<B>),
-    Pause,
-    Continue,
-}
-
 impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
 where
     F: Filter + 'static,
@@ -128,6 +122,12 @@ where
     }
 }
 
+macro_rules! set_error ({ $slf:tt, $err:ident } => {
+    *$slf.st = State::Stop;
+    $slf.inner.error = Some($err);
+    $slf.inner.unregister_keepalive();
+});
+
 impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
 where
     F: Filter,
@@ -167,9 +167,7 @@ where
                                         if let Err(e) =
                                             ready!(this.inner.poll_read_payload(cx))
                                         {
-                                            *this.st = State::Stop;
-                                            this.inner.unregister_keepalive();
-                                            this.inner.error = Some(e);
+                                            set_error!(this, e);
                                         }
                                     } else {
                                         return Poll::Pending;
@@ -286,7 +284,7 @@ where
                     let io = this.inner.io();
 
                     // decode incoming bytes stream
-                    match io.poll_read_next(&this.inner.codec, cx) {
+                    match io.poll_recv(&this.inner.codec, cx) {
                         Poll::Ready(Some(Ok((mut req, pl)))) => {
                             log::trace!(
                                 "http message is received: {:?} and payload {:?}",
@@ -363,19 +361,14 @@ where
                         Poll::Ready(Some(Err(Either::Right(err)))) => {
                             log::trace!("peer is gone with {:?}", err);
                             // peer is gone
-                            *this.st = State::Stop;
-                            this.inner.unregister_keepalive();
-                            this.inner.state.stop_dispatcher();
-                            return Poll::Ready(Err(DispatchError::Disconnect(Some(
-                                err,
-                            ))));
+                            let e = DispatchError::Disconnect(Some(err));
+                            set_error!(this, e);
                         }
                         Poll::Ready(None) => {
                             log::trace!("peer is gone");
                             // peer is gone
-                            this.inner.unregister_keepalive();
-                            this.inner.state.stop_dispatcher();
-                            return Poll::Ready(Err(DispatchError::Disconnect(None)));
+                            let e = DispatchError::Disconnect(None);
+                            set_error!(this, e);
                         }
                         Poll::Pending => {
                             log::trace!("not enough data to decode http message");
@@ -389,35 +382,25 @@ where
                         *this.st = this.inner.switch_to_read_request();
                     }
                     Err(e) => {
-                        *this.st = State::Stop;
-                        this.inner.error = Some(e);
-                        this.inner.unregister_keepalive();
+                        set_error!(this, e);
                     }
                 },
                 // send response body
                 State::SendPayload { ref mut body } => {
                     if !this.inner.state.is_io_open() {
-                        *this.st = State::Stop;
-                        this.inner.error = Some(this.inner.state.take_error().into());
-                        this.inner.unregister_keepalive();
+                        let e = this.inner.state.take_error().into();
+                        set_error!(this, e);
                     } else if let Poll::Ready(Err(e)) = this.inner.poll_read_payload(cx)
                     {
-                        *this.st = State::Stop;
-                        this.inner.error = Some(e);
-                        this.inner.unregister_keepalive();
+                        set_error!(this, e);
                     } else {
-                        match body.poll_next_chunk(cx) {
-                            Poll::Ready(item) => match this.inner.send_payload(item) {
-                                WritePayloadStatus::Next(st) => {
-                                    *this.st = st;
-                                }
-                                WritePayloadStatus::Pause => {
-                                    this.inner.io().enable_write_backpressure(cx);
-                                    return Poll::Pending;
-                                }
-                                WritePayloadStatus::Continue => (),
-                            },
-                            Poll::Pending => return Poll::Pending,
+                        loop {
+                            ready!(this.inner.io().poll_write_backpressure(cx));
+                            let item = ready!(body.poll_next_chunk(cx));
+                            if let Some(st) = this.inner.send_payload(item) {
+                                *this.st = st;
+                                break;
+                            }
                         }
                     }
                 }
@@ -579,21 +562,15 @@ where
     fn send_payload(
         &mut self,
         item: Option<Result<Bytes, Box<dyn Error>>>,
-    ) -> WritePayloadStatus<B> {
+    ) -> Option<State<B>> {
         match item {
             Some(Ok(item)) => {
                 trace!("got response chunk: {:?}", item.len());
                 match self.io().encode(Message::Chunk(Some(item)), &self.codec) {
+                    Ok(_) => None,
                     Err(err) => {
                         self.error = Some(DispatchError::Encode(err));
-                        WritePayloadStatus::Next(State::Stop)
-                    }
-                    Ok(has_space) => {
-                        if has_space {
-                            WritePayloadStatus::Continue
-                        } else {
-                            WritePayloadStatus::Pause
-                        }
+                        Some(State::Stop)
                     }
                 }
             }
@@ -601,20 +578,20 @@ where
                 trace!("response payload eof");
                 if let Err(err) = self.io().encode(Message::Chunk(None), &self.codec) {
                     self.error = Some(DispatchError::Encode(err));
-                    WritePayloadStatus::Next(State::Stop)
+                    Some(State::Stop)
                 } else if self.flags.contains(Flags::SENDPAYLOAD_AND_STOP) {
-                    WritePayloadStatus::Next(State::Stop)
+                    Some(State::Stop)
                 } else if self.payload.is_some() {
-                    WritePayloadStatus::Next(State::ReadPayload)
+                    Some(State::ReadPayload)
                 } else {
                     self.reset_keepalive();
-                    WritePayloadStatus::Next(self.switch_to_read_request())
+                    Some(self.switch_to_read_request())
                 }
             }
             Some(Err(e)) => {
                 trace!("error during response body poll: {:?}", e);
                 self.error = Some(DispatchError::ResponsePayload(e));
-                WritePayloadStatus::Next(State::Stop)
+                Some(State::Stop)
             }
         }
     }
@@ -633,7 +610,8 @@ where
                     // read request payload
                     let mut updated = false;
                     loop {
-                        match io.poll_read_next(&payload.0, cx) {
+                        let res = io.poll_recv(&payload.0, cx);
+                        match res {
                             Poll::Ready(Some(Ok(PayloadItem::Chunk(chunk)))) => {
                                 updated = true;
                                 payload.1.feed_data(chunk);
@@ -1029,6 +1007,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_write_backpressure() {
+        env_logger::init();
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
 
