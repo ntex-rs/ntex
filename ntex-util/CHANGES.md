@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.4] - 2021-12-21
+
+* mpsc: add Receiver::poll_recv() method
+
 ## [0.1.3] - 2021-12-18
 
 * move ntex::channel::mpsc

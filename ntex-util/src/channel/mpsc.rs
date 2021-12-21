@@ -164,17 +164,11 @@ impl<T> Receiver<T> {
     pub fn is_closed(&self) -> bool {
         self.shared.strong_count() == 1 || !self.shared.get_ref().has_receiver
     }
-}
 
-impl<T> Unpin for Receiver<T> {}
-
-impl<T> Stream for Receiver<T> {
-    type Item = T;
-
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    /// Attempt to pull out the next value of this receiver, registering
+    /// the current task for wakeup if the value is not yet available,
+    /// and returning None if the stream is exhausted.
+    pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
         let shared = self.shared.get_mut();
 
         if let Some(msg) = shared.buffer.pop_front() {
@@ -191,6 +185,19 @@ impl<T> Stream for Receiver<T> {
         } else {
             Poll::Ready(None)
         }
+    }
+}
+
+impl<T> Unpin for Receiver<T> {}
+
+impl<T> Stream for Receiver<T> {
+    type Item = T;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        self.poll_recv(cx)
     }
 }
 
