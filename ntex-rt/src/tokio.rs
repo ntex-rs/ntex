@@ -41,13 +41,30 @@ pub fn tcp_connect_in(
 
 #[cfg(unix)]
 /// Opens a unix stream connection.
-pub fn unix_connect<P>(addr: P) -> Pin<Box<dyn Future<Output = Result<Io, io::Error>>>>
+pub fn unix_connect<'a, P>(
+    addr: P,
+) -> Pin<Box<dyn Future<Output = Result<Io, io::Error>> + 'a>>
 where
-    P: AsRef<Path> + 'static,
+    P: AsRef<Path> + 'a,
 {
     Box::pin(async move {
         let sock = tok_io::net::UnixStream::connect(addr).await?;
         Ok(Io::new(sock))
+    })
+}
+
+#[cfg(unix)]
+/// Opens a unix stream connection and specified memory pool.
+pub fn unix_connect_in<'a, P>(
+    addr: P,
+    pool: PoolRef,
+) -> Pin<Box<dyn Future<Output = Result<Io, io::Error>> + 'a>>
+where
+    P: AsRef<Path> + 'a,
+{
+    Box::pin(async move {
+        let sock = tok_io::net::UnixStream::connect(addr).await?;
+        Ok(Io::with_memory_pool(sock, pool))
     })
 }
 

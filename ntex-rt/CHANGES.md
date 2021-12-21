@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.1] - 2021-12-xx
+
+* Fix lifetimes for unix_connect/unix_connect_in
+
 ## [0.3.2] - 2021-12-10
 
 * Set spawn fn to ntex-util
