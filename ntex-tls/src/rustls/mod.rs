@@ -166,7 +166,7 @@ impl Clone for TlsAcceptor {
     }
 }
 
-impl<F: Filter + 'static> FilterFactory<F> for TlsAcceptor {
+impl<F: Filter> FilterFactory<F> for TlsAcceptor {
     type Filter = TlsFilter<F>;
 
     type Error = io::Error;
@@ -221,7 +221,7 @@ impl Clone for TlsConnectorConfigured {
     }
 }
 
-impl<F: Filter + 'static> FilterFactory<F> for TlsConnectorConfigured {
+impl<F: Filter> FilterFactory<F> for TlsConnectorConfigured {
     type Filter = TlsFilter<F>;
 
     type Error = io::Error;

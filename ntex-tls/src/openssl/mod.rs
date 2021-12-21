@@ -242,7 +242,7 @@ impl Clone for SslAcceptor {
     }
 }
 
-impl<F: Filter + 'static> FilterFactory<F> for SslAcceptor {
+impl<F: Filter> FilterFactory<F> for SslAcceptor {
     type Filter = SslFilter<F>;
 
     type Error = Box<dyn Error>;
@@ -297,7 +297,7 @@ impl SslConnector {
     }
 }
 
-impl<F: Filter + 'static> FilterFactory<F> for SslConnector {
+impl<F: Filter> FilterFactory<F> for SslConnector {
     type Filter = SslFilter<F>;
 
     type Error = Box<dyn Error>;
