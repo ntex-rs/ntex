@@ -41,19 +41,19 @@ async fn web_ws() {
     io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
         .await
         .unwrap();
-    let item = io.next(&codec).await.unwrap().unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
 
     io.send(ws::Message::Binary("text".into()), &codec)
         .await
         .unwrap();
-    let item = io.next(&codec).await.unwrap().unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 
     io.send(ws::Message::Ping("text".into()), &codec)
         .await
         .unwrap();
-    let item = io.next(&codec).await.unwrap().unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
 
     io.send(
@@ -63,7 +63,7 @@ async fn web_ws() {
     .await
     .unwrap();
 
-    let item = io.next(&codec).await.unwrap().unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
 }
 

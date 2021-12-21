@@ -2,7 +2,13 @@
 
 ## [0.1.0-b.3] - 2021-12-xx
 
+* Add .poll_write_backpressure()
+
+* Rename .poll_read_next() to .poll_recv()
+
 * Rename .poll_write_ready() to .poll_flush()
+
+* Rename .next() to .recv()
 
 * Rename .write_ready() to .flush()
 

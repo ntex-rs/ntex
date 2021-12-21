@@ -100,7 +100,7 @@ async fn test_simple() {
     io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
         .await
         .unwrap();
-    let item = io.next(&codec).await;
+    let item = io.recv(&codec).await;
     assert_eq!(
         item.unwrap().unwrap(),
         ws::Frame::Text(Bytes::from_static(b"text"))
@@ -109,7 +109,7 @@ async fn test_simple() {
     io.send(ws::Message::Binary("text".into()), &codec)
         .await
         .unwrap();
-    let item = io.next(&codec).await;
+    let item = io.recv(&codec).await;
     assert_eq!(
         item.unwrap().unwrap(),
         ws::Frame::Binary(Bytes::from_static(&b"text"[..]))
@@ -118,7 +118,7 @@ async fn test_simple() {
     io.send(ws::Message::Ping("text".into()), &codec)
         .await
         .unwrap();
-    let item = io.next(&codec).await;
+    let item = io.recv(&codec).await;
     assert_eq!(
         item.unwrap().unwrap(),
         ws::Frame::Pong("text".to_string().into())
@@ -130,7 +130,7 @@ async fn test_simple() {
     )
     .await
     .unwrap();
-    let item = io.next(&codec).await;
+    let item = io.recv(&codec).await;
     assert_eq!(
         item.unwrap().unwrap(),
         ws::Frame::Continuation(ws::Item::FirstText(Bytes::from_static(b"text")))
@@ -157,7 +157,7 @@ async fn test_simple() {
     )
     .await
     .unwrap();
-    let item = io.next(&codec).await;
+    let item = io.recv(&codec).await;
     assert_eq!(
         item.unwrap().unwrap(),
         ws::Frame::Continuation(ws::Item::Continue(Bytes::from_static(b"text")))
@@ -169,7 +169,7 @@ async fn test_simple() {
     )
     .await
     .unwrap();
-    let item = io.next(&codec).await;
+    let item = io.recv(&codec).await;
     assert_eq!(
         item.unwrap().unwrap(),
         ws::Frame::Continuation(ws::Item::Last(Bytes::from_static(b"text")))
@@ -197,7 +197,7 @@ async fn test_simple() {
     )
     .await
     .unwrap();
-    let item = io.next(&codec).await;
+    let item = io.recv(&codec).await;
     assert_eq!(
         item.unwrap().unwrap(),
         ws::Frame::Continuation(ws::Item::FirstBinary(Bytes::from_static(b"bin")))
@@ -209,7 +209,7 @@ async fn test_simple() {
     )
     .await
     .unwrap();
-    let item = io.next(&codec).await;
+    let item = io.recv(&codec).await;
     assert_eq!(
         item.unwrap().unwrap(),
         ws::Frame::Continuation(ws::Item::Continue(Bytes::from_static(b"text")))
@@ -221,7 +221,7 @@ async fn test_simple() {
     )
     .await
     .unwrap();
-    let item = io.next(&codec).await;
+    let item = io.recv(&codec).await;
     assert_eq!(
         item.unwrap().unwrap(),
         ws::Frame::Continuation(ws::Item::Last(Bytes::from_static(b"text")))
@@ -234,7 +234,7 @@ async fn test_simple() {
     .await
     .unwrap();
 
-    let item = io.next(&codec).await;
+    let item = io.recv(&codec).await;
     assert_eq!(
         item.unwrap().unwrap(),
         ws::Frame::Close(Some(ws::CloseCode::Normal.into()))
