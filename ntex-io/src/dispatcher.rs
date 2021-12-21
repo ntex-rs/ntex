@@ -221,21 +221,21 @@ where
                                 Poll::Ready(()) => {
                                     // decode incoming bytes if buffer is ready
                                     match io.poll_recv(&slf.shared.codec, cx) {
-                                        Poll::Ready(Some(Ok(el))) => {
+                                        Poll::Ready(Ok(Some(el))) => {
                                             slf.update_keepalive();
                                             DispatchItem::Item(el)
                                         }
-                                        Poll::Ready(Some(Err(Either::Left(err)))) => {
+                                        Poll::Ready(Err(Either::Left(err))) => {
                                             slf.st.set(DispatcherState::Stop);
                                             slf.unregister_keepalive();
                                             DispatchItem::DecoderError(err)
                                         }
-                                        Poll::Ready(Some(Err(Either::Right(err)))) => {
+                                        Poll::Ready(Err(Either::Right(err))) => {
                                             slf.st.set(DispatcherState::Stop);
                                             slf.unregister_keepalive();
                                             DispatchItem::Disconnect(Some(err))
                                         }
-                                        Poll::Ready(None) => {
+                                        Poll::Ready(Ok(None)) => {
                                             DispatchItem::Disconnect(None)
                                         }
                                         Poll::Pending => {

@@ -97,7 +97,7 @@ async fn test_simple() {
     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
 
     let (_, io, codec) = conn.into_inner();
-    io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
+    io.send(&codec, ws::Message::Text(ByteString::from_static("text")))
         .await
         .unwrap();
     let item = io.recv(&codec).await;
@@ -106,7 +106,7 @@ async fn test_simple() {
         ws::Frame::Text(Bytes::from_static(b"text"))
     );
 
-    io.send(ws::Message::Binary("text".into()), &codec)
+    io.send(&codec, ws::Message::Binary("text".into()))
         .await
         .unwrap();
     let item = io.recv(&codec).await;
@@ -115,7 +115,7 @@ async fn test_simple() {
         ws::Frame::Binary(Bytes::from_static(&b"text"[..]))
     );
 
-    io.send(ws::Message::Ping("text".into()), &codec)
+    io.send(&codec, ws::Message::Ping("text".into()))
         .await
         .unwrap();
     let item = io.recv(&codec).await;
@@ -125,8 +125,8 @@ async fn test_simple() {
     );
 
     io.send(
-        ws::Message::Continuation(ws::Item::FirstText("text".into())),
         &codec,
+        ws::Message::Continuation(ws::Item::FirstText("text".into())),
     )
     .await
     .unwrap();
@@ -138,22 +138,22 @@ async fn test_simple() {
 
     assert!(io
         .send(
+            &codec,
             ws::Message::Continuation(ws::Item::FirstText("text".into())),
-            &codec
         )
         .await
         .is_err());
     assert!(io
         .send(
+            &codec,
             ws::Message::Continuation(ws::Item::FirstBinary("text".into())),
-            &codec
         )
         .await
         .is_err());
 
     io.send(
-        ws::Message::Continuation(ws::Item::Continue("text".into())),
         &codec,
+        ws::Message::Continuation(ws::Item::Continue("text".into())),
     )
     .await
     .unwrap();
@@ -164,8 +164,8 @@ async fn test_simple() {
     );
 
     io.send(
-        ws::Message::Continuation(ws::Item::Last("text".into())),
         &codec,
+        ws::Message::Continuation(ws::Item::Last("text".into())),
     )
     .await
     .unwrap();
@@ -177,23 +177,23 @@ async fn test_simple() {
 
     assert!(io
         .send(
+            &codec,
             ws::Message::Continuation(ws::Item::Continue("text".into())),
-            &codec
         )
         .await
         .is_err());
 
     assert!(io
         .send(
+            &codec,
             ws::Message::Continuation(ws::Item::Last("text".into())),
-            &codec
         )
         .await
         .is_err());
 
     io.send(
-        ws::Message::Continuation(ws::Item::FirstBinary(Bytes::from_static(b"bin"))),
         &codec,
+        ws::Message::Continuation(ws::Item::FirstBinary(Bytes::from_static(b"bin"))),
     )
     .await
     .unwrap();
@@ -204,8 +204,8 @@ async fn test_simple() {
     );
 
     io.send(
-        ws::Message::Continuation(ws::Item::Continue("text".into())),
         &codec,
+        ws::Message::Continuation(ws::Item::Continue("text".into())),
     )
     .await
     .unwrap();
@@ -216,8 +216,8 @@ async fn test_simple() {
     );
 
     io.send(
-        ws::Message::Continuation(ws::Item::Last("text".into())),
         &codec,
+        ws::Message::Continuation(ws::Item::Last("text".into())),
     )
     .await
     .unwrap();
@@ -228,8 +228,8 @@ async fn test_simple() {
     );
 
     io.send(
-        ws::Message::Close(Some(ws::CloseCode::Normal.into())),
         &codec,
+        ws::Message::Close(Some(ws::CloseCode::Normal.into())),
     )
     .await
     .unwrap();

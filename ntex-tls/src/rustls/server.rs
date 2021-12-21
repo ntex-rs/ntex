@@ -251,12 +251,11 @@ impl<F: Filter> TlsServerFilter<F> {
                 };
                 if result.is_ok() && wants_read {
                     poll_fn(|cx| {
-                        match ready!(io.poll_read_ready(cx)) {
+                        match ready!(io.poll_read_ready(cx))? {
+                            Some(_) => Ok(()),
                             None => {
                                 Err(io::Error::new(io::ErrorKind::Other, "disconnected"))
                             }
-                            Some(Err(e)) => Err(e),
-                            _ => Ok(()),
                         }?;
                         Poll::Ready(Ok::<_, io::Error>(()))
                     })
@@ -267,13 +266,12 @@ impl<F: Filter> TlsServerFilter<F> {
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                         poll_fn(|cx| {
                             let read_ready = if wants_read {
-                                match ready!(io.poll_read_ready(cx)) {
+                                match ready!(io.poll_read_ready(cx))? {
+                                    Some(_) => Ok(true),
                                     None => Err(io::Error::new(
                                         io::ErrorKind::Other,
                                         "disconnected",
                                     )),
-                                    Some(Err(e)) => Err(e),
-                                    Some(Ok(_)) => Ok(true),
                                 }?
                             } else {
                                 true

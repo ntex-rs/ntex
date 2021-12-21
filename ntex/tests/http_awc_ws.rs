@@ -54,27 +54,27 @@ async fn test_simple() {
 
     // client service
     let (_, io, codec) = srv.ws().await.unwrap().into_inner();
-    io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
+    io.send(&codec, ws::Message::Text(ByteString::from_static("text")))
         .await
         .unwrap();
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
 
-    io.send(ws::Message::Binary("text".into()), &codec)
+    io.send(&codec, ws::Message::Binary("text".into()))
         .await
         .unwrap();
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 
-    io.send(ws::Message::Ping("text".into()), &codec)
+    io.send(&codec, ws::Message::Ping("text".into()))
         .await
         .unwrap();
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
 
     io.send(
-        ws::Message::Close(Some(ws::CloseCode::Normal.into())),
         &codec,
+        ws::Message::Close(Some(ws::CloseCode::Normal.into())),
     )
     .await
     .unwrap();

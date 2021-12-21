@@ -341,10 +341,10 @@ fn handle_result<T, F>(
         Err(e) => match e.code() {
             ssl::ErrorCode::WANT_READ => {
                 match ready!(io.poll_read_ready(cx)) {
-                    None => Err::<_, Box<dyn Error>>(
+                    Ok(None) => Err::<_, Box<dyn Error>>(
                         io::Error::new(io::ErrorKind::Other, "disconnected").into(),
                     ),
-                    Some(Err(err)) => Err(err.into()),
+                    Err(err) => Err(err.into()),
                     _ => Ok(()),
                 }?;
                 Poll::Pending

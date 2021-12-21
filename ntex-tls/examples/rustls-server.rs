@@ -41,25 +41,25 @@ async fn main() -> io::Result<()> {
                     println!("New client is connected");
 
                     io.send(
-                        ntex_bytes::Bytes::from_static(b"Welcome!\n"),
                         &codec::BytesCodec,
+                        ntex_bytes::Bytes::from_static(b"Welcome!\n"),
                     )
                     .await
                     .map_err(Either::into_inner)?;
 
                     loop {
-                        match io.next(&codec::BytesCodec).await {
-                            Some(Ok(msg)) => {
+                        match io.recv(&codec::BytesCodec).await {
+                            Ok(Some(msg)) => {
                                 println!("Got message: {:?}", msg);
-                                io.send(msg.freeze(), &codec::BytesCodec)
+                                io.send(&codec::BytesCodec, msg.freeze())
                                     .await
                                     .map_err(Either::into_inner)?;
                             }
-                            Some(Err(e)) => {
+                            Err(e) => {
                                 println!("Got error: {:?}", e);
                                 break;
                             }
-                            None => break,
+                            Ok(None) => break,
                         }
                     }
                     println!("Client is disconnected");

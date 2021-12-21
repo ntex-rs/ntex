@@ -59,7 +59,7 @@ where
 
     // send request
     let codec = h1::ClientCodec::default();
-    io.send((head, body.size()).into(), &codec).await?;
+    io.send(&codec, (head, body.size()).into()).await?;
 
     log::trace!("http1 request has been sent");
 
@@ -74,8 +74,7 @@ where
     log::trace!("reading http1 response");
 
     // read response and init read body
-    let head = if let Some(result) = io.recv(&codec).await {
-        let result = result?;
+    let head = if let Some(result) = io.recv(&codec).await? {
         log::trace!(
             "http1 response is received, type: {:?}, response: {:#?}",
             codec.message_type(),
@@ -105,11 +104,11 @@ pub(super) async fn open_tunnel(
 ) -> Result<(ResponseHead, IoBoxed, h1::ClientCodec), SendRequestError> {
     // create Framed and send request
     let codec = h1::ClientCodec::default();
-    io.send((head, BodySize::None).into(), &codec).await?;
+    io.send(&codec, (head, BodySize::None).into()).await?;
 
     // read response
-    if let Some(head) = io.recv(&codec).await {
-        Ok((head?, io, codec))
+    if let Some(head) = io.recv(&codec).await? {
+        Ok((head, io, codec))
     } else {
         Err(SendRequestError::from(ConnectError::Disconnected))
     }

@@ -321,7 +321,7 @@ mod tests {
 
         client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
         let msg = state.recv(&BytesCodec).await;
-        assert!(msg.unwrap().is_err());
+        assert!(msg.is_err());
         assert!(state.flags().contains(Flags::IO_ERR));
         assert!(state.flags().contains(Flags::DSP_STOP));
 
@@ -332,7 +332,7 @@ mod tests {
         client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
-            assert!(msg.unwrap().is_err());
+            assert!(msg.is_err());
             assert!(state.flags().contains(Flags::IO_ERR));
             assert!(state.flags().contains(Flags::DSP_STOP));
         }
@@ -341,14 +341,14 @@ mod tests {
         client.remote_buffer_cap(1024);
         let state = Io::new(server);
         state
-            .send(Bytes::from_static(b"test"), &BytesCodec)
+            .send(&BytesCodec, Bytes::from_static(b"test"))
             .await
             .unwrap();
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         client.write_error(io::Error::new(io::ErrorKind::Other, "err"));
-        let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
+        let res = state.send(&BytesCodec, Bytes::from_static(b"test")).await;
         assert!(res.is_err());
         assert!(state.flags().contains(Flags::IO_ERR));
         assert!(state.flags().contains(Flags::DSP_STOP));
@@ -492,7 +492,7 @@ mod tests {
         assert_eq!(msg, Bytes::from_static(BIN));
 
         state
-            .send(Bytes::from_static(b"test"), &BytesCodec)
+            .send(&BytesCodec, Bytes::from_static(b"test"))
             .await
             .unwrap();
         let buf = client.read().await.unwrap();
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(msg, Bytes::from_static(BIN));
 
         state
-            .send(Bytes::from_static(b"test"), &BytesCodec)
+            .send(&BytesCodec, Bytes::from_static(b"test"))
             .await
             .unwrap();
         let buf = client.read().await.unwrap();

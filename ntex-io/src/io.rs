@@ -410,7 +410,7 @@ impl<F> Io<F> {
     pub async fn recv<U>(
         &self,
         codec: &U,
-    ) -> Option<Result<U::Item, Either<U::Error, io::Error>>>
+    ) -> Result<Option<U::Item>, Either<U::Error, io::Error>>
     where
         U: Decoder,
     {
@@ -418,8 +418,8 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Wake read task and instruct to read more data
-    pub async fn read_ready(&self) -> Option<io::Result<()>> {
+    /// Wait until read becomes ready.
+    pub async fn read_ready(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_ready(cx)).await
     }
 
@@ -442,8 +442,8 @@ impl<F> Io<F> {
     /// Encode item, send to a peer
     pub async fn send<U>(
         &self,
-        item: U::Item,
         codec: &U,
+        item: U::Item,
     ) -> Result<(), Either<U::Error, io::Error>>
     where
         U: Encoder,
@@ -470,22 +470,31 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Shut down connection
+    /// Shut down io stream
     pub async fn shutdown(&self) -> Result<(), io::Error> {
         poll_fn(|cx| self.poll_shutdown(cx)).await
     }
 
     #[inline]
-    /// Wake read task and instruct to read more data
+    /// Polls for read readiness.
     ///
-    /// Read task is awake only if back-pressure is enabled
-    /// otherwise it is already awake. Buffer read status gets clean up.
-    pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Option<io::Result<()>>> {
+    /// If the io stream is not currently ready for reading,
+    /// this method will store a clone of the Waker from the provided Context.
+    /// When the io stream becomes ready for reading, Waker::wake will be called on the waker.
+    ///
+    /// Return value
+    /// The function returns:
+    ///
+    /// `Poll::Pending` if the io stream is not ready for reading.
+    /// `Poll::Ready(Ok(Some(()))))` if the io stream is ready for reading.
+    /// `Poll::Ready(Ok(None))` if io stream is disconnected
+    /// `Some(Poll::Ready(Err(e)))` if an error is encountered.
+    pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         if !self.0 .0.is_io_open() {
             if let Some(err) = self.0 .0.error.take() {
-                Poll::Ready(Some(Err(err)))
+                Poll::Ready(Err(err))
             } else {
-                Poll::Ready(None)
+                Poll::Ready(Ok(None))
             }
         } else {
             self.0 .0.dispatch_task.register(cx.waker());
@@ -498,7 +507,7 @@ impl<F> Io<F> {
                 self.0 .0.read_task.wake();
                 self.0 .0.flags.set(flags);
                 if ready {
-                    Poll::Ready(Some(Ok(())))
+                    Poll::Ready(Ok(Some(())))
                 } else {
                     Poll::Pending
                 }
@@ -507,7 +516,7 @@ impl<F> Io<F> {
                 flags.remove(Flags::RD_READY);
                 self.0 .0.flags.set(flags);
                 self.0 .0.read_task.wake();
-                Poll::Ready(Some(Ok(())))
+                Poll::Ready(Ok(Some(())))
             } else {
                 Poll::Pending
             }
@@ -523,18 +532,18 @@ impl<F> Io<F> {
         &self,
         codec: &U,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<U::Item, Either<U::Error, io::Error>>>>
+    ) -> Poll<Result<Option<U::Item>, Either<U::Error, io::Error>>>
     where
         U: Decoder,
     {
         match self.decode(codec) {
-            Ok(Some(el)) => Poll::Ready(Some(Ok(el))),
+            Ok(Some(el)) => Poll::Ready(Ok(Some(el))),
             Ok(None) => match self.poll_read_ready(cx) {
-                Poll::Pending | Poll::Ready(Some(Ok(()))) => Poll::Pending,
-                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(Either::Right(e)))),
-                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending | Poll::Ready(Ok(Some(()))) => Poll::Pending,
+                Poll::Ready(Err(e)) => Poll::Ready(Err(Either::Right(e))),
+                Poll::Ready(Ok(None)) => Poll::Ready(Ok(None)),
             },
-            Err(err) => Poll::Ready(Some(Err(Either::Left(err)))),
+            Err(err) => Poll::Ready(Err(Either::Left(err))),
         }
     }
 
@@ -602,7 +611,7 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Shut down connection
+    /// Shut down io stream
     pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         let flags = self.flags();
 
@@ -620,61 +629,6 @@ impl<F> Io<F> {
                 Poll::Pending
             }
         }
-    }
-
-    #[doc(hidden)]
-    #[deprecated]
-    #[inline]
-    pub async fn next<U>(
-        &self,
-        codec: &U,
-    ) -> Option<Result<U::Item, Either<U::Error, io::Error>>>
-    where
-        U: Decoder,
-    {
-        self.recv(codec).await
-    }
-
-    #[doc(hidden)]
-    #[deprecated]
-    #[inline]
-    pub async fn write_ready(&self, full: bool) -> Result<(), io::Error> {
-        poll_fn(|cx| self.poll_flush(cx, full)).await
-    }
-
-    #[doc(hidden)]
-    #[deprecated]
-    #[inline]
-    pub fn poll_write_ready(
-        &self,
-        cx: &mut Context<'_>,
-        full: bool,
-    ) -> Poll<io::Result<()>> {
-        self.poll_flush(cx, full)
-    }
-
-    #[doc(hidden)]
-    #[deprecated]
-    #[inline]
-    #[allow(clippy::type_complexity)]
-    pub fn poll_read_next<U>(
-        &self,
-        codec: &U,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<U::Item, Either<U::Error, io::Error>>>>
-    where
-        U: Decoder,
-    {
-        self.poll_recv(codec, cx)
-    }
-
-    #[doc(hidden)]
-    #[deprecated]
-    #[inline]
-    pub fn enable_write_backpressure(&self, cx: &mut Context<'_>) {
-        log::trace!("enable write back-pressure for dispatcher");
-        self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
-        self.0 .0.dispatch_task.register(cx.waker());
     }
 }
 

@@ -2,7 +2,7 @@ use std::task::{Context, Poll};
 use std::{any, cell::RefCell, cmp, future::Future, io, mem, pin::Pin, rc::Rc};
 
 use ntex_bytes::{Buf, BufMut, BytesMut};
-use ntex_util::time::{sleep, Sleep};
+use ntex_util::{ready, time::sleep, time::Sleep};
 use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tok_io::net::TcpStream;
 
@@ -362,10 +362,10 @@ impl<F: Filter> AsyncRead for Io<F> {
         });
 
         if len == 0 {
-            match self.poll_read_ready(cx) {
-                Poll::Pending | Poll::Ready(Some(Ok(()))) => Poll::Pending,
-                Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
-                Poll::Ready(None) => Poll::Ready(Ok(())),
+            match ready!(self.poll_read_ready(cx)) {
+                Ok(Some(())) => Poll::Pending,
+                Ok(None) => Poll::Ready(Ok(())),
+                Err(e) => Poll::Ready(Err(e)),
             }
         } else {
             Poll::Ready(Ok(()))
@@ -407,10 +407,10 @@ impl AsyncRead for IoBoxed {
         });
 
         if len == 0 {
-            match self.poll_read_ready(cx) {
-                Poll::Pending | Poll::Ready(Some(Ok(()))) => Poll::Pending,
-                Poll::Ready(Some(Err(e))) => Poll::Ready(Err(e)),
-                Poll::Ready(None) => Poll::Ready(Ok(())),
+            match ready!(self.poll_read_ready(cx)) {
+                Ok(Some(())) => Poll::Pending,
+                Err(e) => Poll::Ready(Err(e)),
+                Ok(None) => Poll::Ready(Ok(())),
             }
         } else {
             Poll::Ready(Ok(()))

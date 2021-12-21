@@ -285,7 +285,7 @@ where
 
                     // decode incoming bytes stream
                     match io.poll_recv(&this.inner.codec, cx) {
-                        Poll::Ready(Some(Ok((mut req, pl)))) => {
+                        Poll::Ready(Ok(Some((mut req, pl)))) => {
                             log::trace!(
                                 "http message is received: {:?} and payload {:?}",
                                 req,
@@ -350,7 +350,13 @@ where
                                 );
                             }
                         }
-                        Poll::Ready(Some(Err(Either::Left(err)))) => {
+                        Poll::Ready(Ok(None)) => {
+                            // peer is gone
+                            log::trace!("peer is gone");
+                            let e = DispatchError::Disconnect(None);
+                            set_error!(this, e);
+                        }
+                        Poll::Ready(Err(Either::Left(err))) => {
                             // Malformed requests, respond with 400
                             log::trace!("malformed request: {:?}", err);
                             let (res, body) =
@@ -358,16 +364,10 @@ where
                             this.inner.error = Some(DispatchError::Parse(err));
                             *this.st = this.inner.send_response(res, body.into_body());
                         }
-                        Poll::Ready(Some(Err(Either::Right(err)))) => {
+                        Poll::Ready(Err(Either::Right(err))) => {
                             log::trace!("peer is gone with {:?}", err);
                             // peer is gone
                             let e = DispatchError::Disconnect(Some(err));
-                            set_error!(this, e);
-                        }
-                        Poll::Ready(None) => {
-                            log::trace!("peer is gone");
-                            // peer is gone
-                            let e = DispatchError::Disconnect(None);
                             set_error!(this, e);
                         }
                         Poll::Pending => {
@@ -612,11 +612,11 @@ where
                     loop {
                         let res = io.poll_recv(&payload.0, cx);
                         match res {
-                            Poll::Ready(Some(Ok(PayloadItem::Chunk(chunk)))) => {
+                            Poll::Ready(Ok(Some(PayloadItem::Chunk(chunk)))) => {
                                 updated = true;
                                 payload.1.feed_data(chunk);
                             }
-                            Poll::Ready(Some(Ok(PayloadItem::Eof))) => {
+                            Poll::Ready(Ok(Some(PayloadItem::Eof))) => {
                                 payload.1.feed_eof();
                                 self.payload = None;
                                 if !updated {
@@ -624,12 +624,12 @@ where
                                 }
                                 break;
                             }
-                            Poll::Ready(None) => {
+                            Poll::Ready(Ok(None)) => {
                                 payload.1.set_error(PayloadError::EncodingCorrupted);
                                 self.payload = None;
                                 return Poll::Ready(Err(ParseError::Incomplete.into()));
                             }
-                            Poll::Ready(Some(Err(e))) => {
+                            Poll::Ready(Err(e)) => {
                                 payload.1.set_error(PayloadError::EncodingCorrupted);
                                 self.payload = None;
                                 return Poll::Ready(Err(match e {
