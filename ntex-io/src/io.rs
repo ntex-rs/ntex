@@ -418,6 +418,12 @@ impl<F> Io<F> {
     }
 
     #[inline]
+    /// Wake read task and instruct to read more data
+    pub async fn read_ready(&self) -> Option<io::Result<()>> {
+        poll_fn(|cx| self.poll_read_ready(cx)).await
+    }
+
+    #[inline]
     /// Pause read task
     pub fn pause(&self) {
         self.0 .0.insert_flags(Flags::RD_PAUSED);
