@@ -48,7 +48,7 @@ impl<T: any::Any> QueryItem<T> {
         self.item.as_ref().and_then(|v| v.downcast_ref().copied())
     }
 
-    pub fn get_ref(&self) -> Option<&T> {
+    pub fn as_ref(&self) -> Option<&T> {
         if let Some(ref item) = self.item {
             item.downcast_ref()
         } else {

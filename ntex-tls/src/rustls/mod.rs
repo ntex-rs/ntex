@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::{any, future::Future, io, pin::Pin, task::Context, task::Poll};
 
 use ntex_bytes::BytesMut;
-use ntex_io::{Filter, FilterFactory, Io, IoRef, WriteReadiness};
+use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, WriteReadiness};
 use ntex_util::time::Millis;
 use tls_rust::{ClientConfig, ServerConfig, ServerName};
 
@@ -17,7 +17,7 @@ use self::client::TlsClientFilter;
 use self::server::TlsServerFilter;
 
 /// An implementation of SSL streams
-pub struct TlsFilter<F> {
+pub struct TlsFilter<F = Base> {
     inner: InnerTlsFilter<F>,
 }
 

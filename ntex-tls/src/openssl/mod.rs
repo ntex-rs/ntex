@@ -6,7 +6,7 @@ use std::{
 };
 
 use ntex_bytes::{BufMut, BytesMut, PoolRef};
-use ntex_io::{Filter, FilterFactory, Io, IoRef, WriteReadiness};
+use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, WriteReadiness};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_openssl::ssl::{self, SslStream};
 
@@ -16,7 +16,7 @@ pub use self::accept::{Acceptor, AcceptorService};
 use super::types;
 
 /// An implementation of SSL streams
-pub struct SslFilter<F> {
+pub struct SslFilter<F = Base> {
     inner: RefCell<SslStream<IoInner<F>>>,
 }
 
