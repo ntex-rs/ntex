@@ -38,3 +38,4 @@ pub use self::service::HttpService;
 // re-exports
 pub use http::uri::{self, Uri};
 pub use http::{Method, StatusCode, Version};
+pub use ntex_tls::types::HttpProtocol;
