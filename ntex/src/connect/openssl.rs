@@ -1,7 +1,9 @@
 use std::{future::Future, io, pin::Pin, task::Context, task::Poll};
 
-use ntex_tls::openssl::{SslConnector as IoSslConnector, SslFilter};
+pub use ntex_tls::openssl::SslFilter;
 pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
+
+use ntex_tls::openssl::SslConnector as IoSslConnector;
 
 use crate::io::{Base, Io};
 use crate::service::{Service, ServiceFactory};
