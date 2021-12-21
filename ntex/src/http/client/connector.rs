@@ -210,6 +210,19 @@ impl Connector {
         self
     }
 
+    /// Use custom boxed connector to open secure connections.
+    pub fn boxed_secure_connector<T>(mut self, connector: T) -> Self
+    where
+        T: Service<
+                Request = TcpConnect<Uri>,
+                Response = IoBoxed,
+                Error = crate::connect::ConnectError,
+            > + 'static,
+    {
+        self.ssl_connector = Some(boxed::service(connector.map_err(ConnectError::from)));
+        self
+    }
+
     /// Finish configuration process and create connector service.
     /// The Connector builder always concludes by calling `finish()` last in
     /// its combinator chain.
