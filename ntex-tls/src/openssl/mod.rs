@@ -264,10 +264,11 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
                 let ssl = ctx_result.map_err(map_to_ioerr)?;
                 let pool = st.memory_pool();
                 let st = st.map_filter(|inner: F| {
+                    let read_buf = inner.get_read_buf();
                     let inner = IoInner {
                         pool,
                         inner,
-                        read_buf: None,
+                        read_buf,
                         write_buf: None,
                     };
                     let ssl_stream = ssl::SslStream::new(ssl, inner)?;
@@ -315,10 +316,11 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
             let ssl = self.ssl;
             let pool = st.memory_pool();
             let st = st.map_filter(|inner: F| {
+                let read_buf = inner.get_read_buf();
                 let inner = IoInner {
                     pool,
                     inner,
-                    read_buf: None,
+                    read_buf,
                     write_buf: None,
                 };
                 let ssl_stream = ssl::SslStream::new(ssl, inner)?;

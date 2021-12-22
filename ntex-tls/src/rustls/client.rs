@@ -223,10 +223,11 @@ impl<F: Filter> TlsClientFilter<F> {
             Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
         };
         let io = io.map_filter(|inner: F| {
+            let read_buf = inner.get_read_buf();
             let inner = IoInner {
                 pool,
                 inner,
-                read_buf: None,
+                read_buf,
                 write_buf: None,
             };
 

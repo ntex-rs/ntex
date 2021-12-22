@@ -647,9 +647,7 @@ mod unixstream {
                                         continue;
                                     }
                                     Poll::Ready(Err(e)) => {
-                                        log::trace!(
-                                            "write task is closed with err during shutdown"
-                                        );
+                                        log::trace!("write task is closed with err during shutdown");
                                         this.state.close(Some(e));
                                         return Poll::Ready(());
                                     }

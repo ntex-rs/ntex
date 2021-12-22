@@ -144,7 +144,7 @@ impl IoState {
     }
 
     #[inline]
-    pub(super) fn shutdown_filters(&self) -> Result<(), io::Error> {
+    pub(super) fn shutdown_filters(&self) -> io::Result<()> {
         let mut flags = self.flags.get();
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
             let result = match self.filter.get().poll_shutdown() {
