@@ -8,7 +8,7 @@ use crate::service::{Service, ServiceFactory};
 use crate::util::{counter::CounterGuard, Pool, PoolId, Ready};
 use crate::{rt::spawn, time::Millis};
 
-use super::{socket::Stream, ServiceConfig, Token};
+use super::{socket::Stream, Config, Token};
 
 /// Server message
 pub(super) enum ServerMessage {
@@ -23,7 +23,7 @@ pub(super) enum ServerMessage {
 pub(super) trait StreamServiceFactory: Send + Clone + 'static {
     type Factory: ServiceFactory<Config = (), Request = Io>;
 
-    fn create(&self, _: ServiceConfig) -> Self::Factory;
+    fn create(&self, _: Config) -> Self::Factory;
 }
 
 pub(super) trait InternalServiceFactory: Send {
@@ -159,7 +159,7 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
     {
         let token = self.token;
-        let cfg = ServiceConfig::default();
+        let cfg = Config::default();
         let fut = self.inner.create(cfg.clone()).new_service(());
 
         Box::pin(async move {
@@ -194,13 +194,13 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 
 impl<F, T> StreamServiceFactory for F
 where
-    F: Fn(ServiceConfig) -> T + Send + Clone + 'static,
+    F: Fn(Config) -> T + Send + Clone + 'static,
     T: ServiceFactory<Config = (), Request = Io>,
 {
     type Factory = T;
 
     #[inline]
-    fn create(&self, cfg: ServiceConfig) -> T {
+    fn create(&self, cfg: Config) -> T {
         (self)(cfg)
     }
 }

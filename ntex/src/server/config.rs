@@ -15,13 +15,13 @@ use super::service::{
 use super::Token;
 
 #[derive(Clone)]
-pub struct ServiceConfig(pub(super) Rc<InnerServiceConfig>);
+pub struct Config(pub(super) Rc<InnerServiceConfig>);
 
 pub(super) struct InnerServiceConfig {
     pub(super) pool: Cell<PoolId>,
 }
 
-impl Default for ServiceConfig {
+impl Default for Config {
     fn default() -> Self {
         Self(Rc::new(InnerServiceConfig {
             pool: Cell::new(PoolId::DEFAULT),
@@ -29,7 +29,7 @@ impl Default for ServiceConfig {
     }
 }
 
-impl ServiceConfig {
+impl Config {
     /// Set memory pool for the service.
     ///
     /// Use specified memory pool for memory allocations.
@@ -39,7 +39,7 @@ impl ServiceConfig {
     }
 }
 
-pub struct Configuration {
+pub struct ServiceConfig {
     pub(super) services: Vec<(String, net::TcpListener)>,
     pub(super) apply: Box<dyn ServiceRuntimeConfiguration + Send>,
     pub(super) threads: usize,
@@ -47,9 +47,9 @@ pub struct Configuration {
     applied: bool,
 }
 
-impl Configuration {
+impl ServiceConfig {
     pub(super) fn new(threads: usize, backlog: i32) -> Self {
-        Configuration {
+        ServiceConfig {
             threads,
             backlog,
             services: Vec::new(),
@@ -103,7 +103,7 @@ impl Configuration {
     /// It get executed in the worker thread.
     pub fn on_worker_start<F, R, E>(&mut self, f: F) -> io::Result<()>
     where
-        F: Fn(RuntimeConfiguration) -> R + Send + Clone + 'static,
+        F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
         R: Future<Output = Result<(), E>> + 'static,
         E: fmt::Display + 'static,
     {
@@ -156,8 +156,8 @@ impl InternalServiceFactory for ConfiguredService {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
     {
         // configure services
-        let rt = RuntimeConfiguration::new(self.topics.clone());
-        let cfg_fut = self.rt.configure(RuntimeConfiguration(rt.0.clone()));
+        let rt = ServiceRuntime::new(self.topics.clone());
+        let cfg_fut = self.rt.configure(ServiceRuntime(rt.0.clone()));
         let mut names = self.names.clone();
         let tokens = self.services.clone();
 
@@ -208,7 +208,7 @@ pub(super) trait ServiceRuntimeConfiguration {
 
     fn configure(
         &self,
-        rt: RuntimeConfiguration,
+        rt: ServiceRuntime,
     ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 }
 
@@ -222,7 +222,7 @@ unsafe impl<F: Send, R, E> Send for ConfigWrapper<F, R, E> {}
 
 impl<F, R, E> ServiceRuntimeConfiguration for ConfigWrapper<F, R, E>
 where
-    F: Fn(RuntimeConfiguration) -> R + Send + Clone + 'static,
+    F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
     R: Future<Output = Result<(), E>> + 'static,
     E: fmt::Display + 'static,
 {
@@ -235,7 +235,7 @@ where
 
     fn configure(
         &self,
-        rt: RuntimeConfiguration,
+        rt: ServiceRuntime,
     ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
         let f = self.f.clone();
         Box::pin(async move {
@@ -250,7 +250,7 @@ fn not_configured() {
     error!("Service is not configured");
 }
 
-pub struct RuntimeConfiguration(Rc<RefCell<ServiceRuntimeInner>>);
+pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 
 struct ServiceRuntimeInner {
     names: HashMap<String, Token>,
@@ -258,9 +258,9 @@ struct ServiceRuntimeInner {
     onstart: Vec<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
-impl RuntimeConfiguration {
+impl ServiceRuntime {
     fn new(names: HashMap<String, Token>) -> Self {
-        RuntimeConfiguration(Rc::new(RefCell::new(ServiceRuntimeInner {
+        ServiceRuntime(Rc::new(RefCell::new(ServiceRuntimeInner {
             names,
             services: HashMap::default(),
             onstart: Vec::new(),

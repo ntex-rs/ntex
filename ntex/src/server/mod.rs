@@ -22,7 +22,7 @@ pub use ntex_tls::max_concurrent_ssl_accept;
 
 pub(crate) use self::builder::create_tcp_listener;
 pub use self::builder::ServerBuilder;
-pub use self::config::{Configuration, RuntimeConfiguration, ServiceConfig};
+pub use self::config::{Config, ServiceConfig, ServiceRuntime};
 pub use self::test::{build_test_server, test_server, TestServer};
 
 #[non_exhaustive]

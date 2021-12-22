@@ -15,7 +15,7 @@ use crate::{time::sleep, time::Millis, util::join_all};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{
-    ConfigWrapper, Configuration, ConfiguredService, RuntimeConfiguration, ServiceConfig,
+    Config, ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime,
 };
 use super::service::{Factory, InternalServiceFactory};
 use super::socket::Listener;
@@ -151,9 +151,9 @@ impl ServerBuilder {
     /// different module or even library.
     pub fn configure<F>(mut self, f: F) -> io::Result<ServerBuilder>
     where
-        F: Fn(&mut Configuration) -> io::Result<()>,
+        F: Fn(&mut ServiceConfig) -> io::Result<()>,
     {
-        let mut cfg = Configuration::new(self.threads, self.backlog);
+        let mut cfg = ServiceConfig::new(self.threads, self.backlog);
 
         f(&mut cfg)?;
 
@@ -176,7 +176,7 @@ impl ServerBuilder {
     /// It get executed in the worker thread.
     pub fn on_worker_start<F, R, E>(mut self, f: F) -> Self
     where
-        F: Fn(RuntimeConfiguration) -> R + Send + Clone + 'static,
+        F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
         R: Future<Output = Result<(), E>> + 'static,
         E: fmt::Display + 'static,
     {
@@ -197,7 +197,7 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         U: net::ToSocketAddrs,
-        F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+        F: Fn(Config) -> R + Send + Clone + 'static,
         R: ServiceFactory<Config = (), Request = Io>,
     {
         let sockets = bind_addr(addr, self.backlog)?;
@@ -225,7 +225,7 @@ impl ServerBuilder {
     where
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
-        F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+        F: Fn(Config) -> R + Send + Clone + 'static,
         R: ServiceFactory<Config = (), Request = Io>,
     {
         use std::os::unix::net::UnixListener;
@@ -254,7 +254,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+        F: Fn(Config) -> R + Send + Clone + 'static,
         R: ServiceFactory<Config = (), Request = Io>,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -279,7 +279,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: Fn(ServiceConfig) -> R + Send + Clone + 'static,
+        F: Fn(Config) -> R + Send + Clone + 'static,
         R: ServiceFactory<Config = (), Request = Io>,
     {
         let token = self.token.next();
