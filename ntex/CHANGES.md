@@ -1,6 +1,6 @@
 # Changes
 
-## [0.5.0-b.2] - 2021-12-xx
+## [0.5.0-b.2] - 2021-12-22
 
 * Refactor write back-pressure for http1
 

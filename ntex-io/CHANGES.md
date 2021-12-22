@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.0-b.3] - 2021-12-xx
+## [0.1.0-b.3] - 2021-12-22
 
 * Add .poll_write_backpressure()
 

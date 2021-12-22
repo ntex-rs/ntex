@@ -1,6 +1,6 @@
 # Changes
 
-## [0.4.0-b.1] - 2021-12-xx
+## [0.4.0-b.1] - 2021-12-22
 
 * Fix lifetimes for unix_connect/unix_connect_in
 
