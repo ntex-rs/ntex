@@ -3,7 +3,7 @@ use std::{any, io, task::Context, task::Poll};
 use ntex_bytes::BytesMut;
 
 use super::io::Flags;
-use super::{Filter, IoRef, WriteReadiness};
+use super::{Filter, IoRef, ReadStatus, WriteStatus};
 
 pub struct Base(IoRef);
 
@@ -14,19 +14,6 @@ impl Base {
 }
 
 impl Filter for Base {
-    #[inline]
-    fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
-        let mut flags = self.0.flags();
-        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
-            flags.insert(Flags::IO_SHUTDOWN);
-            self.0.set_flags(flags);
-            self.0 .0.read_task.wake();
-            self.0 .0.write_task.wake();
-        }
-
-        Poll::Ready(Ok(()))
-    }
-
     #[inline]
     fn closed(&self, err: Option<io::Error>) {
         self.0 .0.set_error(err);
@@ -47,45 +34,61 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+    fn want_read(&self) {
+        todo!()
+    }
+
+    #[inline]
+    fn want_shutdown(&self) {
+        todo!()
+    }
+
+    #[inline]
+    fn poll_shutdown(&self) -> Poll<io::Result<()>> {
+        let mut flags = self.0.flags();
+        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+            flags.insert(Flags::IO_SHUTDOWN);
+            self.0.set_flags(flags);
+            self.0 .0.read_task.wake();
+            self.0 .0.write_task.wake();
+        }
+
+        Poll::Ready(Ok(()))
+    }
+
+    #[inline]
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         let flags = self.0.flags();
 
         if flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
-            Poll::Ready(Err(()))
+            Poll::Ready(ReadStatus::Terminate)
         } else if flags.intersects(Flags::RD_PAUSED) {
             self.0 .0.read_task.register(cx.waker());
             Poll::Pending
         } else {
             self.0 .0.read_task.register(cx.waker());
-            Poll::Ready(Ok(()))
+            Poll::Ready(ReadStatus::Ready)
         }
     }
 
     #[inline]
-    fn poll_write_ready(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), WriteReadiness>> {
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
         let mut flags = self.0.flags();
 
         if flags.contains(Flags::IO_ERR) {
-            Poll::Ready(Err(WriteReadiness::Terminate))
+            Poll::Ready(WriteStatus::Terminate)
         } else if flags.intersects(Flags::IO_SHUTDOWN) {
-            Poll::Ready(Err(WriteReadiness::Shutdown(
-                self.0 .0.disconnect_timeout.get(),
-            )))
+            Poll::Ready(WriteStatus::Shutdown(self.0 .0.disconnect_timeout.get()))
         } else if flags.contains(Flags::IO_FILTERS)
             && !flags.contains(Flags::IO_FILTERS_TO)
         {
             flags.insert(Flags::IO_FILTERS_TO);
             self.0.set_flags(flags);
             self.0 .0.write_task.register(cx.waker());
-            Poll::Ready(Err(WriteReadiness::Timeout(
-                self.0 .0.disconnect_timeout.get(),
-            )))
+            Poll::Ready(WriteStatus::Timeout(self.0 .0.disconnect_timeout.get()))
         } else {
             self.0 .0.write_task.register(cx.waker());
-            Poll::Ready(Ok(()))
+            Poll::Ready(WriteStatus::Ready)
         }
     }
 
@@ -144,22 +147,26 @@ impl NullFilter {
 }
 
 impl Filter for NullFilter {
-    fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn closed(&self, _: Option<io::Error>) {}
-
     fn query(&self, _: any::TypeId) -> Option<Box<dyn any::Any>> {
         None
     }
 
-    fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), ()>> {
-        Poll::Ready(Err(()))
+    fn closed(&self, _: Option<io::Error>) {}
+
+    fn want_read(&self) {}
+
+    fn want_shutdown(&self) {}
+
+    fn poll_shutdown(&self) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
-    fn poll_write_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), WriteReadiness>> {
-        Poll::Ready(Err(WriteReadiness::Terminate))
+    fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<ReadStatus> {
+        Poll::Ready(ReadStatus::Terminate)
+    }
+
+    fn poll_write_ready(&self, _: &mut Context<'_>) -> Poll<WriteStatus> {
+        Poll::Ready(WriteStatus::Terminate)
     }
 
     fn get_read_buf(&self) -> Option<BytesMut> {

@@ -7,7 +7,9 @@ use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_util::future::poll_fn;
 use ntex_util::time::{sleep, Millis, Sleep};
 
-use crate::{types, Handle, IoStream, ReadContext, WriteContext, WriteReadiness};
+use crate::{
+    types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
+};
 
 #[derive(Default)]
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
@@ -388,11 +390,11 @@ impl Future for ReadTask {
         let this = self.as_ref();
 
         match this.state.poll_ready(cx) {
-            Poll::Ready(Err(())) => {
+            Poll::Ready(ReadStatus::Terminate) => {
                 log::trace!("read task is instructed to terminate");
                 Poll::Ready(())
             }
-            Poll::Ready(Ok(())) => {
+            Poll::Ready(ReadStatus::Ready) => {
                 let io = &this.io;
                 let pool = this.state.memory_pool();
                 let mut buf = self.state.get_read_buf();
@@ -474,20 +476,20 @@ impl Future for WriteTask {
         match this.st {
             IoWriteState::Processing(ref mut delay) => {
                 match this.state.poll_ready(cx) {
-                    Poll::Ready(Ok(())) => {
+                    Poll::Ready(WriteStatus::Ready) => {
                         // flush framed instance
                         match flush_io(&this.io, &this.state, cx) {
                             Poll::Pending | Poll::Ready(true) => Poll::Pending,
                             Poll::Ready(false) => Poll::Ready(()),
                         }
                     }
-                    Poll::Ready(Err(WriteReadiness::Timeout(time))) => {
+                    Poll::Ready(WriteStatus::Timeout(time)) => {
                         if delay.is_none() {
                             *delay = Some(sleep(time));
                         }
                         self.poll(cx)
                     }
-                    Poll::Ready(Err(WriteReadiness::Shutdown(time))) => {
+                    Poll::Ready(WriteStatus::Shutdown(time)) => {
                         log::trace!("write task is instructed to shutdown");
 
                         let timeout = if let Some(delay) = delay.take() {
@@ -499,7 +501,7 @@ impl Future for WriteTask {
                         this.st = IoWriteState::Shutdown(Some(timeout), Shutdown::None);
                         self.poll(cx)
                     }
-                    Poll::Ready(Err(WriteReadiness::Terminate)) => {
+                    Poll::Ready(WriteStatus::Terminate) => {
                         log::trace!("write task is instructed to terminate");
                         // shutdown WRITE side
                         this.io

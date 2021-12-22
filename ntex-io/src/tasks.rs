@@ -2,7 +2,7 @@ use std::{io, task::Context, task::Poll};
 
 use ntex_bytes::{BytesMut, PoolRef};
 
-use super::{io::Flags, IoRef, WriteReadiness};
+use super::{io::Flags, IoRef, ReadStatus, WriteStatus};
 
 pub struct ReadContext(pub(super) IoRef);
 
@@ -13,7 +13,7 @@ impl ReadContext {
     }
 
     #[inline]
-    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         self.0.filter().poll_read_ready(cx)
     }
 
@@ -51,7 +51,7 @@ impl ReadContext {
             self.0.filter().release_read_buf(buf, new_bytes)?;
 
             if flags.contains(Flags::IO_FILTERS) {
-                self.0 .0.shutdown_filters(&self.0)?;
+                self.0 .0.shutdown_filters()?;
             }
             Ok(())
         }
@@ -67,7 +67,7 @@ impl WriteContext {
     }
 
     #[inline]
-    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), WriteReadiness>> {
+    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
         self.0.filter().poll_write_ready(cx)
     }
 
@@ -106,7 +106,7 @@ impl WriteContext {
         }
 
         if flags.contains(Flags::IO_FILTERS) {
-            self.0 .0.shutdown_filters(&self.0)?;
+            self.0 .0.shutdown_filters()?;
         }
         Ok(())
     }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::{any, cell::RefCell, cmp, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesMut, PoolRef};
-use ntex_io::{Filter, Io, IoRef, WriteReadiness};
+use ntex_io::{Filter, Io, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_rust::{ServerConfig, ServerConnection};
 
@@ -24,11 +24,6 @@ struct IoInner<F> {
 }
 
 impl<F: Filter> Filter for TlsServerFilter<F> {
-    #[inline]
-    fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>> {
-        self.inner.borrow().inner.shutdown(st)
-    }
-
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         const H2: &[u8] = b"h2";
 
@@ -57,15 +52,27 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
     }
 
     #[inline]
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+    fn want_read(&self) {
+        self.inner.borrow().inner.want_read()
+    }
+
+    #[inline]
+    fn want_shutdown(&self) {
+        self.inner.borrow().inner.want_shutdown()
+    }
+
+    #[inline]
+    fn poll_shutdown(&self) -> Poll<io::Result<()>> {
+        self.inner.borrow().inner.poll_shutdown()
+    }
+
+    #[inline]
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         self.inner.borrow().inner.poll_read_ready(cx)
     }
 
     #[inline]
-    fn poll_write_ready(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), WriteReadiness>> {
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
         self.inner.borrow().inner.poll_write_ready(cx)
     }
 

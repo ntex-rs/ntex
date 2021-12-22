@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::{any, future::Future, io, pin::Pin, task::Context, task::Poll};
 
 use ntex_bytes::BytesMut;
-use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, WriteReadiness};
+use ntex_io::{Base, Filter, FilterFactory, Io, ReadStatus, WriteStatus};
 use ntex_util::time::Millis;
 use tls_rust::{ClientConfig, ServerConfig, ServerName};
 
@@ -53,14 +53,6 @@ impl<F> TlsFilter<F> {
 
 impl<F: Filter> Filter for TlsFilter<F> {
     #[inline]
-    fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>> {
-        match self.inner {
-            InnerTlsFilter::Server(ref f) => f.shutdown(st),
-            InnerTlsFilter::Client(ref f) => f.shutdown(st),
-        }
-    }
-
-    #[inline]
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.query(id),
@@ -77,7 +69,31 @@ impl<F: Filter> Filter for TlsFilter<F> {
     }
 
     #[inline]
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+    fn want_read(&self) {
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.want_read(),
+            InnerTlsFilter::Client(ref f) => f.want_read(),
+        }
+    }
+
+    #[inline]
+    fn want_shutdown(&self) {
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.want_shutdown(),
+            InnerTlsFilter::Client(ref f) => f.want_shutdown(),
+        }
+    }
+
+    #[inline]
+    fn poll_shutdown(&self) -> Poll<io::Result<()>> {
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.poll_shutdown(),
+            InnerTlsFilter::Client(ref f) => f.poll_shutdown(),
+        }
+    }
+
+    #[inline]
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.poll_read_ready(cx),
             InnerTlsFilter::Client(ref f) => f.poll_read_ready(cx),
@@ -85,10 +101,7 @@ impl<F: Filter> Filter for TlsFilter<F> {
     }
 
     #[inline]
-    fn poll_write_ready(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), WriteReadiness>> {
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.poll_write_ready(cx),
             InnerTlsFilter::Client(ref f) => f.poll_write_ready(cx),

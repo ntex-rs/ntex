@@ -292,7 +292,7 @@ mod tests {
 
     use super::*;
     use crate::testing::IoTest;
-    use crate::{Filter, FilterFactory, Io, WriteReadiness};
+    use crate::{Filter, FilterFactory, Io, ReadStatus, WriteStatus};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -402,15 +402,19 @@ mod tests {
         out_bytes: Rc<Cell<usize>>,
     }
     impl<F: Filter> Filter for Counter<F> {
-        fn shutdown(&self, _: &IoRef) -> Poll<Result<(), io::Error>> {
+        fn poll_shutdown(&self) -> Poll<io::Result<()>> {
             Poll::Ready(Ok(()))
         }
+
+        fn want_read(&self) {}
+
+        fn want_shutdown(&self) {}
 
         fn query(&self, _: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
             None
         }
 
-        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
             self.inner.poll_read_ready(cx)
         }
 
@@ -431,10 +435,7 @@ mod tests {
             self.inner.release_read_buf(buf, new_bytes)
         }
 
-        fn poll_write_ready(
-            &self,
-            cx: &mut Context<'_>,
-        ) -> Poll<Result<(), WriteReadiness>> {
+        fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
             self.inner.poll_write_ready(cx)
         }
 

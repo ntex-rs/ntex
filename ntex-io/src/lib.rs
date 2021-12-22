@@ -34,31 +34,43 @@ pub use self::utils::{filter_factory, into_boxed};
 pub type IoBoxed = Io<Box<dyn Filter>>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum WriteReadiness {
+pub enum ReadStatus {
+    Ready,
+    Terminate,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum WriteStatus {
+    Ready,
     Timeout(Millis),
     Shutdown(Millis),
     Terminate,
 }
 
 pub trait Filter: 'static {
-    fn shutdown(&self, st: &IoRef) -> Poll<Result<(), IoError>>;
-
-    fn closed(&self, err: Option<IoError>);
-
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
 
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>>;
+    /// Filter needs incoming data from io stream
+    fn want_read(&self);
 
-    fn poll_write_ready(&self, cx: &mut Context<'_>)
-        -> Poll<Result<(), WriteReadiness>>;
+    /// Filter wants gracefully shutdown io stream
+    fn want_shutdown(&self);
+
+    fn poll_shutdown(&self) -> Poll<std::io::Result<()>>;
+
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus>;
+
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus>;
 
     fn get_read_buf(&self) -> Option<BytesMut>;
 
     fn get_write_buf(&self) -> Option<BytesMut>;
 
-    fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> Result<(), IoError>;
+    fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> std::io::Result<()>;
 
-    fn release_write_buf(&self, buf: BytesMut) -> Result<(), IoError>;
+    fn release_write_buf(&self, buf: BytesMut) -> std::io::Result<()>;
+
+    fn closed(&self, err: Option<std::io::Error>);
 }
 
 pub trait FilterFactory<F: Filter>: Sized {

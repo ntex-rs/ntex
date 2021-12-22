@@ -7,8 +7,8 @@ use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tok_io::net::TcpStream;
 
 use crate::{
-    types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, WriteContext,
-    WriteReadiness,
+    types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, ReadStatus, WriteContext,
+    WriteStatus,
 };
 
 impl IoStream for TcpStream {
@@ -52,11 +52,7 @@ impl Future for ReadTask {
         let this = self.as_ref();
 
         match this.state.poll_ready(cx) {
-            Poll::Ready(Err(())) => {
-                log::trace!("read task is instructed to shutdown");
-                Poll::Ready(())
-            }
-            Poll::Ready(Ok(())) => {
+            Poll::Ready(ReadStatus::Ready) => {
                 let pool = this.state.memory_pool();
                 let mut io = this.io.borrow_mut();
                 let mut buf = self.state.get_read_buf();
@@ -107,6 +103,10 @@ impl Future for ReadTask {
                     Poll::Pending
                 }
             }
+            Poll::Ready(ReadStatus::Terminate) => {
+                log::trace!("read task is instructed to shutdown");
+                Poll::Ready(())
+            }
             Poll::Pending => Poll::Pending,
         }
     }
@@ -152,7 +152,7 @@ impl Future for WriteTask {
         match this.st {
             IoWriteState::Processing(ref mut delay) => {
                 match this.state.poll_ready(cx) {
-                    Poll::Ready(Ok(())) => {
+                    Poll::Ready(WriteStatus::Ready) => {
                         if let Some(delay) = delay {
                             if delay.poll_elapsed(cx).is_ready() {
                                 this.state.close(Some(io::Error::new(
@@ -169,14 +169,14 @@ impl Future for WriteTask {
                             Poll::Ready(false) => Poll::Ready(()),
                         }
                     }
-                    Poll::Ready(Err(WriteReadiness::Timeout(time))) => {
+                    Poll::Ready(WriteStatus::Timeout(time)) => {
                         log::trace!("initiate timeout delay for {:?}", time);
                         if delay.is_none() {
                             *delay = Some(sleep(time));
                         }
                         self.poll(cx)
                     }
-                    Poll::Ready(Err(WriteReadiness::Shutdown(time))) => {
+                    Poll::Ready(WriteStatus::Shutdown(time)) => {
                         log::trace!("write task is instructed to shutdown");
 
                         let timeout = if let Some(delay) = delay.take() {
@@ -188,7 +188,7 @@ impl Future for WriteTask {
                         this.st = IoWriteState::Shutdown(timeout, Shutdown::None);
                         self.poll(cx)
                     }
-                    Poll::Ready(Err(WriteReadiness::Terminate)) => {
+                    Poll::Ready(WriteStatus::Terminate) => {
                         log::trace!("write task is instructed to terminate");
 
                         let _ = Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx);
@@ -479,11 +479,7 @@ mod unixstream {
             let this = self.as_ref();
 
             match this.state.poll_ready(cx) {
-                Poll::Ready(Err(())) => {
-                    log::trace!("read task is instructed to shutdown");
-                    Poll::Ready(())
-                }
-                Poll::Ready(Ok(())) => {
+                Poll::Ready(ReadStatus::Ready) => {
                     let pool = this.state.memory_pool();
                     let mut io = this.io.borrow_mut();
                     let mut buf = self.state.get_read_buf();
@@ -534,6 +530,10 @@ mod unixstream {
                         Poll::Pending
                     }
                 }
+                Poll::Ready(ReadStatus::Terminate) => {
+                    log::trace!("read task is instructed to shutdown");
+                    Poll::Ready(())
+                }
                 Poll::Pending => Poll::Pending,
             }
         }
@@ -566,7 +566,7 @@ mod unixstream {
             match this.st {
                 IoWriteState::Processing(ref mut delay) => {
                     match this.state.poll_ready(cx) {
-                        Poll::Ready(Ok(())) => {
+                        Poll::Ready(WriteStatus::Ready) => {
                             if let Some(delay) = delay {
                                 if delay.poll_elapsed(cx).is_ready() {
                                     this.state.close(Some(io::Error::new(
@@ -583,13 +583,13 @@ mod unixstream {
                                 Poll::Ready(false) => Poll::Ready(()),
                             }
                         }
-                        Poll::Ready(Err(WriteReadiness::Timeout(time))) => {
+                        Poll::Ready(WriteStatus::Timeout(time)) => {
                             if delay.is_none() {
                                 *delay = Some(sleep(time));
                             }
                             self.poll(cx)
                         }
-                        Poll::Ready(Err(WriteReadiness::Shutdown(time))) => {
+                        Poll::Ready(WriteStatus::Shutdown(time)) => {
                             log::trace!("write task is instructed to shutdown");
 
                             let timeout = if let Some(delay) = delay.take() {
@@ -601,7 +601,7 @@ mod unixstream {
                             this.st = IoWriteState::Shutdown(timeout, Shutdown::None);
                             self.poll(cx)
                         }
-                        Poll::Ready(Err(WriteReadiness::Terminate)) => {
+                        Poll::Ready(WriteStatus::Terminate) => {
                             log::trace!("write task is instructed to terminate");
 
                             let _ =

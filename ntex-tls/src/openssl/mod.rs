@@ -6,7 +6,7 @@ use std::{
 };
 
 use ntex_bytes::{BufMut, BytesMut, PoolRef};
-use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, WriteReadiness};
+use ntex_io::{Base, Filter, FilterFactory, Io, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_openssl::ssl::{self, SslStream};
 
@@ -63,26 +63,6 @@ impl<F: Filter> io::Write for IoInner<F> {
 }
 
 impl<F: Filter> Filter for SslFilter<F> {
-    fn shutdown(&self, st: &IoRef) -> Poll<Result<(), io::Error>> {
-        let ssl_result = self.inner.borrow_mut().shutdown();
-        match ssl_result {
-            Ok(ssl::ShutdownResult::Sent) => Poll::Pending,
-            Ok(ssl::ShutdownResult::Received) => {
-                self.inner.borrow().get_ref().inner.shutdown(st)
-            }
-            Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => Poll::Ready(Ok(())),
-            Err(ref e)
-                if e.code() == ssl::ErrorCode::WANT_READ
-                    || e.code() == ssl::ErrorCode::WANT_WRITE =>
-            {
-                Poll::Pending
-            }
-            Err(e) => Poll::Ready(Err(e
-                .into_io_error()
-                .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e)))),
-        }
-    }
-
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::HttpProtocol>() {
             let proto = if let Some(protos) =
@@ -102,22 +82,49 @@ impl<F: Filter> Filter for SslFilter<F> {
         }
     }
 
+    fn poll_shutdown(&self) -> Poll<io::Result<()>> {
+        let ssl_result = self.inner.borrow_mut().shutdown();
+        match ssl_result {
+            Ok(ssl::ShutdownResult::Sent) => Poll::Pending,
+            Ok(ssl::ShutdownResult::Received) => {
+                self.inner.borrow().get_ref().inner.poll_shutdown()
+            }
+            Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => Poll::Ready(Ok(())),
+            Err(ref e)
+                if e.code() == ssl::ErrorCode::WANT_READ
+                    || e.code() == ssl::ErrorCode::WANT_WRITE =>
+            {
+                Poll::Pending
+            }
+            Err(e) => Poll::Ready(Err(e
+                .into_io_error()
+                .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e)))),
+        }
+    }
+
     #[inline]
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         self.inner.borrow().get_ref().inner.poll_read_ready(cx)
     }
 
     #[inline]
-    fn poll_write_ready(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), WriteReadiness>> {
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
         self.inner.borrow().get_ref().inner.poll_write_ready(cx)
     }
 
     #[inline]
     fn closed(&self, err: Option<io::Error>) {
         self.inner.borrow().get_ref().inner.closed(err)
+    }
+
+    #[inline]
+    fn want_read(&self) {
+        self.inner.borrow().get_ref().inner.want_read()
+    }
+
+    #[inline]
+    fn want_shutdown(&self) {
+        self.inner.borrow().get_ref().inner.want_shutdown()
     }
 
     #[inline]
