@@ -35,16 +35,17 @@ impl Filter for Base {
 
     #[inline]
     fn want_read(&self) {
-        todo!()
+        let flags = self.0.flags();
+        if flags.intersects(Flags::RD_PAUSED | Flags::RD_BUF_FULL) {
+            self.0
+                 .0
+                .remove_flags(Flags::RD_PAUSED | Flags::RD_BUF_FULL);
+            self.0 .0.read_task.wake();
+        }
     }
 
     #[inline]
     fn want_shutdown(&self) {
-        todo!()
-    }
-
-    #[inline]
-    fn poll_shutdown(&self) -> Poll<io::Result<()>> {
         let mut flags = self.0.flags();
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
             flags.insert(Flags::IO_SHUTDOWN);
@@ -52,7 +53,11 @@ impl Filter for Base {
             self.0 .0.read_task.wake();
             self.0 .0.write_task.wake();
         }
+    }
 
+    #[inline]
+    fn poll_shutdown(&self) -> Poll<io::Result<()>> {
+        self.want_shutdown();
         Poll::Ready(Ok(()))
     }
 
@@ -104,19 +109,16 @@ impl Filter for Base {
 
     #[inline]
     fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> Result<(), io::Error> {
-        let mut flags = self.0.flags();
-
         if nbytes > 0 {
             if buf.len() > self.0.memory_pool().read_params().high as usize {
                 log::trace!(
                     "buffer is too large {}, enable read back-pressure",
                     buf.len()
                 );
-                flags.insert(Flags::RD_READY | Flags::RD_BUF_FULL);
+                self.0 .0.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
             } else {
-                flags.insert(Flags::RD_READY);
+                self.0 .0.insert_flags(Flags::RD_READY);
             }
-            self.0.set_flags(flags);
         }
 
         self.0 .0.read_buf.set(Some(buf));

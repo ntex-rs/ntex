@@ -12,6 +12,8 @@
 
 * Rename .write_ready() to .flush()
 
+* .poll_read_ready() cleanups RD_PAUSED state
+
 ## [0.1.0-b.2] - 2021-12-20
 
 * Removed `WriteRef` and `ReadRef`

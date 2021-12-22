@@ -220,29 +220,22 @@ where
                                 }
                                 Poll::Ready(()) => {
                                     // decode incoming bytes if buffer is ready
-                                    match io.poll_recv(&slf.shared.codec, cx) {
-                                        Poll::Ready(Ok(Some(el))) => {
+                                    match ready!(io.poll_recv(&slf.shared.codec, cx)) {
+                                        Ok(Some(el)) => {
                                             slf.update_keepalive();
                                             DispatchItem::Item(el)
                                         }
-                                        Poll::Ready(Err(Either::Left(err))) => {
+                                        Err(Either::Left(err)) => {
                                             slf.st.set(DispatcherState::Stop);
                                             slf.unregister_keepalive();
                                             DispatchItem::DecoderError(err)
                                         }
-                                        Poll::Ready(Err(Either::Right(err))) => {
+                                        Err(Either::Right(err)) => {
                                             slf.st.set(DispatcherState::Stop);
                                             slf.unregister_keepalive();
                                             DispatchItem::Disconnect(Some(err))
                                         }
-                                        Poll::Ready(Ok(None)) => {
-                                            DispatchItem::Disconnect(None)
-                                        }
-                                        Poll::Pending => {
-                                            log::trace!("not enough data to decode next frame, register dispatch task");
-                                            io.resume();
-                                            return Poll::Pending;
-                                        }
+                                        Ok(None) => DispatchItem::Disconnect(None),
                                     }
                                 }
                             }

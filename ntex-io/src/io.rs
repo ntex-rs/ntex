@@ -430,15 +430,6 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Wake read io ask if it is paused
-    pub fn resume(&self) {
-        if self.flags().contains(Flags::RD_PAUSED) {
-            self.0 .0.remove_flags(Flags::RD_PAUSED);
-            self.0 .0.read_task.wake();
-        }
-    }
-
-    #[inline]
     /// Encode item, send to a peer
     pub async fn send<U>(
         &self,
@@ -501,9 +492,13 @@ impl<F> Io<F> {
 
             let mut flags = self.0 .0.flags.get();
             let ready = flags.contains(Flags::RD_READY);
-            if flags.contains(Flags::RD_BUF_FULL) {
-                log::trace!("read back-pressure is disabled, wake io task");
-                flags.remove(Flags::RD_READY | Flags::RD_BUF_FULL);
+            if flags.intersects(Flags::RD_BUF_FULL | Flags::RD_PAUSED) {
+                if flags.intersects(Flags::RD_BUF_FULL) {
+                    log::trace!("read back-pressure is disabled, wake io task");
+                } else {
+                    log::trace!("read task is resumed, wake io task");
+                }
+                flags.remove(Flags::RD_READY | Flags::RD_BUF_FULL | Flags::RD_PAUSED);
                 self.0 .0.read_task.wake();
                 self.0 .0.flags.set(flags);
                 if ready {
@@ -514,8 +509,8 @@ impl<F> Io<F> {
             } else if ready {
                 log::trace!("waking up io read task");
                 flags.remove(Flags::RD_READY);
-                self.0 .0.flags.set(flags);
                 self.0 .0.read_task.wake();
+                self.0 .0.flags.set(flags);
                 Poll::Ready(Ok(Some(())))
             } else {
                 Poll::Pending
@@ -539,7 +534,10 @@ impl<F> Io<F> {
         match self.decode(codec) {
             Ok(Some(el)) => Poll::Ready(Ok(Some(el))),
             Ok(None) => match self.poll_read_ready(cx) {
-                Poll::Pending | Poll::Ready(Ok(Some(()))) => Poll::Pending,
+                Poll::Pending | Poll::Ready(Ok(Some(()))) => {
+                    log::trace!("not enough data to decode next frame");
+                    Poll::Pending
+                }
                 Poll::Ready(Err(e)) => Poll::Ready(Err(Either::Right(e))),
                 Poll::Ready(Ok(None)) => Poll::Ready(Ok(None)),
             },
