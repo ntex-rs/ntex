@@ -356,7 +356,7 @@ impl<F: Filter> AsyncRead for Io<F> {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let len = self.with_read_buf(|src| {
-            let len = cmp::min(src.len(), buf.capacity());
+            let len = cmp::min(src.len(), buf.remaining());
             buf.put_slice(&src.split_to(len));
             len
         });
@@ -401,7 +401,7 @@ impl AsyncRead for IoBoxed {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let len = self.with_read_buf(|src| {
-            let len = cmp::min(src.len(), buf.capacity());
+            let len = cmp::min(src.len(), buf.remaining());
             buf.put_slice(&src.split_to(len));
             len
         });
