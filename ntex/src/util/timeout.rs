@@ -2,7 +2,10 @@
 //!
 //! If the response does not complete within the specified timeout, the response
 //! will be aborted.
-use std::{fmt, future::Future, marker, pin::Pin, task::Context, task::Poll};
+use std::{
+    fmt, future::Future, marker, marker::PhantomData, pin::Pin, task::Context,
+    task::Poll,
+};
 
 use crate::service::{IntoService, Service, Transform};
 use crate::time::{sleep, Millis, Sleep};
@@ -82,10 +85,7 @@ impl Clone for Timeout {
     }
 }
 
-impl<S> Transform<S> for Timeout
-where
-    S: Service,
-{
+impl<S> Transform<S> for Timeout {
     type Service = TimeoutService<S>;
 
     fn new_transform(&self, service: S) -> Self::Service {
@@ -103,14 +103,12 @@ pub struct TimeoutService<S> {
     timeout: Millis,
 }
 
-impl<S> TimeoutService<S>
-where
-    S: Service,
-{
-    pub fn new<T, U>(timeout: T, service: U) -> Self
+impl<S> TimeoutService<S> {
+    pub fn new<T, U, R>(timeout: T, service: U) -> Self
     where
         T: Into<Millis>,
-        U: IntoService<S>,
+        S: Service<R>,
+        U: IntoService<S, R>,
     {
         TimeoutService {
             timeout: timeout.into(),
@@ -119,14 +117,13 @@ where
     }
 }
 
-impl<S> Service for TimeoutService<S>
+impl<S, R> Service<R> for TimeoutService<S>
 where
-    S: Service,
+    S: Service<R>,
 {
-    type Request = S::Request;
     type Response = S::Response;
     type Error = TimeoutError<S::Error>;
-    type Future = Either<TimeoutServiceResponse<S>, TimeoutServiceResponse2<S>>;
+    type Future = Either<TimeoutServiceResponse<S, R>, TimeoutServiceResponse2<S, R>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -138,15 +135,17 @@ where
         self.service.poll_shutdown(cx, is_error)
     }
 
-    fn call(&self, request: S::Request) -> Self::Future {
+    fn call(&self, request: R) -> Self::Future {
         if self.timeout.is_zero() {
             Either::Right(TimeoutServiceResponse2 {
                 fut: self.service.call(request),
+                _t: PhantomData,
             })
         } else {
             Either::Left(TimeoutServiceResponse {
                 fut: self.service.call(request),
                 sleep: sleep(self.timeout),
+                _t: PhantomData,
             })
         }
     }
@@ -156,16 +155,17 @@ pin_project_lite::pin_project! {
     /// `TimeoutService` response future
     #[doc(hidden)]
     #[derive(Debug)]
-    pub struct TimeoutServiceResponse<T: Service> {
+    pub struct TimeoutServiceResponse<T: Service<R>, R> {
         #[pin]
         fut: T::Future,
         sleep: Sleep,
+        _t: PhantomData<R>
     }
 }
 
-impl<T> Future for TimeoutServiceResponse<T>
+impl<T, R> Future for TimeoutServiceResponse<T, R>
 where
-    T: Service,
+    T: Service<R>,
 {
     type Output = Result<T::Response, TimeoutError<T::Error>>;
 
@@ -191,15 +191,16 @@ pin_project_lite::pin_project! {
     /// `TimeoutService` response future
     #[doc(hidden)]
     #[derive(Debug)]
-    pub struct TimeoutServiceResponse2<T: Service> {
+    pub struct TimeoutServiceResponse2<T: Service<R>, R> {
         #[pin]
         fut: T::Future,
+        _t: PhantomData<R>,
     }
 }
 
-impl<T> Future for TimeoutServiceResponse2<T>
+impl<T, R> Future for TimeoutServiceResponse2<T, R>
 where
-    T: Service,
+    T: Service<R>,
 {
     type Output = Result<T::Response, TimeoutError<T::Error>>;
 

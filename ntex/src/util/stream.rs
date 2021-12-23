@@ -5,12 +5,12 @@ use crate::service::{IntoService, Service};
 use crate::{util::poll_fn, Sink, Stream};
 
 pin_project_lite::pin_project! {
-    pub struct Dispatcher<R, S, T, U>
+    pub struct Dispatcher<Req, R, S, T, U>
     where
         R: 'static,
-        S: Service<Response = Option<R>>,
+        S: Service<Req, Response = Option<R>>,
         S: 'static,
-        T: Stream<Item = Result<S::Request, S::Error>>,
+        T: Stream<Item = Result<Req, S::Error>>,
         T: Unpin,
         U: Sink<Result<R, S::Error>>,
         U: Unpin,
@@ -24,18 +24,18 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<R, S, T, U> Dispatcher<R, S, T, U>
+impl<Req, R, S, T, U> Dispatcher<Req, R, S, T, U>
 where
     R: 'static,
-    S: Service<Response = Option<R>> + 'static,
+    S: Service<Req, Response = Option<R>> + 'static,
     S::Error: fmt::Debug,
-    T: Stream<Item = Result<S::Request, S::Error>> + Unpin,
+    T: Stream<Item = Result<Req, S::Error>> + Unpin,
     U: Sink<Result<R, S::Error>> + Unpin + 'static,
     U::Error: fmt::Debug,
 {
     pub fn new<F>(stream: T, sink: U, service: F) -> Self
     where
-        F: IntoService<S>,
+        F: IntoService<S, Req>,
     {
         Dispatcher {
             stream,
@@ -47,12 +47,13 @@ where
     }
 }
 
-impl<R, S, T, U> Future for Dispatcher<R, S, T, U>
+impl<Req, R, S, T, U> Future for Dispatcher<Req, R, S, T, U>
 where
     R: 'static,
-    S: Service<Response = Option<R>> + 'static,
-    S::Error: fmt::Debug,
-    T: Stream<Item = Result<S::Request, S::Error>> + Unpin,
+    S: Service<Req, Response = Option<R>> + 'static,
+    S::Future: 'static,
+    S::Error: fmt::Debug + 'static,
+    T: Stream<Item = Result<Req, S::Error>> + Unpin,
     U: Sink<Result<R, S::Error>> + Unpin + 'static,
     U::Error: fmt::Debug,
 {

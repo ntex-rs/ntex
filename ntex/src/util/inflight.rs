@@ -1,5 +1,5 @@
 //! Service that limits number of in-flight async requests.
-use std::{future::Future, pin::Pin, task::Context, task::Poll};
+use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use super::counter::{Counter, CounterGuard};
 use crate::{IntoService, Service, Transform};
@@ -24,14 +24,14 @@ impl Default for InFlight {
     }
 }
 
-impl<S> Transform<S> for InFlight
-where
-    S: Service,
-{
+impl<S> Transform<S> for InFlight {
     type Service = InFlightService<S>;
 
     fn new_transform(&self, service: S) -> Self::Service {
-        InFlightService::new(self.max_inflight, service)
+        InFlightService {
+            service,
+            count: Counter::new(self.max_inflight),
+        }
     }
 }
 
@@ -40,13 +40,11 @@ pub struct InFlightService<S> {
     service: S,
 }
 
-impl<S> InFlightService<S>
-where
-    S: Service,
-{
-    pub fn new<U>(max: usize, service: U) -> Self
+impl<S> InFlightService<S> {
+    pub fn new<U, R>(max: usize, service: U) -> Self
     where
-        U: IntoService<S>,
+        S: Service<R>,
+        U: IntoService<S, R>,
     {
         Self {
             count: Counter::new(max),
@@ -55,14 +53,13 @@ where
     }
 }
 
-impl<T> Service for InFlightService<T>
+impl<T, R> Service<R> for InFlightService<T>
 where
-    T: Service,
+    T: Service<R>,
 {
-    type Request = T::Request;
     type Response = T::Response;
     type Error = T::Error;
-    type Future = InFlightServiceResponse<T>;
+    type Future = InFlightServiceResponse<T, R>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -82,24 +79,26 @@ where
     }
 
     #[inline]
-    fn call(&self, req: T::Request) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future {
         InFlightServiceResponse {
             fut: self.service.call(req),
             _guard: self.count.get(),
+            _t: PhantomData,
         }
     }
 }
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct InFlightServiceResponse<T: Service> {
+    pub struct InFlightServiceResponse<T: Service<R>, R> {
         #[pin]
         fut: T::Future,
         _guard: CounterGuard,
+        _t: PhantomData<R>
     }
 }
 
-impl<T: Service> Future for InFlightServiceResponse<T> {
+impl<T: Service<R>, R> Future for InFlightServiceResponse<T, R> {
     type Output = Result<T::Response, T::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

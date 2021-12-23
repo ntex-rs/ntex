@@ -40,11 +40,10 @@ where
     }
 }
 
-impl<S, I> Service for SinkService<S, I>
+impl<S, I> Service<I> for SinkService<S, I>
 where
     S: Sink<I> + Unpin,
 {
-    type Request = I;
     type Response = ();
     type Error = S::Error;
     type Future = Ready<(), S::Error>;

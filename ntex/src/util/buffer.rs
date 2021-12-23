@@ -1,7 +1,9 @@
 //! Service that buffers incomming requests.
 use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
-use std::{collections::VecDeque, future::Future, pin::Pin, rc::Rc};
+use std::{
+    collections::VecDeque, future::Future, marker::PhantomData, pin::Pin, rc::Rc,
+};
 
 use crate::channel::oneshot;
 use crate::service::{IntoService, Service, Transform};
@@ -11,12 +13,13 @@ use crate::util::Either;
 /// Buffer - service factory for service that can buffer incoming request.
 ///
 /// Default number of buffered requests is 16
-pub struct Buffer<E> {
+pub struct Buffer<R, E> {
     buf_size: usize,
     err: Rc<dyn Fn() -> E>,
+    _t: PhantomData<R>,
 }
 
-impl<E> Buffer<E> {
+impl<R, E> Buffer<R, E> {
     pub fn new<F>(f: F) -> Self
     where
         F: Fn() -> E + 'static,
@@ -24,6 +27,7 @@ impl<E> Buffer<E> {
         Self {
             buf_size: 16,
             err: Rc::new(f),
+            _t: PhantomData,
         }
     }
 
@@ -33,20 +37,21 @@ impl<E> Buffer<E> {
     }
 }
 
-impl<E> Clone for Buffer<E> {
+impl<R, E> Clone for Buffer<R, E> {
     fn clone(&self) -> Self {
         Self {
             buf_size: self.buf_size,
             err: self.err.clone(),
+            _t: PhantomData,
         }
     }
 }
 
-impl<S, E> Transform<S> for Buffer<E>
+impl<R, S, E> Transform<S> for Buffer<R, E>
 where
-    S: Service<Error = E>,
+    S: Service<R, Error = E>,
 {
-    type Service = BufferService<S, E>;
+    type Service = BufferService<R, S, E>;
 
     fn new_transform(&self, service: S) -> Self::Service {
         BufferService {
@@ -65,26 +70,26 @@ where
 /// Buffer service - service that can buffer incoming requests.
 ///
 /// Default number of buffered requests is 16
-pub struct BufferService<S: Service<Error = E>, E> {
+pub struct BufferService<R, S: Service<R, Error = E>, E> {
     size: usize,
-    inner: Rc<Inner<S, E>>,
+    inner: Rc<Inner<R, S, E>>,
 }
 
-struct Inner<S: Service<Error = E>, E> {
+struct Inner<R, S: Service<R, Error = E>, E> {
     ready: Cell<bool>,
     service: S,
     waker: LocalWaker,
     err: Rc<dyn Fn() -> E>,
-    buf: RefCell<VecDeque<(oneshot::Sender<S::Request>, S::Request)>>,
+    buf: RefCell<VecDeque<(oneshot::Sender<R>, R)>>,
 }
 
-impl<S, E> BufferService<S, E>
+impl<R, S, E> BufferService<R, S, E>
 where
-    S: Service<Error = E>,
+    S: Service<R, Error = E>,
 {
     pub fn new<U, F>(size: usize, err: F, service: U) -> Self
     where
-        U: IntoService<S>,
+        U: IntoService<S, R>,
         F: Fn() -> E + 'static,
     {
         Self {
@@ -100,9 +105,9 @@ where
     }
 }
 
-impl<S, E> Clone for BufferService<S, E>
+impl<R, S, E> Clone for BufferService<R, S, E>
 where
-    S: Service<Error = E> + Clone,
+    S: Service<R, Error = E> + Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -118,14 +123,13 @@ where
     }
 }
 
-impl<S, E> Service for BufferService<S, E>
+impl<R, S, E> Service<R> for BufferService<R, S, E>
 where
-    S: Service<Error = E>,
+    S: Service<R, Error = E>,
 {
-    type Request = S::Request;
     type Response = S::Response;
     type Error = S::Error;
-    type Future = Either<S::Future, BufferServiceResponse<S, E>>;
+    type Future = Either<S::Future, BufferServiceResponse<R, S, E>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -158,7 +162,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: S::Request) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future {
         if self.inner.ready.get() {
             self.inner.ready.set(false);
             Either::Left(self.inner.service.call(req))
@@ -178,21 +182,21 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct BufferServiceResponse<S: Service<Error = E>, E> {
+    pub struct BufferServiceResponse<R, S: Service<R, Error = E>, E> {
         #[pin]
-        state: State<S, E>,
+        state: State<R, S, E>,
     }
 }
 
 pin_project_lite::pin_project! {
     #[project = StateProject]
-    enum State<S: Service<Error = E>, E> {
-        Tx { rx: oneshot::Receiver<S::Request>, inner: Rc<Inner<S, E>> },
-        Srv { #[pin] fut: S::Future, inner: Rc<Inner<S, E>> },
+    enum State<R, S: Service<R, Error = E>, E> {
+        Tx { rx: oneshot::Receiver<R>, inner: Rc<Inner<R, S, E>> },
+        Srv { #[pin] fut: S::Future, inner: Rc<Inner<R, S, E>> },
     }
 }
 
-impl<S: Service<Error = E>, E> Future for BufferServiceResponse<S, E> {
+impl<R, S: Service<R, Error = E>, E> Future for BufferServiceResponse<R, S, E> {
     type Output = Result<S::Response, S::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

@@ -102,8 +102,7 @@ impl<T> Clone for Resolver<T> {
     }
 }
 
-impl<T: Address> ServiceFactory for Resolver<T> {
-    type Request = Connect<T>;
+impl<T: Address> ServiceFactory<Connect<T>> for Resolver<T> {
     type Response = Connect<T>;
     type Error = ConnectError;
     type Config = ();
@@ -116,8 +115,7 @@ impl<T: Address> ServiceFactory for Resolver<T> {
     }
 }
 
-impl<T: Address> Service for Resolver<T> {
-    type Request = Connect<T>;
+impl<T: Address> Service<Connect<T>> for Resolver<T> {
     type Response = Connect<T>;
     type Error = ConnectError;
     type Future = Pin<Box<dyn Future<Output = Result<Connect<T>, Self::Error>>>>;

@@ -21,7 +21,7 @@ pub(super) enum ServerMessage {
 }
 
 pub(super) trait StreamServiceFactory: Send + Clone + 'static {
-    type Factory: ServiceFactory<Config = (), Request = Io>;
+    type Factory: ServiceFactory<Io, Config = ()>;
 
     fn create(&self, _: Config) -> Self::Factory;
 }
@@ -38,7 +38,7 @@ pub(super) trait InternalServiceFactory: Send {
 
 pub(super) type BoxedServerService = Box<
     dyn Service<
-        Request = (Option<CounterGuard>, ServerMessage),
+        (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
         Future = Ready<(), ()>,
@@ -59,13 +59,12 @@ impl<T> StreamService<T> {
     }
 }
 
-impl<T> Service for StreamService<T>
+impl<T> Service<(Option<CounterGuard>, ServerMessage)> for StreamService<T>
 where
-    T: Service<Request = Io>,
+    T: Service<Io>,
     T::Future: 'static,
     T::Error: 'static,
 {
-    type Request = (Option<CounterGuard>, ServerMessage);
     type Response = ();
     type Error = ();
     type Future = Ready<(), ()>;
@@ -195,7 +194,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 impl<F, T> StreamServiceFactory for F
 where
     F: Fn(Config) -> T + Send + Clone + 'static,
-    T: ServiceFactory<Config = (), Request = Io>,
+    T: ServiceFactory<Io, Config = ()>,
 {
     type Factory = T;
 

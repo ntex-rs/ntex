@@ -282,8 +282,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service<T, F>(&self, name: &str, service: F)
     where
-        F: service::IntoServiceFactory<T>,
-        T: service::ServiceFactory<Config = (), Request = Io> + 'static,
+        F: service::IntoServiceFactory<T, Io>,
+        T: service::ServiceFactory<Io, Config = ()> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -297,8 +297,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service_in<T, F>(&self, name: &str, pool: PoolId, service: F)
     where
-        F: service::IntoServiceFactory<T>,
-        T: service::ServiceFactory<Config = (), Request = Io> + 'static,
+        F: service::IntoServiceFactory<T, Io>,
+        T: service::ServiceFactory<Io, Config = ()> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -329,7 +329,7 @@ impl ServiceRuntime {
 
 type BoxedNewService = Box<
     dyn service::ServiceFactory<
-        Request = (Option<CounterGuard>, ServerMessage),
+        (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
         InitError = (),
@@ -344,15 +344,14 @@ struct ServiceFactory<T> {
     pool: PoolId,
 }
 
-impl<T> service::ServiceFactory for ServiceFactory<T>
+impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage)> for ServiceFactory<T>
 where
-    T: service::ServiceFactory<Config = (), Request = Io>,
+    T: service::ServiceFactory<Io, Config = ()>,
     T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,
     T::InitError: fmt::Debug + 'static,
 {
-    type Request = (Option<CounterGuard>, ServerMessage);
     type Response = ();
     type Error = ();
     type InitError = ();

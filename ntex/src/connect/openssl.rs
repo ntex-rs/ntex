@@ -5,7 +5,7 @@ pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslM
 
 use ntex_tls::openssl::SslConnector as IoSslConnector;
 
-use crate::io::{Base, Io};
+use crate::io::{Base, Io, SealedService};
 use crate::service::{Service, ServiceFactory};
 use crate::util::{PoolId, Ready};
 
@@ -75,6 +75,11 @@ impl<T: Address + 'static> Connector<T> {
                 }
             }
         }
+    }
+
+    /// Produce sealed io stream (IoBoxed)
+    pub fn seal(self) -> SealedService<Connector<T>> {
+        SealedService::new(self)
     }
 }
 

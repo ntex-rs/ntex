@@ -41,7 +41,7 @@ use crate::{io::Io, service::ServiceFactory};
 pub fn test_server<F, R>(factory: F) -> TestServer
 where
     F: Fn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Config = (), Request = Io>,
+    R: ServiceFactory<Io, Config = ()>,
 {
     let (tx, rx) = mpsc::channel();
 

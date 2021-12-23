@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, future::Future, io, net::SocketAddr, pin::Pin};
 
-use crate::io::{types, Io};
+use crate::io::{types, Io, SealedService};
 use crate::rt::tcp_connect_in;
 use crate::service::{Service, ServiceFactory};
 use crate::util::{Either, PoolId, PoolRef, Ready};
@@ -46,6 +46,11 @@ impl<T: Address> Connector<T> {
             pool: self.pool,
         }
     }
+
+    /// Produce sealed io stream (IoBoxed)
+    pub fn seal(self) -> SealedService<Connector<T>, Io> {
+        SealedService::new(self)
+    }
 }
 
 impl<T> Default for Connector<T> {
@@ -63,8 +68,7 @@ impl<T> Clone for Connector<T> {
     }
 }
 
-impl<T: Address> ServiceFactory for Connector<T> {
-    type Request = Connect<T>;
+impl<T: Address> ServiceFactory<Connect<T>> for Connector<T> {
     type Response = Io;
     type Error = ConnectError;
     type Config = ();
@@ -78,8 +82,7 @@ impl<T: Address> ServiceFactory for Connector<T> {
     }
 }
 
-impl<T: Address> Service for Connector<T> {
-    type Request = Connect<T>;
+impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Response = Io;
     type Error = ConnectError;
     type Future = ConnectServiceResponse<T>;
@@ -96,7 +99,7 @@ impl<T: Address> Service for Connector<T> {
 }
 
 enum ConnectState<T: Address> {
-    Resolve(<Resolver<T> as Service>::Future),
+    Resolve(<Resolver<T> as Service<Connect<T>>>::Future),
     Connect(TcpConnectorResponse<T>),
 }
 
@@ -107,7 +110,7 @@ pub struct ConnectServiceResponse<T: Address> {
 }
 
 impl<T: Address> ConnectServiceResponse<T> {
-    pub(super) fn new(fut: <Resolver<T> as Service>::Future) -> Self {
+    pub(super) fn new(fut: <Resolver<T> as Service<Connect<T>>>::Future) -> Self {
         Self {
             state: ConnectState::Resolve(fut),
             pool: PoolId::P0.pool_ref(),

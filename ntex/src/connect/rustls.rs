@@ -5,7 +5,7 @@ pub use tls_rustls::{ClientConfig, ServerName};
 
 use ntex_tls::rustls::TlsConnector;
 
-use crate::io::{Base, Io};
+use crate::io::{Base, Io, SealedService};
 use crate::service::{Service, ServiceFactory};
 use crate::util::{PoolId, Ready};
 
@@ -79,6 +79,11 @@ impl<T: Address + 'static> Connector<T> {
                 }
             }
         }
+    }
+
+    /// Produce sealed io stream (IoBoxed)
+    pub fn seal(self) -> SealedService<Connector<T>> {
+        SealedService::new(self)
     }
 }
 
