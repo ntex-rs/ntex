@@ -37,10 +37,7 @@ impl<T, U> Router<T, U> {
         }
     }
 
-    pub fn recognize_mut<R, P>(
-        &mut self,
-        resource: &mut R,
-    ) -> Option<(&mut T, ResourceId)>
+    pub fn recognize_mut<R, P>(&mut self, resource: &mut R) -> Option<(&mut T, ResourceId)>
     where
         R: Resource<P>,
         P: ResourcePath,

@@ -161,11 +161,7 @@ impl Tree {
         self.find_checked_inner(resource, true, &|_, _| true)
     }
 
-    pub(crate) fn find_checked<T, R, F>(
-        &self,
-        resource: &mut R,
-        check: &F,
-    ) -> Option<usize>
+    pub(crate) fn find_checked<T, R, F>(&self, resource: &mut R, check: &F) -> Option<usize>
     where
         T: ResourcePath,
         R: Resource<T>,
@@ -494,9 +490,7 @@ impl Tree {
                                 if let Item::Value(ref val) = val {
                                     let v = match val {
                                         Value::Val(v) | Value::Prefix(v) => *v,
-                                        Value::Slash(_) | Value::PrefixSlash(_) => {
-                                            continue
-                                        }
+                                        Value::Slash(_) | Value::PrefixSlash(_) => continue,
                                     };
                                     if check(v, resource) {
                                         return Some((v, skip));
@@ -537,16 +531,14 @@ impl Tree {
                                         }
                                     }
                                     Value::Prefix(v) => {
-                                        if p == PathState::Slash || p == PathState::Tail
-                                        {
+                                        if p == PathState::Slash || p == PathState::Tail {
                                             *v
                                         } else {
                                             continue;
                                         }
                                     }
                                     Value::PrefixSlash(v) => {
-                                        if p == PathState::Slash || p == PathState::Tail
-                                        {
+                                        if p == PathState::Slash || p == PathState::Tail {
                                             *v
                                         } else {
                                             continue;

@@ -1,8 +1,7 @@
 use core::fmt;
 use core::mem::MaybeUninit;
 use core::ops::{
-    Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
-    RangeToInclusive,
+    Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
 };
 
 /// Uninitialized byte slice.
@@ -42,10 +41,7 @@ impl UninitSlice {
     /// let slice = unsafe { UninitSlice::from_raw_parts_mut(ptr, len) };
     /// ```
     #[inline]
-    pub unsafe fn from_raw_parts_mut<'a>(
-        ptr: *mut u8,
-        len: usize,
-    ) -> &'a mut UninitSlice {
+    pub unsafe fn from_raw_parts_mut<'a>(ptr: *mut u8, len: usize) -> &'a mut UninitSlice {
         let maybe_init: &mut [MaybeUninit<u8>] =
             core::slice::from_raw_parts_mut(ptr as *mut _, len);
         &mut *(maybe_init as *mut [MaybeUninit<u8>] as *mut UninitSlice)

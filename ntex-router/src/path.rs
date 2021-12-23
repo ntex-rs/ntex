@@ -163,9 +163,7 @@ impl<T: ResourcePath> Path<T> {
     }
 
     /// Try to deserialize matching parameters to a specified type `U`
-    pub fn load<'de, U: serde::Deserialize<'de>>(
-        &'de self,
-    ) -> Result<U, de::value::Error> {
+    pub fn load<'de, U: serde::Deserialize<'de>>(&'de self) -> Result<U, de::value::Error> {
         de::Deserialize::deserialize(PathDeserializer::new(self))
     }
 }

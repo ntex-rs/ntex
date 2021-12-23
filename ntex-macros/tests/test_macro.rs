@@ -2,8 +2,8 @@ use futures::{future, Future};
 use ntex::http::{Method, StatusCode};
 use ntex::web::{test, types::Path, App, Error, HttpResponse, HttpResponseBuilder};
 use ntex_macros::{
-    web_connect, web_delete, web_get, web_head, web_options, web_patch, web_post,
-    web_put, web_trace,
+    web_connect, web_delete, web_get, web_head, web_options, web_patch, web_post, web_put,
+    web_trace,
 };
 
 // Make sure that we can name function as 'config'
