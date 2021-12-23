@@ -54,7 +54,7 @@ impl ResponseError for HandshakeError {
     }
 }
 
-impl ResponseError for crate::ws::ProtocolError {}
+impl ResponseError for crate::ws::error::ProtocolError {}
 
 /// Verify `WebSocket` handshake request and create handshake reponse.
 // /// `protocols` is a sequence of known protocols. On successful handshake,

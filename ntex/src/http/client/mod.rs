@@ -31,7 +31,6 @@ mod request;
 mod response;
 mod sender;
 mod test;
-pub mod ws;
 
 pub use self::builder::ClientBuilder;
 pub use self::connection::Connection;
@@ -192,18 +191,5 @@ impl Client {
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
         self.request(Method::OPTIONS, url)
-    }
-
-    /// Construct WebSockets request.
-    pub fn ws<U>(&self, url: U) -> ws::WsRequest
-    where
-        Uri: TryFrom<U>,
-        <Uri as TryFrom<U>>::Error: Into<HttpError>,
-    {
-        let mut req = ws::WsRequest::new(url, self.0.clone());
-        for (key, value) in self.0.headers.iter() {
-            req.head.headers.insert(key.clone(), value.clone());
-        }
-        req
     }
 }

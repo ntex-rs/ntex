@@ -2,7 +2,7 @@ use std::{
     cell::RefCell, fmt, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
 };
 
-use super::{Codec, Frame, Message, ProtocolError};
+use super::{error::ProtocolError, Codec, Frame, Message};
 use crate::util::{Bytes, BytesMut};
 use crate::{codec::Decoder, codec::Encoder, Sink, Stream};
 

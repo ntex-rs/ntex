@@ -4,7 +4,7 @@ use log::debug;
 use nanorand::{Rng, WyRand};
 
 use super::proto::{CloseCode, CloseReason, OpCode};
-use super::{mask::apply_mask, ProtocolError};
+use super::{error::ProtocolError, mask::apply_mask};
 use crate::util::{Buf, BufMut, BytesMut};
 
 /// WebSocket frame parser.

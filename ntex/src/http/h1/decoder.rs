@@ -674,7 +674,6 @@ impl ChunkedState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::error::ParseError;
     use crate::http::header::{HeaderName, SET_COOKIE};
     use crate::http::{HttpMessage, Method, Version};
     use crate::util::{Bytes, BytesMut};
@@ -723,11 +722,7 @@ mod tests {
     macro_rules! expect_parse_err {
         ($e:expr) => {{
             match MessageDecoder::<Request>::default().decode($e) {
-                Err(err) => {
-                    if let ParseError::Io(_) = err {
-                        unreachable!("Parse error expected")
-                    }
-                }
+                Err(_) => (),
                 _ => unreachable!("Error expected"),
             }
         }};

@@ -3,9 +3,9 @@ use std::cell::Cell;
 use crate::codec::{Decoder, Encoder};
 use crate::util::{ByteString, Bytes, BytesMut};
 
+use super::error::ProtocolError;
 use super::frame::Parser;
 use super::proto::{CloseReason, OpCode};
-use super::ProtocolError;
 
 /// WebSocket message
 #[derive(Debug, PartialEq)]

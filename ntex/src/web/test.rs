@@ -10,8 +10,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::http::body::MessageBody;
-use crate::http::client::error::WsClientError;
-use crate::http::client::{ws, Client, ClientRequest, ClientResponse, Connector};
+use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
@@ -22,7 +21,8 @@ use crate::service::{
 };
 use crate::time::{sleep, Millis, Seconds};
 use crate::util::{next, Bytes, BytesMut, Extensions, Ready};
-use crate::{rt::System, server::Server, Stream};
+use crate::ws::{error::WsClientError, WsClient, WsConnection};
+use crate::{io::Sealed, rt::System, server::Server, Stream};
 
 use crate::web::config::AppConfig;
 use crate::web::error::{DefaultError, ErrorRenderer};
@@ -919,12 +919,50 @@ impl TestServer {
     }
 
     /// Connect to websocket server at a given path
-    pub async fn ws_at(&self, path: &str) -> Result<ws::WsConnection, WsClientError> {
-        self.client.ws(self.url(path)).connect().await
+    pub async fn ws_at(
+        &self,
+        path: &str,
+    ) -> Result<WsConnection<Sealed>, WsClientError> {
+        if self.ssl {
+            #[cfg(feature = "openssl")]
+            {
+                use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+
+                let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+                builder.set_verify(SslVerifyMode::NONE);
+                let _ = builder
+                    .set_alpn_protos(b"\x08http/1.1")
+                    .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
+
+                WsClient::build(self.url(path))
+                    .address(self.addr)
+                    .timeout(Seconds(30))
+                    .openssl(builder.build())
+                    .take()
+                    .finish()
+                    .unwrap()
+                    .connect()
+                    .await
+                    .map(|ws| ws.seal())
+            }
+            #[cfg(not(feature = "openssl"))]
+            {
+                panic!("openssl feature is required")
+            }
+        } else {
+            WsClient::build(self.url(path))
+                .address(self.addr)
+                .timeout(Seconds(30))
+                .finish()
+                .unwrap()
+                .connect()
+                .await
+                .map(|ws| ws.seal())
+        }
     }
 
     /// Connect to a websocket server
-    pub async fn ws(&self) -> Result<ws::WsConnection, WsClientError> {
+    pub async fn ws(&self) -> Result<WsConnection<Sealed>, WsClientError> {
         self.ws_at("/").await
     }
 

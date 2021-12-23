@@ -82,7 +82,7 @@ where
         );
         result
     } else {
-        return Err(SendRequestError::from(ConnectError::Disconnected));
+        return Err(SendRequestError::from(ConnectError::Disconnected(None)));
     };
 
     match codec.message_type() {
@@ -95,22 +95,6 @@ where
             let pl: PayloadStream = Box::pin(PlStream::new(io, codec, created, pool));
             Ok((head, pl.into()))
         }
-    }
-}
-
-pub(super) async fn open_tunnel(
-    io: IoBoxed,
-    head: RequestHeadType,
-) -> Result<(ResponseHead, IoBoxed, h1::ClientCodec), SendRequestError> {
-    // create Framed and send request
-    let codec = h1::ClientCodec::default();
-    io.send(&codec, (head, BodySize::None).into()).await?;
-
-    // read response
-    if let Some(head) = io.recv(&codec).await? {
-        Ok((head, io, codec))
-    } else {
-        Err(SendRequestError::from(ConnectError::Disconnected))
     }
 }
 

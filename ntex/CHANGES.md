@@ -1,5 +1,11 @@
 # Changes
 
+## [0.5.0-b.3] - 2021-12-xx
+
+* Remove websocket support from http::client
+
+* Add standalone ws::client
+
 ## [0.5.0-b.2] - 2021-12-22
 
 * Refactor write back-pressure for http1

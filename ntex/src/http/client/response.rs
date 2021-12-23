@@ -63,6 +63,10 @@ impl ClientResponse {
         ClientResponse { head, payload }
     }
 
+    pub(crate) fn with_empty_payload(head: ResponseHead) -> Self {
+        ClientResponse::new(head, Payload::None)
+    }
+
     #[inline]
     pub(crate) fn head(&self) -> &ResponseHead {
         &self.head
