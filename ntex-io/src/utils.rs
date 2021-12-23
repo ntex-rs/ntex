@@ -6,7 +6,7 @@ use ntex_util::future::Ready;
 use super::{Filter, FilterFactory, Io, IoBoxed};
 
 /// Service that converts any Io<F> stream to IoBoxed stream
-pub fn into_boxed<F, S>(
+pub fn seal<F, S>(
     srv: S,
 ) -> impl ServiceFactory<
     Config = S::Config,
@@ -23,7 +23,7 @@ where
         let fut = srv.new_service(cfg);
         async move {
             let srv = fut.await?;
-            Ok(into_service(move |io: Io<F>| srv.call(io.into_boxed())))
+            Ok(into_service(move |io: Io<F>| srv.call(io.seal())))
         }
     })
 }

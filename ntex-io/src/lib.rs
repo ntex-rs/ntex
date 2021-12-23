@@ -24,14 +24,14 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Millis;
 
 pub use self::dispatcher::Dispatcher;
-pub use self::filter::Base;
+pub use self::filter::{Base, Sealed};
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::tasks::{ReadContext, WriteContext};
 pub use self::time::Timer;
 
-pub use self::utils::{filter_factory, into_boxed};
+pub use self::utils::{filter_factory, seal};
 
-pub type IoBoxed = Io<Box<dyn Filter>>;
+pub type IoBoxed = Io<Sealed>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ReadStatus {
@@ -144,6 +144,24 @@ pub mod rt {
 
     #[cfg(feature = "tokio")]
     pub use crate::tokio_rt::*;
+}
+
+#[deprecated]
+#[doc(hidden)]
+pub fn into_boxed<F, S>(
+    srv: S,
+) -> impl ntex_service::ServiceFactory<
+    Config = S::Config,
+    Request = Io<F>,
+    Response = S::Response,
+    Error = S::Error,
+    InitError = S::InitError,
+>
+where
+    F: Filter + 'static,
+    S: ntex_service::ServiceFactory<Request = IoBoxed>,
+{
+    seal(srv)
 }
 
 #[cfg(test)]

@@ -516,7 +516,7 @@ mod tests {
             .add_filter(CounterFactory(in_bytes.clone(), out_bytes.clone()))
             .await
             .unwrap();
-        let state = state.into_boxed();
+        let state = state.seal();
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
