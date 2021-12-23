@@ -518,11 +518,11 @@ mod tests {
 
     impl<S, U> Dispatcher<S, U>
     where
-        S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+        S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
         U: Decoder + Encoder + 'static,
     {
         /// Construct new `Dispatcher` instance
-        pub(crate) fn debug<T: IoStream, F: IntoService<S>>(
+        pub(crate) fn debug<T: IoStream, F: IntoService<S, DispatchItem<U>>>(
             io: T,
             codec: U,
             service: F,
@@ -682,8 +682,7 @@ mod tests {
 
         struct Srv(Rc<Cell<usize>>);
 
-        impl Service for Srv {
-            type Request = DispatchItem<BytesCodec>;
+        impl Service<DispatchItem<BytesCodec>> for Srv {
             type Response = Option<Response<BytesCodec>>;
             type Error = ();
             type Future = Ready<Option<Response<BytesCodec>>, ()>;

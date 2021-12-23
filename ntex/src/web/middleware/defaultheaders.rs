@@ -1,6 +1,6 @@
 //! Middleware for setting default response headers
 use std::task::{Context, Poll};
-use std::{convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
+use std::{convert::TryFrom, future::Future, pin::Pin, rc::Rc};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
@@ -26,9 +26,8 @@ use crate::web::{WebRequest, WebResponse};
 /// }
 /// ```
 #[derive(Clone)]
-pub struct DefaultHeaders<E> {
+pub struct DefaultHeaders {
     inner: Rc<Inner>,
-    _t: PhantomData<E>,
 }
 
 struct Inner {
@@ -36,21 +35,20 @@ struct Inner {
     headers: HeaderMap,
 }
 
-impl<E> Default for DefaultHeaders<E> {
+impl Default for DefaultHeaders {
     fn default() -> Self {
         DefaultHeaders {
             inner: Rc::new(Inner {
                 ct: false,
                 headers: HeaderMap::new(),
             }),
-            _t: PhantomData,
         }
     }
 }
 
-impl<E> DefaultHeaders<E> {
+impl DefaultHeaders {
     /// Construct `DefaultHeaders` middleware.
-    pub fn new() -> DefaultHeaders<E> {
+    pub fn new() -> DefaultHeaders {
         DefaultHeaders::default()
     }
 
@@ -88,29 +86,23 @@ impl<E> DefaultHeaders<E> {
     }
 }
 
-impl<S, E> Transform<S> for DefaultHeaders<E>
-where
-    S: Service<WebRequest<E>, Response = WebResponse>,
-    S::Future: 'static,
-{
-    type Service = DefaultHeadersMiddleware<S, E>;
+impl<S> Transform<S> for DefaultHeaders {
+    type Service = DefaultHeadersMiddleware<S>;
 
     fn new_transform(&self, service: S) -> Self::Service {
         DefaultHeadersMiddleware {
             service,
             inner: self.inner.clone(),
-            _t: PhantomData,
         }
     }
 }
 
-pub struct DefaultHeadersMiddleware<S, E> {
+pub struct DefaultHeadersMiddleware<S> {
     service: S,
     inner: Rc<Inner>,
-    _t: PhantomData<E>,
 }
 
-impl<S, E> Service<WebRequest<E>> for DefaultHeadersMiddleware<S, E>
+impl<S, E> Service<WebRequest<E>> for DefaultHeadersMiddleware<S>
 where
     S: Service<WebRequest<E>, Response = WebResponse>,
     S::Future: 'static,

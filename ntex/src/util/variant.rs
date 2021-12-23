@@ -6,7 +6,9 @@ use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 /// Construct `Variant` service factory.
 ///
 /// Variant service allow to combine multiple different services into a single service.
-pub fn variant<V1: ServiceFactory<V1R>, V1R>(factory: V1) -> Variant<V1, V1R> {
+pub fn variant<V1: ServiceFactory<V1R, V1C>, V1R, V1C>(
+    factory: V1,
+) -> Variant<V1, V1R, V1C> {
     Variant {
         factory,
         _t: PhantomData,
@@ -14,27 +16,27 @@ pub fn variant<V1: ServiceFactory<V1R>, V1R>(factory: V1) -> Variant<V1, V1R> {
 }
 
 /// Combine multiple different service types into a single service.
-pub struct Variant<A, AR> {
+pub struct Variant<A, AR, AC> {
     factory: A,
-    _t: PhantomData<AR>,
+    _t: PhantomData<(AR, AC)>,
 }
 
-impl<A, AR> Variant<A, AR>
+impl<A, AR, AC> Variant<A, AR, AC>
 where
-    A: ServiceFactory<AR>,
-    A::Config: Clone,
+    A: ServiceFactory<AR, AC>,
+    AC: Clone,
 {
     /// Convert to a Variant with two request types
-    pub fn v2<B, BR, F>(self, factory: F) -> VariantFactory2<A, B, AR, BR>
+    pub fn v2<B, BR, F>(self, factory: F) -> VariantFactory2<A, AC, B, AR, BR>
     where
         B: ServiceFactory<
             BR,
-            Config = A::Config,
+            AC,
             Response = A::Response,
             Error = A::Error,
             InitError = A::InitError,
         >,
-        F: IntoServiceFactory<B, BR>,
+        F: IntoServiceFactory<B, BR, AC>,
     {
         VariantFactory2 {
             V1: self.factory,
@@ -47,19 +49,18 @@ where
 macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident, $r_name:ident, $m_name:ident, ($($T:ident),+), ($($R:ident),+)} => {
 
     #[allow(non_snake_case)]
-    impl<V1, $($T,)+ V1R, $($R,)+> $fac1_type<V1, $($T,)+ V1R, $($R,)+>
+    impl<V1, V1C, $($T,)+ V1R, $($R,)+> $fac1_type<V1, V1C, $($T,)+ V1R, $($R,)+>
         where
-            V1: ServiceFactory<V1R>,
-            V1::Config: Clone,
+            V1: ServiceFactory<V1R, V1C>,
+            V1C: Clone,
         {
             /// Convert to a Variant with more request types
-            pub fn $m_name<$name, $r_name, F>(self, factory: F) -> $fac2_type<V1, $($T,)+ $name, V1R, $($R,)+ $r_name>
-            where $name: ServiceFactory<$r_name,
-                    Config = V1::Config,
+            pub fn $m_name<$name, $r_name, F>(self, factory: F) -> $fac2_type<V1, V1C, $($T,)+ $name, V1R, $($R,)+ $r_name>
+            where $name: ServiceFactory<$r_name, V1C,
                     Response = V1::Response,
                     Error = V1::Error,
                     InitError = V1::InitError>,
-                F: IntoServiceFactory<$name, $r_name>,
+                F: IntoServiceFactory<$name, $r_name, V1C>,
             {
                 $fac2_type {
                     V1: self.V1,
@@ -136,13 +137,13 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
     }
 
     #[allow(non_snake_case)]
-    pub struct $fac_type<V1, $($T,)+ V1R, $($R,)+> {
+    pub struct $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+> {
         V1: V1,
         $($T: $T,)+
-        _t: PhantomData<(V1R, $($R,)+)>,
+        _t: PhantomData<(V1C, V1R, $($R,)+)>,
     }
 
-    impl<V1: Clone, $($T: Clone,)+ V1R, $($R,)+> Clone for $fac_type<V1, $($T,)+ V1R, $($R,)+> {
+    impl<V1: Clone, V1C, $($T: Clone,)+ V1R, $($R,)+> Clone for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+> {
         fn clone(&self) -> Self {
             Self {
                 _t: PhantomData,
@@ -152,20 +153,19 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<V1, $($T,)+ V1R, $($R,)+> ServiceFactory<$enum_type<V1R, $($R),+>> for $fac_type<V1, $($T,)+ V1R, $($R,)+>
+    impl<V1, V1C, $($T,)+ V1R, $($R,)+> ServiceFactory<$enum_type<V1R, $($R),+>, V1C> for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+>
     where
-        V1: ServiceFactory<V1R>,
-        V1::Config: Clone,
-        $($T: ServiceFactory<$R, Config = V1::Config, Response = V1::Response, Error = V1::Error, InitError = V1::InitError>),+
+        V1: ServiceFactory<V1R, V1C>,
+        V1C: Clone,
+        $($T: ServiceFactory<$R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError>),+
     {
         type Response = V1::Response;
         type Error = V1::Error;
-        type Config = V1::Config;
         type InitError = V1::InitError;
         type Service = $srv_type<V1::Service, $($T::Service,)+ V1R, $($R,)+>;
-        type Future = $mod_name::ServiceFactoryResponse<V1, $($T,)+ V1R, $($R,)+>;
+        type Future = $mod_name::ServiceFactoryResponse<V1, V1C, $($T,)+ V1R, $($R,)+>;
 
-        fn new_service(&self, cfg: Self::Config) -> Self::Future {
+        fn new_service(&self, cfg: V1C) -> Self::Future {
             $mod_name::ServiceFactoryResponse {
                 V1: None,
                 items: Default::default(),
@@ -206,7 +206,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 
         pin_project_lite::pin_project! {
             #[doc(hidden)]
-            pub struct ServiceFactoryResponse<V1: ServiceFactory<V1R>, $($T: ServiceFactory<$R>,)+ V1R, $($R,)+> {
+            pub struct ServiceFactoryResponse<V1: ServiceFactory<V1R, V1C>, V1C, $($T: ServiceFactory<$R, V1C>,)+ V1R, $($R,)+> {
                 pub(super) V1: Option<V1::Service>,
                 pub(super) items: ($(Option<$T::Service>,)+),
                 #[pin] pub(super) V1_fut: V1::Future,
@@ -214,10 +214,10 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }
         }
 
-        impl<V1, $($T,)+ V1R, $($R,)+> Future for ServiceFactoryResponse<V1, $($T,)+ V1R, $($R,)+>
+        impl<V1, V1C, $($T,)+ V1R, $($R,)+> Future for ServiceFactoryResponse<V1, V1C, $($T,)+ V1R, $($R,)+>
         where
-            V1: ServiceFactory<V1R>,
-        $($T: ServiceFactory<$R, Response = V1::Response, Error = V1::Error, InitError = V1::InitError,>),+
+            V1: ServiceFactory<V1R, V1C>,
+        $($T: ServiceFactory<$R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError,>),+
         {
             type Output = Result<$srv_type<V1::Service, $($T::Service,)+ V1R, $($R),+>, V1::InitError>;
 
@@ -301,8 +301,7 @@ mod tests {
     #[derive(Clone)]
     struct Srv1;
 
-    impl Service for Srv1 {
-        type Request = ();
+    impl Service<()> for Srv1 {
         type Response = usize;
         type Error = ();
         type Future = Ready<usize, ()>;
@@ -323,8 +322,7 @@ mod tests {
     #[derive(Clone)]
     struct Srv2;
 
-    impl Service for Srv2 {
-        type Request = ();
+    impl Service<()> for Srv2 {
         type Response = usize;
         type Error = ();
         type Future = Ready<usize, ()>;

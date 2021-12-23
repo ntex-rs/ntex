@@ -117,8 +117,7 @@ mod tests {
 
     struct SleepService(Duration);
 
-    impl Service for SleepService {
-        type Request = ();
+    impl Service<()> for SleepService {
         type Response = ();
         type Error = ();
         type Future = Pin<Box<dyn Future<Output = Result<(), ()>>>>;

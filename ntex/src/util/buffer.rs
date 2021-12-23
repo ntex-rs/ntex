@@ -244,8 +244,7 @@ mod tests {
         count: Cell<usize>,
     }
 
-    impl Service for TestService {
-        type Request = ();
+    impl Service<()> for TestService {
         type Response = ();
         type Error = ();
         type Future = Ready<(), ()>;

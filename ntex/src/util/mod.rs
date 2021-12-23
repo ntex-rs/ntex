@@ -6,7 +6,7 @@ pub mod keepalive;
 pub mod sink;
 pub mod stream;
 pub mod timeout;
-//pub mod variant;
+pub mod variant;
 
 pub use self::extensions::Extensions;
 

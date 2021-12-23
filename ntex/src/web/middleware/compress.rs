@@ -26,50 +26,40 @@ use crate::web::{BodyEncoding, ErrorRenderer, WebRequest, WebResponse};
 ///         );
 /// }
 /// ```
-pub struct Compress<E> {
+pub struct Compress {
     enc: ContentEncoding,
-    _t: marker::PhantomData<E>,
 }
 
-impl<E> Compress<E> {
+impl Compress {
     /// Create new `Compress` middleware with default encoding.
     pub fn new(encoding: ContentEncoding) -> Self {
-        Compress {
-            enc: encoding,
-            _t: marker::PhantomData,
-        }
+        Compress { enc: encoding }
     }
 }
 
-impl<E> Default for Compress<E> {
+impl Default for Compress {
     fn default() -> Self {
         Compress::new(ContentEncoding::Auto)
     }
 }
 
-impl<S, E> Transform<S> for Compress<E>
-where
-    S: Service<WebRequest<E>, Response = WebResponse>,
-    E: ErrorRenderer,
-{
-    type Service = CompressMiddleware<S, E>;
+impl<S> Transform<S> for Compress {
+    type Service = CompressMiddleware<S>;
 
     fn new_transform(&self, service: S) -> Self::Service {
         CompressMiddleware {
             service,
             encoding: self.enc,
-            _t: marker::PhantomData,
         }
     }
 }
 
-pub struct CompressMiddleware<S, E> {
+pub struct CompressMiddleware<S> {
     service: S,
     encoding: ContentEncoding,
-    _t: marker::PhantomData<E>,
 }
 
-impl<S, E> Service<WebRequest<E>> for CompressMiddleware<S, E>
+impl<S, E> Service<WebRequest<E>> for CompressMiddleware<S>
 where
     S: Service<WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,

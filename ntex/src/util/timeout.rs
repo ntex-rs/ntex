@@ -228,8 +228,7 @@ mod tests {
     #[derive(Clone, Debug, Display, PartialEq)]
     struct SrvError;
 
-    impl Service for SleepService {
-        type Request = ();
+    impl Service<()> for SleepService {
         type Response = ();
         type Error = SrvError;
         type Future = Pin<Box<dyn Future<Output = Result<(), SrvError>>>>;

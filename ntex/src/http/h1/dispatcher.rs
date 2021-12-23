@@ -654,8 +654,8 @@ mod tests {
         service: F,
     ) -> Dispatcher<Base, S, B, ExpectHandler, UpgradeHandler<Base>>
     where
-        F: IntoService<S>,
-        S: Service<Request = Request>,
+        F: IntoService<S, Request>,
+        S: Service<Request>,
         S::Error: ResponseError + 'static,
         S::Response: Into<Response<B>>,
         B: MessageBody,
@@ -680,8 +680,8 @@ mod tests {
 
     pub(crate) fn spawn_h1<F, S, B>(stream: Io, service: F)
     where
-        F: IntoService<S>,
-        S: Service<Request = Request> + 'static,
+        F: IntoService<S, Request>,
+        S: Service<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
         B: MessageBody + 'static,

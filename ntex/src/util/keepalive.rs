@@ -7,13 +7,13 @@ use crate::{util::Ready, Service, ServiceFactory};
 /// KeepAlive service factory
 ///
 /// Controls min time between requests.
-pub struct KeepAlive<E, F> {
+pub struct KeepAlive<R, E, F> {
     f: F,
     ka: Millis,
-    _t: marker::PhantomData<E>,
+    _t: marker::PhantomData<(R, E)>,
 }
 
-impl<E, F> KeepAlive<E, F>
+impl<R, E, F> KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
@@ -30,7 +30,7 @@ where
     }
 }
 
-impl<E, F> Clone for KeepAlive<E, F>
+impl<R, E, F> Clone for KeepAlive<R, E, F>
 where
     F: Clone,
 {
@@ -43,14 +43,14 @@ where
     }
 }
 
-impl<R, E, F, C> ServiceFactory<R, C> for KeepAlive<E, F>
+impl<R, E, F, C> ServiceFactory<R, C> for KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
     type Response = R;
     type Error = E;
     type InitError = Infallible;
-    type Service = KeepAliveService<E, F>;
+    type Service = KeepAliveService<R, E, F>;
     type Future = Ready<Self::Service, Self::InitError>;
 
     #[inline]
@@ -59,15 +59,15 @@ where
     }
 }
 
-pub struct KeepAliveService<E, F> {
+pub struct KeepAliveService<R, E, F> {
     f: F,
     dur: Millis,
     sleep: Sleep,
     expire: Cell<Instant>,
-    _t: marker::PhantomData<E>,
+    _t: marker::PhantomData<(R, E)>,
 }
 
-impl<E, F> KeepAliveService<E, F>
+impl<R, E, F> KeepAliveService<R, E, F>
 where
     F: Fn() -> E,
 {
@@ -84,7 +84,7 @@ where
     }
 }
 
-impl<R, E, F> Service<R> for KeepAliveService<E, F>
+impl<R, E, F> Service<R> for KeepAliveService<R, E, F>
 where
     F: Fn() -> E,
 {
