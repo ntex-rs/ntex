@@ -86,10 +86,6 @@ pub enum ParseError {
     Timeout,
     /// An `InvalidInput` occurred while trying to parse incoming stream.
     InvalidInput(&'static str),
-    /// An `io::Error` that occurred while trying to read or write to a network
-    /// stream.
-    #[display(fmt = "IO error: {}", _0)]
-    Io(io::Error),
     /// Parsing a field as string failed
     #[display(fmt = "UTF8 error: {}", _0)]
     Utf8(Utf8Error),
@@ -321,21 +317,8 @@ mod tests {
         };
     }
 
-    macro_rules! from_and_cause {
-        ($from:expr => $error:pat) => {
-            match ParseError::from($from) {
-                e @ $error => {
-                    let desc = format!("{}", e);
-                    assert_eq!(desc, format!("IO error: {}", $from));
-                }
-                _ => unreachable!("{:?}", $from),
-            }
-        };
-    }
-
     #[test]
     fn test_from() {
-        from_and_cause!(io::Error::new(io::ErrorKind::Other, "other") => ParseError::Io(..));
         from!(httparse::Error::HeaderName => ParseError::Header);
         from!(httparse::Error::HeaderName => ParseError::Header);
         from!(httparse::Error::HeaderValue => ParseError::Header);

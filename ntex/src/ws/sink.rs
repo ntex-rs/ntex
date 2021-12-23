@@ -19,7 +19,7 @@ impl WsSink {
     pub fn send(
         &self,
         item: ws::Message,
-    ) -> impl Future<Output = Result<(), ws::ProtocolError>> {
+    ) -> impl Future<Output = Result<(), ws::error::ProtocolError>> {
         let inner = self.0.clone();
 
         async move {

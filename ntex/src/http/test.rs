@@ -4,13 +4,11 @@ use std::{convert::TryFrom, io, net, str::FromStr, sync::mpsc, thread};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
-use crate::{io::Io, rt::System, server::Server, service::ServiceFactory};
+use crate::ws::{error::WsClientError, WsClient, WsConnection};
+use crate::{io::Filter, io::Io, rt::System, server::Server, service::ServiceFactory};
 use crate::{time::Millis, time::Seconds, util::Bytes};
 
-use super::client::error::WsClientError;
-use super::client::{
-    ws::WsConnection, Client, ClientRequest, ClientResponse, Connector,
-};
+use super::client::{Client, ClientRequest, ClientResponse, Connector};
 use super::error::{HttpError, PayloadError};
 use super::header::{HeaderMap, HeaderName, HeaderValue};
 use super::payload::Payload;
@@ -322,14 +320,54 @@ impl TestServer {
         response.body().limit(10_485_760).await
     }
 
-    /// Connect to websocket server at a given path
-    pub async fn ws_at(&mut self, path: &str) -> Result<WsConnection, WsClientError> {
-        self.client.ws(self.url(path)).connect().await
+    /// Connect to a websocket server
+    pub async fn ws(&mut self) -> Result<WsConnection<impl Filter>, WsClientError> {
+        self.ws_at("/").await
     }
 
+    /// Connect to websocket server at a given path
+    pub async fn ws_at(
+        &mut self,
+        path: &str,
+    ) -> Result<WsConnection<impl Filter>, WsClientError> {
+        WsClient::build(self.url(path))
+            .address(self.addr)
+            .timeout(Seconds(30))
+            .finish()
+            .unwrap()
+            .connect()
+            .await
+    }
+
+    #[cfg(feature = "openssl")]
     /// Connect to a websocket server
-    pub async fn ws(&mut self) -> Result<WsConnection, WsClientError> {
-        self.ws_at("/").await
+    pub async fn wss(&mut self) -> Result<WsConnection<impl Filter>, WsClientError> {
+        self.wss_at("/").await
+    }
+
+    #[cfg(feature = "openssl")]
+    /// Connect to secure websocket server at a given path
+    pub async fn wss_at(
+        &mut self,
+        path: &str,
+    ) -> Result<WsConnection<impl Filter>, WsClientError> {
+        use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+
+        let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+        builder.set_verify(SslVerifyMode::NONE);
+        let _ = builder
+            .set_alpn_protos(b"\x08http/1.1")
+            .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
+
+        WsClient::build(self.url(path))
+            .address(self.addr)
+            .timeout(Seconds(30))
+            .openssl(builder.build())
+            .take()
+            .finish()
+            .unwrap()
+            .connect()
+            .await
     }
 
     /// Stop http server

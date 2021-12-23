@@ -49,7 +49,7 @@ impl Service for WsService {
             io.encode((res, body::BodySize::None).into(), &codec)
                 .unwrap();
 
-            Dispatcher::new(io.into_boxed(), ws::Codec::new(), service, Timer::default())
+            Dispatcher::new(io.seal(), ws::Codec::new(), service, Timer::default())
                 .await
                 .map_err(|_| panic!())
         };
@@ -96,7 +96,7 @@ async fn test_simple() {
     let conn = srv.ws().await.unwrap();
     assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
 
-    let (_, io, codec) = conn.into_inner();
+    let (io, codec, _) = conn.into_inner();
     io.send(&codec, ws::Message::Text(ByteString::from_static("text")))
         .await
         .unwrap();

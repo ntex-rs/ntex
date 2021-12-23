@@ -55,7 +55,7 @@ impl Connector {
         let conn = Connector {
             connector: boxed::service(
                 TcpConnector::new()
-                    .map(|io| io.into_boxed())
+                    .map(|io| io.seal())
                     .map_err(ConnectError::from),
             ),
             ssl_connector: None,
@@ -184,11 +184,8 @@ impl Connector {
             > + 'static,
         F: Filter,
     {
-        self.connector = boxed::service(
-            connector
-                .map(|io| io.into_boxed())
-                .map_err(ConnectError::from),
-        );
+        self.connector =
+            boxed::service(connector.map(|io| io.seal()).map_err(ConnectError::from));
         self
     }
 
@@ -203,9 +200,7 @@ impl Connector {
         F: Filter,
     {
         self.ssl_connector = Some(boxed::service(
-            connector
-                .map(|io| io.into_boxed())
-                .map_err(ConnectError::from),
+            connector.map(|io| io.seal()).map_err(ConnectError::from),
         ));
         self
     }

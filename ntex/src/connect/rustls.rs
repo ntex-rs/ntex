@@ -17,6 +17,15 @@ pub struct Connector<T> {
     inner: TlsConnector,
 }
 
+impl<T> From<std::sync::Arc<ClientConfig>> for Connector<T> {
+    fn from(cfg: std::sync::Arc<ClientConfig>) -> Self {
+        Connector {
+            inner: TlsConnector::new(cfg),
+            connector: BaseConnector::default(),
+        }
+    }
+}
+
 impl<T> Connector<T> {
     pub fn new(config: ClientConfig) -> Self {
         Connector {

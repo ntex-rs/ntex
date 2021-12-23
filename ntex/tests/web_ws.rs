@@ -37,7 +37,7 @@ async fn web_ws() {
     });
 
     // client service
-    let (_, io, codec) = srv.ws().await.unwrap().into_inner();
+    let (io, codec, _) = srv.ws().await.unwrap().into_inner();
     io.send(&codec, ws::Message::Text(ByteString::from_static("text")))
         .await
         .unwrap();

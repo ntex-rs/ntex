@@ -8,53 +8,7 @@ use serde_json::error::Error as JsonError;
 use crate::connect::openssl::{HandshakeError, SslError};
 
 use crate::http::error::{HttpError, ParseError, PayloadError};
-use crate::http::header::HeaderValue;
-use crate::http::StatusCode;
 use crate::util::Either;
-use crate::ws::ProtocolError;
-
-/// Websocket client error
-#[derive(Debug, Display, From)]
-pub enum WsClientError {
-    /// Invalid response status
-    #[display(fmt = "Invalid response status")]
-    InvalidResponseStatus(StatusCode),
-    /// Invalid upgrade header
-    #[display(fmt = "Invalid upgrade header")]
-    InvalidUpgradeHeader,
-    /// Invalid connection header
-    #[display(fmt = "Invalid connection header")]
-    InvalidConnectionHeader(HeaderValue),
-    /// Missing CONNECTION header
-    #[display(fmt = "Missing CONNECTION header")]
-    MissingConnectionHeader,
-    /// Missing SEC-WEBSOCKET-ACCEPT header
-    #[display(fmt = "Missing SEC-WEBSOCKET-ACCEPT header")]
-    MissingWebSocketAcceptHeader,
-    /// Invalid challenge response
-    #[display(fmt = "Invalid challenge response")]
-    InvalidChallengeResponse(String, HeaderValue),
-    /// Protocol error
-    #[display(fmt = "{}", _0)]
-    Protocol(ProtocolError),
-    /// Send request error
-    #[display(fmt = "{}", _0)]
-    SendRequest(SendRequestError),
-}
-
-impl std::error::Error for WsClientError {}
-
-impl From<InvalidUrl> for WsClientError {
-    fn from(err: InvalidUrl) -> Self {
-        WsClientError::SendRequest(err.into())
-    }
-}
-
-impl From<HttpError> for WsClientError {
-    fn from(err: HttpError) -> Self {
-        WsClientError::SendRequest(err.into())
-    }
-}
 
 /// A set of errors that can occur during parsing json payloads
 #[derive(Debug, Display, From)]
@@ -107,16 +61,12 @@ pub enum ConnectError {
     Timeout,
 
     /// Connector has been disconnected
-    #[display(fmt = "Internal error: connector has been disconnected")]
-    Disconnected,
+    #[display(fmt = "Connector has been disconnected")]
+    Disconnected(Option<io::Error>),
 
     /// Unresolved host name
     #[display(fmt = "Connector received `Connect` method with unresolved host")]
     Unresolved,
-
-    /// Connection io error
-    #[display(fmt = "{}", _0)]
-    Io(io::Error),
 }
 
 impl std::error::Error for ConnectError {}
@@ -128,7 +78,7 @@ impl From<crate::connect::ConnectError> for ConnectError {
             crate::connect::ConnectError::NoRecords => ConnectError::NoRecords,
             crate::connect::ConnectError::InvalidInput => panic!(),
             crate::connect::ConnectError::Unresolved => ConnectError::Unresolved,
-            crate::connect::ConnectError::Io(e) => ConnectError::Io(e),
+            crate::connect::ConnectError::Io(e) => ConnectError::Disconnected(Some(e)),
         }
     }
 }

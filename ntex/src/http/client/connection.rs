@@ -4,7 +4,6 @@ use h2::client::SendRequest;
 use ntex_tls::types::HttpProtocol;
 
 use crate::http::body::MessageBody;
-use crate::http::h1::ClientCodec;
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
 use crate::io::IoBoxed;
@@ -88,26 +87,6 @@ impl Connection {
             ConnectionType::H2(io) => {
                 h2proto::send_request(io, head.into(), body, self.created, self.pool)
                     .await
-            }
-        }
-    }
-
-    /// Send request, returns Response and Framed
-    pub(super) async fn open_tunnel<H: Into<RequestHeadType>>(
-        mut self,
-        head: H,
-    ) -> Result<(ResponseHead, IoBoxed, ClientCodec), SendRequestError> {
-        match self.io.take().unwrap() {
-            ConnectionType::H1(io) => h1proto::open_tunnel(io, head.into()).await,
-            ConnectionType::H2(io) => {
-                if let Some(mut pool) = self.pool.take() {
-                    pool.release(Connection::new(
-                        ConnectionType::H2(io),
-                        self.created,
-                        None,
-                    ));
-                }
-                Err(SendRequestError::TunnelNotSupported)
             }
         }
     }

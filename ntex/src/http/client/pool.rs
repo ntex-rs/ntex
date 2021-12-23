@@ -136,7 +136,7 @@ where
                     OpenConnection::spawn(key, tx, inner, connector.call(req));
 
                     match rx.await {
-                        Err(_) => Err(ConnectError::Disconnected),
+                        Err(_) => Err(ConnectError::Disconnected(None)),
                         Ok(res) => res,
                     }
                 }
@@ -148,7 +148,7 @@ where
                     );
                     let rx = inner.borrow_mut().wait_for(req);
                     match rx.await {
-                        Err(_) => Err(ConnectError::Disconnected),
+                        Err(_) => Err(ConnectError::Disconnected(None)),
                         Ok(res) => res,
                     }
                 }
@@ -536,7 +536,7 @@ mod tests {
             fn_service(move |req| {
                 let (client, server) = Io::create();
                 store2.borrow_mut().push((req, server));
-                Box::pin(async move { Ok(nio::Io::new(client).into_boxed()) })
+                Box::pin(async move { Ok(nio::Io::new(client).seal()) })
             }),
             Duration::from_secs(10),
             Duration::from_secs(10),

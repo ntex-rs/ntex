@@ -45,7 +45,7 @@ pub struct RequestHead {
     pub headers: HeaderMap,
     pub extensions: RefCell<Extensions>,
     pub io: Option<IoRef>,
-    pub(super) flags: Flags,
+    pub(crate) flags: Flags,
 }
 
 impl Default for RequestHead {
