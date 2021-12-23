@@ -92,7 +92,6 @@ impl<Err, M, T> Scope<Err, M, T>
 where
     T: ServiceFactory<
         WebRequest<Err>,
-        Config = (),
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -293,19 +292,14 @@ where
     pub fn default_service<F, S>(mut self, f: F) -> Self
     where
         F: IntoServiceFactory<S, WebRequest<Err>>,
-        S: ServiceFactory<
-                WebRequest<Err>,
-                Config = (),
-                Response = WebResponse,
-                Error = Err::Container,
-            > + 'static,
+        S: ServiceFactory<WebRequest<Err>, Response = WebResponse, Error = Err::Container>
+            + 'static,
         S::InitError: fmt::Debug,
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            f.into_factory().map_init_err(|e| {
-                log::error!("Cannot construct default service: {:?}", e)
-            }),
+            f.into_factory()
+                .map_init_err(|e| log::error!("Cannot construct default service: {:?}", e)),
         )))));
 
         self
@@ -326,7 +320,6 @@ where
         M,
         impl ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -335,7 +328,6 @@ where
     where
         U: ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -384,7 +376,6 @@ impl<Err, M, T> WebServiceFactory<Err> for Scope<Err, M, T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -476,14 +467,12 @@ where
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,
 {
-    type Config = ();
     type Response = WebResponse;
     type Error = Err::Container;
     type Service = M::Service;
@@ -578,7 +567,6 @@ struct ScopeRouterFactory<Err: ErrorRenderer> {
 }
 
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<Err> {
-    type Config = ();
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
@@ -681,13 +669,13 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_scope() {
-        let srv =
-            init_service(App::new().service(
-                web::scope("/app").service(
-                    web::resource("/path1").to(|| async { HttpResponse::Ok() }),
-                ),
-            ))
-            .await;
+        let srv = init_service(
+            App::new().service(
+                web::scope("/app")
+                    .service(web::resource("/path1").to(|| async { HttpResponse::Ok() })),
+            ),
+        )
+        .await;
 
         let req = TestRequest::with_uri("/app/path1").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -704,9 +692,7 @@ mod tests {
             App::new().service(
                 web::scope("/app")
                     .service(web::resource("").to(|| async { HttpResponse::Ok() }))
-                    .service(
-                        web::resource("/").to(|| async { HttpResponse::Created() }),
-                    ),
+                    .service(web::resource("/").to(|| async { HttpResponse::Created() })),
             ),
         )
         .await;
@@ -726,9 +712,7 @@ mod tests {
             App::new().service(
                 web::scope(["/app", "/app2"])
                     .service(web::resource("").to(|| async { HttpResponse::Ok() }))
-                    .service(
-                        web::resource("/").to(|| async { HttpResponse::Created() }),
-                    ),
+                    .service(web::resource("/").to(|| async { HttpResponse::Created() })),
             ),
         )
         .await;
@@ -895,15 +879,16 @@ mod tests {
     async fn test_scope_guard() {
         let srv = init_service(
             App::new()
-                .service(web::scope("/app").guard(guard::Get()).service(
-                    web::resource("/path1").to(|| async { HttpResponse::Ok() }),
-                ))
+                .service(
+                    web::scope("/app").guard(guard::Get()).service(
+                        web::resource("/path1").to(|| async { HttpResponse::Ok() }),
+                    ),
+                )
                 .service(web::scope("/app").guard(guard::Post()).service(
                     web::resource("/path1").to(|| async { HttpResponse::NotModified() }),
                 ))
                 .service(
-                    web::resource("/app/path1")
-                        .to(|| async { HttpResponse::NoContent() }),
+                    web::resource("/app/path1").to(|| async { HttpResponse::NoContent() }),
                 ),
         )
         .await;
@@ -931,8 +916,7 @@ mod tests {
     async fn test_scope_variable_segment() {
         let srv = init_service(App::new().service(web::scope("/ab-{project}").service(
             web::resource("/path1").to(|r: HttpRequest| async move {
-                HttpResponse::Ok()
-                    .body(format!("project: {}", &r.match_info()["project"]))
+                HttpResponse::Ok().body(format!("project: {}", &r.match_info()["project"]))
             }),
         )))
         .await;
@@ -955,8 +939,7 @@ mod tests {
     async fn test_scope_variable_segment2() {
         let srv = init_service(App::new().service(web::scope("/ab-{project}").service(
             web::resource(["", "/"]).to(|r: HttpRequest| async move {
-                HttpResponse::Ok()
-                    .body(format!("project: {}", &r.match_info()["project"]))
+                HttpResponse::Ok().body(format!("project: {}", &r.match_info()["project"]))
             }),
         )))
         .await;
@@ -986,12 +969,13 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_nested_scope() {
-        let srv = init_service(App::new().service(web::scope("/app").service(
-            web::scope("/t1").service(
-                web::resource("/path1").to(|| async { HttpResponse::Created() }),
-            ),
-        )))
-        .await;
+        let srv =
+            init_service(App::new().service(web::scope("/app").service(
+                web::scope("/t1").service(
+                    web::resource("/path1").to(|| async { HttpResponse::Created() }),
+                ),
+            )))
+            .await;
 
         let req = TestRequest::with_uri("/app/t1/path1").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -1000,12 +984,13 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_nested_scope_no_slash() {
-        let srv = init_service(App::new().service(web::scope("/app").service(
-            web::scope("t1").service(
-                web::resource("/path1").to(|| async { HttpResponse::Created() }),
-            ),
-        )))
-        .await;
+        let srv =
+            init_service(App::new().service(web::scope("/app").service(
+                web::scope("t1").service(
+                    web::resource("/path1").to(|| async { HttpResponse::Created() }),
+                ),
+            )))
+            .await;
 
         let req = TestRequest::with_uri("/app/t1/path1").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -1039,11 +1024,13 @@ mod tests {
     #[crate::rt_test]
     async fn test_nested_scope_filter() {
         let srv =
-            init_service(App::new().service(web::scope("/app").service(
-                web::scope("/t1").guard(guard::Get()).service(
-                    web::resource("/path1").to(|| async { HttpResponse::Ok() }),
+            init_service(App::new().service(
+                web::scope("/app").service(
+                    web::scope("/t1").guard(guard::Get()).service(
+                        web::resource("/path1").to(|| async { HttpResponse::Ok() }),
+                    ),
                 ),
-            )))
+            ))
             .await;
 
         let req = TestRequest::with_uri("/app/t1/path1")

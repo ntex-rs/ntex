@@ -34,10 +34,7 @@ impl<T> Connector<T> {
 
 impl<T: Address> Connector<T> {
     /// Resolve and connect to remote host
-    pub fn connect<U>(
-        &self,
-        message: U,
-    ) -> impl Future<Output = Result<Io, ConnectError>>
+    pub fn connect<U>(&self, message: U) -> impl Future<Output = Result<Io, ConnectError>>
     where
         Connect<T>: From<U>,
     {
@@ -68,16 +65,15 @@ impl<T> Clone for Connector<T> {
     }
 }
 
-impl<T: Address> ServiceFactory<Connect<T>> for Connector<T> {
+impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Response = Io;
     type Error = ConnectError;
-    type Config = ();
     type Service = Connector<T>;
     type InitError = ();
     type Future = Ready<Self::Service, Self::InitError>;
 
     #[inline]
-    fn new_service(&self, _: ()) -> Self::Future {
+    fn new_service(&self, _: C) -> Self::Future {
         Ready::Ok(self.clone())
     }
 }

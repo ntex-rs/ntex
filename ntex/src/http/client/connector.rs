@@ -177,11 +177,8 @@ impl Connector {
     /// Use custom connector to open un-secured connections.
     pub fn connector<T, F>(mut self, connector: T) -> Self
     where
-        T: Service<
-                TcpConnect<Uri>,
-                Response = Io<F>,
-                Error = crate::connect::ConnectError,
-            > + 'static,
+        T: Service<TcpConnect<Uri>, Response = Io<F>, Error = crate::connect::ConnectError>
+            + 'static,
         F: Filter,
     {
         self.connector =
@@ -192,11 +189,8 @@ impl Connector {
     /// Use custom connector to open secure connections.
     pub fn secure_connector<T, F>(mut self, connector: T) -> Self
     where
-        T: Service<
-                TcpConnect<Uri>,
-                Response = Io<F>,
-                Error = crate::connect::ConnectError,
-            > + 'static,
+        T: Service<TcpConnect<Uri>, Response = Io<F>, Error = crate::connect::ConnectError>
+            + 'static,
         F: Filter,
     {
         self.ssl_connector = Some(boxed::service(
@@ -224,8 +218,7 @@ impl Connector {
     pub fn finish(
         self,
     ) -> impl Service<Connect, Response = Connection, Error = ConnectError> + Clone {
-        let tcp_service =
-            connector(self.connector, self.timeout, self.disconnect_timeout);
+        let tcp_service = connector(self.connector, self.timeout, self.disconnect_timeout);
 
         let ssl_pool = if let Some(ssl_connector) = self.ssl_connector {
             let srv = connector(ssl_connector, self.timeout, self.disconnect_timeout);
@@ -257,8 +250,8 @@ fn connector(
     connector: BoxedConnector,
     timeout: Millis,
     disconnect_timeout: Millis,
-) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError, Future = impl Unpin>
-       + Unpin {
+) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError, Future = impl Unpin> + Unpin
+{
     TimeoutService::new(
         timeout,
         apply_fn(connector, |msg: Connect, srv| {

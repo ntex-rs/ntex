@@ -243,8 +243,7 @@ impl Inner {
                             continue;
                         }
                         let is_valid = s.with_read_buf(|buf| {
-                            if buf.is_empty() || (buf.len() == 2 && &buf[..] == b"\r\n")
-                            {
+                            if buf.is_empty() || (buf.len() == 2 && &buf[..] == b"\r\n") {
                                 buf.clear();
                                 true
                             } else {

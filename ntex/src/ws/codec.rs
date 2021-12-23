@@ -151,11 +151,7 @@ impl Encoder for Codec {
             ),
             Message::Close(reason) => {
                 self.insert_flags(Flags::CLOSED);
-                Parser::write_close(
-                    dst,
-                    reason,
-                    !self.flags.get().contains(Flags::SERVER),
-                )
+                Parser::write_close(dst, reason, !self.flags.get().contains(Flags::SERVER))
             }
             Message::Continuation(cont) => match cont {
                 Item::FirstText(data) => {
@@ -224,8 +220,7 @@ impl Decoder for Codec {
     type Error = ProtocolError;
 
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        match Parser::parse(src, self.flags.get().contains(Flags::SERVER), self.max_size)
-        {
+        match Parser::parse(src, self.flags.get().contains(Flags::SERVER), self.max_size) {
             Ok(Some((finished, opcode, payload))) => {
                 // handle continuation
                 if !finished {

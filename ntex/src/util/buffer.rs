@@ -1,9 +1,7 @@
 //! Service that buffers incomming requests.
 use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
-use std::{
-    collections::VecDeque, future::Future, marker::PhantomData, pin::Pin, rc::Rc,
-};
+use std::{collections::VecDeque, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use crate::channel::oneshot;
 use crate::service::{IntoService, Service, Transform};

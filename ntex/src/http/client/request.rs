@@ -502,10 +502,8 @@ impl ClientRequest {
             if let Some(ref mut jar) = self.cookies {
                 let mut cookie = String::new();
                 for c in jar.delta() {
-                    let name = percent_encode(
-                        c.name().as_bytes(),
-                        crate::http::helpers::USERINFO,
-                    );
+                    let name =
+                        percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
                     let value = percent_encode(
                         c.value().as_bytes(),
                         crate::http::helpers::USERINFO,
@@ -534,8 +532,7 @@ impl ClientRequest {
             } else {
                 #[cfg(any(feature = "compress"))]
                 {
-                    slf =
-                        slf.set_header_if_none(header::ACCEPT_ENCODING, "gzip, deflate")
+                    slf = slf.set_header_if_none(header::ACCEPT_ENCODING, "gzip, deflate")
                 }
             };
         }

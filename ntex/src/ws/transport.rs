@@ -99,11 +99,7 @@ impl<F: Filter> Filter for WsTransport<F> {
         None
     }
 
-    fn release_read_buf(
-        &self,
-        mut src: BytesMut,
-        nbytes: usize,
-    ) -> Result<(), io::Error> {
+    fn release_read_buf(&self, mut src: BytesMut, nbytes: usize) -> Result<(), io::Error> {
         if nbytes == 0 {
             if !src.is_empty() {
                 self.read_buf.set(Some(src));
@@ -228,9 +224,7 @@ impl<F: Filter> Filter for WsTransport<F> {
         };
         self.codec
             .encode(Message::Binary(src.freeze()), &mut buf)
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, "Cannot encode ws frame")
-            })?;
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Cannot encode ws frame"))?;
         self.inner.release_write_buf(buf)
     }
 }

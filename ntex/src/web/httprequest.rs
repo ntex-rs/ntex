@@ -344,8 +344,7 @@ mod tests {
 
     #[test]
     fn test_debug() {
-        let req =
-            TestRequest::with_header("content-type", "text/plain").to_http_request();
+        let req = TestRequest::with_header("content-type", "text/plain").to_http_request();
         let dbg = format!("{:?}", req);
         assert!(dbg.contains("HttpRequest"));
 
@@ -483,15 +482,15 @@ mod tests {
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let srv = init_service(App::new().app_data(10u32).service(
-            web::resource("/").to(|req: HttpRequest| async move {
+        let srv = init_service(App::new().app_data(10u32).service(web::resource("/").to(
+            |req: HttpRequest| async move {
                 if req.app_data::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {
                     HttpResponse::BadRequest()
                 }
-            }),
-        ))
+            },
+        )))
         .await;
 
         let req = TestRequest::default().to_request();
@@ -516,14 +515,14 @@ mod tests {
         let tracker = Rc::new(RefCell::new(Tracker { dropped: false }));
         {
             let tracker2 = Rc::clone(&tracker);
-            let srv = init_service(App::new().data(10u32).service(
-                web::resource("/").to(move |req: HttpRequest| {
+            let srv = init_service(App::new().data(10u32).service(web::resource("/").to(
+                move |req: HttpRequest| {
                     req.extensions_mut().insert(Foo {
                         tracker: Rc::clone(&tracker2),
                     });
                     async { HttpResponse::Ok() }
-                }),
-            ))
+                },
+            )))
             .await;
 
             let req = TestRequest::default().to_request();

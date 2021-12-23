@@ -77,8 +77,7 @@ impl Parser {
                 return Ok(None);
             }
 
-            let mask =
-                u32::from_le_bytes(TryFrom::try_from(&src[idx..idx + 4]).unwrap());
+            let mask = u32::from_le_bytes(TryFrom::try_from(&src[idx..idx + 4]).unwrap());
             idx += 4;
             Some(mask)
         } else {
@@ -235,9 +234,7 @@ mod tests {
         }
     }
 
-    fn extract(
-        frm: Result<Option<(bool, OpCode, Option<BytesMut>)>, ProtocolError>,
-    ) -> F {
+    fn extract(frm: Result<Option<(bool, OpCode, Option<BytesMut>)>, ProtocolError>) -> F {
         match frm {
             Ok(Some((finished, opcode, payload))) => F {
                 finished,

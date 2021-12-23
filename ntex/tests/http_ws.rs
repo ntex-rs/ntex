@@ -58,9 +58,7 @@ impl Service for WsService {
     }
 }
 
-async fn service(
-    msg: DispatchItem<ws::Codec>,
-) -> Result<Option<ws::Message>, io::Error> {
+async fn service(msg: DispatchItem<ws::Codec>) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
         DispatchItem::Item(msg) => match msg {
             ws::Frame::Ping(msg) => ws::Message::Pong(msg),

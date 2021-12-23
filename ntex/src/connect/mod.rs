@@ -26,7 +26,5 @@ where
     T: Address + 'static,
     Connect<T>: From<U>,
 {
-    service::ConnectServiceResponse::new(Box::pin(
-        Resolver::new().lookup(message.into()),
-    ))
+    service::ConnectServiceResponse::new(Box::pin(Resolver::new().lookup(message.into())))
 }

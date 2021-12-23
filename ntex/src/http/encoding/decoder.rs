@@ -26,15 +26,15 @@ where
     #[inline]
     pub fn new(stream: S, encoding: ContentEncoding) -> Decoder<S> {
         let decoder = match encoding {
-            ContentEncoding::Br => Some(ContentDecoder::Br(Box::new(
-                BrotliDecoder::new(Writer::new()),
-            ))),
+            ContentEncoding::Br => Some(ContentDecoder::Br(Box::new(BrotliDecoder::new(
+                Writer::new(),
+            )))),
             ContentEncoding::Deflate => Some(ContentDecoder::Deflate(Box::new(
                 ZlibDecoder::new(Writer::new()),
             ))),
-            ContentEncoding::Gzip => Some(ContentDecoder::Gzip(Box::new(
-                GzDecoder::new(Writer::new()),
-            ))),
+            ContentEncoding::Gzip => Some(ContentDecoder::Gzip(Box::new(GzDecoder::new(
+                Writer::new(),
+            )))),
             _ => None,
         };
         Decoder {

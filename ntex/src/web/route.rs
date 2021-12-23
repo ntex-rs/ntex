@@ -26,9 +26,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// Create new route which matches any request.
     pub fn new() -> Route<Err> {
         Route {
-            handler: Box::new(HandlerWrapper::new(|| async {
-                HttpResponse::NotFound()
-            })),
+            handler: Box::new(HandlerWrapper::new(|| async { HttpResponse::NotFound() })),
             methods: Vec::new(),
             guards: Rc::new(Vec::new()),
         }
@@ -54,7 +52,6 @@ impl<Err: ErrorRenderer> Route<Err> {
 }
 
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
-    type Config = ();
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
@@ -290,9 +287,9 @@ mod tests {
                 .service(web::resource("/test").route(vec![
                     web::get().to(|| async { HttpResponse::Ok() }),
                     web::put().to(|| async {
-                        Err::<HttpResponse, _>(
-                            error::ErrorBadRequest::<_, DefaultError>("err"),
-                        )
+                        Err::<HttpResponse, _>(error::ErrorBadRequest::<_, DefaultError>(
+                            "err",
+                        ))
                     }),
                     web::post().to(|| async {
                         sleep(Millis(100)).await;

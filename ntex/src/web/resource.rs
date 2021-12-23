@@ -77,7 +77,6 @@ impl<Err, M, T> Resource<Err, M, T>
 where
     T: ServiceFactory<
         WebRequest<Err>,
-        Config = (),
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -252,7 +251,6 @@ where
         M,
         impl ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -261,7 +259,6 @@ where
     where
         U: ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -306,19 +303,14 @@ where
     pub fn default_service<F, S>(mut self, f: F) -> Self
     where
         F: IntoServiceFactory<S, WebRequest<Err>>,
-        S: ServiceFactory<
-                WebRequest<Err>,
-                Config = (),
-                Response = WebResponse,
-                Error = Err::Container,
-            > + 'static,
+        S: ServiceFactory<WebRequest<Err>, Response = WebResponse, Error = Err::Container>
+            + 'static,
         S::InitError: fmt::Debug,
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            f.into_factory().map_init_err(|e| {
-                log::error!("Cannot construct default service: {:?}", e)
-            }),
+            f.into_factory()
+                .map_init_err(|e| log::error!("Cannot construct default service: {:?}", e)),
         )))));
 
         self
@@ -329,7 +321,6 @@ impl<Err, M, T> WebServiceFactory<Err> for Resource<Err, M, T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -384,7 +375,6 @@ impl<Err, M, T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -423,14 +413,12 @@ where
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,
 {
-    type Config = ();
     type Response = WebResponse;
     type Error = Err::Container;
     type Service = M::Service;
@@ -524,7 +512,6 @@ struct ResourceRouterFactory<Err: ErrorRenderer> {
 }
 
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFactory<Err> {
-    type Config = ();
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
@@ -598,9 +585,7 @@ mod tests {
     use crate::time::{sleep, Millis};
     use crate::web::middleware::DefaultHeaders;
     use crate::web::test::{call_service, init_service, TestRequest};
-    use crate::web::{
-        self, guard, request::WebRequest, App, DefaultError, HttpResponse,
-    };
+    use crate::web::{self, guard, request::WebRequest, App, DefaultError, HttpResponse};
     use crate::{service::fn_service, util::Ready};
 
     #[crate::rt_test]
@@ -626,19 +611,18 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_middleware() {
-        let srv =
-            init_service(
-                App::new().service(
-                    web::resource("/test")
-                        .name("test")
-                        .wrap(DefaultHeaders::new().header(
-                            header::CONTENT_TYPE,
-                            HeaderValue::from_static("0001"),
-                        ))
-                        .route(web::get().to(|| async { HttpResponse::Ok() })),
-                ),
-            )
-            .await;
+        let srv = init_service(
+            App::new().service(
+                web::resource("/test")
+                    .name("test")
+                    .wrap(
+                        DefaultHeaders::new()
+                            .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
+                    )
+                    .route(web::get().to(|| async { HttpResponse::Ok() })),
+            ),
+        )
+        .await;
         let req = TestRequest::with_uri("/test").to_request();
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -650,12 +634,11 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_to() {
-        let srv =
-            init_service(App::new().service(web::resource("/test").to(|| async {
-                sleep(Millis(100)).await;
-                HttpResponse::Ok()
-            })))
-            .await;
+        let srv = init_service(App::new().service(web::resource("/test").to(|| async {
+            sleep(Millis(100)).await;
+            HttpResponse::Ok()
+        })))
+        .await;
         let req = TestRequest::with_uri("/test").to_request();
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);

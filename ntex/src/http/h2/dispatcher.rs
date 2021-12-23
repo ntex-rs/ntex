@@ -1,7 +1,5 @@
 use std::task::{Context, Poll};
-use std::{
-    convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::Rc, time,
-};
+use std::{convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::Rc, time};
 
 use h2::server::{Connection, SendResponse};
 use h2::SendStream;
@@ -51,12 +49,10 @@ where
     ) -> Self {
         // keep-alive timer
         let (ka_expire, ka_timer) = if let Some(delay) = timeout {
-            let expire =
-                config.timer.now() + std::time::Duration::from(config.keep_alive);
+            let expire = config.timer.now() + std::time::Duration::from(config.keep_alive);
             (expire, Some(delay))
         } else if let Some(delay) = config.keep_alive_timer() {
-            let expire =
-                config.timer.now() + std::time::Duration::from(config.keep_alive);
+            let expire = config.timer.now() + std::time::Duration::from(config.keep_alive);
             (expire, Some(delay))
         } else {
             (now(), None)
@@ -233,8 +229,7 @@ where
 
                         let mut send = send.take().unwrap();
                         let mut size = body.size();
-                        let h2_res =
-                            self.as_mut().prepare_response(res.head(), &mut size);
+                        let h2_res = self.as_mut().prepare_response(res.head(), &mut size);
                         this = self.as_mut().project();
 
                         let stream = match send.send_response(h2_res, size.is_eof()) {
@@ -260,8 +255,7 @@ where
 
                         let mut send = send.take().unwrap();
                         let mut size = body.size();
-                        let h2_res =
-                            self.as_mut().prepare_response(res.head(), &mut size);
+                        let h2_res = self.as_mut().prepare_response(res.head(), &mut size);
                         this = self.as_mut().project();
 
                         let stream = match send.send_response(h2_res, size.is_eof()) {

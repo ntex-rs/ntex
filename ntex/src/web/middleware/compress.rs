@@ -26,26 +26,30 @@ use crate::web::{BodyEncoding, ErrorRenderer, WebRequest, WebResponse};
 ///         );
 /// }
 /// ```
-pub struct Compress {
+pub struct Compress<E> {
     enc: ContentEncoding,
+    _t: marker::PhantomData<E>,
 }
 
-impl Compress {
+impl<E> Compress<E> {
     /// Create new `Compress` middleware with default encoding.
     pub fn new(encoding: ContentEncoding) -> Self {
-        Compress { enc: encoding }
+        Compress {
+            enc: encoding,
+            _t: marker::PhantomData,
+        }
     }
 }
 
-impl Default for Compress {
+impl<E> Default for Compress<E> {
     fn default() -> Self {
         Compress::new(ContentEncoding::Auto)
     }
 }
 
-impl<S, E> Transform<S> for Compress
+impl<S, E> Transform<S> for Compress<E>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
     type Service = CompressMiddleware<S, E>;
@@ -65,12 +69,11 @@ pub struct CompressMiddleware<S, E> {
     _t: marker::PhantomData<E>,
 }
 
-impl<S, E> Service for CompressMiddleware<S, E>
+impl<S, E> Service<WebRequest<E>> for CompressMiddleware<S, E>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
-    type Request = WebRequest<E>;
     type Response = WebResponse;
     type Error = S::Error;
     type Future = CompressResponse<S, E>;
@@ -107,7 +110,7 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct CompressResponse<S: Service, E>
+    pub struct CompressResponse<S: Service<WebRequest<E>>, E>
     {
         #[pin]
         fut: S::Future,
@@ -118,7 +121,7 @@ pin_project_lite::pin_project! {
 
 impl<S, E> Future for CompressResponse<S, E>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
     type Output = Result<WebResponse, S::Error>;

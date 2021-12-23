@@ -20,10 +20,9 @@ pub async fn start<T, F, S, Err>(
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<Frame, Config = WebSocketsSink, Response = Option<Message>>
-        + 'static,
+    T: ServiceFactory<Frame, WebSocketsSink, Response = Option<Message>> + 'static,
     T::Error: error::Error,
-    F: IntoServiceFactory<T, Frame>,
+    F: IntoServiceFactory<T, Frame, WebSocketsSink>,
     S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
     Err: From<T::InitError> + From<HandshakeError>,
 {
@@ -41,10 +40,9 @@ pub async fn start_with<T, F, S, Err, Tx, Rx>(
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<Frame, Config = ws::StreamEncoder<Tx>, Response = Option<Message>>
-        + 'static,
+    T: ServiceFactory<Frame, ws::StreamEncoder<Tx>, Response = Option<Message>> + 'static,
     T::Error: error::Error,
-    F: IntoServiceFactory<T, Frame>,
+    F: IntoServiceFactory<T, Frame, ws::StreamEncoder<Tx>>,
     S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
     Err: From<T::InitError> + From<HandshakeError>,
     Tx: Sink<Result<Bytes, Box<dyn error::Error>>> + Clone + Unpin + 'static,
@@ -98,10 +96,7 @@ where
 {
     type Item = Result<I, Box<dyn error::Error>>;
 
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.project().stream.poll_next(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(Ok(item))) => Poll::Ready(Some(Ok(item))),

@@ -79,7 +79,6 @@ impl<M, T, Err> App<M, T, Err>
 where
     T: ServiceFactory<
         WebRequest<Err>,
-        Config = (),
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -281,12 +280,8 @@ where
     pub fn default_service<F, U>(mut self, f: F) -> Self
     where
         F: IntoServiceFactory<U, WebRequest<Err>>,
-        U: ServiceFactory<
-                WebRequest<Err>,
-                Config = (),
-                Response = WebResponse,
-                Error = Err::Container,
-            > + 'static,
+        U: ServiceFactory<WebRequest<Err>, Response = WebResponse, Error = Err::Container>
+            + 'static,
         U::InitError: fmt::Debug,
     {
         // create and configure default resource
@@ -362,7 +357,6 @@ where
         M,
         impl ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -372,7 +366,6 @@ where
     where
         S: ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -449,7 +442,6 @@ where
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
         WebRequest<Err>,
-        Config = (),
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -479,7 +471,6 @@ where
         self,
     ) -> impl ServiceFactory<
         Request,
-        Config = (),
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
@@ -510,7 +501,6 @@ where
         cfg: AppConfig,
     ) -> impl ServiceFactory<
         Request,
-        Config = (),
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
@@ -519,13 +509,13 @@ where
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request> for App<M, F, Err>
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, AppConfig>
+    for App<M, F, Err>
 where
     M: Transform<AppService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
         WebRequest<Err>,
-        Config = (),
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -580,7 +570,6 @@ impl<Err: ErrorRenderer> Filter<Err> {
 }
 
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Filter<Err> {
-    type Config = ();
     type Response = WebRequest<Err>;
     type Error = Err::Container;
     type InitError = ();
@@ -599,10 +588,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for Filter<Err> {
     type Future = Ready<WebRequest<Err>, Err::Container>;
 
     #[inline]
-    fn poll_ready(
-        &self,
-        _: &mut task::Context<'_>,
-    ) -> task::Poll<Result<(), Self::Error>> {
+    fn poll_ready(&self, _: &mut task::Context<'_>) -> task::Poll<Result<(), Self::Error>> {
         task::Poll::Ready(Ok(()))
     }
 
@@ -621,15 +607,14 @@ mod tests {
     use crate::util::{Bytes, Ready};
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{
-        self, middleware::DefaultHeaders, request::WebRequest, DefaultError,
-        HttpRequest, HttpResponse,
+        self, middleware::DefaultHeaders, request::WebRequest, DefaultError, HttpRequest,
+        HttpResponse,
     };
 
     #[crate::rt_test]
     async fn test_default_resource() {
         let srv = init_service(
-            App::new()
-                .service(web::resource("/test").to(|| async { HttpResponse::Ok() })),
+            App::new().service(web::resource("/test").to(|| async { HttpResponse::Ok() })),
         )
         .await;
         let req = TestRequest::with_uri("/test").to_request();

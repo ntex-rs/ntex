@@ -11,7 +11,6 @@ impl<F> ServiceFactory<(Request, Io<F>, Codec)> for UpgradeHandler<F> {
     type Response = ();
     type Error = io::Error;
 
-    type Config = ();
     type Service = UpgradeHandler<F>;
     type InitError = io::Error;
     type Future = Ready<Self::Service, Self::InitError>;

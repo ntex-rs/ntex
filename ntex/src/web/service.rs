@@ -137,18 +137,13 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         F: IntoServiceFactory<S, WebRequest<Err>>,
         S: ServiceFactory<
                 WebRequest<Err>,
-                Config = (),
                 Response = WebResponse,
                 Error = Err::Container,
                 InitError = (),
             > + 'static,
     {
-        self.services.push((
-            rdef,
-            boxed::factory(factory.into_factory()),
-            guards,
-            nested,
-        ));
+        self.services
+            .push((rdef, boxed::factory(factory.into_factory()), guards, nested));
     }
 }
 
@@ -220,7 +215,6 @@ impl WebServiceAdapter {
         F: IntoServiceFactory<T, WebRequest<Err>>,
         T: ServiceFactory<
                 WebRequest<Err>,
-                Config = (),
                 Response = WebResponse,
                 Error = Err::Container,
                 InitError = (),
@@ -247,7 +241,6 @@ impl<T, Err> WebServiceFactory<Err> for WebServiceImpl<T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
-            Config = (),
             Response = WebResponse,
             Error = Err::Container,
             InitError = (),

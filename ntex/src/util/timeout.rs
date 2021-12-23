@@ -3,8 +3,7 @@
 //! If the response does not complete within the specified timeout, the response
 //! will be aborted.
 use std::{
-    fmt, future::Future, marker, marker::PhantomData, pin::Pin, task::Context,
-    task::Poll,
+    fmt, future::Future, marker, marker::PhantomData, pin::Pin, task::Context, task::Poll,
 };
 
 use crate::service::{IntoService, Service, Transform};

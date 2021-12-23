@@ -92,9 +92,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
             if let Some(ref mut fut) = self.fut {
                 let mut encoder = match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(Ok(item))) => item,
-                    Poll::Ready(Ok(Err(e))) => {
-                        return Poll::Ready(Some(Err(Box::new(e))))
-                    }
+                    Poll::Ready(Ok(Err(e))) => return Poll::Ready(Some(Err(Box::new(e)))),
                     Poll::Ready(Err(_)) => {
                         return Poll::Ready(Some(Err(Box::new(io::Error::new(
                             io::ErrorKind::Other,
@@ -177,9 +175,7 @@ enum ContentEncoder {
 impl ContentEncoder {
     fn can_encode(encoding: ContentEncoding) -> bool {
         match encoding {
-            ContentEncoding::Deflate | ContentEncoding::Gzip | ContentEncoding::Br => {
-                true
-            }
+            ContentEncoding::Deflate | ContentEncoding::Gzip | ContentEncoding::Br => true,
             _ => false,
         }
     }

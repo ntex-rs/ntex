@@ -26,12 +26,10 @@ pub struct H2Service<F, S, B> {
 
 impl<F, S, B> H2Service<F, S, B>
 where
-    S: ServiceFactory<Request, Config = ()>,
-    S::Error: ResponseError + 'static,
-    S::Response: Into<Response<B>> + 'static,
-    S::Future: 'static,
-    <S::Service as Service<Request>>::Future: 'static,
-    B: MessageBody + 'static,
+    S: ServiceFactory<Request>,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
     pub(crate) fn with_config<U: IntoServiceFactory<S, Request>>(
@@ -61,7 +59,7 @@ mod openssl {
     impl<F, S, B> H2Service<SslFilter<F>, S, B>
     where
         F: Filter,
-        S: ServiceFactory<Config = (), Request = Request> + 'static,
+        S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
@@ -71,8 +69,7 @@ mod openssl {
             self,
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
-            Config = (),
-            Request = Io<F>,
+            Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
@@ -99,11 +96,9 @@ mod rustls {
     impl<F, S, B> H2Service<TlsFilter<F>, S, B>
     where
         F: Filter,
-        S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: ResponseError + 'static,
-        S::Response: Into<Response<B>> + 'static,
-        S::Future: 'static,
-        <S::Service as Service>::Future: 'static,
+        S: ServiceFactory<Request> + 'static,
+        S::Error: ResponseError,
+        S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
     {
         /// Create openssl based service
@@ -111,8 +106,7 @@ mod rustls {
             self,
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
-            Config = (),
-            Request = Io<F>,
+            Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
@@ -134,14 +128,11 @@ mod rustls {
 impl<F, S, B> ServiceFactory<Io<F>> for H2Service<F, S, B>
 where
     F: Filter,
-    S: ServiceFactory<Request, Config = ()>,
-    S::Error: ResponseError + 'static,
-    S::Response: Into<Response<B>> + 'static,
-    S::Future: 'static,
-    <S::Service as Service<Request>>::Future: 'static,
+    S: ServiceFactory<Request> + 'static,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
     B: MessageBody + 'static,
 {
-    type Config = ();
     type Response = ();
     type Error = DispatchError;
     type InitError = S::InitError;

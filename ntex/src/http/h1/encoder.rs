@@ -64,9 +64,9 @@ pub(super) trait MessageType: Sized {
         // Content length
         if let Some(status) = self.status() {
             match status {
-                StatusCode::NO_CONTENT
-                | StatusCode::CONTINUE
-                | StatusCode::PROCESSING => length = BodySize::None,
+                StatusCode::NO_CONTENT | StatusCode::CONTINUE | StatusCode::PROCESSING => {
+                    length = BodySize::None
+                }
                 StatusCode::SWITCHING_PROTOCOLS => {
                     skip_len = true;
                     length = BodySize::Stream;
@@ -259,10 +259,7 @@ impl MessageType for RequestHeadType {
                 Version::HTTP_10 => "HTTP/1.0",
                 Version::HTTP_11 => "HTTP/1.1",
                 _ =>
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "unsupported version"
-                    )),
+                    return Err(io::Error::new(io::ErrorKind::Other, "unsupported version")),
             }
         )
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
@@ -271,11 +268,7 @@ impl MessageType for RequestHeadType {
 
 impl<T: MessageType> MessageEncoder<T> {
     /// Encode message
-    pub(super) fn encode_chunk(
-        &self,
-        msg: &[u8],
-        buf: &mut BytesMut,
-    ) -> io::Result<bool> {
+    pub(super) fn encode_chunk(&self, msg: &[u8], buf: &mut BytesMut) -> io::Result<bool> {
         let mut te = self.te.get();
         let result = te.encode(msg, buf);
         self.te.set(te);
@@ -480,11 +473,7 @@ fn write_status_line(version: Version, mut n: u16, bytes: &mut BytesMut) {
         } else {
             let d1 = n << 1;
             curr -= 2;
-            ptr::copy_nonoverlapping(
-                lut_ptr.offset(d1 as isize),
-                buf_ptr.offset(curr),
-                2,
-            );
+            ptr::copy_nonoverlapping(lut_ptr.offset(d1 as isize), buf_ptr.offset(curr), 2);
         }
     }
 
@@ -498,15 +487,15 @@ fn write_status_line(version: Version, mut n: u16, bytes: &mut BytesMut) {
 fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
     if n < 10 {
         let mut buf: [u8; 21] = [
-            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e',
-            b'n', b'g', b't', b'h', b':', b' ', b'0', b'\r', b'\n',
+            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e', b'n',
+            b'g', b't', b'h', b':', b' ', b'0', b'\r', b'\n',
         ];
         buf[18] = (n as u8) + b'0';
         bytes.extend_from_slice(&buf);
     } else if n < 100 {
         let mut buf: [u8; 22] = [
-            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e',
-            b'n', b'g', b't', b'h', b':', b' ', b'0', b'0', b'\r', b'\n',
+            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e', b'n',
+            b'g', b't', b'h', b':', b' ', b'0', b'0', b'\r', b'\n',
         ];
         let d1 = n << 1;
         unsafe {
@@ -519,8 +508,8 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
         bytes.extend_from_slice(&buf);
     } else if n < 1000 {
         let mut buf: [u8; 23] = [
-            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e',
-            b'n', b'g', b't', b'h', b':', b' ', b'0', b'0', b'0', b'\r', b'\n',
+            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e', b'n',
+            b'g', b't', b'h', b':', b' ', b'0', b'0', b'0', b'\r', b'\n',
         ];
         // decode 2 more chars, if > 2 chars
         let d1 = (n % 100) << 1;
@@ -640,8 +629,7 @@ mod tests {
             ConnectionType::Close,
             &DateService::default(),
         );
-        let data =
-            String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
+        let data = String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
         assert!(data.contains("content-length: 0\r\n"));
         assert!(data.contains("connection: close\r\n"));
         assert!(data.contains("authorization: another authorization\r\n"));

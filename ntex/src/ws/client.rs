@@ -134,9 +134,7 @@ where
     T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
 {
     /// Complete request construction and connect to a websockets server.
-    pub fn connect(
-        &self,
-    ) -> impl Future<Output = Result<WsConnection<F>, WsClientError>> {
+    pub fn connect(&self) -> impl Future<Output = Result<WsConnection<F>, WsClientError>> {
         let head = self.head.clone();
         let max_size = self.max_size;
         let server_mode = self.server_mode;
@@ -215,9 +213,7 @@ where
                 if let Ok(s) = conn.to_str() {
                     if !s.to_ascii_lowercase().contains("upgrade") {
                         log::trace!("Invalid connection header: {}", s);
-                        return Err(WsClientError::InvalidConnectionHeader(
-                            conn.clone(),
-                        ));
+                        return Err(WsClientError::InvalidConnectionHeader(conn.clone()));
                     }
                 } else {
                     log::trace!("Invalid connection header: {:?}", conn);
@@ -586,10 +582,8 @@ where
             if let Some(ref mut jar) = self.cookies {
                 let mut cookie = String::new();
                 for c in jar.delta() {
-                    let name = percent_encode(
-                        c.name().as_bytes(),
-                        crate::http::helpers::USERINFO,
-                    );
+                    let name =
+                        percent_encode(c.name().as_bytes(), crate::http::helpers::USERINFO);
                     let value = percent_encode(
                         c.value().as_bytes(),
                         crate::http::helpers::USERINFO,
@@ -702,8 +696,7 @@ impl WsConnection<Sealed> {
     // TODO: fix close frame handling
     /// Start client websockets with `SinkService` and `mpsc::Receiver<Frame>`
     pub fn start_default(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
-        let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) =
-            mpsc::channel();
+        let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
         rt::spawn(async move {
             let io = self.io.get_ref();

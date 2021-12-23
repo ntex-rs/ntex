@@ -1,6 +1,4 @@
-use std::{
-    fmt, future::Future, io, marker, mem, net, pin::Pin, task::Context, task::Poll,
-};
+use std::{fmt, future::Future, io, marker, mem, net, pin::Pin, task::Context, task::Poll};
 
 use async_channel::{unbounded, Receiver};
 use async_oneshot as oneshot;
@@ -198,7 +196,7 @@ impl ServerBuilder {
     where
         U: net::ToSocketAddrs,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, Config = ()>,
+        R: ServiceFactory<Io>,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
@@ -210,11 +208,8 @@ impl ServerBuilder {
                 factory.clone(),
                 lst.local_addr()?,
             ));
-            self.sockets.push((
-                token,
-                name.as_ref().to_string(),
-                Listener::from_tcp(lst),
-            ));
+            self.sockets
+                .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
         }
         Ok(self)
     }
@@ -226,7 +221,7 @@ impl ServerBuilder {
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, Config = ()>,
+        R: ServiceFactory<Io>,
     {
         use std::os::unix::net::UnixListener;
 
@@ -255,7 +250,7 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, Config = ()>,
+        R: ServiceFactory<Io>,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();
@@ -280,7 +275,7 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, Config = ()>,
+        R: ServiceFactory<Io>,
     {
         let token = self.token.next();
         self.services.push(Factory::create(

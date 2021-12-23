@@ -1,7 +1,6 @@
 //! Various helpers for ntex applications to use during testing.
 use std::{
-    convert::TryFrom, error::Error, fmt, net, net::SocketAddr, rc::Rc, sync::mpsc,
-    thread,
+    convert::TryFrom, error::Error, fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread,
 };
 
 #[cfg(feature = "cookie")]
@@ -75,8 +74,8 @@ pub async fn init_service<R, S, E>(
     app: R,
 ) -> impl Service<Request, Response = WebResponse, Error = E>
 where
-    R: IntoServiceFactory<S, Request>,
-    S: ServiceFactory<Request, Config = AppConfig, Response = WebResponse, Error = E>,
+    R: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig, Response = WebResponse, Error = E>,
     S::InitError: std::fmt::Debug,
 {
     let srv = app.into_factory();
@@ -542,8 +541,8 @@ impl TestRequest {
 pub fn server<F, I, S, B>(factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request>,
-    S: ServiceFactory<Request, Config = AppConfig> + 'static,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>>,
@@ -580,8 +579,8 @@ where
 pub fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request>,
-    S: ServiceFactory<Request, Config = AppConfig> + 'static,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>>,
@@ -907,10 +906,7 @@ impl TestServer {
     }
 
     /// Connect to websocket server at a given path
-    pub async fn ws_at(
-        &self,
-        path: &str,
-    ) -> Result<WsConnection<Sealed>, WsClientError> {
+    pub async fn ws_at(&self, path: &str) -> Result<WsConnection<Sealed>, WsClientError> {
         if self.ssl {
             #[cfg(feature = "openssl")]
             {
@@ -1004,12 +1000,9 @@ mod tests {
             App::new().service(
                 web::resource("/index.html")
                     .route(web::put().to(|| async { HttpResponse::Ok().body("put!") }))
+                    .route(web::patch().to(|| async { HttpResponse::Ok().body("patch!") }))
                     .route(
-                        web::patch().to(|| async { HttpResponse::Ok().body("patch!") }),
-                    )
-                    .route(
-                        web::delete()
-                            .to(|| async { HttpResponse::Ok().body("delete!") }),
+                        web::delete().to(|| async { HttpResponse::Ok().body("delete!") }),
                     ),
             ),
         )
@@ -1039,9 +1032,11 @@ mod tests {
     #[crate::rt_test]
     async fn test_response() {
         let app =
-            init_service(App::new().service(web::resource("/index.html").route(
-                web::post().to(|| async { HttpResponse::Ok().body("welcome!") }),
-            )))
+            init_service(App::new().service(
+                web::resource("/index.html").route(
+                    web::post().to(|| async { HttpResponse::Ok().body("welcome!") }),
+                ),
+            ))
             .await;
 
         let req = TestRequest::post()

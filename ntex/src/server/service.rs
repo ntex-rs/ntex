@@ -21,7 +21,7 @@ pub(super) enum ServerMessage {
 }
 
 pub(super) trait StreamServiceFactory: Send + Clone + 'static {
-    type Factory: ServiceFactory<Io, Config = ()>;
+    type Factory: ServiceFactory<Io>;
 
     fn create(&self, _: Config) -> Self::Factory;
 }
@@ -155,8 +155,7 @@ where
 
     fn create(
         &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>> {
         let token = self.token;
         let cfg = Config::default();
         let fut = self.inner.create(cfg.clone()).new_service(());
@@ -185,8 +184,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 
     fn create(
         &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>> {
         self.as_ref().create()
     }
 }
@@ -194,7 +192,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 impl<F, T> StreamServiceFactory for F
 where
     F: Fn(Config) -> T + Send + Clone + 'static,
-    T: ServiceFactory<Io, Config = ()>,
+    T: ServiceFactory<Io>,
 {
     type Factory = T;
 

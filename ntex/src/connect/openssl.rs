@@ -78,7 +78,7 @@ impl<T: Address + 'static> Connector<T> {
     }
 
     /// Produce sealed io stream (IoBoxed)
-    pub fn seal(self) -> SealedService<Connector<T>> {
+    pub fn seal(self) -> SealedService<Connector<T>, Connect<T>> {
         SealedService::new(self)
     }
 }
@@ -92,22 +92,20 @@ impl<T> Clone for Connector<T> {
     }
 }
 
-impl<T: Address + 'static> ServiceFactory for Connector<T> {
-    type Request = Connect<T>;
+impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Response = Io<SslFilter<Base>>;
     type Error = ConnectError;
-    type Config = ();
     type Service = Connector<T>;
     type InitError = ();
     type Future = Ready<Self::Service, Self::InitError>;
 
-    fn new_service(&self, _: ()) -> Self::Future {
+    #[inline]
+    fn new_service(&self, _: C) -> Self::Future {
         Ready::Ok(self.clone())
     }
 }
 
-impl<T: Address + 'static> Service for Connector<T> {
-    type Request = Connect<T>;
+impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Response = Io<SslFilter<Base>>;
     type Error = ConnectError;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
@@ -117,6 +115,7 @@ impl<T: Address + 'static> Service for Connector<T> {
         Poll::Ready(Ok(()))
     }
 
+    #[inline]
     fn call(&self, req: Connect<T>) -> Self::Future {
         Box::pin(self.connect(req))
     }

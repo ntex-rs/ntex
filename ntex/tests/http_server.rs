@@ -115,8 +115,8 @@ async fn test_chunked_payload() {
 
     let returned_size = {
         let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-        let _ = stream
-            .write_all(b"POST /test HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n");
+        let _ =
+            stream.write_all(b"POST /test HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n");
 
         for chunk_size in chunk_sizes.iter() {
             let mut bytes = Vec::new();
@@ -217,8 +217,7 @@ async fn test_http1_keepalive_close() {
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ =
-        stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nconnection: close\r\n\r\n");
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\nconnection: close\r\n\r\n");
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");

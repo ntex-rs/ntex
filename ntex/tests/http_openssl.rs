@@ -404,10 +404,7 @@ async fn test_h2_service_error() {
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|_| {
-                err::<Response, _>(InternalError::default(
-                    "error",
-                    StatusCode::BAD_REQUEST,
-                ))
+                err::<Response, _>(InternalError::default("error", StatusCode::BAD_REQUEST))
             })
             .openssl(ssl_acceptor())
             .map_err(|_| ())

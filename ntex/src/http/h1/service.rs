@@ -29,7 +29,7 @@ pub struct H1Service<F, S, B, X = ExpectHandler, U = UpgradeHandler<F>> {
 
 impl<F, S, B> H1Service<F, S, B>
 where
-    S: ServiceFactory<Request, Config = ()>,
+    S: ServiceFactory<Request>,
     S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
@@ -63,21 +63,17 @@ mod openssl {
     impl<F, S, B, X, U> H1Service<SslFilter<F>, S, B, X, U>
     where
         F: Filter,
-        S: ServiceFactory<Request, Config = ()>,
+        S: ServiceFactory<Request>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         S::Future: 'static,
         B: MessageBody,
-        X: ServiceFactory<Request, Config = (), Response = Request>,
+        X: ServiceFactory<Request, Response = Request>,
         X::Error: ResponseError + 'static,
         X::InitError: fmt::Debug,
         X::Future: 'static,
-        U: ServiceFactory<
-                (Request, Io<SslFilter<F>>, Codec),
-                Config = (),
-                Response = (),
-            > + 'static,
+        U: ServiceFactory<(Request, Io<SslFilter<F>>, Codec), Response = ()> + 'static,
         U::Error: fmt::Display + Error,
         U::InitError: fmt::Debug,
     {
@@ -87,7 +83,6 @@ mod openssl {
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
             Io<F>,
-            Config = (),
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -116,21 +111,17 @@ mod rustls {
     impl<F, S, B, X, U> H1Service<TlsFilter<F>, S, B, X, U>
     where
         F: Filter,
-        S: ServiceFactory<Request, Config = ()>,
+        S: ServiceFactory<Request>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         S::Future: 'static,
         B: MessageBody,
-        X: ServiceFactory<Request, Config = (), Response = Request>,
+        X: ServiceFactory<Request, Response = Request>,
         X::Error: ResponseError + 'static,
         X::InitError: fmt::Debug,
         X::Future: 'static,
-        U: ServiceFactory<
-                (Request, Io<TlsFilter<F>>, Codec),
-                Config = (),
-                Response = (),
-            > + 'static,
+        U: ServiceFactory<(Request, Io<TlsFilter<F>>, Codec), Response = ()> + 'static,
         U::Error: fmt::Display + Error,
         U::InitError: fmt::Debug,
     {
@@ -140,7 +131,6 @@ mod rustls {
             config: ServerConfig,
         ) -> impl ServiceFactory<
             Io<F>,
-            Config = (),
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -159,7 +149,7 @@ mod rustls {
 impl<F, S, B, X, U> H1Service<F, S, B, X, U>
 where
     F: Filter,
-    S: ServiceFactory<Request, Config = ()>,
+    S: ServiceFactory<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
@@ -214,21 +204,20 @@ where
 impl<F, S, B, X, U> ServiceFactory<Io<F>> for H1Service<F, S, B, X, U>
 where
     F: Filter + 'static,
-    S: ServiceFactory<Request, Config = ()>,
+    S: ServiceFactory<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
     S::Future: 'static,
     B: MessageBody,
-    X: ServiceFactory<Request, Config = (), Response = Request>,
+    X: ServiceFactory<Request, Response = Request>,
     X::Error: ResponseError + 'static,
     X::InitError: fmt::Debug,
     X::Future: 'static,
-    U: ServiceFactory<(Request, Io<F>, Codec), Config = (), Response = ()> + 'static,
+    U: ServiceFactory<(Request, Io<F>, Codec), Response = ()> + 'static,
     U::Error: fmt::Display + Error,
     U::InitError: fmt::Debug,
 {
-    type Config = ();
     type Response = ();
     type Error = DispatchError;
     type InitError = ();
@@ -336,11 +325,7 @@ where
         }
     }
 
-    fn poll_shutdown(
-        &self,
-        cx: &mut task::Context<'_>,
-        is_error: bool,
-    ) -> task::Poll<()> {
+    fn poll_shutdown(&self, cx: &mut task::Context<'_>, is_error: bool) -> task::Poll<()> {
         let ready = self.config.expect.poll_shutdown(cx, is_error).is_ready();
         let ready = self.config.service.poll_shutdown(cx, is_error).is_ready() && ready;
         let ready = if let Some(ref upg) = self.config.upgrade {

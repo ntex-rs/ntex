@@ -46,13 +46,13 @@ impl<F, S> HttpServiceBuilder<F, S, ExpectHandler, UpgradeHandler<F>> {
 impl<F, S, X, U> HttpServiceBuilder<F, S, X, U>
 where
     F: Filter,
-    S: ServiceFactory<Request, Config = ()> + 'static,
+    S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    X: ServiceFactory<Request, Config = (), Response = Request> + 'static,
+    X: ServiceFactory<Request, Response = Request> + 'static,
     X::Error: ResponseError,
     X::InitError: fmt::Debug,
-    U: ServiceFactory<(Request, Io<F>, Codec), Config = (), Response = ()> + 'static,
+    U: ServiceFactory<(Request, Io<F>, Codec), Response = ()> + 'static,
     U::Error: fmt::Display + Error,
     U::InitError: fmt::Debug,
 {
@@ -110,7 +110,7 @@ where
     pub fn expect<XF, X1>(self, expect: XF) -> HttpServiceBuilder<F, S, X1, U>
     where
         XF: IntoServiceFactory<X1, Request>,
-        X1: ServiceFactory<Request, Config = (), Response = Request> + 'static,
+        X1: ServiceFactory<Request, Response = Request>,
         X1::InitError: fmt::Debug,
     {
         HttpServiceBuilder {
@@ -132,8 +132,7 @@ where
     pub fn upgrade<UF, U1>(self, upgrade: UF) -> HttpServiceBuilder<F, S, X, U1>
     where
         UF: IntoServiceFactory<U1, (Request, Io<F>, Codec)>,
-        U1: ServiceFactory<(Request, Io<F>, Codec), Config = (), Response = ()>
-            + 'static,
+        U1: ServiceFactory<(Request, Io<F>, Codec), Response = ()>,
         U1::Error: fmt::Display + Error,
         U1::InitError: fmt::Debug,
     {
@@ -169,7 +168,6 @@ where
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
-        S::Future: 'static,
     {
         let cfg = ServiceConfig::new(
             self.keep_alive,

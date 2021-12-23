@@ -33,7 +33,6 @@ pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
         WebRequest<Err>,
-        Config = (),
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -52,13 +51,12 @@ where
     pub(super) case_insensitive: bool,
 }
 
-impl<T, F, Err> ServiceFactory<Request> for AppFactory<T, F, Err>
+impl<T, F, Err> ServiceFactory<Request, AppConfig> for AppFactory<T, F, Err>
 where
     T: Transform<AppService<F::Service, Err>> + 'static,
     T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
         WebRequest<Err>,
-        Config = (),
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -66,7 +64,6 @@ where
     F::Future: 'static,
     Err: ErrorRenderer,
 {
-    type Config = AppConfig;
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
@@ -84,8 +81,7 @@ where
         });
 
         // App config
-        let mut config =
-            WebServiceConfig::new(config, default.clone(), self.data.clone());
+        let mut config = WebServiceConfig::new(config, default.clone(), self.data.clone());
 
         // register services
         std::mem::take(&mut *self.services.borrow_mut())
@@ -366,11 +362,12 @@ mod tests {
         let data = Arc::new(AtomicBool::new(false));
 
         {
-            let app =
-                init_service(App::new().data(DropData(data.clone())).service(
-                    web::resource("/test").to(|| async { HttpResponse::Ok() }),
-                ))
-                .await;
+            let app = init_service(
+                App::new()
+                    .data(DropData(data.clone()))
+                    .service(web::resource("/test").to(|| async { HttpResponse::Ok() })),
+            )
+            .await;
             let req = TestRequest::with_uri("/test").to_request();
             let _ = app.call(req).await.unwrap();
         }

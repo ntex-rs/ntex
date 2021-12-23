@@ -169,9 +169,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        channel::mpsc, util::next, util::poll_fn, util::send, util::ByteString,
-    };
+    use crate::{channel::mpsc, util::next, util::poll_fn, util::send, util::ByteString};
 
     #[crate::rt_test]
     async fn test_decoder() {

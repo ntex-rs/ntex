@@ -93,8 +93,7 @@ where
                     }
                 }
                 Poll::Ready(Ok(_)) => {
-                    if let Poll::Ready(Some(item)) = Pin::new(&mut this.rx).poll_next(cx)
-                    {
+                    if let Poll::Ready(Some(item)) = Pin::new(&mut this.rx).poll_next(cx) {
                         match item {
                             Ok(Some(item)) => {
                                 if let Err(e) = Pin::new(this.sink.as_mut().unwrap())

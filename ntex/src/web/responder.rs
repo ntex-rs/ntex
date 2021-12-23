@@ -123,9 +123,9 @@ where
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
         match self {
             Some(t) => Either::Left(t.respond_to(req)),
-            None => Either::Right(Ready(Some(
-                Response::build(StatusCode::NOT_FOUND).finish(),
-            ))),
+            None => {
+                Either::Right(Ready(Some(Response::build(StatusCode::NOT_FOUND).finish())))
+            }
         }
     }
 }
@@ -432,15 +432,15 @@ pub(crate) mod tests {
 
     #[crate::rt_test]
     async fn test_either_responder() {
-        let srv = init_service(web::App::new().service(
-            web::resource("/index.html").to(|req: HttpRequest| async move {
+        let srv = init_service(web::App::new().service(web::resource("/index.html").to(
+            |req: HttpRequest| async move {
                 if req.query_string().is_empty() {
                     Either::Left(HttpResponse::BadRequest())
                 } else {
                     Either::Right("hello")
                 }
-            }),
-        ))
+            },
+        )))
         .await;
 
         let req = TestRequest::with_uri("/index.html").to_request();
@@ -604,13 +604,11 @@ pub(crate) mod tests {
         assert_eq!(res.body().get_ref(), b"test");
 
         let req = TestRequest::default().to_http_request();
-        let res = CustomResponder::<_, DefaultError>::new((
-            "test".to_string(),
-            StatusCode::OK,
-        ))
-        .with_header("content-type", "json")
-        .respond_to(&req)
-        .await;
+        let res =
+            CustomResponder::<_, DefaultError>::new(("test".to_string(), StatusCode::OK))
+                .with_header("content-type", "json")
+                .respond_to(&req)
+                .await;
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(res.body().get_ref(), b"test");
         assert_eq!(

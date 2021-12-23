@@ -29,7 +29,7 @@ pub struct HttpService<F, S, B, X = h1::ExpectHandler, U = h1::UpgradeHandler<F>
 
 impl<F, S, B> HttpService<F, S, B>
 where
-    S: ServiceFactory<Request, Config = ()>,
+    S: ServiceFactory<Request>,
     S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
@@ -46,7 +46,7 @@ where
 impl<F, S, B> HttpService<F, S, B>
 where
     F: Filter,
-    S: ServiceFactory<Request, Config = ()>,
+    S: ServiceFactory<Request>,
     S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
@@ -92,7 +92,7 @@ where
 impl<F, S, B, X, U> HttpService<F, S, B, X, U>
 where
     F: Filter,
-    S: ServiceFactory<Request, Config = ()>,
+    S: ServiceFactory<Request>,
     S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
@@ -107,10 +107,9 @@ where
     /// request will be forwarded to main service.
     pub fn expect<X1>(self, expect: X1) -> HttpService<F, S, B, X1, U>
     where
-        X1: ServiceFactory<Request, Config = (), Response = Request>,
+        X1: ServiceFactory<Request, Response = Request>,
         X1::Error: ResponseError,
         X1::InitError: fmt::Debug,
-        X1::Future: 'static,
     {
         HttpService {
             expect,
@@ -128,10 +127,9 @@ where
     /// and this service get called with original request and framed object.
     pub fn upgrade<U1>(self, upgrade: Option<U1>) -> HttpService<F, S, B, X, U1>
     where
-        U1: ServiceFactory<(Request, Io<F>, h1::Codec), Config = (), Response = ()>,
-        U1::Error: fmt::Display + error::Error + 'static,
+        U1: ServiceFactory<(Request, Io<F>, h1::Codec), Response = ()>,
+        U1::Error: fmt::Display + error::Error,
         U1::InitError: fmt::Debug,
-        U1::Future: 'static,
     {
         HttpService {
             upgrade,
@@ -162,23 +160,17 @@ mod openssl {
     impl<F, S, B, X, U> HttpService<SslFilter<F>, S, B, X, U>
     where
         F: Filter,
-        S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: ResponseError + 'static,
+        S: ServiceFactory<Request> + 'static,
+        S::Error: ResponseError,
         S::InitError: fmt::Debug,
-        S::Response: Into<Response<B>> + 'static,
+        S::Response: Into<Response<B>>,
         S::Future: 'static,
-        <S::Service as Service>::Future: 'static,
         B: MessageBody + 'static,
-        X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-        X::Error: ResponseError + 'static,
+        X: ServiceFactory<Request, Response = Request> + 'static,
+        X::Error: ResponseError,
         X::InitError: fmt::Debug,
         X::Future: 'static,
-        <X::Service as Service>::Future: 'static,
-        U: ServiceFactory<
-                Config = (),
-                Request = (Request, Io<SslFilter<F>>, h1::Codec),
-                Response = (),
-            > + 'static,
+        U: ServiceFactory<(Request, Io<SslFilter<F>>, h1::Codec), Response = ()> + 'static,
         U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
     {
@@ -187,8 +179,7 @@ mod openssl {
             self,
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
-            Config = (),
-            Request = Io<F>,
+            Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -215,23 +206,15 @@ mod rustls {
     impl<F, S, B, X, U> HttpService<TlsFilter<F>, S, B, X, U>
     where
         F: Filter,
-        S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: ResponseError + 'static,
+        S: ServiceFactory<Request> + 'static,
+        S::Error: ResponseError,
         S::InitError: fmt::Debug,
-        S::Future: 'static,
-        S::Response: Into<Response<B>> + 'static,
-        <S::Service as Service>::Future: 'static,
+        S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
-        X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-        X::Error: ResponseError + 'static,
+        X: ServiceFactory<Request, Response = Request> + 'static,
+        X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        X::Future: 'static,
-        <X::Service as Service>::Future: 'static,
-        U: ServiceFactory<
-                Config = (),
-                Request = (Request, Io<TlsFilter<F>>, h1::Codec),
-                Response = (),
-            > + 'static,
+        U: ServiceFactory<(Request, Io<TlsFilter<F>>, h1::Codec), Response = ()> + 'static,
         U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
     {
@@ -240,8 +223,7 @@ mod rustls {
             self,
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
-            Config = (),
-            Request = Io<F>,
+            Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -263,19 +245,18 @@ mod rustls {
 impl<F, S, B, X, U> ServiceFactory<Io<F>> for HttpService<F, S, B, X, U>
 where
     F: Filter + 'static,
-    S: ServiceFactory<Request, Config = ()> + 'static,
+    S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody + 'static,
-    X: ServiceFactory<Request, Config = (), Response = Request> + 'static,
+    X: ServiceFactory<Request, Response = Request> + 'static,
     X::Error: ResponseError,
     X::InitError: fmt::Debug,
-    U: ServiceFactory<(Request, Io<F>, h1::Codec), Config = (), Response = ()> + 'static,
+    U: ServiceFactory<(Request, Io<F>, h1::Codec), Response = ()> + 'static,
     U::Error: fmt::Display + error::Error,
     U::InitError: fmt::Debug,
 {
-    type Config = ();
     type Response = ();
     type Error = DispatchError;
     type InitError = ();
@@ -308,8 +289,7 @@ where
                 None
             };
 
-            let config =
-                DispatcherConfig::new(cfg, service, expect, upgrade, on_request);
+            let config = DispatcherConfig::new(cfg, service, expect, upgrade, on_request);
 
             Ok(HttpServiceHandler {
                 config: Rc::new(config),

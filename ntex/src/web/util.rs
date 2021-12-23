@@ -285,8 +285,8 @@ where
 pub fn server<F, I, S, B>(factory: F) -> HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request>,
-    S: ServiceFactory<Request, Config = AppConfig> + 'static,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
