@@ -29,7 +29,9 @@ pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::tasks::{ReadContext, WriteContext};
 pub use self::time::Timer;
 
-pub use self::utils::{filter_factory, seal};
+pub use self::utils::{
+    filter_factory, seal, sealed_service, SealedFactory, SealedService,
+};
 
 pub type IoBoxed = Io<Sealed>;
 
@@ -151,15 +153,15 @@ pub mod rt {
 pub fn into_boxed<F, S>(
     srv: S,
 ) -> impl ntex_service::ServiceFactory<
+    Io<F>,
     Config = S::Config,
-    Request = Io<F>,
     Response = S::Response,
     Error = S::Error,
     InitError = S::InitError,
 >
 where
     F: Filter + 'static,
-    S: ntex_service::ServiceFactory<Request = IoBoxed>,
+    S: ntex_service::ServiceFactory<IoBoxed>,
 {
     seal(srv)
 }
