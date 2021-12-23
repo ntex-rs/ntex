@@ -7,10 +7,10 @@ use super::{IntoServiceFactory, Service, ServiceFactory};
 ///
 /// Note that this function consumes the receiving service factory and returns
 /// a wrapped version of it.
-pub fn map_config<T, U, F, C>(factory: U, f: F) -> MapConfig<T, F, C>
+pub fn map_config<T, R, U, F, C>(factory: U, f: F) -> MapConfig<T, R, F, C>
 where
-    T: ServiceFactory,
-    U: IntoServiceFactory<T>,
+    T: ServiceFactory<R>,
+    U: IntoServiceFactory<T, R>,
     F: Fn(C) -> T::Config,
 {
     MapConfig::new(factory.into_factory(), f)
@@ -19,46 +19,46 @@ where
 /// Adapt external config argument to a config for provided service factory
 ///
 /// This function uses service for converting config.
-pub fn map_config_service<T, M, C, U1, U2>(
+pub fn map_config_service<T, R, M, C, U1, U2>(
     factory: U1,
     mapper: U2,
-) -> MapConfigService<T, M, C>
+) -> MapConfigService<T, R, M, C>
 where
-    T: ServiceFactory,
+    T: ServiceFactory<R>,
     M: ServiceFactory<
+        C,
         Config = (),
-        Request = C,
         Response = T::Config,
         Error = T::InitError,
         InitError = T::InitError,
     >,
-    U1: IntoServiceFactory<T>,
-    U2: IntoServiceFactory<M>,
+    U1: IntoServiceFactory<T, R>,
+    U2: IntoServiceFactory<M, C>,
 {
     MapConfigService::new(factory.into_factory(), mapper.into_factory())
 }
 
 /// Replace config with unit
-pub fn unit_config<T, U, C>(factory: U) -> UnitConfig<T, C>
+pub fn unit_config<T, R, U, C>(factory: U) -> UnitConfig<T, R, C>
 where
-    T: ServiceFactory<Config = ()>,
-    U: IntoServiceFactory<T>,
+    T: ServiceFactory<R, Config = ()>,
+    U: IntoServiceFactory<T, R>,
 {
     UnitConfig::new(factory.into_factory())
 }
 
 /// `map_config()` adapter service factory
-pub struct MapConfig<A, F, C> {
+pub struct MapConfig<A, R, F, C> {
     a: A,
     f: F,
-    e: PhantomData<C>,
+    e: PhantomData<(R, C)>,
 }
 
-impl<A, F, C> MapConfig<A, F, C> {
+impl<A, R, F, C> MapConfig<A, R, F, C> {
     /// Create new `MapConfig` combinator
     pub(crate) fn new(a: A, f: F) -> Self
     where
-        A: ServiceFactory,
+        A: ServiceFactory<R>,
         F: Fn(C) -> A::Config,
     {
         Self {
@@ -69,7 +69,7 @@ impl<A, F, C> MapConfig<A, F, C> {
     }
 }
 
-impl<A, F, C> Clone for MapConfig<A, F, C>
+impl<A, R, F, C> Clone for MapConfig<A, R, F, C>
 where
     A: Clone,
     F: Clone,
@@ -83,12 +83,11 @@ where
     }
 }
 
-impl<A, F, C> ServiceFactory for MapConfig<A, F, C>
+impl<A, R, F, C> ServiceFactory<R> for MapConfig<A, R, F, C>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     F: Fn(C) -> A::Config,
 {
-    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
 
@@ -103,14 +102,14 @@ where
 }
 
 /// `unit_config()` config combinator
-pub struct UnitConfig<A, C> {
+pub struct UnitConfig<A, R, C> {
     a: A,
-    e: PhantomData<C>,
+    e: PhantomData<(C, R)>,
 }
 
-impl<A, C> UnitConfig<A, C>
+impl<A, R, C> UnitConfig<A, R, C>
 where
-    A: ServiceFactory<Config = ()>,
+    A: ServiceFactory<R, Config = ()>,
 {
     /// Create new `UnitConfig` combinator
     pub(crate) fn new(a: A) -> Self {
@@ -118,7 +117,7 @@ where
     }
 }
 
-impl<A, C> Clone for UnitConfig<A, C>
+impl<A, R, C> Clone for UnitConfig<A, R, C>
 where
     A: Clone,
 {
@@ -130,11 +129,10 @@ where
     }
 }
 
-impl<A, C> ServiceFactory for UnitConfig<A, C>
+impl<A, R, C> ServiceFactory<R> for UnitConfig<A, R, C>
 where
-    A: ServiceFactory<Config = ()>,
+    A: ServiceFactory<R, Config = ()>,
 {
-    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
 
@@ -149,29 +147,29 @@ where
 }
 
 /// `map_config_service()` adapter service factory
-pub struct MapConfigService<A, M: ServiceFactory, C>(Rc<Inner<A, M, C>>);
+pub struct MapConfigService<A, R, M: ServiceFactory<C>, C>(Rc<Inner<A, R, M, C>>);
 
-struct Inner<A, M: ServiceFactory, C> {
+struct Inner<A, R, M: ServiceFactory<C>, C> {
     a: A,
     m: M,
     mapper: RefCell<Option<M::Service>>,
-    e: PhantomData<C>,
+    e: PhantomData<(R, C)>,
 }
 
-impl<A, M: ServiceFactory, C> Clone for MapConfigService<A, M, C> {
+impl<A, R, M: ServiceFactory<C>, C> Clone for MapConfigService<A, R, M, C> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<A, M: ServiceFactory, C> MapConfigService<A, M, C> {
+impl<A, R, M: ServiceFactory<C>, C> MapConfigService<A, R, M, C> {
     /// Create new `MapConfigService` combinator
     pub(crate) fn new(a: A, m: M) -> Self
     where
-        A: ServiceFactory,
+        A: ServiceFactory<R>,
         M: ServiceFactory<
+            C,
             Config = (),
-            Request = C,
             Response = A::Config,
             Error = A::InitError,
             InitError = A::InitError,
@@ -186,25 +184,24 @@ impl<A, M: ServiceFactory, C> MapConfigService<A, M, C> {
     }
 }
 
-impl<A, M, C> ServiceFactory for MapConfigService<A, M, C>
+impl<A, R, M, C> ServiceFactory<R> for MapConfigService<A, R, M, C>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     M: ServiceFactory<
+        C,
         Config = (),
-        Request = C,
         Response = A::Config,
         Error = A::InitError,
         InitError = A::InitError,
     >,
 {
-    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
 
     type Config = C;
     type Service = A::Service;
     type InitError = A::InitError;
-    type Future = MapConfigServiceResponse<A, M, C>;
+    type Future = MapConfigServiceResponse<A, R, M, C>;
 
     fn new_service(&self, cfg: C) -> Self::Future {
         let inner = self.0.clone();
@@ -227,34 +224,34 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapConfigServiceResponse<A, M: ServiceFactory, C>
+    pub struct MapConfigServiceResponse<A, R, M, C>
     where
-        A: ServiceFactory,
-        M: ServiceFactory,
+        A: ServiceFactory<R>,
+        M: ServiceFactory<C>,
     {
-        inner: Rc<Inner<A, M, C>>,
+        inner: Rc<Inner<A, R, M, C>>,
         config: Option<C>,
         #[pin]
-        state: ResponseState<A, M>,
+        state: ResponseState<A, R, M, C>,
     }
 }
 
 pin_project_lite::pin_project! {
     #[project = ResponseStateProject]
-    enum ResponseState<A: ServiceFactory, M: ServiceFactory> {
+    enum ResponseState<A: ServiceFactory<R>, R, M: ServiceFactory<C>, C> {
         CreateMapper { #[pin] fut: M::Future },
         MapReady,
-        MapConfig { #[pin] fut: <M::Service as Service>::Future },
+        MapConfig { #[pin] fut: <M::Service as Service<C>>::Future },
         CreateService { #[pin] fut: A::Future },
     }
 }
 
-impl<A, M, C> Future for MapConfigServiceResponse<A, M, C>
+impl<A, R, M, C> Future for MapConfigServiceResponse<A, R, M, C>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     M: ServiceFactory<
+        C,
         Config = (),
-        Request = C,
         Response = A::Config,
         Error = A::InitError,
         InitError = A::InitError,

@@ -6,17 +6,17 @@ use super::{Service, ServiceFactory};
 /// error.
 ///
 /// This is created by the `ServiceExt::map_err` method.
-pub struct MapErr<A, F, E> {
+pub struct MapErr<A, R, F, E> {
     service: A,
     f: F,
-    _t: PhantomData<E>,
+    _t: PhantomData<fn(R) -> E>,
 }
 
-impl<A, F, E> MapErr<A, F, E> {
+impl<A, R, F, E> MapErr<A, R, F, E> {
     /// Create new `MapErr` combinator
     pub(crate) fn new(service: A, f: F) -> Self
     where
-        A: Service,
+        A: Service<R>,
         F: Fn(A::Error) -> E,
     {
         Self {
@@ -27,7 +27,7 @@ impl<A, F, E> MapErr<A, F, E> {
     }
 }
 
-impl<A, F, E> Clone for MapErr<A, F, E>
+impl<A, R, F, E> Clone for MapErr<A, R, F, E>
 where
     A: Clone,
     F: Clone,
@@ -42,15 +42,14 @@ where
     }
 }
 
-impl<A, F, E> Service for MapErr<A, F, E>
+impl<A, R, F, E> Service<R> for MapErr<A, R, F, E>
 where
-    A: Service,
+    A: Service<R>,
     F: Fn(A::Error) -> E + Clone,
 {
-    type Request = A::Request;
     type Response = A::Response;
     type Error = E;
-    type Future = MapErrFuture<A, F, E>;
+    type Future = MapErrFuture<A, R, F, E>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -58,31 +57,31 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
+    fn shutdown(&self) {
+        self.service.shutdown()
     }
 
     #[inline]
-    fn call(&self, req: A::Request) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future {
         MapErrFuture::new(self.service.call(req), self.f.clone())
     }
 }
 
 pin_project_lite::pin_project! {
-pub struct MapErrFuture<A, F, E>
-where
-    A: Service,
-    F: Fn(A::Error) -> E,
-{
-    f: F,
-    #[pin]
-    fut: A::Future,
-}
+    pub struct MapErrFuture<A, R, F, E>
+    where
+        A: Service<R>,
+        F: Fn(A::Error) -> E,
+    {
+        f: F,
+        #[pin]
+        fut: A::Future,
+    }
 }
 
-impl<A, F, E> MapErrFuture<A, F, E>
+impl<A, R, F, E> MapErrFuture<A, R, F, E>
 where
-    A: Service,
+    A: Service<R>,
     F: Fn(A::Error) -> E,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -90,9 +89,9 @@ where
     }
 }
 
-impl<A, F, E> Future for MapErrFuture<A, F, E>
+impl<A, R, F, E> Future for MapErrFuture<A, R, F, E>
 where
-    A: Service,
+    A: Service<R>,
     F: Fn(A::Error) -> E,
 {
     type Output = Result<A::Response, E>;
@@ -107,19 +106,19 @@ where
 /// service's error.
 ///
 /// This is created by the `NewServiceExt::map_err` method.
-pub struct MapErrServiceFactory<A, F, E>
+pub struct MapErrServiceFactory<A, R, F, E>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     F: Fn(A::Error) -> E + Clone,
 {
     a: A,
     f: F,
-    e: PhantomData<E>,
+    e: PhantomData<fn(R) -> E>,
 }
 
-impl<A, F, E> MapErrServiceFactory<A, F, E>
+impl<A, R, F, E> MapErrServiceFactory<A, R, F, E>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     F: Fn(A::Error) -> E + Clone,
 {
     /// Create new `MapErr` new service instance
@@ -132,9 +131,9 @@ where
     }
 }
 
-impl<A, F, E> Clone for MapErrServiceFactory<A, F, E>
+impl<A, R, F, E> Clone for MapErrServiceFactory<A, R, F, E>
 where
-    A: ServiceFactory + Clone,
+    A: ServiceFactory<R> + Clone,
     F: Fn(A::Error) -> E + Clone,
 {
     fn clone(&self) -> Self {
@@ -146,19 +145,18 @@ where
     }
 }
 
-impl<A, F, E> ServiceFactory for MapErrServiceFactory<A, F, E>
+impl<A, R, F, E> ServiceFactory<R> for MapErrServiceFactory<A, R, F, E>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     F: Fn(A::Error) -> E + Clone,
 {
-    type Request = A::Request;
     type Response = A::Response;
     type Error = E;
 
     type Config = A::Config;
-    type Service = MapErr<A::Service, F, E>;
+    type Service = MapErr<A::Service, R, F, E>;
     type InitError = A::InitError;
-    type Future = MapErrServiceFuture<A, F, E>;
+    type Future = MapErrServiceFuture<A, R, F, E>;
 
     #[inline]
     fn new_service(&self, cfg: A::Config) -> Self::Future {
@@ -167,20 +165,20 @@ where
 }
 
 pin_project_lite::pin_project! {
-pub struct MapErrServiceFuture<A, F, E>
-where
-    A: ServiceFactory,
-    F: Fn(A::Error) -> E,
-{
-    #[pin]
-    fut: A::Future,
-    f: F,
-}
+    pub struct MapErrServiceFuture<A, R, F, E>
+    where
+        A: ServiceFactory<R>,
+        F: Fn(A::Error) -> E,
+    {
+        #[pin]
+        fut: A::Future,
+        f: F,
+    }
 }
 
-impl<A, F, E> MapErrServiceFuture<A, F, E>
+impl<A, R, F, E> MapErrServiceFuture<A, R, F, E>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     F: Fn(A::Error) -> E,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -188,12 +186,12 @@ where
     }
 }
 
-impl<A, F, E> Future for MapErrServiceFuture<A, F, E>
+impl<A, R, F, E> Future for MapErrServiceFuture<A, R, F, E>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     F: Fn(A::Error) -> E + Clone,
 {
-    type Output = Result<MapErr<A::Service, F, E>, A::InitError>;
+    type Output = Result<MapErr<A::Service, R, F, E>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -214,8 +212,7 @@ mod tests {
     #[derive(Clone)]
     struct Srv;
 
-    impl Service for Srv {
-        type Request = ();
+    impl Service<()> for Srv {
         type Response = ();
         type Error = ();
         type Future = Ready<(), ()>;
@@ -235,8 +232,7 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Err("error")));
 
-        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
-        assert_eq!(res, Poll::Ready(()));
+        srv.shutdown();
     }
 
     #[ntex::test]

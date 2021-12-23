@@ -1,4 +1,6 @@
-use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{
+    future::Future, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
 use super::{Service, ServiceFactory};
 
@@ -6,34 +8,33 @@ use super::{Service, ServiceFactory};
 /// of another service which completes successfully.
 ///
 /// This is created by the `ServiceExt::and_then` method.
-pub(crate) struct AndThenService<A, B>(Rc<(A, B)>);
+pub struct AndThen<A, B, Req>(Rc<(A, B)>, PhantomData<fn(Req)>);
 
-impl<A, B> AndThenService<A, B> {
+impl<A, B, Req> AndThen<A, B, Req> {
     /// Create new `AndThen` combinator
     pub(crate) fn new(a: A, b: B) -> Self
     where
-        A: Service,
-        B: Service<Request = A::Response, Error = A::Error>,
+        A: Service<Req>,
+        B: Service<A::Response, Error = A::Error>,
     {
-        Self(Rc::new((a, b)))
+        Self(Rc::new((a, b)), PhantomData)
     }
 }
 
-impl<A, B> Clone for AndThenService<A, B> {
+impl<A, B, Req> Clone for AndThen<A, B, Req> {
     fn clone(&self) -> Self {
-        AndThenService(self.0.clone())
+        AndThen(self.0.clone(), PhantomData)
     }
 }
 
-impl<A, B> Service for AndThenService<A, B>
+impl<A, B, Req> Service<Req> for AndThen<A, B, Req>
 where
-    A: Service,
-    B: Service<Request = A::Response, Error = A::Error>,
+    A: Service<Req>,
+    B: Service<A::Response, Error = A::Error>,
 {
-    type Request = A::Request;
     type Response = B::Response;
     type Error = A::Error;
-    type Future = AndThenServiceResponse<A, B>;
+    type Future = AndThenServiceResponse<A, B, Req>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let srv = self.0.as_ref();
@@ -45,20 +46,14 @@ where
         }
     }
 
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    fn shutdown(&self) {
         let srv = self.0.as_ref();
-
-        if srv.0.poll_shutdown(cx, is_error).is_ready()
-            && srv.1.poll_shutdown(cx, is_error).is_ready()
-        {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
+        srv.0.shutdown();
+        srv.1.shutdown();
     }
 
     #[inline]
-    fn call(&self, req: A::Request) -> Self::Future {
+    fn call(&self, req: Req) -> Self::Future {
         AndThenServiceResponse {
             state: State::A {
                 fut: self.0.as_ref().0.call(req),
@@ -69,22 +64,22 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub(crate) struct AndThenServiceResponse<A, B>
+    pub struct AndThenServiceResponse<A, B, Req>
     where
-        A: Service,
-        B: Service<Request = A::Response, Error = A::Error>,
+        A: Service<Req>,
+        B: Service<A::Response, Error = A::Error>,
     {
         #[pin]
-        state: State<A, B>,
+        state: State<A, B, Req>,
     }
 }
 
 pin_project_lite::pin_project! {
     #[project = StateProject]
-    enum State<A, B>
+    enum State<A, B, Req>
     where
-        A: Service,
-        B: Service<Request = A::Response, Error = A::Error>,
+        A: Service<Req>,
+        B: Service<A::Response, Error = A::Error>,
     {
         A { #[pin] fut: A::Future, b: Option<Rc<(A, B)>> },
         B { #[pin] fut: B::Future },
@@ -92,10 +87,10 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<A, B> Future for AndThenServiceResponse<A, B>
+impl<A, B, Req> Future for AndThenServiceResponse<A, B, Req>
 where
-    A: Service,
-    B: Service<Request = A::Response, Error = A::Error>,
+    A: Service<Req>,
+    B: Service<A::Response, Error = A::Error>,
 {
     type Output = Result<B::Response, A::Error>;
 
@@ -125,27 +120,18 @@ where
 }
 
 /// `.and_then()` service factory combinator
-pub(crate) struct AndThenServiceFactory<A, B>
-where
-    A: ServiceFactory,
-    A::Config: Clone,
-    B: ServiceFactory<
-        Config = A::Config,
-        Request = A::Response,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
-{
+pub struct AndThenFactory<A, B, Req> {
     inner: Rc<(A, B)>,
+    _t: PhantomData<fn(Req)>,
 }
 
-impl<A, B> AndThenServiceFactory<A, B>
+impl<A, B, Req> AndThenFactory<A, B, Req>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<Req>,
     A::Config: Clone,
     B: ServiceFactory<
+        A::Response,
         Config = A::Config,
-        Request = A::Response,
         Error = A::Error,
         InitError = A::InitError,
     >,
@@ -154,29 +140,29 @@ where
     pub(crate) fn new(a: A, b: B) -> Self {
         Self {
             inner: Rc::new((a, b)),
+            _t: PhantomData,
         }
     }
 }
 
-impl<A, B> ServiceFactory for AndThenServiceFactory<A, B>
+impl<A, B, Req> ServiceFactory<Req> for AndThenFactory<A, B, Req>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<Req>,
     A::Config: Clone,
     B: ServiceFactory<
+        A::Response,
         Config = A::Config,
-        Request = A::Response,
         Error = A::Error,
         InitError = A::InitError,
     >,
 {
-    type Request = A::Request;
     type Response = B::Response;
     type Error = A::Error;
 
     type Config = A::Config;
-    type Service = AndThenService<A::Service, B::Service>;
+    type Service = AndThen<A::Service, B::Service, Req>;
     type InitError = A::InitError;
-    type Future = AndThenServiceFactoryResponse<A, B>;
+    type Future = AndThenServiceFactoryResponse<A, B, Req>;
 
     fn new_service(&self, cfg: A::Config) -> Self::Future {
         let inner = &*self.inner;
@@ -187,29 +173,20 @@ where
     }
 }
 
-impl<A, B> Clone for AndThenServiceFactory<A, B>
-where
-    A: ServiceFactory,
-    A::Config: Clone,
-    B: ServiceFactory<
-        Config = A::Config,
-        Request = A::Response,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
-{
+impl<A, B, Req> Clone for AndThenFactory<A, B, Req> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            _t: PhantomData,
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub(crate) struct AndThenServiceFactoryResponse<A, B>
+    pub struct AndThenServiceFactoryResponse<A, B, Req>
     where
-        A: ServiceFactory,
-        B: ServiceFactory<Request = A::Response>,
+        A: ServiceFactory<Req>,
+        B: ServiceFactory<A::Response>,
     {
         #[pin]
         fut_a: A::Future,
@@ -221,10 +198,10 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<A, B> AndThenServiceFactoryResponse<A, B>
+impl<A, B, Req> AndThenServiceFactoryResponse<A, B, Req>
 where
-    A: ServiceFactory,
-    B: ServiceFactory<Request = A::Response>,
+    A: ServiceFactory<Req>,
+    B: ServiceFactory<A::Response>,
 {
     fn new(fut_a: A::Future, fut_b: B::Future) -> Self {
         AndThenServiceFactoryResponse {
@@ -236,12 +213,12 @@ where
     }
 }
 
-impl<A, B> Future for AndThenServiceFactoryResponse<A, B>
+impl<A, B, Req> Future for AndThenServiceFactoryResponse<A, B, Req>
 where
-    A: ServiceFactory,
-    B: ServiceFactory<Request = A::Response, Error = A::Error, InitError = A::InitError>,
+    A: ServiceFactory<Req>,
+    B: ServiceFactory<A::Response, Error = A::Error, InitError = A::InitError>,
 {
-    type Output = Result<AndThenService<A::Service, B::Service>, A::InitError>;
+    type Output = Result<AndThen<A::Service, B::Service, Req>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -257,7 +234,7 @@ where
             }
         }
         if this.a.is_some() && this.b.is_some() {
-            Poll::Ready(Ok(AndThenService::new(
+            Poll::Ready(Ok(AndThen::new(
                 this.a.take().unwrap(),
                 this.b.take().unwrap(),
             )))
@@ -276,8 +253,7 @@ mod tests {
 
     struct Srv1(Rc<Cell<usize>>);
 
-    impl Service for Srv1 {
-        type Request = &'static str;
+    impl Service<&'static str> for Srv1 {
         type Response = &'static str;
         type Error = ();
         type Future = Ready<Self::Response, ()>;
@@ -295,8 +271,7 @@ mod tests {
     #[derive(Clone)]
     struct Srv2(Rc<Cell<usize>>);
 
-    impl Service for Srv2 {
-        type Request = &'static str;
+    impl Service<&'static str> for Srv2 {
         type Response = (&'static str, &'static str);
         type Error = ();
         type Future = Ready<Self::Response, ()>;
@@ -321,8 +296,7 @@ mod tests {
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 2);
 
-        let res = lazy(|cx| srv.poll_shutdown(cx, false)).await;
-        assert_eq!(res, Poll::Ready(()));
+        srv.shutdown();
     }
 
     #[ntex::test]

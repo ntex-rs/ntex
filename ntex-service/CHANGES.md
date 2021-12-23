@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0] - 2021-12-xx
+
+* Service now takes the the request type as a type parameter instead of an associated type
+
 ## [0.2.1] - 2021-09-17
 
 * Simplify fn_transform

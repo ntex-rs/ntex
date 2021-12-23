@@ -3,15 +3,15 @@ use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Po
 use super::ServiceFactory;
 
 /// `MapInitErr` service combinator
-pub struct MapInitErr<A, F, E> {
+pub struct MapInitErr<A, R, F, E> {
     a: A,
     f: F,
-    e: PhantomData<E>,
+    e: PhantomData<fn(R) -> E>,
 }
 
-impl<A, F, E> MapInitErr<A, F, E>
+impl<A, R, F, E> MapInitErr<A, R, F, E>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     F: Fn(A::InitError) -> E,
 {
     /// Create new `MapInitErr` combinator
@@ -24,7 +24,7 @@ where
     }
 }
 
-impl<A, F, E> Clone for MapInitErr<A, F, E>
+impl<A, R, F, E> Clone for MapInitErr<A, R, F, E>
 where
     A: Clone,
     F: Clone,
@@ -38,50 +38,42 @@ where
     }
 }
 
-impl<A, F, E> ServiceFactory for MapInitErr<A, F, E>
+impl<A, R, F, E> ServiceFactory<R> for MapInitErr<A, R, F, E>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     F: Fn(A::InitError) -> E + Clone,
 {
-    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
 
     type Config = A::Config;
     type Service = A::Service;
     type InitError = E;
-    type Future = MapInitErrFuture<A, F, E>;
+    type Future = MapInitErrFuture<A, R, F, E>;
 
     fn new_service(&self, cfg: A::Config) -> Self::Future {
-        MapInitErrFuture::new(self.a.new_service(cfg), self.f.clone())
+        MapInitErrFuture {
+            fut: self.a.new_service(cfg),
+            f: self.f.clone(),
+        }
     }
 }
 
 pin_project_lite::pin_project! {
-pub struct MapInitErrFuture<A, F, E>
-where
-    A: ServiceFactory,
-    F: Fn(A::InitError) -> E,
-{
-    f: F,
-    #[pin]
-    fut: A::Future,
-}
-}
-
-impl<A, F, E> MapInitErrFuture<A, F, E>
-where
-    A: ServiceFactory,
-    F: Fn(A::InitError) -> E,
-{
-    fn new(fut: A::Future, f: F) -> Self {
-        MapInitErrFuture { f, fut }
+    pub struct MapInitErrFuture<A, R, F, E>
+    where
+        A: ServiceFactory<R>,
+        F: Fn(A::InitError) -> E,
+    {
+        f: F,
+        #[pin]
+        fut: A::Future,
     }
 }
 
-impl<A, F, E> Future for MapInitErrFuture<A, F, E>
+impl<A, R, F, E> Future for MapInitErrFuture<A, R, F, E>
 where
-    A: ServiceFactory,
+    A: ServiceFactory<R>,
     F: Fn(A::InitError) -> E,
 {
     type Output = Result<A::Service, E>;
