@@ -51,8 +51,7 @@ impl<F> Clone for Acceptor<F> {
     }
 }
 
-impl<F: Filter> ServiceFactory for Acceptor<F> {
-    type Request = Io<F>;
+impl<F: Filter> ServiceFactory<Io<F>> for Acceptor<F> {
     type Response = Io<TlsFilter<F>>;
     type Error = io::Error;
     type Service = AcceptorService<F>;
@@ -79,8 +78,7 @@ pub struct AcceptorService<F> {
     conns: Counter,
 }
 
-impl<F: Filter> Service for AcceptorService<F> {
-    type Request = Io<F>;
+impl<F: Filter> Service<Io<F>> for AcceptorService<F> {
     type Response = Io<TlsFilter<F>>;
     type Error = io::Error;
     type Future = AcceptorServiceFut<F>;
@@ -95,7 +93,7 @@ impl<F: Filter> Service for AcceptorService<F> {
     }
 
     #[inline]
-    fn call(&self, req: Self::Request) -> Self::Future {
+    fn call(&self, req: Io<F>) -> Self::Future {
         AcceptorServiceFut {
             _guard: self.conns.get(),
             fut: self.acceptor.clone().create(req),
