@@ -1,10 +1,12 @@
 # Changes
 
-## [0.5.0-b.3] - 2021-12-xx
+## [0.5.0-b.3] - 2021-12-23
 
 * Remove websocket support from http::client
 
 * Add standalone ws::client
+
+* Add websockets transport (io filter)
 
 ## [0.5.0-b.2] - 2021-12-22
 
