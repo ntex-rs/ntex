@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.0-b.4] - 2021-12-23
+
+* Introduce `Sealed` type instead of `Box<dyn Filter>`
+
 ## [0.1.0-b.3] - 2021-12-22
 
 * Add .poll_write_backpressure()

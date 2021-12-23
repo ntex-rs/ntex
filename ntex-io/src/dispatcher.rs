@@ -551,7 +551,7 @@ mod tests {
                         ready_err: Cell::new(false),
                         st: Cell::new(DispatcherState::Processing),
                         pool: state.memory_pool().pool(),
-                        io: state.into_boxed(),
+                        io: state.seal(),
                         shared,
                         timer,
                         ka_timeout,

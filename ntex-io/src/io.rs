@@ -6,7 +6,7 @@ use ntex_bytes::{BytesMut, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Millis};
 
-use super::filter::{Base, NullFilter};
+use super::filter::{Base, NullFilter, Sealed};
 use super::tasks::{ReadContext, WriteContext};
 use super::{Filter, FilterFactory, Handle, IoStream};
 
@@ -45,7 +45,7 @@ bitflags::bitflags! {
 }
 
 enum FilterItem<F> {
-    Boxed(Box<dyn Filter>),
+    Boxed(Sealed),
     Ptr(*mut F),
 }
 
@@ -344,21 +344,26 @@ impl<F: Filter> Io<F> {
         panic!()
     }
 
+    #[deprecated]
     #[inline]
-    pub fn into_boxed(mut self) -> crate::IoBoxed
-    where
-        F: 'static,
-    {
+    /// Convert current io stream into sealed version
+    pub fn into_boxed(self) -> crate::IoBoxed {
+        self.seal()
+    }
+
+    #[inline]
+    /// Convert current io stream into sealed version
+    pub fn seal(mut self) -> crate::IoBoxed {
         // get current filter
         let filter = unsafe {
-            let item = mem::replace(&mut self.1, FilterItem::Ptr(std::ptr::null_mut()));
-            let filter: Box<dyn Filter> = match item {
+            let item = mem::replace(&mut self.1, FilterItem::Ptr(ptr::null_mut()));
+            let filter: Sealed = match item {
                 FilterItem::Boxed(b) => b,
-                FilterItem::Ptr(p) => Box::new(*Box::from_raw(p)),
+                FilterItem::Ptr(p) => Sealed(Box::new(*Box::from_raw(p))),
             };
 
             let filter_ref: &'static dyn Filter = {
-                let filter: &dyn Filter = filter.as_ref();
+                let filter: &dyn Filter = filter.0.as_ref();
                 std::mem::transmute(filter)
             };
             self.0 .0.filter.replace(filter_ref);
@@ -384,7 +389,7 @@ impl<F: Filter> Io<F> {
     {
         // replace current filter
         let filter = unsafe {
-            let item = mem::replace(&mut self.1, FilterItem::Ptr(std::ptr::null_mut()));
+            let item = mem::replace(&mut self.1, FilterItem::Ptr(ptr::null_mut()));
             let filter = match item {
                 FilterItem::Boxed(_) => panic!(),
                 FilterItem::Ptr(p) => {
@@ -643,7 +648,7 @@ impl<F> Drop for Io<F> {
 
             self.force_close();
             self.0 .0.filter.set(NullFilter::get());
-            let _ = mem::replace(&mut self.1, FilterItem::Ptr(std::ptr::null_mut()));
+            let _ = mem::replace(&mut self.1, FilterItem::Ptr(ptr::null_mut()));
             unsafe { Box::from_raw(p) };
         } else {
             log::trace!(
