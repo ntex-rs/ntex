@@ -1,7 +1,7 @@
 //! Request logging middleware
-use std::fmt::{self, Display};
 use std::task::{Context, Poll};
 use std::{convert::TryFrom, env, error::Error, future::Future, pin::Pin, rc::Rc, time};
+use std::{fmt, fmt::Display, marker::PhantomData};
 
 use regex::Regex;
 
@@ -113,10 +113,7 @@ impl Default for Logger {
     }
 }
 
-impl<S, Err> Transform<S> for Logger
-where
-    S: Service<Request = WebRequest<Err>, Response = WebResponse>,
-{
+impl<S> Transform<S> for Logger {
     type Service = LoggerMiddleware<S>;
 
     fn new_transform(&self, service: S) -> Self::Service {
@@ -133,14 +130,13 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<S, E> Service for LoggerMiddleware<S>
+impl<S, E> Service<WebRequest<E>> for LoggerMiddleware<S>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse>,
 {
-    type Request = WebRequest<E>;
     type Response = WebResponse;
     type Error = S::Error;
-    type Future = Either<LoggerResponse<S>, S::Future>;
+    type Future = Either<LoggerResponse<S, E>, S::Future>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -167,6 +163,7 @@ where
                 time,
                 format: Some(format),
                 fut: self.service.call(req),
+                _t: PhantomData,
             })
         }
     }
@@ -174,18 +171,19 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct LoggerResponse<S: Service>
+    pub struct LoggerResponse<S: Service<WebRequest<E>>, E>
     {
         #[pin]
         fut: S::Future,
         time: time::SystemTime,
         format: Option<Format>,
+        _t: PhantomData<E>
     }
 }
 
-impl<S, E> Future for LoggerResponse<S>
+impl<S, E> Future for LoggerResponse<S, E>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse>,
 {
     type Output = Result<WebResponse, S::Error>;
 

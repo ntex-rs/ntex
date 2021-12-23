@@ -9,7 +9,7 @@ use crate::http::{
     body::MessageBody, HttpService, KeepAlive, Request, Response, ResponseError,
 };
 use crate::server::{Server, ServerBuilder};
-use crate::{service::map_config, IntoServiceFactory, Service, ServiceFactory};
+use crate::{service::map_config, IntoServiceFactory, ServiceFactory};
 use crate::{time::Seconds, util::PoolId};
 
 use super::config::AppConfig;
@@ -43,11 +43,10 @@ struct Config {
 pub struct HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S>,
-    S: ServiceFactory<Config = AppConfig, Request = Request>,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, Config = AppConfig>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    <S::Service as Service>::Future: 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
@@ -61,13 +60,11 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S>,
-    S: ServiceFactory<Config = AppConfig, Request = Request>,
-    S::Error: ResponseError + 'static,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, Config = AppConfig> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
-    <S::Service as Service>::Future: 'static,
+    S::Response: Into<Response<B>>,
     B: MessageBody + 'static,
 {
     /// Create new http server with application factory
@@ -508,8 +505,8 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S>,
-    S: ServiceFactory<Config = AppConfig, Request = Request>,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, Config = AppConfig>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,

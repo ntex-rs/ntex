@@ -45,22 +45,16 @@ impl<F, S> HttpServiceBuilder<F, S, ExpectHandler, UpgradeHandler<F>> {
 
 impl<F, S, X, U> HttpServiceBuilder<F, S, X, U>
 where
-    F: Filter + 'static,
-    S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError + 'static,
+    F: Filter,
+    S: ServiceFactory<Request, Config = ()> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Future: 'static,
-    <S::Service as Service>::Future: 'static,
-    X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-    X::Error: ResponseError + 'static,
+    X: ServiceFactory<Request, Config = (), Response = Request> + 'static,
+    X::Error: ResponseError,
     X::InitError: fmt::Debug,
-    X::Future: 'static,
-    <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, Io<F>, Codec), Response = ()>,
-    U::Error: fmt::Display + Error + 'static,
+    U: ServiceFactory<(Request, Io<F>, Codec), Config = (), Response = ()> + 'static,
+    U::Error: fmt::Display + Error,
     U::InitError: fmt::Debug,
-    U::Future: 'static,
-    <U::Service as Service>::Future: 'static,
 {
     /// Set server keep-alive setting.
     ///
@@ -115,12 +109,9 @@ where
     /// request will be forwarded to main service.
     pub fn expect<XF, X1>(self, expect: XF) -> HttpServiceBuilder<F, S, X1, U>
     where
-        XF: IntoServiceFactory<X1>,
-        X1: ServiceFactory<Config = (), Request = Request, Response = Request>,
-        X1::Error: ResponseError + 'static,
+        XF: IntoServiceFactory<X1, Request>,
+        X1: ServiceFactory<Request, Config = (), Response = Request> + 'static,
         X1::InitError: fmt::Debug,
-        X1::Future: 'static,
-        <X1::Service as Service>::Future: 'static,
     {
         HttpServiceBuilder {
             keep_alive: self.keep_alive,
@@ -140,16 +131,11 @@ where
     /// and this service get called with original request and framed object.
     pub fn upgrade<UF, U1>(self, upgrade: UF) -> HttpServiceBuilder<F, S, X, U1>
     where
-        UF: IntoServiceFactory<U1>,
-        U1: ServiceFactory<
-            Config = (),
-            Request = (Request, Io<F>, Codec),
-            Response = (),
-        >,
-        U1::Error: fmt::Display + Error + 'static,
+        UF: IntoServiceFactory<U1, (Request, Io<F>, Codec)>,
+        U1: ServiceFactory<(Request, Io<F>, Codec), Config = (), Response = ()>
+            + 'static,
+        U1::Error: fmt::Display + Error,
         U1::InitError: fmt::Debug,
-        U1::Future: 'static,
-        <U1::Service as Service>::Future: 'static,
     {
         HttpServiceBuilder {
             keep_alive: self.keep_alive,
@@ -168,9 +154,8 @@ where
     /// It get called once per request.
     pub fn on_request<R, FR>(mut self, f: FR) -> Self
     where
-        FR: IntoService<R>,
-        R: Service<Request = (Request, IoRef), Response = Request, Error = Response>
-            + 'static,
+        FR: IntoService<R, (Request, IoRef)>,
+        R: Service<(Request, IoRef), Response = Request, Error = Response> + 'static,
     {
         self.on_request = Some(boxed::service(f.into_service()));
         self
@@ -180,7 +165,7 @@ where
     pub fn h1<B, SF>(self, service: SF) -> H1Service<F, S, B, X, U>
     where
         B: MessageBody,
-        SF: IntoServiceFactory<S>,
+        SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
@@ -202,11 +187,11 @@ where
     pub fn h2<B, SF>(self, service: SF) -> H2Service<F, S, B>
     where
         B: MessageBody + 'static,
-        SF: IntoServiceFactory<S>,
+        SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
-        <S::Service as Service>::Future: 'static,
+        <S::Service as Service<Request>>::Future: 'static,
     {
         let cfg = ServiceConfig::new(
             self.keep_alive,
@@ -222,12 +207,12 @@ where
     pub fn finish<B, SF>(self, service: SF) -> HttpService<F, S, B, X, U>
     where
         B: MessageBody + 'static,
-        SF: IntoServiceFactory<S>,
+        SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
         S::Future: 'static,
-        <S::Service as Service>::Future: 'static,
+        <S::Service as Service<Request>>::Future: 'static,
     {
         let cfg = ServiceConfig::new(
             self.keep_alive,

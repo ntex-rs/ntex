@@ -53,9 +53,8 @@ impl<Err: ErrorRenderer> Route<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> ServiceFactory for Route<Err> {
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
     type Config = ();
-    type Request = WebRequest<Err>;
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
@@ -88,8 +87,7 @@ impl<Err: ErrorRenderer> RouteService<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> Service for RouteService<Err> {
-    type Request = WebRequest<Err>;
+impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;

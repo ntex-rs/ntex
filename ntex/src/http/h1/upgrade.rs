@@ -7,11 +7,11 @@ use crate::{util::Ready, Service, ServiceFactory};
 
 pub struct UpgradeHandler<F>(PhantomData<F>);
 
-impl<F> ServiceFactory for UpgradeHandler<F> {
-    type Config = ();
-    type Request = (Request, Io<F>, Codec);
+impl<F> ServiceFactory<(Request, Io<F>, Codec)> for UpgradeHandler<F> {
     type Response = ();
     type Error = io::Error;
+
+    type Config = ();
     type Service = UpgradeHandler<F>;
     type InitError = io::Error;
     type Future = Ready<Self::Service, Self::InitError>;
@@ -22,8 +22,7 @@ impl<F> ServiceFactory for UpgradeHandler<F> {
     }
 }
 
-impl<F> Service for UpgradeHandler<F> {
-    type Request = (Request, Io<F>, Codec);
+impl<F> Service<(Request, Io<F>, Codec)> for UpgradeHandler<F> {
     type Response = ();
     type Error = io::Error;
     type Future = Ready<Self::Response, Self::Error>;
@@ -34,7 +33,7 @@ impl<F> Service for UpgradeHandler<F> {
     }
 
     #[inline]
-    fn call(&self, _: Self::Request) -> Self::Future {
+    fn call(&self, _: (Request, Io<F>, Codec)) -> Self::Future {
         unimplemented!()
     }
 }

@@ -32,8 +32,8 @@ type FnDataFactory =
 pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
+        WebRequest<Err>,
         Config = (),
-        Request = WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -42,7 +42,7 @@ where
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
-    pub(super) filter: PipelineFactory<F>,
+    pub(super) filter: PipelineFactory<F, WebRequest<Err>>,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) data: Rc<Vec<Box<dyn DataFactory>>>,
     pub(super) data_factories: Rc<Vec<FnDataFactory>>,
@@ -52,17 +52,13 @@ where
     pub(super) case_insensitive: bool,
 }
 
-impl<T, F, Err> ServiceFactory for AppFactory<T, F, Err>
+impl<T, F, Err> ServiceFactory<Request> for AppFactory<T, F, Err>
 where
     T: Transform<AppService<F::Service, Err>> + 'static,
-    T::Service: Service<
-        Request = WebRequest<Err>,
-        Response = WebResponse,
-        Error = Err::Container,
-    >,
+    T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
+        WebRequest<Err>,
         Config = (),
-        Request = WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -71,7 +67,6 @@ where
     Err: ErrorRenderer,
 {
     type Config = AppConfig;
-    type Request = Request;
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
@@ -178,11 +173,7 @@ where
 /// Service to convert `Request` to a `WebRequest<Err>`
 pub struct AppFactoryService<T, Err>
 where
-    T: Service<
-        Request = WebRequest<Err>,
-        Response = WebResponse,
-        Error = Err::Container,
-    >,
+    T: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     service: T,
@@ -193,16 +184,11 @@ where
     _t: PhantomData<Err>,
 }
 
-impl<T, Err> Service for AppFactoryService<T, Err>
+impl<T, Err> Service<Request> for AppFactoryService<T, Err>
 where
-    T: Service<
-        Request = WebRequest<Err>,
-        Response = WebResponse,
-        Error = Err::Container,
-    >,
+    T: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
-    type Request = Request;
     type Response = WebResponse;
     type Error = T::Error;
     type Future = T::Future;
@@ -244,11 +230,7 @@ where
 
 impl<T, Err> Drop for AppFactoryService<T, Err>
 where
-    T: Service<
-        Request = WebRequest<Err>,
-        Response = WebResponse,
-        Error = Err::Container,
-    >,
+    T: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn drop(&mut self) {
@@ -261,8 +243,7 @@ struct AppRouting<Err: ErrorRenderer> {
     default: Option<HttpService<Err>>,
 }
 
-impl<Err: ErrorRenderer> Service for AppRouting<Err> {
-    type Request = WebRequest<Err>;
+impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
     type Future = BoxResponse<Err>;
@@ -301,16 +282,11 @@ pub struct AppService<F, Err: ErrorRenderer> {
     routing: Rc<AppRouting<Err>>,
 }
 
-impl<F, Err> Service for AppService<F, Err>
+impl<F, Err> Service<WebRequest<Err>> for AppService<F, Err>
 where
-    F: Service<
-        Request = WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-    >,
+    F: Service<WebRequest<Err>, Response = WebRequest<Err>, Error = Err::Container>,
     Err: ErrorRenderer,
 {
-    type Request = WebRequest<Err>;
     type Response = WebResponse;
     type Error = Err::Container;
     type Future = AppServiceResponse<F, Err>;
@@ -336,7 +312,7 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct AppServiceResponse<F: Service, Err: ErrorRenderer> {
+    pub struct AppServiceResponse<F: Service<WebRequest<Err>>, Err: ErrorRenderer> {
         #[pin]
         filter: F::Future,
         routing: Rc<AppRouting<Err>>,
@@ -346,11 +322,7 @@ pin_project_lite::pin_project! {
 
 impl<F, Err> Future for AppServiceResponse<F, Err>
 where
-    F: Service<
-        Request = WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-    >,
+    F: Service<WebRequest<Err>, Response = WebRequest<Err>, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     type Output = Result<WebResponse, Err::Container>;

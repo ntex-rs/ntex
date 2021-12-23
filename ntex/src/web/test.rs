@@ -31,22 +31,17 @@ use crate::web::rmap::ResourceMap;
 use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service<Err: ErrorRenderer>() -> impl Service<
-    Request = WebRequest<Err>,
-    Response = WebResponse,
-    Error = std::convert::Infallible,
-> {
+pub fn ok_service<Err: ErrorRenderer>(
+) -> impl Service<WebRequest<Err>, Response = WebResponse, Error = std::convert::Infallible>
+{
     default_service::<Err>(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
 pub fn default_service<Err: ErrorRenderer>(
     status_code: StatusCode,
-) -> impl Service<
-    Request = WebRequest<Err>,
-    Response = WebResponse,
-    Error = std::convert::Infallible,
-> {
+) -> impl Service<WebRequest<Err>, Response = WebResponse, Error = std::convert::Infallible>
+{
     (move |req: WebRequest<Err>| {
         Ready::Ok(req.into_response(HttpResponse::build(status_code).finish()))
     })
@@ -78,15 +73,10 @@ pub fn default_service<Err: ErrorRenderer>(
 /// ```
 pub async fn init_service<R, S, E>(
     app: R,
-) -> impl Service<Request = Request, Response = WebResponse, Error = E>
+) -> impl Service<Request, Response = WebResponse, Error = E>
 where
-    R: IntoServiceFactory<S>,
-    S: ServiceFactory<
-        Config = AppConfig,
-        Request = Request,
-        Response = WebResponse,
-        Error = E,
-    >,
+    R: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, Config = AppConfig, Response = WebResponse, Error = E>,
     S::InitError: std::fmt::Debug,
 {
     let srv = app.into_factory();
@@ -118,7 +108,7 @@ where
 /// ```
 pub async fn call_service<S, R, E>(app: &S, req: R) -> S::Response
 where
-    S: Service<Request = R, Response = WebResponse, Error = E>,
+    S: Service<R, Response = WebResponse, Error = E>,
     E: std::fmt::Debug,
 {
     app.call(req).await.unwrap()
@@ -151,7 +141,7 @@ where
 /// ```
 pub async fn read_response<S>(app: &S, req: Request) -> Bytes
 where
-    S: Service<Request = Request, Response = WebResponse>,
+    S: Service<Request, Response = WebResponse>,
 {
     let mut resp = app
         .call(req)
@@ -250,7 +240,7 @@ where
 /// ```
 pub async fn read_response_json<S, T>(app: &S, req: Request) -> T
 where
-    S: Service<Request = Request, Response = WebResponse>,
+    S: Service<Request, Response = WebResponse>,
     T: DeserializeOwned,
 {
     let body = read_response::<S>(app, req).await;
@@ -552,12 +542,11 @@ impl TestRequest {
 pub fn server<F, I, S, B>(factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S>,
-    S: ServiceFactory<Config = AppConfig, Request = Request> + 'static,
-    S::Error: ResponseError + 'static,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, Config = AppConfig> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<HttpResponse<B>> + 'static,
-    <S::Service as Service>::Future: 'static,
+    S::Response: Into<HttpResponse<B>>,
     B: MessageBody + 'static,
 {
     server_with(TestServerConfig::default(), factory)
@@ -591,12 +580,11 @@ where
 pub fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S>,
-    S: ServiceFactory<Config = AppConfig, Request = Request> + 'static,
-    S::Error: ResponseError + 'static,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, Config = AppConfig> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<HttpResponse<B>> + 'static,
-    <S::Service as Service>::Future: 'static,
+    S::Response: Into<HttpResponse<B>>,
     B: MessageBody + 'static,
 {
     let (tx, rx) = mpsc::channel();

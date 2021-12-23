@@ -209,7 +209,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 pub fn server<F, R>(factory: F) -> TestServer
 where
     F: Fn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Config = (), Request = Io>,
+    R: ServiceFactory<Io, Config = ()>,
 {
     let (tx, rx) = mpsc::channel();
 

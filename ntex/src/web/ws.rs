@@ -20,13 +20,10 @@ pub async fn start<T, F, S, Err>(
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<
-            Config = WebSocketsSink,
-            Request = Frame,
-            Response = Option<Message>,
-        > + 'static,
+    T: ServiceFactory<Frame, Config = WebSocketsSink, Response = Option<Message>>
+        + 'static,
     T::Error: error::Error,
-    F: IntoServiceFactory<T>,
+    F: IntoServiceFactory<T, Frame>,
     S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
     Err: From<T::InitError> + From<HandshakeError>,
 {
@@ -44,13 +41,10 @@ pub async fn start_with<T, F, S, Err, Tx, Rx>(
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<
-            Config = ws::StreamEncoder<Tx>,
-            Request = Frame,
-            Response = Option<Message>,
-        > + 'static,
+    T: ServiceFactory<Frame, Config = ws::StreamEncoder<Tx>, Response = Option<Message>>
+        + 'static,
     T::Error: error::Error,
-    F: IntoServiceFactory<T>,
+    F: IntoServiceFactory<T, Frame>,
     S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
     Err: From<T::InitError> + From<HandshakeError>,
     Tx: Sink<Result<Bytes, Box<dyn error::Error>>> + Clone + Unpin + 'static,

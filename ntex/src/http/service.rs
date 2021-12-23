@@ -29,12 +29,12 @@ pub struct HttpService<F, S, B, X = h1::ExpectHandler, U = h1::UpgradeHandler<F>
 
 impl<F, S, B> HttpService<F, S, B>
 where
-    S: ServiceFactory<Config = (), Request = Request>,
+    S: ServiceFactory<Request, Config = ()>,
     S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
     S::Future: 'static,
-    <S::Service as Service>::Future: 'static,
+    <S::Service as Service<Request>>::Future: 'static,
     B: MessageBody + 'static,
 {
     /// Create builder for `HttpService` instance.
@@ -46,16 +46,16 @@ where
 impl<F, S, B> HttpService<F, S, B>
 where
     F: Filter,
-    S: ServiceFactory<Config = (), Request = Request>,
+    S: ServiceFactory<Request, Config = ()>,
     S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
     S::Future: 'static,
-    <S::Service as Service>::Future: 'static,
+    <S::Service as Service<Request>>::Future: 'static,
     B: MessageBody + 'static,
 {
     /// Create new `HttpService` instance.
-    pub fn new<U: IntoServiceFactory<S>>(service: U) -> Self {
+    pub fn new<U: IntoServiceFactory<S, Request>>(service: U) -> Self {
         let cfg = ServiceConfig::new(
             KeepAlive::Timeout(Seconds(5)),
             Millis(5_000),
@@ -74,7 +74,7 @@ where
     }
 
     /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S>>(
+    pub(crate) fn with_config<U: IntoServiceFactory<S, Request>>(
         cfg: ServiceConfig,
         service: U,
     ) -> Self {
@@ -92,12 +92,12 @@ where
 impl<F, S, B, X, U> HttpService<F, S, B, X, U>
 where
     F: Filter,
-    S: ServiceFactory<Config = (), Request = Request>,
+    S: ServiceFactory<Request, Config = ()>,
     S::Error: ResponseError + 'static,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>> + 'static,
     S::Future: 'static,
-    <S::Service as Service>::Future: 'static,
+    <S::Service as Service<Request>>::Future: 'static,
     B: MessageBody,
 {
     /// Provide service for `EXPECT: 100-Continue` support.
@@ -107,7 +107,7 @@ where
     /// request will be forwarded to main service.
     pub fn expect<X1>(self, expect: X1) -> HttpService<F, S, B, X1, U>
     where
-        X1: ServiceFactory<Config = (), Request = Request, Response = Request>,
+        X1: ServiceFactory<Request, Config = (), Response = Request>,
         X1::Error: ResponseError,
         X1::InitError: fmt::Debug,
         X1::Future: 'static,
@@ -128,11 +128,7 @@ where
     /// and this service get called with original request and framed object.
     pub fn upgrade<U1>(self, upgrade: Option<U1>) -> HttpService<F, S, B, X, U1>
     where
-        U1: ServiceFactory<
-            Config = (),
-            Request = (Request, Io<F>, h1::Codec),
-            Response = (),
-        >,
+        U1: ServiceFactory<(Request, Io<F>, h1::Codec), Config = (), Response = ()>,
         U1::Error: fmt::Display + error::Error + 'static,
         U1::InitError: fmt::Debug,
         U1::Future: 'static,
@@ -264,28 +260,22 @@ mod rustls {
     }
 }
 
-impl<F, S, B, X, U> ServiceFactory for HttpService<F, S, B, X, U>
+impl<F, S, B, X, U> ServiceFactory<Io<F>> for HttpService<F, S, B, X, U>
 where
     F: Filter + 'static,
-    S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError + 'static,
+    S: ServiceFactory<Request, Config = ()> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
-    <S::Service as Service>::Future: 'static,
+    S::Response: Into<Response<B>>,
     B: MessageBody + 'static,
-    X: ServiceFactory<Config = (), Request = Request, Response = Request>,
-    X::Error: ResponseError + 'static,
+    X: ServiceFactory<Request, Config = (), Response = Request> + 'static,
+    X::Error: ResponseError,
     X::InitError: fmt::Debug,
-    X::Future: 'static,
-    <X::Service as Service>::Future: 'static,
-    U: ServiceFactory<Config = (), Request = (Request, Io<F>, h1::Codec), Response = ()>
-        + 'static,
+    U: ServiceFactory<(Request, Io<F>, h1::Codec), Config = (), Response = ()> + 'static,
     U::Error: fmt::Display + error::Error,
     U::InitError: fmt::Debug,
 {
     type Config = ();
-    type Request = Io<F>;
     type Response = ();
     type Error = DispatchError;
     type InitError = ();
@@ -330,25 +320,24 @@ where
 }
 
 /// `Service` implementation for http transport
-pub struct HttpServiceHandler<F, S: Service, B, X: Service, U: Service> {
+pub struct HttpServiceHandler<F, S, B, X, U> {
     config: Rc<DispatcherConfig<S, X, U>>,
-    _t: marker::PhantomData<(F, B, X)>,
+    _t: marker::PhantomData<(F, B)>,
 }
 
-impl<F, S, B, X, U> Service for HttpServiceHandler<F, S, B, X, U>
+impl<F, S, B, X, U> Service<Io<F>> for HttpServiceHandler<F, S, B, X, U>
 where
     F: Filter + 'static,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
-    X: Service<Request = Request, Response = Request>,
+    X: Service<Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, Io<F>, h1::Codec), Response = ()> + 'static,
+    U: Service<(Request, Io<F>, h1::Codec), Response = ()> + 'static,
     U::Error: fmt::Display + error::Error,
 {
-    type Request = Io<F>;
     type Response = ();
     type Error = DispatchError;
     type Future = HttpServiceHandlerResponse<F, S, B, X, U>;
@@ -410,7 +399,7 @@ where
         }
     }
 
-    fn call(&self, io: Self::Request) -> Self::Future {
+    fn call(&self, io: Io<F>) -> Self::Future {
         log::trace!(
             "New http connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
@@ -442,17 +431,17 @@ pin_project_lite::pin_project! {
     where
         F: Filter,
         F: 'static,
-        S: Service<Request = Request>,
+        S: Service<Request>,
         S::Error: ResponseError,
         S::Error: 'static,
         S::Response: Into<Response<B>>,
         S::Response: 'static,
         B: MessageBody,
         B: 'static,
-        X: Service<Request = Request, Response = Request>,
+        X: Service<Request, Response = Request>,
         X::Error: ResponseError,
         X::Error: 'static,
-        U: Service<Request = (Request, Io<F>, h1::Codec), Response = ()>,
+        U: Service<(Request, Io<F>, h1::Codec), Response = ()>,
         U::Error: fmt::Display,
         U::Error: error::Error,
         U: 'static,
@@ -466,16 +455,16 @@ pin_project_lite::pin_project! {
     #[project = StateProject]
     enum ResponseState<F, S, B, X, U>
     where
-        S: Service<Request = Request>,
+        S: Service<Request>,
         S::Error: ResponseError,
         S::Error: 'static,
         F: Filter,
         F: 'static,
         B: MessageBody,
-        X: Service<Request = Request, Response = Request>,
+        X: Service<Request, Response = Request>,
         X::Error: ResponseError,
         X::Error: 'static,
-        U: Service<Request = (Request, Io<F>, h1::Codec), Response = ()>,
+        U: Service<(Request, Io<F>, h1::Codec), Response = ()>,
         U::Error: fmt::Display,
         U::Error: error::Error,
         U: 'static,
@@ -495,14 +484,14 @@ pin_project_lite::pin_project! {
 impl<F, S, B, X, U> future::Future for HttpServiceHandlerResponse<F, S, B, X, U>
 where
     F: Filter + 'static,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
+    X: Service<Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, Io<F>, h1::Codec), Response = ()> + 'static,
+    U: Service<(Request, Io<F>, h1::Codec), Response = ()> + 'static,
     U::Error: fmt::Display + error::Error,
 {
     type Output = Result<(), DispatchError>;

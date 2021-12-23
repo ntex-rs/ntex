@@ -32,7 +32,7 @@ bitflags::bitflags! {
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
-    pub struct Dispatcher<F, S: Service, B, X: Service, U: Service> {
+    pub struct Dispatcher<F, S: Service<Request>, B, X: Service<Request>, U: Service<(Request, Io<F>, Codec)>> {
         #[pin]
         call: CallState<S, X>,
         st: State<B>,
@@ -56,7 +56,7 @@ enum State<B> {
 
 pin_project_lite::pin_project! {
     #[project = CallStateProject]
-    enum CallState<S: Service, X: Service> {
+    enum CallState<S: Service<Request>, X: Service<Request>> {
         None,
         Service { #[pin] fut: S::Future },
         Expect { #[pin] fut: X::Future },
@@ -79,13 +79,13 @@ struct DispatcherInner<F, S, B, X, U> {
 impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
 where
     F: Filter + 'static,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
+    X: Service<Request, Response = Request>,
     X::Error: ResponseError,
-    U: Service<Request = (Request, Io<F>, Codec), Response = ()> + 'static,
+    U: Service<(Request, Io<F>, Codec), Response = ()> + 'static,
     U::Error: Error + fmt::Display,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
@@ -131,13 +131,13 @@ macro_rules! set_error ({ $slf:tt, $err:ident } => {
 impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
 where
     F: Filter,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
+    X: Service<Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, Io<F>, Codec), Response = ()> + 'static,
+    U: Service<(Request, Io<F>, Codec), Response = ()> + 'static,
     U::Error: Error + fmt::Display,
 {
     type Output = Result<(), DispatchError>;
@@ -441,7 +441,7 @@ where
 
 impl<T, S, B, X, U> DispatcherInner<T, S, B, X, U>
 where
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,

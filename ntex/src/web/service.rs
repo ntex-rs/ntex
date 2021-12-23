@@ -134,10 +134,10 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         factory: F,
         nested: Option<Rc<ResourceMap>>,
     ) where
-        F: IntoServiceFactory<S>,
+        F: IntoServiceFactory<S, WebRequest<Err>>,
         S: ServiceFactory<
+                WebRequest<Err>,
                 Config = (),
-                Request = WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
                 InitError = (),
@@ -217,10 +217,10 @@ impl WebServiceAdapter {
     /// Set a service factory implementation and generate web service.
     pub fn finish<T, F, Err>(self, service: F) -> impl WebServiceFactory<Err>
     where
-        F: IntoServiceFactory<T>,
+        F: IntoServiceFactory<T, WebRequest<Err>>,
         T: ServiceFactory<
+                WebRequest<Err>,
                 Config = (),
-                Request = WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
                 InitError = (),
@@ -246,8 +246,8 @@ struct WebServiceImpl<T> {
 impl<T, Err> WebServiceFactory<Err> for WebServiceImpl<T>
 where
     T: ServiceFactory<
+            WebRequest<Err>,
             Config = (),
-            Request = WebRequest<Err>,
             Response = WebResponse,
             Error = Err::Container,
             InitError = (),

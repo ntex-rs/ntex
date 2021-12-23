@@ -21,7 +21,7 @@ pub(super) trait Connect {
 
 impl<T> Connect for ConnectorWrapper<T>
 where
-    T: Service<Request = ClientConnect, Response = Connection, Error = ConnectError>,
+    T: Service<ClientConnect, Response = Connection, Error = ConnectError>,
     T::Future: 'static,
 {
     fn send_request(

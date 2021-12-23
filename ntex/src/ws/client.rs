@@ -61,7 +61,7 @@ impl WsClient<Base, ()> {
         uri: U,
     ) -> WsClientBuilder<
         Base,
-        impl Service<Request = Connect<Uri>, Response = Io, Error = ConnectError>,
+        impl Service<Connect<Uri>, Response = Io, Error = ConnectError>,
     >
     where
         Uri: TryFrom<U>,
@@ -76,7 +76,7 @@ impl WsClient<Base, ()> {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter,
-        T: Service<Request = Connect<Uri>, Response = Io<F>, Error = ConnectError>,
+        T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
     {
         WsClientBuilder::new(uri).connector(connector)
     }
@@ -131,7 +131,7 @@ impl<F, T> WsClient<F, T> {
 impl<F, T> WsClient<F, T>
 where
     F: Filter,
-    T: Service<Request = Connect<Uri>, Response = Io<F>, Error = ConnectError>,
+    T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
 {
     /// Complete request construction and connect to a websockets server.
     pub fn connect(
@@ -277,7 +277,7 @@ impl WsClientBuilder<Base, ()> {
         uri: U,
     ) -> WsClientBuilder<
         Base,
-        impl Service<Request = Connect<Uri>, Response = Io, Error = ConnectError>,
+        impl Service<Connect<Uri>, Response = Io, Error = ConnectError>,
     >
     where
         Uri: TryFrom<U>,
@@ -315,7 +315,7 @@ impl WsClientBuilder<Base, ()> {
 
 impl<F, T> WsClientBuilder<F, T>
 where
-    T: Service<Request = Connect<Uri>, Response = Io<F>, Error = ConnectError>,
+    T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
 {
     /// Set socket address of the server.
     ///
@@ -494,7 +494,7 @@ where
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
         F1: Filter,
-        T1: Service<Request = Connect<Uri>, Response = Io<F1>, Error = ConnectError>,
+        T1: Service<Connect<Uri>, Response = Io<F1>, Error = ConnectError>,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
 
@@ -734,8 +734,8 @@ impl WsConnection<Sealed> {
     /// Start client websockets service.
     pub async fn start<T, U>(self, service: U) -> Result<(), WsError<T::Error>>
     where
-        T: Service<Request = ws::Frame, Response = Option<ws::Message>> + 'static,
-        U: IntoService<T>,
+        T: Service<ws::Frame, Response = Option<ws::Message>> + 'static,
+        U: IntoService<T, ws::Frame>,
     {
         let service = apply_fn(
             service.into_service().map_err(WsError::Service),

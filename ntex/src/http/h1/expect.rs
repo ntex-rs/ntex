@@ -6,9 +6,8 @@ use crate::{util::Ready, Service, ServiceFactory};
 
 pub struct ExpectHandler;
 
-impl ServiceFactory for ExpectHandler {
+impl ServiceFactory<Request> for ExpectHandler {
     type Config = ();
-    type Request = Request;
     type Response = Request;
     type Error = io::Error;
     type Service = ExpectHandler;
@@ -21,8 +20,7 @@ impl ServiceFactory for ExpectHandler {
     }
 }
 
-impl Service for ExpectHandler {
-    type Request = Request;
+impl Service<Request> for ExpectHandler {
     type Response = Request;
     type Error = io::Error;
     type Future = Ready<Self::Response, Self::Error>;

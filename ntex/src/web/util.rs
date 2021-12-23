@@ -7,7 +7,7 @@ use crate::http::body::MessageBody;
 use crate::http::error::{BlockingError, ResponseError};
 use crate::http::header::ContentEncoding;
 use crate::http::{Method, Request, Response};
-use crate::{IntoServiceFactory, Service, ServiceFactory};
+use crate::{IntoServiceFactory, ServiceFactory};
 
 use super::config::AppConfig;
 use super::error::ErrorRenderer;
@@ -285,13 +285,11 @@ where
 pub fn server<F, I, S, B>(factory: F) -> HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S>,
-    S: ServiceFactory<Config = AppConfig, Request = Request>,
-    S::Error: ResponseError + 'static,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, Config = AppConfig> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>> + 'static,
-    S::Future: 'static,
-    <S::Service as Service>::Future: 'static,
+    S::Response: Into<Response<B>>,
     B: MessageBody + 'static,
 {
     HttpServer::new(factory)

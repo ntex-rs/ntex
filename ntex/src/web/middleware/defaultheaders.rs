@@ -26,8 +26,9 @@ use crate::web::{WebRequest, WebResponse};
 /// }
 /// ```
 #[derive(Clone)]
-pub struct DefaultHeaders {
+pub struct DefaultHeaders<E> {
     inner: Rc<Inner>,
+    _t: PhantomData<E>,
 }
 
 struct Inner {
@@ -35,20 +36,21 @@ struct Inner {
     headers: HeaderMap,
 }
 
-impl Default for DefaultHeaders {
+impl<E> Default for DefaultHeaders<E> {
     fn default() -> Self {
         DefaultHeaders {
             inner: Rc::new(Inner {
                 ct: false,
                 headers: HeaderMap::new(),
             }),
+            _t: PhantomData,
         }
     }
 }
 
-impl DefaultHeaders {
+impl<E> DefaultHeaders<E> {
     /// Construct `DefaultHeaders` middleware.
-    pub fn new() -> DefaultHeaders {
+    pub fn new() -> DefaultHeaders<E> {
         DefaultHeaders::default()
     }
 
@@ -86,9 +88,9 @@ impl DefaultHeaders {
     }
 }
 
-impl<S, E> Transform<S> for DefaultHeaders
+impl<S, E> Transform<S> for DefaultHeaders<E>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse>,
     S::Future: 'static,
 {
     type Service = DefaultHeadersMiddleware<S, E>;
@@ -108,12 +110,11 @@ pub struct DefaultHeadersMiddleware<S, E> {
     _t: PhantomData<E>,
 }
 
-impl<S, E> Service for DefaultHeadersMiddleware<S, E>
+impl<S, E> Service<WebRequest<E>> for DefaultHeadersMiddleware<S, E>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse>,
     S::Future: 'static,
 {
-    type Request = WebRequest<E>;
     type Response = WebResponse;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;

@@ -344,7 +344,8 @@ struct ServiceFactory<T> {
     pool: PoolId,
 }
 
-impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage)> for ServiceFactory<T>
+impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage)>
+    for ServiceFactory<T>
 where
     T: service::ServiceFactory<Io, Config = ()>,
     T::Future: 'static,

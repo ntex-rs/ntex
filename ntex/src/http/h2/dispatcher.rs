@@ -25,7 +25,7 @@ const CHUNK_SIZE: usize = 16_384;
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/2 protocol
-    pub struct Dispatcher<F, S: Service<Request = Request>, B: MessageBody, X, U> {
+    pub struct Dispatcher<F, S: Service<Request>, B: MessageBody, X, U> {
         io: IoRef,
         config: Rc<DispatcherConfig<S, X, U>>,
         connection: Connection<Io<F>, Bytes>,
@@ -38,7 +38,7 @@ pin_project_lite::pin_project! {
 impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
 where
     F: Filter,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
@@ -76,7 +76,7 @@ where
 impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
 where
     F: Filter,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,

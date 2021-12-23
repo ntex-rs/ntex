@@ -37,9 +37,7 @@ pub(super) struct ConnectionPool<T>(Rc<T>, Rc<RefCell<Inner>>);
 
 impl<T> ConnectionPool<T>
 where
-    T: Service<Request = Connect, Response = IoBoxed, Error = ConnectError>
-        + Unpin
-        + 'static,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin + 'static,
     T::Future: Unpin,
 {
     pub(super) fn new(
@@ -84,12 +82,11 @@ impl<T> Clone for ConnectionPool<T> {
     }
 }
 
-impl<T> Service for ConnectionPool<T>
+impl<T> Service<Connect> for ConnectionPool<T>
 where
-    T: Service<Request = Connect, Response = IoBoxed, Error = ConnectError> + 'static,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
     T::Future: Unpin,
 {
-    type Request = Connect;
     type Response = Connection;
     type Error = ConnectError;
     type Future = Pin<Box<dyn Future<Output = Result<Connection, ConnectError>>>>;
@@ -303,7 +300,7 @@ struct ConnectionPoolSupport<T> {
 
 impl<T> Future for ConnectionPoolSupport<T>
 where
-    T: Service<Request = Connect, Response = IoBoxed, Error = ConnectError> + Unpin,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin,
     T::Future: Unpin + 'static,
 {
     type Output = ();
