@@ -126,21 +126,16 @@ where
 }
 
 /// `.and_then()` service factory combinator
-pub struct AndThenFactory<A, B, Req> {
+pub struct AndThenFactory<A, B, Req, Cfg> {
     inner: Rc<(A, B)>,
-    _t: PhantomData<fn(Req)>,
+    _t: PhantomData<fn(Req, Cfg)>,
 }
 
-impl<A, B, Req> AndThenFactory<A, B, Req>
+impl<A, B, Req, Cfg> AndThenFactory<A, B, Req, Cfg>
 where
-    A: ServiceFactory<Req>,
-    A::Config: Clone,
-    B: ServiceFactory<
-        A::Response,
-        Config = A::Config,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
+    A: ServiceFactory<Req, Cfg>,
+    B: ServiceFactory<A::Response, Cfg, Error = A::Error, InitError = A::InitError>,
+    Cfg: Clone,
 {
     /// Create new `AndThenFactory` combinator
     pub(crate) fn new(a: A, b: B) -> Self {
@@ -151,26 +146,20 @@ where
     }
 }
 
-impl<A, B, Req> ServiceFactory<Req> for AndThenFactory<A, B, Req>
+impl<A, B, Req, Cfg> ServiceFactory<Req, Cfg> for AndThenFactory<A, B, Req, Cfg>
 where
-    A: ServiceFactory<Req>,
-    A::Config: Clone,
-    B: ServiceFactory<
-        A::Response,
-        Config = A::Config,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
+    A: ServiceFactory<Req, Cfg>,
+    B: ServiceFactory<A::Response, Cfg, Error = A::Error, InitError = A::InitError>,
+    Cfg: Clone,
 {
     type Response = B::Response;
     type Error = A::Error;
 
-    type Config = A::Config;
     type Service = AndThen<A::Service, B::Service, Req>;
     type InitError = A::InitError;
-    type Future = AndThenServiceFactoryResponse<A, B, Req>;
+    type Future = AndThenServiceFactoryResponse<A, B, Req, Cfg>;
 
-    fn new_service(&self, cfg: A::Config) -> Self::Future {
+    fn new_service(&self, cfg: Cfg) -> Self::Future {
         let inner = &*self.inner;
         AndThenServiceFactoryResponse::new(
             inner.0.new_service(cfg.clone()),
@@ -179,7 +168,7 @@ where
     }
 }
 
-impl<A, B, Req> Clone for AndThenFactory<A, B, Req> {
+impl<A, B, Req, Cfg> Clone for AndThenFactory<A, B, Req, Cfg> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -189,10 +178,10 @@ impl<A, B, Req> Clone for AndThenFactory<A, B, Req> {
 }
 
 pin_project_lite::pin_project! {
-    pub struct AndThenServiceFactoryResponse<A, B, Req>
+    pub struct AndThenServiceFactoryResponse<A, B, Req, Cfg>
     where
-        A: ServiceFactory<Req>,
-        B: ServiceFactory<A::Response>,
+        A: ServiceFactory<Req, Cfg>,
+        B: ServiceFactory<A::Response, Cfg>,
     {
         #[pin]
         fut_a: A::Future,
@@ -204,10 +193,10 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<A, B, Req> AndThenServiceFactoryResponse<A, B, Req>
+impl<A, B, Req, Cfg> AndThenServiceFactoryResponse<A, B, Req, Cfg>
 where
-    A: ServiceFactory<Req>,
-    B: ServiceFactory<A::Response>,
+    A: ServiceFactory<Req, Cfg>,
+    B: ServiceFactory<A::Response, Cfg>,
 {
     fn new(fut_a: A::Future, fut_b: B::Future) -> Self {
         AndThenServiceFactoryResponse {
@@ -219,10 +208,10 @@ where
     }
 }
 
-impl<A, B, Req> Future for AndThenServiceFactoryResponse<A, B, Req>
+impl<A, B, Req, Cfg> Future for AndThenServiceFactoryResponse<A, B, Req, Cfg>
 where
-    A: ServiceFactory<Req>,
-    B: ServiceFactory<A::Response, Error = A::Error, InitError = A::InitError>,
+    A: ServiceFactory<Req, Cfg>,
+    B: ServiceFactory<A::Response, Cfg, Error = A::Error, InitError = A::InitError>,
 {
     type Output = Result<AndThen<A::Service, B::Service, Req>, A::InitError>;
 

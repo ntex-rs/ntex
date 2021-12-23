@@ -12,17 +12,16 @@ pub type BoxService<Req, Res, Err> =
 pub type RcService<Req, Res, Err> =
     Rc<dyn Service<Req, Response = Res, Error = Err, Future = BoxFuture<Res, Err>>>;
 
-pub struct BoxServiceFactory<C, Req, Res, Err, InitErr>(
-    Inner<C, Req, Res, Err, InitErr>,
-);
+pub struct BoxServiceFactory<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
 
 /// Create boxed service factory
-pub fn factory<T, R>(
+pub fn factory<T, R, C>(
     factory: T,
-) -> BoxServiceFactory<T::Config, R, T::Response, T::Error, T::InitError>
+) -> BoxServiceFactory<C, R, T::Response, T::Error, T::InitError>
 where
+    C: 'static,
     R: 'static,
-    T: ServiceFactory<R> + 'static,
+    T: ServiceFactory<R, C> + 'static,
     T::Response: 'static,
     T::Error: 'static,
     T::InitError: 'static,
@@ -56,7 +55,7 @@ where
 type Inner<C, Req, Res, Err, InitErr> = Box<
     dyn ServiceFactory<
         Req,
-        Config = C,
+        C,
         Response = Res,
         Error = Err,
         InitError = InitErr,
@@ -65,7 +64,7 @@ type Inner<C, Req, Res, Err, InitErr> = Box<
     >,
 >;
 
-impl<C, Req, Res, Err, InitErr> ServiceFactory<Req>
+impl<C, Req, Res, Err, InitErr> ServiceFactory<Req, C>
     for BoxServiceFactory<C, Req, Res, Err, InitErr>
 where
     Req: 'static,
@@ -76,7 +75,6 @@ where
     type Response = Res;
     type Error = Err;
     type InitError = InitErr;
-    type Config = C;
     type Service = BoxService<Req, Res, Err>;
 
     type Future = BoxFuture<Self::Service, InitErr>;
@@ -86,24 +84,25 @@ where
     }
 }
 
-struct FactoryWrapper<C, R, T: ServiceFactory<R>> {
+struct FactoryWrapper<C, R, T: ServiceFactory<R, C>> {
     factory: T,
     _t: std::marker::PhantomData<(C, R)>,
 }
 
-impl<C, R, T, Res, Err, InitErr> ServiceFactory<R> for FactoryWrapper<C, R, T>
+impl<C, R, T, Res, Err, InitErr> ServiceFactory<R, C> for FactoryWrapper<C, R, T>
 where
     R: 'static,
     Res: 'static,
     Err: 'static,
     InitErr: 'static,
-    T: ServiceFactory<R, Config = C, Response = Res, Error = Err, InitError = InitErr>
-        + 'static,
+    T: ServiceFactory<R, C, Response = Res, Error = Err, InitError = InitErr> + 'static,
+    T::Service: 'static,
+    T::Future: 'static,
+    <T::Service as Service<R>>::Future: 'static,
 {
     type Response = Res;
     type Error = Err;
     type InitError = InitErr;
-    type Config = C;
     type Service = BoxService<R, Res, Err>;
     type Future = BoxFuture<Self::Service, Self::InitError>;
 

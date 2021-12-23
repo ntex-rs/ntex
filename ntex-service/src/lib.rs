@@ -156,15 +156,12 @@ pub trait Service<Req> {
 /// requests on that new TCP stream.
 ///
 /// `Config` is a service factory configuration type.
-pub trait ServiceFactory<Req> {
+pub trait ServiceFactory<Req, Cfg = ()> {
     /// Responses given by the service
     type Response;
 
     /// Errors produced by the service
     type Error;
-
-    /// Service factory configuration
-    type Config;
 
     /// The `Service` value created by this factory
     type Service: Service<Req, Response = Self::Response, Error = Self::Error>;
@@ -176,12 +173,12 @@ pub trait ServiceFactory<Req> {
     type Future: Future<Output = Result<Self::Service, Self::InitError>>;
 
     /// Create and return a new service value asynchronously.
-    fn new_service(&self, cfg: Self::Config) -> Self::Future;
+    fn new_service(&self, cfg: Cfg) -> Self::Future;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service
     /// of the resulting type.
-    fn map<F, Res>(self, f: F) -> crate::map::MapServiceFactory<Self, F, Req, Res>
+    fn map<F, Res>(self, f: F) -> crate::map::MapServiceFactory<Self, F, Req, Res, Cfg>
     where
         Self: Sized,
         F: FnMut(Self::Response) -> Res + Clone,
@@ -191,17 +188,23 @@ pub trait ServiceFactory<Req> {
 
     #[inline]
     /// Map this service's error to a different error, returning a new service.
-    fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrServiceFactory<Self, Req, F, E>
+    fn map_err<F, E>(
+        self,
+        f: F,
+    ) -> crate::map_err::MapErrServiceFactory<Self, Req, Cfg, F, E>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
     {
-        crate::map_err::MapErrServiceFactory::new(self, f)
+        crate::map_err::MapErrServiceFactory::<_, _, Cfg, _, _>::new(self, f)
     }
 
     #[inline]
     /// Map this factory's init error to a different error, returning a new service.
-    fn map_init_err<F, E>(self, f: F) -> crate::map_init_err::MapInitErr<Self, Req, F, E>
+    fn map_init_err<F, E>(
+        self,
+        f: F,
+    ) -> crate::map_init_err::MapInitErr<Self, Req, Cfg, F, E>
     where
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
@@ -256,18 +259,17 @@ where
     }
 }
 
-impl<S, Req> ServiceFactory<Req> for Rc<S>
+impl<S, Req, Cfg> ServiceFactory<Req, Cfg> for Rc<S>
 where
-    S: ServiceFactory<Req>,
+    S: ServiceFactory<Req, Cfg>,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Config = S::Config;
     type Service = S::Service;
     type InitError = S::InitError;
     type Future = S::Future;
 
-    fn new_service(&self, cfg: S::Config) -> S::Future {
+    fn new_service(&self, cfg: Cfg) -> S::Future {
         self.as_ref().new_service(cfg)
     }
 }
@@ -282,9 +284,9 @@ where
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
-pub trait IntoServiceFactory<T, Req>
+pub trait IntoServiceFactory<T, Req, Cfg = ()>
 where
-    T: ServiceFactory<Req>,
+    T: ServiceFactory<Req, Cfg>,
 {
     /// Convert `Self` to a `ServiceFactory`
     fn into_factory(self) -> T;
@@ -299,9 +301,9 @@ where
     }
 }
 
-impl<T, Req> IntoServiceFactory<T, Req> for T
+impl<T, Req, Cfg> IntoServiceFactory<T, Req, Cfg> for T
 where
-    T: ServiceFactory<Req>,
+    T: ServiceFactory<Req, Cfg>,
 {
     fn into_factory(self) -> T {
         self

@@ -163,8 +163,7 @@ where
     }
 }
 
-impl<F, Fut, Req, Res, Err, FShut> Service<Req>
-    for FnService<F, Fut, Req, Res, Err, FShut>
+impl<F, Fut, Req, Res, Err, FShut> Service<Req> for FnService<F, Fut, Req, Res, Err, FShut>
 where
     F: Fn(Req) -> Fut,
     FShut: FnOnce(),
@@ -293,7 +292,7 @@ where
     }
 }
 
-impl<F, Fut, Req, Res, Err, Cfg, FShut> ServiceFactory<Req>
+impl<F, Fut, Req, Res, Err, Cfg, FShut> ServiceFactory<Req, Cfg>
     for FnServiceFactory<F, Fut, Req, Res, Err, Cfg, FShut>
 where
     F: Fn(Req) -> Fut + Clone,
@@ -303,7 +302,6 @@ where
     type Response = Res;
     type Error = Err;
 
-    type Config = Cfg;
     type Service = FnService<F, Fut, Req, Res, Err, FShut>;
     type InitError = ();
     type Future = Ready<Self::Service, Self::InitError>;
@@ -322,7 +320,7 @@ where
 }
 
 impl<F, Fut, Req, Res, Err, Cfg>
-    IntoServiceFactory<FnServiceFactory<F, Fut, Req, Res, Err, Cfg>, Req> for F
+    IntoServiceFactory<FnServiceFactory<F, Fut, Req, Res, Err, Cfg>, Req, Cfg> for F
 where
     F: Fn(Req) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,
@@ -370,7 +368,7 @@ where
     }
 }
 
-impl<F, Fut, Cfg, Srv, Req, Err> ServiceFactory<Req>
+impl<F, Fut, Cfg, Srv, Req, Err> ServiceFactory<Req, Cfg>
     for FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
     F: Fn(Cfg) -> Fut,
@@ -380,7 +378,6 @@ where
     type Response = Srv::Response;
     type Error = Srv::Error;
 
-    type Config = Cfg;
     type Service = Srv;
     type InitError = Err;
     type Future = Fut;
@@ -413,7 +410,7 @@ where
     }
 }
 
-impl<F, C, S, R, Req, E> ServiceFactory<Req> for FnServiceNoConfig<F, C, S, R, Req, E>
+impl<F, C, S, R, Req, E> ServiceFactory<Req, C> for FnServiceNoConfig<F, C, S, R, Req, E>
 where
     F: Fn() -> R,
     R: Future<Output = Result<S, E>>,
@@ -422,7 +419,6 @@ where
     type Response = S::Response;
     type Error = S::Error;
     type Service = S;
-    type Config = C;
     type InitError = E;
     type Future = R;
 
@@ -444,7 +440,7 @@ where
     }
 }
 
-impl<F, C, S, R, Req, E> IntoServiceFactory<FnServiceNoConfig<F, C, S, R, Req, E>, Req>
+impl<F, C, S, R, Req, E> IntoServiceFactory<FnServiceNoConfig<F, C, S, R, Req, E>, Req, C>
     for F
 where
     F: Fn() -> R,

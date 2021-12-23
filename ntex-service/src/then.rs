@@ -129,30 +129,20 @@ where
 /// `.then()` service factory combinator
 pub struct ThenFactory<A, B, R>(Rc<(A, B)>, PhantomData<R>);
 
-impl<A, B, R> ThenFactory<A, B, R>
-where
-    A: ServiceFactory<R>,
-    A::Config: Clone,
-    B: ServiceFactory<
-        Result<A::Response, A::Error>,
-        Config = A::Config,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
-{
+impl<A, B, R> ThenFactory<A, B, R> {
     /// Create new `AndThen` combinator
     pub(crate) fn new(a: A, b: B) -> Self {
         Self(Rc::new((a, b)), PhantomData)
     }
 }
 
-impl<A, B, R> ServiceFactory<R> for ThenFactory<A, B, R>
+impl<A, B, R, C> ServiceFactory<R, C> for ThenFactory<A, B, R>
 where
-    A: ServiceFactory<R>,
-    A::Config: Clone,
+    A: ServiceFactory<R, C>,
+    C: Clone,
     B: ServiceFactory<
         Result<A::Response, A::Error>,
-        Config = A::Config,
+        C,
         Error = A::Error,
         InitError = A::InitError,
     >,
@@ -160,17 +150,13 @@ where
     type Response = B::Response;
     type Error = A::Error;
 
-    type Config = A::Config;
     type Service = Then<A::Service, B::Service, R>;
     type InitError = A::InitError;
-    type Future = ThenServiceFactoryResponse<A, B, R>;
+    type Future = ThenFactoryResponse<A, B, R, C>;
 
-    fn new_service(&self, cfg: A::Config) -> Self::Future {
+    fn new_service(&self, cfg: C) -> Self::Future {
         let srv = &*self.0;
-        ThenServiceFactoryResponse::new(
-            srv.0.new_service(cfg.clone()),
-            srv.1.new_service(cfg),
-        )
+        ThenFactoryResponse::new(srv.0.new_service(cfg.clone()), srv.1.new_service(cfg))
     }
 }
 
@@ -181,11 +167,10 @@ impl<A, B, R> Clone for ThenFactory<A, B, R> {
 }
 
 pin_project_lite::pin_project! {
-    pub struct ThenServiceFactoryResponse<A, B, R>
+    pub struct ThenFactoryResponse<A, B, R, C>
     where
-        A: ServiceFactory<R>,
-        B: ServiceFactory<Result<A::Response, A::Error>,
-           Config = A::Config,
+        A: ServiceFactory<R, C>,
+        B: ServiceFactory<Result<A::Response, A::Error>, C,
            Error = A::Error,
            InitError = A::InitError,
         >,
@@ -199,12 +184,12 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<A, B, R> ThenServiceFactoryResponse<A, B, R>
+impl<A, B, R, C> ThenFactoryResponse<A, B, R, C>
 where
-    A: ServiceFactory<R>,
+    A: ServiceFactory<R, C>,
     B: ServiceFactory<
         Result<A::Response, A::Error>,
-        Config = A::Config,
+        C,
         Error = A::Error,
         InitError = A::InitError,
     >,
@@ -219,12 +204,12 @@ where
     }
 }
 
-impl<A, B, R> Future for ThenServiceFactoryResponse<A, B, R>
+impl<A, B, R, C> Future for ThenFactoryResponse<A, B, R, C>
 where
-    A: ServiceFactory<R>,
+    A: ServiceFactory<R, C>,
     B: ServiceFactory<
         Result<A::Response, A::Error>,
-        Config = A::Config,
+        C,
         Error = A::Error,
         InitError = A::InitError,
     >,

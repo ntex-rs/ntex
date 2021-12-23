@@ -5,11 +5,11 @@ use std::{
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply transform to a service.
-pub fn apply<T, S, R, U>(t: T, factory: U) -> ApplyTransform<T, S, R>
+pub fn apply<T, S, R, C, U>(t: T, factory: U) -> ApplyTransform<T, S, R, C>
 where
-    S: ServiceFactory<R>,
+    S: ServiceFactory<R, C>,
     T: Transform<S::Service>,
-    U: IntoServiceFactory<S, R>,
+    U: IntoServiceFactory<S, R, C>,
 {
     ApplyTransform::new(t, factory.into_factory())
 }
@@ -101,11 +101,11 @@ where
 }
 
 /// `Apply` transform to new service
-pub struct ApplyTransform<T, S, R>(Rc<(T, S)>, PhantomData<R>);
+pub struct ApplyTransform<T, S, R, C>(Rc<(T, S)>, PhantomData<(R, C)>);
 
-impl<T, S, R> ApplyTransform<T, S, R>
+impl<T, S, R, C> ApplyTransform<T, S, R, C>
 where
-    S: ServiceFactory<R>,
+    S: ServiceFactory<R, C>,
     T: Transform<S::Service>,
 {
     /// Create new `ApplyTransform` new service instance
@@ -114,49 +114,50 @@ where
     }
 }
 
-impl<T, S, R> Clone for ApplyTransform<T, S, R> {
+impl<T, S, R, C> Clone for ApplyTransform<T, S, R, C> {
     fn clone(&self) -> Self {
         ApplyTransform(self.0.clone(), PhantomData)
     }
 }
 
-impl<T, S, R> ServiceFactory<R> for ApplyTransform<T, S, R>
+impl<T, S, R, C> ServiceFactory<R, C> for ApplyTransform<T, S, R, C>
 where
-    S: ServiceFactory<R>,
+    S: ServiceFactory<R, C>,
     T: Transform<S::Service>,
     T::Service: Service<R>,
 {
     type Response = <T::Service as Service<R>>::Response;
     type Error = <T::Service as Service<R>>::Error;
 
-    type Config = S::Config;
     type Service = T::Service;
     type InitError = S::InitError;
-    type Future = ApplyTransformFuture<T, S, R>;
+    type Future = ApplyTransformFuture<T, S, R, C>;
 
-    fn new_service(&self, cfg: S::Config) -> Self::Future {
+    fn new_service(&self, cfg: C) -> Self::Future {
         ApplyTransformFuture {
             store: self.0.clone(),
             fut: self.0.as_ref().1.new_service(cfg),
+            _t: PhantomData,
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct ApplyTransformFuture<T, S, R>
+    pub struct ApplyTransformFuture<T, S, R, C>
     where
-        S: ServiceFactory<R>,
+        S: ServiceFactory<R, C>,
         T: Transform<S::Service>,
     {
         store: Rc<(T, S)>,
         #[pin]
         fut: S::Future,
+        _t: PhantomData<C>
     }
 }
 
-impl<T, S, R> Future for ApplyTransformFuture<T, S, R>
+impl<T, S, R, C> Future for ApplyTransformFuture<T, S, R, C>
 where
-    S: ServiceFactory<R>,
+    S: ServiceFactory<R, C>,
     T: Transform<S::Service>,
 {
     type Output = Result<T::Service, S::InitError>;

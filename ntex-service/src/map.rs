@@ -107,17 +107,17 @@ where
 }
 
 /// `MapNewService` new service combinator
-pub struct MapServiceFactory<A, F, Req, Res> {
+pub struct MapServiceFactory<A, F, Req, Res, Cfg> {
     a: A,
     f: F,
-    r: PhantomData<fn(Req) -> Res>,
+    r: PhantomData<fn(Req, Cfg) -> Res>,
 }
 
-impl<A, F, Req, Res> MapServiceFactory<A, F, Req, Res> {
+impl<A, F, Req, Res, Cfg> MapServiceFactory<A, F, Req, Res, Cfg> {
     /// Create new `Map` new service instance
     pub(crate) fn new(a: A, f: F) -> Self
     where
-        A: ServiceFactory<Req>,
+        A: ServiceFactory<Req, Cfg>,
         F: FnMut(A::Response) -> Res,
     {
         Self {
@@ -128,7 +128,7 @@ impl<A, F, Req, Res> MapServiceFactory<A, F, Req, Res> {
     }
 }
 
-impl<A, F, Req, Res> Clone for MapServiceFactory<A, F, Req, Res>
+impl<A, F, Req, Res, Cfg> Clone for MapServiceFactory<A, F, Req, Res, Cfg>
 where
     A: Clone,
     F: Clone,
@@ -143,29 +143,29 @@ where
     }
 }
 
-impl<A, F, Req, Res> ServiceFactory<Req> for MapServiceFactory<A, F, Req, Res>
+impl<A, F, Req, Res, Cfg> ServiceFactory<Req, Cfg>
+    for MapServiceFactory<A, F, Req, Res, Cfg>
 where
-    A: ServiceFactory<Req>,
+    A: ServiceFactory<Req, Cfg>,
     F: FnMut(A::Response) -> Res + Clone,
 {
     type Response = Res;
     type Error = A::Error;
 
-    type Config = A::Config;
     type Service = Map<A::Service, F, Req, Res>;
     type InitError = A::InitError;
-    type Future = MapServiceFuture<A, F, Req, Res>;
+    type Future = MapServiceFuture<A, F, Req, Res, Cfg>;
 
     #[inline]
-    fn new_service(&self, cfg: A::Config) -> Self::Future {
+    fn new_service(&self, cfg: Cfg) -> Self::Future {
         MapServiceFuture::new(self.a.new_service(cfg), self.f.clone())
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapServiceFuture<A, F, Req, Res>
+    pub struct MapServiceFuture<A, F, Req, Res, Cfg>
     where
-        A: ServiceFactory<Req>,
+        A: ServiceFactory<Req, Cfg>,
         F: FnMut(A::Response) -> Res,
     {
         #[pin]
@@ -174,9 +174,9 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<A, F, Req, Res> MapServiceFuture<A, F, Req, Res>
+impl<A, F, Req, Res, Cfg> MapServiceFuture<A, F, Req, Res, Cfg>
 where
-    A: ServiceFactory<Req>,
+    A: ServiceFactory<Req, Cfg>,
     F: FnMut(A::Response) -> Res,
 {
     fn new(fut: A::Future, f: F) -> Self {
@@ -184,9 +184,9 @@ where
     }
 }
 
-impl<A, F, Req, Res> Future for MapServiceFuture<A, F, Req, Res>
+impl<A, F, Req, Res, Cfg> Future for MapServiceFuture<A, F, Req, Res, Cfg>
 where
-    A: ServiceFactory<Req>,
+    A: ServiceFactory<Req, Cfg>,
     F: FnMut(A::Response) -> Res,
 {
     type Output = Result<Map<A::Service, F, Req, Res>, A::InitError>;

@@ -17,15 +17,15 @@ where
 }
 
 /// Service factory that prodices `apply_fn` service.
-pub fn apply_fn_factory<T, Req, F, R, In, Out, Err, U>(
+pub fn apply_fn_factory<T, Req, Cfg, F, R, In, Out, Err, U>(
     service: U,
     f: F,
-) -> ApplyServiceFactory<T, Req, F, R, In, Out, Err>
+) -> ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
-    U: IntoServiceFactory<T, Req>,
+    U: IntoServiceFactory<T, Req, Cfg>,
 {
     ApplyServiceFactory::new(service.into_factory(), f)
 }
@@ -98,20 +98,20 @@ where
 }
 
 /// `apply()` service factory
-pub struct ApplyServiceFactory<T, Req, F, R, In, Out, Err>
+pub struct ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     service: T,
     f: F,
-    r: PhantomData<fn(Req) -> (R, In, Out)>,
+    r: PhantomData<fn(Req, Cfg) -> (R, In, Out)>,
 }
 
-impl<T, Req, F, R, In, Out, Err> ApplyServiceFactory<T, Req, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, R, In, Out, Err> ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
@@ -125,10 +125,10 @@ where
     }
 }
 
-impl<T, Req, F, R, In, Out, Err> Clone
-    for ApplyServiceFactory<T, Req, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, R, In, Out, Err> Clone
+    for ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Error = Err> + Clone,
+    T: ServiceFactory<Req, Cfg, Error = Err> + Clone,
     F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
@@ -141,30 +141,29 @@ where
     }
 }
 
-impl<T, Req, F, R, In, Out, Err> ServiceFactory<In>
-    for ApplyServiceFactory<T, Req, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, R, In, Out, Err> ServiceFactory<In, Cfg>
+    for ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     type Response = Out;
     type Error = Err;
 
-    type Config = T::Config;
     type Service = Apply<T::Service, Req, F, R, In, Out, Err>;
     type InitError = T::InitError;
-    type Future = ApplyServiceFactoryResponse<T, Req, F, R, In, Out, Err>;
+    type Future = ApplyServiceFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>;
 
-    fn new_service(&self, cfg: T::Config) -> Self::Future {
+    fn new_service(&self, cfg: Cfg) -> Self::Future {
         ApplyServiceFactoryResponse::new(self.service.new_service(cfg), self.f.clone())
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct ApplyServiceFactoryResponse<T, Req, F, R, In, Out, Err>
+    pub struct ApplyServiceFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>
     where
-        T: ServiceFactory<Req, Error = Err>,
+        T: ServiceFactory<Req, Cfg, Error = Err>,
         F: Fn(In, &T::Service) -> R,
         R: Future<Output = Result<Out, Err>>,
     {
@@ -175,9 +174,10 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<T, Req, F, R, In, Out, Err> ApplyServiceFactoryResponse<T, Req, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, R, In, Out, Err>
+    ApplyServiceFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
@@ -190,10 +190,10 @@ where
     }
 }
 
-impl<T, Req, F, R, In, Out, Err> Future
-    for ApplyServiceFactoryResponse<T, Req, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, R, In, Out, Err> Future
+    for ApplyServiceFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
