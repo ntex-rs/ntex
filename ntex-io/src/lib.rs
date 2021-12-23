@@ -29,9 +29,7 @@ pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::tasks::{ReadContext, WriteContext};
 pub use self::time::Timer;
 
-pub use self::utils::{
-    filter_factory, seal, sealed_service, SealedFactory, SealedService,
-};
+pub use self::utils::{filter_factory, seal, sealed_service, SealedFactory, SealedService};
 
 pub type IoBoxed = Io<Sealed>;
 
@@ -148,24 +146,6 @@ pub mod rt {
     pub use crate::tokio_rt::*;
 }
 
-#[deprecated]
-#[doc(hidden)]
-pub fn into_boxed<F, S>(
-    srv: S,
-) -> impl ntex_service::ServiceFactory<
-    Io<F>,
-    Config = S::Config,
-    Response = S::Response,
-    Error = S::Error,
-    InitError = S::InitError,
->
-where
-    F: Filter + 'static,
-    S: ntex_service::ServiceFactory<IoBoxed>,
-{
-    seal(srv)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,7 +167,8 @@ mod tests {
             .contains("DispatchItem::WBackPressureEnabled"));
         assert!(format!("{:?}", T::WBackPressureDisabled)
             .contains("DispatchItem::WBackPressureDisabled"));
-        assert!(format!("{:?}", T::KeepAliveTimeout)
-            .contains("DispatchItem::KeepAliveTimeout"));
+        assert!(
+            format!("{:?}", T::KeepAliveTimeout).contains("DispatchItem::KeepAliveTimeout")
+        );
     }
 }

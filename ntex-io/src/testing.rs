@@ -7,9 +7,7 @@ use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_util::future::poll_fn;
 use ntex_util::time::{sleep, Millis, Sleep};
 
-use crate::{
-    types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
-};
+use crate::{types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus};
 
 #[derive(Default)]
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
@@ -411,10 +409,7 @@ impl Future for ReadTask {
 
                     match io.poll_read_buf(cx, &mut buf) {
                         Poll::Pending => {
-                            log::trace!(
-                                "no more data in io stream, read: {:?}",
-                                new_bytes
-                            );
+                            log::trace!("no more data in io stream, read: {:?}", new_bytes);
                             break;
                         }
                         Poll::Ready(Ok(n)) => {
@@ -732,10 +727,7 @@ mod tokio_impl {
             }
         }
 
-        fn poll_flush(
-            self: Pin<&mut Self>,
-            _: &mut Context<'_>,
-        ) -> Poll<io::Result<()>> {
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
             Poll::Ready(Ok(()))
         }
 

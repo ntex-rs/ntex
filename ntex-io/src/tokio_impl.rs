@@ -72,8 +72,7 @@ impl Future for ReadTask {
                         Poll::Ready(Ok(n)) => {
                             if n == 0 {
                                 log::trace!("io stream is disconnected");
-                                if let Err(e) =
-                                    this.state.release_read_buf(buf, new_bytes)
+                                if let Err(e) = this.state.release_read_buf(buf, new_bytes)
                                 {
                                     this.state.close(Some(e));
                                 } else {
@@ -221,8 +220,7 @@ impl Future for WriteTask {
                         }
                         Shutdown::Flushed => {
                             // shutdown WRITE side
-                            match Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx)
-                            {
+                            match Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx) {
                                 Poll::Ready(Ok(_)) => {
                                     *st = Shutdown::Stopping;
                                     continue;
@@ -386,10 +384,7 @@ impl<F: Filter> AsyncWrite for Io<F> {
         Io::poll_flush(&*self, cx, false)
     }
 
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Io::poll_shutdown(&*self, cx)
     }
 }
@@ -431,10 +426,7 @@ impl AsyncWrite for IoBoxed {
         Self::poll_flush(&*self, cx, false)
     }
 
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Self::poll_shutdown(&*self, cx)
     }
 }
@@ -446,11 +438,7 @@ mod unixstream {
     use super::*;
 
     impl IoStream for UnixStream {
-        fn start(
-            self,
-            read: ReadContext,
-            write: WriteContext,
-        ) -> Option<Box<dyn Handle>> {
+        fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
             let io = Rc::new(RefCell::new(self));
 
             tok_io::task::spawn_local(ReadTask::new(io.clone(), read));
@@ -604,8 +592,7 @@ mod unixstream {
                         Poll::Ready(WriteStatus::Terminate) => {
                             log::trace!("write task is instructed to terminate");
 
-                            let _ =
-                                Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx);
+                            let _ = Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx);
                             this.state.close(None);
                             Poll::Ready(())
                         }
@@ -619,11 +606,8 @@ mod unixstream {
                         match st {
                             Shutdown::None => {
                                 // flush write buffer
-                                match flush_io(
-                                    &mut *this.io.borrow_mut(),
-                                    &this.state,
-                                    cx,
-                                ) {
+                                match flush_io(&mut *this.io.borrow_mut(), &this.state, cx)
+                                {
                                     Poll::Ready(true) => {
                                         *st = Shutdown::Flushed;
                                         continue;
@@ -639,15 +623,16 @@ mod unixstream {
                             }
                             Shutdown::Flushed => {
                                 // shutdown WRITE side
-                                match Pin::new(&mut *this.io.borrow_mut())
-                                    .poll_shutdown(cx)
+                                match Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx)
                                 {
                                     Poll::Ready(Ok(_)) => {
                                         *st = Shutdown::Stopping;
                                         continue;
                                     }
                                     Poll::Ready(Err(e)) => {
-                                        log::trace!("write task is closed with err during shutdown");
+                                        log::trace!(
+                                            "write task is closed with err during shutdown"
+                                        );
                                         this.state.close(Some(e));
                                         return Poll::Ready(());
                                     }
@@ -660,8 +645,7 @@ mod unixstream {
                                 let mut io = this.io.borrow_mut();
                                 loop {
                                     let mut read_buf = ReadBuf::new(&mut buf);
-                                    match Pin::new(&mut *io).poll_read(cx, &mut read_buf)
-                                    {
+                                    match Pin::new(&mut *io).poll_read(cx, &mut read_buf) {
                                         Poll::Ready(Err(_)) | Poll::Ready(Ok(_))
                                             if read_buf.filled().is_empty() =>
                                         {

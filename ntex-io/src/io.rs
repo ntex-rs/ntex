@@ -559,9 +559,12 @@ impl<F> Io<F> {
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         // check io error
         if !self.0 .0.is_io_open() {
-            return Poll::Ready(Err(self.0 .0.error.take().unwrap_or_else(|| {
-                io::Error::new(io::ErrorKind::Other, "disconnected")
-            })));
+            return Poll::Ready(Err(self
+                .0
+                 .0
+                .error
+                .take()
+                .unwrap_or_else(|| io::Error::new(io::ErrorKind::Other, "disconnected"))));
         }
 
         if let Some(buf) = self.0 .0.write_buf.take() {

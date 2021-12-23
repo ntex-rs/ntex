@@ -6,20 +6,20 @@ use ntex_util::{future::Ready, ready};
 use super::{Filter, FilterFactory, Io, IoBoxed};
 
 /// Service that converts any Io<F> stream to IoBoxed stream
-pub fn seal<F, S>(
+pub fn seal<F, S, C>(
     srv: S,
 ) -> impl ServiceFactory<
     Io<F>,
-    Config = S::Config,
+    C,
     Response = S::Response,
     Error = S::Error,
     InitError = S::InitError,
 >
 where
     F: Filter + 'static,
-    S: ServiceFactory<IoBoxed>,
+    S: ServiceFactory<IoBoxed, C>,
 {
-    fn_factory_with_config(move |cfg: S::Config| {
+    fn_factory_with_config(move |cfg: C| {
         let fut = srv.new_service(cfg);
         async move {
             let srv = fut.await?;
@@ -72,19 +72,18 @@ impl<S: Clone, R> Clone for SealedFactory<S, R> {
     }
 }
 
-impl<S, R, F> ServiceFactory<R> for SealedFactory<S, R>
+impl<S, R, C, F> ServiceFactory<R, C> for SealedFactory<S, R>
 where
     F: Filter,
-    S: ServiceFactory<R, Response = Io<F>>,
+    S: ServiceFactory<R, C, Response = Io<F>>,
 {
-    type Config = S::Config;
     type Response = IoBoxed;
     type Error = S::Error;
     type Service = SealedService<S::Service, R>;
     type InitError = S::InitError;
-    type Future = SealedFactoryResponse<S, R>;
+    type Future = SealedFactoryResponse<S, R, C>;
 
-    fn new_service(&self, cfg: S::Config) -> Self::Future {
+    fn new_service(&self, cfg: C) -> Self::Future {
         SealedFactoryResponse {
             fut: self.inner.new_service(cfg),
             _t: PhantomData,
@@ -138,14 +137,14 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct SealedFactoryResponse<S: ServiceFactory<R>, R> {
+    pub struct SealedFactoryResponse<S: ServiceFactory<R, C>, R, C> {
         #[pin]
         fut: S::Future,
-        _t: PhantomData<R>
+        _t: PhantomData<(R, C)>
     }
 }
 
-impl<S: ServiceFactory<R>, R> Future for SealedFactoryResponse<S, R> {
+impl<S: ServiceFactory<R, C>, R, C> Future for SealedFactoryResponse<S, R, C> {
     type Output = Result<SealedService<S::Service, R>, S::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -165,9 +164,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<S: Service<R, Response = Io<F>>, R, F: Filter> Future
-    for SealedServiceResponse<S, R>
-{
+impl<S: Service<R, Response = Io<F>>, R, F: Filter> Future for SealedServiceResponse<S, R> {
     type Output = Result<IoBoxed, S::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -180,12 +177,11 @@ pub struct FilterServiceFactory<T, F> {
     _t: PhantomData<F>,
 }
 
-impl<T, F> ServiceFactory<Io<F>> for FilterServiceFactory<T, F>
+impl<T, F> ServiceFactory<Io<F>, ()> for FilterServiceFactory<T, F>
 where
     T: FilterFactory<F> + Clone,
     F: Filter,
 {
-    type Config = ();
     type Response = Io<T::Filter>;
     type Error = T::Error;
     type Service = FilterService<T, F>;
