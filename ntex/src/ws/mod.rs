@@ -10,6 +10,7 @@ mod mask;
 mod proto;
 mod sink;
 mod stream;
+mod transport;
 
 pub mod error;
 
@@ -19,3 +20,4 @@ pub use self::frame::Parser;
 pub use self::proto::{hash_key, CloseCode, CloseReason, OpCode};
 pub use self::sink::WsSink;
 pub use self::stream::{StreamDecoder, StreamEncoder};
+pub use self::transport::{WsTransport, WsTransportFactory};
