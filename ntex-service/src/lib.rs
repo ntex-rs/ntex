@@ -91,8 +91,14 @@ pub trait Service<Req> {
     fn poll_ready(&self, ctx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>>;
 
     #[inline]
+    #[allow(unused_variables)]
     /// Shutdown service.
-    fn shutdown(&self) {}
+    ///
+    /// Returns `Ready` when the service is properly shutdowned. This method might be called
+    /// after it returns `Ready`.
+    fn poll_shutdown(&self, ctx: &mut task::Context<'_>, is_error: bool) -> Poll<()> {
+        Poll::Ready(())
+    }
 
     /// Process the request and return the response asynchronously.
     ///
@@ -218,8 +224,8 @@ where
     }
 
     #[inline]
-    fn shutdown(&self) {
-        (**self).shutdown()
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        (**self).poll_shutdown(cx, is_error)
     }
 
     #[inline]
@@ -241,8 +247,8 @@ where
     }
 
     #[inline]
-    fn shutdown(&self) {
-        (**self).shutdown()
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        (**self).poll_shutdown(cx, is_error)
     }
 
     fn call(&self, request: Req) -> S::Future {

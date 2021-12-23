@@ -163,8 +163,8 @@ impl<T: Service<R>, R> Service<R> for Pipeline<T, R> {
     }
 
     #[inline]
-    fn shutdown(&self) {
-        self.service.shutdown()
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
     }
 
     #[inline]

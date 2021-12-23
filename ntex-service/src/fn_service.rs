@@ -180,10 +180,11 @@ where
     }
 
     #[inline]
-    fn shutdown(&self) {
+    fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
         if let Some(f) = self.f_shutdown.take() {
             (f)()
         }
+        Poll::Ready(())
     }
 
     #[inline]
@@ -279,10 +280,11 @@ where
     }
 
     #[inline]
-    fn shutdown(&self) {
+    fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
         if let Some(f) = self.f_shutdown.take() {
             (f)()
         }
+        Poll::Ready(())
     }
 
     #[inline]
@@ -483,7 +485,10 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
 
-        srv2.shutdown();
+        assert_eq!(
+            lazy(|cx| srv2.poll_shutdown(cx, false)).await,
+            Poll::Ready(())
+        );
         assert!(*shutdown.borrow());
     }
 
@@ -500,7 +505,10 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
-        srv.shutdown();
+        assert_eq!(
+            lazy(|cx| srv.poll_shutdown(cx, false)).await,
+            Poll::Ready(())
+        );
         assert!(*shutdown.borrow());
     }
 

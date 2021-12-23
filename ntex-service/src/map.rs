@@ -56,8 +56,8 @@ where
     }
 
     #[inline]
-    fn shutdown(&self) {
-        self.service.shutdown()
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.service.poll_shutdown(cx, is_error)
     }
 
     #[inline]
@@ -236,7 +236,8 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
-        srv.shutdown();
+        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        assert_eq!(res, Poll::Ready(()));
     }
 
     #[ntex::test]
@@ -249,7 +250,8 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
-        srv.shutdown();
+        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        assert_eq!(res, Poll::Ready(()));
     }
 
     #[ntex::test]

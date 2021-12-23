@@ -238,6 +238,7 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
-        srv.shutdown();
+        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        assert_eq!(res, Poll::Ready(()));
     }
 }

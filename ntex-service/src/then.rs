@@ -47,12 +47,16 @@ where
         }
     }
 
-    #[inline]
-    fn shutdown(&self) {
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
         let srv = self.0.as_ref();
 
-        srv.0.shutdown();
-        srv.1.shutdown();
+        if srv.0.poll_shutdown(cx, is_error).is_ready()
+            && srv.1.poll_shutdown(cx, is_error).is_ready()
+        {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
     }
 
     #[inline]
@@ -306,7 +310,8 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Err(())));
         assert_eq!(cnt.get(), 2);
-        srv.shutdown();
+        let res = lazy(|cx| srv.poll_shutdown(cx, false)).await;
+        assert_eq!(res, Poll::Ready(()));
     }
 
     #[ntex::test]

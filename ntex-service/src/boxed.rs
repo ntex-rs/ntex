@@ -144,8 +144,8 @@ where
     }
 
     #[inline]
-    fn shutdown(&self) {
-        self.0.shutdown()
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.0.poll_shutdown(cx, is_error)
     }
 
     #[inline]
