@@ -423,11 +423,11 @@ impl AsyncWrite for IoBoxed {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Self::poll_flush(&*self, cx, false)
+        (&*self.as_ref()).poll_flush(cx, false)
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Self::poll_shutdown(&*self, cx)
+        (&*self.as_ref()).poll_shutdown(cx)
     }
 }
 

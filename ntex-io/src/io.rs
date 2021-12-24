@@ -6,7 +6,8 @@ use ntex_bytes::{BytesMut, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Millis};
 
-use super::filter::{Base, NullFilter, Sealed};
+use super::filter::{Base, NullFilter};
+use super::seal::{IoBoxed, Sealed};
 use super::tasks::{ReadContext, WriteContext};
 use super::{Filter, FilterFactory, Handle, IoStream};
 
@@ -332,6 +333,12 @@ impl<F> Io<F> {
     }
 }
 
+impl Io<Sealed> {
+    pub fn boxed(self) -> IoBoxed {
+        self.into()
+    }
+}
+
 impl<F: Filter> Io<F> {
     #[inline]
     /// Get referece to filter
@@ -346,7 +353,7 @@ impl<F: Filter> Io<F> {
 
     #[inline]
     /// Convert current io stream into sealed version
-    pub fn seal(mut self) -> crate::IoBoxed {
+    pub fn seal(mut self) -> Io<Sealed> {
         // get current filter
         let filter = unsafe {
             let item = mem::replace(&mut self.1, FilterItem::Ptr(ptr::null_mut()));

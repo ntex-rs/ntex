@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{error::Error, future::Future, marker::PhantomData, pin::Pin};
 
-use ntex_io::{Filter, FilterFactory, Io, SealedFactory};
+use ntex_io::{BoxedFactory, Filter, FilterFactory, Io};
 use ntex_service::{Service, ServiceFactory};
 use ntex_util::{future::Ready, time::Millis};
 use tls_openssl::ssl::SslAcceptor;
@@ -36,8 +36,8 @@ impl<F> Acceptor<F> {
         self
     }
 
-    pub fn seal(self) -> SealedFactory<Acceptor<F>, Io<F>> {
-        SealedFactory::new(self)
+    pub fn seal(self) -> BoxedFactory<Acceptor<F>, Io<F>> {
+        BoxedFactory::new(self)
     }
 }
 

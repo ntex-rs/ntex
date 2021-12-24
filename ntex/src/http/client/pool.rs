@@ -532,7 +532,7 @@ mod tests {
             fn_service(move |req| {
                 let (client, server) = Io::create();
                 store2.borrow_mut().push((req, server));
-                Box::pin(async move { Ok(nio::Io::new(client).seal()) })
+                Box::pin(async move { Ok(IoBoxed::from(nio::Io::new(client))) })
             }),
             Duration::from_secs(10),
             Duration::from_secs(10),

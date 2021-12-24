@@ -2,7 +2,7 @@ use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::http::Uri;
-use crate::io::{Filter, Io, IoBoxed};
+use crate::io::IoBoxed;
 use crate::service::{apply_fn, boxed, Service};
 use crate::time::{Millis, Seconds};
 use crate::util::timeout::{TimeoutError, TimeoutService};
@@ -55,7 +55,7 @@ impl Connector {
         let conn = Connector {
             connector: boxed::service(
                 TcpConnector::new()
-                    .map(|io| io.seal())
+                    .map(IoBoxed::from)
                     .map_err(ConnectError::from),
             ),
             ssl_connector: None,
@@ -175,40 +175,32 @@ impl Connector {
     }
 
     /// Use custom connector to open un-secured connections.
-    pub fn connector<T, F>(mut self, connector: T) -> Self
+    pub fn connector<Io, T>(mut self, connector: T) -> Self
     where
-        T: Service<TcpConnect<Uri>, Response = Io<F>, Error = crate::connect::ConnectError>
+        T: Service<TcpConnect<Uri>, Response = Io, Error = crate::connect::ConnectError>
             + 'static,
-        F: Filter,
+        IoBoxed: From<Io>,
     {
-        self.connector =
-            boxed::service(connector.map(|io| io.seal()).map_err(ConnectError::from));
+        self.connector = boxed::service(
+            connector
+                .map(|io| IoBoxed::from(io))
+                .map_err(ConnectError::from),
+        );
         self
     }
 
     /// Use custom connector to open secure connections.
-    pub fn secure_connector<T, F>(mut self, connector: T) -> Self
+    pub fn secure_connector<Io, T>(mut self, connector: T) -> Self
     where
-        T: Service<TcpConnect<Uri>, Response = Io<F>, Error = crate::connect::ConnectError>
+        T: Service<TcpConnect<Uri>, Response = Io, Error = crate::connect::ConnectError>
             + 'static,
-        F: Filter,
+        IoBoxed: From<Io>,
     {
         self.ssl_connector = Some(boxed::service(
-            connector.map(|io| io.seal()).map_err(ConnectError::from),
+            connector
+                .map(|io| IoBoxed::from(io))
+                .map_err(ConnectError::from),
         ));
-        self
-    }
-
-    /// Use custom boxed connector to open secure connections.
-    pub fn boxed_secure_connector<T>(mut self, connector: T) -> Self
-    where
-        T: Service<
-                TcpConnect<Uri>,
-                Response = IoBoxed,
-                Error = crate::connect::ConnectError,
-            > + 'static,
-    {
-        self.ssl_connector = Some(boxed::service(connector.map_err(ConnectError::from)));
         self
     }
 

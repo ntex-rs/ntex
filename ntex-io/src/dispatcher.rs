@@ -89,12 +89,16 @@ where
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<F: IntoService<S, DispatchItem<U>>>(
-        io: IoBoxed,
+    pub fn new<Io, F: IntoService<S, DispatchItem<U>>>(
+        io: Io,
         codec: U,
         service: F,
         timer: Timer,
-    ) -> Self {
+    ) -> Self
+    where
+        IoBoxed: From<Io>,
+    {
+        let io = IoBoxed::from(io);
         let updated = now();
         let ka_timeout = Seconds(30);
 
@@ -551,7 +555,7 @@ mod tests {
                         ready_err: Cell::new(false),
                         st: Cell::new(DispatcherState::Processing),
                         pool: state.memory_pool().pool(),
-                        io: state.seal(),
+                        io: state.into(),
                         shared,
                         timer,
                         ka_timeout,

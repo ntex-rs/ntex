@@ -1,7 +1,7 @@
 use std::{fs::File, io, io::BufReader, sync::Arc};
 
 use ntex::service::{fn_service, pipeline_factory};
-use ntex::{codec, io::filter_factory, io::Io, server, util::Either};
+use ntex::{codec, io::add_filter, io::Io, server, util::Either};
 use ntex_tls::rustls::TlsAcceptor;
 use rustls_pemfile::{certs, rsa_private_keys};
 use tls_rust::{Certificate, PrivateKey, ServerConfig};
@@ -35,7 +35,7 @@ async fn main() -> io::Result<()> {
     // start server
     server::ServerBuilder::new()
         .bind("basic", "127.0.0.1:8443", move |_| {
-            pipeline_factory(filter_factory(TlsAcceptor::new(tls_config.clone()))).and_then(
+            pipeline_factory(add_filter(TlsAcceptor::new(tls_config.clone()))).and_then(
                 fn_service(|io: Io<_>| async move {
                     println!("New client is connected");
 

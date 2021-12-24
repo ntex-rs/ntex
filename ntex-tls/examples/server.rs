@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::service::{fn_service, pipeline_factory};
-use ntex::{codec, io::filter_factory, io::Io, server, util::Either};
+use ntex::{codec, io::add_filter, io::Io, server, util::Either};
 use ntex_tls::openssl::SslAcceptor;
 use tls_openssl::ssl::{self, SslFiletype, SslMethod};
 
@@ -25,7 +25,7 @@ async fn main() -> io::Result<()> {
     // start server
     server::ServerBuilder::new()
         .bind("basic", "127.0.0.1:8443", move |_| {
-            pipeline_factory(filter_factory(SslAcceptor::new(acceptor.clone()))).and_then(
+            pipeline_factory(add_filter(SslAcceptor::new(acceptor.clone()))).and_then(
                 fn_service(|io: Io<_>| async move {
                     println!("New client is connected");
                     loop {
