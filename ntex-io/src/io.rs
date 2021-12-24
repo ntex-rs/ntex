@@ -344,13 +344,6 @@ impl<F: Filter> Io<F> {
         panic!()
     }
 
-    #[deprecated]
-    #[inline]
-    /// Convert current io stream into sealed version
-    pub fn into_boxed(self) -> crate::IoBoxed {
-        self.seal()
-    }
-
     #[inline]
     /// Convert current io stream into sealed version
     pub fn seal(mut self) -> crate::IoBoxed {

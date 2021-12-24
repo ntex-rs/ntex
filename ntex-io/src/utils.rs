@@ -16,7 +16,7 @@ pub fn seal<F, S, C>(
     InitError = S::InitError,
 >
 where
-    F: Filter + 'static,
+    F: Filter,
     S: ServiceFactory<IoBoxed, C>,
 {
     fn_factory_with_config(move |cfg: C| {

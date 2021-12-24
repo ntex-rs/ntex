@@ -46,7 +46,7 @@ ntex-macros = "0.1.3"
 ntex-util = "0.1.4"
 ntex-bytes = "0.1.8"
 ntex-tls = "0.1.0-b.2"
-ntex-io = "0.1.0-b.4"
+ntex-io = "0.1.0-b.5"
 ntex-rt = { version = "0.4.0-b.1", default-features = false, features = ["tokio"] }
 
 base64 = "0.13"
