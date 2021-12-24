@@ -1,6 +1,8 @@
 # Changes
 
-## [0.1.0-b.5] - 2021-12-xx
+## [0.1.0-b.5] - 2021-12-24
+
+* Use new ntex-service traits
 
 * Make `IoBoxed` into spearate type
 
