@@ -83,9 +83,7 @@ impl fmt::Debug for Error {
 }
 
 /// Return `GATEWAY_TIMEOUT` for `TimeoutError`
-impl<E: WebResponseError<DefaultError>> WebResponseError<DefaultError>
-    for TimeoutError<E>
-{
+impl<E: WebResponseError<DefaultError>> WebResponseError<DefaultError> for TimeoutError<E> {
     fn status_code(&self) -> StatusCode {
         match self {
             TimeoutError::Service(e) => e.status_code(),

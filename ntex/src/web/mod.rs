@@ -130,9 +130,7 @@ pub mod dev {
     pub use crate::web::info::ConnectionInfo;
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::route::IntoRoutes;
-    pub use crate::web::service::{
-        WebServiceAdapter, WebServiceConfig, WebServiceFactory,
-    };
+    pub use crate::web::service::{WebServiceAdapter, WebServiceConfig, WebServiceFactory};
 
     pub(crate) fn insert_slesh(mut patterns: Vec<String>) -> Vec<String> {
         for path in &mut patterns {

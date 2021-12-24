@@ -79,8 +79,7 @@ pub(super) trait MessageType: Sized {
             let headers = self.headers_mut();
 
             for idx in raw_headers.iter() {
-                let name =
-                    HeaderName::from_bytes(&slice[idx.name.0..idx.name.1]).unwrap();
+                let name = HeaderName::from_bytes(&slice[idx.name.0..idx.name.1]).unwrap();
 
                 // Unsafe: httparse check header value for valid utf-8
                 let value = unsafe {
@@ -121,8 +120,7 @@ pub(super) trait MessageType: Sized {
                     header::TRANSFER_ENCODING => {
                         seen_te = true;
                         if let Ok(s) = value.to_str().map(str::trim) {
-                            if s.eq_ignore_ascii_case("chunked")
-                                && content_length.is_none()
+                            if s.eq_ignore_ascii_case("chunked") && content_length.is_none()
                             {
                                 chunked = true
                             } else if s.eq_ignore_ascii_case("identity") {
@@ -600,9 +598,9 @@ impl ChunkedState {
         match byte!(rdr) {
             b'\r' => Poll::Ready(Ok(ChunkedState::SizeLf)),
             // strictly 0x20 (space) should be disallowed but we don't parse quoted strings here
-            0x00..=0x08 | 0x0a..=0x1f | 0x7f => Poll::Ready(Err(
-                ParseError::InvalidInput("Invalid character in chunk extension"),
-            )),
+            0x00..=0x08 | 0x0a..=0x1f | 0x7f => Poll::Ready(Err(ParseError::InvalidInput(
+                "Invalid character in chunk extension",
+            ))),
             _ => Poll::Ready(Ok(ChunkedState::Extension)), // no supported extensions
         }
     }
@@ -770,8 +768,7 @@ mod tests {
 
     #[test]
     fn test_parse_body() {
-        let mut buf =
-            BytesMut::from("GET /test HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody");
+        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody");
 
         let reader = MessageDecoder::<Request>::default();
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();

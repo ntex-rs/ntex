@@ -224,11 +224,10 @@ mod tests {
         assert_eq!((res.0).0, "name");
         assert_eq!((res.0).1, "user1");
 
-        let res = from_request::<(Path<(String, String)>, Path<(String, String)>)>(
-            &req, &mut pl,
-        )
-        .await
-        .unwrap();
+        let res =
+            from_request::<(Path<(String, String)>, Path<(String, String)>)>(&req, &mut pl)
+                .await
+                .unwrap();
         assert_eq!((res.0).0, "name");
         assert_eq!((res.0).1, "user1");
         assert_eq!((res.1).0, "name");

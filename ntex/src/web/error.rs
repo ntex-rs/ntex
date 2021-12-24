@@ -998,12 +998,10 @@ mod tests {
         let r: HttpResponse = ErrorGatewayTimeout::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::GATEWAY_TIMEOUT);
 
-        let r: HttpResponse =
-            ErrorHttpVersionNotSupported::<_, DefaultError>("err").into();
+        let r: HttpResponse = ErrorHttpVersionNotSupported::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::HTTP_VERSION_NOT_SUPPORTED);
 
-        let r: HttpResponse =
-            ErrorVariantAlsoNegotiates::<_, DefaultError>("err").into();
+        let r: HttpResponse = ErrorVariantAlsoNegotiates::<_, DefaultError>("err").into();
         assert_eq!(r.status(), StatusCode::VARIANT_ALSO_NEGOTIATES);
 
         let r: HttpResponse = ErrorInsufficientStorage::<_, DefaultError>("err").into();

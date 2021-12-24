@@ -9,7 +9,7 @@ use crate::http::{
     body::MessageBody, HttpService, KeepAlive, Request, Response, ResponseError,
 };
 use crate::server::{Server, ServerBuilder};
-use crate::{service::map_config, IntoServiceFactory, Service, ServiceFactory};
+use crate::{service::map_config, IntoServiceFactory, ServiceFactory};
 use crate::{time::Seconds, util::PoolId};
 
 use super::config::AppConfig;
@@ -43,11 +43,10 @@ struct Config {
 pub struct HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S>,
-    S: ServiceFactory<Config = AppConfig, Request = Request>,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    <S::Service as Service>::Future: 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
@@ -61,13 +60,11 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S>,
-    S: ServiceFactory<Config = AppConfig, Request = Request>,
-    S::Error: ResponseError + 'static,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
-    <S::Service as Service>::Future: 'static,
+    S::Response: Into<Response<B>>,
     B: MessageBody + 'static,
 {
     /// Create new http server with application factory
@@ -238,25 +235,23 @@ where
         let factory = self.factory.clone();
         let addr = lst.local_addr().unwrap();
 
-        self.builder = self.builder.listen(
-            format!("ntex-web-service-{}", addr),
-            lst,
-            move |r| {
-                let c = cfg.lock().unwrap();
-                let cfg = AppConfig::new(
-                    false,
-                    addr,
-                    c.host.clone().unwrap_or_else(|| format!("{}", addr)),
-                );
-                r.memory_pool(c.pool);
+        self.builder =
+            self.builder
+                .listen(format!("ntex-web-service-{}", addr), lst, move |r| {
+                    let c = cfg.lock().unwrap();
+                    let cfg = AppConfig::new(
+                        false,
+                        addr,
+                        c.host.clone().unwrap_or_else(|| format!("{}", addr)),
+                    );
+                    r.memory_pool(c.pool);
 
-                HttpService::build()
-                    .keep_alive(c.keep_alive)
-                    .client_timeout(c.client_timeout)
-                    .disconnect_timeout(c.client_disconnect)
-                    .finish(map_config(factory(), move |_| cfg.clone()))
-            },
-        )?;
+                    HttpService::build()
+                        .keep_alive(c.keep_alive)
+                        .client_timeout(c.client_timeout)
+                        .disconnect_timeout(c.client_disconnect)
+                        .finish(map_config(factory(), move |_| cfg.clone()))
+                })?;
         Ok(self)
     }
 
@@ -282,27 +277,25 @@ where
         let cfg = self.config.clone();
         let addr = lst.local_addr().unwrap();
 
-        self.builder = self.builder.listen(
-            format!("ntex-web-service-{}", addr),
-            lst,
-            move |r| {
-                let c = cfg.lock().unwrap();
-                let cfg = AppConfig::new(
-                    true,
-                    addr,
-                    c.host.clone().unwrap_or_else(|| format!("{}", addr)),
-                );
-                r.memory_pool(c.pool);
+        self.builder =
+            self.builder
+                .listen(format!("ntex-web-service-{}", addr), lst, move |r| {
+                    let c = cfg.lock().unwrap();
+                    let cfg = AppConfig::new(
+                        true,
+                        addr,
+                        c.host.clone().unwrap_or_else(|| format!("{}", addr)),
+                    );
+                    r.memory_pool(c.pool);
 
-                HttpService::build()
-                    .keep_alive(c.keep_alive)
-                    .client_timeout(c.client_timeout)
-                    .disconnect_timeout(c.client_disconnect)
-                    .ssl_handshake_timeout(c.handshake_timeout)
-                    .finish(map_config(factory(), move |_| cfg.clone()))
-                    .openssl(acceptor.clone())
-            },
-        )?;
+                    HttpService::build()
+                        .keep_alive(c.keep_alive)
+                        .client_timeout(c.client_timeout)
+                        .disconnect_timeout(c.client_disconnect)
+                        .ssl_handshake_timeout(c.handshake_timeout)
+                        .finish(map_config(factory(), move |_| cfg.clone()))
+                        .openssl(acceptor.clone())
+                })?;
         Ok(self)
     }
 
@@ -365,10 +358,7 @@ where
         Ok(self)
     }
 
-    fn bind2<A: net::ToSocketAddrs>(
-        &self,
-        addr: A,
-    ) -> io::Result<Vec<net::TcpListener>> {
+    fn bind2<A: net::ToSocketAddrs>(&self, addr: A) -> io::Result<Vec<net::TcpListener>> {
         let mut err = None;
         let mut succ = false;
         let mut sockets = Vec::new();
@@ -438,16 +428,11 @@ where
     /// Start listening for unix domain connections on existing listener.
     ///
     /// This method is available with `uds` feature.
-    pub fn listen_uds(
-        mut self,
-        lst: std::os::unix::net::UnixListener,
-    ) -> io::Result<Self> {
+    pub fn listen_uds(mut self, lst: std::os::unix::net::UnixListener) -> io::Result<Self> {
         let cfg = self.config.clone();
         let factory = self.factory.clone();
-        let socket_addr = net::SocketAddr::new(
-            net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)),
-            8080,
-        );
+        let socket_addr =
+            net::SocketAddr::new(net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)), 8080);
 
         let addr = format!("ntex-web-service-{:?}", lst.local_addr()?);
 
@@ -478,10 +463,8 @@ where
     {
         let cfg = self.config.clone();
         let factory = self.factory.clone();
-        let socket_addr = net::SocketAddr::new(
-            net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)),
-            8080,
-        );
+        let socket_addr =
+            net::SocketAddr::new(net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)), 8080);
 
         self.builder = self.builder.bind_uds(
             format!("ntex-web-service-{:?}", addr.as_ref()),
@@ -508,8 +491,8 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S>,
-    S: ServiceFactory<Config = AppConfig, Request = Request>,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,

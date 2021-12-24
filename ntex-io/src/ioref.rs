@@ -185,11 +185,7 @@ impl IoRef {
     /// Encode and write item to a buffer and wake up write task
     ///
     /// Returns write buffer state, false is returned if write buffer if full.
-    pub fn encode<U>(
-        &self,
-        item: U::Item,
-        codec: &U,
-    ) -> Result<bool, <U as Encoder>::Error>
+    pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<bool, <U as Encoder>::Error>
     where
         U: Encoder,
     {

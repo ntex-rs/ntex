@@ -86,8 +86,7 @@ impl Filter for Base {
             Poll::Ready(WriteStatus::Terminate)
         } else if flags.intersects(Flags::IO_SHUTDOWN) {
             Poll::Ready(WriteStatus::Shutdown(self.0 .0.disconnect_timeout.get()))
-        } else if flags.contains(Flags::IO_FILTERS)
-            && !flags.contains(Flags::IO_FILTERS_TO)
+        } else if flags.contains(Flags::IO_FILTERS) && !flags.contains(Flags::IO_FILTERS_TO)
         {
             flags.insert(Flags::IO_FILTERS_TO);
             self.0.set_flags(flags);

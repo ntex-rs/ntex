@@ -134,9 +134,7 @@ impl Decoder for ClientCodec {
                     PayloadType::None => {
                         self.inner.payload.borrow_mut().take();
                     }
-                    PayloadType::Payload(pl) => {
-                        *self.inner.payload.borrow_mut() = Some(pl)
-                    }
+                    PayloadType::Payload(pl) => *self.inner.payload.borrow_mut() = Some(pl),
                     PayloadType::Stream(pl) => {
                         *self.inner.payload.borrow_mut() = Some(pl);
                         let mut flags = self.inner.flags.get();

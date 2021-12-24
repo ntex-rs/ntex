@@ -31,8 +31,7 @@ impl Clone for WsService {
     }
 }
 
-impl Service for WsService {
-    type Request = (Request, Io, h1::Codec);
+impl Service<(Request, Io, h1::Codec)> for WsService {
     type Response = ();
     type Error = io::Error;
     type Future = Pin<Box<dyn Future<Output = Result<(), io::Error>>>>;
@@ -42,7 +41,7 @@ impl Service for WsService {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&self, (req, io, codec): Self::Request) -> Self::Future {
+    fn call(&self, (req, io, codec): (Request, Io, h1::Codec)) -> Self::Future {
         let fut = async move {
             let res = handshake(req.head()).unwrap().message_body(());
 
@@ -58,9 +57,7 @@ impl Service for WsService {
     }
 }
 
-async fn service(
-    msg: DispatchItem<ws::Codec>,
-) -> Result<Option<ws::Message>, io::Error> {
+async fn service(msg: DispatchItem<ws::Codec>) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
         DispatchItem::Item(msg) => match msg {
             ws::Frame::Ping(msg) => ws::Message::Pong(msg),

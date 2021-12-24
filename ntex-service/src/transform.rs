@@ -1,13 +1,15 @@
-use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{
+    future::Future, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply transform to a service.
-pub fn apply<T, S, U>(t: T, factory: U) -> ApplyTransform<T, S>
+pub fn apply<T, S, R, C, U>(t: T, factory: U) -> ApplyTransform<T, S, R, C>
 where
-    S: ServiceFactory,
+    S: ServiceFactory<R, C>,
     T: Transform<S::Service>,
-    U: IntoServiceFactory<S>,
+    U: IntoServiceFactory<S, R, C>,
 {
     ApplyTransform::new(t, factory.into_factory())
 }
@@ -99,63 +101,63 @@ where
 }
 
 /// `Apply` transform to new service
-pub struct ApplyTransform<T, S>(Rc<(T, S)>);
+pub struct ApplyTransform<T, S, R, C>(Rc<(T, S)>, PhantomData<(R, C)>);
 
-impl<T, S> ApplyTransform<T, S>
+impl<T, S, R, C> ApplyTransform<T, S, R, C>
 where
-    S: ServiceFactory,
+    S: ServiceFactory<R, C>,
     T: Transform<S::Service>,
 {
     /// Create new `ApplyTransform` new service instance
     pub(crate) fn new(t: T, service: S) -> Self {
-        Self(Rc::new((t, service)))
+        Self(Rc::new((t, service)), PhantomData)
     }
 }
 
-impl<T, S> Clone for ApplyTransform<T, S> {
+impl<T, S, R, C> Clone for ApplyTransform<T, S, R, C> {
     fn clone(&self) -> Self {
-        ApplyTransform(self.0.clone())
+        ApplyTransform(self.0.clone(), PhantomData)
     }
 }
 
-impl<T, S> ServiceFactory for ApplyTransform<T, S>
+impl<T, S, R, C> ServiceFactory<R, C> for ApplyTransform<T, S, R, C>
 where
-    S: ServiceFactory,
+    S: ServiceFactory<R, C>,
     T: Transform<S::Service>,
-    T::Service: Service,
+    T::Service: Service<R>,
 {
-    type Request = <T::Service as Service>::Request;
-    type Response = <T::Service as Service>::Response;
-    type Error = <T::Service as Service>::Error;
+    type Response = <T::Service as Service<R>>::Response;
+    type Error = <T::Service as Service<R>>::Error;
 
-    type Config = S::Config;
     type Service = T::Service;
     type InitError = S::InitError;
-    type Future = ApplyTransformFuture<T, S>;
+    type Future = ApplyTransformFuture<T, S, R, C>;
 
-    fn new_service(&self, cfg: S::Config) -> Self::Future {
+    fn new_service(&self, cfg: C) -> Self::Future {
         ApplyTransformFuture {
             store: self.0.clone(),
             fut: self.0.as_ref().1.new_service(cfg),
+            _t: PhantomData,
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct ApplyTransformFuture<T, S>
+    pub struct ApplyTransformFuture<T, S, R, C>
     where
-        S: ServiceFactory,
+        S: ServiceFactory<R, C>,
         T: Transform<S::Service>,
     {
         store: Rc<(T, S)>,
         #[pin]
         fut: S::Future,
+        _t: PhantomData<C>
     }
 }
 
-impl<T, S> Future for ApplyTransformFuture<T, S>
+impl<T, S, R, C> Future for ApplyTransformFuture<T, S, R, C>
 where
-    S: ServiceFactory,
+    S: ServiceFactory<R, C>,
     T: Transform<S::Service>,
 {
     type Output = Result<T::Service, S::InitError>;
@@ -176,7 +178,7 @@ where
 #[derive(Debug, Clone, Copy)]
 pub struct Identity;
 
-impl<S: Service> Transform<S> for Identity {
+impl<S> Transform<S> for Identity {
     type Service = S;
 
     #[inline]
@@ -194,21 +196,20 @@ mod tests {
     use crate::{fn_service, Service, ServiceFactory};
 
     #[derive(Clone)]
-    struct Tr;
+    struct Tr<R>(PhantomData<R>);
 
-    impl<S: Service> Transform<S> for Tr {
-        type Service = Srv<S>;
+    impl<S, R> Transform<S> for Tr<R> {
+        type Service = Srv<S, R>;
 
         fn new_transform(&self, service: S) -> Self::Service {
-            Srv(service)
+            Srv(service, PhantomData)
         }
     }
 
     #[derive(Clone)]
-    struct Srv<S>(S);
+    struct Srv<S, R>(S, PhantomData<R>);
 
-    impl<S: Service> Service for Srv<S> {
-        type Request = S::Request;
+    impl<S: Service<R>, R> Service<R> for Srv<S, R> {
         type Response = S::Response;
         type Error = S::Error;
         type Future = S::Future;
@@ -217,7 +218,7 @@ mod tests {
             self.0.poll_ready(cx)
         }
 
-        fn call(&self, req: S::Request) -> Self::Future {
+        fn call(&self, req: R) -> Self::Future {
             self.0.call(req)
         }
     }
@@ -225,7 +226,7 @@ mod tests {
     #[ntex::test]
     async fn transform() {
         let factory = apply(
-            Rc::new(Tr.clone()),
+            Rc::new(Tr(PhantomData).clone()),
             fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)),
         )
         .clone();

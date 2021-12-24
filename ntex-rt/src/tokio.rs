@@ -77,9 +77,7 @@ pub fn from_tcp_stream(stream: net::TcpStream) -> Result<Io, io::Error> {
 
 #[cfg(unix)]
 /// Convert std UnixStream to tokio's UnixStream
-pub fn from_unix_stream(
-    stream: std::os::unix::net::UnixStream,
-) -> Result<Io, io::Error> {
+pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> Result<Io, io::Error> {
     stream.set_nonblocking(true)?;
     Ok(Io::new(tok_io::net::UnixStream::from_std(stream)?))
 }

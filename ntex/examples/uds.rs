@@ -29,9 +29,7 @@ async fn main() -> std::io::Result<()> {
             .service((index, no_params))
             .service(
                 web::resource("/resource2/index.html")
-                    .wrap(
-                        middleware::DefaultHeaders::new().header("X-Version-R2", "0.3"),
-                    )
+                    .wrap(middleware::DefaultHeaders::new().header("X-Version-R2", "0.3"))
                     .default_service(
                         web::route().to(|| async { HttpResponse::MethodNotAllowed() }),
                     )

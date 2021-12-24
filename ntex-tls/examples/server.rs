@@ -25,8 +25,8 @@ async fn main() -> io::Result<()> {
     // start server
     server::ServerBuilder::new()
         .bind("basic", "127.0.0.1:8443", move |_| {
-            pipeline_factory(filter_factory(SslAcceptor::new(acceptor.clone())))
-                .and_then(fn_service(|io: Io<_>| async move {
+            pipeline_factory(filter_factory(SslAcceptor::new(acceptor.clone()))).and_then(
+                fn_service(|io: Io<_>| async move {
                     println!("New client is connected");
                     loop {
                         match io.recv(&codec::BytesCodec).await {
@@ -45,7 +45,8 @@ async fn main() -> io::Result<()> {
                     }
                     println!("Client is disconnected");
                     Ok(())
-                }))
+                }),
+            )
         })?
         .workers(1)
         .run()

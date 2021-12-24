@@ -43,34 +43,27 @@ impl Default for Compress {
     }
 }
 
-impl<S, E> Transform<S> for Compress
-where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
-    E: ErrorRenderer,
-{
-    type Service = CompressMiddleware<S, E>;
+impl<S> Transform<S> for Compress {
+    type Service = CompressMiddleware<S>;
 
     fn new_transform(&self, service: S) -> Self::Service {
         CompressMiddleware {
             service,
             encoding: self.enc,
-            _t: marker::PhantomData,
         }
     }
 }
 
-pub struct CompressMiddleware<S, E> {
+pub struct CompressMiddleware<S> {
     service: S,
     encoding: ContentEncoding,
-    _t: marker::PhantomData<E>,
 }
 
-impl<S, E> Service for CompressMiddleware<S, E>
+impl<S, E> Service<WebRequest<E>> for CompressMiddleware<S>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
-    type Request = WebRequest<E>;
     type Response = WebResponse;
     type Error = S::Error;
     type Future = CompressResponse<S, E>;
@@ -107,7 +100,7 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct CompressResponse<S: Service, E>
+    pub struct CompressResponse<S: Service<WebRequest<E>>, E>
     {
         #[pin]
         fut: S::Future,
@@ -118,7 +111,7 @@ pin_project_lite::pin_project! {
 
 impl<S, E> Future for CompressResponse<S, E>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
     type Output = Result<WebResponse, S::Error>;

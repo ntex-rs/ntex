@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.0-b.5] - 2021-12-23
+
+* Add `SealedService` and `SealedFactory` helpers
+
 ## [0.1.0-b.4] - 2021-12-23
 
 * Introduce `Sealed` type instead of `Box<dyn Filter>`

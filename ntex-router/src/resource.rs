@@ -346,8 +346,7 @@ impl ResourceDef {
 
         loop {
             let start = if pattern.starts_with('/') { 1 } else { 0 };
-            let idx = if let Some(idx) = pattern[start..].find(|c| c == '{' || c == '/')
-            {
+            let idx = if let Some(idx) = pattern[start..].find(|c| c == '{' || c == '/') {
                 idx + start
             } else {
                 break;
@@ -551,8 +550,7 @@ mod tests {
         assert_eq!(tree.find(&mut resource), Some(1));
         assert_eq!(resource.get("id").unwrap(), "012345");
 
-        let re =
-            ResourceDef::new("/u/test/v{version}-no-{minor}xx/resource/{id}/{name}");
+        let re = ResourceDef::new("/u/test/v{version}-no-{minor}xx/resource/{id}/{name}");
         let tree = Tree::new(&re, 1);
         let mut resource = Path::new("/u/test/v1-no-3xx/resource/320120/name");
         assert_eq!(tree.find(&mut resource), Some(1));

@@ -134,21 +134,16 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         factory: F,
         nested: Option<Rc<ResourceMap>>,
     ) where
-        F: IntoServiceFactory<S>,
+        F: IntoServiceFactory<S, WebRequest<Err>>,
         S: ServiceFactory<
-                Config = (),
-                Request = WebRequest<Err>,
+                WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
                 InitError = (),
             > + 'static,
     {
-        self.services.push((
-            rdef,
-            boxed::factory(factory.into_factory()),
-            guards,
-            nested,
-        ));
+        self.services
+            .push((rdef, boxed::factory(factory.into_factory()), guards, nested));
     }
 }
 
@@ -217,10 +212,9 @@ impl WebServiceAdapter {
     /// Set a service factory implementation and generate web service.
     pub fn finish<T, F, Err>(self, service: F) -> impl WebServiceFactory<Err>
     where
-        F: IntoServiceFactory<T>,
+        F: IntoServiceFactory<T, WebRequest<Err>>,
         T: ServiceFactory<
-                Config = (),
-                Request = WebRequest<Err>,
+                WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
                 InitError = (),
@@ -246,8 +240,7 @@ struct WebServiceImpl<T> {
 impl<T, Err> WebServiceFactory<Err> for WebServiceImpl<T>
 where
     T: ServiceFactory<
-            Config = (),
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebResponse,
             Error = Err::Container,
             InitError = (),

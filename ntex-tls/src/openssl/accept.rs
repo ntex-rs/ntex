@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{error::Error, future::Future, marker::PhantomData, pin::Pin};
 
-use ntex_io::{Filter, FilterFactory, Io};
+use ntex_io::{Filter, FilterFactory, Io, SealedFactory};
 use ntex_service::{Service, ServiceFactory};
 use ntex_util::{future::Ready, time::Millis};
 use tls_openssl::ssl::SslAcceptor;
@@ -35,6 +35,16 @@ impl<F> Acceptor<F> {
         self.acceptor.timeout(timeout);
         self
     }
+
+    pub fn seal(self) -> SealedFactory<Acceptor<F>, Io<F>> {
+        SealedFactory::new(self)
+    }
+}
+
+impl<F> From<SslAcceptor> for Acceptor<F> {
+    fn from(acceptor: SslAcceptor) -> Self {
+        Self::new(acceptor)
+    }
 }
 
 impl<F> Clone for Acceptor<F> {
@@ -46,16 +56,15 @@ impl<F> Clone for Acceptor<F> {
     }
 }
 
-impl<F: Filter> ServiceFactory for Acceptor<F> {
-    type Request = Io<F>;
+impl<F: Filter, C> ServiceFactory<Io<F>, C> for Acceptor<F> {
     type Response = Io<SslFilter<F>>;
     type Error = Box<dyn Error>;
-    type Config = ();
     type Service = AcceptorService<F>;
     type InitError = ();
     type Future = Ready<Self::Service, Self::InitError>;
 
-    fn new_service(&self, _: ()) -> Self::Future {
+    #[inline]
+    fn new_service(&self, _: C) -> Self::Future {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ready::Ok(AcceptorService {
                 acceptor: self.acceptor.clone(),
@@ -75,8 +84,7 @@ pub struct AcceptorService<F> {
     _t: PhantomData<F>,
 }
 
-impl<F: Filter> Service for AcceptorService<F> {
-    type Request = Io<F>;
+impl<F: Filter> Service<Io<F>> for AcceptorService<F> {
     type Response = Io<SslFilter<F>>;
     type Error = Box<dyn Error>;
     type Future = AcceptorServiceResponse<F>;
@@ -91,7 +99,7 @@ impl<F: Filter> Service for AcceptorService<F> {
     }
 
     #[inline]
-    fn call(&self, req: Self::Request) -> Self::Future {
+    fn call(&self, req: Io<F>) -> Self::Future {
         AcceptorServiceResponse {
             _guard: self.conns.get(),
             fut: self.acceptor.clone().create(req),

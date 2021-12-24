@@ -1,41 +1,28 @@
-use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{
+    future::Future, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
 use crate::{Service, ServiceFactory};
 
 pub type BoxFuture<I, E> = Pin<Box<dyn Future<Output = Result<I, E>>>>;
 
-pub type BoxService<Req, Res, Err> = Box<
-    dyn Service<
-        Request = Req,
-        Response = Res,
-        Error = Err,
-        Future = BoxFuture<Res, Err>,
-    >,
->;
+pub type BoxService<Req, Res, Err> =
+    Box<dyn Service<Req, Response = Res, Error = Err, Future = BoxFuture<Res, Err>>>;
 
-pub type RcService<Req, Res, Err> = Rc<
-    dyn Service<
-        Request = Req,
-        Response = Res,
-        Error = Err,
-        Future = BoxFuture<Res, Err>,
-    >,
->;
+pub type RcService<Req, Res, Err> =
+    Rc<dyn Service<Req, Response = Res, Error = Err, Future = BoxFuture<Res, Err>>>;
 
-pub struct BoxServiceFactory<C, Req, Res, Err, InitErr>(
-    Inner<C, Req, Res, Err, InitErr>,
-);
+pub struct BoxServiceFactory<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
 
 /// Create boxed service factory
-pub fn factory<T>(
+pub fn factory<T, R, C>(
     factory: T,
-) -> BoxServiceFactory<T::Config, T::Request, T::Response, T::Error, T::InitError>
+) -> BoxServiceFactory<C, R, T::Response, T::Error, T::InitError>
 where
-    T: ServiceFactory + 'static,
-    T::Request: 'static,
+    C: 'static,
+    R: 'static,
+    T: ServiceFactory<R, C> + 'static,
     T::Response: 'static,
-    T::Service: 'static,
-    T::Future: 'static,
     T::Error: 'static,
     T::InitError: 'static,
 {
@@ -46,27 +33,29 @@ where
 }
 
 /// Create boxed service
-pub fn service<T>(service: T) -> BoxService<T::Request, T::Response, T::Error>
+pub fn service<T, R>(service: T) -> BoxService<R, T::Response, T::Error>
 where
-    T: Service + 'static,
+    R: 'static,
+    T: Service<R> + 'static,
     T::Future: 'static,
 {
-    Box::new(ServiceWrapper(service))
+    Box::new(ServiceWrapper(service, PhantomData))
 }
 
 /// Create rc service
-pub fn rcservice<T>(service: T) -> RcService<T::Request, T::Response, T::Error>
+pub fn rcservice<T, R>(service: T) -> RcService<R, T::Response, T::Error>
 where
-    T: Service + 'static,
+    R: 'static,
+    T: Service<R> + 'static,
     T::Future: 'static,
 {
-    Rc::new(ServiceWrapper(service))
+    Rc::new(ServiceWrapper(service, PhantomData))
 }
 
 type Inner<C, Req, Res, Err, InitErr> = Box<
     dyn ServiceFactory<
-        Config = C,
-        Request = Req,
+        Req,
+        C,
         Response = Res,
         Error = Err,
         InitError = InitErr,
@@ -75,7 +64,7 @@ type Inner<C, Req, Res, Err, InitErr> = Box<
     >,
 >;
 
-impl<C, Req, Res, Err, InitErr> ServiceFactory
+impl<C, Req, Res, Err, InitErr> ServiceFactory<Req, C>
     for BoxServiceFactory<C, Req, Res, Err, InitErr>
 where
     Req: 'static,
@@ -83,11 +72,9 @@ where
     Err: 'static,
     InitErr: 'static,
 {
-    type Request = Req;
     type Response = Res;
     type Error = Err;
     type InitError = InitErr;
-    type Config = C;
     type Service = BoxService<Req, Res, Err>;
 
     type Future = BoxFuture<Self::Service, InitErr>;
@@ -97,34 +84,26 @@ where
     }
 }
 
-struct FactoryWrapper<C, T: ServiceFactory> {
+struct FactoryWrapper<C, R, T: ServiceFactory<R, C>> {
     factory: T,
-    _t: std::marker::PhantomData<C>,
+    _t: std::marker::PhantomData<(C, R)>,
 }
 
-impl<C, T, Req, Res, Err, InitErr> ServiceFactory for FactoryWrapper<C, T>
+impl<C, R, T, Res, Err, InitErr> ServiceFactory<R, C> for FactoryWrapper<C, R, T>
 where
-    Req: 'static,
+    R: 'static,
     Res: 'static,
     Err: 'static,
     InitErr: 'static,
-    T: ServiceFactory<
-        Config = C,
-        Request = Req,
-        Response = Res,
-        Error = Err,
-        InitError = InitErr,
-    >,
-    T::Future: 'static,
+    T: ServiceFactory<R, C, Response = Res, Error = Err, InitError = InitErr> + 'static,
     T::Service: 'static,
-    <T::Service as Service>::Future: 'static,
+    T::Future: 'static,
+    <T::Service as Service<R>>::Future: 'static,
 {
-    type Request = Req;
     type Response = Res;
     type Error = Err;
     type InitError = InitErr;
-    type Config = C;
-    type Service = BoxService<Req, Res, Err>;
+    type Service = BoxService<R, Res, Err>;
     type Future = BoxFuture<Self::Service, Self::InitError>;
 
     fn new_service(&self, cfg: C) -> Self::Future {
@@ -136,24 +115,24 @@ where
     }
 }
 
-struct ServiceWrapper<T: Service>(T);
+struct ServiceWrapper<T: Service<R>, R>(T, PhantomData<R>);
 
-impl<T> ServiceWrapper<T>
+impl<T, R> ServiceWrapper<T, R>
 where
-    T: Service + 'static,
+    R: 'static,
+    T: Service<R> + 'static,
     T::Future: 'static,
 {
-    fn boxed(service: T) -> BoxService<T::Request, T::Response, T::Error> {
-        Box::new(ServiceWrapper(service))
+    fn boxed(service: T) -> BoxService<R, T::Response, T::Error> {
+        Box::new(ServiceWrapper(service, PhantomData))
     }
 }
 
-impl<T, Req, Res, Err> Service for ServiceWrapper<T>
+impl<T, R, Res, Err> Service<R> for ServiceWrapper<T, R>
 where
-    T: Service<Request = Req, Response = Res, Error = Err>,
+    T: Service<R, Response = Res, Error = Err>,
     T::Future: 'static,
 {
-    type Request = Req;
     type Response = Res;
     type Error = Err;
     type Future = BoxFuture<Res, Err>;
@@ -169,7 +148,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: Self::Request) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future {
         Box::pin(self.0.call(req))
     }
 }

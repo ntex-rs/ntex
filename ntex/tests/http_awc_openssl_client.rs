@@ -50,8 +50,7 @@ async fn test_connection_reuse_h2() {
             HttpService::build()
                 .h2(map_config(
                     App::new().service(
-                        web::resource("/")
-                            .route(web::to(|| async { HttpResponse::Ok() })),
+                        web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
                     ),
                     |_| AppConfig::default(),
                 ))

@@ -160,8 +160,7 @@ impl RequestHeadType {
             Err(e) => return SendRequestError::Error(Box::new(e)).into(),
         };
 
-        if let Err(e) = self.set_header_if_none(header::CONTENT_TYPE, "application/json")
-        {
+        if let Err(e) = self.set_header_if_none(header::CONTENT_TYPE, "application/json") {
             return e.into();
         }
 
@@ -188,10 +187,9 @@ impl RequestHeadType {
         };
 
         // set content-type
-        if let Err(e) = self.set_header_if_none(
-            header::CONTENT_TYPE,
-            "application/x-www-form-urlencoded",
-        ) {
+        if let Err(e) = self
+            .set_header_if_none(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        {
             return e.into();
         }
 
@@ -235,11 +233,7 @@ impl RequestHeadType {
         self.send_body(addr, response_decompress, timeout, config, Body::None)
     }
 
-    fn set_header_if_none<V>(
-        &mut self,
-        key: HeaderName,
-        value: V,
-    ) -> Result<(), HttpError>
+    fn set_header_if_none<V>(&mut self, key: HeaderName, value: V) -> Result<(), HttpError>
     where
         HeaderValue: TryFrom<V>,
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,

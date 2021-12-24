@@ -65,17 +65,16 @@ impl<F: Filter> io::Write for IoInner<F> {
 impl<F: Filter> Filter for SslFilter<F> {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::HttpProtocol>() {
-            let proto = if let Some(protos) =
-                self.inner.borrow().ssl().selected_alpn_protocol()
-            {
-                if protos.windows(2).any(|window| window == b"h2") {
-                    types::HttpProtocol::Http2
+            let proto =
+                if let Some(protos) = self.inner.borrow().ssl().selected_alpn_protocol() {
+                    if protos.windows(2).any(|window| window == b"h2") {
+                        types::HttpProtocol::Http2
+                    } else {
+                        types::HttpProtocol::Http1
+                    }
                 } else {
                     types::HttpProtocol::Http1
-                }
-            } else {
-                types::HttpProtocol::Http1
-            };
+                };
             Some(Box::new(proto))
         } else {
             self.inner.borrow().get_ref().inner.query(id)
@@ -160,12 +159,12 @@ impl<F: Filter> Filter for SslFilter<F> {
         let (hw, lw) = pool.read_params().unpack();
 
         // get inner filter buffer
-        let mut buf =
-            if let Some(buf) = self.inner.borrow().get_ref().inner.get_read_buf() {
-                buf
-            } else {
-                BytesMut::with_capacity_in(lw, pool)
-            };
+        let mut buf = if let Some(buf) = self.inner.borrow().get_ref().inner.get_read_buf()
+        {
+            buf
+        } else {
+            BytesMut::with_capacity_in(lw, pool)
+        };
 
         let mut new_bytes = 0;
         loop {
@@ -330,10 +329,8 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
                 })
             })?;
 
-            poll_fn(|cx| {
-                handle_result(st.filter().inner.borrow_mut().connect(), &st, cx)
-            })
-            .await?;
+            poll_fn(|cx| handle_result(st.filter().inner.borrow_mut().connect(), &st, cx))
+                .await?;
 
             Ok(st)
         })

@@ -5,22 +5,22 @@ use std::{
 use crate::{Service, ServiceFactory};
 
 /// `Apply` service combinator
-pub(crate) struct AndThenApplyFn<A, B, F, Fut, Res, Err>
+pub(crate) struct AndThenApplyFn<A, B, F, Req1, Req2, Fut, Res, Err>
 where
-    A: Service,
-    B: Service,
+    A: Service<Req1>,
+    B: Service<Req2>,
     F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
     srv: Rc<(A, B, F)>,
-    r: PhantomData<(Fut, Res, Err)>,
+    r: PhantomData<fn(Req1) -> (Fut, Req2, Res, Err)>,
 }
 
-impl<A, B, F, Fut, Res, Err> AndThenApplyFn<A, B, F, Fut, Res, Err>
+impl<A, B, F, Req1, Req2, Fut, Res, Err> AndThenApplyFn<A, B, F, Req1, Req2, Fut, Res, Err>
 where
-    A: Service,
-    B: Service,
+    A: Service<Req1>,
+    B: Service<Req2>,
     F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
@@ -34,10 +34,10 @@ where
     }
 }
 
-impl<A, B, F, Fut, Res, Err> Clone for AndThenApplyFn<A, B, F, Fut, Res, Err>
+impl<A, B, F, Req1, Req2, Fut, Res, Err> Clone for AndThenApplyFn<A, B, F, Req1, Req2, Fut, Res, Err>
 where
-    A: Service,
-    B: Service,
+    A: Service<Req1>,
+    B: Service<Req2>,
     F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
@@ -50,18 +50,17 @@ where
     }
 }
 
-impl<A, B, F, Fut, Res, Err> Service for AndThenApplyFn<A, B, F, Fut, Res, Err>
+impl<A, B, F, Req1, Req2, Fut, Res, Err> Service for AndThenApplyFn<A, B, F, Req1, Req2, Fut, Res, Err>
 where
-    A: Service,
-    B: Service,
+    A: Service<Req1>,
+    B: Service<Req2>,
     F: Fn(A::Response, &B) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
     Err: From<A::Error> + From<B::Error>,
 {
-    type Request = A::Request;
     type Response = Res;
     type Error = Err;
-    type Future = AndThenApplyFnFuture<A, B, F, Fut, Res, Err>;
+    type Future = AndThenApplyFnFuture<A, B, F, Req1, Req2, Fut, Res, Err>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let inner = self.srv.as_ref();
@@ -73,16 +72,11 @@ where
         }
     }
 
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+    fn shutdown(&self) {
         let srv = self.srv.as_ref();
 
-        if srv.0.poll_shutdown(cx, is_error).is_ready()
-            && srv.1.poll_shutdown(cx, is_error).is_ready()
-        {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
+        srv.0.shutdown();
+        srv.1.shutdown();
     }
 
     fn call(&self, req: A::Request) -> Self::Future {
@@ -97,26 +91,26 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub(crate) struct AndThenApplyFnFuture<A, B, F, Fut, Res, Err>
+    pub(crate) struct AndThenApplyFnFuture<A, B, F, Req1, Req2, Fut, Res, Err>
     where
-        A: Service,
-        B: Service,
+        A: Service<Req1>,
+        B: Service<Req2>,
         F: Fn(A::Response, &B) -> Fut,
         Fut: Future<Output = Result<Res, Err>>,
         Err: From<A::Error>,
         Err: From<B::Error>,
     {
         #[pin]
-        state: State<A, B, F, Fut, Res, Err>,
+        state: State<A, B, F, Req1, Req2, Fut, Res, Err>,
     }
 }
 
 pin_project_lite::pin_project! {
     #[project = StateProject]
-    enum State<A, B, F, Fut, Res, Err>
+    enum State<A, B, F, Req1, Req2, Fut, Res, Err>
     where
-        A: Service,
-        B: Service,
+        A: Service<Req1>,
+        B: Service<Req2>,
         F: Fn(A::Response, &B) -> Fut,
         Fut: Future<Output = Result<Res, Err>>,
         Err: From<A::Error>,
@@ -128,7 +122,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<A, B, F, Fut, Res, Err> Future for AndThenApplyFnFuture<A, B, F, Fut, Res, Err>
+impl<A, B, F, Req1, Req2, Fut, Res, Err> Future for AndThenApplyFnFuture<A, B, F, Req1, Req2, Fut, Res, Err>
 where
     A: Service,
     B: Service,

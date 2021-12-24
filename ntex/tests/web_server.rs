@@ -353,14 +353,14 @@ async fn test_body_br_streaming() {
 
 #[ntex::test]
 async fn test_head_binary() {
-    let srv =
-        test::server_with(test::config().h1(), || {
-            App::new().service(web::resource("/").route(
-                web::head().to(move || async {
+    let srv = test::server_with(test::config().h1(), || {
+        App::new().service(
+            web::resource("/")
+                .route(web::head().to(move || async {
                     HttpResponse::Ok().content_length(100).body(STR)
-                }),
-            ))
-        });
+                })),
+        )
+    });
 
     let mut response = srv.head("/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -764,14 +764,13 @@ async fn test_brotli_encoding_large_openssl_h1() {
         .unwrap();
 
     let data = STR.repeat(10);
-    let srv =
-        test::server_with(test::config().openssl(builder.build()).h1(), move || {
-            App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
-                HttpResponse::Ok()
-                    .encoding(ContentEncoding::Identity)
-                    .body(bytes)
-            })))
-        });
+    let srv = test::server_with(test::config().openssl(builder.build()).h1(), move || {
+        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+            HttpResponse::Ok()
+                .encoding(ContentEncoding::Identity)
+                .body(bytes)
+        })))
+    });
 
     // body
     let mut e = BrotliEncoder::new(Vec::new(), 3);
@@ -819,14 +818,13 @@ async fn test_brotli_encoding_large_openssl_h2() {
     builder.set_alpn_protos(b"\x08http/1.1\x02h2").unwrap();
 
     let data = STR.repeat(10);
-    let srv =
-        test::server_with(test::config().openssl(builder.build()).h2(), move || {
-            App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
-                HttpResponse::Ok()
-                    .encoding(ContentEncoding::Identity)
-                    .body(bytes)
-            })))
-        });
+    let srv = test::server_with(test::config().openssl(builder.build()).h2(), move || {
+        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+            HttpResponse::Ok()
+                .encoding(ContentEncoding::Identity)
+                .body(bytes)
+        })))
+    });
 
     // body
     let mut e = BrotliEncoder::new(Vec::new(), 3);

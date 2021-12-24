@@ -466,8 +466,7 @@ impl Bytes {
             }
         } else {
             Bytes {
-                inner: BytesMut::copy_from_slice_in(data, PoolId::DEFAULT.pool_ref())
-                    .inner,
+                inner: BytesMut::copy_from_slice_in(data, PoolId::DEFAULT.pool_ref()).inner,
             }
         }
     }
@@ -717,8 +716,7 @@ impl Bytes {
                 }
             } else {
                 Bytes {
-                    inner: BytesMut::copy_from_slice_in_priv(self, self.inner.pool())
-                        .inner,
+                    inner: BytesMut::copy_from_slice_in_priv(self, self.inner.pool()).inner,
                 }
             };
         }
@@ -2369,8 +2367,7 @@ impl Inner {
             let new_cap = len + additional;
 
             // Promote to a vector
-            *self =
-                Inner::from_slice(new_cap, self.as_ref(), PoolId::DEFAULT.pool_ref());
+            *self = Inner::from_slice(new_cap, self.as_ref(), PoolId::DEFAULT.pool_ref());
             return;
         }
 

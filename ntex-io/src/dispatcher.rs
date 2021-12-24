@@ -16,7 +16,7 @@ pin_project_lite::pin_project! {
     /// and pass then to the service.
     pub struct Dispatcher<S, U>
     where
-        S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
+        S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
         S: 'static,
         U: Encoder,
         U: Decoder,
@@ -30,7 +30,7 @@ pin_project_lite::pin_project! {
 
 struct DispatcherInner<S, U>
 where
-    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     io: IoBoxed,
@@ -46,7 +46,7 @@ where
 
 struct DispatcherShared<S, U>
 where
-    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>>,
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     codec: U,
@@ -85,11 +85,11 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
 
 impl<S, U> Dispatcher<S, U>
 where
-    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<F: IntoService<S>>(
+    pub fn new<F: IntoService<S, DispatchItem<U>>>(
         io: IoBoxed,
         codec: U,
         service: F,
@@ -158,7 +158,7 @@ where
 
 impl<S, U> DispatcherShared<S, U>
 where
-    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Encoder + Decoder + 'static,
 {
     fn handle_result(&self, item: Result<S::Response, S::Error>, io: &IoRef) {
@@ -178,7 +178,7 @@ where
 
 impl<S, U> future::Future for Dispatcher<S, U>
 where
-    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     type Output = Result<(), S::Error>;
@@ -335,7 +335,7 @@ where
 
 impl<S, U> DispatcherInner<S, U>
 where
-    S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     /// spawn service call
@@ -518,11 +518,11 @@ mod tests {
 
     impl<S, U> Dispatcher<S, U>
     where
-        S: Service<Request = DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+        S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
         U: Decoder + Encoder + 'static,
     {
         /// Construct new `Dispatcher` instance
-        pub(crate) fn debug<T: IoStream, F: IntoService<S>>(
+        pub(crate) fn debug<T: IoStream, F: IntoService<S, DispatchItem<U>>>(
             io: T,
             codec: U,
             service: F,
@@ -682,8 +682,7 @@ mod tests {
 
         struct Srv(Rc<Cell<usize>>);
 
-        impl Service for Srv {
-            type Request = DispatchItem<BytesCodec>;
+        impl Service<DispatchItem<BytesCodec>> for Srv {
             type Response = Option<Response<BytesCodec>>;
             type Error = ();
             type Future = Ready<Option<Response<BytesCodec>>, ()>;

@@ -660,8 +660,7 @@ mod tests {
         let _elapsed = Instant::now() - time;
         #[cfg(not(target_os = "macos"))]
         assert!(
-            _elapsed > Duration::from_millis(200)
-                && _elapsed < Duration::from_millis(300),
+            _elapsed > Duration::from_millis(200) && _elapsed < Duration::from_millis(300),
             "elapsed: {:?}",
             _elapsed
         );

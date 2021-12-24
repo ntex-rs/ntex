@@ -1,6 +1,4 @@
-use std::{
-    cell::Cell, io, sync::mpsc, sync::Arc, thread, time::Duration, time::Instant,
-};
+use std::{cell::Cell, io, sync::mpsc, sync::Arc, thread, time::Duration, time::Instant};
 
 use polling::{Event, Poller};
 
@@ -138,8 +136,7 @@ impl Accept {
             .name("ntex-server accept loop".to_owned())
             .spawn(move || {
                 System::set_current(sys);
-                Accept::new(rx, poller, socks, workers, srv, notify, status_handler)
-                    .poll()
+                Accept::new(rx, poller, socks, workers, srv, notify, status_handler).poll()
             });
     }
 
@@ -276,10 +273,7 @@ impl Accept {
             let info = &mut self.sockets[key];
             if let Some(inst) = info.timeout.get() {
                 if now > inst && !self.backpressure {
-                    log::info!(
-                        "Resuming socket listener on {} after timeout",
-                        info.addr
-                    );
+                    log::info!("Resuming socket listener on {} after timeout", info.addr);
                     info.timeout.take();
                     self.add_source(key);
                 }

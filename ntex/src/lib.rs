@@ -41,8 +41,8 @@ pub mod ws;
 
 pub use self::service::{
     apply_fn, boxed, fn_factory, fn_factory_with_config, fn_service, into_service,
-    pipeline, pipeline_factory, IntoService, IntoServiceFactory, Service,
-    ServiceFactory, Transform,
+    pipeline, pipeline_factory, IntoService, IntoServiceFactory, Service, ServiceFactory,
+    Transform,
 };
 
 pub use futures_core::stream::Stream;

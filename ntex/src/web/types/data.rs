@@ -191,25 +191,23 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_route_data_extractor() {
-        let srv =
-            init_service(App::new().service(web::resource("/").data(10usize).route(
-                web::get().to(|data: web::types::Data<usize>| async move {
-                    let _ = data.clone();
-                    HttpResponse::Ok()
-                }),
-            )))
-            .await;
+        let srv = init_service(App::new().service(web::resource("/").data(10usize).route(
+            web::get().to(|data: web::types::Data<usize>| async move {
+                let _ = data.clone();
+                HttpResponse::Ok()
+            }),
+        )))
+        .await;
 
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // different type
-        let srv =
-            init_service(App::new().service(web::resource("/").data(10u32).route(
-                web::get().to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
-            )))
-            .await;
+        let srv = init_service(App::new().service(web::resource("/").data(10u32).route(
+            web::get().to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+        )))
+        .await;
         let req = TestRequest::default().to_request();
         let res = srv.call(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);

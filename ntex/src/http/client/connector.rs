@@ -177,11 +177,8 @@ impl Connector {
     /// Use custom connector to open un-secured connections.
     pub fn connector<T, F>(mut self, connector: T) -> Self
     where
-        T: Service<
-                Request = TcpConnect<Uri>,
-                Response = Io<F>,
-                Error = crate::connect::ConnectError,
-            > + 'static,
+        T: Service<TcpConnect<Uri>, Response = Io<F>, Error = crate::connect::ConnectError>
+            + 'static,
         F: Filter,
     {
         self.connector =
@@ -192,11 +189,8 @@ impl Connector {
     /// Use custom connector to open secure connections.
     pub fn secure_connector<T, F>(mut self, connector: T) -> Self
     where
-        T: Service<
-                Request = TcpConnect<Uri>,
-                Response = Io<F>,
-                Error = crate::connect::ConnectError,
-            > + 'static,
+        T: Service<TcpConnect<Uri>, Response = Io<F>, Error = crate::connect::ConnectError>
+            + 'static,
         F: Filter,
     {
         self.ssl_connector = Some(boxed::service(
@@ -209,7 +203,7 @@ impl Connector {
     pub fn boxed_secure_connector<T>(mut self, connector: T) -> Self
     where
         T: Service<
-                Request = TcpConnect<Uri>,
+                TcpConnect<Uri>,
                 Response = IoBoxed,
                 Error = crate::connect::ConnectError,
             > + 'static,
@@ -223,10 +217,8 @@ impl Connector {
     /// its combinator chain.
     pub fn finish(
         self,
-    ) -> impl Service<Request = Connect, Response = Connection, Error = ConnectError> + Clone
-    {
-        let tcp_service =
-            connector(self.connector, self.timeout, self.disconnect_timeout);
+    ) -> impl Service<Connect, Response = Connection, Error = ConnectError> + Clone {
+        let tcp_service = connector(self.connector, self.timeout, self.disconnect_timeout);
 
         let ssl_pool = if let Some(ssl_connector) = self.ssl_connector {
             let srv = connector(ssl_connector, self.timeout, self.disconnect_timeout);
@@ -258,12 +250,8 @@ fn connector(
     connector: BoxedConnector,
     timeout: Millis,
     disconnect_timeout: Millis,
-) -> impl Service<
-    Request = Connect,
-    Response = IoBoxed,
-    Error = ConnectError,
-    Future = impl Unpin,
-> + Unpin {
+) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError, Future = impl Unpin> + Unpin
+{
     TimeoutService::new(
         timeout,
         apply_fn(connector, |msg: Connect, srv| {
@@ -286,18 +274,15 @@ struct InnerConnector<T> {
     ssl_pool: Option<ConnectionPool<T>>,
 }
 
-impl<T> Service for InnerConnector<T>
+impl<T> Service<Connect> for InnerConnector<T>
 where
-    T: Service<Request = Connect, Response = IoBoxed, Error = ConnectError>
-        + Unpin
-        + 'static,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin + 'static,
     T::Future: Unpin,
 {
-    type Request = Connect;
-    type Response = <ConnectionPool<T> as Service>::Response;
+    type Response = <ConnectionPool<T> as Service<Connect>>::Response;
     type Error = ConnectError;
     type Future = Either<
-        <ConnectionPool<T> as Service>::Future,
+        <ConnectionPool<T> as Service<Connect>>::Future,
         Ready<Self::Response, Self::Error>,
     >;
 

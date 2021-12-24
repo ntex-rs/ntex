@@ -147,8 +147,7 @@ where
     E: ErrorRenderer,
 {
     type Error = T::Error;
-    type Future =
-        Pin<Box<dyn Future<Output = Result<Result<T, T::Error>, Self::Error>>>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Result<T, T::Error>, Self::Error>>>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {

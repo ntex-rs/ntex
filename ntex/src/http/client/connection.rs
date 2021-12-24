@@ -71,22 +71,17 @@ impl Connection {
         }
     }
 
-    pub(super) async fn send_request<
-        B: MessageBody + 'static,
-        H: Into<RequestHeadType>,
-    >(
+    pub(super) async fn send_request<B: MessageBody + 'static, H: Into<RequestHeadType>>(
         mut self,
         head: H,
         body: B,
     ) -> Result<(ResponseHead, Payload), SendRequestError> {
         match self.io.take().unwrap() {
             ConnectionType::H1(io) => {
-                h1proto::send_request(io, head.into(), body, self.created, self.pool)
-                    .await
+                h1proto::send_request(io, head.into(), body, self.created, self.pool).await
             }
             ConnectionType::H2(io) => {
-                h2proto::send_request(io, head.into(), body, self.created, self.pool)
-                    .await
+                h2proto::send_request(io, head.into(), body, self.created, self.pool).await
             }
         }
     }

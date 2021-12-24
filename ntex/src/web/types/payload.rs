@@ -93,10 +93,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
     type Future = Ready<Payload, Self::Error>;
 
     #[inline]
-    fn from_request(
-        _: &HttpRequest,
-        payload: &mut crate::http::Payload,
-    ) -> Self::Future {
+    fn from_request(_: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
         Ready::Ok(Payload(payload.take()))
     }
 }
@@ -133,10 +130,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
     >;
 
     #[inline]
-    fn from_request(
-        req: &HttpRequest,
-        payload: &mut crate::http::Payload,
-    ) -> Self::Future {
+    fn from_request(req: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
         let tmp;
         let cfg = if let Some(cfg) = req.app_data::<PayloadConfig>() {
             cfg
@@ -190,10 +184,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
     >;
 
     #[inline]
-    fn from_request(
-        req: &HttpRequest,
-        payload: &mut crate::http::Payload,
-    ) -> Self::Future {
+    fn from_request(req: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
         let tmp;
         let cfg = if let Some(cfg) = req.app_data::<PayloadConfig>() {
             cfg
@@ -378,9 +369,7 @@ impl Future for HttpMessageBody {
 
         if let Some(len) = self.length.take() {
             if len > self.limit {
-                return Poll::Ready(Err(PayloadError::from(
-                    error::PayloadError::Overflow,
-                )));
+                return Poll::Ready(Err(PayloadError::from(error::PayloadError::Overflow)));
             }
         }
 

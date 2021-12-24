@@ -33,11 +33,8 @@ async fn test_simple() {
                     let res = handshake_response(req.head()).finish();
 
                     // send handshake respone
-                    io.encode(
-                        h1::Message::Item((res.drop_body(), BodySize::None)),
-                        &codec,
-                    )
-                    .unwrap();
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
 
                     // start websocket service
                     Dispatcher::new(

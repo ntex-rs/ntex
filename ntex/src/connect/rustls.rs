@@ -5,7 +5,7 @@ pub use tls_rustls::{ClientConfig, ServerName};
 
 use ntex_tls::rustls::TlsConnector;
 
-use crate::io::{Base, Io};
+use crate::io::{Base, Io, SealedService};
 use crate::service::{Service, ServiceFactory};
 use crate::util::{PoolId, Ready};
 
@@ -80,6 +80,11 @@ impl<T: Address + 'static> Connector<T> {
             }
         }
     }
+
+    /// Produce sealed io stream (IoBoxed)
+    pub fn seal(self) -> SealedService<Connector<T>, Connect<T>> {
+        SealedService::new(self)
+    }
 }
 
 impl<T> Clone for Connector<T> {
@@ -91,22 +96,20 @@ impl<T> Clone for Connector<T> {
     }
 }
 
-impl<T: Address + 'static> ServiceFactory for Connector<T> {
-    type Request = Connect<T>;
+impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Response = Io<TlsFilter<Base>>;
     type Error = ConnectError;
-    type Config = ();
     type Service = Connector<T>;
     type InitError = ();
     type Future = Ready<Self::Service, Self::InitError>;
 
-    fn new_service(&self, _: ()) -> Self::Future {
+    #[inline]
+    fn new_service(&self, _: C) -> Self::Future {
         Ready::Ok(self.clone())
     }
 }
 
-impl<T: Address + 'static> Service for Connector<T> {
-    type Request = Connect<T>;
+impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Response = Io<TlsFilter<Base>>;
     type Error = ConnectError;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
@@ -135,15 +138,15 @@ mod tests {
         });
 
         let mut cert_store = RootCertStore::empty();
-        cert_store.add_server_trust_anchors(
-            webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+        cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
+            |ta| {
                 OwnedTrustAnchor::from_subject_spki_name_constraints(
                     ta.subject,
                     ta.spki,
                     ta.name_constraints,
                 )
-            }),
-        );
+            },
+        ));
         let config = ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(cert_store)

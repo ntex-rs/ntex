@@ -79,11 +79,7 @@ impl ServiceConfig {
     }
 
     /// Add new service to the server.
-    pub fn listen<N: AsRef<str>>(
-        &mut self,
-        name: N,
-        lst: net::TcpListener,
-    ) -> &mut Self {
+    pub fn listen<N: AsRef<str>>(&mut self, name: N, lst: net::TcpListener) -> &mut Self {
         if !self.applied {
             self.apply = Box::new(ConfigWrapper {
                 f: |_| {
@@ -153,8 +149,7 @@ impl InternalServiceFactory for ConfiguredService {
 
     fn create(
         &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>> {
         // configure services
         let rt = ServiceRuntime::new(self.topics.clone());
         let cfg_fut = self.rt.configure(ServiceRuntime(rt.0.clone()));
@@ -282,8 +277,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service<T, F>(&self, name: &str, service: F)
     where
-        F: service::IntoServiceFactory<T>,
-        T: service::ServiceFactory<Config = (), Request = Io> + 'static,
+        F: service::IntoServiceFactory<T, Io>,
+        T: service::ServiceFactory<Io> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -297,8 +292,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service_in<T, F>(&self, name: &str, pool: PoolId, service: F)
     where
-        F: service::IntoServiceFactory<T>,
-        T: service::ServiceFactory<Config = (), Request = Io> + 'static,
+        F: service::IntoServiceFactory<T, Io>,
+        T: service::ServiceFactory<Io> + 'static,
         T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
@@ -329,11 +324,10 @@ impl ServiceRuntime {
 
 type BoxedNewService = Box<
     dyn service::ServiceFactory<
-        Request = (Option<CounterGuard>, ServerMessage),
+        (Option<CounterGuard>, ServerMessage),
         Response = (),
         Error = (),
         InitError = (),
-        Config = (),
         Service = BoxedServerService,
         Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>,
     >,
@@ -344,19 +338,17 @@ struct ServiceFactory<T> {
     pool: PoolId,
 }
 
-impl<T> service::ServiceFactory for ServiceFactory<T>
+impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage)> for ServiceFactory<T>
 where
-    T: service::ServiceFactory<Config = (), Request = Io>,
+    T: service::ServiceFactory<Io>,
     T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,
     T::InitError: fmt::Debug + 'static,
 {
-    type Request = (Option<CounterGuard>, ServerMessage);
     type Response = ();
     type Error = ();
     type InitError = ();
-    type Config = ();
     type Service = BoxedServerService;
     type Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>;
 

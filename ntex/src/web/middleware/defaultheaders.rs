@@ -1,6 +1,6 @@
 //! Middleware for setting default response headers
 use std::task::{Context, Poll};
-use std::{convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
+use std::{convert::TryFrom, future::Future, pin::Pin, rc::Rc};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
@@ -86,34 +86,27 @@ impl DefaultHeaders {
     }
 }
 
-impl<S, E> Transform<S> for DefaultHeaders
-where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
-    S::Future: 'static,
-{
-    type Service = DefaultHeadersMiddleware<S, E>;
+impl<S> Transform<S> for DefaultHeaders {
+    type Service = DefaultHeadersMiddleware<S>;
 
     fn new_transform(&self, service: S) -> Self::Service {
         DefaultHeadersMiddleware {
             service,
             inner: self.inner.clone(),
-            _t: PhantomData,
         }
     }
 }
 
-pub struct DefaultHeadersMiddleware<S, E> {
+pub struct DefaultHeadersMiddleware<S> {
     service: S,
     inner: Rc<Inner>,
-    _t: PhantomData<E>,
 }
 
-impl<S, E> Service for DefaultHeadersMiddleware<S, E>
+impl<S, E> Service<WebRequest<E>> for DefaultHeadersMiddleware<S>
 where
-    S: Service<Request = WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse>,
     S::Future: 'static,
 {
-    type Request = WebRequest<E>;
     type Response = WebResponse;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
@@ -177,12 +170,11 @@ mod tests {
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0001");
 
         let req = TestRequest::default().to_srv_request();
-        let srv =
-            |req: WebRequest<DefaultError>| async move {
-                Ok::<_, Error>(req.into_response(
-                    HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish(),
-                ))
-            };
+        let srv = |req: WebRequest<DefaultError>| async move {
+            Ok::<_, Error>(
+                req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()),
+            )
+        };
         let mw = DefaultHeaders::new()
             .header(CONTENT_TYPE, "0001")
             .new_transform(srv.into_service());

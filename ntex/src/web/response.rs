@@ -166,9 +166,8 @@ mod tests {
         assert_eq!(res.response().status(), StatusCode::PAYLOAD_TOO_LARGE);
 
         let res = TestRequest::default().to_srv_response(HttpResponse::Ok().finish());
-        let mut res = res.checked_expr::<DefaultError, _, _>(|_| {
-            Ok::<_, http::error::PayloadError>(())
-        });
+        let mut res = res
+            .checked_expr::<DefaultError, _, _>(|_| Ok::<_, http::error::PayloadError>(()));
         assert_eq!(res.response_mut().status(), StatusCode::OK);
         let res = res.checked_expr::<DefaultError, _, _>(|_| {
             Err(http::error::PayloadError::Overflow)

@@ -186,11 +186,9 @@ mod tests {
         let req = TestRequest::with_header("content-type", "applicatjson").finish();
         assert_eq!(Some(ContentTypeError::ParseError), req.encoding().err());
 
-        let req = TestRequest::with_header(
-            "content-type",
-            "application/json; charset=kkkttktk",
-        )
-        .finish();
+        let req =
+            TestRequest::with_header("content-type", "application/json; charset=kkkttktk")
+                .finish();
         assert_eq!(
             Some(ContentTypeError::UnknownEncoding),
             req.encoding().err()
@@ -202,8 +200,7 @@ mod tests {
         let req = TestRequest::default().finish();
         assert!(!req.chunked().unwrap());
 
-        let req =
-            TestRequest::with_header(header::TRANSFER_ENCODING, "chunked").finish();
+        let req = TestRequest::with_header(header::TRANSFER_ENCODING, "chunked").finish();
         assert!(req.chunked().unwrap());
 
         let req = TestRequest::default()

@@ -32,7 +32,7 @@ bitflags::bitflags! {
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
-    pub struct Dispatcher<F, S: Service, B, X: Service, U: Service> {
+    pub struct Dispatcher<F, S: Service<Request>, B, X: Service<Request>, U: Service<(Request, Io<F>, Codec)>> {
         #[pin]
         call: CallState<S, X>,
         st: State<B>,
@@ -56,7 +56,7 @@ enum State<B> {
 
 pin_project_lite::pin_project! {
     #[project = CallStateProject]
-    enum CallState<S: Service, X: Service> {
+    enum CallState<S: Service<Request>, X: Service<Request>> {
         None,
         Service { #[pin] fut: S::Future },
         Expect { #[pin] fut: X::Future },
@@ -79,20 +79,17 @@ struct DispatcherInner<F, S, B, X, U> {
 impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
 where
     F: Filter + 'static,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
+    X: Service<Request, Response = Request>,
     X::Error: ResponseError,
-    U: Service<Request = (Request, Io<F>, Codec), Response = ()> + 'static,
+    U: Service<(Request, Io<F>, Codec), Response = ()> + 'static,
     U::Error: Error + fmt::Display,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
-    pub(in crate::http) fn new(
-        io: Io<F>,
-        config: Rc<DispatcherConfig<S, X, U>>,
-    ) -> Self {
+    pub(in crate::http) fn new(io: Io<F>, config: Rc<DispatcherConfig<S, X, U>>) -> Self {
         let mut expire = now();
         let state = io.get_ref();
         let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
@@ -131,13 +128,13 @@ macro_rules! set_error ({ $slf:tt, $err:ident } => {
 impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
 where
     F: Filter,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: Service<Request = Request, Response = Request>,
+    X: Service<Request, Response = Request>,
     X::Error: ResponseError + 'static,
-    U: Service<Request = (Request, Io<F>, Codec), Response = ()> + 'static,
+    U: Service<(Request, Io<F>, Codec), Response = ()> + 'static,
     U::Error: Error + fmt::Display,
 {
     type Output = Result<(), DispatchError>;
@@ -156,9 +153,7 @@ where
                                         let (res, body) = res.into().into_parts();
                                         *this.st = this.inner.send_response(res, body)
                                     }
-                                    Err(e) => {
-                                        *this.st = this.inner.handle_error(e, false)
-                                    }
+                                    Err(e) => *this.st = this.inner.handle_error(e, false),
                                 },
                                 Poll::Pending => {
                                     // we might need to read more data into a request payload
@@ -184,9 +179,7 @@ where
                         CallStateProject::Expect { fut } => match ready!(fut.poll(cx)) {
                             Ok(req) => {
                                 let result = this.inner.state.with_write_buf(|buf| {
-                                    buf.extend_from_slice(
-                                        b"HTTP/1.1 100 Continue\r\n\r\n",
-                                    )
+                                    buf.extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n")
                                 });
                                 if result.is_err() {
                                     *this.st = State::Stop;
@@ -348,8 +341,7 @@ where
                         Err(Either::Left(err)) => {
                             // Malformed requests, respond with 400
                             log::trace!("malformed request: {:?}", err);
-                            let (res, body) =
-                                Response::BadRequest().finish().into_parts();
+                            let (res, body) = Response::BadRequest().finish().into_parts();
                             this.inner.error = Some(DispatchError::Parse(err));
                             *this.st = this.inner.send_response(res, body.into_body());
                         }
@@ -374,8 +366,7 @@ where
                     if !this.inner.state.is_io_open() {
                         let e = this.inner.state.take_error().into();
                         set_error!(this, e);
-                    } else if let Poll::Ready(Err(e)) =
-                        this.inner.poll_request_payload(cx)
+                    } else if let Poll::Ready(Err(e)) = this.inner.poll_request_payload(cx)
                     {
                         set_error!(this, e);
                     } else {
@@ -397,13 +388,11 @@ where
                     let req = req.take().unwrap();
 
                     // Handle UPGRADE request
-                    crate::rt::spawn(
-                        this.inner.config.upgrade.as_ref().unwrap().call((
-                            req,
-                            io,
-                            this.inner.codec.clone(),
-                        )),
-                    );
+                    crate::rt::spawn(this.inner.config.upgrade.as_ref().unwrap().call((
+                        req,
+                        io,
+                        this.inner.codec.clone(),
+                    )));
                     return Poll::Ready(Ok(()));
                 }
                 // prepare to shutdown
@@ -423,13 +412,11 @@ where
                             ));
                         }
 
-                        return Poll::Ready(
-                            if let Some(err) = this.inner.error.take() {
-                                Err(err)
-                            } else {
-                                Ok(())
-                            },
-                        );
+                        return Poll::Ready(if let Some(err) = this.inner.error.take() {
+                            Err(err)
+                        } else {
+                            Ok(())
+                        });
                     } else {
                         return Poll::Pending;
                     }
@@ -441,7 +428,7 @@ where
 
 impl<T, S, B, X, U> DispatcherInner<T, S, B, X, U>
 where
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
@@ -616,9 +603,7 @@ where
                                 self.payload = None;
                                 return Poll::Ready(Err(match e {
                                     Either::Left(e) => DispatchError::Parse(e),
-                                    Either::Right(e) => {
-                                        DispatchError::Disconnect(Some(e))
-                                    }
+                                    Either::Right(e) => DispatchError::Disconnect(Some(e)),
                                 }));
                             }
                             Poll::Pending => break,
@@ -669,8 +654,8 @@ mod tests {
         service: F,
     ) -> Dispatcher<Base, S, B, ExpectHandler, UpgradeHandler<Base>>
     where
-        F: IntoService<S>,
-        S: Service<Request = Request>,
+        F: IntoService<S, Request>,
+        S: Service<Request>,
         S::Error: ResponseError + 'static,
         S::Response: Into<Response<B>>,
         B: MessageBody,
@@ -695,8 +680,8 @@ mod tests {
 
     pub(crate) fn spawn_h1<F, S, B>(stream: Io, service: F)
     where
-        F: IntoService<S>,
-        S: Service<Request = Request> + 'static,
+        F: IntoService<S, Request>,
+        S: Service<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
@@ -780,8 +765,7 @@ mod tests {
         assert!(h1.inner.state.is_closed());
         sleep(Millis(50)).await;
 
-        client
-            .local_buffer(|buf| assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n"));
+        client.local_buffer(|buf| assert_eq!(&buf[..26], b"HTTP/1.1 400 Bad Request\r\n"));
 
         client.close().await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
@@ -978,8 +962,7 @@ mod tests {
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
 
         // io should be drained only by no more than MAX_BUFFER_SIZE
-        let random_bytes: Vec<u8> =
-            (0..1_048_576).map(|_| rand::random::<u8>()).collect();
+        let random_bytes: Vec<u8> = (0..1_048_576).map(|_| rand::random::<u8>()).collect();
         client.write(random_bytes);
 
         sleep(Millis(50)).await;

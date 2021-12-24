@@ -1,5 +1,11 @@
 # Changes
 
+## [0.3.0] - 2021-12-xx
+
+* Service takes request type as a type parameter instead of an associated type
+
+* ServiceFactory takes config type as a type parameter instead of an associated type
+
 ## [0.2.1] - 2021-09-17
 
 * Simplify fn_transform

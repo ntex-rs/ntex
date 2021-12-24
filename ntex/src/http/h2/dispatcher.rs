@@ -1,7 +1,5 @@
 use std::task::{Context, Poll};
-use std::{
-    convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::Rc, time,
-};
+use std::{convert::TryFrom, future::Future, marker::PhantomData, pin::Pin, rc::Rc, time};
 
 use h2::server::{Connection, SendResponse};
 use h2::SendStream;
@@ -25,7 +23,7 @@ const CHUNK_SIZE: usize = 16_384;
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/2 protocol
-    pub struct Dispatcher<F, S: Service<Request = Request>, B: MessageBody, X, U> {
+    pub struct Dispatcher<F, S: Service<Request>, B: MessageBody, X, U> {
         io: IoRef,
         config: Rc<DispatcherConfig<S, X, U>>,
         connection: Connection<Io<F>, Bytes>,
@@ -38,7 +36,7 @@ pin_project_lite::pin_project! {
 impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
 where
     F: Filter,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
     B: MessageBody,
@@ -51,12 +49,10 @@ where
     ) -> Self {
         // keep-alive timer
         let (ka_expire, ka_timer) = if let Some(delay) = timeout {
-            let expire =
-                config.timer.now() + std::time::Duration::from(config.keep_alive);
+            let expire = config.timer.now() + std::time::Duration::from(config.keep_alive);
             (expire, Some(delay))
         } else if let Some(delay) = config.keep_alive_timer() {
-            let expire =
-                config.timer.now() + std::time::Duration::from(config.keep_alive);
+            let expire = config.timer.now() + std::time::Duration::from(config.keep_alive);
             (expire, Some(delay))
         } else {
             (now(), None)
@@ -76,7 +72,7 @@ where
 impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
 where
     F: Filter,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
@@ -233,8 +229,7 @@ where
 
                         let mut send = send.take().unwrap();
                         let mut size = body.size();
-                        let h2_res =
-                            self.as_mut().prepare_response(res.head(), &mut size);
+                        let h2_res = self.as_mut().prepare_response(res.head(), &mut size);
                         this = self.as_mut().project();
 
                         let stream = match send.send_response(h2_res, size.is_eof()) {
@@ -260,8 +255,7 @@ where
 
                         let mut send = send.take().unwrap();
                         let mut size = body.size();
-                        let h2_res =
-                            self.as_mut().prepare_response(res.head(), &mut size);
+                        let h2_res = self.as_mut().prepare_response(res.head(), &mut size);
                         this = self.as_mut().project();
 
                         let stream = match send.send_response(h2_res, size.is_eof()) {

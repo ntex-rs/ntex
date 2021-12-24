@@ -117,10 +117,7 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
 impl<B: MessageBody + Unpin> Stream for ResponseBody<B> {
     type Item = Result<Bytes, Box<dyn Error>>;
 
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.get_mut() {
             ResponseBody::Body(ref mut body) => body.poll_next_chunk(cx),
             ResponseBody::Other(ref mut body) => body.poll_next_chunk(cx),
@@ -662,8 +659,7 @@ mod tests {
         assert!(Body::Empty == Body::Empty);
         assert!(Body::Empty != Body::None);
         assert!(
-            Body::Bytes(Bytes::from_static(b"1"))
-                == Body::Bytes(Bytes::from_static(b"1"))
+            Body::Bytes(Bytes::from_static(b"1")) == Body::Bytes(Bytes::from_static(b"1"))
         );
         assert!(Body::Bytes(Bytes::from_static(b"1")) != Body::None);
     }
@@ -690,8 +686,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn body_stream() {
-        let st =
-            BodyStream::new(stream::once(Ready::<_, io::Error>::Ok(Bytes::from("1"))));
+        let st = BodyStream::new(stream::once(Ready::<_, io::Error>::Ok(Bytes::from("1"))));
         let body: Body = st.into();
         assert!(format!("{:?}", body).contains("Body::Message(_)"));
         assert!(body != Body::None);

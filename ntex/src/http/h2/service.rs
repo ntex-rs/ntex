@@ -26,15 +26,13 @@ pub struct H2Service<F, S, B> {
 
 impl<F, S, B> H2Service<F, S, B>
 where
-    S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError + 'static,
-    S::Response: Into<Response<B>> + 'static,
-    S::Future: 'static,
-    <S::Service as Service>::Future: 'static,
-    B: MessageBody + 'static,
+    S: ServiceFactory<Request>,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S>>(
+    pub(crate) fn with_config<U: IntoServiceFactory<S, Request>>(
         cfg: ServiceConfig,
         service: U,
     ) -> Self {
@@ -61,7 +59,7 @@ mod openssl {
     impl<F, S, B> H2Service<SslFilter<F>, S, B>
     where
         F: Filter,
-        S: ServiceFactory<Config = (), Request = Request> + 'static,
+        S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
@@ -71,8 +69,7 @@ mod openssl {
             self,
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
-            Config = (),
-            Request = Io<F>,
+            Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
@@ -99,11 +96,9 @@ mod rustls {
     impl<F, S, B> H2Service<TlsFilter<F>, S, B>
     where
         F: Filter,
-        S: ServiceFactory<Config = (), Request = Request>,
-        S::Error: ResponseError + 'static,
-        S::Response: Into<Response<B>> + 'static,
-        S::Future: 'static,
-        <S::Service as Service>::Future: 'static,
+        S: ServiceFactory<Request> + 'static,
+        S::Error: ResponseError,
+        S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
     {
         /// Create openssl based service
@@ -111,8 +106,7 @@ mod rustls {
             self,
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
-            Config = (),
-            Request = Io<F>,
+            Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
@@ -131,18 +125,14 @@ mod rustls {
     }
 }
 
-impl<F, S, B> ServiceFactory for H2Service<F, S, B>
+impl<F, S, B> ServiceFactory<Io<F>> for H2Service<F, S, B>
 where
     F: Filter,
-    S: ServiceFactory<Config = (), Request = Request>,
-    S::Error: ResponseError + 'static,
-    S::Response: Into<Response<B>> + 'static,
-    S::Future: 'static,
-    <S::Service as Service>::Future: 'static,
+    S: ServiceFactory<Request> + 'static,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
     B: MessageBody + 'static,
 {
-    type Config = ();
-    type Request = Io<F>;
     type Response = ();
     type Error = DispatchError;
     type InitError = S::InitError;
@@ -166,21 +156,20 @@ where
 }
 
 /// `Service` implementation for http/2 transport
-pub struct H2ServiceHandler<F, S: Service, B> {
+pub struct H2ServiceHandler<F, S: Service<Request>, B> {
     config: Rc<DispatcherConfig<S, (), ()>>,
     _t: PhantomData<(F, B)>,
 }
 
-impl<F, S, B> Service for H2ServiceHandler<F, S, B>
+impl<F, S, B> Service<Io<F>> for H2ServiceHandler<F, S, B>
 where
     F: Filter,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
     B: MessageBody + 'static,
 {
-    type Request = Io<F>;
     type Response = ();
     type Error = DispatchError;
     type Future = H2ServiceHandlerResponse<F, S, B>;
@@ -198,7 +187,7 @@ where
         self.config.service.poll_shutdown(cx, is_error)
     }
 
-    fn call(&self, io: Self::Request) -> Self::Future {
+    fn call(&self, io: Io<F>) -> Self::Future {
         log::trace!(
             "New http2 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
@@ -215,7 +204,7 @@ where
     }
 }
 
-enum State<F, S: Service<Request = Request>, B: MessageBody>
+enum State<F, S: Service<Request>, B: MessageBody>
 where
     F: Filter,
     S::Future: 'static,
@@ -231,7 +220,7 @@ where
 pub struct H2ServiceHandlerResponse<F, S, B>
 where
     F: Filter,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,
@@ -243,7 +232,7 @@ where
 impl<F, S, B> Future for H2ServiceHandlerResponse<F, S, B>
 where
     F: Filter,
-    S: Service<Request = Request>,
+    S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Future: 'static,
     S::Response: Into<Response<B>> + 'static,

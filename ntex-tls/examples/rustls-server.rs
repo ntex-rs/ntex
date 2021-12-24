@@ -17,8 +17,7 @@ async fn main() -> io::Result<()> {
     // load ssl keys
     let cert_file =
         &mut BufReader::new(File::open("../ntex-tls/examples/cert.pem").unwrap());
-    let key_file =
-        &mut BufReader::new(File::open("../ntex-tls/examples/key.pem").unwrap());
+    let key_file = &mut BufReader::new(File::open("../ntex-tls/examples/key.pem").unwrap());
     let keys = PrivateKey(rsa_private_keys(key_file).unwrap().remove(0));
     let cert_chain = certs(cert_file)
         .unwrap()
@@ -36,8 +35,8 @@ async fn main() -> io::Result<()> {
     // start server
     server::ServerBuilder::new()
         .bind("basic", "127.0.0.1:8443", move |_| {
-            pipeline_factory(filter_factory(TlsAcceptor::new(tls_config.clone())))
-                .and_then(fn_service(|io: Io<_>| async move {
+            pipeline_factory(filter_factory(TlsAcceptor::new(tls_config.clone()))).and_then(
+                fn_service(|io: Io<_>| async move {
                     println!("New client is connected");
 
                     io.send(
@@ -64,7 +63,8 @@ async fn main() -> io::Result<()> {
                     }
                     println!("Client is disconnected");
                     Ok(())
-                }))
+                }),
+            )
         })?
         .workers(1)
         .run()
