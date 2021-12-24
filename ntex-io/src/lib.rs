@@ -10,6 +10,7 @@ mod dispatcher;
 mod filter;
 mod io;
 mod ioref;
+mod seal;
 mod tasks;
 mod time;
 mod utils;
@@ -24,14 +25,12 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Millis;
 
 pub use self::dispatcher::Dispatcher;
-pub use self::filter::{Base, Sealed};
+pub use self::filter::Base;
 pub use self::io::{Io, IoRef, OnDisconnect};
+pub use self::seal::{IoBoxed, Sealed};
 pub use self::tasks::{ReadContext, WriteContext};
 pub use self::time::Timer;
-
-pub use self::utils::{filter_factory, seal, sealed_service, SealedFactory, SealedService};
-
-pub type IoBoxed = Io<Sealed>;
+pub use self::utils::{add_filter, boxed, seal, Boxed, BoxedFactory};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ReadStatus {

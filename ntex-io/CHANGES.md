@@ -1,6 +1,8 @@
 # Changes
 
-## [0.1.0-b.5] - 2021-12-23
+## [0.1.0-b.5] - 2021-12-xx
+
+* Make `IoBoxed` into spearate type
 
 * Add `SealedService` and `SealedFactory` helpers
 

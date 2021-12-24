@@ -5,8 +5,6 @@ use ntex_bytes::BytesMut;
 use super::io::Flags;
 use super::{Filter, IoRef, ReadStatus, WriteStatus};
 
-pub struct Sealed(pub(crate) Box<dyn Filter>);
-
 pub struct Base(IoRef);
 
 impl Base {

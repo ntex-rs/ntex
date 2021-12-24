@@ -23,25 +23,25 @@ where
         let fut = srv.new_service(cfg);
         async move {
             let srv = fut.await?;
-            Ok(into_service(move |io: Io<F>| srv.call(io.seal())))
+            Ok(into_service(move |io: Io<F>| srv.call(IoBoxed::from(io))))
         }
     })
 }
 
 /// Service that converts Io<F> responses from service to the IoBoxed
-pub fn sealed_service<S, R, F>(inner: S) -> SealedService<S, R>
+pub fn boxed<S, R, F>(inner: S) -> Boxed<S, R>
 where
     F: Filter,
     S: Service<R, Response = Io<F>>,
 {
-    SealedService {
+    Boxed {
         inner,
         _t: PhantomData,
     }
 }
 
 /// Create filter factory service
-pub fn filter_factory<T, F>(filter: T) -> FilterServiceFactory<T, F>
+pub fn add_filter<T, F>(filter: T) -> FilterServiceFactory<T, F>
 where
     T: FilterFactory<F> + Clone,
     F: Filter,
@@ -52,12 +52,12 @@ where
     }
 }
 
-pub struct SealedFactory<S, R> {
+pub struct BoxedFactory<S, R> {
     inner: S,
     _t: PhantomData<R>,
 }
 
-impl<S, R> SealedFactory<S, R> {
+impl<S, R> BoxedFactory<S, R> {
     pub fn new(inner: S) -> Self {
         Self {
             inner,
@@ -66,37 +66,37 @@ impl<S, R> SealedFactory<S, R> {
     }
 }
 
-impl<S: Clone, R> Clone for SealedFactory<S, R> {
+impl<S: Clone, R> Clone for BoxedFactory<S, R> {
     fn clone(&self) -> Self {
         Self::new(self.inner.clone())
     }
 }
 
-impl<S, R, C, F> ServiceFactory<R, C> for SealedFactory<S, R>
+impl<S, R, C, F> ServiceFactory<R, C> for BoxedFactory<S, R>
 where
     F: Filter,
     S: ServiceFactory<R, C, Response = Io<F>>,
 {
     type Response = IoBoxed;
     type Error = S::Error;
-    type Service = SealedService<S::Service, R>;
+    type Service = Boxed<S::Service, R>;
     type InitError = S::InitError;
-    type Future = SealedFactoryResponse<S, R, C>;
+    type Future = BoxedFactoryResponse<S, R, C>;
 
     fn new_service(&self, cfg: C) -> Self::Future {
-        SealedFactoryResponse {
+        BoxedFactoryResponse {
             fut: self.inner.new_service(cfg),
             _t: PhantomData,
         }
     }
 }
 
-pub struct SealedService<S, R> {
+pub struct Boxed<S, R> {
     inner: S,
     _t: PhantomData<R>,
 }
 
-impl<S, R> SealedService<S, R> {
+impl<S, R> Boxed<S, R> {
     pub fn new(inner: S) -> Self {
         Self {
             inner,
@@ -105,20 +105,20 @@ impl<S, R> SealedService<S, R> {
     }
 }
 
-impl<S: Clone, R> Clone for SealedService<S, R> {
+impl<S: Clone, R> Clone for Boxed<S, R> {
     fn clone(&self) -> Self {
         Self::new(self.inner.clone())
     }
 }
 
-impl<S, R, F> Service<R> for SealedService<S, R>
+impl<S, R, F> Service<R> for Boxed<S, R>
 where
     F: Filter,
     S: Service<R, Response = Io<F>>,
 {
     type Response = IoBoxed;
     type Error = S::Error;
-    type Future = SealedServiceResponse<S, R>;
+    type Future = BoxedResponse<S, R>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
         self.inner.poll_ready(cx)
@@ -130,45 +130,43 @@ where
     }
 
     fn call(&self, req: R) -> Self::Future {
-        SealedServiceResponse {
+        BoxedResponse {
             fut: self.inner.call(req),
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct SealedFactoryResponse<S: ServiceFactory<R, C>, R, C> {
+    pub struct BoxedFactoryResponse<S: ServiceFactory<R, C>, R, C> {
         #[pin]
         fut: S::Future,
         _t: PhantomData<(R, C)>
     }
 }
 
-impl<S: ServiceFactory<R, C>, R, C> Future for SealedFactoryResponse<S, R, C> {
-    type Output = Result<SealedService<S::Service, R>, S::InitError>;
+impl<S: ServiceFactory<R, C>, R, C> Future for BoxedFactoryResponse<S, R, C> {
+    type Output = Result<Boxed<S::Service, R>, S::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(
-            ready!(self.project().fut.poll(cx)).map(|inner| SealedService {
-                inner,
-                _t: PhantomData,
-            }),
-        )
+        Poll::Ready(ready!(self.project().fut.poll(cx)).map(|inner| Boxed {
+            inner,
+            _t: PhantomData,
+        }))
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct SealedServiceResponse<S: Service<R>, R> {
+    pub struct BoxedResponse<S: Service<R>, R> {
         #[pin]
         fut: S::Future,
     }
 }
 
-impl<S: Service<R, Response = Io<F>>, R, F: Filter> Future for SealedServiceResponse<S, R> {
+impl<S: Service<R, Response = Io<F>>, R, F: Filter> Future for BoxedResponse<S, R> {
     type Output = Result<IoBoxed, S::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(ready!(self.project().fut.poll(cx)).map(|io| io.seal()))
+        Poll::Ready(ready!(self.project().fut.poll(cx)).map(IoBoxed::from))
     }
 }
 
