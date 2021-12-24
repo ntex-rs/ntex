@@ -1,4 +1,4 @@
-//#![deny(rust_2018_idioms, warnings)]
+#![deny(rust_2018_idioms, warnings)]
 #![allow(clippy::type_complexity)]
 
 use std::future::Future;
@@ -6,7 +6,6 @@ use std::rc::Rc;
 use std::task::{self, Context, Poll};
 
 mod and_then;
-// mod and_then_apply_fn;
 mod apply;
 pub mod boxed;
 mod fn_service;

@@ -1,6 +1,8 @@
 # Changes
 
-## [0.5.0-b.3] - 2021-12-23
+## [0.5.0-b.3] - 2021-12-24
+
+* Use new ntex-service traits
 
 * Remove websocket support from http::client
 
