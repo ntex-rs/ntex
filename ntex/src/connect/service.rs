@@ -45,7 +45,7 @@ impl<T: Address> Connector<T> {
     }
 
     /// Produce sealed io stream (IoBoxed)
-    pub fn seal(self) -> Boxed<Connector<T>, Io> {
+    pub fn seal(self) -> Boxed<Connector<T>, Connect<T>> {
         Boxed::new(self)
     }
 }
