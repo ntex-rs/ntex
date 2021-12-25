@@ -91,7 +91,7 @@ impl<F: Filter> Filter for WsTransport<F> {
 
     #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
-        self.read_buf.take()
+        self.inner.get_read_buf().or_else(|| self.read_buf.take())
     }
 
     #[inline]
@@ -99,115 +99,127 @@ impl<F: Filter> Filter for WsTransport<F> {
         None
     }
 
-    fn release_read_buf(&self, mut src: BytesMut, nbytes: usize) -> Result<(), io::Error> {
-        if nbytes == 0 {
-            if !src.is_empty() {
-                self.read_buf.set(Some(src));
-            }
-            Ok(())
-        } else {
-            let (hw, lw) = self.pool.read_params().unpack();
+    fn release_read_buf(
+        &self,
+        src: BytesMut,
+        dst: &mut Option<BytesMut>,
+        nbytes: usize,
+    ) -> io::Result<usize> {
+        let mut src = {
+            let mut dst = None;
+            self.inner.release_read_buf(src, &mut dst, nbytes)?;
 
-            // get inner filter buffer
-            let mut buf = if let Some(buf) = self.inner.get_read_buf() {
-                buf
+            if let Some(dst) = dst {
+                dst
             } else {
-                self.pool.get_read_buf()
-            };
-            let len = buf.len();
-            let mut flags = self.flags.get();
+                return Ok(0);
+            }
+        };
+        let (hw, lw) = self.pool.read_params().unpack();
 
-            // read from input buffer
-            loop {
-                let result = self.codec.decode(&mut src).map_err(|e| {
-                    log::trace!("ws codec failed to decode bytes stream: {:?}", e);
-                    io::Error::new(io::ErrorKind::Other, e)
-                })?;
+        // get outter filter buffer
+        if dst.is_none() {
+            *dst = Some(self.pool.get_read_buf());
+        }
+        let buf = dst.as_mut().unwrap();
+        let mut flags = self.flags.get();
+        let mut nbytes = 0;
 
-                // make sure we've got room
-                let remaining = buf.remaining_mut();
-                if remaining < lw {
-                    buf.reserve(hw - remaining);
-                }
+        // read from input buffer
+        loop {
+            let result = self.codec.decode(&mut src).map_err(|e| {
+                log::trace!("ws codec failed to decode bytes stream: {:?}", e);
+                io::Error::new(io::ErrorKind::Other, e)
+            })?;
 
-                match result {
-                    Some(frame) => match frame {
-                        Frame::Binary(bin) => buf.extend_from_slice(&bin),
-                        Frame::Continuation(item) => match item {
-                            Item::FirstText(_) => {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    "WebSocket text continuation frames are not supported",
-                                ));
-                            }
-                            Item::FirstBinary(bin) => {
-                                flags = self.insert_flags(Flags::CONTINUATION);
+            // make sure we've got room
+            let remaining = buf.remaining_mut();
+            if remaining < lw {
+                buf.reserve(hw - remaining);
+            }
+
+            match result {
+                Some(frame) => match frame {
+                    Frame::Binary(bin) => {
+                        nbytes += bin.len();
+                        buf.extend_from_slice(&bin)
+                    }
+                    Frame::Continuation(item) => match item {
+                        Item::FirstText(_) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Other,
+                                "WebSocket text continuation frames are not supported",
+                            ));
+                        }
+                        Item::FirstBinary(bin) => {
+                            nbytes += bin.len();
+                            buf.extend_from_slice(&bin);
+                            flags = self.insert_flags(Flags::CONTINUATION);
+                        }
+                        Item::Continue(bin) => {
+                            if flags.contains(Flags::CONTINUATION) {
+                                nbytes += bin.len();
                                 buf.extend_from_slice(&bin);
-                            }
-                            Item::Continue(bin) => {
-                                if flags.contains(Flags::CONTINUATION) {
-                                    buf.extend_from_slice(&bin);
-                                } else {
-                                    return Err(io::Error::new(
+                            } else {
+                                return Err(io::Error::new(
                                         io::ErrorKind::Other,
                                         "Continuation frame must follow data frame with FIN bit clear",
                                     ));
-                                }
                             }
-                            Item::Last(bin) => {
-                                if flags.contains(Flags::CONTINUATION) {
-                                    flags = self.remove_flags(Flags::CONTINUATION);
-                                    buf.extend_from_slice(&bin);
-                                } else {
-                                    return Err(io::Error::new(
+                        }
+                        Item::Last(bin) => {
+                            if flags.contains(Flags::CONTINUATION) {
+                                nbytes += bin.len();
+                                buf.extend_from_slice(&bin);
+                                flags = self.remove_flags(Flags::CONTINUATION);
+                            } else {
+                                return Err(io::Error::new(
                                         io::ErrorKind::Other,
                                         "Received last frame without initial continuation frame",
                                     ));
-                                }
                             }
-                        },
-                        Frame::Text(_) => {
-                            log::trace!("WebSocket text frames are not supported");
-                            return Err(io::Error::new(
-                                io::ErrorKind::Other,
-                                "WebSocket text frames are not supported",
-                            ));
-                        }
-                        Frame::Ping(msg) => {
-                            let mut b = self
-                                .inner
-                                .get_write_buf()
-                                .unwrap_or_else(|| self.pool.get_write_buf());
-                            self.codec
-                                .encode(Message::Pong(msg), &mut b)
-                                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-                            self.release_write_buf(b)?;
-                        }
-                        Frame::Pong(_) => (),
-                        Frame::Close(_) => {
-                            let mut b = self
-                                .inner
-                                .get_write_buf()
-                                .unwrap_or_else(|| self.pool.get_write_buf());
-                            self.codec
-                                .encode(Message::Close(None), &mut b)
-                                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-                            self.release_write_buf(b)?;
-                            break;
                         }
                     },
-                    None => break,
-                }
+                    Frame::Text(_) => {
+                        log::trace!("WebSocket text frames are not supported");
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "WebSocket text frames are not supported",
+                        ));
+                    }
+                    Frame::Ping(msg) => {
+                        let mut b = self
+                            .inner
+                            .get_write_buf()
+                            .unwrap_or_else(|| self.pool.get_write_buf());
+                        self.codec
+                            .encode(Message::Pong(msg), &mut b)
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                        self.release_write_buf(b)?;
+                    }
+                    Frame::Pong(_) => (),
+                    Frame::Close(_) => {
+                        let mut b = self
+                            .inner
+                            .get_write_buf()
+                            .unwrap_or_else(|| self.pool.get_write_buf());
+                        self.codec
+                            .encode(Message::Close(None), &mut b)
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                        self.release_write_buf(b)?;
+                        break;
+                    }
+                },
+                None => break,
             }
-
-            if !src.is_empty() {
-                self.read_buf.set(Some(src));
-            } else {
-                self.pool.release_read_buf(src);
-            }
-            let new_bytes = buf.len() - len;
-            self.inner.release_read_buf(buf, new_bytes)
         }
+
+        if !src.is_empty() {
+            self.read_buf.set(Some(src));
+        } else {
+            self.pool.release_read_buf(src);
+        }
+        Ok(nbytes)
     }
 
     fn release_write_buf(&self, src: BytesMut) -> Result<(), io::Error> {
@@ -251,5 +263,41 @@ impl<F: Filter> FilterFactory<F> for WsTransportFactory {
     fn create(self, st: Io<F>) -> Self::Future {
         let pool = st.memory_pool();
         Ready::from(st.map_filter(|inner| Ok(WsTransport::new(inner, self.codec, pool))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{codec::BytesCodec, io::Io, testing::IoTest, util::Bytes};
+
+    #[crate::rt_test]
+    async fn basics() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        server.remote_buffer_cap(1024);
+
+        let client = WsTransportFactory::new(Codec::new().client_mode())
+            .create(Io::new(client))
+            .await
+            .unwrap();
+        let server = WsTransportFactory::new(Codec::new())
+            .create(Io::new(server))
+            .await
+            .unwrap();
+
+        client
+            .send(&BytesCodec, Bytes::from_static(b"DATA"))
+            .await
+            .unwrap();
+        let res = server.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(res, b"DATA".as_ref());
+
+        server
+            .send(&BytesCodec, Bytes::from_static(b"DATA"))
+            .await
+            .unwrap();
+        let res = client.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(res, b"DATA".as_ref());
     }
 }

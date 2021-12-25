@@ -4,7 +4,7 @@ use std::{sync::mpsc, thread, time::Duration};
 use tls_openssl::ssl::SslAcceptorBuilder;
 
 use ntex::web::{self, App, HttpResponse, HttpServer};
-use ntex::{rt, server::TestServer, time::Seconds};
+use ntex::{rt, server::TestServer, time::sleep, time::Seconds};
 
 #[cfg(unix)]
 #[ntex::test]
@@ -203,7 +203,7 @@ async fn test_rustls() {
     // stop
     let _ = srv.stop(false);
 
-    thread::sleep(Duration::from_millis(100));
+    sleep(Duration::from_millis(100)).await;
     sys.stop();
 }
 
@@ -253,7 +253,7 @@ async fn test_bind_uds() {
     // stop
     let _ = srv.stop(false);
 
-    thread::sleep(Duration::from_millis(100));
+    sleep(Duration::from_millis(100)).await;
     sys.stop();
 }
 
@@ -305,6 +305,6 @@ async fn test_listen_uds() {
     // stop
     let _ = srv.stop(false);
 
-    thread::sleep(Duration::from_millis(100));
+    sleep(Duration::from_millis(100)).await;
     sys.stop();
 }

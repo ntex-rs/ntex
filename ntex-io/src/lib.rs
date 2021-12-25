@@ -1,6 +1,6 @@
 use std::{
-    any::Any, any::TypeId, fmt, future::Future, io::Error as IoError, task::Context,
-    task::Poll,
+    any::Any, any::TypeId, fmt, future::Future, io as sio, io::Error as IoError,
+    task::Context, task::Poll,
 };
 
 pub mod testing;
@@ -55,7 +55,7 @@ pub trait Filter: 'static {
     /// Filter wants gracefully shutdown io stream
     fn want_shutdown(&self);
 
-    fn poll_shutdown(&self) -> Poll<std::io::Result<()>>;
+    fn poll_shutdown(&self) -> Poll<sio::Result<()>>;
 
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus>;
 
@@ -65,11 +65,16 @@ pub trait Filter: 'static {
 
     fn get_write_buf(&self) -> Option<BytesMut>;
 
-    fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> std::io::Result<()>;
+    fn release_read_buf(
+        &self,
+        src: BytesMut,
+        dst: &mut Option<BytesMut>,
+        nbytes: usize,
+    ) -> sio::Result<usize>;
 
-    fn release_write_buf(&self, buf: BytesMut) -> std::io::Result<()>;
+    fn release_write_buf(&self, buf: BytesMut) -> sio::Result<()>;
 
-    fn closed(&self, err: Option<std::io::Error>);
+    fn closed(&self, err: Option<sio::Error>);
 }
 
 pub trait FilterFactory<F: Filter>: Sized {

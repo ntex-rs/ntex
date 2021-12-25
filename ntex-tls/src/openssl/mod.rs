@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::{
     any, cmp, error::Error, future::Future, io, pin::Pin, task::Context, task::Poll,
 };
@@ -18,6 +18,7 @@ use super::types;
 /// An implementation of SSL streams
 pub struct SslFilter<F = Base> {
     inner: RefCell<SslStream<IoInner<F>>>,
+    handshake: Cell<bool>,
 }
 
 struct IoInner<F> {
@@ -128,12 +129,15 @@ impl<F: Filter> Filter for SslFilter<F> {
 
     #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
-        if let Some(buf) = self.inner.borrow_mut().get_mut().read_buf.take() {
-            if !buf.is_empty() {
-                return Some(buf);
+        let mut inner = self.inner.borrow_mut();
+        inner.get_ref().inner.get_read_buf().or_else(|| {
+            if let Some(buf) = inner.get_mut().read_buf.take() {
+                if !buf.is_empty() {
+                    return Some(buf);
+                }
             }
-        }
-        None
+            None
+        })
     }
 
     #[inline]
@@ -146,25 +150,34 @@ impl<F: Filter> Filter for SslFilter<F> {
         None
     }
 
-    fn release_read_buf(&self, src: BytesMut, nbytes: usize) -> Result<(), io::Error> {
+    fn release_read_buf(
+        &self,
+        src: BytesMut,
+        dst: &mut Option<BytesMut>,
+        nbytes: usize,
+    ) -> io::Result<usize> {
         // store to read_buf
         let pool = {
             let mut inner = self.inner.borrow_mut();
-            inner.get_mut().read_buf = Some(src);
-            inner.get_ref().pool
+            let mut dst = None;
+            inner
+                .get_ref()
+                .inner
+                .release_read_buf(src, &mut dst, nbytes)?;
+            if dst.is_some() {
+                inner.get_mut().read_buf = dst;
+                inner.get_ref().pool
+            } else {
+                return Ok(0);
+            }
         };
-        if nbytes == 0 {
-            return Ok(());
-        }
         let (hw, lw) = pool.read_params().unpack();
 
         // get inner filter buffer
-        let mut buf = if let Some(buf) = self.inner.borrow().get_ref().inner.get_read_buf()
-        {
-            buf
-        } else {
-            BytesMut::with_capacity_in(lw, pool)
-        };
+        if dst.is_none() {
+            *dst = Some(pool.get_read_buf());
+        }
+        let buf = dst.as_mut().unwrap();
 
         let mut new_bytes = 0;
         loop {
@@ -186,11 +199,13 @@ impl<F: Filter> Filter for SslFilter<F> {
                     if e.code() == ssl::ErrorCode::WANT_READ
                         || e.code() == ssl::ErrorCode::WANT_WRITE =>
                 {
-                    self.inner
-                        .borrow()
-                        .get_ref()
-                        .inner
-                        .release_read_buf(buf, new_bytes)
+                    if new_bytes == 0 && self.handshake.get() {
+                        new_bytes = 1;
+                        if self.inner.borrow().ssl().is_init_finished() {
+                            self.handshake.set(false);
+                        }
+                    }
+                    Ok(new_bytes)
                 }
                 Err(e) => Err(map_to_ioerr(e)),
             };
@@ -274,6 +289,7 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
 
                     Ok::<_, Box<dyn Error>>(SslFilter {
                         inner: RefCell::new(ssl_stream),
+                        handshake: Cell::new(true),
                     })
                 })?;
 
@@ -326,6 +342,7 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
 
                 Ok::<_, Box<dyn Error>>(SslFilter {
                     inner: RefCell::new(ssl_stream),
+                    handshake: Cell::new(true),
                 })
             })?;
 

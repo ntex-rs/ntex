@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.0-b.4] - 2021-12-xx
+
+* Allow to get access to ws transport codec
+
 ## [0.5.0-b.3] - 2021-12-24
 
 * Use new ntex-service traits
