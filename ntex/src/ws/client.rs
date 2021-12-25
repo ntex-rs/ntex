@@ -57,12 +57,7 @@ struct Inner<F, T> {
 
 impl WsClient<Base, ()> {
     /// Create new websocket client builder
-    pub fn build<U>(
-        uri: U,
-    ) -> WsClientBuilder<
-        Base,
-        impl Service<Connect<Uri>, Response = Io, Error = ConnectError>,
-    >
+    pub fn build<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -269,12 +264,7 @@ impl<F, T> fmt::Debug for WsClient<F, T> {
 
 impl WsClientBuilder<Base, ()> {
     /// Create new websocket connector
-    fn new<U>(
-        uri: U,
-    ) -> WsClientBuilder<
-        Base,
-        impl Service<Connect<Uri>, Response = Io, Error = ConnectError>,
-    >
+    fn new<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -671,6 +661,11 @@ pub struct WsConnection<F> {
 impl<F> WsConnection<F> {
     fn new(io: Io<F>, res: ClientResponse, codec: ws::Codec) -> Self {
         Self { io, codec, res }
+    }
+
+    /// Get codec reference
+    pub fn codec(&self) -> &ws::Codec {
+        &self.codec
     }
 
     /// Get reference to response

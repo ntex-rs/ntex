@@ -253,3 +253,42 @@ impl<F: Filter> FilterFactory<F> for WsTransportFactory {
         Ready::from(st.map_filter(|inner| Ok(WsTransport::new(inner, self.codec, pool))))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::BytesCodec;
+    use crate::io::Io;
+    use crate::testing::IoTest;
+    use crate::util::{Bytes, Ready};
+
+    #[crate::rt_test]
+    async fn basics() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        server.remote_buffer_cap(1024);
+
+        let client = WsTransportFactory::new(Codec::new().client_mode())
+            .create(Io::new(client))
+            .await
+            .unwrap();
+        let server = WsTransportFactory::new(Codec::new())
+            .create(Io::new(server))
+            .await
+            .unwrap();
+
+        client
+            .send(&BytesCodec, Bytes::from_static(b"DATA"))
+            .await
+            .unwrap();
+        let res = server.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(res, b"DATA".as_ref());
+
+        server
+            .send(&BytesCodec, Bytes::from_static(b"DATA"))
+            .await
+            .unwrap();
+        let res = client.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(res, b"DATA".as_ref());
+    }
+}

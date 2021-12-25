@@ -81,7 +81,9 @@ pub mod io {
 
 pub mod testing {
     //! IO testing utilities.
+    #[doc(hidden)]
     pub use ntex_io::testing::IoTest as Io;
+    pub use ntex_io::testing::IoTest;
 }
 
 pub mod tls {
