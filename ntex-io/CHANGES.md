@@ -2,6 +2,8 @@
 
 ## [0.1.0-b.6] - 2021-12-26
 
+* Rename `RecvError::StopDispatcher` to `RecvError::Stop`
+
 * Better error information for .poll_recv() method.
 
 * Remove redundant Io::poll_write_backpressure() method.
@@ -9,6 +11,8 @@
 * Add Framed type
 
 * Fix read filters ordering
+
+* Fix read filter root buffer
 
 ## [0.1.0-b.5] - 2021-12-24
 

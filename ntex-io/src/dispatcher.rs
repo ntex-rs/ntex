@@ -226,7 +226,7 @@ where
                                     slf.st.set(DispatcherState::Stop);
                                     DispatchItem::KeepAliveTimeout
                                 }
-                                Err(RecvError::StopDispatcher) => {
+                                Err(RecvError::Stop) => {
                                     log::trace!("dispatcher is instructed to stop");
                                     slf.st.set(DispatcherState::Stop);
                                     continue;

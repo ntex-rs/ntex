@@ -325,6 +325,27 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn read_readiness() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let io = Io::new(server);
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+
+        client.write(TEXT);
+        assert_eq!(io.read_ready().await.unwrap(), Some(()));
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+
+        let item = io.with_read_buf(|buffer| buffer.clone());
+        assert_eq!(item, Bytes::from_static(BIN));
+
+        client.write(TEXT);
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+    }
+
+    #[ntex::test]
     async fn on_disconnect() {
         let (client, server) = IoTest::create();
         let state = Io::new(server);

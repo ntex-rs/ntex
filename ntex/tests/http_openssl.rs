@@ -481,6 +481,7 @@ async fn test_ws_transport() {
     io.send(ws::Message::Binary(Bytes::from_static(b"text")), &codec)
         .await
         .unwrap();
+
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 }

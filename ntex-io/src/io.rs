@@ -426,7 +426,7 @@ impl<F> Io<F> {
                     io::ErrorKind::Other,
                     "Keep-alive",
                 ))),
-                Err(RecvError::StopDispatcher) => Err(Either::Right(io::Error::new(
+                Err(RecvError::Stop) => Err(Either::Right(io::Error::new(
                     io::ErrorKind::Other,
                     "Dispatcher stopped",
                 ))),
@@ -558,7 +558,7 @@ impl<F> Io<F> {
             Ok(None) => {
                 let flags = self.flags();
                 if flags.contains(Flags::DSP_STOP) {
-                    Poll::Ready(Err(RecvError::StopDispatcher))
+                    Poll::Ready(Err(RecvError::Stop))
                 } else if flags.contains(Flags::DSP_KEEPALIVE) {
                     Poll::Ready(Err(RecvError::KeepAlive))
                 } else if flags.contains(Flags::WR_BACKPRESSURE) {

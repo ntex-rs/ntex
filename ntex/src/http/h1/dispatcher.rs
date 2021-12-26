@@ -328,7 +328,7 @@ where
                             *this.st = State::Stop;
                             this.inner.error = Some(DispatchError::Disconnect(err));
                         }
-                        Err(RecvError::StopDispatcher) => {
+                        Err(RecvError::Stop) => {
                             log::trace!("dispatcher is instructed to stop");
                             *this.st = State::Stop;
                         }
@@ -607,7 +607,7 @@ where
                                         io::Error::new(io::ErrorKind::Other, "Keep-alive")
                                             .into()
                                     }
-                                    RecvError::StopDispatcher => {
+                                    RecvError::Stop => {
                                         payload
                                             .1
                                             .set_error(PayloadError::EncodingCorrupted);

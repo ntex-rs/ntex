@@ -98,7 +98,7 @@ impl Filter for Base {
 
     #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
-        None
+        self.0 .0.read_buf.take()
     }
 
     #[inline]

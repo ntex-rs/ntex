@@ -83,7 +83,6 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_transport() {
-    env_logger::init();
     let mut srv = test_server(|| {
         HttpService::build()
             .upgrade(|(req, io, codec): (Request, Io, h1::Codec)| {

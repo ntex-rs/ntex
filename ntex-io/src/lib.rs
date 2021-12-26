@@ -103,8 +103,8 @@ pub enum RecvError<U: Decoder> {
     KeepAlive,
     /// Write backpressure is enabled
     WriteBackpressure,
-    /// Dispatcher marked stopped
-    StopDispatcher,
+    /// Stop io stream handling
+    Stop,
     /// Unrecoverable frame decoding errors
     Decoder(U::Error),
     /// Peer is disconnected
