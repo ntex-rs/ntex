@@ -145,8 +145,12 @@ impl IoRef {
         let mut buf = filter
             .get_write_buf()
             .unwrap_or_else(|| self.memory_pool().get_write_buf());
+        let is_write_sleep = buf.is_empty();
 
         let result = f(&mut buf);
+        if is_write_sleep {
+            self.0.write_task.wake();
+        }
         filter.release_write_buf(buf)?;
         Ok(result)
     }
@@ -177,29 +181,28 @@ impl IoRef {
         let flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
-            let filter = self.0.filter.get();
-            let mut buf = filter
-                .get_write_buf()
-                .unwrap_or_else(|| self.memory_pool().get_write_buf());
-            let is_write_sleep = buf.is_empty();
-            let (hw, lw) = self.memory_pool().write_params().unpack();
+            self.with_write_buf(|buf| {
+                let (hw, lw) = self.memory_pool().write_params().unpack();
 
-            // make sure we've got room
-            let remaining = buf.remaining_mut();
-            if remaining < lw {
-                buf.reserve(hw - remaining);
-            }
+                // make sure we've got room
+                let remaining = buf.remaining_mut();
+                if remaining < lw {
+                    buf.reserve(hw - remaining);
+                }
 
-            // encode item and wake write task
-            codec.encode(item, &mut buf)?;
-            if is_write_sleep {
-                self.0.write_task.wake();
-            }
-            if let Err(err) = filter.release_write_buf(buf) {
-                self.0.set_error(Some(err));
-            }
+                // encode item and wake write task
+                codec.encode(item, buf)
+            })
+            .map_or_else(
+                |err| {
+                    self.0.set_error(Some(err));
+                    Ok(())
+                },
+                |item| item,
+            )
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
     #[inline]
@@ -221,31 +224,15 @@ impl IoRef {
 
     #[inline]
     /// Write bytes to a buffer and wake up write task
-    ///
-    /// Returns write buffer state, false is returned if write buffer if full.
-    pub fn write(&self, src: &[u8]) -> Result<bool, io::Error> {
+    pub fn write(&self, src: &[u8]) -> io::Result<()> {
         let flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
-            let filter = self.0.filter.get();
-            let mut buf = filter
-                .get_write_buf()
-                .unwrap_or_else(|| self.memory_pool().get_write_buf());
-            let is_write_sleep = buf.is_empty();
-
-            // write and wake write task
-            buf.extend_from_slice(src);
-            let result = buf.len() < self.memory_pool().write_params_high();
-            if is_write_sleep {
-                self.0.write_task.wake();
-            }
-
-            if let Err(err) = filter.release_write_buf(buf) {
-                self.0.set_error(Some(err));
-            }
-            Ok(result)
+            self.with_write_buf(|buf| {
+                buf.extend_from_slice(src);
+            })
         } else {
-            Ok(true)
+            Ok(())
         }
     }
 }
@@ -318,14 +305,14 @@ mod tests {
         client.remote_buffer_cap(1024);
         let state = Io::new(server);
         state
-            .send(&BytesCodec, Bytes::from_static(b"test"))
+            .send(Bytes::from_static(b"test"), &BytesCodec)
             .await
             .unwrap();
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         client.write_error(io::Error::new(io::ErrorKind::Other, "err"));
-        let res = state.send(&BytesCodec, Bytes::from_static(b"test")).await;
+        let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
         assert!(res.is_err());
         assert!(state.flags().contains(Flags::IO_ERR));
 
@@ -496,7 +483,7 @@ mod tests {
         assert_eq!(msg, Bytes::from_static(BIN));
 
         state
-            .send(&BytesCodec, Bytes::from_static(b"test"))
+            .send(Bytes::from_static(b"test"), &BytesCodec)
             .await
             .unwrap();
         let buf = client.read().await.unwrap();
@@ -541,7 +528,7 @@ mod tests {
         assert_eq!(msg, Bytes::from_static(BIN));
 
         state
-            .send(&BytesCodec, Bytes::from_static(b"test"))
+            .send(Bytes::from_static(b"test"), &BytesCodec)
             .await
             .unwrap();
         let buf = client.read().await.unwrap();

@@ -20,7 +20,7 @@ async fn main() -> io::Result<()> {
     let io = connector.connect("127.0.0.1:8443").await.unwrap();
     println!("Connected to ssl server");
     let result = io
-        .send(&codec::BytesCodec, Bytes::from_static(b"hello"))
+        .send(Bytes::from_static(b"hello"), &codec::BytesCodec)
         .await
         .map_err(Either::into_inner)?;
 

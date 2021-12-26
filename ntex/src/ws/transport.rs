@@ -287,14 +287,14 @@ mod tests {
             .unwrap();
 
         client
-            .send(&BytesCodec, Bytes::from_static(b"DATA"))
+            .send(Bytes::from_static(b"DATA"), &BytesCodec)
             .await
             .unwrap();
         let res = server.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(res, b"DATA".as_ref());
 
         server
-            .send(&BytesCodec, Bytes::from_static(b"DATA"))
+            .send(Bytes::from_static(b"DATA"), &BytesCodec)
             .await
             .unwrap();
         let res = client.recv(&BytesCodec).await.unwrap().unwrap();

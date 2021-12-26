@@ -40,8 +40,8 @@ async fn main() -> io::Result<()> {
                     println!("New client is connected");
 
                     io.send(
-                        &codec::BytesCodec,
                         ntex_bytes::Bytes::from_static(b"Welcome!\n"),
+                        &codec::BytesCodec,
                     )
                     .await
                     .map_err(Either::into_inner)?;
@@ -50,7 +50,7 @@ async fn main() -> io::Result<()> {
                         match io.recv(&codec::BytesCodec).await {
                             Ok(Some(msg)) => {
                                 println!("Got message: {:?}", msg);
-                                io.send(&codec::BytesCodec, msg.freeze())
+                                io.send(msg.freeze(), &codec::BytesCodec)
                                     .await
                                     .map_err(Either::into_inner)?;
                             }

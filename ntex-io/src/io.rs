@@ -459,22 +459,18 @@ impl<F> Io<F> {
     /// Encode item, send to a peer
     pub async fn send<U>(
         &self,
-        codec: &U,
         item: U::Item,
+        codec: &U,
     ) -> Result<(), Either<U::Error, io::Error>>
     where
         U: Encoder,
     {
-        let filter = self.filter();
-        let mut buf = filter
-            .get_write_buf()
-            .unwrap_or_else(|| self.memory_pool().get_write_buf());
-        codec.encode(item, &mut buf).map_err(Either::Left)?;
-        filter.release_write_buf(buf).map_err(Either::Right)?;
+        self.encode(item, codec).map_err(Either::Left)?;
 
         poll_fn(|cx| self.poll_flush(cx, true))
             .await
             .map_err(Either::Right)?;
+
         Ok(())
     }
 

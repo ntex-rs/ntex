@@ -52,27 +52,27 @@ async fn test_simple() {
 
     // client service
     let (io, codec, _) = srv.ws().await.unwrap().into_inner();
-    io.send(&codec, ws::Message::Text(ByteString::from_static("text")))
+    io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
         .await
         .unwrap();
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
 
-    io.send(&codec, ws::Message::Binary("text".into()))
+    io.send(ws::Message::Binary("text".into()), &codec)
         .await
         .unwrap();
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 
-    io.send(&codec, ws::Message::Ping("text".into()))
+    io.send(ws::Message::Ping("text".into()), &codec)
         .await
         .unwrap();
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Pong("text".to_string().into()));
 
     io.send(
-        &codec,
         ws::Message::Close(Some(ws::CloseCode::Normal.into())),
+        &codec,
     )
     .await
     .unwrap();
@@ -110,7 +110,7 @@ async fn test_transport() {
     // client service
     let io = srv.ws().await.unwrap().into_transport().await;
 
-    io.send(&BytesCodec, Bytes::from_static(b"text"))
+    io.send(Bytes::from_static(b"text"), &BytesCodec)
         .await
         .unwrap();
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();

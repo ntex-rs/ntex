@@ -164,8 +164,8 @@ where
             // send request and read response
             let fut = async {
                 io.send(
-                    &codec,
                     (RequestHeadType::Rc(head, Some(headers)), BodySize::None).into(),
+                    &codec,
                 )
                 .await?;
                 io.recv(&codec)

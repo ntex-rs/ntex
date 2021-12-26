@@ -12,7 +12,7 @@ use ntex::util::Bytes;
 async fn test_string() {
     let srv = test_server(|| {
         fn_service(|io: Io| async move {
-            io.send(&BytesCodec, Bytes::from_static(b"test"))
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, io::Error>(())
@@ -30,7 +30,7 @@ async fn test_string() {
 async fn test_rustls_string() {
     let srv = test_server(|| {
         fn_service(|io: Io| async move {
-            io.send(&BytesCodec, Bytes::from_static(b"test"))
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, io::Error>(())
@@ -47,7 +47,7 @@ async fn test_rustls_string() {
 async fn test_static_str() {
     let srv = test_server(|| {
         fn_service(|io: Io| async move {
-            io.send(&BytesCodec, Bytes::from_static(b"test"))
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, io::Error>(())
@@ -69,7 +69,7 @@ async fn test_static_str() {
 async fn test_new_service() {
     let srv = test_server(|| {
         fn_service(|io: Io| async move {
-            io.send(&BytesCodec, Bytes::from_static(b"test"))
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, io::Error>(())
@@ -89,7 +89,7 @@ async fn test_uri() {
 
     let srv = test_server(|| {
         fn_service(|io: Io| async move {
-            io.send(&BytesCodec, Bytes::from_static(b"test"))
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, io::Error>(())
@@ -111,7 +111,7 @@ async fn test_rustls_uri() {
 
     let srv = test_server(|| {
         fn_service(|io: Io| async move {
-            io.send(&BytesCodec, Bytes::from_static(b"test"))
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, io::Error>(())

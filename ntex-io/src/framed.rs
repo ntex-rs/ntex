@@ -85,7 +85,7 @@ where
         &self,
         item: <U as Encoder>::Item,
     ) -> Result<(), Either<U::Error, io::Error>> {
-        self.io.send(&self.codec, item).await
+        self.io.send(item, &self.codec).await
     }
 }
 

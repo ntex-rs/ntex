@@ -463,7 +463,7 @@ async fn test_ws_transport() {
                         if let Some(item) =
                             io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
                         {
-                            io.send(&BytesCodec, item.freeze()).await.unwrap()
+                            io.send(item.freeze(), &BytesCodec).await.unwrap()
                         } else {
                             break;
                         }
@@ -478,7 +478,7 @@ async fn test_ws_transport() {
     let io = srv.wss().await.unwrap().into_inner().0;
     let codec = ws::Codec::default().client_mode();
 
-    io.send(&codec, ws::Message::Binary(Bytes::from_static(b"text")))
+    io.send(ws::Message::Binary(Bytes::from_static(b"text")), &codec)
         .await
         .unwrap();
     let item = io.recv(&codec).await.unwrap().unwrap();
