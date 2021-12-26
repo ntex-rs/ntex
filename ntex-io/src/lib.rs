@@ -8,6 +8,7 @@ pub mod types;
 
 mod dispatcher;
 mod filter;
+mod framed;
 mod io;
 mod ioref;
 mod seal;
@@ -26,6 +27,7 @@ use ntex_util::time::Millis;
 
 pub use self::dispatcher::Dispatcher;
 pub use self::filter::Base;
+pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
 pub use self::tasks::{ReadContext, WriteContext};

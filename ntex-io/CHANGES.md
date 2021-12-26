@@ -6,6 +6,8 @@
 
 * Remove redundant Io::poll_write_backpressure() method.
 
+* Add Framed type
+
 * Fix read filters ordering
 
 ## [0.1.0-b.5] - 2021-12-24
