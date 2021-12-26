@@ -3,30 +3,36 @@ use std::{fmt, io};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::future::Either;
 
-use crate::Io;
+use crate::IoBoxed;
 
 /// A unified interface to an underlying I/O object, using
 /// the `Encoder` and `Decoder` traits to encode and decode frames.
 /// `Framed` is heavily optimized for streaming io.
-pub struct Framed<F, U> {
-    io: Io<F>,
+pub struct Framed<U> {
+    io: IoBoxed,
     codec: U,
 }
 
-impl<F, U> Framed<F, U>
+impl<U> Framed<U>
 where
     U: Decoder + Encoder,
 {
     #[inline]
     /// Provides an interface for reading and writing to
     /// `Io` object, using `Decode` and `Encode` traits of codec.
-    pub fn new(io: Io<F>, codec: U) -> Framed<F, U> {
-        Framed { io, codec }
+    pub fn new<Io>(io: Io, codec: U) -> Framed<U>
+    where
+        IoBoxed: From<Io>,
+    {
+        Framed {
+            codec,
+            io: IoBoxed::from(io),
+        }
     }
 
     #[inline]
     /// Returns a reference to the underlying I/O stream wrapped by `Framed`.
-    pub fn get_io(&self) -> &Io<F> {
+    pub fn get_io(&self) -> &IoBoxed {
         &self.io
     }
 
@@ -51,7 +57,7 @@ where
     }
 }
 
-impl<F, U> Framed<F, U>
+impl<U> Framed<U>
 where
     U: Decoder,
 {
@@ -62,20 +68,18 @@ where
     }
 }
 
-impl<F, U> fmt::Debug for Framed<F, U>
+impl<U> fmt::Debug for Framed<U>
 where
-    Io<F>: fmt::Debug,
     U: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Framed")
-            .field("io", &self.io)
             .field("codec", &self.codec)
             .finish()
     }
 }
 
-impl<F, U> Framed<F, U>
+impl<U> Framed<U>
 where
     U: Encoder,
 {
