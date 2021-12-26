@@ -301,7 +301,6 @@ mod tests {
         let msg = state.recv(&BytesCodec).await;
         assert!(msg.is_err());
         assert!(state.flags().contains(Flags::IO_ERR));
-        assert!(state.flags().contains(Flags::DSP_STOP));
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
@@ -329,7 +328,6 @@ mod tests {
         let res = state.send(&BytesCodec, Bytes::from_static(b"test")).await;
         assert!(res.is_err());
         assert!(state.flags().contains(Flags::IO_ERR));
-        assert!(state.flags().contains(Flags::DSP_STOP));
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
