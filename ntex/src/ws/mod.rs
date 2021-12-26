@@ -6,6 +6,7 @@
 mod client;
 mod codec;
 mod frame;
+mod handshake;
 mod mask;
 mod proto;
 mod sink;
@@ -17,6 +18,7 @@ pub mod error;
 pub use self::client::{WsClient, WsClientBuilder, WsConnection};
 pub use self::codec::{Codec, Frame, Item, Message};
 pub use self::frame::Parser;
+pub use self::handshake::{handshake, handshake_response, verify_handshake};
 pub use self::proto::{hash_key, CloseCode, CloseReason, OpCode};
 pub use self::sink::WsSink;
 pub use self::stream::{StreamDecoder, StreamEncoder};

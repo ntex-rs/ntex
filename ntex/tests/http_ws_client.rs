@@ -2,9 +2,9 @@ use std::io;
 
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
-use ntex::http::ws::handshake_response;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
 use ntex::io::{DispatchItem, Dispatcher, Io};
+use ntex::ws::handshake_response;
 use ntex::{util::ByteString, util::Bytes, util::Ready, ws};
 
 async fn ws_service(

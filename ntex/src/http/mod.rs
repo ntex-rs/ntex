@@ -19,7 +19,6 @@ pub mod h1;
 pub mod h2;
 pub mod header;
 pub mod test;
-pub mod ws;
 
 pub(crate) use self::message::Message;
 
