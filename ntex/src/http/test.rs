@@ -340,7 +340,9 @@ impl TestServer {
 
     #[cfg(feature = "openssl")]
     /// Connect to a websocket server
-    pub async fn wss(&mut self) -> Result<WsConnection<crate::connect::openssl::SslFilter>, WsClientError> {
+    pub async fn wss(
+        &mut self,
+    ) -> Result<WsConnection<crate::connect::openssl::SslFilter>, WsClientError> {
         self.wss_at("/").await
     }
 

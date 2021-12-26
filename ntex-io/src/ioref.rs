@@ -279,7 +279,8 @@ impl fmt::Debug for IoRef {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
+    use std::cell::{Cell, RefCell};
+    use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
@@ -393,9 +394,12 @@ mod tests {
     }
 
     struct Counter<F> {
+        idx: usize,
         inner: F,
         in_bytes: Rc<Cell<usize>>,
         out_bytes: Rc<Cell<usize>>,
+        read_order: Rc<RefCell<Vec<usize>>>,
+        write_order: Rc<RefCell<Vec<usize>>>,
     }
     impl<F: Filter> Filter for Counter<F> {
         fn poll_shutdown(&self) -> Poll<io::Result<()>> {
@@ -425,10 +429,13 @@ mod tests {
         fn release_read_buf(
             &self,
             buf: BytesMut,
+            dst: &mut Option<BytesMut>,
             new_bytes: usize,
-        ) -> Result<(), io::Error> {
-            self.in_bytes.set(self.in_bytes.get() + new_bytes);
-            self.inner.release_read_buf(buf, new_bytes)
+        ) -> io::Result<usize> {
+            let result = self.inner.release_read_buf(buf, dst, new_bytes)?;
+            self.read_order.borrow_mut().push(self.idx);
+            self.in_bytes.set(self.in_bytes.get() + result);
+            Ok(result)
         }
 
         fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
@@ -445,12 +452,19 @@ mod tests {
         }
 
         fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error> {
+            self.write_order.borrow_mut().push(self.idx);
             self.out_bytes.set(self.out_bytes.get() + buf.len());
             self.inner.release_write_buf(buf)
         }
     }
 
-    struct CounterFactory(Rc<Cell<usize>>, Rc<Cell<usize>>);
+    struct CounterFactory(
+        usize,
+        Rc<Cell<usize>>,
+        Rc<Cell<usize>>,
+        Rc<RefCell<Vec<usize>>>,
+        Rc<RefCell<Vec<usize>>>,
+    );
 
     impl<F: Filter> FilterFactory<F> for CounterFactory {
         type Filter = Counter<F>;
@@ -459,14 +473,20 @@ mod tests {
         type Future = Ready<Io<Counter<F>>, Self::Error>;
 
         fn create(self, io: Io<F>) -> Self::Future {
-            let in_bytes = self.0.clone();
-            let out_bytes = self.1.clone();
+            let idx = self.0;
+            let in_bytes = self.1.clone();
+            let out_bytes = self.2.clone();
+            let read_order = self.3.clone();
+            let write_order = self.4.clone();
             Ready::Ok(
                 io.map_filter(|inner| {
                     Ok::<_, ()>(Counter {
+                        idx,
                         inner,
                         in_bytes,
                         out_bytes,
+                        read_order,
+                        write_order,
                     })
                 })
                 .unwrap(),
@@ -478,7 +498,15 @@ mod tests {
     async fn filter() {
         let in_bytes = Rc::new(Cell::new(0));
         let out_bytes = Rc::new(Cell::new(0));
-        let factory = CounterFactory(in_bytes.clone(), out_bytes.clone());
+        let read_order = Rc::new(RefCell::new(Vec::new()));
+        let write_order = Rc::new(RefCell::new(Vec::new()));
+        let factory = CounterFactory(
+            1,
+            in_bytes.clone(),
+            out_bytes.clone(),
+            read_order.clone(),
+            write_order.clone(),
+        );
 
         let (client, server) = IoTest::create();
         let state = Io::new(server).add_filter(factory).await.unwrap();
@@ -503,13 +531,27 @@ mod tests {
     async fn boxed_filter() {
         let in_bytes = Rc::new(Cell::new(0));
         let out_bytes = Rc::new(Cell::new(0));
+        let read_order = Rc::new(RefCell::new(Vec::new()));
+        let write_order = Rc::new(RefCell::new(Vec::new()));
 
         let (client, server) = IoTest::create();
         let state = Io::new(server)
-            .add_filter(CounterFactory(in_bytes.clone(), out_bytes.clone()))
+            .add_filter(CounterFactory(
+                1,
+                in_bytes.clone(),
+                out_bytes.clone(),
+                read_order.clone(),
+                write_order.clone(),
+            ))
             .await
             .unwrap()
-            .add_filter(CounterFactory(in_bytes.clone(), out_bytes.clone()))
+            .add_filter(CounterFactory(
+                2,
+                in_bytes.clone(),
+                out_bytes.clone(),
+                read_order.clone(),
+                write_order.clone(),
+            ))
             .await
             .unwrap();
         let state = state.seal();
@@ -533,5 +575,7 @@ mod tests {
         assert_eq!(Rc::strong_count(&in_bytes), 3);
         drop(state);
         assert_eq!(Rc::strong_count(&in_bytes), 1);
+        assert_eq!(*read_order.borrow(), &[1, 2][..]);
+        assert_eq!(*write_order.borrow(), &[2, 1][..]);
     }
 }

@@ -78,12 +78,15 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
 
     #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
-        if let Some(buf) = self.inner.borrow_mut().read_buf.take() {
-            if !buf.is_empty() {
-                return Some(buf);
+        let mut inner = self.inner.borrow_mut();
+        inner.inner.get_read_buf().or_else(|| {
+            if let Some(buf) = inner.read_buf.take() {
+                if !buf.is_empty() {
+                    return Some(buf);
+                }
             }
-        }
-        None
+            None
+        })
     }
 
     #[inline]
@@ -96,25 +99,36 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
         None
     }
 
-    fn release_read_buf(&self, mut src: BytesMut, _nb: usize) -> Result<(), io::Error> {
-        let mut session = self.session.borrow_mut();
+    fn release_read_buf(
+        &self,
+        src: BytesMut,
+        dst: &mut Option<BytesMut>,
+        nbytes: usize,
+    ) -> io::Result<usize> {
         let mut inner = self.inner.borrow_mut();
+        let mut session = self.session.borrow_mut();
 
         if session.is_handshaking() {
             inner.read_buf = Some(src);
-            Ok(())
+            Ok(1)
         } else {
-            if src.is_empty() {
-                return Ok(());
-            }
+            let mut src = {
+                let mut dst = None;
+                inner.inner.release_read_buf(src, &mut dst, nbytes)?;
+
+                if let Some(dst) = dst {
+                    dst
+                } else {
+                    return Ok(0);
+                }
+            };
             let (hw, lw) = inner.pool.read_params().unpack();
 
             // get inner filter buffer
-            let mut buf = if let Some(buf) = inner.inner.get_read_buf() {
-                buf
-            } else {
-                BytesMut::with_capacity_in(lw, inner.pool)
-            };
+            if dst.is_none() {
+                *dst = Some(inner.pool.get_read_buf());
+            }
+            let buf = dst.as_mut().unwrap();
 
             let mut new_bytes = 0;
             loop {
@@ -147,7 +161,7 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
             if !src.is_empty() {
                 inner.read_buf = Some(src);
             }
-            inner.inner.release_read_buf(buf, new_bytes)
+            Ok(new_bytes)
         }
     }
 

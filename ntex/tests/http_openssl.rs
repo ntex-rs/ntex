@@ -5,13 +5,13 @@ use futures::future::{err, ok, ready};
 use futures::stream::{once, Stream, StreamExt};
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 
-use ntex::io::Io;
 use ntex::codec::BytesCodec;
 use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
 use ntex::http::ws::handshake_response;
 use ntex::http::{body, h1, HttpService, Method, Request, Response, StatusCode, Version};
+use ntex::io::Io;
 use ntex::service::{fn_service, ServiceFactory};
 use ntex::util::{Bytes, BytesMut, Ready};
 use ntex::{time::Seconds, web::error::InternalError, ws};
@@ -441,7 +441,6 @@ async fn test_ssl_handshake_timeout() {
 
 #[ntex::test]
 async fn test_ws_transport() {
-    env_logger::init();
     let mut srv = test_server(|| {
         HttpService::build()
             .upgrade(|(req, io, codec): (Request, Io<_>, h1::Codec)| {
@@ -477,15 +476,11 @@ async fn test_ws_transport() {
     });
 
     let io = srv.wss().await.unwrap().into_inner().0;
-    // let codec = ws::Codec::default().client_mode();
+    let codec = ws::Codec::default().client_mode();
 
-    io.send(&BytesCodec, Bytes::from_static(b"text"))
+    io.send(&codec, ws::Message::Binary(Bytes::from_static(b"text")))
         .await
         .unwrap();
-
-    // io.send(&codec, ws::Message::Binary(Bytes::from_static(b"text")))
-    //     .await
-    //     .unwrap();
-    // let item = io.recv(&codec).await.unwrap().unwrap();
-    // assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 }

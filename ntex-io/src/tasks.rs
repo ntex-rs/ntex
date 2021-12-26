@@ -31,27 +31,35 @@ impl ReadContext {
     }
 
     #[inline]
-    pub fn release_read_buf(
-        &self,
-        buf: BytesMut,
-        new_bytes: usize,
-    ) -> Result<(), io::Error> {
+    pub fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> Result<(), io::Error> {
         if buf.is_empty() {
             self.0.memory_pool().release_read_buf(buf);
             Ok(())
         } else {
-            let mut flags = self.0.flags();
-            if new_bytes > 0 {
-                flags.insert(Flags::RD_READY);
-                self.0.set_flags(flags);
+            let mut dst = self.0 .0.read_buf.take();
+            let nbytes = self.0.filter().release_read_buf(buf, &mut dst, nbytes)?;
+
+            if let Some(dst) = dst {
+                if self.0.flags().contains(Flags::IO_FILTERS) {
+                    self.0 .0.shutdown_filters()?;
+                }
+                if nbytes > 0 {
+                    if dst.len() > self.0.memory_pool().read_params().high as usize {
+                        log::trace!(
+                            "buffer is too large {}, enable read back-pressure",
+                            dst.len()
+                        );
+                        self.0 .0.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
+                    } else {
+                        self.0 .0.insert_flags(Flags::RD_READY);
+                        log::trace!("new {} bytes available, wakeup dispatcher", nbytes);
+                    }
+                    self.0 .0.dispatch_task.wake();
+                }
+                self.0 .0.read_buf.set(Some(dst));
+            } else if nbytes > 0 {
                 self.0 .0.dispatch_task.wake();
-                log::trace!("new {} bytes available, wakeup dispatcher", new_bytes);
-            }
-
-            self.0.filter().release_read_buf(buf, new_bytes)?;
-
-            if flags.contains(Flags::IO_FILTERS) {
-                self.0 .0.shutdown_filters()?;
+                self.0 .0.insert_flags(Flags::RD_READY);
             }
             Ok(())
         }

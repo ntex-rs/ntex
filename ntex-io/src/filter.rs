@@ -67,7 +67,7 @@ impl Filter for Base {
 
         if flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
             Poll::Ready(ReadStatus::Terminate)
-        } else if flags.intersects(Flags::RD_PAUSED) {
+        } else if flags.intersects(Flags::RD_PAUSED | Flags::RD_BUF_FULL) {
             self.0 .0.read_task.register(cx.waker());
             Poll::Pending
         } else {
@@ -98,7 +98,7 @@ impl Filter for Base {
 
     #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
-        self.0 .0.read_buf.take()
+        None
     }
 
     #[inline]
@@ -107,21 +107,18 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> Result<(), io::Error> {
-        if nbytes > 0 {
-            if buf.len() > self.0.memory_pool().read_params().high as usize {
-                log::trace!(
-                    "buffer is too large {}, enable read back-pressure",
-                    buf.len()
-                );
-                self.0 .0.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
-            } else {
-                self.0 .0.insert_flags(Flags::RD_READY);
-            }
+    fn release_read_buf(
+        &self,
+        buf: BytesMut,
+        dst: &mut Option<BytesMut>,
+        nbytes: usize,
+    ) -> io::Result<usize> {
+        if let Some(ref mut dst) = dst {
+            dst.extend_from_slice(&buf)
+        } else {
+            *dst = Some(buf)
         }
-
-        self.0 .0.read_buf.set(Some(buf));
-        Ok(())
+        Ok(nbytes)
     }
 
     #[inline]
@@ -178,8 +175,13 @@ impl Filter for NullFilter {
         None
     }
 
-    fn release_read_buf(&self, _: BytesMut, _: usize) -> Result<(), io::Error> {
-        Ok(())
+    fn release_read_buf(
+        &self,
+        _: BytesMut,
+        _: &mut Option<BytesMut>,
+        _: usize,
+    ) -> io::Result<usize> {
+        Ok(0)
     }
 
     fn release_write_buf(&self, _: BytesMut) -> Result<(), io::Error> {
