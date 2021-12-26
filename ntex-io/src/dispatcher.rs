@@ -7,7 +7,7 @@ use ntex_service::{IntoService, Service};
 use ntex_util::time::{now, Seconds};
 use ntex_util::{future::Either, ready};
 
-use super::{rt::spawn, DispatchItem, IoBoxed, IoRef, Timer};
+use crate::{rt::spawn, DispatchItem, IoBoxed, IoRef, RecvError, Timer};
 
 type Response<U> = <U as Encoder>::Item;
 
@@ -36,7 +36,7 @@ where
     io: IoBoxed,
     st: Cell<DispatcherState>,
     timer: Timer,
-    ka_timeout: Seconds,
+    ka_timeout: Cell<Seconds>,
     ka_updated: Cell<time::Instant>,
     error: Cell<Option<S::Error>>,
     ready_err: Cell<bool>,
@@ -100,10 +100,10 @@ where
     {
         let io = IoBoxed::from(io);
         let updated = now();
-        let ka_timeout = Seconds(30);
+        let ka_timeout = Cell::new(Seconds(30));
 
         // register keepalive timer
-        let expire = updated + time::Duration::from(ka_timeout);
+        let expire = updated + time::Duration::from(ka_timeout.get());
         timer.register(expire, expire, &io);
 
         Dispatcher {
@@ -132,7 +132,7 @@ where
     /// To disable timeout set value to 0.
     ///
     /// By default keep-alive timeout is set to 30 seconds.
-    pub fn keepalive_timeout(mut self, timeout: Seconds) -> Self {
+    pub fn keepalive_timeout(self, timeout: Seconds) -> Self {
         // register keepalive timer
         let prev = self.inner.ka_updated.get() + time::Duration::from(self.inner.ka());
         if timeout.is_zero() {
@@ -141,7 +141,7 @@ where
             let expire = self.inner.ka_updated.get() + time::Duration::from(timeout);
             self.inner.timer.register(expire, prev, &self.inner.io);
         }
-        self.inner.ka_timeout = timeout;
+        self.inner.ka_timeout.set(timeout);
 
         self
     }
@@ -168,11 +168,11 @@ where
     fn handle_result(&self, item: Result<S::Response, S::Error>, io: &IoRef) {
         self.inflight.set(self.inflight.get() - 1);
         match item {
-            Ok(Some(val)) => match io.encode(val, &self.codec) {
-                Ok(true) => (),
-                Ok(false) => io.enable_write_backpressure(),
-                Err(err) => self.error.set(Some(DispatcherError::Encoder(err))),
-            },
+            Ok(Some(val)) => {
+                if let Err(err) = io.encode(val, &self.codec) {
+                    self.error.set(Some(DispatcherError::Encoder(err)))
+                }
+            }
             Err(err) => self.error.set(Some(DispatcherError::Service(err))),
             Ok(None) => return,
         }
@@ -216,31 +216,33 @@ where
                 DispatcherState::Processing => {
                     let item = match ready!(slf.poll_service(this.service, cx, io)) {
                         PollService::Ready => {
-                            match io.poll_write_backpressure(cx) {
-                                Poll::Pending => {
+                            // decode incoming bytes if buffer is ready
+                            match ready!(io.poll_recv(&slf.shared.codec, cx)) {
+                                Ok(el) => {
+                                    slf.update_keepalive();
+                                    DispatchItem::Item(el)
+                                }
+                                Err(RecvError::KeepAlive) => {
+                                    slf.st.set(DispatcherState::Stop);
+                                    DispatchItem::KeepAliveTimeout
+                                }
+                                Err(RecvError::StopDispatcher) => {
+                                    log::trace!("dispatcher is instructed to stop");
+                                    slf.st.set(DispatcherState::Stop);
+                                    continue;
+                                }
+                                Err(RecvError::WriteBackpressure) => {
                                     // instruct write task to notify dispatcher when data is flushed
                                     slf.st.set(DispatcherState::Backpressure);
                                     DispatchItem::WBackPressureEnabled
                                 }
-                                Poll::Ready(()) => {
-                                    // decode incoming bytes if buffer is ready
-                                    match ready!(io.poll_recv(&slf.shared.codec, cx)) {
-                                        Ok(Some(el)) => {
-                                            slf.update_keepalive();
-                                            DispatchItem::Item(el)
-                                        }
-                                        Err(Either::Left(err)) => {
-                                            slf.st.set(DispatcherState::Stop);
-                                            slf.unregister_keepalive();
-                                            DispatchItem::DecoderError(err)
-                                        }
-                                        Err(Either::Right(err)) => {
-                                            slf.st.set(DispatcherState::Stop);
-                                            slf.unregister_keepalive();
-                                            DispatchItem::Disconnect(Some(err))
-                                        }
-                                        Ok(None) => DispatchItem::Disconnect(None),
-                                    }
+                                Err(RecvError::Decoder(err)) => {
+                                    slf.st.set(DispatcherState::Stop);
+                                    DispatchItem::DecoderError(err)
+                                }
+                                Err(RecvError::PeerGone(err)) => {
+                                    slf.st.set(DispatcherState::Stop);
+                                    DispatchItem::Disconnect(err)
                                 }
                             }
                         }
@@ -270,7 +272,7 @@ where
                     let result = ready!(slf.poll_service(this.service, cx, io));
                     let item = match result {
                         PollService::Ready => {
-                            if slf.io.poll_write_backpressure(cx).is_ready() {
+                            if slf.io.poll_flush(cx, false).is_ready() {
                                 slf.st.set(DispatcherState::Processing);
                                 DispatchItem::WBackPressureDisabled
                             } else {
@@ -300,6 +302,8 @@ where
                 }
                 // drain service responses and shutdown io
                 DispatcherState::Stop => {
+                    slf.unregister_keepalive();
+
                     // service may relay on poll_ready for response results
                     if !this.inner.ready_err.get() {
                         let _ = this.service.poll_ready(cx);
@@ -360,11 +364,11 @@ where
         io: &IoRef,
     ) {
         match item {
-            Ok(Some(item)) => match io.encode(item, &self.shared.codec) {
-                Ok(true) => (),
-                Ok(false) => io.enable_write_backpressure(),
-                Err(err) => self.shared.error.set(Some(DispatcherError::Encoder(err))),
-            },
+            Ok(Some(item)) => {
+                if let Err(err) = io.encode(item, &self.shared.codec) {
+                    self.shared.error.set(Some(DispatcherError::Encoder(err)))
+                }
+            }
             Err(err) => self.shared.error.set(Some(DispatcherError::Service(err))),
             Ok(None) => (),
         }
@@ -384,7 +388,6 @@ where
                 // check for errors
                 Poll::Ready(if let Some(err) = self.shared.error.take() {
                     log::trace!("error occured, stopping dispatcher");
-                    self.unregister_keepalive();
                     self.st.set(DispatcherState::Stop);
 
                     match err {
@@ -396,24 +399,6 @@ where
                         }
                         DispatcherError::Service(err) => {
                             self.error.set(Some(err));
-                            PollService::ServiceError
-                        }
-                    }
-                } else if self.io.is_dispatcher_stopped() {
-                    log::trace!("dispatcher is instructed to stop");
-
-                    self.unregister_keepalive();
-
-                    // process unhandled data
-                    if let Ok(Some(el)) = io.decode(&self.shared.codec) {
-                        PollService::Item(DispatchItem::Item(el))
-                    } else {
-                        self.st.set(DispatcherState::Stop);
-
-                        // get io error
-                        if let Some(err) = self.io.take_error() {
-                            PollService::Item(DispatchItem::Disconnect(Some(err)))
-                        } else {
                             PollService::ServiceError
                         }
                     }
@@ -432,7 +417,6 @@ where
                 log::trace!("service readiness check failed, stopping");
                 self.st.set(DispatcherState::Stop);
                 self.error.set(Some(err));
-                self.unregister_keepalive();
                 self.ready_err.set(true);
                 Poll::Ready(PollService::ServiceError)
             }
@@ -440,11 +424,11 @@ where
     }
 
     fn ka(&self) -> Seconds {
-        self.ka_timeout
+        self.ka_timeout.get()
     }
 
     fn ka_enabled(&self) -> bool {
-        self.ka_timeout.non_zero()
+        self.ka_timeout.get().non_zero()
     }
 
     /// check keepalive timeout
@@ -475,6 +459,7 @@ where
     /// unregister keep-alive timer
     fn unregister_keepalive(&self) {
         if self.ka_enabled() {
+            self.ka_timeout.set(Seconds::ZERO);
             self.timer.unregister(
                 self.ka_updated.get() + time::Duration::from(self.ka()),
                 &self.io,
@@ -533,7 +518,7 @@ mod tests {
         ) -> (Self, State) {
             let state = Io::new(io);
             let timer = Timer::default();
-            let ka_timeout = Seconds(1);
+            let ka_timeout = Cell::new(Seconds(1));
             let ka_updated = now();
             let shared = Rc::new(DispatcherShared {
                 codec: codec,
