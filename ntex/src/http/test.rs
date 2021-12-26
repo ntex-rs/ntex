@@ -340,7 +340,9 @@ impl TestServer {
 
     #[cfg(feature = "openssl")]
     /// Connect to a websocket server
-    pub async fn wss(&mut self) -> Result<WsConnection<impl Filter>, WsClientError> {
+    pub async fn wss(
+        &mut self,
+    ) -> Result<WsConnection<crate::connect::openssl::SslFilter>, WsClientError> {
         self.wss_at("/").await
     }
 
@@ -349,7 +351,7 @@ impl TestServer {
     pub async fn wss_at(
         &mut self,
         path: &str,
-    ) -> Result<WsConnection<impl Filter>, WsClientError> {
+    ) -> Result<WsConnection<crate::connect::openssl::SslFilter>, WsClientError> {
         use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
         let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();

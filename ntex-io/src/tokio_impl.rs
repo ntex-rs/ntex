@@ -51,62 +51,72 @@ impl Future for ReadTask {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_ref();
 
-        match this.state.poll_ready(cx) {
-            Poll::Ready(ReadStatus::Ready) => {
-                let pool = this.state.memory_pool();
-                let mut io = this.io.borrow_mut();
-                let mut buf = self.state.get_read_buf();
-                let (hw, lw) = pool.read_params().unpack();
+        loop {
+            match ready!(this.state.poll_ready(cx)) {
+                ReadStatus::Ready => {
+                    let pool = this.state.memory_pool();
+                    let mut io = this.io.borrow_mut();
+                    let mut buf = self.state.get_read_buf();
+                    let (hw, lw) = pool.read_params().unpack();
 
-                // read data from socket
-                let mut new_bytes = 0;
-                loop {
-                    // make sure we've got room
-                    let remaining = buf.remaining_mut();
-                    if remaining < lw {
-                        buf.reserve(hw - remaining);
-                    }
+                    // read data from socket
+                    let mut new_bytes = 0;
+                    let mut close = false;
+                    let mut pending = false;
+                    loop {
+                        // make sure we've got room
+                        let remaining = buf.remaining_mut();
+                        if remaining < lw {
+                            buf.reserve(hw - remaining);
+                        }
 
-                    match poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
-                        Poll::Pending => break,
-                        Poll::Ready(Ok(n)) => {
-                            if n == 0 {
-                                log::trace!("io stream is disconnected");
-                                if let Err(e) = this.state.release_read_buf(buf, new_bytes)
-                                {
-                                    this.state.close(Some(e));
+                        match poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
+                            Poll::Pending => {
+                                pending = true;
+                                break;
+                            }
+                            Poll::Ready(Ok(n)) => {
+                                if n == 0 {
+                                    log::trace!("tokio stream is disconnected");
+                                    close = true;
                                 } else {
-                                    this.state.close(None);
+                                    new_bytes += n;
+                                    if new_bytes < hw {
+                                        continue;
+                                    }
                                 }
+                                break;
+                            }
+                            Poll::Ready(Err(err)) => {
+                                log::trace!("read task failed on io {:?}", err);
+                                let _ = this.state.release_read_buf(buf, new_bytes);
+                                this.state.close(Some(err));
                                 return Poll::Ready(());
-                            } else {
-                                new_bytes += n;
-                                if buf.len() > hw {
-                                    break;
-                                }
                             }
                         }
-                        Poll::Ready(Err(err)) => {
-                            log::trace!("read task failed on io {:?}", err);
-                            let _ = this.state.release_read_buf(buf, new_bytes);
-                            this.state.close(Some(err));
-                            return Poll::Ready(());
-                        }
                     }
-                }
 
-                if let Err(e) = this.state.release_read_buf(buf, new_bytes) {
-                    this.state.close(Some(e));
-                    Poll::Ready(())
-                } else {
-                    Poll::Pending
+                    if new_bytes == 0 && close {
+                        this.state.close(None);
+                        return Poll::Ready(());
+                    }
+                    return if let Err(e) = this.state.release_read_buf(buf, new_bytes) {
+                        this.state.close(Some(e));
+                        Poll::Ready(())
+                    } else if close {
+                        this.state.close(None);
+                        Poll::Ready(())
+                    } else if pending {
+                        Poll::Pending
+                    } else {
+                        continue;
+                    };
+                }
+                ReadStatus::Terminate => {
+                    log::trace!("read task is instructed to shutdown");
+                    return Poll::Ready(());
                 }
             }
-            Poll::Ready(ReadStatus::Terminate) => {
-                log::trace!("read task is instructed to shutdown");
-                Poll::Ready(())
-            }
-            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -466,63 +476,72 @@ mod unixstream {
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let this = self.as_ref();
 
-            match this.state.poll_ready(cx) {
-                Poll::Ready(ReadStatus::Ready) => {
-                    let pool = this.state.memory_pool();
-                    let mut io = this.io.borrow_mut();
-                    let mut buf = self.state.get_read_buf();
-                    let (hw, lw) = pool.read_params().unpack();
+            loop {
+                match ready!(this.state.poll_ready(cx)) {
+                    ReadStatus::Ready => {
+                        let pool = this.state.memory_pool();
+                        let mut io = this.io.borrow_mut();
+                        let mut buf = self.state.get_read_buf();
+                        let (hw, lw) = pool.read_params().unpack();
 
-                    // read data from socket
-                    let mut new_bytes = 0;
-                    loop {
-                        // make sure we've got room
-                        let remaining = buf.remaining_mut();
-                        if remaining < lw {
-                            buf.reserve(hw - remaining);
-                        }
+                        // read data from socket
+                        let mut new_bytes = 0;
+                        let mut close = false;
+                        let mut pending = false;
+                        loop {
+                            // make sure we've got room
+                            let remaining = buf.remaining_mut();
+                            if remaining < lw {
+                                buf.reserve(hw - remaining);
+                            }
 
-                        match poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
-                            Poll::Pending => break,
-                            Poll::Ready(Ok(n)) => {
-                                if n == 0 {
-                                    log::trace!("io stream is disconnected");
-                                    if let Err(e) =
-                                        this.state.release_read_buf(buf, new_bytes)
-                                    {
-                                        this.state.close(Some(e));
+                            match poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
+                                Poll::Pending => {
+                                    pending = true;
+                                    break;
+                                }
+                                Poll::Ready(Ok(n)) => {
+                                    if n == 0 {
+                                        log::trace!("unix stream is disconnected");
+                                        close = true;
                                     } else {
-                                        this.state.close(None);
+                                        new_bytes += n;
+                                        if new_bytes < hw {
+                                            continue;
+                                        }
                                     }
+                                    break;
+                                }
+                                Poll::Ready(Err(err)) => {
+                                    log::trace!("read task failed on io {:?}", err);
+                                    let _ = this.state.release_read_buf(buf, new_bytes);
+                                    this.state.close(Some(err));
                                     return Poll::Ready(());
-                                } else {
-                                    new_bytes += n;
-                                    if buf.len() > hw {
-                                        break;
-                                    }
                                 }
                             }
-                            Poll::Ready(Err(err)) => {
-                                log::trace!("read task failed on io {:?}", err);
-                                let _ = this.state.release_read_buf(buf, new_bytes);
-                                this.state.close(Some(err));
-                                return Poll::Ready(());
-                            }
                         }
-                    }
 
-                    if let Err(e) = this.state.release_read_buf(buf, new_bytes) {
-                        this.state.close(Some(e));
-                        Poll::Ready(())
-                    } else {
-                        Poll::Pending
+                        if new_bytes == 0 && close {
+                            this.state.close(None);
+                            return Poll::Ready(());
+                        }
+                        return if let Err(e) = this.state.release_read_buf(buf, new_bytes) {
+                            this.state.close(Some(e));
+                            Poll::Ready(())
+                        } else if close {
+                            this.state.close(None);
+                            Poll::Ready(())
+                        } else if pending {
+                            Poll::Pending
+                        } else {
+                            continue;
+                        };
+                    }
+                    ReadStatus::Terminate => {
+                        log::trace!("read task is instructed to shutdown");
+                        return Poll::Ready(());
                     }
                 }
-                Poll::Ready(ReadStatus::Terminate) => {
-                    log::trace!("read task is instructed to shutdown");
-                    Poll::Ready(())
-                }
-                Poll::Pending => Poll::Pending,
             }
         }
     }

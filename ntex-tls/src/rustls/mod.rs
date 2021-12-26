@@ -125,10 +125,15 @@ impl<F: Filter> Filter for TlsFilter<F> {
     }
 
     #[inline]
-    fn release_read_buf(&self, src: BytesMut, nb: usize) -> Result<(), io::Error> {
+    fn release_read_buf(
+        &self,
+        src: BytesMut,
+        dst: &mut Option<BytesMut>,
+        nb: usize,
+    ) -> io::Result<usize> {
         match self.inner {
-            InnerTlsFilter::Server(ref f) => f.release_read_buf(src, nb),
-            InnerTlsFilter::Client(ref f) => f.release_read_buf(src, nb),
+            InnerTlsFilter::Server(ref f) => f.release_read_buf(src, dst, nb),
+            InnerTlsFilter::Client(ref f) => f.release_read_buf(src, dst, nb),
         }
     }
 
