@@ -1,6 +1,6 @@
 # Changes
 
-## [0.5.0-b.4] - 2021-12-xx
+## [0.5.0-b.4] - 2021-12-26
 
 * Allow to get access to ws transport codec
 

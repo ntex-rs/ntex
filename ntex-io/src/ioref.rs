@@ -1,6 +1,6 @@
 use std::{any, fmt, io};
 
-use ntex_bytes::{BytesMut, PoolRef};
+use ntex_bytes::{BufMut, BytesMut, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
 use super::io::{Flags, IoRef, OnDisconnect};
@@ -66,12 +66,6 @@ impl IoRef {
     /// Wake dispatcher task
     pub fn wake_dispatcher(&self) {
         self.0.dispatch_task.wake();
-    }
-
-    #[inline]
-    /// Mark dispatcher as stopped
-    pub fn stop_dispatcher(&self) {
-        self.0.insert_flags(Flags::DSP_STOP);
     }
 
     #[inline]
@@ -142,15 +136,6 @@ impl IoRef {
     }
 
     #[inline]
-    /// Wait until write task flushes data to io stream
-    ///
-    /// Write task must be waken up separately.
-    pub fn enable_write_backpressure(&self) {
-        log::trace!("enable write back-pressure");
-        self.0.insert_flags(Flags::WR_BACKPRESSURE);
-    }
-
-    #[inline]
     /// Get mut access to write buffer
     pub fn with_write_buf<F, R>(&self, f: F) -> Result<R, io::Error>
     where
@@ -185,7 +170,7 @@ impl IoRef {
     /// Encode and write item to a buffer and wake up write task
     ///
     /// Returns write buffer state, false is returned if write buffer if full.
-    pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<bool, <U as Encoder>::Error>
+    pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
         U: Encoder,
     {
@@ -200,25 +185,21 @@ impl IoRef {
             let (hw, lw) = self.memory_pool().write_params().unpack();
 
             // make sure we've got room
-            let remaining = buf.capacity() - buf.len();
+            let remaining = buf.remaining_mut();
             if remaining < lw {
                 buf.reserve(hw - remaining);
             }
 
             // encode item and wake write task
-            let result = codec.encode(item, &mut buf).map(|_| {
-                if is_write_sleep {
-                    self.0.write_task.wake();
-                }
-                buf.len() < hw
-            });
+            codec.encode(item, &mut buf)?;
+            if is_write_sleep {
+                self.0.write_task.wake();
+            }
             if let Err(err) = filter.release_write_buf(buf) {
                 self.0.set_error(Some(err));
             }
-            result
-        } else {
-            Ok(true)
         }
+        Ok(())
     }
 
     #[inline]
@@ -313,14 +294,13 @@ mod tests {
         sleep(Millis(50)).await;
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
-            assert_eq!(msg.unwrap().unwrap(), Bytes::from_static(BIN));
+            assert_eq!(msg.unwrap(), Bytes::from_static(BIN));
         }
 
         client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
         let msg = state.recv(&BytesCodec).await;
         assert!(msg.is_err());
         assert!(state.flags().contains(Flags::IO_ERR));
-        assert!(state.flags().contains(Flags::DSP_STOP));
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
@@ -348,7 +328,6 @@ mod tests {
         let res = state.send(&BytesCodec, Bytes::from_static(b"test")).await;
         assert!(res.is_err());
         assert!(state.flags().contains(Flags::IO_ERR));
-        assert!(state.flags().contains(Flags::DSP_STOP));
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);

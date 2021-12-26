@@ -94,7 +94,22 @@ pub trait Handle {
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
 }
 
-/// Framed transport item
+/// Recv error
+#[derive(Debug)]
+pub enum RecvError<U: Decoder> {
+    /// Keep-alive timeout occured
+    KeepAlive,
+    /// Write backpressure is enabled
+    WriteBackpressure,
+    /// Dispatcher marked stopped
+    StopDispatcher,
+    /// Unrecoverable frame decoding errors
+    Decoder(U::Error),
+    /// Peer is disconnected
+    PeerGone(Option<sio::Error>),
+}
+
+/// Dispatcher item
 pub enum DispatchItem<U: Encoder + Decoder> {
     Item(<U as Decoder>::Item),
     /// Write back-pressure enabled

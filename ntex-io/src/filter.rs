@@ -127,6 +127,9 @@ impl Filter for Base {
         if buf.is_empty() {
             pool.release_write_buf(buf);
         } else {
+            if buf.len() >= pool.write_params_high() {
+                self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
+            }
             self.0 .0.write_buf.set(Some(buf));
             self.0 .0.write_task.wake();
         }

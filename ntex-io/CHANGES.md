@@ -1,6 +1,10 @@
 # Changes
 
-## [0.1.0-b.6] - 2021-12-xx
+## [0.1.0-b.6] - 2021-12-26
+
+* Better error information for .poll_recv() method.
+
+* Remove redundant Io::poll_write_backpressure() method.
 
 * Fix read filters ordering
 

@@ -1,10 +1,10 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{error::Error, fmt, future::Future, marker, pin::Pin, rc::Rc, time};
+use std::{error::Error, fmt, future::Future, io, marker, pin::Pin, rc::Rc, time};
 
-use crate::io::{Filter, Io, IoRef};
+use crate::io::{Filter, Io, IoRef, RecvError};
 use crate::service::Service;
-use crate::{time::now, util::ready, util::Bytes, util::Either};
+use crate::{time::now, util::ready, util::Bytes};
 
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -122,7 +122,6 @@ where
 macro_rules! set_error ({ $slf:tt, $err:ident } => {
     *$slf.st = State::Stop;
     $slf.inner.error = Some($err);
-    $slf.inner.unregister_keepalive();
 });
 
 impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
@@ -239,35 +238,11 @@ where
                 State::ReadRequest => {
                     log::trace!("trying to read http message");
 
-                    // stop dispatcher
-                    if this.inner.io().is_dispatcher_stopped() {
-                        log::trace!("dispatcher is instructed to stop");
-                        *this.st = State::Stop;
-                        this.inner.unregister_keepalive();
-                        continue;
-                    }
-
-                    // keep-alive timeout
-                    if this.inner.state.is_keepalive() {
-                        if !this.inner.flags.contains(Flags::STARTED) {
-                            log::trace!("slow request timeout");
-                            let (req, body) =
-                                Response::RequestTimeout().finish().into_parts();
-                            let _ = this.inner.send_response(req, body.into_body());
-                            this.inner.error = Some(DispatchError::SlowRequestTimeout);
-                        } else {
-                            log::trace!("keep-alive timeout, close connection");
-                        }
-                        *this.st = State::Stop;
-                        this.inner.unregister_keepalive();
-                        continue;
-                    }
-
                     let io = this.inner.io();
 
                     // decode incoming bytes stream
                     match ready!(io.poll_recv(&this.inner.codec, cx)) {
-                        Ok(Some((mut req, pl))) => {
+                        Ok((mut req, pl)) => {
                             log::trace!(
                                 "http message is received: {:?} and payload {:?}",
                                 req,
@@ -332,24 +307,43 @@ where
                                 );
                             }
                         }
-                        Ok(None) => {
-                            // peer is gone
-                            log::trace!("peer is gone");
-                            let e = DispatchError::Disconnect(None);
-                            set_error!(this, e);
+                        Err(RecvError::WriteBackpressure) => {
+                            if let Err(err) = ready!(this.inner.io().poll_flush(cx, false))
+                            {
+                                log::trace!("peer is gone with {:?}", err);
+                                *this.st = State::Stop;
+                                this.inner.error =
+                                    Some(DispatchError::Disconnect(Some(err)));
+                            }
                         }
-                        Err(Either::Left(err)) => {
+                        Err(RecvError::Decoder(err)) => {
                             // Malformed requests, respond with 400
                             log::trace!("malformed request: {:?}", err);
                             let (res, body) = Response::BadRequest().finish().into_parts();
                             this.inner.error = Some(DispatchError::Parse(err));
                             *this.st = this.inner.send_response(res, body.into_body());
                         }
-                        Err(Either::Right(err)) => {
+                        Err(RecvError::PeerGone(err)) => {
                             log::trace!("peer is gone with {:?}", err);
-                            // peer is gone
-                            let e = DispatchError::Disconnect(Some(err));
-                            set_error!(this, e);
+                            *this.st = State::Stop;
+                            this.inner.error = Some(DispatchError::Disconnect(err));
+                        }
+                        Err(RecvError::StopDispatcher) => {
+                            log::trace!("dispatcher is instructed to stop");
+                            *this.st = State::Stop;
+                        }
+                        Err(RecvError::KeepAlive) => {
+                            // keep-alive timeout
+                            if !this.inner.flags.contains(Flags::STARTED) {
+                                log::trace!("slow request timeout");
+                                let (req, body) =
+                                    Response::RequestTimeout().finish().into_parts();
+                                let _ = this.inner.send_response(req, body.into_body());
+                                this.inner.error = Some(DispatchError::SlowRequestTimeout);
+                            } else {
+                                log::trace!("keep-alive timeout, close connection");
+                            }
+                            *this.st = State::Stop;
                         }
                     }
                 }
@@ -371,7 +365,7 @@ where
                         set_error!(this, e);
                     } else {
                         loop {
-                            ready!(this.inner.io().poll_write_backpressure(cx));
+                            let _ = ready!(this.inner.io().poll_flush(cx, false));
                             let item = ready!(body.poll_next_chunk(cx));
                             if let Some(st) = this.inner.send_payload(item) {
                                 *this.st = st;
@@ -397,6 +391,8 @@ where
                 }
                 // prepare to shutdown
                 State::Stop => {
+                    this.inner.unregister_keepalive();
+
                     if this
                         .inner
                         .io
@@ -441,7 +437,7 @@ where
         // connection is not keep-alive, disconnect
         if !self.flags.contains(Flags::KEEPALIVE) || !self.codec.keepalive_enabled() {
             self.unregister_keepalive();
-            self.state.stop_dispatcher();
+            self.state.close();
             State::Stop
         } else {
             self.reset_keepalive();
@@ -452,6 +448,7 @@ where
     fn unregister_keepalive(&mut self) {
         if self.flags.contains(Flags::KEEPALIVE) {
             self.config.timer_h1.unregister(self.expire, &self.state);
+            self.flags.remove(Flags::KEEPALIVE);
         }
     }
 
@@ -583,28 +580,64 @@ where
                     loop {
                         let res = io.poll_recv(&payload.0, cx);
                         match res {
-                            Poll::Ready(Ok(Some(PayloadItem::Chunk(chunk)))) => {
+                            Poll::Ready(Ok(PayloadItem::Chunk(chunk))) => {
                                 updated = true;
                                 payload.1.feed_data(chunk);
                             }
-                            Poll::Ready(Ok(Some(PayloadItem::Eof))) => {
+                            Poll::Ready(Ok(PayloadItem::Eof)) => {
                                 updated = true;
                                 payload.1.feed_eof();
                                 self.payload = None;
                                 break;
                             }
-                            Poll::Ready(Ok(None)) => {
-                                payload.1.set_error(PayloadError::EncodingCorrupted);
-                                self.payload = None;
-                                return Poll::Ready(Err(ParseError::Incomplete.into()));
-                            }
-                            Poll::Ready(Err(e)) => {
-                                payload.1.set_error(PayloadError::EncodingCorrupted);
-                                self.payload = None;
-                                return Poll::Ready(Err(match e {
-                                    Either::Left(e) => DispatchError::Parse(e),
-                                    Either::Right(e) => DispatchError::Disconnect(Some(e)),
-                                }));
+                            Poll::Ready(Err(err)) => {
+                                let err = match err {
+                                    RecvError::WriteBackpressure => {
+                                        if io.poll_flush(cx, false)?.is_pending() {
+                                            break;
+                                        } else {
+                                            continue;
+                                        }
+                                    }
+                                    RecvError::KeepAlive => {
+                                        payload
+                                            .1
+                                            .set_error(PayloadError::EncodingCorrupted);
+                                        self.payload = None;
+                                        io::Error::new(io::ErrorKind::Other, "Keep-alive")
+                                            .into()
+                                    }
+                                    RecvError::StopDispatcher => {
+                                        payload
+                                            .1
+                                            .set_error(PayloadError::EncodingCorrupted);
+                                        self.payload = None;
+                                        io::Error::new(
+                                            io::ErrorKind::Other,
+                                            "Dispatcher stopped",
+                                        )
+                                        .into()
+                                    }
+                                    RecvError::PeerGone(err) => {
+                                        payload
+                                            .1
+                                            .set_error(PayloadError::EncodingCorrupted);
+                                        self.payload = None;
+                                        if let Some(err) = err {
+                                            DispatchError::Disconnect(Some(err))
+                                        } else {
+                                            ParseError::Incomplete.into()
+                                        }
+                                    }
+                                    RecvError::Decoder(e) => {
+                                        payload
+                                            .1
+                                            .set_error(PayloadError::EncodingCorrupted);
+                                        self.payload = None;
+                                        DispatchError::Parse(e)
+                                    }
+                                };
+                                return Poll::Ready(Err(err));
                             }
                             Poll::Pending => break,
                         }
@@ -870,9 +903,8 @@ mod tests {
     }
 
     #[crate::rt_test]
-    /// if socket is disconnected, h1 dispatcher does not process any data
-    // /// h1 dispatcher still processes all incoming requests
-    // /// but it does not write any data to socket
+    /// /// h1 dispatcher still processes all incoming requests
+    /// /// but it does not write any data to socket
     async fn test_write_disconnected() {
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
@@ -892,7 +924,7 @@ mod tests {
         assert!(client.read_any().is_empty());
 
         // only first request get handled
-        assert_eq!(num.load(Ordering::Relaxed), 0);
+        assert_eq!(num.load(Ordering::Relaxed), 1);
     }
 
     #[crate::rt_test]

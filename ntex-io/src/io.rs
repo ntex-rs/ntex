@@ -9,7 +9,7 @@ use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Millis}
 use super::filter::{Base, NullFilter};
 use super::seal::{IoBoxed, Sealed};
 use super::tasks::{ReadContext, WriteContext};
-use super::{Filter, FilterFactory, Handle, IoStream};
+use super::{Filter, FilterFactory, Handle, IoStream, RecvError};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -120,7 +120,7 @@ impl IoState {
         self.read_task.wake();
         self.write_task.wake();
         self.dispatch_task.wake();
-        self.insert_flags(Flags::IO_ERR | Flags::DSP_STOP);
+        self.insert_flags(Flags::IO_ERR);
         self.notify_disconnect();
     }
 
@@ -419,7 +419,28 @@ impl<F> Io<F> {
     where
         U: Decoder,
     {
-        poll_fn(|cx| self.poll_recv(codec, cx)).await
+        loop {
+            return match poll_fn(|cx| self.poll_recv(codec, cx)).await {
+                Ok(item) => Ok(Some(item)),
+                Err(RecvError::KeepAlive) => Err(Either::Right(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Keep-alive",
+                ))),
+                Err(RecvError::StopDispatcher) => Err(Either::Right(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Dispatcher stopped",
+                ))),
+                Err(RecvError::WriteBackpressure) => {
+                    poll_fn(|cx| self.poll_flush(cx, false))
+                        .await
+                        .map_err(Either::Right)?;
+                    continue;
+                }
+                Err(RecvError::Decoder(err)) => Err(Either::Left(err)),
+                Err(RecvError::PeerGone(Some(err))) => Err(Either::Right(err)),
+                Err(RecvError::PeerGone(None)) => Ok(None),
+            };
+        }
     }
 
     #[inline]
@@ -514,7 +535,6 @@ impl<F> Io<F> {
             } else if ready {
                 log::trace!("waking up io read task");
                 flags.remove(Flags::RD_READY);
-                self.0 .0.read_task.wake();
                 self.0 .0.flags.set(flags);
                 Poll::Ready(Ok(Some(())))
             } else {
@@ -528,25 +548,41 @@ impl<F> Io<F> {
     /// Decode codec item from incoming bytes stream.
     ///
     /// Wake read task and request to read more data if data is not enough for decoding.
+    /// If error get returned this method does not register waker for later wake up action.
     pub fn poll_recv<U>(
         &self,
         codec: &U,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<Option<U::Item>, Either<U::Error, io::Error>>>
+    ) -> Poll<Result<U::Item, RecvError<U>>>
     where
         U: Decoder,
     {
         match self.decode(codec) {
-            Ok(Some(el)) => Poll::Ready(Ok(Some(el))),
-            Ok(None) => match self.poll_read_ready(cx) {
-                Poll::Pending | Poll::Ready(Ok(Some(()))) => {
-                    log::trace!("not enough data to decode next frame");
-                    Poll::Pending
+            Ok(Some(el)) => Poll::Ready(Ok(el)),
+            Ok(None) => {
+                let flags = self.flags();
+                if flags.contains(Flags::DSP_STOP) {
+                    Poll::Ready(Err(RecvError::StopDispatcher))
+                } else if flags.contains(Flags::DSP_KEEPALIVE) {
+                    Poll::Ready(Err(RecvError::KeepAlive))
+                } else if flags.contains(Flags::WR_BACKPRESSURE) {
+                    Poll::Ready(Err(RecvError::WriteBackpressure))
+                } else {
+                    match self.poll_read_ready(cx) {
+                        Poll::Pending | Poll::Ready(Ok(Some(()))) => {
+                            log::trace!("not enough data to decode next frame");
+                            Poll::Pending
+                        }
+                        Poll::Ready(Err(e)) => {
+                            Poll::Ready(Err(RecvError::PeerGone(Some(e))))
+                        }
+                        Poll::Ready(Ok(None)) => {
+                            Poll::Ready(Err(RecvError::PeerGone(None)))
+                        }
+                    }
                 }
-                Poll::Ready(Err(e)) => Poll::Ready(Err(Either::Right(e))),
-                Poll::Ready(Ok(None)) => Poll::Ready(Ok(None)),
-            },
-            Err(err) => Poll::Ready(Err(Either::Left(err))),
+            }
+            Err(err) => Poll::Ready(Err(RecvError::Decoder(err))),
         }
     }
 
@@ -567,53 +603,26 @@ impl<F> Io<F> {
                 .unwrap_or_else(|| io::Error::new(io::ErrorKind::Other, "disconnected"))));
         }
 
-        if let Some(buf) = self.0 .0.write_buf.take() {
-            let len = buf.len();
-            if len != 0 {
-                self.0 .0.write_buf.set(Some(buf));
+        let len = self
+            .0
+             .0
+            .with_write_buf(|buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
 
-                if full {
-                    self.0 .0.insert_flags(Flags::WR_WAIT);
-                    self.0 .0.dispatch_task.register(cx.waker());
-                    return Poll::Pending;
-                } else if len >= self.0.memory_pool().write_params_high() << 1 {
-                    self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
-                    self.0 .0.dispatch_task.register(cx.waker());
-                    return Poll::Pending;
-                } else {
-                    self.0 .0.remove_flags(Flags::WR_BACKPRESSURE);
-                }
-            }
-        }
-
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    /// Wait until write task flushes data to io stream
-    ///
-    /// Write task must be waken up separately.
-    pub fn poll_write_backpressure(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if !self.is_io_open() {
-            Poll::Ready(())
-        } else if self.flags().contains(Flags::WR_BACKPRESSURE) {
-            self.0 .0.dispatch_task.register(cx.waker());
-            Poll::Pending
-        } else {
-            let len = self
-                .0
-                 .0
-                .with_write_buf(|buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
-            let hw = self.memory_pool().write_params_high();
-            if len >= hw {
-                log::trace!("enable write back-pressure");
+        if len > 0 {
+            if full {
+                self.0 .0.insert_flags(Flags::WR_WAIT);
+                self.0 .0.dispatch_task.register(cx.waker());
+                return Poll::Pending;
+            } else if len >= self.0.memory_pool().write_params_high() << 1 {
                 self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
                 self.0 .0.dispatch_task.register(cx.waker());
-                Poll::Pending
-            } else {
-                Poll::Ready(())
+                return Poll::Pending;
             }
         }
+        self.0
+             .0
+            .remove_flags(Flags::WR_WAIT | Flags::WR_BACKPRESSURE);
+        Poll::Ready(Ok(()))
     }
 
     #[inline]
