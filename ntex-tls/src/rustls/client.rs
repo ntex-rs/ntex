@@ -78,15 +78,12 @@ impl<F: Filter> Filter for TlsClientFilter<F> {
 
     #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
-        let mut inner = self.inner.borrow_mut();
-        inner.inner.get_read_buf().or_else(|| {
-            if let Some(buf) = inner.read_buf.take() {
-                if !buf.is_empty() {
-                    return Some(buf);
-                }
+        if let Some(buf) = self.inner.borrow_mut().read_buf.take() {
+            if !buf.is_empty() {
+                return Some(buf);
             }
-            None
-        })
+        }
+        None
     }
 
     #[inline]

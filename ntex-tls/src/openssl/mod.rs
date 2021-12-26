@@ -129,15 +129,12 @@ impl<F: Filter> Filter for SslFilter<F> {
 
     #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
-        let mut inner = self.inner.borrow_mut();
-        inner.get_ref().inner.get_read_buf().or_else(|| {
-            if let Some(buf) = inner.get_mut().read_buf.take() {
-                if !buf.is_empty() {
-                    return Some(buf);
-                }
+        if let Some(buf) = self.inner.borrow_mut().get_mut().read_buf.take() {
+            if !buf.is_empty() {
+                return Some(buf);
             }
-            None
-        })
+        }
+        None
     }
 
     #[inline]
