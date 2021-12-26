@@ -69,12 +69,6 @@ impl IoRef {
     }
 
     #[inline]
-    /// Mark dispatcher as stopped
-    pub fn stop_dispatcher(&self) {
-        self.0.insert_flags(Flags::DSP_STOP);
-    }
-
-    #[inline]
     /// Gracefully close connection
     ///
     /// First stop dispatcher, then dispatcher stops io tasks

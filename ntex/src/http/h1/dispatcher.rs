@@ -437,7 +437,7 @@ where
         // connection is not keep-alive, disconnect
         if !self.flags.contains(Flags::KEEPALIVE) || !self.codec.keepalive_enabled() {
             self.unregister_keepalive();
-            self.state.stop_dispatcher();
+            self.state.close();
             State::Stop
         } else {
             self.reset_keepalive();

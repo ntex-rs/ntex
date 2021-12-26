@@ -120,7 +120,7 @@ impl IoState {
         self.read_task.wake();
         self.write_task.wake();
         self.dispatch_task.wake();
-        self.insert_flags(Flags::IO_ERR | Flags::DSP_STOP);
+        self.insert_flags(Flags::IO_ERR);
         self.notify_disconnect();
     }
 
