@@ -4,9 +4,9 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
 
 use crate::http::body::{Body, BoxedBodyStream};
 use crate::http::error::PayloadError;
-use crate::http::ws::{handshake, HandshakeError};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::web::{HttpRequest, HttpResponse};
+use crate::ws::{error::HandshakeError, handshake};
 use crate::{channel::mpsc, rt, util::Bytes, ws, Sink, Stream};
 
 pub type WebSocketsSink =

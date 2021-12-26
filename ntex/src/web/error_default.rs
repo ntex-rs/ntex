@@ -7,9 +7,9 @@ use serde_urlencoded::ser::Error as FormError;
 
 use crate::http::body::Body;
 use crate::http::helpers::Writer;
-use crate::http::ws::HandshakeError;
 use crate::http::{self, header, StatusCode};
 use crate::util::{timeout::TimeoutError, BytesMut};
+use crate::ws::error::HandshakeError;
 
 use super::error::{self, ErrorContainer, ErrorRenderer, WebResponseError};
 use super::{HttpRequest, HttpResponse};

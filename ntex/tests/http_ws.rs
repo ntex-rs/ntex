@@ -4,12 +4,10 @@ use std::{cell::Cell, future::Future, io, pin::Pin};
 
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
-use ntex::http::ws::handshake_response;
-use ntex::http::{
-    body, h1, test, ws::handshake, HttpService, Request, Response, StatusCode,
-};
+use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
 use ntex::io::{DispatchItem, Dispatcher, Io, Timer};
 use ntex::service::{fn_factory, Service};
+use ntex::ws::{handshake, handshake_response};
 use ntex::{util::ByteString, util::Bytes, util::Ready, ws};
 
 struct WsService(Arc<Mutex<Cell<bool>>>);

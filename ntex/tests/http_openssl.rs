@@ -9,11 +9,11 @@ use ntex::codec::BytesCodec;
 use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
-use ntex::http::ws::handshake_response;
 use ntex::http::{body, h1, HttpService, Method, Request, Response, StatusCode, Version};
 use ntex::io::Io;
 use ntex::service::{fn_service, ServiceFactory};
 use ntex::util::{Bytes, BytesMut, Ready};
+use ntex::ws::handshake_response;
 use ntex::{time::Seconds, web::error::InternalError, ws};
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>

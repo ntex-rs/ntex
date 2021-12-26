@@ -1,60 +1,8 @@
 //! Websockets protocol helpers
-use derive_more::Display;
-
-use crate::http::error::ResponseError;
-use crate::http::message::RequestHead;
-use crate::http::response::{Response, ResponseBuilder};
 use crate::http::{header, Method, StatusCode};
+use crate::http::{RequestHead, Response, ResponseBuilder};
 
-/// Websocket handshake errors
-#[derive(PartialEq, Debug, Display)]
-pub enum HandshakeError {
-    /// Only get method is allowed
-    #[display(fmt = "Method not allowed")]
-    GetMethodRequired,
-    /// Upgrade header if not set to websocket
-    #[display(fmt = "Websocket upgrade is expected")]
-    NoWebsocketUpgrade,
-    /// Connection header is not set to upgrade
-    #[display(fmt = "Connection upgrade is expected")]
-    NoConnectionUpgrade,
-    /// Websocket version header is not set
-    #[display(fmt = "Websocket version header is required")]
-    NoVersionHeader,
-    /// Unsupported websocket version
-    #[display(fmt = "Unsupported version")]
-    UnsupportedVersion,
-    /// Websocket key is not set or wrong
-    #[display(fmt = "Unknown websocket key")]
-    BadWebsocketKey,
-}
-
-impl ResponseError for HandshakeError {
-    fn error_response(&self) -> Response {
-        match *self {
-            HandshakeError::GetMethodRequired => Response::MethodNotAllowed()
-                .header(header::ALLOW, "GET")
-                .finish(),
-            HandshakeError::NoWebsocketUpgrade => Response::BadRequest()
-                .reason("No WebSocket UPGRADE header found")
-                .finish(),
-            HandshakeError::NoConnectionUpgrade => Response::BadRequest()
-                .reason("No CONNECTION upgrade")
-                .finish(),
-            HandshakeError::NoVersionHeader => Response::BadRequest()
-                .reason("Websocket version header is required")
-                .finish(),
-            HandshakeError::UnsupportedVersion => Response::BadRequest()
-                .reason("Unsupported version")
-                .finish(),
-            HandshakeError::BadWebsocketKey => {
-                Response::BadRequest().reason("Handshake error").finish()
-            }
-        }
-    }
-}
-
-impl ResponseError for crate::ws::error::ProtocolError {}
+use super::error::HandshakeError;
 
 /// Verify `WebSocket` handshake request and create handshake reponse.
 // /// `protocols` is a sequence of known protocols. On successful handshake,
@@ -135,8 +83,7 @@ pub fn handshake_response(req: &RequestHead) -> ResponseBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::test::TestRequest;
-    use crate::http::{header, Method};
+    use crate::http::{error::ResponseError, header, test::TestRequest, Method};
 
     #[test]
     fn test_handshake() {

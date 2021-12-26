@@ -4,6 +4,8 @@
 
 * Allow to get access to ws transport codec
 
+* Move http::client::handshake to ws::handshake
+
 ## [0.5.0-b.3] - 2021-12-24
 
 * Use new ntex-service traits

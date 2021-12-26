@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn test_handshake_error() {
-        use crate::http::ws::HandshakeError;
+        use crate::ws::error::HandshakeError;
 
         let req = TestRequest::default().to_http_request();
 
