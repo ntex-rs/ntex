@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.0-b.8] - 2021-12-28
+
+* Fix error handing for nested filters
+
 ## [0.1.0-b.7] - 2021-12-27
 
 * Do not swallow decoded read bytes in case of filter error

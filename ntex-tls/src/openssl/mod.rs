@@ -123,8 +123,8 @@ impl<F: Filter> Filter for SslFilter<F> {
     }
 
     #[inline]
-    fn want_shutdown(&self) {
-        self.inner.borrow().get_ref().inner.want_shutdown()
+    fn want_shutdown(&self, err: Option<io::Error>) {
+        self.inner.borrow().get_ref().inner.want_shutdown(err)
     }
 
     #[inline]
@@ -157,10 +157,13 @@ impl<F: Filter> Filter for SslFilter<F> {
         let pool = {
             let mut inner = self.inner.borrow_mut();
             let mut dst = None;
-            inner
+            let result = inner
                 .get_ref()
                 .inner
-                .release_read_buf(src, &mut dst, nbytes)?;
+                .release_read_buf(src, &mut dst, nbytes);
+            if let Err(err) = result {
+                self.want_shutdown(Some(err));
+            }
             if dst.is_some() {
                 inner.get_mut().read_buf = dst;
                 inner.get_ref().pool

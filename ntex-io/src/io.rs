@@ -126,46 +126,37 @@ impl IoState {
 
     #[inline]
     /// Gracefully shutdown read and write io tasks
-    pub(super) fn init_shutdown(&self, cx: Option<&mut Context<'_>>) {
+    pub(super) fn init_shutdown(&self, err: Option<io::Error>) {
         let flags = self.flags.get();
-
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::IO_FILTERS) {
-            log::trace!("initiate io shutdown {:?}", flags);
+            log::trace!("initiate io shutdown {:?} {:?}", flags, err);
             self.insert_flags(Flags::IO_FILTERS);
-            if let Err(err) = self.shutdown_filters() {
-                self.error.set(Some(err));
-            }
-
             self.read_task.wake();
             self.write_task.wake();
-            if let Some(cx) = cx {
-                self.dispatch_task.register(cx.waker());
+            if let Some(err) = err {
+                self.error.set(Some(err));
             }
         }
     }
 
     #[inline]
-    pub(super) fn shutdown_filters(&self) -> io::Result<()> {
+    pub(super) fn shutdown_filters(&self) {
         let mut flags = self.flags.get();
         if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
-            let result = match self.filter.get().poll_shutdown() {
-                Poll::Pending => return Ok(()),
+            match self.filter.get().poll_shutdown() {
+                Poll::Pending => return,
                 Poll::Ready(Ok(())) => {
                     flags.insert(Flags::IO_SHUTDOWN);
-                    Ok(())
                 }
                 Poll::Ready(Err(err)) => {
                     flags.insert(Flags::IO_ERR);
-                    self.dispatch_task.wake();
-                    Err(err)
+                    self.error.set(Some(err));
                 }
-            };
+            }
             self.flags.set(flags);
             self.read_task.wake();
             self.write_task.wake();
-            result
-        } else {
-            Ok(())
+            self.dispatch_task.wake();
         }
     }
 
@@ -630,7 +621,7 @@ impl<F> Io<F> {
             Poll::Ready(Ok(()))
         } else {
             if !flags.contains(Flags::IO_FILTERS) {
-                self.0 .0.init_shutdown(Some(cx));
+                self.0 .0.init_shutdown(None);
             }
 
             if let Some(err) = self.0 .0.error.take() {

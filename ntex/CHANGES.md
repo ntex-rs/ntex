@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.0-b.5] - 2021-12-xx
+
+* Fix handling for ws transport nested errors
+
 ## [0.5.0-b.4] - 2021-12-26
 
 * Allow to get access to ws transport codec

@@ -65,8 +65,8 @@ impl<F: Filter> Filter for WsTransport<F> {
     }
 
     #[inline]
-    fn want_shutdown(&self) {
-        self.inner.want_shutdown()
+    fn want_shutdown(&self, err: Option<io::Error>) {
+        self.inner.want_shutdown(err)
     }
 
     #[inline]
@@ -107,8 +107,9 @@ impl<F: Filter> Filter for WsTransport<F> {
     ) -> io::Result<usize> {
         let mut src = {
             let mut dst = None;
-            self.inner.release_read_buf(src, &mut dst, nbytes)?;
-
+            if let Err(err) = self.inner.release_read_buf(src, &mut dst, nbytes) {
+                self.want_shutdown(Some(err));
+            }
             if let Some(dst) = dst {
                 dst
             } else {

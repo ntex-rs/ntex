@@ -31,19 +31,16 @@ impl ReadContext {
     }
 
     #[inline]
-    pub fn release_read_buf(&self, buf: BytesMut, nbytes: usize) -> Result<(), io::Error> {
+    pub fn release_read_buf(&self, buf: BytesMut, nbytes: usize) {
         if buf.is_empty() {
             self.0.memory_pool().release_read_buf(buf);
-            Ok(())
         } else {
+            let filter = self.0.filter();
             let mut dst = self.0 .0.read_buf.take();
-            let result = self.0.filter().release_read_buf(buf, &mut dst, nbytes);
+            let result = filter.release_read_buf(buf, &mut dst, nbytes);
             let nbytes = result.as_ref().map(|i| *i).unwrap_or(0);
 
             if let Some(dst) = dst {
-                if self.0.flags().contains(Flags::IO_FILTERS) {
-                    self.0 .0.shutdown_filters()?;
-                }
                 if nbytes > 0 {
                     if dst.len() > self.0.memory_pool().read_params().high as usize {
                         log::trace!(
@@ -66,10 +63,12 @@ impl ReadContext {
             if let Err(err) = result {
                 self.0 .0.dispatch_task.wake();
                 self.0 .0.insert_flags(Flags::RD_READY);
-                Err(err)
-            } else {
-                Ok(())
+                filter.want_shutdown(Some(err));
             }
+        }
+
+        if self.0.flags().contains(Flags::IO_FILTERS) {
+            self.0 .0.shutdown_filters();
         }
     }
 }
@@ -122,7 +121,7 @@ impl WriteContext {
         }
 
         if flags.contains(Flags::IO_FILTERS) {
-            self.0 .0.shutdown_filters()?;
+            self.0 .0.shutdown_filters();
         }
         Ok(())
     }

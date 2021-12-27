@@ -45,19 +45,13 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn want_shutdown(&self) {
-        let mut flags = self.0.flags();
-        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
-            flags.insert(Flags::IO_SHUTDOWN);
-            self.0.set_flags(flags);
-            self.0 .0.read_task.wake();
-            self.0 .0.write_task.wake();
-        }
+    fn want_shutdown(&self, err: Option<io::Error>) {
+        self.0 .0.init_shutdown(err);
     }
 
     #[inline]
     fn poll_shutdown(&self) -> Poll<io::Result<()>> {
-        self.want_shutdown();
+        self.want_shutdown(None);
         Poll::Ready(Ok(()))
     }
 
@@ -156,7 +150,7 @@ impl Filter for NullFilter {
 
     fn want_read(&self) {}
 
-    fn want_shutdown(&self) {}
+    fn want_shutdown(&self, _: Option<io::Error>) {}
 
     fn poll_shutdown(&self) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))

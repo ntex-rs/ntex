@@ -55,7 +55,7 @@ pub trait Filter: 'static {
     fn want_read(&self);
 
     /// Filter wants gracefully shutdown io stream
-    fn want_shutdown(&self);
+    fn want_shutdown(&self, err: Option<sio::Error>);
 
     fn poll_shutdown(&self) -> Poll<sio::Result<()>>;
 

@@ -100,10 +100,8 @@ impl Future for ReadTask {
                         this.state.close(None);
                         return Poll::Ready(());
                     }
-                    return if let Err(e) = this.state.release_read_buf(buf, new_bytes) {
-                        this.state.close(Some(e));
-                        Poll::Ready(())
-                    } else if close {
+                    this.state.release_read_buf(buf, new_bytes);
+                    return if close {
                         this.state.close(None);
                         Poll::Ready(())
                     } else if pending {
@@ -525,10 +523,8 @@ mod unixstream {
                             this.state.close(None);
                             return Poll::Ready(());
                         }
-                        return if let Err(e) = this.state.release_read_buf(buf, new_bytes) {
-                            this.state.close(Some(e));
-                            Poll::Ready(())
-                        } else if close {
+                        this.state.release_read_buf(buf, new_bytes);
+                        return if close {
                             this.state.close(None);
                             Poll::Ready(())
                         } else if pending {

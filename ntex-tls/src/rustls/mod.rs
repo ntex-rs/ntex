@@ -77,10 +77,10 @@ impl<F: Filter> Filter for TlsFilter<F> {
     }
 
     #[inline]
-    fn want_shutdown(&self) {
+    fn want_shutdown(&self, err: Option<io::Error>) {
         match self.inner {
-            InnerTlsFilter::Server(ref f) => f.want_shutdown(),
-            InnerTlsFilter::Client(ref f) => f.want_shutdown(),
+            InnerTlsFilter::Server(ref f) => f.want_shutdown(err),
+            InnerTlsFilter::Client(ref f) => f.want_shutdown(err),
         }
     }
 

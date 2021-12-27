@@ -52,8 +52,8 @@ impl<F: Filter> Filter for TlsClientFilter<F> {
     }
 
     #[inline]
-    fn want_shutdown(&self) {
-        self.inner.borrow().inner.want_shutdown()
+    fn want_shutdown(&self, err: Option<io::Error>) {
+        self.inner.borrow().inner.want_shutdown(err)
     }
 
     #[inline]
@@ -111,7 +111,9 @@ impl<F: Filter> Filter for TlsClientFilter<F> {
         } else {
             let mut src = {
                 let mut dst = None;
-                inner.inner.release_read_buf(src, &mut dst, nbytes)?;
+                if let Err(err) = inner.inner.release_read_buf(src, &mut dst, nbytes) {
+                    self.want_shutdown(Some(err));
+                }
 
                 if let Some(dst) = dst {
                     dst
