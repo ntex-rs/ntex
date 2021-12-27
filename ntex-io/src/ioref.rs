@@ -82,7 +82,7 @@ impl IoRef {
     ///
     /// Dispatcher does not wait for uncompleted responses, but flushes io buffers.
     pub fn force_close(&self) {
-        log::trace!("force close framed object");
+        log::trace!("force close io stream object");
         self.0.insert_flags(Flags::DSP_STOP | Flags::IO_SHUTDOWN);
         self.0.read_task.wake();
         self.0.write_task.wake();

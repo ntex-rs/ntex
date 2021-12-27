@@ -53,6 +53,40 @@ async fn test_openssl_string() {
     assert_eq!(item, Bytes::from_static(b"test"));
 }
 
+#[cfg(feature = "openssl")]
+#[ntex::test]
+async fn test_openssl_read_before_error() {
+    env_logger::init();
+    use ntex::server::openssl;
+    use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+
+    let srv = test_server(|| {
+        ntex::pipeline_factory(fn_service(|io: Io<_>| async move {
+            let res = io.read_ready().await;
+            assert!(res.is_ok());
+            Ok(io)
+        }))
+        .and_then(openssl::Acceptor::new(ssl_acceptor()))
+        .and_then(fn_service(|io: Io<_>| async move {
+            log::info!("ssl handshake completed");
+            io.encode(Bytes::from_static(b"test"), &BytesCodec).unwrap();
+            // ntex::time::sleep(ntex::time::Millis(1000)).await;
+            io.shutdown().await.unwrap();
+            Ok::<_, Box<dyn std::error::Error>>(())
+        }))
+    });
+
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::NONE);
+
+    let conn = ntex::connect::openssl::Connector::new(builder.build());
+    let addr = format!("127.0.0.1:{}", srv.addr().port());
+    let io = conn.call(addr.into()).await.unwrap();
+    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+    assert_eq!(item, Bytes::from_static(b"test"));
+    assert!(io.recv(&BytesCodec).await.is_err());
+}
+
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_string() {

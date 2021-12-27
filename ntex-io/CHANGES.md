@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.0-b.7] - 2021-12-27
+
+* Do not swallow decoded read bytes in case of filter error
+
 ## [0.1.0-b.6] - 2021-12-26
 
 * Rename `RecvError::StopDispatcher` to `RecvError::Stop`

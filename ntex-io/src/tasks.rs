@@ -37,7 +37,8 @@ impl ReadContext {
             Ok(())
         } else {
             let mut dst = self.0 .0.read_buf.take();
-            let nbytes = self.0.filter().release_read_buf(buf, &mut dst, nbytes)?;
+            let result = self.0.filter().release_read_buf(buf, &mut dst, nbytes);
+            let nbytes = result.as_ref().map(|i| *i).unwrap_or(0);
 
             if let Some(dst) = dst {
                 if self.0.flags().contains(Flags::IO_FILTERS) {
@@ -61,7 +62,14 @@ impl ReadContext {
                 self.0 .0.dispatch_task.wake();
                 self.0 .0.insert_flags(Flags::RD_READY);
             }
-            Ok(())
+
+            if let Err(err) = result {
+                self.0 .0.dispatch_task.wake();
+                self.0 .0.insert_flags(Flags::RD_READY);
+                Err(err)
+            } else {
+                Ok(())
+            }
         }
     }
 }
