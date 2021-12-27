@@ -550,7 +550,9 @@ impl TimerDriver {
 
 impl Drop for TimerDriver {
     fn drop(&mut self) {
-        self.0.borrow_mut().stop_wheel();
+        if let Ok(mut timer) = self.0.try_borrow_mut() {
+            timer.stop_wheel();
+        }
     }
 }
 
@@ -608,7 +610,9 @@ impl LowresTimerDriver {
 
 impl Drop for LowresTimerDriver {
     fn drop(&mut self) {
-        self.0.borrow_mut().stop_wheel();
+        if let Ok(mut timer) = self.0.try_borrow_mut() {
+            timer.stop_wheel();
+        }
     }
 }
 
