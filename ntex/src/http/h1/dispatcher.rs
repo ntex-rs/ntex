@@ -360,10 +360,11 @@ where
                     if !this.inner.state.is_io_open() {
                         let e = this.inner.state.take_error().into();
                         set_error!(this, e);
-                    } else if let Poll::Ready(Err(e)) = this.inner.poll_request_payload(cx)
-                    {
-                        set_error!(this, e);
                     } else {
+                        if let Poll::Ready(Err(err)) = this.inner.poll_request_payload(cx) {
+                            this.inner.error = Some(err);
+                            this.inner.flags.insert(Flags::SENDPAYLOAD_AND_STOP);
+                        }
                         loop {
                             let _ = ready!(this.inner.io().poll_flush(cx, false));
                             let item = ready!(body.poll_next_chunk(cx));
