@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.0-b.5] - 2021-12-28
+
+* Add query support for peer cert and peer cert chain
+
 ## [0.1.0-b.4] - 2021-12-27
 
 * Upgrade no ntex 0.5-b.4

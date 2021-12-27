@@ -2,8 +2,8 @@ use std::io;
 
 use ntex::service::{fn_service, pipeline_factory};
 use ntex::{codec, io::add_filter, io::Io, server, util::Either};
-use ntex_tls::openssl::SslAcceptor;
-use tls_openssl::ssl::{self, SslFiletype, SslMethod};
+use ntex_tls::openssl::{PeerCert, PeerCertChain, SslAcceptor};
+use tls_openssl::ssl::{self, SslFiletype, SslMethod, SslVerifyMode};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
@@ -14,6 +14,8 @@ async fn main() -> io::Result<()> {
 
     // load ssl keys
     let mut builder = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+    builder.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+    builder.set_verify_callback(SslVerifyMode::PEER, |_success, _ctx| true);
     builder
         .set_private_key_file("./examples/key.pem", SslFiletype::PEM)
         .unwrap();
@@ -28,6 +30,12 @@ async fn main() -> io::Result<()> {
             pipeline_factory(add_filter(SslAcceptor::new(acceptor.clone()))).and_then(
                 fn_service(|io: Io<_>| async move {
                     println!("New client is connected");
+                    if let Some(cert) = io.query::<PeerCert>().as_ref() {
+                        println!("Peer cert: {:?}", cert.0);
+                    }
+                    if let Some(cert) = io.query::<PeerCertChain>().as_ref() {
+                        println!("Peer cert chain: {:?}", cert.0);
+                    }
                     loop {
                         match io.recv(&codec::BytesCodec).await {
                             Ok(Some(msg)) => {

@@ -9,11 +9,20 @@ use ntex_bytes::{BufMut, BytesMut, PoolRef};
 use ntex_io::{Base, Filter, FilterFactory, Io, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_openssl::ssl::{self, SslStream};
+use tls_openssl::x509::X509;
 
 mod accept;
 pub use self::accept::{Acceptor, AcceptorService};
 
 use super::types;
+
+/// Connection's peer cert
+#[derive(Debug)]
+pub struct PeerCert(pub X509);
+
+/// Connection's peer cert chain
+#[derive(Debug)]
+pub struct PeerCertChain(pub Vec<X509>);
 
 /// An implementation of SSL streams
 pub struct SslFilter<F = Base> {
@@ -77,6 +86,20 @@ impl<F: Filter> Filter for SslFilter<F> {
                     types::HttpProtocol::Http1
                 };
             Some(Box::new(proto))
+        } else if id == any::TypeId::of::<PeerCert>() {
+            if let Some(cert) = self.inner.borrow().ssl().peer_certificate() {
+                Some(Box::new(PeerCert(cert)))
+            } else {
+                None
+            }
+        } else if id == any::TypeId::of::<PeerCertChain>() {
+            if let Some(cert_chain) = self.inner.borrow().ssl().peer_cert_chain() {
+                Some(Box::new(PeerCertChain(
+                    cert_chain.iter().map(|c| c.to_owned()).collect(),
+                )))
+            } else {
+                None
+            }
         } else {
             self.inner.borrow().get_ref().inner.query(id)
         }

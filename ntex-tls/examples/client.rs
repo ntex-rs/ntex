@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::{codec, connect, util::Bytes, util::Either};
-use tls_openssl::ssl::{self, SslMethod, SslVerifyMode};
+use tls_openssl::ssl::{self, SslFiletype, SslMethod, SslVerifyMode};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
@@ -12,6 +12,12 @@ async fn main() -> io::Result<()> {
 
     // load ssl keys
     let mut builder = ssl::SslConnector::builder(SslMethod::tls()).unwrap();
+    builder
+        .set_private_key_file("./examples/key.pem", SslFiletype::PEM)
+        .unwrap();
+    builder
+        .set_certificate_chain_file("./examples/cert.pem")
+        .unwrap();
     builder.set_verify(SslVerifyMode::NONE);
 
     // openssl connector
@@ -29,6 +35,7 @@ async fn main() -> io::Result<()> {
         .await
         .map_err(|e| e.into_inner())?
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "disconnected"))?;
+    println!("Received: {:?}", resp);
 
     println!("disconnecting");
     io.shutdown().await
