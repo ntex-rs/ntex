@@ -292,14 +292,12 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
     let pool = state.memory_pool();
 
     if len != 0 {
-        // log::trace!("flushing framed transport: {:?} {:?}", buf.len(), buf);
+        // log::trace!("flushing framed transport: {:?}", buf.len());
 
         let mut written = 0;
         while written < len {
             match Pin::new(&mut *io).poll_write(cx, &buf[written..]) {
-                Poll::Pending => {
-                    break;
-                }
+                Poll::Pending => break,
                 Poll::Ready(Ok(n)) => {
                     if n == 0 {
                         log::trace!("Disconnected during flush, written {}", written);

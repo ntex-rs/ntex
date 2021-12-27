@@ -236,21 +236,27 @@ impl<F: Filter> Filter for SslFilter<F> {
     }
 
     fn release_write_buf(&self, mut buf: BytesMut) -> Result<(), io::Error> {
-        let ssl_result = self.inner.borrow_mut().ssl_write(&buf);
-        let result = match ssl_result {
-            Ok(v) => {
-                if v != buf.len() {
-                    buf.split_to(v);
-                    self.inner.borrow_mut().get_mut().write_buf = Some(buf);
-                }
-                Ok(())
+        loop {
+            if buf.is_empty() {
+                return Ok(());
             }
-            Err(e) => match e.code() {
-                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => Ok(()),
-                _ => Err(map_to_ioerr(e)),
-            },
-        };
-        result
+            let ssl_result = self.inner.borrow_mut().ssl_write(&buf);
+            match ssl_result {
+                Ok(v) => {
+                    buf.split_to(v);
+                    continue;
+                }
+                Err(e) => {
+                    if !buf.is_empty() {
+                        self.inner.borrow_mut().get_mut().write_buf = Some(buf);
+                    }
+                    return match e.code() {
+                        ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => Ok(()),
+                        _ => Err(map_to_ioerr(e)),
+                    };
+                }
+            }
+        }
     }
 }
 

@@ -395,7 +395,7 @@ mod tests {
 
         fn want_read(&self) {}
 
-        fn want_shutdown(&self) {}
+        fn want_shutdown(&self, _: Option<io::Error>) {}
 
         fn query(&self, _: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
             None
