@@ -18,11 +18,11 @@ mod tasks;
 mod time;
 mod utils;
 
-#[cfg(any(feature = "async-std"))]
+#[cfg(feature = "async-std")]
 mod asyncstd_rt;
 #[cfg(any(feature = "tokio-traits", feature = "tokio"))]
 mod tokio_impl;
-#[cfg(any(feature = "tokio"))]
+#[cfg(feature = "tokio")]
 mod tokio_rt;
 
 use ntex_bytes::BytesMut;
@@ -170,7 +170,7 @@ pub mod rt {
     #[cfg(feature = "tokio")]
     pub use crate::tokio_rt::*;
 
-    #[cfg(feature = "async-std")]
+    #[cfg(all(not(feature = "tokio"), feature = "async-std"))]
     pub use crate::asyncstd_rt::*;
 }
 

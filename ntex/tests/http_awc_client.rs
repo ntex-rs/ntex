@@ -236,7 +236,6 @@ async fn test_connection_reuse() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
-#[cfg(not(all(target_os = "macos", feature = "async-std")))]
 #[ntex::test]
 async fn test_connection_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -273,7 +272,6 @@ async fn test_connection_force_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
-#[cfg(not(all(target_os = "macos", feature = "async-std")))]
 #[ntex::test]
 async fn test_connection_server_close() {
     env_logger::init();
@@ -311,7 +309,6 @@ async fn test_connection_server_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
-#[cfg(not(all(target_os = "macos", feature = "async-std")))]
 #[ntex::test]
 async fn test_connection_wait_queue() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -358,7 +355,6 @@ async fn test_connection_wait_queue() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
-#[cfg(not(all(target_os = "macos", feature = "async-std")))]
 #[ntex::test]
 async fn test_connection_wait_queue_force_close() {
     let num = Arc::new(AtomicUsize::new(0));

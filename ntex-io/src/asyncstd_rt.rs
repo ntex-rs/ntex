@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! async net providers
 use ntex_util::future::lazy;
 use std::future::Future;

@@ -17,7 +17,7 @@ pub use self::tokio::*;
 
 #[cfg(feature = "async-std")]
 mod asyncstd;
-#[cfg(feature = "async-std")]
+#[cfg(all(not(feature = "tokio"), feature = "async-std"))]
 pub use self::asyncstd::*;
 
 pub trait Runtime {

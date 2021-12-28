@@ -49,21 +49,18 @@ jobs:
           path: ~/.cargo/bin
           key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-tarpaulin
 
-      - name: Run ntex tests
+      - name: Run tests
+        uses: actions-rs/cargo@v1
+        timeout-minutes: 40
+        with:
+          command: test
+          args: --all --all-features --no-fail-fast -- --nocapture
+
+      - name: Run async-std tests
         timeout-minutes: 40
         run: |
           cd ntex
-          cargo test --no-default-features --no-fail-fast --features="tokio,cookie,url,compress,openssl,rustls"
           cargo test --no-default-features --no-fail-fast --features="async-std,cookie,url,compress,openssl,rustls"
-          cd ../ntex-io
-          cargo test --no-fail-fast --features="tokio"
-          cargo test --no-fail-fast --features="async-std"
-          cd ..
-          cargo test -p ntex-bytes --no-fail-fast --all-features
-          cargo test -p ntex-codec --no-fail-fast --all-features
-          cargo test -p ntex-router --no-fail-fast --all-features
-          cargo test -p ntex-service --no-fail-fast --all-features
-          cargo test -p ntex-util --no-fail-fast --all-features
 
       - name: Install tarpaulin
         if: matrix.version == '1.56.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
@@ -76,6 +73,8 @@ jobs:
         continue-on-error: true
         run: |
           cargo tarpaulin --out Xml --all --all-features
+          cd ntex
+          cargo tarpaulin --out Xml --output-dir=.. --no-default-features --features="async-std,cookie,url,compress,openssl,rustls"
 
       - name: Upload to Codecov
         if: matrix.version == '1.56.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')

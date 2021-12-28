@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::future::Future;
 use std::task::{Context, Poll};
 use std::{any, cell::RefCell, io, net, net::SocketAddr, pin::Pin, rc::Rc};
@@ -432,8 +433,12 @@ impl Future for WriteTask {
                                 match Pin::new(&mut io.0).poll_read(cx, &mut buf) {
                                     Poll::Ready(Err(e)) => {
                                         log::trace!("write task is stopped");
-                                        let _ = Pin::new(&mut io.0).poll_close(cx);
                                         this.state.close(Some(e));
+                                        return Poll::Ready(());
+                                    }
+                                    Poll::Ready(Ok(0)) => {
+                                        log::trace!("async-std socket is disconnected");
+                                        this.state.close(None);
                                         return Poll::Ready(());
                                     }
                                     Poll::Ready(Ok(n)) => {
@@ -442,7 +447,6 @@ impl Future for WriteTask {
                                             log::trace!(
                                                 "write task is stopped, too much input"
                                             );
-                                            let _ = Pin::new(&mut io.0).poll_close(cx);
                                             this.state.close(None);
                                             return Poll::Ready(());
                                         }
@@ -482,7 +486,7 @@ pub(super) fn flush_io<T: Read + Write + Unpin>(
     let pool = state.memory_pool();
 
     if len != 0 {
-        log::trace!("flushing framed transport: {:?} {:?}", buf.len(), buf);
+        // log::trace!("flushing framed transport: {:?}", buf.len());
 
         let mut written = 0;
         while written < len {
@@ -772,8 +776,14 @@ mod unixstream {
                                     match Pin::new(&mut io.0).poll_read(cx, &mut buf) {
                                         Poll::Ready(Err(e)) => {
                                             log::trace!("write task is stopped");
-                                            let _ = Pin::new(&mut io.0).poll_close(cx);
                                             this.state.close(Some(e));
+                                            return Poll::Ready(());
+                                        }
+                                        Poll::Ready(Ok(0)) => {
+                                            log::trace!(
+                                                "async-std unix socket is disconnected"
+                                            );
+                                            this.state.close(None);
                                             return Poll::Ready(());
                                         }
                                         Poll::Ready(Ok(n)) => {
@@ -782,7 +792,6 @@ mod unixstream {
                                                 log::trace!(
                                                     "write task is stopped, too much input"
                                                 );
-                                                let _ = Pin::new(&mut io.0).poll_close(cx);
                                                 this.state.close(None);
                                                 return Poll::Ready(());
                                             }
