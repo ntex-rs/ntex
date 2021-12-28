@@ -1,3 +1,5 @@
+//! Utilities for abstructing io streams
+#![allow(clippy::return_self_not_must_use)]
 use std::{
     any::Any, any::TypeId, fmt, future::Future, io as sio, io::Error as IoError,
     task::Context, task::Poll,
@@ -16,6 +18,8 @@ mod tasks;
 mod time;
 mod utils;
 
+#[cfg(any(feature = "async-std"))]
+mod asyncstd_rt;
 #[cfg(any(feature = "tokio-traits", feature = "tokio"))]
 mod tokio_impl;
 #[cfg(any(feature = "tokio"))]
@@ -165,6 +169,9 @@ pub mod rt {
 
     #[cfg(feature = "tokio")]
     pub use crate::tokio_rt::*;
+
+    #[cfg(feature = "async-std")]
+    pub use crate::asyncstd_rt::*;
 }
 
 #[cfg(test)]

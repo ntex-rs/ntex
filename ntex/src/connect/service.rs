@@ -175,7 +175,7 @@ impl<T: Address> TcpConnectorResponse<T> {
             Either::Left(addr) => TcpConnectorResponse {
                 req: Some(req),
                 addrs: None,
-                stream: Some(tcp_connect_in(addr, pool)),
+                stream: Some(Box::pin(tcp_connect_in(addr, pool))),
                 pool,
                 port,
             },
@@ -230,7 +230,7 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
 
             // try to connect
             let addr = this.addrs.as_mut().unwrap().pop_front().unwrap();
-            this.stream = Some(tcp_connect_in(addr, this.pool));
+            this.stream = Some(Box::pin(tcp_connect_in(addr, this.pool)));
         }
     }
 }

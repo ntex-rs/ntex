@@ -49,12 +49,19 @@ jobs:
           path: ~/.cargo/bin
           key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-tarpaulin
 
-      - name: Run tests
+      - name: Run ntex [tokio] tests
         uses: actions-rs/cargo@v1
         timeout-minutes: 40
         with:
           command: test
-          args: --all --all-features --no-fail-fast -- --nocapture
+          args: -p ntex --no-default-features --no-fail-fast --features="tokio,cookie,url,compress,openssl,rustls" -- --nocapture
+
+      - name: Run ntex [async-std] tests
+        uses: actions-rs/cargo@v1
+        timeout-minutes: 40
+        with:
+          command: test
+          args: -p ntex --no-default-features --no-fail-fast --features="async-std,cookie,url,compress,openssl,rustls" -- --nocapture
 
       - name: Install tarpaulin
         if: matrix.version == '1.56.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')

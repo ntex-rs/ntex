@@ -236,6 +236,7 @@ async fn test_connection_reuse() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
+#[cfg(not(all(target_os = "macos", feature = "async-std")))]
 #[ntex::test]
 async fn test_connection_force_close() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -263,6 +264,7 @@ async fn test_connection_force_close() {
     assert!(response.status().is_success());
 
     // req 2
+    let client = Client::build().timeout(Seconds(10)).finish();
     let req = client.post(srv.url("/")).force_close();
     let response = req.send().await.unwrap();
     assert!(response.status().is_success());
@@ -271,8 +273,11 @@ async fn test_connection_force_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
+#[cfg(not(all(target_os = "macos", feature = "async-std")))]
 #[ntex::test]
 async fn test_connection_server_close() {
+    env_logger::init();
+
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
 
@@ -306,6 +311,7 @@ async fn test_connection_server_close() {
     assert_eq!(num.load(Ordering::Relaxed), 2);
 }
 
+#[cfg(not(all(target_os = "macos", feature = "async-std")))]
 #[ntex::test]
 async fn test_connection_wait_queue() {
     let num = Arc::new(AtomicUsize::new(0));
@@ -352,6 +358,7 @@ async fn test_connection_wait_queue() {
     assert_eq!(num.load(Ordering::Relaxed), 1);
 }
 
+#[cfg(not(all(target_os = "macos", feature = "async-std")))]
 #[ntex::test]
 async fn test_connection_wait_queue_force_close() {
     let num = Arc::new(AtomicUsize::new(0));

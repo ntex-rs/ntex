@@ -266,6 +266,7 @@ async fn test_listen_uds() {
         let sys = ntex::rt::System::new("test");
 
         let srv = sys.exec(|| {
+            let _ = std::fs::remove_file("/tmp/uds-test2");
             let lst = std::os::unix::net::UnixListener::bind("/tmp/uds-test2").unwrap();
 
             HttpServer::new(|| {

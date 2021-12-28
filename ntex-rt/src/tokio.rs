@@ -17,55 +17,37 @@ pub fn create_runtime() -> Box<dyn Runtime> {
 }
 
 /// Opens a TCP connection to a remote host.
-pub fn tcp_connect(
-    addr: SocketAddr,
-) -> Pin<Box<dyn Future<Output = Result<Io, io::Error>>>> {
-    Box::pin(async move {
-        let sock = tok_io::net::TcpStream::connect(addr).await?;
-        sock.set_nodelay(true)?;
-        Ok(Io::new(sock))
-    })
+pub async fn tcp_connect(addr: SocketAddr) -> Result<Io, io::Error> {
+    let sock = tok_io::net::TcpStream::connect(addr).await?;
+    sock.set_nodelay(true)?;
+    Ok(Io::new(sock))
 }
 
 /// Opens a TCP connection to a remote host and use specified memory pool.
-pub fn tcp_connect_in(
-    addr: SocketAddr,
-    pool: PoolRef,
-) -> Pin<Box<dyn Future<Output = Result<Io, io::Error>>>> {
-    Box::pin(async move {
-        let sock = tok_io::net::TcpStream::connect(addr).await?;
-        sock.set_nodelay(true)?;
-        Ok(Io::with_memory_pool(sock, pool))
-    })
+pub async fn tcp_connect_in(addr: SocketAddr, pool: PoolRef) -> Result<Io, io::Error> {
+    let sock = tok_io::net::TcpStream::connect(addr).await?;
+    sock.set_nodelay(true)?;
+    Ok(Io::with_memory_pool(sock, pool))
 }
 
 #[cfg(unix)]
 /// Opens a unix stream connection.
-pub fn unix_connect<'a, P>(
-    addr: P,
-) -> Pin<Box<dyn Future<Output = Result<Io, io::Error>> + 'a>>
+pub async fn unix_connect<'a, P>(addr: P) -> Result<Io, io::Error>
 where
     P: AsRef<Path> + 'a,
 {
-    Box::pin(async move {
-        let sock = tok_io::net::UnixStream::connect(addr).await?;
-        Ok(Io::new(sock))
-    })
+    let sock = tok_io::net::UnixStream::connect(addr).await?;
+    Ok(Io::new(sock))
 }
 
 #[cfg(unix)]
 /// Opens a unix stream connection and specified memory pool.
-pub fn unix_connect_in<'a, P>(
-    addr: P,
-    pool: PoolRef,
-) -> Pin<Box<dyn Future<Output = Result<Io, io::Error>> + 'a>>
+pub async fn unix_connect_in<'a, P>(addr: P, pool: PoolRef) -> Result<Io, io::Error>
 where
     P: AsRef<Path> + 'a,
 {
-    Box::pin(async move {
-        let sock = tok_io::net::UnixStream::connect(addr).await?;
-        Ok(Io::with_memory_pool(sock, pool))
-    })
+    let sock = tok_io::net::UnixStream::connect(addr).await?;
+    Ok(Io::with_memory_pool(sock, pool))
 }
 
 /// Convert std TcpStream to tokio's TcpStream
