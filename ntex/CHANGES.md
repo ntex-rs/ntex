@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.0-b.6] - 2021-12-29
+
+* Add `async-std` support
+
 ## [0.5.0-b.5] - 2021-12-28
 
 * http: proper send payload, if request payload is not consumed

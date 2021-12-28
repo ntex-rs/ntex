@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0-b.3] - 2021-12-28
+
+* Add `async-std` support
+
 ## [0.4.0-b.1] - 2021-12-22
 
 * Fix lifetimes for unix_connect/unix_connect_in

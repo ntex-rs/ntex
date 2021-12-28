@@ -56,7 +56,6 @@ async fn test_openssl_string() {
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_openssl_read_before_error() {
-    env_logger::init();
     use ntex::server::openssl;
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 

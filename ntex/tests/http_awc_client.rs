@@ -274,8 +274,6 @@ async fn test_connection_force_close() {
 
 #[ntex::test]
 async fn test_connection_server_close() {
-    env_logger::init();
-
     let num = Arc::new(AtomicUsize::new(0));
     let num2 = num.clone();
 
