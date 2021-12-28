@@ -1,4 +1,5 @@
 //! An implementations of SSL streams for ntex ecosystem
+#![allow(clippy::return_self_not_must_use)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub mod types;

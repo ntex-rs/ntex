@@ -1,4 +1,5 @@
 //! A runtime implementation that runs everything on the current thread.
+#![allow(clippy::return_self_not_must_use)]
 use std::{future::Future, pin::Pin};
 
 mod arbiter;
@@ -13,6 +14,11 @@ pub use self::system::System;
 mod tokio;
 #[cfg(feature = "tokio")]
 pub use self::tokio::*;
+
+#[cfg(feature = "async-std")]
+mod asyncstd;
+#[cfg(all(not(feature = "tokio"), feature = "async-std"))]
+pub use self::asyncstd::*;
 
 pub trait Runtime {
     /// Spawn a future onto the single-threaded runtime.

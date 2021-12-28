@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "0.4.0-b.2"
+version = "0.4.0-b.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -16,18 +16,23 @@ name = "ntex_rt"
 path = "src/lib.rs"
 
 [features]
-default = ["tokio"]
+default = []
 
 # tokio support
-tokio = ["tok-io", "ntex-io/tokio"]
+tokio = ["ntex-io/tokio", "tok-io"]
+
+# async-std support
+async-std = ["ntex-io/async-std", "async_std/unstable"]
 
 [dependencies]
 ntex-bytes = "0.1.8"
-ntex-io = "0.1.0-b.5"
+ntex-io = "0.1.0-b.9"
 ntex-util = "0.1.3"
 async-oneshot = "0.5.0"
 async-channel = "1.6.1"
+derive_more = "0.99.14"
 log = "0.4"
 pin-project-lite = "0.2"
 
 tok-io = { version = "1", package = "tokio", default-features = false, features = ["rt", "net", "signal"], optional = true }
+async_std = { version = "1", package = "async-std", optional = true }

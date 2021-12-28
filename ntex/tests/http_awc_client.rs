@@ -263,6 +263,7 @@ async fn test_connection_force_close() {
     assert!(response.status().is_success());
 
     // req 2
+    let client = Client::build().timeout(Seconds(10)).finish();
     let req = client.post(srv.url("/")).force_close();
     let response = req.send().await.unwrap();
     assert!(response.status().is_success());
