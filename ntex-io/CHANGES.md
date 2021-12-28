@@ -4,6 +4,8 @@
 
 * Fix error handing for nested filters
 
+* Improve tokio streams support
+
 ## [0.1.0-b.7] - 2021-12-27
 
 * Do not swallow decoded read bytes in case of filter error
