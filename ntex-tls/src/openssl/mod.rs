@@ -112,7 +112,9 @@ impl<F: Filter> Filter for SslFilter<F> {
             Ok(ssl::ShutdownResult::Received) => {
                 self.inner.borrow().get_ref().inner.poll_shutdown()
             }
-            Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => Poll::Ready(Ok(())),
+            Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
+                self.inner.borrow().get_ref().inner.poll_shutdown()
+            }
             Err(ref e)
                 if e.code() == ssl::ErrorCode::WANT_READ
                     || e.code() == ssl::ErrorCode::WANT_WRITE =>
@@ -230,6 +232,10 @@ impl<F: Filter> Filter for SslFilter<F> {
                     }
                     Ok(new_bytes)
                 }
+                Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
+                    self.want_shutdown(None);
+                    Ok(new_bytes)
+                }
                 Err(e) => Err(map_to_ioerr(e)),
             };
         }
@@ -252,6 +258,10 @@ impl<F: Filter> Filter for SslFilter<F> {
                     }
                     return match e.code() {
                         ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => Ok(()),
+                        ssl::ErrorCode::ZERO_RETURN => {
+                            self.want_shutdown(None);
+                            Ok(())
+                        }
                         _ => Err(map_to_ioerr(e)),
                     };
                 }

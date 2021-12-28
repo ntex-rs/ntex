@@ -2,6 +2,10 @@
 
 ## [0.1.0-b.5] - 2021-12-28
 
+* Proper handling for openssl ZERO_RETURN error
+
+## [0.1.0-b.5] - 2021-12-28
+
 * Add query support for peer cert and peer cert chain
 
 ## [0.1.0-b.4] - 2021-12-27

@@ -1,6 +1,6 @@
 <div align="center">
  <p><h1>ntex</h1> </p>
-  <p><strong>Framework for composable network services. This is personal project. This project uses *unsafe*!</strong> </p>
+  <p><strong>Framework for composable network services. This project uses *unsafe*!</strong> </p>
   <p>
 
 [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Linux)") 

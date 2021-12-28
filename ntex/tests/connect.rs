@@ -84,7 +84,7 @@ async fn test_openssl_read_before_error() {
     let io = conn.call(addr.into()).await.unwrap();
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
-    assert!(io.recv(&BytesCodec).await.is_err());
+    assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
 #[cfg(feature = "rustls")]
