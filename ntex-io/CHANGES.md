@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.0-b.10] - 2021-12-xx
+
+* Cleanup internal flags on io error
+
 ## [0.1.0-b.9] - 2021-12-29
 
 * Add `async-std` support

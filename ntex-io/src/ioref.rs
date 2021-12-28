@@ -48,11 +48,7 @@ impl IoRef {
     /// Check if io stream is closed
     pub fn is_closed(&self) -> bool {
         self.0.flags.get().intersects(
-            Flags::IO_ERR
-                | Flags::IO_SHUTDOWN
-                | Flags::IO_CLOSED
-                | Flags::IO_FILTERS
-                | Flags::DSP_STOP,
+            Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::IO_FILTERS | Flags::DSP_STOP,
         )
     }
 

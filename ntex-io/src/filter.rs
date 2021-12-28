@@ -18,7 +18,6 @@ impl Filter for Base {
     fn closed(&self, err: Option<io::Error>) {
         self.0 .0.set_error(err);
         self.0 .0.handle.take();
-        self.0 .0.insert_flags(Flags::IO_CLOSED);
         self.0 .0.dispatch_task.wake();
     }
 

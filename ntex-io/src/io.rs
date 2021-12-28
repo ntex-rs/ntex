@@ -21,8 +21,6 @@ bitflags::bitflags! {
         const IO_FILTERS_TO   = 0b0000_0000_0000_0100;
         /// shutdown io tasks
         const IO_SHUTDOWN     = 0b0000_0000_0000_1000;
-        /// io object is closed
-        const IO_CLOSED       = 0b0000_0000_0001_0000;
 
         /// pause io read
         const RD_PAUSED       = 0b0000_0000_0010_0000;
@@ -107,9 +105,10 @@ impl IoState {
 
     #[inline]
     pub(super) fn is_io_open(&self) -> bool {
-        !self.flags.get().intersects(
-            Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::IO_SHUTDOWN | Flags::IO_CLOSED,
-        )
+        !self
+            .flags
+            .get()
+            .intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN)
     }
 
     #[inline]
@@ -120,8 +119,18 @@ impl IoState {
         self.read_task.wake();
         self.write_task.wake();
         self.dispatch_task.wake();
-        self.insert_flags(Flags::IO_ERR);
         self.notify_disconnect();
+        let mut flags = self.flags.get();
+        flags.insert(Flags::IO_ERR);
+        flags.remove(
+            Flags::DSP_KEEPALIVE
+                | Flags::RD_PAUSED
+                | Flags::RD_READY
+                | Flags::RD_BUF_FULL
+                | Flags::WR_WAIT
+                | Flags::WR_BACKPRESSURE,
+        );
+        self.flags.set(flags);
     }
 
     #[inline]
@@ -617,7 +626,7 @@ impl<F> Io<F> {
     pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         let flags = self.flags();
 
-        if flags.intersects(Flags::IO_ERR | Flags::IO_CLOSED) {
+        if flags.intersects(Flags::IO_ERR) {
             Poll::Ready(Ok(()))
         } else {
             if !flags.contains(Flags::IO_FILTERS) {
