@@ -41,3 +41,16 @@ pub enum Signal {
     /// SIGQUIT
     Quit,
 }
+
+#[cfg(all(not(feature = "tokio"), not(feature = "async-std")))]
+pub fn create_runtime() -> Box<dyn Runtime> {
+    unimplemented!()
+}
+
+#[cfg(all(not(feature = "tokio"), not(feature = "async-std")))]
+pub fn spawn<F>(_: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = F::Output>>>
+where
+    F: std::future::Future + 'static,
+{
+    unimplemented!()
+}

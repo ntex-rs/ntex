@@ -172,6 +172,14 @@ pub mod rt {
 
     #[cfg(all(not(feature = "tokio"), feature = "async-std"))]
     pub use crate::asyncstd_rt::*;
+
+    #[cfg(all(not(feature = "tokio"), not(feature = "async-std")))]
+    pub fn spawn<F>(_: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = F::Output>>>
+    where
+        F: std::future::Future + 'static,
+    {
+        unimplemented!()
+    }
 }
 
 #[cfg(test)]
