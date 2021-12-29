@@ -556,6 +556,11 @@ impl<F> Io<F> {
         match self.decode(codec) {
             Ok(Some(el)) => Poll::Ready(Ok(el)),
             Ok(None) => {
+                if !self.0 .0.is_io_open() {
+                    return Poll::Ready(Err(RecvError::PeerGone(
+                        self.0 .0.error.take(),
+                    )));
+                }
                 let flags = self.flags();
                 if flags.contains(Flags::DSP_STOP) {
                     Poll::Ready(Err(RecvError::Stop))
@@ -591,6 +596,14 @@ impl<F> Io<F> {
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         // check io error
         if !self.0 .0.is_io_open() {
+            self.0 .0.remove_flags(
+                Flags::DSP_KEEPALIVE
+                    | Flags::RD_PAUSED
+                    | Flags::RD_READY
+                    | Flags::RD_BUF_FULL
+                    | Flags::WR_WAIT
+                    | Flags::WR_BACKPRESSURE,
+            );
             return Poll::Ready(Err(self
                 .0
                  .0
