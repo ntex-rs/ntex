@@ -133,6 +133,7 @@ impl IoState {
             self.read_task.wake();
             self.write_task.wake();
             self.dispatch_task.wake();
+            self.shutdown_filters();
         }
     }
 
@@ -153,7 +154,19 @@ impl IoState {
                 Poll::Ready(Err(err)) => {
                     self.io_stopped(Some(err));
                 }
-                Poll::Pending => (),
+                Poll::Pending => {
+                    let flags = self.flags.get();
+                    // check read buffer, if buffer is not consumed it is unlikely
+                    // that filter will properly complete shutdown
+                    if flags.contains(Flags::RD_PAUSED)
+                        || flags.contains(Flags::RD_BUF_FULL | Flags::RD_READY)
+                    {
+                        self.read_task.wake();
+                        self.write_task.wake();
+                        self.dispatch_task.wake();
+                        self.insert_flags(Flags::IO_STOPPING);
+                    }
+                }
             }
         }
     }

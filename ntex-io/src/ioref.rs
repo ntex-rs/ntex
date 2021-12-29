@@ -77,19 +77,25 @@ impl IoRef {
     #[inline]
     /// Gracefully close connection
     ///
-    /// First stop dispatcher, then dispatcher stops io tasks
+    /// Notify dispatcher and initiate io stream shutdown process
     pub fn close(&self) {
         self.0.insert_flags(Flags::DSP_STOP);
-        self.0.dispatch_task.wake();
+        self.0.init_shutdown(None);
     }
 
     #[inline]
     /// Force close connection
     ///
-    /// Dispatcher does not wait for uncompleted responses, but flushes io buffers.
+    /// Dispatcher does not wait for uncompleted responses. Io stream get terminated
+    /// without any graceful period.
     pub fn force_close(&self) {
         log::trace!("force close io stream object");
-        self.0.insert_flags(Flags::DSP_STOP | Flags::IO_STOPPING);
+        self.0.insert_flags(
+            Flags::DSP_STOP
+                | Flags::IO_STOPPED
+                | Flags::IO_STOPPING
+                | Flags::IO_STOPPING_FILTERS,
+        );
         self.0.read_task.wake();
         self.0.write_task.wake();
         self.0.dispatch_task.wake();
