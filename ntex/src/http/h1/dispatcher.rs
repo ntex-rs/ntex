@@ -312,8 +312,7 @@ where
                             {
                                 log::trace!("peer is gone with {:?}", err);
                                 *this.st = State::Stop;
-                                this.inner.error =
-                                    Some(DispatchError::Disconnect(Some(err)));
+                                this.inner.error = Some(DispatchError::PeerGone(Some(err)));
                             }
                         }
                         Err(RecvError::Decoder(err)) => {
@@ -326,7 +325,7 @@ where
                         Err(RecvError::PeerGone(err)) => {
                             log::trace!("peer is gone with {:?}", err);
                             *this.st = State::Stop;
-                            this.inner.error = Some(DispatchError::Disconnect(err));
+                            this.inner.error = Some(DispatchError::PeerGone(err));
                         }
                         Err(RecvError::Stop) => {
                             log::trace!("dispatcher is instructed to stop");
@@ -350,16 +349,16 @@ where
                 // consume request's payload
                 State::ReadPayload => {
                     if let Err(e) = ready!(this.inner.poll_request_payload(cx)) {
-                        set_error!(this, e);
+                        *this.st = State::Stop;
+                        this.inner.error = Some(e);
                     } else {
                         *this.st = this.inner.switch_to_read_request();
                     }
                 }
                 // send response body
                 State::SendPayload { ref mut body } => {
-                    if !this.inner.state.is_io_open() {
-                        let e = this.inner.state.take_error().into();
-                        set_error!(this, e);
+                    if this.inner.io().is_closed() {
+                        *this.st = State::Stop;
                     } else {
                         if let Poll::Ready(Err(err)) = this.inner.poll_request_payload(cx) {
                             this.inner.error = Some(err);
@@ -394,29 +393,18 @@ where
                 State::Stop => {
                     this.inner.unregister_keepalive();
 
-                    if this
-                        .inner
-                        .io
-                        .as_ref()
-                        .unwrap()
-                        .poll_shutdown(cx)?
-                        .is_ready()
+                    return if let Err(e) =
+                        ready!(this.inner.io.as_ref().unwrap().poll_shutdown(cx))
                     {
                         // get io error
-                        if this.inner.error.is_none() {
-                            this.inner.error = Some(DispatchError::Disconnect(
-                                this.inner.state.take_error(),
-                            ));
-                        }
-
-                        return Poll::Ready(if let Some(err) = this.inner.error.take() {
-                            Err(err)
+                        if let Some(e) = this.inner.error.take() {
+                            Poll::Ready(Err(e))
                         } else {
-                            Ok(())
-                        });
+                            Poll::Ready(Err(DispatchError::PeerGone(Some(e))))
+                        }
                     } else {
-                        return Poll::Pending;
-                    }
+                        Poll::Ready(Ok(()))
+                    };
                 }
             }
         }
@@ -494,7 +482,9 @@ where
         // we dont need to process responses if socket is disconnected
         // but we still want to handle requests with app service
         // so we skip response processing for droppped connection
-        if self.state.is_io_open() {
+        if self.state.is_closed() {
+            State::Stop
+        } else {
             let result = self
                 .io()
                 .encode(Message::Item((msg, body.size())), &self.codec)
@@ -523,8 +513,6 @@ where
                     _ => State::SendPayload { body },
                 }
             }
-        } else {
-            State::Stop
         }
     }
 
@@ -571,95 +559,88 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), DispatchError>> {
         // check if payload data is required
-        if let Some(ref mut payload) = self.payload {
-            match payload.1.poll_data_required(cx) {
-                PayloadStatus::Read => {
-                    let io = self.io.as_ref().unwrap();
+        let payload = if let Some(ref mut payload) = self.payload {
+            payload
+        } else {
+            return Poll::Ready(Ok(()));
+        };
+        match payload.1.poll_data_required(cx) {
+            PayloadStatus::Read => {
+                let io = self.io.as_ref().unwrap();
 
-                    // read request payload
-                    let mut updated = false;
-                    loop {
-                        let res = io.poll_recv(&payload.0, cx);
-                        match res {
-                            Poll::Ready(Ok(PayloadItem::Chunk(chunk))) => {
-                                updated = true;
-                                payload.1.feed_data(chunk);
-                            }
-                            Poll::Ready(Ok(PayloadItem::Eof)) => {
-                                updated = true;
-                                payload.1.feed_eof();
-                                self.payload = None;
-                                break;
-                            }
-                            Poll::Ready(Err(err)) => {
-                                let err = match err {
-                                    RecvError::WriteBackpressure => {
-                                        if io.poll_flush(cx, false)?.is_pending() {
-                                            break;
-                                        } else {
-                                            continue;
-                                        }
-                                    }
-                                    RecvError::KeepAlive => {
-                                        payload
-                                            .1
-                                            .set_error(PayloadError::EncodingCorrupted);
-                                        self.payload = None;
-                                        io::Error::new(io::ErrorKind::Other, "Keep-alive")
-                                            .into()
-                                    }
-                                    RecvError::Stop => {
-                                        payload
-                                            .1
-                                            .set_error(PayloadError::EncodingCorrupted);
-                                        self.payload = None;
-                                        io::Error::new(
-                                            io::ErrorKind::Other,
-                                            "Dispatcher stopped",
-                                        )
-                                        .into()
-                                    }
-                                    RecvError::PeerGone(err) => {
-                                        payload
-                                            .1
-                                            .set_error(PayloadError::EncodingCorrupted);
-                                        self.payload = None;
-                                        if let Some(err) = err {
-                                            DispatchError::Disconnect(Some(err))
-                                        } else {
-                                            ParseError::Incomplete.into()
-                                        }
-                                    }
-                                    RecvError::Decoder(e) => {
-                                        payload
-                                            .1
-                                            .set_error(PayloadError::EncodingCorrupted);
-                                        self.payload = None;
-                                        DispatchError::Parse(e)
-                                    }
-                                };
-                                return Poll::Ready(Err(err));
-                            }
-                            Poll::Pending => break,
+                // read request payload
+                let mut updated = false;
+                loop {
+                    let res = io.poll_recv(&payload.0, cx);
+                    match res {
+                        Poll::Ready(Ok(PayloadItem::Chunk(chunk))) => {
+                            updated = true;
+                            payload.1.feed_data(chunk);
                         }
-                    }
-                    if updated {
-                        Poll::Ready(Ok(()))
-                    } else {
-                        Poll::Pending
+                        Poll::Ready(Ok(PayloadItem::Eof)) => {
+                            updated = true;
+                            payload.1.feed_eof();
+                            self.payload = None;
+                            break;
+                        }
+                        Poll::Ready(Err(err)) => {
+                            let err = match err {
+                                RecvError::WriteBackpressure => {
+                                    if io.poll_flush(cx, false)?.is_pending() {
+                                        break;
+                                    } else {
+                                        continue;
+                                    }
+                                }
+                                RecvError::KeepAlive => {
+                                    payload.1.set_error(PayloadError::EncodingCorrupted);
+                                    self.payload = None;
+                                    io::Error::new(io::ErrorKind::Other, "Keep-alive")
+                                        .into()
+                                }
+                                RecvError::Stop => {
+                                    payload.1.set_error(PayloadError::EncodingCorrupted);
+                                    self.payload = None;
+                                    io::Error::new(
+                                        io::ErrorKind::Other,
+                                        "Dispatcher stopped",
+                                    )
+                                    .into()
+                                }
+                                RecvError::PeerGone(err) => {
+                                    payload.1.set_error(PayloadError::EncodingCorrupted);
+                                    self.payload = None;
+                                    if let Some(err) = err {
+                                        DispatchError::PeerGone(Some(err))
+                                    } else {
+                                        ParseError::Incomplete.into()
+                                    }
+                                }
+                                RecvError::Decoder(e) => {
+                                    payload.1.set_error(PayloadError::EncodingCorrupted);
+                                    self.payload = None;
+                                    DispatchError::Parse(e)
+                                }
+                            };
+                            return Poll::Ready(Err(err));
+                        }
+                        Poll::Pending => break,
                     }
                 }
-                PayloadStatus::Pause => Poll::Pending,
-                PayloadStatus::Dropped => {
-                    // service call is not interested in payload
-                    // wait until future completes and then close
-                    // connection
-                    self.payload = None;
-                    Poll::Ready(Err(DispatchError::PayloadIsNotConsumed))
+                if updated {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
                 }
             }
-        } else {
-            Poll::Ready(Ok(()))
+            PayloadStatus::Pause => Poll::Pending,
+            PayloadStatus::Dropped => {
+                // service call is not interested in payload
+                // wait until future completes and then close
+                // connection
+                self.payload = None;
+                Poll::Ready(Err(DispatchError::PayloadIsNotConsumed))
+            }
         }
     }
 }
@@ -803,7 +784,7 @@ mod tests {
 
         client.close().await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
-        assert!(!h1.inner.state.is_io_open());
+        assert!(h1.inner.state.is_closed());
     }
 
     #[crate::rt_test]
@@ -947,6 +928,7 @@ mod tests {
 
         let mut decoder = ClientCodec::default();
 
+        // generate large http message
         let data = rand::thread_rng()
             .sample_iter(&rand::distributions::Alphanumeric)
             .take(70_000)
@@ -960,7 +942,7 @@ mod tests {
         sleep(Millis(50)).await;
         // required because io shutdown is async oper
         let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await;
-        sleep(Millis(50)).await;
+        sleep(Millis(550)).await;
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         assert!(h1.inner.state.is_closed());
 
@@ -1130,7 +1112,7 @@ mod tests {
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         sleep(Millis(50)).await;
-        assert!(!h1.inner.state.is_io_open());
+        assert!(h1.inner.state.is_closed());
         let buf = client.local_buffer(|buf| buf.split().freeze());
         assert_eq!(&buf[..28], b"HTTP/1.1 500 Internal Server");
         assert_eq!(&buf[buf.len() - 5..], b"error");

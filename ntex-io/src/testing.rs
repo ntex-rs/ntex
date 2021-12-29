@@ -638,6 +638,7 @@ pub(super) fn flush_io(
             Poll::Pending
         }
     } else {
+        let _ = state.release_write_buf(buf);
         Poll::Ready(true)
     }
 }

@@ -55,24 +55,13 @@ pub enum WriteStatus {
 pub trait Filter: 'static {
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
 
-    /// Filter needs incoming data from io stream
-    fn want_read(&self);
-
-    /// Filter wants gracefully shutdown io stream
-    fn want_shutdown(&self, err: Option<sio::Error>);
-
-    fn poll_shutdown(&self) -> Poll<sio::Result<()>>;
-
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus>;
-
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus>;
-
     fn get_read_buf(&self) -> Option<BytesMut>;
 
     fn get_write_buf(&self) -> Option<BytesMut>;
 
     fn release_read_buf(
         &self,
+        io: &IoRef,
         src: BytesMut,
         dst: &mut Option<BytesMut>,
         nbytes: usize,
@@ -80,7 +69,11 @@ pub trait Filter: 'static {
 
     fn release_write_buf(&self, buf: BytesMut) -> sio::Result<()>;
 
-    fn closed(&self, err: Option<sio::Error>);
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus>;
+
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus>;
+
+    fn poll_shutdown(&self) -> Poll<sio::Result<()>>;
 }
 
 pub trait FilterFactory<F: Filter>: Sized {

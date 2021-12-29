@@ -1,6 +1,8 @@
 # Changes
 
-## [0.1.0-b.10] - 2021-12-xx
+## [0.1.0-b.10] - 2021-12-30
+
+* Cleanup Filter trait, removed closed,want_read,want_shutdown methods
 
 * Cleanup internal flags on io error
 

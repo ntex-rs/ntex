@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.5.0-b.6"
+version = "0.5.0-b.7"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -51,9 +51,9 @@ ntex-service = "0.3.0-b.0"
 ntex-macros = "0.1.3"
 ntex-util = "0.1.5"
 ntex-bytes = "0.1.8"
-ntex-tls = "0.1.0-b.6"
+ntex-tls = "0.1.0-b.7"
 ntex-rt = "0.4.0-b.3"
-ntex-io = { version = "0.1.0-b.9", features = ["tokio-traits"] }
+ntex-io = { version = "0.1.0-b.10", features = ["tokio-traits"] }
 
 base64 = "0.13"
 bitflags = "1.3"

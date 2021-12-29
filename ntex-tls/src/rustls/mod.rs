@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::{any, future::Future, io, pin::Pin, task::Context, task::Poll};
 
 use ntex_bytes::BytesMut;
-use ntex_io::{Base, Filter, FilterFactory, Io, ReadStatus, WriteStatus};
+use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::time::Millis;
 use tls_rust::{ClientConfig, ServerConfig, ServerName};
 
@@ -61,30 +61,6 @@ impl<F: Filter> Filter for TlsFilter<F> {
     }
 
     #[inline]
-    fn closed(&self, err: Option<io::Error>) {
-        match self.inner {
-            InnerTlsFilter::Server(ref f) => f.closed(err),
-            InnerTlsFilter::Client(ref f) => f.closed(err),
-        }
-    }
-
-    #[inline]
-    fn want_read(&self) {
-        match self.inner {
-            InnerTlsFilter::Server(ref f) => f.want_read(),
-            InnerTlsFilter::Client(ref f) => f.want_read(),
-        }
-    }
-
-    #[inline]
-    fn want_shutdown(&self, err: Option<io::Error>) {
-        match self.inner {
-            InnerTlsFilter::Server(ref f) => f.want_shutdown(err),
-            InnerTlsFilter::Client(ref f) => f.want_shutdown(err),
-        }
-    }
-
-    #[inline]
     fn poll_shutdown(&self) -> Poll<io::Result<()>> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.poll_shutdown(),
@@ -127,13 +103,14 @@ impl<F: Filter> Filter for TlsFilter<F> {
     #[inline]
     fn release_read_buf(
         &self,
+        io: &IoRef,
         src: BytesMut,
         dst: &mut Option<BytesMut>,
         nb: usize,
     ) -> io::Result<usize> {
         match self.inner {
-            InnerTlsFilter::Server(ref f) => f.release_read_buf(src, dst, nb),
-            InnerTlsFilter::Client(ref f) => f.release_read_buf(src, dst, nb),
+            InnerTlsFilter::Server(ref f) => f.release_read_buf(io, src, dst, nb),
+            InnerTlsFilter::Client(ref f) => f.release_read_buf(io, src, dst, nb),
         }
     }
 

@@ -63,7 +63,6 @@ enum DispatcherState {
 }
 
 enum DispatcherError<S, U> {
-    KeepAlive,
     Encoder(U),
     Service(S),
 }
@@ -176,7 +175,7 @@ where
             Err(err) => self.error.set(Some(DispatcherError::Service(err))),
             Ok(None) => return,
         }
-        io.wake_dispatcher();
+        io.wake();
     }
 }
 
@@ -382,18 +381,12 @@ where
     ) -> Poll<PollService<U>> {
         match srv.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
-                // check keepalive timeout
-                self.check_keepalive();
-
                 // check for errors
                 Poll::Ready(if let Some(err) = self.shared.error.take() {
                     log::trace!("error occured, stopping dispatcher");
                     self.st.set(DispatcherState::Stop);
 
                     match err {
-                        DispatcherError::KeepAlive => {
-                            PollService::Item(DispatchItem::KeepAliveTimeout)
-                        }
                         DispatcherError::Encoder(err) => {
                             PollService::Item(DispatchItem::EncoderError(err))
                         }
@@ -429,18 +422,6 @@ where
 
     fn ka_enabled(&self) -> bool {
         self.ka_timeout.get().non_zero()
-    }
-
-    /// check keepalive timeout
-    fn check_keepalive(&self) {
-        if self.io.is_keepalive() {
-            log::trace!("keepalive timeout");
-            if let Some(err) = self.shared.error.take() {
-                self.shared.error.set(Some(err));
-            } else {
-                self.shared.error.set(Some(DispatcherError::KeepAlive));
-            }
-        }
     }
 
     /// update keep-alive timer
@@ -790,6 +771,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_keepalive() {
+        env_logger::init();
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
@@ -831,7 +813,7 @@ mod tests {
 
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();
-        assert!(flags.contains(Flags::IO_SHUTDOWN));
+        assert!(flags.contains(Flags::IO_STOPPING));
         assert!(flags.contains(Flags::DSP_KEEPALIVE));
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);

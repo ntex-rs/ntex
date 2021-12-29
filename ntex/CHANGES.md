@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.0-b.10] - 2021-12-30
+
+* Update ntex-io to 0.1.0-b.10
+
 ## [0.5.0-b.6] - 2021-12-29
 
 * Add `async-std` support

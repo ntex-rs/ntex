@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::{any, cell::RefCell, cmp, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesMut, PoolRef};
-use ntex_io::{Filter, Io, ReadStatus, WriteStatus};
+use ntex_io::{Filter, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_rust::{ServerConfig, ServerConnection};
 
@@ -47,21 +47,6 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
     }
 
     #[inline]
-    fn closed(&self, err: Option<io::Error>) {
-        self.inner.borrow().inner.closed(err)
-    }
-
-    #[inline]
-    fn want_read(&self) {
-        self.inner.borrow().inner.want_read()
-    }
-
-    #[inline]
-    fn want_shutdown(&self, err: Option<io::Error>) {
-        self.inner.borrow().inner.want_shutdown(err)
-    }
-
-    #[inline]
     fn poll_shutdown(&self) -> Poll<io::Result<()>> {
         self.inner.borrow().inner.poll_shutdown()
     }
@@ -98,6 +83,7 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
 
     fn release_read_buf(
         &self,
+        io: &IoRef,
         src: BytesMut,
         dst: &mut Option<BytesMut>,
         nbytes: usize,
@@ -111,8 +97,8 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
         } else {
             let mut src = {
                 let mut dst = None;
-                if let Err(e) = inner.inner.release_read_buf(src, &mut dst, nbytes) {
-                    self.want_shutdown(Some(e));
+                if let Err(e) = inner.inner.release_read_buf(io, src, &mut dst, nbytes) {
+                    io.want_shutdown(Some(e));
                 }
 
                 if let Some(dst) = dst {

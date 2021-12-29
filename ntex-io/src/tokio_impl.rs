@@ -359,6 +359,9 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
                 Poll::Ready(false)
             }
         }
+    } else if let Err(e) = state.release_write_buf(buf) {
+        state.close(Some(e));
+        Poll::Ready(false)
     } else {
         Poll::Ready(true)
     }

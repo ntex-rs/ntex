@@ -13,33 +13,33 @@ use super::{Filter, FilterFactory, Handle, IoStream, RecvError};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
-        /// io error occured
-        const IO_ERR          = 0b0000_0000_0000_0001;
-        /// shuting down filters
-        const IO_FILTERS      = 0b0000_0000_0000_0010;
-        /// shuting down filters timeout
-        const IO_FILTERS_TO   = 0b0000_0000_0000_0100;
+        /// io is closed
+        const IO_STOPPED          = 0b0000_0000_0000_0001;
         /// shutdown io tasks
-        const IO_SHUTDOWN     = 0b0000_0000_0000_1000;
+        const IO_STOPPING         = 0b0000_0000_0000_0010;
+        /// shuting down filters
+        const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
+        /// initiate filters shutdown timeout in write task
+        const IO_FILTERS_TIMEOUT  = 0b0000_0000_0000_1000;
 
         /// pause io read
-        const RD_PAUSED       = 0b0000_0000_0010_0000;
+        const RD_PAUSED       = 0b0000_0000_0001_0000;
         /// new data is available
-        const RD_READY        = 0b0000_0000_0100_0000;
+        const RD_READY        = 0b0000_0000_0010_0000;
         /// read buffer is full
-        const RD_BUF_FULL     = 0b0000_0000_1000_0000;
+        const RD_BUF_FULL     = 0b0000_0000_0100_0000;
 
         /// wait write completion
-        const WR_WAIT         = 0b0000_0001_0000_0000;
+        const WR_WAIT         = 0b0000_0000_1000_0000;
         /// write buffer is full
-        const WR_BACKPRESSURE = 0b0000_0010_0000_0000;
+        const WR_BACKPRESSURE = 0b0000_0001_0000_0000;
 
         /// dispatcher is marked stopped
-        const DSP_STOP        = 0b0001_0000_0000_0000;
+        const DSP_STOP        = 0b0000_0010_0000_0000;
         /// keep-alive timeout occured
-        const DSP_KEEPALIVE   = 0b0010_0000_0000_0000;
+        const DSP_KEEPALIVE   = 0b0000_0100_0000_0000;
         /// dispatcher returned error
-        const DSP_ERR         = 0b0100_0000_0000_0000;
+        const DSP_ERR         = 0b0000_1000_0000_0000;
     }
 }
 
@@ -104,15 +104,7 @@ impl IoState {
     }
 
     #[inline]
-    pub(super) fn is_io_open(&self) -> bool {
-        !self
-            .flags
-            .get()
-            .intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN)
-    }
-
-    #[inline]
-    pub(super) fn set_error(&self, err: Option<io::Error>) {
+    pub(super) fn io_stopped(&self, err: Option<io::Error>) {
         if err.is_some() {
             self.error.set(err);
         }
@@ -120,52 +112,49 @@ impl IoState {
         self.write_task.wake();
         self.dispatch_task.wake();
         self.notify_disconnect();
-        let mut flags = self.flags.get();
-        flags.insert(Flags::IO_ERR);
-        flags.remove(
-            Flags::DSP_KEEPALIVE
-                | Flags::RD_PAUSED
-                | Flags::RD_READY
-                | Flags::RD_BUF_FULL
-                | Flags::WR_WAIT
-                | Flags::WR_BACKPRESSURE,
+        self.handle.take();
+        self.insert_flags(
+            Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS,
         );
-        self.flags.set(flags);
     }
 
     #[inline]
     /// Gracefully shutdown read and write io tasks
     pub(super) fn init_shutdown(&self, err: Option<io::Error>) {
-        let flags = self.flags.get();
-        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::IO_FILTERS) {
-            log::trace!("initiate io shutdown {:?} {:?}", flags, err);
-            self.insert_flags(Flags::IO_FILTERS);
+        if err.is_some() {
+            self.io_stopped(err);
+        } else if !self
+            .flags
+            .get()
+            .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
+        {
+            log::trace!("initiate io shutdown {:?}", self.flags.get());
+            self.insert_flags(Flags::IO_STOPPING_FILTERS);
             self.read_task.wake();
             self.write_task.wake();
-            if let Some(err) = err {
-                self.error.set(Some(err));
-            }
+            self.dispatch_task.wake();
         }
     }
 
     #[inline]
     pub(super) fn shutdown_filters(&self) {
-        let mut flags = self.flags.get();
-        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+        if !self
+            .flags
+            .get()
+            .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
+        {
             match self.filter.get().poll_shutdown() {
-                Poll::Pending => return,
                 Poll::Ready(Ok(())) => {
-                    flags.insert(Flags::IO_SHUTDOWN);
+                    self.read_task.wake();
+                    self.write_task.wake();
+                    self.dispatch_task.wake();
+                    self.insert_flags(Flags::IO_STOPPING);
                 }
                 Poll::Ready(Err(err)) => {
-                    flags.insert(Flags::IO_ERR);
-                    self.error.set(Some(err));
+                    self.io_stopped(Some(err));
                 }
+                Poll::Pending => (),
             }
-            self.flags.set(flags);
-            self.read_task.wake();
-            self.write_task.wake();
-            self.dispatch_task.wake();
         }
     }
 
@@ -264,7 +253,7 @@ impl Io {
         let io_ref = IoRef(inner);
 
         // start io tasks
-        let hnd = io.start(ReadContext(io_ref.clone()), WriteContext(io_ref.clone()));
+        let hnd = io.start(ReadContext::new(&io_ref), WriteContext::new(&io_ref));
         io_ref.0.handle.set(hnd);
 
         Io(io_ref, FilterItem::Ptr(Box::into_raw(filter)))
@@ -330,6 +319,11 @@ impl<F> Io<F> {
     /// Reset keep-alive error
     pub fn reset_keepalive(&self) {
         self.0 .0.remove_flags(Flags::DSP_KEEPALIVE)
+    }
+
+    /// Get current io error
+    fn error(&self) -> Option<io::Error> {
+        self.0 .0.error.take()
     }
 }
 
@@ -478,13 +472,13 @@ impl<F> Io<F> {
     /// Wake write task and instruct to flush data.
     ///
     /// This is async version of .poll_flush() method.
-    pub async fn flush(&self, full: bool) -> Result<(), io::Error> {
+    pub async fn flush(&self, full: bool) -> io::Result<()> {
         poll_fn(|cx| self.poll_flush(cx, full)).await
     }
 
     #[inline]
     /// Shut down io stream
-    pub async fn shutdown(&self) -> Result<(), io::Error> {
+    pub async fn shutdown(&self) -> io::Result<()> {
         poll_fn(|cx| self.poll_shutdown(cx)).await
     }
 
@@ -503,16 +497,13 @@ impl<F> Io<F> {
     /// `Poll::Ready(Ok(None))` if io stream is disconnected
     /// `Some(Poll::Ready(Err(e)))` if an error is encountered.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
-        if !self.0 .0.is_io_open() {
-            if let Some(err) = self.0 .0.error.take() {
-                Poll::Ready(Err(err))
-            } else {
-                Poll::Ready(Ok(None))
-            }
+        let mut flags = self.0 .0.flags.get();
+
+        if flags.contains(Flags::IO_STOPPED) {
+            Poll::Ready(self.error().map(Err).unwrap_or(Ok(None)))
         } else {
             self.0 .0.dispatch_task.register(cx.waker());
 
-            let mut flags = self.0 .0.flags.get();
             let ready = flags.contains(Flags::RD_READY);
             if flags.intersects(Flags::RD_BUF_FULL | Flags::RD_PAUSED) {
                 if flags.intersects(Flags::RD_BUF_FULL) {
@@ -540,7 +531,6 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    #[allow(clippy::type_complexity)]
     /// Decode codec item from incoming bytes stream.
     ///
     /// Wake read task and request to read more data if data is not enough for decoding.
@@ -556,13 +546,10 @@ impl<F> Io<F> {
         match self.decode(codec) {
             Ok(Some(el)) => Poll::Ready(Ok(el)),
             Ok(None) => {
-                if !self.0 .0.is_io_open() {
-                    return Poll::Ready(Err(RecvError::PeerGone(
-                        self.0 .0.error.take(),
-                    )));
-                }
                 let flags = self.flags();
-                if flags.contains(Flags::DSP_STOP) {
+                if flags.contains(Flags::IO_STOPPED) {
+                    Poll::Ready(Err(RecvError::PeerGone(self.error())))
+                } else if flags.contains(Flags::DSP_STOP) {
                     Poll::Ready(Err(RecvError::Stop))
                 } else if flags.contains(Flags::DSP_KEEPALIVE) {
                     Poll::Ready(Err(RecvError::KeepAlive))
@@ -594,64 +581,51 @@ impl<F> Io<F> {
     /// otherwise wake up when size of write buffer is lower than
     /// buffer max size.
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
-        // check io error
-        if !self.0 .0.is_io_open() {
-            self.0 .0.remove_flags(
-                Flags::DSP_KEEPALIVE
-                    | Flags::RD_PAUSED
-                    | Flags::RD_READY
-                    | Flags::RD_BUF_FULL
-                    | Flags::WR_WAIT
-                    | Flags::WR_BACKPRESSURE,
-            );
-            return Poll::Ready(Err(self
+        let flags = self.flags();
+
+        if flags.contains(Flags::IO_STOPPED) {
+            Poll::Ready(self.error().map(Err).unwrap_or(Ok(())))
+        } else {
+            let len = self
                 .0
                  .0
-                .error
-                .take()
-                .unwrap_or_else(|| io::Error::new(io::ErrorKind::Other, "disconnected"))));
-        }
+                .with_write_buf(|buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
 
-        let len = self
-            .0
-             .0
-            .with_write_buf(|buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
-
-        if len > 0 {
-            if full {
-                self.0 .0.insert_flags(Flags::WR_WAIT);
-                self.0 .0.dispatch_task.register(cx.waker());
-                return Poll::Pending;
-            } else if len >= self.0.memory_pool().write_params_high() << 1 {
-                self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
-                self.0 .0.dispatch_task.register(cx.waker());
-                return Poll::Pending;
+            if len > 0 {
+                if full {
+                    self.0 .0.insert_flags(Flags::WR_WAIT);
+                    self.0 .0.dispatch_task.register(cx.waker());
+                    return Poll::Pending;
+                } else if len >= self.0.memory_pool().write_params_high() << 1 {
+                    self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
+                    self.0 .0.dispatch_task.register(cx.waker());
+                    return Poll::Pending;
+                }
             }
+            self.0
+                 .0
+                .remove_flags(Flags::WR_WAIT | Flags::WR_BACKPRESSURE);
+            Poll::Ready(Ok(()))
         }
-        self.0
-             .0
-            .remove_flags(Flags::WR_WAIT | Flags::WR_BACKPRESSURE);
-        Poll::Ready(Ok(()))
     }
 
     #[inline]
     /// Shut down io stream
-    pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+    pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let flags = self.flags();
 
-        if flags.intersects(Flags::IO_ERR) {
-            Poll::Ready(Ok(()))
-        } else {
-            if !flags.contains(Flags::IO_FILTERS) {
-                self.0 .0.init_shutdown(None);
-            }
-
-            if let Some(err) = self.0 .0.error.take() {
+        if flags.intersects(Flags::IO_STOPPED) {
+            if let Some(err) = self.error() {
                 Poll::Ready(Err(err))
             } else {
-                self.0 .0.dispatch_task.register(cx.waker());
-                Poll::Pending
+                Poll::Ready(Ok(()))
             }
+        } else {
+            if !flags.contains(Flags::IO_STOPPING_FILTERS) {
+                self.0 .0.init_shutdown(None);
+            }
+            self.0 .0.dispatch_task.register(cx.waker());
+            Poll::Pending
         }
     }
 }
@@ -708,7 +682,7 @@ pub struct OnDisconnect {
 
 impl OnDisconnect {
     pub(super) fn new(inner: Rc<IoState>) -> Self {
-        Self::new_inner(inner.flags.get().contains(Flags::IO_ERR), inner)
+        Self::new_inner(inner.flags.get().contains(Flags::IO_STOPPED), inner)
     }
 
     fn new_inner(disconnected: bool, inner: Rc<IoState>) -> Self {

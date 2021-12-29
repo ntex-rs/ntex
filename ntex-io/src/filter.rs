@@ -15,13 +15,6 @@ impl Base {
 
 impl Filter for Base {
     #[inline]
-    fn closed(&self, err: Option<io::Error>) {
-        self.0 .0.set_error(err);
-        self.0 .0.handle.take();
-        self.0 .0.dispatch_task.wake();
-    }
-
-    #[inline]
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if let Some(hnd) = self.0 .0.handle.take() {
             let res = hnd.query(id);
@@ -33,24 +26,7 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn want_read(&self) {
-        let flags = self.0.flags();
-        if flags.intersects(Flags::RD_PAUSED | Flags::RD_BUF_FULL) {
-            self.0
-                 .0
-                .remove_flags(Flags::RD_PAUSED | Flags::RD_BUF_FULL);
-            self.0 .0.read_task.wake();
-        }
-    }
-
-    #[inline]
-    fn want_shutdown(&self, err: Option<io::Error>) {
-        self.0 .0.init_shutdown(err);
-    }
-
-    #[inline]
     fn poll_shutdown(&self) -> Poll<io::Result<()>> {
-        self.want_shutdown(None);
         Poll::Ready(Ok(()))
     }
 
@@ -58,7 +34,7 @@ impl Filter for Base {
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         let flags = self.0.flags();
 
-        if flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+        if flags.intersects(Flags::IO_STOPPING) {
             Poll::Ready(ReadStatus::Terminate)
         } else if flags.intersects(Flags::RD_PAUSED | Flags::RD_BUF_FULL) {
             self.0 .0.read_task.register(cx.waker());
@@ -73,13 +49,14 @@ impl Filter for Base {
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
         let mut flags = self.0.flags();
 
-        if flags.contains(Flags::IO_ERR) {
+        if flags.contains(Flags::IO_STOPPED) {
             Poll::Ready(WriteStatus::Terminate)
-        } else if flags.intersects(Flags::IO_SHUTDOWN) {
+        } else if flags.intersects(Flags::IO_STOPPING) {
             Poll::Ready(WriteStatus::Shutdown(self.0 .0.disconnect_timeout.get()))
-        } else if flags.contains(Flags::IO_FILTERS) && !flags.contains(Flags::IO_FILTERS_TO)
+        } else if flags.contains(Flags::IO_STOPPING_FILTERS)
+            && !flags.contains(Flags::IO_FILTERS_TIMEOUT)
         {
-            flags.insert(Flags::IO_FILTERS_TO);
+            flags.insert(Flags::IO_FILTERS_TIMEOUT);
             self.0.set_flags(flags);
             self.0 .0.write_task.register(cx.waker());
             Poll::Ready(WriteStatus::Timeout(self.0 .0.disconnect_timeout.get()))
@@ -102,6 +79,7 @@ impl Filter for Base {
     #[inline]
     fn release_read_buf(
         &self,
+        _: &IoRef,
         buf: BytesMut,
         dst: &mut Option<BytesMut>,
         nbytes: usize,
@@ -145,12 +123,6 @@ impl Filter for NullFilter {
         None
     }
 
-    fn closed(&self, _: Option<io::Error>) {}
-
-    fn want_read(&self) {}
-
-    fn want_shutdown(&self, _: Option<io::Error>) {}
-
     fn poll_shutdown(&self) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
@@ -173,6 +145,7 @@ impl Filter for NullFilter {
 
     fn release_read_buf(
         &self,
+        _: &IoRef,
         _: BytesMut,
         _: &mut Option<BytesMut>,
         _: usize,

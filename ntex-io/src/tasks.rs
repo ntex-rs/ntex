@@ -4,9 +4,13 @@ use ntex_bytes::{BytesMut, PoolRef};
 
 use super::{io::Flags, IoRef, ReadStatus, WriteStatus};
 
-pub struct ReadContext(pub(super) IoRef);
+pub struct ReadContext(IoRef);
 
 impl ReadContext {
+    pub(crate) fn new(io: &IoRef) -> Self {
+        Self(io.clone())
+    }
+
     #[inline]
     pub fn memory_pool(&self) -> PoolRef {
         self.0.memory_pool()
@@ -15,11 +19,6 @@ impl ReadContext {
     #[inline]
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         self.0.filter().poll_read_ready(cx)
-    }
-
-    #[inline]
-    pub fn close(&self, err: Option<io::Error>) {
-        self.0.filter().closed(err);
     }
 
     #[inline]
@@ -37,7 +36,7 @@ impl ReadContext {
         } else {
             let filter = self.0.filter();
             let mut dst = self.0 .0.read_buf.take();
-            let result = filter.release_read_buf(buf, &mut dst, nbytes);
+            let result = filter.release_read_buf(&self.0, buf, &mut dst, nbytes);
             let nbytes = result.as_ref().map(|i| *i).unwrap_or(0);
 
             if let Some(dst) = dst {
@@ -63,19 +62,28 @@ impl ReadContext {
             if let Err(err) = result {
                 self.0 .0.dispatch_task.wake();
                 self.0 .0.insert_flags(Flags::RD_READY);
-                filter.want_shutdown(Some(err));
+                self.0.want_shutdown(Some(err));
             }
         }
 
-        if self.0.flags().contains(Flags::IO_FILTERS) {
+        if self.0.flags().contains(Flags::IO_STOPPING_FILTERS) {
             self.0 .0.shutdown_filters();
         }
     }
+
+    #[inline]
+    pub fn close(&self, err: Option<io::Error>) {
+        self.0 .0.io_stopped(err);
+    }
 }
 
-pub struct WriteContext(pub(super) IoRef);
+pub struct WriteContext(IoRef);
 
 impl WriteContext {
+    pub(crate) fn new(io: &IoRef) -> Self {
+        Self(io.clone())
+    }
+
     #[inline]
     pub fn memory_pool(&self) -> PoolRef {
         self.0.memory_pool()
@@ -84,11 +92,6 @@ impl WriteContext {
     #[inline]
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
         self.0.filter().poll_write_ready(cx)
-    }
-
-    #[inline]
-    pub fn close(&self, err: Option<io::Error>) {
-        self.0.filter().closed(err)
     }
 
     #[inline]
@@ -120,9 +123,15 @@ impl WriteContext {
             self.0 .0.write_buf.set(Some(buf))
         }
 
-        if flags.contains(Flags::IO_FILTERS) {
+        if self.0.flags().contains(Flags::IO_STOPPING_FILTERS) {
             self.0 .0.shutdown_filters();
         }
+
         Ok(())
+    }
+
+    #[inline]
+    pub fn close(&self, err: Option<io::Error>) {
+        self.0 .0.io_stopped(err);
     }
 }

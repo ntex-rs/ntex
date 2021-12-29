@@ -163,8 +163,8 @@ pub enum DispatchError {
     Upgrade(Box<dyn std::error::Error>),
 
     /// Peer is disconnected, error indicates that peer is disconnected because of it
-    #[display(fmt = "Disconnect: {:?}", _0)]
-    Disconnect(Option<io::Error>),
+    #[display(fmt = "Disconnected: {:?}", _0)]
+    PeerGone(Option<io::Error>),
 
     /// Http request parse error.
     #[display(fmt = "Parse error: {}", _0)]
@@ -212,7 +212,7 @@ impl std::error::Error for DispatchError {}
 
 impl From<io::Error> for DispatchError {
     fn from(err: io::Error) -> Self {
-        DispatchError::Disconnect(Some(err))
+        DispatchError::PeerGone(Some(err))
     }
 }
 

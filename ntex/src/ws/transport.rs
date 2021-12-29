@@ -2,7 +2,7 @@
 use std::{any, cell::Cell, io, task::Context, task::Poll};
 
 use crate::codec::{Decoder, Encoder};
-use crate::io::{Filter, FilterFactory, Io, ReadStatus, WriteStatus};
+use crate::io::{Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
 use crate::util::{BufMut, BytesMut, PoolRef, Ready};
 
 use super::{Codec, Frame, Item, Message};
@@ -60,16 +60,6 @@ impl<F: Filter> Filter for WsTransport<F> {
     }
 
     #[inline]
-    fn want_read(&self) {
-        self.inner.want_read()
-    }
-
-    #[inline]
-    fn want_shutdown(&self, err: Option<io::Error>) {
-        self.inner.want_shutdown(err)
-    }
-
-    #[inline]
     fn poll_shutdown(&self) -> Poll<io::Result<()>> {
         self.inner.poll_shutdown()
     }
@@ -85,11 +75,6 @@ impl<F: Filter> Filter for WsTransport<F> {
     }
 
     #[inline]
-    fn closed(&self, err: Option<io::Error>) {
-        self.inner.closed(err)
-    }
-
-    #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
         self.inner.get_read_buf().or_else(|| self.read_buf.take())
     }
@@ -101,14 +86,15 @@ impl<F: Filter> Filter for WsTransport<F> {
 
     fn release_read_buf(
         &self,
+        io: &IoRef,
         src: BytesMut,
         dst: &mut Option<BytesMut>,
         nbytes: usize,
     ) -> io::Result<usize> {
         let mut src = {
             let mut dst = None;
-            if let Err(err) = self.inner.release_read_buf(src, &mut dst, nbytes) {
-                self.want_shutdown(Some(err));
+            if let Err(err) = self.inner.release_read_buf(io, src, &mut dst, nbytes) {
+                io.want_shutdown(Some(err));
             }
             if let Some(dst) = dst {
                 dst

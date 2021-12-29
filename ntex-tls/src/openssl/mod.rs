@@ -6,7 +6,7 @@ use std::{
 };
 
 use ntex_bytes::{BufMut, BytesMut, PoolRef};
-use ntex_io::{Base, Filter, FilterFactory, Io, ReadStatus, WriteStatus};
+use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_openssl::ssl::{self, SslStream};
 use tls_openssl::x509::X509;
@@ -138,21 +138,6 @@ impl<F: Filter> Filter for SslFilter<F> {
     }
 
     #[inline]
-    fn closed(&self, err: Option<io::Error>) {
-        self.inner.borrow().get_ref().inner.closed(err)
-    }
-
-    #[inline]
-    fn want_read(&self) {
-        self.inner.borrow().get_ref().inner.want_read()
-    }
-
-    #[inline]
-    fn want_shutdown(&self, err: Option<io::Error>) {
-        self.inner.borrow().get_ref().inner.want_shutdown(err)
-    }
-
-    #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
         if let Some(buf) = self.inner.borrow_mut().get_mut().read_buf.take() {
             if !buf.is_empty() {
@@ -174,6 +159,7 @@ impl<F: Filter> Filter for SslFilter<F> {
 
     fn release_read_buf(
         &self,
+        io: &IoRef,
         src: BytesMut,
         dst: &mut Option<BytesMut>,
         nbytes: usize,
@@ -185,9 +171,9 @@ impl<F: Filter> Filter for SslFilter<F> {
             let result = inner
                 .get_ref()
                 .inner
-                .release_read_buf(src, &mut dst, nbytes);
+                .release_read_buf(io, src, &mut dst, nbytes);
             if let Err(err) = result {
-                self.want_shutdown(Some(err));
+                io.want_shutdown(Some(err));
             }
             if dst.is_some() {
                 inner.get_mut().read_buf = dst;
@@ -233,7 +219,7 @@ impl<F: Filter> Filter for SslFilter<F> {
                     Ok(new_bytes)
                 }
                 Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                    self.want_shutdown(None);
+                    io.want_shutdown(None);
                     Ok(new_bytes)
                 }
                 Err(e) => Err(map_to_ioerr(e)),
@@ -258,10 +244,6 @@ impl<F: Filter> Filter for SslFilter<F> {
                     }
                     return match e.code() {
                         ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => Ok(()),
-                        ssl::ErrorCode::ZERO_RETURN => {
-                            self.want_shutdown(None);
-                            Ok(())
-                        }
                         _ => Err(map_to_ioerr(e)),
                     };
                 }

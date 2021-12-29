@@ -74,6 +74,11 @@ jobs:
         continue-on-error: true
         run: |
           cargo tarpaulin --out Xml --all --all-features
+
+      - name: Generate coverage report (async-std)
+        if: matrix.version == '1.56.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
+        continue-on-error: true
+        run: |
           cd ntex
           cargo tarpaulin --out Xml --output-dir=.. --no-default-features --features="async-std,cookie,url,compress,openssl,rustls" --lib
 

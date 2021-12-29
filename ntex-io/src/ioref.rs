@@ -33,72 +33,9 @@ impl IoRef {
     }
 
     #[inline]
-    /// Check if io is still active
-    pub fn is_io_open(&self) -> bool {
-        self.0.is_io_open()
-    }
-
-    #[inline]
-    /// Check if keep-alive timeout occured
-    pub fn is_keepalive(&self) -> bool {
-        self.0.flags.get().contains(Flags::DSP_KEEPALIVE)
-    }
-
-    #[inline]
     /// Check if io stream is closed
     pub fn is_closed(&self) -> bool {
-        self.0.flags.get().intersects(
-            Flags::IO_ERR | Flags::IO_SHUTDOWN | Flags::IO_FILTERS | Flags::DSP_STOP,
-        )
-    }
-
-    #[inline]
-    /// Take io error if any occured
-    pub fn take_error(&self) -> Option<io::Error> {
-        self.0.error.take()
-    }
-
-    #[inline]
-    /// Wake dispatcher task
-    pub fn wake_dispatcher(&self) {
-        self.0.dispatch_task.wake();
-    }
-
-    #[inline]
-    /// Gracefully close connection
-    ///
-    /// First stop dispatcher, then dispatcher stops io tasks
-    pub fn close(&self) {
-        self.0.insert_flags(Flags::DSP_STOP);
-        self.0.dispatch_task.wake();
-    }
-
-    #[inline]
-    /// Force close connection
-    ///
-    /// Dispatcher does not wait for uncompleted responses, but flushes io buffers.
-    pub fn force_close(&self) {
-        log::trace!("force close io stream object");
-        self.0.insert_flags(Flags::DSP_STOP | Flags::IO_SHUTDOWN);
-        self.0.read_task.wake();
-        self.0.write_task.wake();
-        self.0.dispatch_task.wake();
-    }
-
-    #[inline]
-    /// Notify when io stream get disconnected
-    pub fn on_disconnect(&self) -> OnDisconnect {
-        OnDisconnect::new(self.0.clone())
-    }
-
-    #[inline]
-    /// Query specific data
-    pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
-        if let Some(item) = self.filter().query(any::TypeId::of::<T>()) {
-            types::QueryItem::new(item)
-        } else {
-            types::QueryItem::empty()
-        }
+        self.0.flags.get().contains(Flags::IO_STOPPING)
     }
 
     #[inline]
@@ -129,6 +66,55 @@ impl IoRef {
             .0
             .with_read_buf(false, |buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
         len >= self.memory_pool().read_params_high()
+    }
+
+    #[inline]
+    /// Wake dispatcher task
+    pub fn wake(&self) {
+        self.0.dispatch_task.wake();
+    }
+
+    #[inline]
+    /// Gracefully close connection
+    ///
+    /// First stop dispatcher, then dispatcher stops io tasks
+    pub fn close(&self) {
+        self.0.insert_flags(Flags::DSP_STOP);
+        self.0.dispatch_task.wake();
+    }
+
+    #[inline]
+    /// Force close connection
+    ///
+    /// Dispatcher does not wait for uncompleted responses, but flushes io buffers.
+    pub fn force_close(&self) {
+        log::trace!("force close io stream object");
+        self.0.insert_flags(Flags::DSP_STOP | Flags::IO_STOPPING);
+        self.0.read_task.wake();
+        self.0.write_task.wake();
+        self.0.dispatch_task.wake();
+    }
+
+    #[inline]
+    /// Gracefully shutdown io stream
+    pub fn want_shutdown(&self, err: Option<io::Error>) {
+        self.0.init_shutdown(err);
+    }
+
+    #[inline]
+    /// Notify when io stream get disconnected
+    pub fn on_disconnect(&self) -> OnDisconnect {
+        OnDisconnect::new(self.0.clone())
+    }
+
+    #[inline]
+    /// Query specific data
+    pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
+        if let Some(item) = self.filter().query(any::TypeId::of::<T>()) {
+            types::QueryItem::new(item)
+        } else {
+            types::QueryItem::empty()
+        }
     }
 
     #[inline]
@@ -176,7 +162,7 @@ impl IoRef {
     {
         let flags = self.0.flags.get();
 
-        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+        if !flags.contains(Flags::IO_STOPPING) {
             self.with_write_buf(|buf| {
                 let (hw, lw) = self.memory_pool().write_params().unpack();
 
@@ -191,7 +177,7 @@ impl IoRef {
             })
             .map_or_else(
                 |err| {
-                    self.0.set_error(Some(err));
+                    self.0.io_stopped(Some(err));
                     Ok(())
                 },
                 |item| item,
@@ -223,7 +209,7 @@ impl IoRef {
     pub fn write(&self, src: &[u8]) -> io::Result<()> {
         let flags = self.0.flags.get();
 
-        if !flags.intersects(Flags::IO_ERR | Flags::IO_SHUTDOWN) {
+        if !flags.intersects(Flags::IO_STOPPING) {
             self.with_write_buf(|buf| {
                 buf.extend_from_slice(src);
             })
@@ -283,7 +269,7 @@ mod tests {
         client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
         let msg = state.recv(&BytesCodec).await;
         assert!(msg.is_err());
-        assert!(state.flags().contains(Flags::IO_ERR));
+        assert!(state.flags().contains(Flags::IO_STOPPED));
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
@@ -293,7 +279,7 @@ mod tests {
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
             assert!(msg.is_err());
-            assert!(state.flags().contains(Flags::IO_ERR));
+            assert!(state.flags().contains(Flags::IO_STOPPED));
             assert!(state.flags().contains(Flags::DSP_STOP));
         }
 
@@ -310,14 +296,14 @@ mod tests {
         client.write_error(io::Error::new(io::ErrorKind::Other, "err"));
         let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
         assert!(res.is_err());
-        assert!(state.flags().contains(Flags::IO_ERR));
+        assert!(state.flags().contains(Flags::IO_STOPPED));
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::new(server);
         state.force_close();
         assert!(state.flags().contains(Flags::DSP_STOP));
-        assert!(state.flags().contains(Flags::IO_SHUTDOWN));
+        assert!(state.flags().contains(Flags::IO_STOPPING));
     }
 
     #[ntex::test]
@@ -389,10 +375,6 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn want_read(&self) {}
-
-        fn want_shutdown(&self, _: Option<io::Error>) {}
-
         fn query(&self, _: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
             None
         }
@@ -401,21 +383,18 @@ mod tests {
             self.inner.poll_read_ready(cx)
         }
 
-        fn closed(&self, err: Option<io::Error>) {
-            self.inner.closed(err)
-        }
-
         fn get_read_buf(&self) -> Option<BytesMut> {
             self.inner.get_read_buf()
         }
 
         fn release_read_buf(
             &self,
+            io: &IoRef,
             buf: BytesMut,
             dst: &mut Option<BytesMut>,
             new_bytes: usize,
         ) -> io::Result<usize> {
-            let result = self.inner.release_read_buf(buf, dst, new_bytes)?;
+            let result = self.inner.release_read_buf(io, buf, dst, new_bytes)?;
             self.read_order.borrow_mut().push(self.idx);
             self.in_bytes.set(self.in_bytes.get() + result);
             Ok(result)
