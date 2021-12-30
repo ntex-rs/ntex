@@ -38,13 +38,7 @@ async fn test_simple() {
                         .unwrap();
 
                     // start websocket service
-                    Dispatcher::new(
-                        io.seal(),
-                        ws::Codec::default(),
-                        ws_service,
-                        Default::default(),
-                    )
-                    .await
+                    Dispatcher::new(io.seal(), ws::Codec::default(), ws_service).await
                 }
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
@@ -94,13 +88,7 @@ async fn test_transport() {
                         .unwrap();
 
                     // start websocket service
-                    Dispatcher::new(
-                        io.seal(),
-                        ws::Codec::default(),
-                        ws_service,
-                        Default::default(),
-                    )
-                    .await
+                    Dispatcher::new(io.seal(), ws::Codec::default(), ws_service).await
                 }
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))

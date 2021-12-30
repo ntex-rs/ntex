@@ -1,28 +1,24 @@
-use std::{
-    cell::RefCell, collections::BTreeMap, collections::HashSet, rc::Rc, time::Instant,
-};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Duration, time::Instant};
 
 use ntex_util::time::{now, sleep, Millis};
+use ntex_util::HashSet;
 
 use crate::{io::IoState, rt::spawn, IoRef};
 
-pub struct Timer(Rc<RefCell<Inner>>);
+thread_local! {
+    static TIMER: Rc<RefCell<Inner>> = Rc::new(RefCell::new(
+        Inner {
+            running: false,
+            notifications: BTreeMap::default(),
+        }));
+}
 
 struct Inner {
     running: bool,
-    resolution: Millis,
-    notifications: BTreeMap<Instant, HashSet<Rc<IoState>, fxhash::FxBuildHasher>>,
+    notifications: BTreeMap<Instant, HashSet<Rc<IoState>>>,
 }
 
 impl Inner {
-    fn new(resolution: Millis) -> Self {
-        Inner {
-            resolution,
-            running: false,
-            notifications: BTreeMap::default(),
-        }
-    }
-
     fn unregister(&mut self, expire: Instant, io: &IoRef) {
         if let Some(states) = self.notifications.get_mut(&expire) {
             states.remove(&io.0);
@@ -33,28 +29,12 @@ impl Inner {
     }
 }
 
-impl Clone for Timer {
-    fn clone(&self) -> Self {
-        Timer(self.0.clone())
-    }
-}
+pub(crate) fn register(timeout: Duration, io: &IoRef) -> Instant {
+    let expire = now() + timeout;
 
-impl Default for Timer {
-    fn default() -> Self {
-        Timer::new(Millis::ONE_SEC)
-    }
-}
+    TIMER.with(|timer| {
+        let mut inner = timer.borrow_mut();
 
-impl Timer {
-    /// Create new timer with resolution in milliseconds
-    pub fn new(resolution: Millis) -> Timer {
-        Timer(Rc::new(RefCell::new(Inner::new(resolution))))
-    }
-
-    pub fn register(&self, expire: Instant, previous: Instant, io: &IoRef) {
-        let mut inner = self.0.borrow_mut();
-
-        inner.unregister(previous, io);
         inner
             .notifications
             .entry(expire)
@@ -63,12 +43,11 @@ impl Timer {
 
         if !inner.running {
             inner.running = true;
-            let interval = inner.resolution;
-            let inner = self.0.clone();
+            let inner = timer.clone();
 
             spawn(async move {
                 loop {
-                    sleep(interval).await;
+                    sleep(Millis::ONE_SEC).await;
                     {
                         let mut i = inner.borrow_mut();
                         let now_time = now();
@@ -94,9 +73,13 @@ impl Timer {
                 }
             });
         }
-    }
+    });
 
-    pub fn unregister(&self, expire: Instant, io: &IoRef) {
-        self.0.borrow_mut().unregister(expire, io);
-    }
+    expire
+}
+
+pub(crate) fn unregister(expire: Instant, io: &IoRef) {
+    TIMER.with(|timer| {
+        let _ = timer.borrow_mut().unregister(expire, io);
+    })
 }

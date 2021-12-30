@@ -1,10 +1,9 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{error::Error, fmt, future::Future, io, marker, pin::Pin, rc::Rc, time};
+use std::{error::Error, fmt, future::Future, io, marker, pin::Pin, rc::Rc};
 
 use crate::io::{Filter, Io, IoRef, RecvError};
-use crate::service::Service;
-use crate::{time::now, util::ready, util::Bytes};
+use crate::{service::Service, util::ready, util::Bytes};
 
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -70,7 +69,6 @@ struct DispatcherInner<F, S, B, X, U> {
     codec: Codec,
     state: IoRef,
     config: Rc<DispatcherConfig<S, X, U>>,
-    expire: time::Instant,
     error: Option<DispatchError>,
     payload: Option<(PayloadDecoder, PayloadSender)>,
     _t: marker::PhantomData<(S, B)>,
@@ -90,29 +88,24 @@ where
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(io: Io<F>, config: Rc<DispatcherConfig<S, X, U>>) -> Self {
-        let mut expire = now();
         let state = io.get_ref();
         let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
         io.set_disconnect_timeout(config.client_disconnect.into());
 
         // slow-request timer
-        if config.client_timeout.non_zero() {
-            expire += time::Duration::from(config.client_timeout);
-            config.timer_h1.register(expire, expire, &state);
-        }
+        io.start_keepalive_timer(config.client_timeout);
 
         Dispatcher {
             call: CallState::None,
             st: State::ReadRequest,
             inner: DispatcherInner {
+                codec,
+                state,
+                config,
                 io: Some(io),
                 flags: Flags::empty(),
                 error: None,
                 payload: None,
-                codec,
-                state,
-                config,
-                expire,
                 _t: marker::PhantomData,
             },
         }
@@ -275,10 +268,7 @@ where
                             // unregister slow-request timer
                             if !this.inner.flags.contains(Flags::STARTED) {
                                 this.inner.flags.insert(Flags::STARTED);
-                                this.inner
-                                    .config
-                                    .timer_h1
-                                    .unregister(this.inner.expire, &this.inner.state);
+                                this.inner.io().remove_keepalive_timer();
                             }
 
                             if upgrade {
@@ -436,21 +426,15 @@ where
 
     fn unregister_keepalive(&mut self) {
         if self.flags.contains(Flags::KEEPALIVE) {
-            self.config.timer_h1.unregister(self.expire, &self.state);
+            self.io().remove_keepalive_timer();
             self.flags.remove(Flags::KEEPALIVE);
         }
     }
 
     fn reset_keepalive(&mut self) {
         // re-register keep-alive
-        if self.flags.contains(Flags::KEEPALIVE) && self.config.keep_alive.non_zero() {
-            let expire = now() + time::Duration::from(self.config.keep_alive);
-            if expire != self.expire {
-                self.config
-                    .timer_h1
-                    .register(expire, self.expire, &self.state);
-                self.expire = expire;
-            }
+        if self.flags.contains(Flags::KEEPALIVE) {
+            self.io().start_keepalive_timer(self.config.keep_alive);
         }
     }
 

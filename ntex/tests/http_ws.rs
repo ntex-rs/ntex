@@ -5,7 +5,7 @@ use std::{cell::Cell, future::Future, io, pin::Pin};
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
-use ntex::io::{DispatchItem, Dispatcher, Io, Timer};
+use ntex::io::{DispatchItem, Dispatcher, Io};
 use ntex::service::{fn_factory, Service};
 use ntex::ws::{handshake, handshake_response};
 use ntex::{util::ByteString, util::Bytes, util::Ready, ws};
@@ -49,7 +49,7 @@ impl Service<(Request, Io, h1::Codec)> for WsService {
             io.encode((res, body::BodySize::None).into(), &codec)
                 .unwrap();
 
-            Dispatcher::new(io.seal(), ws::Codec::new(), service, Timer::default())
+            Dispatcher::new(io.seal(), ws::Codec::new(), service)
                 .await
                 .map_err(|_| panic!())
         };

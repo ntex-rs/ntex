@@ -2,6 +2,8 @@
 
 ## [0.1.0] - 2021-12-30
 
+* Unify keep-alive timers
+
 * Add Io::poll_status_update() method to use instead of register_dispatcher()
 
 * Reset DSP_STOP and DSP_KEEPALIVE flags

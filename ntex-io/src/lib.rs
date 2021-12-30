@@ -15,7 +15,7 @@ mod io;
 mod ioref;
 mod seal;
 mod tasks;
-mod time;
+mod timer;
 pub mod utils;
 
 #[cfg(feature = "async-std")]
@@ -34,7 +34,6 @@ pub use self::filter::Base;
 pub use self::io::{Io, IoRef};
 pub use self::seal::{IoBoxed, Sealed};
 pub use self::tasks::{ReadContext, WriteContext};
-pub use self::time::Timer;
 pub use self::utils::filter;
 
 /// Status for read task

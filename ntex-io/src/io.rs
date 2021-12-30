@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
-use std::{fmt, future::Future, hash, io, mem, ops::Deref, pin::Pin, ptr, rc::Rc};
+use std::{fmt, future::Future, hash, io, mem, ops::Deref, pin::Pin, ptr, rc::Rc, time};
 
 use ntex_bytes::{BytesMut, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
@@ -9,7 +9,7 @@ use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Millis}
 use super::filter::{Base, NullFilter};
 use super::seal::Sealed;
 use super::tasks::{ReadContext, WriteContext};
-use super::{Filter, FilterFactory, Handle, IoStatusUpdate, IoStream, RecvError};
+use super::{timer, Filter, FilterFactory, Handle, IoStatusUpdate, IoStream, RecvError};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -65,6 +65,7 @@ pub(crate) struct IoState {
     pub(super) filter: Cell<&'static dyn Filter>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     pub(super) on_disconnect: RefCell<Vec<Option<LocalWaker>>>,
+    keepalive: Cell<Option<time::Instant>>,
 }
 
 impl IoState {
@@ -253,6 +254,7 @@ impl Io {
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
             on_disconnect: RefCell::new(Vec::new()),
+            keepalive: Cell::new(None),
         });
 
         let filter = Box::new(Base::new(IoRef(inner.clone())));
@@ -303,16 +305,31 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    #[allow(clippy::should_implement_trait)]
-    /// Get `IoRef` reference
-    pub fn as_ref(&self) -> &IoRef {
-        &self.0
-    }
-
-    #[inline]
     /// Get instance of `IoRef`
     pub fn get_ref(&self) -> IoRef {
         self.0.clone()
+    }
+
+    #[inline]
+    /// Start keep-alive timer
+    pub fn start_keepalive_timer(&self, timeout: time::Duration) {
+        if let Some(expire) = self.0 .0.keepalive.take() {
+            timer::unregister(expire, &self.0)
+        }
+        if timeout != time::Duration::ZERO {
+            self.0
+                 .0
+                .keepalive
+                .set(Some(timer::register(timeout, &self.0)));
+        }
+    }
+
+    #[inline]
+    /// Remove keep-alive timer
+    pub fn remove_keepalive_timer(&self) {
+        if let Some(expire) = self.0 .0.keepalive.take() {
+            timer::unregister(expire, &self.0)
+        }
     }
 
     /// Get current io error
@@ -643,8 +660,16 @@ impl<F> Io<F> {
     }
 }
 
+impl<F> AsRef<IoRef> for Io<F> {
+    fn as_ref(&self) -> &IoRef {
+        &self.0
+    }
+}
+
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
+        self.remove_keepalive_timer();
+
         if let FilterItem::Ptr(p) = self.1 {
             if p.is_null() {
                 return;

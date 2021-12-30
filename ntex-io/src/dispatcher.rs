@@ -4,10 +4,10 @@ use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll, time}
 use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::{IntoService, Service};
-use ntex_util::time::{now, Seconds};
+use ntex_util::time::Seconds;
 use ntex_util::{future::Either, ready};
 
-use crate::{rt::spawn, DispatchItem, IoBoxed, IoRef, IoStatusUpdate, RecvError, Timer};
+use crate::{rt::spawn, DispatchItem, IoBoxed, IoRef, IoStatusUpdate, RecvError};
 
 type Response<U> = <U as Encoder>::Item;
 
@@ -30,8 +30,8 @@ pin_project_lite::pin_project! {
 
 bitflags::bitflags! {
     struct Flags: u8  {
-        const READY_ERR = 0b0001;
-        const IO_ERR    = 0b0010;
+        const READY_ERR  = 0b0001;
+        const IO_ERR     = 0b0010;
     }
 }
 
@@ -42,9 +42,7 @@ where
 {
     io: IoBoxed,
     st: Cell<DispatcherState>,
-    timer: Timer,
-    ka_timeout: Cell<Seconds>,
-    ka_updated: Cell<time::Instant>,
+    ka_timeout: Cell<time::Duration>,
     error: Cell<Option<S::Error>>,
     flags: Cell<Flags>,
     shared: Rc<DispatcherShared<S, U>>,
@@ -95,29 +93,21 @@ where
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io, F: IntoService<S, DispatchItem<U>>>(
-        io: Io,
-        codec: U,
-        service: F,
-        timer: Timer,
-    ) -> Self
+    pub fn new<Io, F: IntoService<S, DispatchItem<U>>>(io: Io, codec: U, service: F) -> Self
     where
         IoBoxed: From<Io>,
     {
         let io = IoBoxed::from(io);
-        let updated = now();
-        let ka_timeout = Cell::new(Seconds(30));
+        let ka_timeout = Cell::new(Seconds(30).into());
 
         // register keepalive timer
-        let expire = updated + time::Duration::from(ka_timeout.get());
-        timer.register(expire, expire, &io);
+        io.start_keepalive_timer(ka_timeout.get());
 
         Dispatcher {
             service: service.into_service(),
             fut: None,
             inner: DispatcherInner {
                 pool: io.memory_pool().pool(),
-                ka_updated: Cell::new(updated),
                 error: Cell::new(None),
                 flags: Cell::new(Flags::empty()),
                 st: Cell::new(DispatcherState::Processing),
@@ -127,7 +117,6 @@ where
                     inflight: Cell::new(0),
                 }),
                 io,
-                timer,
                 ka_timeout,
             },
         }
@@ -139,15 +128,11 @@ where
     ///
     /// By default keep-alive timeout is set to 30 seconds.
     pub fn keepalive_timeout(self, timeout: Seconds) -> Self {
+        let ka_timeout = time::Duration::from(timeout);
+
         // register keepalive timer
-        let prev = self.inner.ka_updated.get() + time::Duration::from(self.inner.ka());
-        if timeout.is_zero() {
-            self.inner.timer.unregister(prev, &self.inner.io);
-        } else {
-            let expire = self.inner.ka_updated.get() + time::Duration::from(timeout);
-            self.inner.timer.register(expire, prev, &self.inner.io);
-        }
-        self.inner.ka_timeout.set(timeout);
+        self.inner.io.start_keepalive_timer(ka_timeout);
+        self.inner.ka_timeout.set(ka_timeout);
 
         self
     }
@@ -436,14 +421,6 @@ where
         }
     }
 
-    fn ka(&self) -> Seconds {
-        self.ka_timeout.get()
-    }
-
-    fn ka_enabled(&self) -> bool {
-        self.ka_timeout.get().non_zero()
-    }
-
     fn insert_flags(&self, f: Flags) {
         let mut flags = self.flags.get();
         flags.insert(f);
@@ -452,26 +429,13 @@ where
 
     /// update keep-alive timer
     fn update_keepalive(&self) {
-        if self.ka_enabled() {
-            let updated = now();
-            if updated != self.ka_updated.get() {
-                let ka = time::Duration::from(self.ka());
-                self.timer
-                    .register(updated + ka, self.ka_updated.get() + ka, &self.io);
-                self.ka_updated.set(updated);
-            }
-        }
+        self.io.start_keepalive_timer(self.ka_timeout.get());
     }
 
     /// unregister keep-alive timer
     fn unregister_keepalive(&self) {
-        if self.ka_enabled() {
-            self.ka_timeout.set(Seconds::ZERO);
-            self.timer.unregister(
-                self.ka_updated.get() + time::Duration::from(self.ka()),
-                &self.io,
-            );
-        }
+        self.io.remove_keepalive_timer();
+        self.ka_timeout.set(time::Duration::ZERO);
     }
 }
 
@@ -524,32 +488,26 @@ mod tests {
             service: F,
         ) -> (Self, State) {
             let state = Io::new(io);
-            let timer = Timer::default();
-            let ka_timeout = Cell::new(Seconds(1));
-            let ka_updated = now();
+            let ka_timeout = Cell::new(Seconds(1).into());
             let shared = Rc::new(DispatcherShared {
                 codec: codec,
                 error: Cell::new(None),
                 inflight: Cell::new(0),
             });
             let inner = State(state.get_ref());
-
-            let expire = ka_updated + Duration::from_millis(500);
-            timer.register(expire, expire, &state);
+            state.start_keepalive_timer(Duration::from_millis(500));
 
             (
                 Dispatcher {
                     service: service.into_service(),
                     fut: None,
                     inner: DispatcherInner {
-                        ka_updated: Cell::new(ka_updated),
                         error: Cell::new(None),
                         flags: Cell::new(super::Flags::empty()),
                         st: Cell::new(DispatcherState::Processing),
                         pool: state.memory_pool().pool(),
                         io: state.into(),
                         shared,
-                        timer,
                         ka_timeout,
                     },
                 },

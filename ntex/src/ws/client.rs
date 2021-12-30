@@ -743,7 +743,7 @@ impl WsConnection<Sealed> {
             },
         );
 
-        Dispatcher::new(self.io, self.codec, service, Default::default()).await
+        Dispatcher::new(self.io, self.codec, service).await
     }
 }
 

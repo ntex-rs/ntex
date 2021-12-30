@@ -1,10 +1,8 @@
-use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time};
+use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time, time::Duration};
 
 use crate::http::{Request, Response};
-use crate::io::{IoRef, Timer};
-use crate::service::boxed::BoxService;
-use crate::time::{sleep, Millis, Seconds, Sleep};
-use crate::util::BytesMut;
+use crate::time::{now, sleep, Millis, Seconds, Sleep};
+use crate::{io::IoRef, service::boxed::BoxService, util::BytesMut};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 /// Server keep-alive setting
@@ -49,7 +47,6 @@ pub(super) struct Inner {
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
     pub(super) ssl_handshake_timeout: Millis,
-    pub(super) timer_h1: Timer,
 }
 
 impl Clone for ServiceConfig {
@@ -91,7 +88,6 @@ impl ServiceConfig {
             client_disconnect,
             ssl_handshake_timeout,
             timer: DateService::new(),
-            timer_h1: Timer::default(),
         }))
     }
 }
@@ -102,12 +98,11 @@ pub(super) struct DispatcherConfig<S, X, U> {
     pub(super) service: S,
     pub(super) expect: X,
     pub(super) upgrade: Option<U>,
-    pub(super) keep_alive: Millis,
-    pub(super) client_timeout: Millis,
+    pub(super) keep_alive: Duration,
+    pub(super) client_timeout: Duration,
     pub(super) client_disconnect: Seconds,
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
-    pub(super) timer_h1: Timer,
     pub(super) on_request: Option<OnRequest>,
 }
 
@@ -124,12 +119,11 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
             expect,
             upgrade,
             on_request,
-            keep_alive: cfg.0.keep_alive,
-            client_timeout: cfg.0.client_timeout,
+            keep_alive: Duration::from(cfg.0.keep_alive),
+            client_timeout: Duration::from(cfg.0.client_timeout),
             client_disconnect: cfg.0.client_disconnect,
             ka_enabled: cfg.0.ka_enabled,
             timer: cfg.0.timer.clone(),
-            timer_h1: cfg.0.timer_h1.clone(),
         }
     }
 
@@ -140,13 +134,20 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
 
     /// Return keep-alive timer Sleep is configured.
     pub(super) fn keep_alive_timer(&self) -> Option<Sleep> {
-        self.keep_alive.map(sleep)
+        if self.keep_alive != Duration::ZERO {
+            Some(sleep(self.keep_alive))
+        } else {
+            None
+        }
     }
 
     /// Keep-alive expire time
     pub(super) fn keep_alive_expire(&self) -> Option<time::Instant> {
-        self.keep_alive
-            .map(|t| self.timer.now() + time::Duration::from(t))
+        if self.keep_alive != Duration::ZERO {
+            Some(now() + self.keep_alive)
+        } else {
+            None
+        }
     }
 }
 
