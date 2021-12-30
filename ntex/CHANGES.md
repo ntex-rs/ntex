@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.1] - 2021-12-30
+
+* Drop WsTransport
+
 ## [0.5.0] - 2021-12-30
 
 * Upgrade to ntex-io 0.1

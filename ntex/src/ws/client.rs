@@ -21,7 +21,6 @@ use crate::util::{sink, Either, Ready};
 use crate::{channel::mpsc, rt, time::timeout, time::Millis, ws};
 
 use super::error::{WsClientBuilderError, WsClientError, WsError};
-use super::transport::{WsTransport, WsTransportFactory};
 
 /// `WebSocket` client builder
 pub struct WsClient<F, T> {
@@ -755,15 +754,6 @@ impl<F: Filter> WsConnection<F> {
             codec: self.codec,
             res: self.res,
         }
-    }
-
-    /// Convert to ws stream to plain io stream
-    pub async fn into_transport(self) -> Io<WsTransport<F>> {
-        // WsTransportFactory is infallible
-        self.io
-            .add_filter(WsTransportFactory::new(self.codec))
-            .await
-            .unwrap()
     }
 }
 

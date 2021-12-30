@@ -1,6 +1,5 @@
 use std::io;
 
-use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
 use ntex::io::{DispatchItem, Dispatcher, Io};
@@ -73,33 +72,4 @@ async fn test_simple() {
 
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Normal.into())));
-}
-
-#[ntex::test]
-async fn test_transport() {
-    let mut srv = test_server(|| {
-        HttpService::build()
-            .upgrade(|(req, io, codec): (Request, Io, h1::Codec)| {
-                async move {
-                    let res = handshake_response(req.head()).finish();
-
-                    // send handshake respone
-                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
-                        .unwrap();
-
-                    // start websocket service
-                    Dispatcher::new(io.seal(), ws::Codec::default(), ws_service).await
-                }
-            })
-            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-    });
-
-    // client service
-    let io = srv.ws().await.unwrap().into_transport().await;
-
-    io.send(Bytes::from_static(b"text"), &BytesCodec)
-        .await
-        .unwrap();
-    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
-    assert_eq!(item, Bytes::from_static(b"text"));
 }

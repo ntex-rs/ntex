@@ -5,16 +5,13 @@ use futures::future::{err, ok, ready};
 use futures::stream::{once, Stream, StreamExt};
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 
-use ntex::codec::BytesCodec;
 use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
-use ntex::http::{body, h1, HttpService, Method, Request, Response, StatusCode, Version};
-use ntex::io::Io;
+use ntex::http::{body, HttpService, Method, Request, Response, StatusCode, Version};
 use ntex::service::{fn_service, ServiceFactory};
-use ntex::util::{Bytes, BytesMut, Ready};
-use ntex::ws::handshake_response;
-use ntex::{time::Seconds, web::error::InternalError, ws};
+use ntex::util::{Bytes, BytesMut};
+use ntex::{time::Seconds, web::error::InternalError};
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>
 where
@@ -437,51 +434,4 @@ async fn test_ssl_handshake_timeout() {
     let mut data = String::new();
     let _ = stream.read_to_string(&mut data);
     assert!(data.is_empty());
-}
-
-#[ntex::test]
-async fn test_ws_transport() {
-    let mut srv = test_server(|| {
-        HttpService::build()
-            .upgrade(|(req, io, codec): (Request, Io<_>, h1::Codec)| {
-                async move {
-                    let res = handshake_response(req.head()).finish();
-
-                    // send handshake respone
-                    io.encode(
-                        h1::Message::Item((res.drop_body(), body::BodySize::None)),
-                        &codec,
-                    )
-                    .unwrap();
-
-                    let io = io
-                        .add_filter(ws::WsTransportFactory::new(ws::Codec::default()))
-                        .await?;
-
-                    // start websocket service
-                    loop {
-                        if let Some(item) =
-                            io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
-                        {
-                            io.send(item.freeze(), &BytesCodec).await.unwrap()
-                        } else {
-                            break;
-                        }
-                    }
-                    Ok::<_, io::Error>(())
-                }
-            })
-            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-            .openssl(ssl_acceptor())
-    });
-
-    let io = srv.wss().await.unwrap().into_inner().0;
-    let codec = ws::Codec::default().client_mode();
-
-    io.send(ws::Message::Binary(Bytes::from_static(b"text")), &codec)
-        .await
-        .unwrap();
-
-    let item = io.recv(&codec).await.unwrap().unwrap();
-    assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 }
