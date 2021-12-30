@@ -1,12 +1,12 @@
-use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::{cell::Cell, future::Future, io, pin::Pin};
+use std::{cell::Cell, future::Future, io, pin::Pin, sync::Arc, sync::Mutex};
 
+use ntex::http::test::server as test_server;
 use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
 use ntex::io::{DispatchItem, Dispatcher, Io};
 use ntex::service::{fn_factory, Service};
-use ntex::ws::handshake;
-use ntex::{util::ByteString, util::Bytes, util::Ready, ws};
+use ntex::ws::{handshake, handshake_response};
+use ntex::{codec::BytesCodec, util::ByteString, util::Bytes, util::Ready, ws};
 
 struct WsService(Arc<Mutex<Cell<bool>>>);
 
@@ -237,4 +237,50 @@ async fn test_simple() {
     );
 
     assert!(ws_service.was_polled());
+}
+
+#[ntex::test]
+async fn test_transport() {
+    let mut srv = test_server(|| {
+        HttpService::build()
+            .upgrade(|(req, io, codec): (Request, Io, h1::Codec)| {
+                async move {
+                    let res = handshake_response(req.head()).finish();
+
+                    // send handshake respone
+                    io.encode(
+                        h1::Message::Item((res.drop_body(), body::BodySize::None)),
+                        &codec,
+                    )
+                    .unwrap();
+
+                    let io = io
+                        .add_filter(ws::WsTransportFactory::new(ws::Codec::default()))
+                        .await?;
+
+                    // start websocket service
+                    loop {
+                        if let Some(item) =
+                            io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
+                        {
+                            io.send(item.freeze(), &BytesCodec).await.unwrap()
+                        } else {
+                            break;
+                        }
+                    }
+                    Ok::<_, io::Error>(())
+                }
+            })
+            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
+    });
+
+    // client service
+    let io = srv.ws().await.unwrap().into_inner().0;
+
+    let codec = ws::Codec::default().client_mode();
+    io.send(ws::Message::Binary(Bytes::from_static(b"text")), &codec)
+        .await
+        .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
 }

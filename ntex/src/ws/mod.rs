@@ -11,6 +11,7 @@ mod mask;
 mod proto;
 mod sink;
 mod stream;
+mod transport;
 
 pub mod error;
 
@@ -21,3 +22,4 @@ pub use self::handshake::{handshake, handshake_response, verify_handshake};
 pub use self::proto::{hash_key, CloseCode, CloseReason, OpCode};
 pub use self::sink::WsSink;
 pub use self::stream::{StreamDecoder, StreamEncoder};
+pub use self::transport::{WsTransport, WsTransportFactory};

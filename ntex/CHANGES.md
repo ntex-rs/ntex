@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.2] - 2021-12-30
+
+* Introduce new WsTransport implementation
+
 ## [0.5.1] - 2021-12-30
 
 * Drop WsTransport
