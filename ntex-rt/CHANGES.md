@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.0] - 2021-12-30
+
+* 0.4 release
+
 ## [0.4.0-b.3] - 2021-12-28
 
 * Add `async-std` support
