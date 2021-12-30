@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{error::Error, future::Future, marker::PhantomData, pin::Pin};
 
-use ntex_io::{BoxedFactory, Filter, FilterFactory, Io};
+use ntex_io::{utils::BoxedFactory, Filter, FilterFactory, Io};
 use ntex_service::{Service, ServiceFactory};
 use ntex_util::{future::Ready, time::Millis};
 use tls_openssl::ssl::SslAcceptor;

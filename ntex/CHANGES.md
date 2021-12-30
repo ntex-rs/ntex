@@ -1,8 +1,10 @@
 # Changes
 
-## [0.5.0-b.8] - 2021-12-xx
+## [0.5.0] - 2021-12-30
 
-* Update cookie 0.16
+* Upgrade to ntex-io 0.1
+
+* Updrade to cookie 0.16
 
 ## [0.5.0-b.7] - 2021-12-30
 

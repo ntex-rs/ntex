@@ -1,3 +1,4 @@
+//! utilities and helpers for testing
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};

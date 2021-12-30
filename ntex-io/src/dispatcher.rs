@@ -7,12 +7,12 @@ use ntex_service::{IntoService, Service};
 use ntex_util::time::{now, Seconds};
 use ntex_util::{future::Either, ready};
 
-use crate::{rt::spawn, DispatchItem, IoBoxed, IoRef, RecvError, Timer};
+use crate::{rt::spawn, DispatchItem, IoBoxed, IoRef, IoStatusUpdate, RecvError, Timer};
 
 type Response<U> = <U as Encoder>::Item;
 
 pin_project_lite::pin_project! {
-    /// Framed dispatcher - is a future that reads frames from bytes stream
+    /// Dispatcher - is a future that reads frames from bytes stream
     /// and pass then to the service.
     pub struct Dispatcher<S, U>
     where
@@ -28,6 +28,13 @@ pin_project_lite::pin_project! {
     }
 }
 
+bitflags::bitflags! {
+    struct Flags: u8  {
+        const READY_ERR = 0b0001;
+        const IO_ERR    = 0b0010;
+    }
+}
+
 struct DispatcherInner<S, U>
 where
     S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
@@ -39,7 +46,7 @@ where
     ka_timeout: Cell<Seconds>,
     ka_updated: Cell<time::Instant>,
     error: Cell<Option<S::Error>>,
-    ready_err: Cell<bool>,
+    flags: Cell<Flags>,
     shared: Rc<DispatcherShared<S, U>>,
     pool: Pool,
 }
@@ -112,7 +119,7 @@ where
                 pool: io.memory_pool().pool(),
                 ka_updated: Cell::new(updated),
                 error: Cell::new(None),
-                ready_err: Cell::new(false),
+                flags: Cell::new(Flags::empty()),
                 st: Cell::new(DispatcherState::Processing),
                 shared: Rc::new(DispatcherShared {
                     codec,
@@ -304,7 +311,7 @@ where
                     slf.unregister_keepalive();
 
                     // service may relay on poll_ready for response results
-                    if !this.inner.ready_err.get() {
+                    if !slf.flags.get().contains(Flags::READY_ERR) {
                         let _ = this.service.poll_ready(cx);
                     }
 
@@ -313,8 +320,21 @@ where
                             slf.st.set(DispatcherState::Shutdown);
                             continue;
                         }
-                    } else {
-                        slf.io.register_dispatcher(cx);
+                    } else if !slf.flags.get().contains(Flags::IO_ERR) {
+                        match ready!(slf.io.poll_status_update(cx)) {
+                            IoStatusUpdate::PeerGone(_)
+                            | IoStatusUpdate::Stop
+                            | IoStatusUpdate::KeepAlive => {
+                                slf.insert_flags(Flags::IO_ERR);
+                                continue;
+                            }
+                            IoStatusUpdate::WriteBackpressure => {
+                                if ready!(slf.io.poll_flush(cx, true)).is_err() {
+                                    slf.insert_flags(Flags::IO_ERR);
+                                }
+                                continue;
+                            }
+                        }
                     }
                     return Poll::Pending;
                 }
@@ -410,7 +430,7 @@ where
                 log::trace!("service readiness check failed, stopping");
                 self.st.set(DispatcherState::Stop);
                 self.error.set(Some(err));
-                self.ready_err.set(true);
+                self.insert_flags(Flags::READY_ERR);
                 Poll::Ready(PollService::ServiceError)
             }
         }
@@ -422,6 +442,12 @@ where
 
     fn ka_enabled(&self) -> bool {
         self.ka_timeout.get().non_zero()
+    }
+
+    fn insert_flags(&self, f: Flags) {
+        let mut flags = self.flags.get();
+        flags.insert(f);
+        self.flags.set(flags)
     }
 
     /// update keep-alive timer
@@ -518,7 +544,7 @@ mod tests {
                     inner: DispatcherInner {
                         ka_updated: Cell::new(ka_updated),
                         error: Cell::new(None),
-                        ready_err: Cell::new(false),
+                        flags: Cell::new(super::Flags::empty()),
                         st: Cell::new(DispatcherState::Processing),
                         pool: state.memory_pool().pool(),
                         io: state.into(),
@@ -753,7 +779,6 @@ mod tests {
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
 
         // response message
-        assert!(!state.io().is_write_ready());
         assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 65536);
 
         client.remote_buffer_cap(10240);
@@ -765,7 +790,6 @@ mod tests {
         assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 10240);
 
         // backpressure disabled
-        assert!(state.io().is_write_ready());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1, 2]);
     }
 
@@ -814,7 +838,6 @@ mod tests {
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();
         assert!(flags.contains(Flags::IO_STOPPING));
-        assert!(flags.contains(Flags::DSP_KEEPALIVE));
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }

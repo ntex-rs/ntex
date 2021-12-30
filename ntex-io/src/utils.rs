@@ -3,7 +3,9 @@ use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Po
 use ntex_service::{fn_factory_with_config, into_service, Service, ServiceFactory};
 use ntex_util::{future::Ready, ready};
 
-use super::{Filter, FilterFactory, Io, IoBoxed};
+pub use crate::framed::Framed;
+pub use crate::io::OnDisconnect;
+use crate::{Filter, FilterFactory, Io, IoBoxed};
 
 /// Service that converts any Io<F> stream to IoBoxed stream
 pub fn seal<F, S, C>(
@@ -41,7 +43,7 @@ where
 }
 
 /// Create filter factory service
-pub fn add_filter<T, F>(filter: T) -> FilterServiceFactory<T, F>
+pub fn filter<T, F>(filter: T) -> FilterServiceFactory<T, F>
 where
     T: FilterFactory<F> + Clone,
     F: Filter,
@@ -137,6 +139,7 @@ where
 }
 
 pin_project_lite::pin_project! {
+    #[doc(hidden)]
     pub struct BoxedFactoryResponse<S: ServiceFactory<R, C>, R, C> {
         #[pin]
         fut: S::Future,
@@ -156,6 +159,7 @@ impl<S: ServiceFactory<R, C>, R, C> Future for BoxedFactoryResponse<S, R, C> {
 }
 
 pin_project_lite::pin_project! {
+    #[doc(hidden)]
     pub struct BoxedResponse<S: Service<R>, R> {
         #[pin]
         fut: S::Future,

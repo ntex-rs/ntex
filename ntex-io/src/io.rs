@@ -7,9 +7,9 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Millis};
 
 use super::filter::{Base, NullFilter};
-use super::seal::{IoBoxed, Sealed};
+use super::seal::Sealed;
 use super::tasks::{ReadContext, WriteContext};
-use super::{Filter, FilterFactory, Handle, IoStream, RecvError};
+use super::{Filter, FilterFactory, Handle, IoStatusUpdate, IoStream, RecvError};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -23,23 +23,21 @@ bitflags::bitflags! {
         const IO_FILTERS_TIMEOUT  = 0b0000_0000_0000_1000;
 
         /// pause io read
-        const RD_PAUSED       = 0b0000_0000_0001_0000;
+        const RD_PAUSED           = 0b0000_0000_0001_0000;
         /// new data is available
-        const RD_READY        = 0b0000_0000_0010_0000;
+        const RD_READY            = 0b0000_0000_0010_0000;
         /// read buffer is full
-        const RD_BUF_FULL     = 0b0000_0000_0100_0000;
+        const RD_BUF_FULL         = 0b0000_0000_0100_0000;
 
         /// wait write completion
-        const WR_WAIT         = 0b0000_0000_1000_0000;
+        const WR_WAIT             = 0b0000_0000_1000_0000;
         /// write buffer is full
-        const WR_BACKPRESSURE = 0b0000_0001_0000_0000;
+        const WR_BACKPRESSURE     = 0b0000_0001_0000_0000;
 
         /// dispatcher is marked stopped
-        const DSP_STOP        = 0b0000_0010_0000_0000;
+        const DSP_STOP            = 0b0000_0010_0000_0000;
         /// keep-alive timeout occured
-        const DSP_KEEPALIVE   = 0b0000_0100_0000_0000;
-        /// dispatcher returned error
-        const DSP_ERR         = 0b0000_1000_0000_0000;
+        const DSP_KEEPALIVE       = 0b0000_0100_0000_0000;
     }
 }
 
@@ -48,6 +46,7 @@ enum FilterItem<F> {
     Ptr(*mut F),
 }
 
+/// Interface object to underlying io stream
 pub struct Io<F = Base>(pub(super) IoRef, FilterItem<F>);
 
 #[derive(Clone)]
@@ -233,13 +232,13 @@ impl Drop for IoState {
 
 impl Io {
     #[inline]
-    /// Create `State` instance
+    /// Create `Io` instance
     pub fn new<I: IoStream>(io: I) -> Self {
         Self::with_memory_pool(io, PoolId::DEFAULT.pool_ref())
     }
 
     #[inline]
-    /// Create `State` instance with specific memory pool.
+    /// Create `Io` instance in specific memory pool.
     pub fn with_memory_pool<I: IoStream>(io: I, pool: PoolRef) -> Self {
         let inner = Rc::new(IoState {
             pool: Cell::new(pool),
@@ -289,7 +288,7 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Set io disconnect timeout in secs
+    /// Set io disconnect timeout in millis
     pub fn set_disconnect_timeout(&self, timeout: Millis) {
         self.0 .0.disconnect_timeout.set(timeout);
     }
@@ -305,33 +304,15 @@ impl<F> Io<F> {
 
     #[inline]
     #[allow(clippy::should_implement_trait)]
-    /// Get IoRef reference
+    /// Get `IoRef` reference
     pub fn as_ref(&self) -> &IoRef {
         &self.0
     }
 
     #[inline]
-    /// Get instance of IoRef
+    /// Get instance of `IoRef`
     pub fn get_ref(&self) -> IoRef {
         self.0.clone()
-    }
-
-    #[inline]
-    /// Check if dispatcher marked stopped
-    pub fn is_dispatcher_stopped(&self) -> bool {
-        self.flags().contains(Flags::DSP_STOP)
-    }
-
-    #[inline]
-    /// Register dispatcher task
-    pub fn register_dispatcher(&self, cx: &mut Context<'_>) {
-        self.0 .0.dispatch_task.register(cx.waker());
-    }
-
-    #[inline]
-    /// Reset keep-alive error
-    pub fn reset_keepalive(&self) {
-        self.0 .0.remove_flags(Flags::DSP_KEEPALIVE)
     }
 
     /// Get current io error
@@ -340,15 +321,9 @@ impl<F> Io<F> {
     }
 }
 
-impl Io<Sealed> {
-    pub fn boxed(self) -> IoBoxed {
-        self.into()
-    }
-}
-
 impl<F: Filter> Io<F> {
     #[inline]
-    /// Get referece to filter
+    /// Get referece to a filter
     pub fn filter(&self) -> &F {
         if let FilterItem::Ptr(p) = self.1 {
             if let Some(r) = unsafe { p.as_ref() } {
@@ -381,6 +356,7 @@ impl<F: Filter> Io<F> {
     }
 
     #[inline]
+    /// Create new filter and replace current one
     pub fn add_filter<T>(self, factory: T) -> T::Future
     where
         T: FilterFactory<F>,
@@ -389,6 +365,7 @@ impl<F: Filter> Io<F> {
     }
 
     #[inline]
+    /// Map current filter with new one
     pub fn map_filter<T, U, E>(mut self, map: U) -> Result<Io<T>, E>
     where
         T: Filter,
@@ -459,6 +436,7 @@ impl<F> Io<F> {
     #[inline]
     /// Pause read task
     pub fn pause(&self) {
+        self.0 .0.read_task.wake();
         self.0 .0.insert_flags(Flags::RD_PAUSED);
     }
 
@@ -490,7 +468,7 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Shut down io stream
+    /// Gracefully shutdown io stream
     pub async fn shutdown(&self) -> io::Result<()> {
         poll_fn(|cx| self.poll_shutdown(cx)).await
     }
@@ -563,8 +541,10 @@ impl<F> Io<F> {
                 if flags.contains(Flags::IO_STOPPED) {
                     Poll::Ready(Err(RecvError::PeerGone(self.error())))
                 } else if flags.contains(Flags::DSP_STOP) {
+                    self.0 .0.remove_flags(Flags::DSP_STOP);
                     Poll::Ready(Err(RecvError::Stop))
                 } else if flags.contains(Flags::DSP_KEEPALIVE) {
+                    self.0 .0.remove_flags(Flags::DSP_KEEPALIVE);
                     Poll::Ready(Err(RecvError::KeepAlive))
                 } else if flags.contains(Flags::WR_BACKPRESSURE) {
                     Poll::Ready(Err(RecvError::WriteBackpressure))
@@ -623,7 +603,7 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Shut down io stream
+    /// Gracefully shutdown io stream
     pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let flags = self.flags();
 
@@ -637,6 +617,26 @@ impl<F> Io<F> {
             if !flags.contains(Flags::IO_STOPPING_FILTERS) {
                 self.0 .0.init_shutdown(None);
             }
+            self.0 .0.dispatch_task.register(cx.waker());
+            Poll::Pending
+        }
+    }
+
+    #[inline]
+    /// Wait for status updates
+    pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
+        let flags = self.flags();
+        if flags.contains(Flags::IO_STOPPED) {
+            Poll::Ready(IoStatusUpdate::PeerGone(self.error()))
+        } else if flags.contains(Flags::DSP_STOP) {
+            self.0 .0.remove_flags(Flags::DSP_STOP);
+            Poll::Ready(IoStatusUpdate::Stop)
+        } else if flags.contains(Flags::DSP_KEEPALIVE) {
+            self.0 .0.remove_flags(Flags::DSP_KEEPALIVE);
+            Poll::Ready(IoStatusUpdate::KeepAlive)
+        } else if flags.contains(Flags::WR_BACKPRESSURE) {
+            Poll::Ready(IoStatusUpdate::WriteBackpressure)
+        } else {
             self.0 .0.dispatch_task.register(cx.waker());
             Poll::Pending
         }

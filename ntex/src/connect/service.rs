@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, future::Future, io, net::SocketAddr, pin::Pin};
 
-use crate::io::{types, Boxed, Io};
+use crate::io::{types, utils::Boxed, Io};
 use crate::rt::tcp_connect_in;
 use crate::service::{Service, ServiceFactory};
 use crate::util::{Either, PoolId, PoolRef, Ready};

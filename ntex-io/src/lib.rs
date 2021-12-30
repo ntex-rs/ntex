@@ -16,7 +16,7 @@ mod ioref;
 mod seal;
 mod tasks;
 mod time;
-mod utils;
+pub mod utils;
 
 #[cfg(feature = "async-std")]
 mod asyncstd_rt;
@@ -31,24 +31,29 @@ use ntex_util::time::Millis;
 
 pub use self::dispatcher::Dispatcher;
 pub use self::filter::Base;
-pub use self::framed::Framed;
-pub use self::io::{Io, IoRef, OnDisconnect};
+pub use self::io::{Io, IoRef};
 pub use self::seal::{IoBoxed, Sealed};
 pub use self::tasks::{ReadContext, WriteContext};
 pub use self::time::Timer;
-pub use self::utils::{add_filter, boxed, seal, Boxed, BoxedFactory};
+pub use self::utils::filter;
 
+/// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ReadStatus {
     Ready,
     Terminate,
 }
 
+/// Status for write task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum WriteStatus {
+    /// Write task is clear to proceed with write operation
     Ready,
+    /// Initiate timeout for normal write operations, shutdown connection after timeout
     Timeout(Millis),
+    /// Initiate graceful io shutdown operation with timeout
     Shutdown(Millis),
+    /// Immediately terminate connection
     Terminate,
 }
 
@@ -69,19 +74,26 @@ pub trait Filter: 'static {
 
     fn release_write_buf(&self, buf: BytesMut) -> sio::Result<()>;
 
+    /// Check readiness for read operations
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus>;
 
+    /// Check readiness for write operations
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus>;
 
+    /// Gracefully shutdown filter
     fn poll_shutdown(&self) -> Poll<sio::Result<()>>;
 }
 
+/// Creates new `Filter` values.
 pub trait FilterFactory<F: Filter>: Sized {
+    /// The `Filter` value created by this factory
     type Filter: Filter;
-
+    /// Errors produced while building a filter.
     type Error: fmt::Debug;
+    /// The future of the `FilterFactory` instance.
     type Future: Future<Output = Result<Io<Self::Filter>, Self::Error>>;
 
+    /// Create and return a new filter value asynchronously.
     fn create(self, st: Io<F>) -> Self::Future;
 }
 
@@ -91,6 +103,19 @@ pub trait IoStream {
 
 pub trait Handle {
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
+}
+
+/// Io status
+#[derive(Debug)]
+pub enum IoStatusUpdate {
+    /// Keep-alive timeout occured
+    KeepAlive,
+    /// Write backpressure is enabled
+    WriteBackpressure,
+    /// Stop io stream handling
+    Stop,
+    /// Peer is disconnected
+    PeerGone(Option<sio::Error>),
 }
 
 /// Recv error

@@ -2,8 +2,10 @@ use std::ops;
 
 use crate::{Filter, Io};
 
+/// Sealed filter type
 pub struct Sealed(pub(crate) Box<dyn Filter>);
 
+/// Boxed `Io` object with erased filter type
 pub struct IoBoxed(Io<Sealed>);
 
 impl From<Io<Sealed>> for IoBoxed {

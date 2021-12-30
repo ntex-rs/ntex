@@ -39,36 +39,6 @@ impl IoRef {
     }
 
     #[inline]
-    /// Check if write task is ready
-    pub fn is_write_ready(&self) -> bool {
-        !self.0.flags.get().contains(Flags::WR_BACKPRESSURE)
-    }
-
-    #[inline]
-    /// Check if read buffer has new data
-    pub fn is_read_ready(&self) -> bool {
-        self.0.flags.get().contains(Flags::RD_READY)
-    }
-
-    #[inline]
-    /// Check if write buffer is full
-    pub fn is_write_buf_full(&self) -> bool {
-        let len = self
-            .0
-            .with_write_buf(|buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
-        len >= self.memory_pool().write_params_high()
-    }
-
-    #[inline]
-    /// Check if read buffer is full
-    pub fn is_read_buf_full(&self) -> bool {
-        let len = self
-            .0
-            .with_read_buf(false, |buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
-        len >= self.memory_pool().read_params_high()
-    }
-
-    #[inline]
     /// Wake dispatcher task
     pub fn wake(&self) {
         self.0.dispatch_task.wake();
@@ -77,7 +47,7 @@ impl IoRef {
     #[inline]
     /// Gracefully close connection
     ///
-    /// Notify dispatcher and initiate io stream shutdown process
+    /// Notify dispatcher and initiate io stream shutdown process.
     pub fn close(&self) {
         self.0.insert_flags(Flags::DSP_STOP);
         self.0.init_shutdown(None);
@@ -108,18 +78,73 @@ impl IoRef {
     }
 
     #[inline]
-    /// Notify when io stream get disconnected
-    pub fn on_disconnect(&self) -> OnDisconnect {
-        OnDisconnect::new(self.0.clone())
-    }
-
-    #[inline]
-    /// Query specific data
+    /// Query filter specific data
     pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
         if let Some(item) = self.filter().query(any::TypeId::of::<T>()) {
             types::QueryItem::new(item)
         } else {
             types::QueryItem::empty()
+        }
+    }
+
+    #[inline]
+    /// Encode and write item to a buffer and wake up write task
+    pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
+    where
+        U: Encoder,
+    {
+        let flags = self.0.flags.get();
+
+        if !flags.contains(Flags::IO_STOPPING) {
+            self.with_write_buf(|buf| {
+                let (hw, lw) = self.memory_pool().write_params().unpack();
+
+                // make sure we've got room
+                let remaining = buf.remaining_mut();
+                if remaining < lw {
+                    buf.reserve(hw - remaining);
+                }
+
+                // encode item and wake write task
+                codec.encode(item, buf)
+            })
+            .map_or_else(
+                |err| {
+                    self.0.io_stopped(Some(err));
+                    Ok(())
+                },
+                |item| item,
+            )
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline]
+    /// Attempts to decode a frame from the read buffer
+    pub fn decode<U>(
+        &self,
+        codec: &U,
+    ) -> Result<Option<<U as Decoder>::Item>, <U as Decoder>::Error>
+    where
+        U: Decoder,
+    {
+        self.0.with_read_buf(false, |buf| {
+            buf.as_mut().map(|b| codec.decode(b)).unwrap_or(Ok(None))
+        })
+    }
+
+    #[inline]
+    /// Write bytes to a buffer and wake up write task
+    pub fn write(&self, src: &[u8]) -> io::Result<()> {
+        let flags = self.0.flags.get();
+
+        if !flags.intersects(Flags::IO_STOPPING) {
+            self.with_write_buf(|buf| {
+                buf.extend_from_slice(src);
+            })
+        } else {
+            Ok(())
         }
     }
 
@@ -159,69 +184,9 @@ impl IoRef {
     }
 
     #[inline]
-    /// Encode and write item to a buffer and wake up write task
-    ///
-    /// Returns write buffer state, false is returned if write buffer if full.
-    pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
-    where
-        U: Encoder,
-    {
-        let flags = self.0.flags.get();
-
-        if !flags.contains(Flags::IO_STOPPING) {
-            self.with_write_buf(|buf| {
-                let (hw, lw) = self.memory_pool().write_params().unpack();
-
-                // make sure we've got room
-                let remaining = buf.remaining_mut();
-                if remaining < lw {
-                    buf.reserve(hw - remaining);
-                }
-
-                // encode item and wake write task
-                codec.encode(item, buf)
-            })
-            .map_or_else(
-                |err| {
-                    self.0.io_stopped(Some(err));
-                    Ok(())
-                },
-                |item| item,
-            )
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline]
-    /// Attempts to decode a frame from the read buffer
-    ///
-    /// Read buffer ready state gets cleanup if decoder cannot
-    /// decode any frame.
-    pub fn decode<U>(
-        &self,
-        codec: &U,
-    ) -> Result<Option<<U as Decoder>::Item>, <U as Decoder>::Error>
-    where
-        U: Decoder,
-    {
-        self.0.with_read_buf(false, |buf| {
-            buf.as_mut().map(|b| codec.decode(b)).unwrap_or(Ok(None))
-        })
-    }
-
-    #[inline]
-    /// Write bytes to a buffer and wake up write task
-    pub fn write(&self, src: &[u8]) -> io::Result<()> {
-        let flags = self.0.flags.get();
-
-        if !flags.intersects(Flags::IO_STOPPING) {
-            self.with_write_buf(|buf| {
-                buf.extend_from_slice(src);
-            })
-        } else {
-            Ok(())
-        }
+    /// Notify when io stream get disconnected
+    pub fn on_disconnect(&self) -> OnDisconnect {
+        OnDisconnect::new(self.0.clone())
     }
 }
 
@@ -257,9 +222,6 @@ mod tests {
         client.write(TEXT);
 
         let state = Io::new(server);
-        assert!(!state.is_read_buf_full());
-        assert!(!state.is_write_buf_full());
-
         let msg = state.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
 

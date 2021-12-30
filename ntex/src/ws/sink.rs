@@ -1,6 +1,6 @@
 use std::{future::Future, rc::Rc};
 
-use crate::io::{IoRef, OnDisconnect};
+use crate::io::{utils::OnDisconnect, IoRef};
 use crate::ws;
 
 pub struct WsSink(Rc<WsSinkInner>);

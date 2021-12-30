@@ -5,7 +5,7 @@ pub use tls_rustls::{ClientConfig, ServerName};
 
 use ntex_tls::rustls::TlsConnector;
 
-use crate::io::{Base, Boxed, Io};
+use crate::io::{utils::Boxed, Base, Io};
 use crate::service::{Service, ServiceFactory};
 use crate::util::{PoolId, Ready};
 

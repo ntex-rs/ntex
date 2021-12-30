@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.0] - 2021-12-30
+
+* Add Io::poll_status_update() method to use instead of register_dispatcher()
+
+* Reset DSP_STOP and DSP_KEEPALIVE flags
+
 ## [0.1.0-b.10] - 2021-12-30
 
 * IoRef::close() method initiates io stream shutdown

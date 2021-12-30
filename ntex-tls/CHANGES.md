@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.0] - 2021-12-30
+
+* Upgrade to ntex-io 0.1
+
 ## [0.1.0-b.5] - 2021-12-28
 
 * Proper handling for openssl ZERO_RETURN error

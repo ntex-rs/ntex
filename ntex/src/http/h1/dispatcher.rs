@@ -450,7 +450,6 @@ where
                     .timer_h1
                     .register(expire, self.expire, &self.state);
                 self.expire = expire;
-                self.io().reset_keepalive();
             }
         }
     }

@@ -4,6 +4,7 @@ use ntex_bytes::{BytesMut, PoolRef};
 
 use super::{io::Flags, IoRef, ReadStatus, WriteStatus};
 
+/// Context for io read task
 pub struct ReadContext(IoRef);
 
 impl ReadContext {
@@ -12,16 +13,19 @@ impl ReadContext {
     }
 
     #[inline]
+    /// Return memory pool for this context
     pub fn memory_pool(&self) -> PoolRef {
         self.0.memory_pool()
     }
 
     #[inline]
+    /// Check readiness for read operations
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         self.0.filter().poll_read_ready(cx)
     }
 
     #[inline]
+    /// Get read buffer
     pub fn get_read_buf(&self) -> BytesMut {
         self.0
             .filter()
@@ -30,6 +34,7 @@ impl ReadContext {
     }
 
     #[inline]
+    /// Release read buffer after io read operations
     pub fn release_read_buf(&self, buf: BytesMut, nbytes: usize) {
         if buf.is_empty() {
             self.0.memory_pool().release_read_buf(buf);
@@ -72,11 +77,13 @@ impl ReadContext {
     }
 
     #[inline]
+    /// Indicate that io task is stopped
     pub fn close(&self, err: Option<io::Error>) {
         self.0 .0.io_stopped(err);
     }
 }
 
+/// Context for io write task
 pub struct WriteContext(IoRef);
 
 impl WriteContext {
@@ -85,21 +92,25 @@ impl WriteContext {
     }
 
     #[inline]
+    /// Return memory pool for this context
     pub fn memory_pool(&self) -> PoolRef {
         self.0.memory_pool()
     }
 
     #[inline]
+    /// Check readiness for write operations
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
         self.0.filter().poll_write_ready(cx)
     }
 
     #[inline]
+    /// Get write buffer
     pub fn get_write_buf(&self) -> Option<BytesMut> {
         self.0 .0.write_buf.take()
     }
 
     #[inline]
+    /// Release write buffer after io write operations
     pub fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error> {
         let pool = self.0.memory_pool();
         let mut flags = self.0.flags();
@@ -131,6 +142,7 @@ impl WriteContext {
     }
 
     #[inline]
+    /// Indicate that io task is stopped
     pub fn close(&self, err: Option<io::Error>) {
         self.0 .0.io_stopped(err);
     }

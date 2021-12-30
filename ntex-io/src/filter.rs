@@ -5,6 +5,7 @@ use ntex_bytes::BytesMut;
 use super::io::Flags;
 use super::{Filter, IoRef, ReadStatus, WriteStatus};
 
+/// Default `Io` filter
 pub struct Base(IoRef);
 
 impl Base {
