@@ -154,6 +154,7 @@ where
 
         let msg = Connect::new(head.uri.clone()).set_addr(self.addr);
         let fut = self.connector.call(msg);
+        log::trace!("Open ws connection to {:?} addr: {:?}", head.uri, self.addr);
 
         async move {
             let io = fut.await?;
@@ -163,11 +164,13 @@ where
 
             // send request and read response
             let fut = async {
+                log::trace!("Sending ws handshake http message");
                 io.send(
                     (RequestHeadType::Rc(head, Some(headers)), BodySize::None).into(),
                     &codec,
                 )
                 .await?;
+                log::trace!("Waiting for ws handshake response");
                 io.recv(&codec)
                     .await?
                     .ok_or(WsClientError::Disconnected(None))
@@ -182,6 +185,7 @@ where
             } else {
                 fut.await?
             };
+            log::trace!("Ws handshake response is received {:?}", response);
 
             // verify response
             if response.status != StatusCode::SWITCHING_PROTOCOLS {
@@ -236,6 +240,7 @@ where
                 log::trace!("Missing SEC-WEBSOCKET-ACCEPT header");
                 return Err(WsClientError::MissingWebSocketAcceptHeader);
             };
+            log::trace!("Ws handshake response verification is completed");
 
             // response and ws io
             Ok(WsConnection::new(
