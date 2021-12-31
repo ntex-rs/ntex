@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.3] - 2021-12-31
+
+* Fix WsTransport shutdown, send close frame
+
 ## [0.5.2] - 2021-12-30
 
 * Introduce new WsTransport implementation

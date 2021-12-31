@@ -482,4 +482,14 @@ async fn test_ws_transport() {
 
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
+
+    io.send(ws::Message::Close(None), &codec).await.unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(
+        item,
+        ws::Frame::Close(Some(ws::CloseReason {
+            code: ws::CloseCode::Normal,
+            description: None
+        }))
+    );
 }

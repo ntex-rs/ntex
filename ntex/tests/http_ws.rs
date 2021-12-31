@@ -5,8 +5,8 @@ use ntex::http::test::server as test_server;
 use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
 use ntex::io::{DispatchItem, Dispatcher, Io};
 use ntex::service::{fn_factory, Service};
-use ntex::ws::{handshake, handshake_response};
-use ntex::{codec::BytesCodec, util::ByteString, util::Bytes, util::Ready, ws};
+use ntex::ws::{self, handshake, handshake_response};
+use ntex::{codec::BytesCodec, util::ByteString, util::Bytes, util::Ready};
 
 struct WsService(Arc<Mutex<Cell<bool>>>);
 
@@ -283,4 +283,14 @@ async fn test_transport() {
         .unwrap();
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
+
+    io.send(ws::Message::Close(None), &codec).await.unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(
+        item,
+        ws::Frame::Close(Some(ws::CloseReason {
+            code: ws::CloseCode::Normal,
+            description: None
+        }))
+    );
 }

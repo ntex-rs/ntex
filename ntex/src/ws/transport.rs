@@ -5,12 +5,13 @@ use crate::codec::{Decoder, Encoder};
 use crate::io::{Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
 use crate::util::{BufMut, BytesMut, PoolRef, Ready};
 
-use super::{Codec, Frame, Item, Message};
+use super::{CloseCode, CloseReason, Codec, Frame, Item, Message};
 
 bitflags::bitflags! {
     struct Flags: u8  {
         const CLOSED       = 0b0001;
         const CONTINUATION = 0b0010;
+        const PROTO_ERR    = 0b0100;
     }
 }
 
@@ -40,6 +41,7 @@ impl<F: Filter> WsTransport<F> {
         if self.flags.get().contains(Flags::CONTINUATION) {
             Ok(())
         } else {
+            self.insert_flags(Flags::PROTO_ERR);
             Err(io::Error::new(io::ErrorKind::Other, err_message))
         }
     }
@@ -53,14 +55,26 @@ impl<F: Filter> Filter for WsTransport<F> {
 
     #[inline]
     fn poll_shutdown(&self) -> Poll<io::Result<()>> {
-        if !self.flags.get().contains(Flags::CLOSED) {
+        let flags = self.flags.get();
+        if !flags.contains(Flags::CLOSED) {
             self.insert_flags(Flags::CLOSED);
             let mut b = self
                 .inner
                 .get_write_buf()
                 .unwrap_or_else(|| self.pool.get_write_buf());
-            let _ = self.codec.encode(Message::Close(None), &mut b);
-            self.release_write_buf(b)?;
+            let code = if flags.contains(Flags::PROTO_ERR) {
+                CloseCode::Protocol
+            } else {
+                CloseCode::Normal
+            };
+            let _ = self.codec.encode(
+                Message::Close(Some(CloseReason {
+                    code,
+                    description: None,
+                })),
+                &mut b,
+            );
+            self.inner.release_write_buf(b)?;
         }
 
         self.inner.poll_shutdown()
@@ -124,6 +138,7 @@ impl<F: Filter> Filter for WsTransport<F> {
 
             let frame = if let Some(frame) = self.codec.decode(&mut src).map_err(|e| {
                 log::trace!("Failed to decode ws codec frames: {:?}", e);
+                self.insert_flags(Flags::PROTO_ERR);
                 io::Error::new(io::ErrorKind::Other, e)
             })? {
                 frame
@@ -149,12 +164,14 @@ impl<F: Filter> Filter for WsTransport<F> {
                     self.remove_flags(Flags::CONTINUATION);
                 }
                 Frame::Continuation(Item::FirstText(_)) => {
+                    self.insert_flags(Flags::PROTO_ERR);
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
                         "WebSocket Text continuation frames are not supported",
                     ));
                 }
                 Frame::Text(_) => {
+                    self.insert_flags(Flags::PROTO_ERR);
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
                         "WebSockets Text frames are not supported",
