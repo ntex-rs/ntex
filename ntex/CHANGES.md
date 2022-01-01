@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.4] - 2022-01-02
+
+* http1: Unregister keep-alive timer after request is received
+
 ## [0.5.3] - 2021-12-31
 
 * Fix WsTransport shutdown, send close frame

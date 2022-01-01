@@ -210,6 +210,33 @@ async fn test_http1_keepalive_timeout() {
     assert_eq!(res, 0);
 }
 
+/// Keep-alive must occure only while waiting complete request
+#[ntex::test]
+async fn test_http1_no_keepalive_during_response() {
+    let srv = test_server(|| {
+        HttpService::build().keep_alive(1).h1(|_| async {
+            sleep(Millis(1100)).await;
+            Ok::<_, io::Error>(Response::Ok().finish())
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let mut data = vec![0; 1024];
+    let _ = stream.read(&mut data);
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let mut data = vec![0; 1024];
+    let _ = stream.read(&mut data);
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let mut data = vec![0; 1024];
+    let _ = stream.read(&mut data);
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+}
+
 #[ntex::test]
 async fn test_http1_keepalive_close() {
     let srv = test_server(|| {

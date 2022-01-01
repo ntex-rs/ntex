@@ -85,6 +85,7 @@ impl IoState {
 
     #[inline]
     pub(super) fn notify_keepalive(&self) {
+        log::trace!("keep-alive timeout, notify dispatcher");
         let mut flags = self.flags.get();
         if !flags.contains(Flags::DSP_KEEPALIVE) {
             flags.insert(Flags::DSP_KEEPALIVE);
