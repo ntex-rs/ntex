@@ -4,6 +4,8 @@
 
 * http1: Unregister keep-alive timer after request is received
 
+* web: Add option to use default `AppConfig` for App type factory
+
 ## [0.5.3] - 2021-12-31
 
 * Fix WsTransport shutdown, send close frame

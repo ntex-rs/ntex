@@ -62,7 +62,7 @@ mod openssl {
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
-        B: MessageBody + 'static,
+        B: MessageBody,
     {
         /// Create ssl based service
         pub fn openssl(
@@ -99,7 +99,7 @@ mod rustls {
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
-        B: MessageBody + 'static,
+        B: MessageBody,
     {
         /// Create openssl based service
         pub fn rustls(
@@ -131,7 +131,7 @@ where
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
-    B: MessageBody + 'static,
+    B: MessageBody,
 {
     type Response = ();
     type Error = DispatchError;
@@ -164,11 +164,10 @@ pub struct H2ServiceHandler<F, S: Service<Request>, B> {
 impl<F, S, B> Service<Io<F>> for H2ServiceHandler<F, S, B>
 where
     F: Filter,
-    S: Service<Request>,
-    S::Error: ResponseError + 'static,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
-    B: MessageBody + 'static,
+    S: Service<Request> + 'static,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
 {
     type Response = ();
     type Error = DispatchError;
@@ -207,7 +206,7 @@ where
 enum State<F, S: Service<Request>, B: MessageBody>
 where
     F: Filter,
-    S::Future: 'static,
+    S: 'static,
 {
     Incoming(Dispatcher<F, S, B, (), ()>),
     Handshake(
@@ -220,11 +219,10 @@ where
 pub struct H2ServiceHandlerResponse<F, S, B>
 where
     F: Filter,
-    S: Service<Request>,
-    S::Error: ResponseError + 'static,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
-    B: MessageBody + 'static,
+    S: Service<Request> + 'static,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
 {
     state: State<F, S, B>,
 }
@@ -232,10 +230,9 @@ where
 impl<F, S, B> Future for H2ServiceHandlerResponse<F, S, B>
 where
     F: Filter,
-    S: Service<Request>,
-    S::Error: ResponseError + 'static,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
+    S: Service<Request> + 'static,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     type Output = Result<(), DispatchError>;

@@ -36,8 +36,8 @@ pin_project_lite::pin_project! {
 impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
 where
     F: Filter,
-    S: Service<Request>,
-    S::Error: ResponseError + 'static,
+    S: Service<Request> + 'static,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
@@ -72,11 +72,10 @@ where
 impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
 where
     F: Filter,
-    S: Service<Request>,
-    S::Error: ResponseError + 'static,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
-    B: MessageBody + 'static,
+    S: Service<Request> + 'static,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
 {
     type Output = Result<(), DispatchError>;
 

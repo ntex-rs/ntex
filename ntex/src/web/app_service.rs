@@ -51,6 +51,30 @@ where
     pub(super) case_insensitive: bool,
 }
 
+impl<T, F, Err> ServiceFactory<Request> for AppFactory<T, F, Err>
+where
+    T: Transform<AppService<F::Service, Err>> + 'static,
+    T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    F: ServiceFactory<
+        WebRequest<Err>,
+        Response = WebRequest<Err>,
+        Error = Err::Container,
+        InitError = (),
+    >,
+    F::Future: 'static,
+    Err: ErrorRenderer,
+{
+    type Response = WebResponse;
+    type Error = Err::Container;
+    type InitError = ();
+    type Service = AppFactoryService<T::Service, Err>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+
+    fn new_service(&self, _: ()) -> Self::Future {
+        ServiceFactory::<Request, AppConfig>::new_service(self, AppConfig::default())
+    }
+}
+
 impl<T, F, Err> ServiceFactory<Request, AppConfig> for AppFactory<T, F, Err>
 where
     T: Transform<AppService<F::Service, Err>> + 'static,

@@ -29,8 +29,8 @@ pub struct H1Service<F, S, B, X = ExpectHandler, U = UpgradeHandler<F>> {
 
 impl<F, S, B> H1Service<F, S, B>
 where
-    S: ServiceFactory<Request>,
-    S::Error: ResponseError + 'static,
+    S: ServiceFactory<Request> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
@@ -63,16 +63,14 @@ mod openssl {
     impl<F, S, B, X, U> H1Service<SslFilter<F>, S, B, X, U>
     where
         F: Filter,
-        S: ServiceFactory<Request>,
-        S::Error: ResponseError + 'static,
+        S: ServiceFactory<Request> + 'static,
+        S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
-        S::Future: 'static,
         B: MessageBody,
-        X: ServiceFactory<Request, Response = Request>,
-        X::Error: ResponseError + 'static,
+        X: ServiceFactory<Request, Response = Request> + 'static,
+        X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        X::Future: 'static,
         U: ServiceFactory<(Request, Io<SslFilter<F>>, Codec), Response = ()> + 'static,
         U::Error: fmt::Display + Error,
         U::InitError: fmt::Debug,
@@ -111,16 +109,14 @@ mod rustls {
     impl<F, S, B, X, U> H1Service<TlsFilter<F>, S, B, X, U>
     where
         F: Filter,
-        S: ServiceFactory<Request>,
-        S::Error: ResponseError + 'static,
+        S: ServiceFactory<Request> + 'static,
+        S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
-        S::Future: 'static,
         B: MessageBody,
-        X: ServiceFactory<Request, Response = Request>,
-        X::Error: ResponseError + 'static,
+        X: ServiceFactory<Request, Response = Request> + 'static,
+        X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        X::Future: 'static,
         U: ServiceFactory<(Request, Io<TlsFilter<F>>, Codec), Response = ()> + 'static,
         U::Error: fmt::Display + Error,
         U::InitError: fmt::Debug,
@@ -149,19 +145,17 @@ mod rustls {
 impl<F, S, B, X, U> H1Service<F, S, B, X, U>
 where
     F: Filter,
-    S: ServiceFactory<Request>,
-    S::Error: ResponseError + 'static,
+    S: ServiceFactory<Request> + 'static,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
-    S::Future: 'static,
     B: MessageBody,
 {
     pub fn expect<X1>(self, expect: X1) -> H1Service<F, S, B, X1, U>
     where
-        X1: ServiceFactory<Request, Response = Request>,
-        X1::Error: ResponseError + 'static,
+        X1: ServiceFactory<Request, Response = Request> + 'static,
+        X1::Error: ResponseError,
         X1::InitError: fmt::Debug,
-        X1::Future: 'static,
     {
         H1Service {
             expect,
@@ -176,10 +170,9 @@ where
 
     pub fn upgrade<U1>(self, upgrade: Option<U1>) -> H1Service<F, S, B, X, U1>
     where
-        U1: ServiceFactory<(Request, Io<F>, Codec), Response = ()>,
-        U1::Error: fmt::Display + Error + 'static,
+        U1: ServiceFactory<(Request, Io<F>, Codec), Response = ()> + 'static,
+        U1::Error: fmt::Display + Error,
         U1::InitError: fmt::Debug,
-        U1::Future: 'static,
     {
         H1Service {
             upgrade,
@@ -203,17 +196,15 @@ where
 
 impl<F, S, B, X, U> ServiceFactory<Io<F>> for H1Service<F, S, B, X, U>
 where
-    F: Filter + 'static,
-    S: ServiceFactory<Request>,
-    S::Error: ResponseError + 'static,
+    F: Filter,
+    S: ServiceFactory<Request> + 'static,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
-    S::Future: 'static,
     B: MessageBody,
-    X: ServiceFactory<Request, Response = Request>,
-    X::Error: ResponseError + 'static,
+    X: ServiceFactory<Request, Response = Request> + 'static,
+    X::Error: ResponseError,
     X::InitError: fmt::Debug,
-    X::Future: 'static,
     U: ServiceFactory<(Request, Io<F>, Codec), Response = ()> + 'static,
     U::Error: fmt::Display + Error,
     U::InitError: fmt::Debug,
@@ -267,13 +258,13 @@ pub struct H1ServiceHandler<F, S, B, X, U> {
 
 impl<F, S, B, X, U> Service<Io<F>> for H1ServiceHandler<F, S, B, X, U>
 where
-    F: Filter + 'static,
-    S: Service<Request>,
-    S::Error: ResponseError + 'static,
+    F: Filter,
+    S: Service<Request> + 'static,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: Service<Request, Response = Request>,
-    X::Error: ResponseError + 'static,
+    X: Service<Request, Response = Request> + 'static,
+    X::Error: ResponseError,
     U: Service<(Request, Io<F>, Codec), Response = ()> + 'static,
     U::Error: fmt::Display + Error,
 {

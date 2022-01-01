@@ -1,6 +1,6 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{error::Error, fmt, future::Future, io, marker, pin::Pin, rc::Rc};
+use std::{error::Error, future::Future, io, marker, pin::Pin, rc::Rc};
 
 use crate::io::{Filter, Io, IoRef, RecvError};
 use crate::{service::Service, util::ready, util::Bytes};
@@ -78,15 +78,14 @@ struct DispatcherInner<F, S, B, X, U> {
 
 impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
 where
-    F: Filter + 'static,
+    F: Filter,
     S: Service<Request>,
-    S::Error: ResponseError + 'static,
+    S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     X: Service<Request, Response = Request>,
     X::Error: ResponseError,
-    U: Service<(Request, Io<F>, Codec), Response = ()> + 'static,
-    U::Error: Error + fmt::Display,
+    U: Service<(Request, Io<F>, Codec), Response = ()>,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(io: Io<F>, config: Rc<DispatcherConfig<S, X, U>>) -> Self {
@@ -129,7 +128,6 @@ where
     X: Service<Request, Response = Request>,
     X::Error: ResponseError + 'static,
     U: Service<(Request, Io<F>, Codec), Response = ()> + 'static,
-    U::Error: Error + fmt::Display,
 {
     type Output = Result<(), DispatchError>;
 

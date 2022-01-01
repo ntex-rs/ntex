@@ -449,35 +449,6 @@ where
     F::Future: 'static,
     Err: ErrorRenderer,
 {
-    /// Construct service factory with default `AppConfig`, suitable for `http::HttpService`.
-    ///
-    /// ```rust,no_run
-    /// use ntex::{web, http, server};
-    ///
-    /// #[ntex::main]
-    /// async fn main() -> std::io::Result<()> {
-    ///     server::build().bind("http", "127.0.0.1:0", |_|
-    ///         http::HttpService::build().finish(
-    ///             web::App::new()
-    ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))
-    ///                 .finish()
-    ///         )
-    ///     )?
-    ///     .run()
-    ///     .await
-    /// }
-    /// ```
-    pub fn finish(
-        self,
-    ) -> impl ServiceFactory<
-        Request,
-        Response = WebResponse,
-        Error = Err::Container,
-        InitError = (),
-    > {
-        map_config(self.into_factory(), move |_| Default::default())
-    }
-
     /// Construct service factory suitable for `http::HttpService`.
     ///
     /// ```rust,no_run
@@ -505,12 +476,51 @@ where
         Error = Err::Container,
         InitError = (),
     > {
-        map_config(self.into_factory(), move |_| cfg.clone())
+        let app = AppFactory {
+            filter: self.filter,
+            middleware: Rc::new(self.middleware),
+            data: Rc::new(self.data),
+            data_factories: Rc::new(self.data_factories),
+            services: Rc::new(RefCell::new(self.services)),
+            external: RefCell::new(self.external),
+            default: self.default,
+            extensions: RefCell::new(Some(self.extensions)),
+            case_insensitive: self.case_insensitive,
+        };
+        map_config(app, move |_| cfg.clone())
     }
 }
 
 impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, AppConfig>
     for App<M, F, Err>
+where
+    M: Transform<AppService<F::Service, Err>> + 'static,
+    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    F: ServiceFactory<
+        WebRequest<Err>,
+        Response = WebRequest<Err>,
+        Error = Err::Container,
+        InitError = (),
+    >,
+    F::Future: 'static,
+    Err: ErrorRenderer,
+{
+    fn into_factory(self) -> AppFactory<M, F, Err> {
+        AppFactory {
+            filter: self.filter,
+            middleware: Rc::new(self.middleware),
+            data: Rc::new(self.data),
+            data_factories: Rc::new(self.data_factories),
+            services: Rc::new(RefCell::new(self.services)),
+            external: RefCell::new(self.external),
+            default: self.default,
+            extensions: RefCell::new(Some(self.extensions)),
+            case_insensitive: self.case_insensitive,
+        }
+    }
+}
+
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, ()> for App<M, F, Err>
 where
     M: Transform<AppService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,

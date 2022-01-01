@@ -29,13 +29,11 @@ pub struct HttpService<F, S, B, X = h1::ExpectHandler, U = h1::UpgradeHandler<F>
 
 impl<F, S, B> HttpService<F, S, B>
 where
-    S: ServiceFactory<Request>,
-    S::Error: ResponseError + 'static,
+    S: ServiceFactory<Request> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>> + 'static,
-    S::Future: 'static,
-    <S::Service as Service<Request>>::Future: 'static,
-    B: MessageBody + 'static,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
 {
     /// Create builder for `HttpService` instance.
     pub fn build() -> HttpServiceBuilder<F, S> {
@@ -46,13 +44,11 @@ where
 impl<F, S, B> HttpService<F, S, B>
 where
     F: Filter,
-    S: ServiceFactory<Request>,
-    S::Error: ResponseError + 'static,
+    S: ServiceFactory<Request> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>> + 'static,
-    S::Future: 'static,
-    <S::Service as Service<Request>>::Future: 'static,
-    B: MessageBody + 'static,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
 {
     /// Create new `HttpService` instance.
     pub fn new<U: IntoServiceFactory<S, Request>>(service: U) -> Self {
@@ -92,12 +88,10 @@ where
 impl<F, S, B, X, U> HttpService<F, S, B, X, U>
 where
     F: Filter,
-    S: ServiceFactory<Request>,
-    S::Error: ResponseError + 'static,
+    S: ServiceFactory<Request> + 'static,
+    S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>> + 'static,
-    S::Future: 'static,
-    <S::Service as Service<Request>>::Future: 'static,
+    S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     /// Provide service for `EXPECT: 100-Continue` support.
@@ -164,12 +158,10 @@ mod openssl {
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
-        S::Future: 'static,
-        B: MessageBody + 'static,
+        B: MessageBody,
         X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        X::Future: 'static,
         U: ServiceFactory<(Request, Io<SslFilter<F>>, h1::Codec), Response = ()> + 'static,
         U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
@@ -210,7 +202,7 @@ mod rustls {
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
-        B: MessageBody + 'static,
+        B: MessageBody,
         X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
@@ -244,12 +236,12 @@ mod rustls {
 
 impl<F, S, B, X, U> ServiceFactory<Io<F>> for HttpService<F, S, B, X, U>
 where
-    F: Filter + 'static,
+    F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
-    B: MessageBody + 'static,
+    B: MessageBody,
     X: ServiceFactory<Request, Response = Request> + 'static,
     X::Error: ResponseError,
     X::InitError: fmt::Debug,
@@ -307,14 +299,13 @@ pub struct HttpServiceHandler<F, S, B, X, U> {
 
 impl<F, S, B, X, U> Service<Io<F>> for HttpServiceHandler<F, S, B, X, U>
 where
-    F: Filter + 'static,
-    S: Service<Request>,
-    S::Error: ResponseError + 'static,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
-    B: MessageBody + 'static,
-    X: Service<Request, Response = Request>,
-    X::Error: ResponseError + 'static,
+    F: Filter,
+    S: Service<Request> + 'static,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
+    X: Service<Request, Response = Request> + 'static,
+    X::Error: ResponseError,
     U: Service<(Request, Io<F>, h1::Codec), Response = ()> + 'static,
     U::Error: fmt::Display + error::Error,
 {
@@ -410,14 +401,11 @@ pin_project_lite::pin_project! {
     pub struct HttpServiceHandlerResponse<F, S, B, X, U>
     where
         F: Filter,
-        F: 'static,
         S: Service<Request>,
+        S: 'static,
         S::Error: ResponseError,
-        S::Error: 'static,
         S::Response: Into<Response<B>>,
-        S::Response: 'static,
         B: MessageBody,
-        B: 'static,
         X: Service<Request, Response = Request>,
         X::Error: ResponseError,
         X::Error: 'static,
@@ -435,11 +423,10 @@ pin_project_lite::pin_project! {
     #[project = StateProject]
     enum ResponseState<F, S, B, X, U>
     where
-        S: Service<Request>,
-        S::Error: ResponseError,
-        S::Error: 'static,
         F: Filter,
-        F: 'static,
+        S: Service<Request>,
+        S: 'static,
+        S::Error: ResponseError,
         B: MessageBody,
         X: Service<Request, Response = Request>,
         X::Error: ResponseError,
@@ -463,14 +450,13 @@ pin_project_lite::pin_project! {
 
 impl<F, S, B, X, U> future::Future for HttpServiceHandlerResponse<F, S, B, X, U>
 where
-    F: Filter + 'static,
-    S: Service<Request>,
-    S::Error: ResponseError + 'static,
-    S::Future: 'static,
-    S::Response: Into<Response<B>> + 'static,
+    F: Filter,
+    S: Service<Request> + 'static,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: Service<Request, Response = Request>,
-    X::Error: ResponseError + 'static,
+    X: Service<Request, Response = Request> + 'static,
+    X::Error: ResponseError,
     U: Service<(Request, Io<F>, h1::Codec), Response = ()> + 'static,
     U::Error: fmt::Display + error::Error,
 {

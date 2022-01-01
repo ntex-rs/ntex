@@ -20,7 +20,7 @@ impl BodySize {
 }
 
 /// Type that provides this trait can be streamed to a peer.
-pub trait MessageBody {
+pub trait MessageBody: 'static {
     fn size(&self) -> BodySize;
 
     fn poll_next_chunk(
@@ -392,7 +392,7 @@ where
 
 impl<S, E> MessageBody for BodyStream<S, E>
 where
-    S: Stream<Item = Result<Bytes, E>> + Unpin,
+    S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
     E: Error + 'static,
 {
     fn size(&self) -> BodySize {
@@ -435,7 +435,7 @@ where
 
 impl<S> MessageBody for BoxedBodyStream<S>
 where
-    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
+    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin + 'static,
 {
     fn size(&self) -> BodySize {
         BodySize::Stream
@@ -478,7 +478,7 @@ where
 
 impl<S> MessageBody for SizedStream<S>
 where
-    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
+    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin + 'static,
 {
     fn size(&self) -> BodySize {
         BodySize::Sized(self.size)
