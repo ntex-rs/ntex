@@ -209,8 +209,11 @@ impl Future for WriteTask {
                             // flush write buffer
                             match flush_io(&mut this.io.0, &this.state, cx) {
                                 Poll::Ready(true) => {
-                                    if let Err(_) =
-                                        this.io.0.shutdown(std::net::Shutdown::Write)
+                                    if this
+                                        .io
+                                        .0
+                                        .shutdown(std::net::Shutdown::Write)
+                                        .is_err()
                                     {
                                         this.state.close(None);
                                         return Poll::Ready(());
@@ -379,7 +382,7 @@ mod unixstream {
     impl IoStream for UnixStream {
         fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
             async_std::task::spawn_local(ReadTask::new(self.clone(), read));
-            async_std::task::spawn_local(WriteTask::new(self.clone(), write));
+            async_std::task::spawn_local(WriteTask::new(self, write));
             None
         }
     }
@@ -553,8 +556,11 @@ mod unixstream {
                                 // flush write buffer
                                 match flush_io(&mut this.io.0, &this.state, cx) {
                                     Poll::Ready(true) => {
-                                        if let Err(_) =
-                                            this.io.0.shutdown(std::net::Shutdown::Write)
+                                        if this
+                                            .io
+                                            .0
+                                            .shutdown(std::net::Shutdown::Write)
+                                            .is_err()
                                         {
                                             this.state.close(None);
                                             return Poll::Ready(());

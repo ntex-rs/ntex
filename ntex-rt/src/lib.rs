@@ -12,7 +12,7 @@ pub use self::system::System;
 #[cfg(feature = "tokio")]
 mod tokio {
     use std::future::Future;
-    pub use tokio::task::{spawn_blocking, JoinError, JoinHandle};
+    pub use tok_io::task::{spawn_blocking, JoinError, JoinHandle};
 
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
