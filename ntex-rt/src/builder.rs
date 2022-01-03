@@ -186,8 +186,8 @@ mod tests {
         thread::spawn(move || {
             let runner = crate::System::build().stop_on_panic(true).finish();
 
-            tx.send(System::current()).unwrap();
-            let _ = runner.run();
+            tx.send(runner.system()).unwrap();
+            let _ = runner.run_until_stop();
         });
         let s = System::new("test");
 

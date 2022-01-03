@@ -32,5 +32,5 @@ futures-core = "0.3"
 log = "0.4"
 pin-project-lite = "0.2"
 
-tok-io = { version = "1", package = "tokio", default-features = false, features = ["rt"], optional = true }
+tok-io = { version = "1", package = "tokio", default-features = false, features = ["rt", "net"], optional = true }
 async_std = { version = "1", package = "async-std", optional = true }
