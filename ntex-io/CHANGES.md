@@ -4,6 +4,8 @@
 
 * Move tokio support to separate crate
 
+* Move async-std support to separate crate
+
 ## [0.1.0] - 2021-12-30
 
 * Unify keep-alive timers

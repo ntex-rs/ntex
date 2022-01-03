@@ -4,6 +4,8 @@
 
 * Disable default runtime selection
 
+* Move ntex::util services to ntex-util
+
 ## [0.5.4] - 2022-01-02
 
 * http1: Unregister keep-alive timer after request is received
