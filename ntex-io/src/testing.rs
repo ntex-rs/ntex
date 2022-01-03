@@ -351,11 +351,11 @@ impl IoStream for IoTest {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(self);
 
-        crate::rt::spawn(ReadTask {
+        ntex_util::spawn(ReadTask {
             io: io.clone(),
             state: read,
         });
-        crate::rt::spawn(WriteTask {
+        ntex_util::spawn(WriteTask {
             io: io.clone(),
             state: write,
             st: IoWriteState::Processing(None),
@@ -641,110 +641,6 @@ pub(super) fn flush_io(
     } else {
         let _ = state.release_write_buf(buf);
         Poll::Ready(true)
-    }
-}
-
-#[cfg(any(feature = "tokio", feature = "tokio-traits"))]
-mod tokio_impl {
-    use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
-
-    use super::*;
-
-    impl AsyncRead for IoTest {
-        fn poll_read(
-            self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &mut ReadBuf<'_>,
-        ) -> Poll<io::Result<()>> {
-            let guard = self.local.lock().unwrap();
-            let mut ch = guard.borrow_mut();
-            *ch.waker.0.lock().unwrap().borrow_mut() = Some(cx.waker().clone());
-
-            if !ch.buf.is_empty() {
-                let size = std::cmp::min(ch.buf.len(), buf.remaining());
-                let b = ch.buf.split_to(size);
-                buf.put_slice(&b);
-                return Poll::Ready(Ok(()));
-            }
-
-            match mem::take(&mut ch.read) {
-                IoTestState::Ok => Poll::Pending,
-                IoTestState::Close => {
-                    ch.read = IoTestState::Close;
-                    Poll::Ready(Ok(()))
-                }
-                IoTestState::Pending => Poll::Pending,
-                IoTestState::Err(e) => Poll::Ready(Err(e)),
-            }
-        }
-    }
-
-    impl AsyncWrite for IoTest {
-        fn poll_write(
-            self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &[u8],
-        ) -> Poll<io::Result<usize>> {
-            let guard = self.remote.lock().unwrap();
-            let mut ch = guard.borrow_mut();
-
-            match mem::take(&mut ch.write) {
-                IoTestState::Ok => {
-                    let cap = cmp::min(buf.len(), ch.buf_cap);
-                    if cap > 0 {
-                        ch.buf.extend(&buf[..cap]);
-                        ch.buf_cap -= cap;
-                        ch.flags.remove(IoTestFlags::FLUSHED);
-                        ch.waker.wake();
-                        Poll::Ready(Ok(cap))
-                    } else {
-                        *self
-                            .local
-                            .lock()
-                            .unwrap()
-                            .borrow_mut()
-                            .waker
-                            .0
-                            .lock()
-                            .unwrap()
-                            .borrow_mut() = Some(cx.waker().clone());
-                        Poll::Pending
-                    }
-                }
-                IoTestState::Close => Poll::Ready(Ok(0)),
-                IoTestState::Pending => {
-                    *self
-                        .local
-                        .lock()
-                        .unwrap()
-                        .borrow_mut()
-                        .waker
-                        .0
-                        .lock()
-                        .unwrap()
-                        .borrow_mut() = Some(cx.waker().clone());
-                    Poll::Pending
-                }
-                IoTestState::Err(e) => Poll::Ready(Err(e)),
-            }
-        }
-
-        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn poll_shutdown(
-            self: Pin<&mut Self>,
-            _: &mut Context<'_>,
-        ) -> Poll<io::Result<()>> {
-            self.local
-                .lock()
-                .unwrap()
-                .borrow_mut()
-                .flags
-                .insert(IoTestFlags::CLOSED);
-            Poll::Ready(Ok(()))
-        }
     }
 }
 

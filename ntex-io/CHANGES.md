@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.1] - 2022-01-03
+
+* Move tokio support to separate crate
+
 ## [0.1.0] - 2021-12-30
 
 * Unify keep-alive timers

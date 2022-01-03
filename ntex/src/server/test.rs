@@ -51,17 +51,15 @@ where
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
-        sys.exec(|| {
+        tx.send((sys.system(), local_addr)).unwrap();
+        sys.run(|| {
             Server::build()
                 .listen("test", tcp, move |_| factory())?
                 .workers(1)
                 .disable_signals()
                 .run();
-            Ok::<_, io::Error>(())
-        })?;
-
-        tx.send((System::current(), local_addr)).unwrap();
-        sys.run()
+            Ok(())
+        })
     });
 
     let (system, addr) = rx.recv().unwrap();
@@ -80,12 +78,11 @@ where
     thread::spawn(move || {
         let sys = System::new("ntex-test-server");
 
-        sys.exec(|| {
+        tx.send(sys.system()).unwrap();
+        sys.run(|| {
             factory(Server::build()).workers(1).disable_signals().run();
-        });
-
-        tx.send(System::current()).unwrap();
-        sys.run()
+            Ok(())
+        })
     });
     let system = rx.recv().unwrap();
 

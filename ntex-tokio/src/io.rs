@@ -1,223 +1,31 @@
-#![allow(dead_code)]
-use std::future::Future;
 use std::task::{Context, Poll};
-use std::{any, cell::RefCell, io, net, net::SocketAddr, pin::Pin, rc::Rc};
+use std::{any, cell::RefCell, cmp, future::Future, io, mem, pin::Pin, rc::Rc};
 
-use async_oneshot as oneshot;
-use async_std::io::{Read, Write};
-use ntex_bytes::{Buf, BufMut, BytesMut, PoolRef};
+use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_io::{
-    types, Handle, Io, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
+    types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, ReadStatus, WriteContext,
+    WriteStatus,
 };
-use ntex_util::{future::lazy, ready, time::sleep, time::Sleep};
+use ntex_util::{ready, time::sleep, time::Sleep};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
 
-use crate::{Runtime, Signal};
-
-#[derive(Debug, Copy, Clone, derive_more::Display)]
-pub struct JoinError;
-
-impl std::error::Error for JoinError {}
-
-#[derive(Clone)]
-struct TcpStream(async_std::net::TcpStream);
-
-#[cfg(unix)]
-#[derive(Clone)]
-struct UnixStream(async_std::os::unix::net::UnixStream);
-
-/// Create new single-threaded async-std runtime.
-pub fn create_runtime() -> Box<dyn Runtime> {
-    Box::new(AsyncStdRuntime::new().unwrap())
-}
-
-/// Opens a TCP connection to a remote host.
-pub async fn tcp_connect(addr: SocketAddr) -> Result<Io, io::Error> {
-    let sock = async_std::net::TcpStream::connect(addr).await?;
-    sock.set_nodelay(true)?;
-    Ok(Io::new(TcpStream(sock)))
-}
-
-/// Opens a TCP connection to a remote host and use specified memory pool.
-pub async fn tcp_connect_in(addr: SocketAddr, pool: PoolRef) -> Result<Io, io::Error> {
-    let sock = async_std::net::TcpStream::connect(addr).await?;
-    sock.set_nodelay(true)?;
-    Ok(Io::with_memory_pool(TcpStream(sock), pool))
-}
-
-#[cfg(unix)]
-/// Opens a unix stream connection.
-pub async fn unix_connect<P>(addr: P) -> Result<Io, io::Error>
-where
-    P: AsRef<async_std::path::Path>,
-{
-    let sock = async_std::os::unix::net::UnixStream::connect(addr).await?;
-    Ok(Io::new(UnixStream(sock)))
-}
-
-#[cfg(unix)]
-/// Opens a unix stream connection and specified memory pool.
-pub async fn unix_connect_in<P>(addr: P, pool: PoolRef) -> Result<Io, io::Error>
-where
-    P: AsRef<async_std::path::Path>,
-{
-    let sock = async_std::os::unix::net::UnixStream::connect(addr).await?;
-    Ok(Io::with_memory_pool(UnixStream(sock), pool))
-}
-
-/// Convert std TcpStream to async-std's TcpStream
-pub fn from_tcp_stream(stream: net::TcpStream) -> Result<Io, io::Error> {
-    stream.set_nonblocking(true)?;
-    stream.set_nodelay(true)?;
-    Ok(Io::new(TcpStream(async_std::net::TcpStream::from(stream))))
-}
-
-#[cfg(unix)]
-/// Convert std UnixStream to async-std's UnixStream
-pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> Result<Io, io::Error> {
-    stream.set_nonblocking(true)?;
-    Ok(Io::new(UnixStream(From::from(stream))))
-}
-
-/// Spawn a future on the current thread. This does not create a new Arbiter
-/// or Arbiter address, it is simply a helper for spawning futures on the current
-/// thread.
-///
-/// # Panics
-///
-/// This function panics if ntex system is not running.
-#[inline]
-pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
-where
-    F: Future + 'static,
-{
-    JoinHandle {
-        fut: async_std::task::spawn_local(f),
-    }
-}
-
-/// Executes a future on the current thread. This does not create a new Arbiter
-/// or Arbiter address, it is simply a helper for executing futures on the current
-/// thread.
-///
-/// # Panics
-///
-/// This function panics if ntex system is not running.
-#[inline]
-pub fn spawn_fn<F, R>(f: F) -> JoinHandle<R::Output>
-where
-    F: FnOnce() -> R + 'static,
-    R: Future + 'static,
-{
-    spawn(async move {
-        let r = lazy(|_| f()).await;
-        r.await
-    })
-}
-
-/// Spawns a blocking task.
-///
-/// The task will be spawned onto a thread pool specifically dedicated
-/// to blocking tasks. This is useful to prevent long-running synchronous
-/// operations from blocking the main futures executor.
-pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    JoinHandle {
-        fut: async_std::task::spawn_blocking(f),
-    }
-}
-
-pub struct JoinHandle<T> {
-    fut: async_std::task::JoinHandle<T>,
-}
-
-impl<T> Future for JoinHandle<T> {
-    type Output = Result<T, JoinError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(Ok(ready!(Pin::new(&mut self.fut).poll(cx))))
-    }
-}
-
-thread_local! {
-    static SRUN: RefCell<bool> = RefCell::new(false);
-    static SHANDLERS: Rc<RefCell<Vec<oneshot::Sender<Signal>>>> = Default::default();
-}
-
-/// Register signal handler.
-///
-/// Signals are handled by oneshots, you have to re-register
-/// after each signal.
-pub fn signal() -> Option<oneshot::Receiver<Signal>> {
-    if !SRUN.with(|v| *v.borrow()) {
-        spawn(Signals::new());
-    }
-    SHANDLERS.with(|handlers| {
-        let (tx, rx) = oneshot::oneshot();
-        handlers.borrow_mut().push(tx);
-        Some(rx)
-    })
-}
-
-/// Single-threaded async-std runtime.
-#[derive(Debug)]
-struct AsyncStdRuntime {}
-
-impl AsyncStdRuntime {
-    /// Returns a new runtime initialized with default configuration values.
-    fn new() -> io::Result<Self> {
-        Ok(Self {})
-    }
-}
-
-impl Runtime for AsyncStdRuntime {
-    /// Spawn a future onto the single-threaded runtime.
-    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()>>>) {
-        async_std::task::spawn_local(future);
-    }
-
-    /// Runs the provided future, blocking the current thread until the future
-    /// completes.
-    fn block_on(&self, f: Pin<Box<dyn Future<Output = ()>>>) {
-        // set ntex-util spawn fn
-        ntex_util::set_spawn_fn(|fut| {
-            async_std::task::spawn_local(fut);
-        });
-
-        async_std::task::block_on(f);
-    }
-}
-
-struct Signals {}
-
-impl Signals {
-    pub(super) fn new() -> Signals {
-        Self {}
-    }
-}
-
-impl Future for Signals {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(())
-    }
-}
-
-impl IoStream for TcpStream {
+impl IoStream for crate::TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        spawn(ReadTask::new(self.clone(), read));
-        spawn(WriteTask::new(self.clone(), write));
-        Some(Box::new(self))
+        let io = Rc::new(RefCell::new(self.0));
+
+        tokio::task::spawn_local(ReadTask::new(io.clone(), read));
+        tokio::task::spawn_local(WriteTask::new(io.clone(), write));
+        Some(Box::new(HandleWrapper(io)))
     }
 }
 
-impl Handle for TcpStream {
+struct HandleWrapper(Rc<RefCell<TcpStream>>);
+
+impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            if let Ok(addr) = self.0.peer_addr() {
+            if let Ok(addr) = self.0.borrow().peer_addr() {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
         }
@@ -227,13 +35,13 @@ impl Handle for TcpStream {
 
 /// Read io task
 struct ReadTask {
-    io: TcpStream,
+    io: Rc<RefCell<TcpStream>>,
     state: ReadContext,
 }
 
 impl ReadTask {
     /// Create new read io task
-    fn new(io: TcpStream, state: ReadContext) -> Self {
+    fn new(io: Rc<RefCell<TcpStream>>, state: ReadContext) -> Self {
         Self { io, state }
     }
 }
@@ -241,15 +49,15 @@ impl ReadTask {
 impl Future for ReadTask {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_ref();
 
         loop {
             match ready!(this.state.poll_ready(cx)) {
                 ReadStatus::Ready => {
                     let pool = this.state.memory_pool();
-                    let mut buf = this.state.get_read_buf();
-                    let io = &mut this.io;
+                    let mut io = this.io.borrow_mut();
+                    let mut buf = self.state.get_read_buf();
                     let (hw, lw) = pool.read_params().unpack();
 
                     // read data from socket
@@ -263,14 +71,14 @@ impl Future for ReadTask {
                             buf.reserve(hw - remaining);
                         }
 
-                        match poll_read_buf(Pin::new(&mut io.0), cx, &mut buf) {
+                        match poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
                             Poll::Pending => {
                                 pending = true;
                                 break;
                             }
                             Poll::Ready(Ok(n)) => {
                                 if n == 0 {
-                                    log::trace!("async-std stream is disconnected");
+                                    log::trace!("tokio stream is disconnected");
                                     close = true;
                                 } else {
                                     new_bytes += n;
@@ -321,19 +129,20 @@ enum IoWriteState {
 #[derive(Debug)]
 enum Shutdown {
     None,
+    Flushed,
     Stopping(u16),
 }
 
 /// Write io task
 struct WriteTask {
     st: IoWriteState,
-    io: TcpStream,
+    io: Rc<RefCell<TcpStream>>,
     state: WriteContext,
 }
 
 impl WriteTask {
     /// Create new write io task
-    fn new(io: TcpStream, state: WriteContext) -> Self {
+    fn new(io: Rc<RefCell<TcpStream>>, state: WriteContext) -> Self {
         Self {
             io,
             state,
@@ -363,7 +172,7 @@ impl Future for WriteTask {
                         }
 
                         // flush framed instance
-                        match flush_io(&mut this.io.0, &this.state, cx) {
+                        match flush_io(&mut *this.io.borrow_mut(), &this.state, cx) {
                             Poll::Pending | Poll::Ready(true) => Poll::Pending,
                             Poll::Ready(false) => Poll::Ready(()),
                         }
@@ -390,7 +199,7 @@ impl Future for WriteTask {
                     Poll::Ready(WriteStatus::Terminate) => {
                         log::trace!("write task is instructed to terminate");
 
-                        let _ = Pin::new(&mut this.io.0).poll_close(cx);
+                        let _ = Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx);
                         this.state.close(None);
                         Poll::Ready(())
                     }
@@ -404,15 +213,9 @@ impl Future for WriteTask {
                     match st {
                         Shutdown::None => {
                             // flush write buffer
-                            match flush_io(&mut this.io.0, &this.state, cx) {
+                            match flush_io(&mut *this.io.borrow_mut(), &this.state, cx) {
                                 Poll::Ready(true) => {
-                                    if let Err(_) =
-                                        this.io.0.shutdown(std::net::Shutdown::Write)
-                                    {
-                                        this.state.close(None);
-                                        return Poll::Ready(());
-                                    }
-                                    *st = Shutdown::Stopping(0);
+                                    *st = Shutdown::Flushed;
                                     continue;
                                 }
                                 Poll::Ready(false) => {
@@ -425,24 +228,39 @@ impl Future for WriteTask {
                                 _ => (),
                             }
                         }
+                        Shutdown::Flushed => {
+                            // shutdown WRITE side
+                            match Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx) {
+                                Poll::Ready(Ok(_)) => {
+                                    *st = Shutdown::Stopping(0);
+                                    continue;
+                                }
+                                Poll::Ready(Err(e)) => {
+                                    log::trace!(
+                                        "write task is closed with err during shutdown"
+                                    );
+                                    this.state.close(Some(e));
+                                    return Poll::Ready(());
+                                }
+                                _ => (),
+                            }
+                        }
                         Shutdown::Stopping(ref mut count) => {
                             // read until 0 or err
                             let mut buf = [0u8; 512];
-                            let io = &mut this.io;
+                            let mut io = this.io.borrow_mut();
                             loop {
-                                match Pin::new(&mut io.0).poll_read(cx, &mut buf) {
-                                    Poll::Ready(Err(e)) => {
-                                        log::trace!("write task is stopped");
-                                        this.state.close(Some(e));
-                                        return Poll::Ready(());
-                                    }
-                                    Poll::Ready(Ok(0)) => {
-                                        log::trace!("async-std socket is disconnected");
+                                let mut read_buf = ReadBuf::new(&mut buf);
+                                match Pin::new(&mut *io).poll_read(cx, &mut read_buf) {
+                                    Poll::Ready(Err(_)) | Poll::Ready(Ok(_))
+                                        if read_buf.filled().is_empty() =>
+                                    {
                                         this.state.close(None);
+                                        log::trace!("write task is stopped");
                                         return Poll::Ready(());
                                     }
-                                    Poll::Ready(Ok(n)) => {
-                                        *count += n as u16;
+                                    Poll::Pending => {
+                                        *count += read_buf.filled().len() as u16;
                                         if *count > 4096 {
                                             log::trace!(
                                                 "write task is stopped, too much input"
@@ -450,8 +268,9 @@ impl Future for WriteTask {
                                             this.state.close(None);
                                             return Poll::Ready(());
                                         }
+                                        break;
                                     }
-                                    Poll::Pending => break,
+                                    _ => (),
                                 }
                             }
                         }
@@ -463,7 +282,6 @@ impl Future for WriteTask {
                     }
                     log::trace!("write task is stopped after delay");
                     this.state.close(None);
-                    let _ = Pin::new(&mut this.io.0).poll_close(cx);
                     return Poll::Ready(());
                 }
             }
@@ -472,7 +290,7 @@ impl Future for WriteTask {
 }
 
 /// Flush write buffer to underlying I/O stream.
-pub(super) fn flush_io<T: Read + Write + Unpin>(
+pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
     io: &mut T,
     state: &WriteContext,
     cx: &mut Context<'_>,
@@ -542,53 +360,104 @@ pub(super) fn flush_io<T: Read + Write + Unpin>(
                 Poll::Ready(false)
             }
         }
+    } else if let Err(e) = state.release_write_buf(buf) {
+        state.close(Some(e));
+        Poll::Ready(false)
     } else {
         Poll::Ready(true)
     }
 }
 
-pub fn poll_read_buf<T: Read>(
-    io: Pin<&mut T>,
-    cx: &mut Context<'_>,
-    buf: &mut BytesMut,
-) -> Poll<io::Result<usize>> {
-    if !buf.has_remaining_mut() {
-        return Poll::Ready(Ok(0));
+pub struct TokioIoBoxed(IoBoxed);
+
+impl std::ops::Deref for TokioIoBoxed {
+    type Target = IoBoxed;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<IoBoxed> for TokioIoBoxed {
+    fn from(io: IoBoxed) -> TokioIoBoxed {
+        TokioIoBoxed(io)
+    }
+}
+
+impl<F: Filter> From<Io<F>> for TokioIoBoxed {
+    fn from(io: Io<F>) -> TokioIoBoxed {
+        TokioIoBoxed(IoBoxed::from(io))
+    }
+}
+
+impl AsyncRead for TokioIoBoxed {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let len = self.0.with_read_buf(|src| {
+            let len = cmp::min(src.len(), buf.remaining());
+            buf.put_slice(&src.split_to(len));
+            len
+        });
+
+        if len == 0 {
+            match ready!(self.0.poll_read_ready(cx)) {
+                Ok(Some(())) => Poll::Pending,
+                Err(e) => Poll::Ready(Err(e)),
+                Ok(None) => Poll::Ready(Ok(())),
+            }
+        } else {
+            Poll::Ready(Ok(()))
+        }
+    }
+}
+
+impl AsyncWrite for TokioIoBoxed {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Poll::Ready(self.0.write(buf).map(|_| buf.len()))
     }
 
-    let dst = unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [u8]) };
-    let n = ready!(io.poll_read(cx, dst))?;
-
-    // Safety: This is guaranteed to be the number of initialized (and read)
-    // bytes due to the invariants provided by Read::poll_read() api
-    unsafe {
-        buf.advance_mut(n);
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        (*self.as_ref()).0.poll_flush(cx, false)
     }
 
-    Poll::Ready(Ok(n))
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        (*self.as_ref()).0.poll_shutdown(cx)
+    }
 }
 
 #[cfg(unix)]
 mod unixstream {
+    use tokio::net::UnixStream;
+
     use super::*;
 
-    impl IoStream for UnixStream {
+    impl IoStream for crate::UnixStream {
         fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-            spawn(ReadTask::new(self.clone(), read));
-            spawn(WriteTask::new(self.clone(), write));
+            let io = Rc::new(RefCell::new(self.0));
+
+            tokio::task::spawn_local(ReadTask::new(io.clone(), read));
+            tokio::task::spawn_local(WriteTask::new(io, write));
             None
         }
     }
 
     /// Read io task
     struct ReadTask {
-        io: UnixStream,
+        io: Rc<RefCell<UnixStream>>,
         state: ReadContext,
     }
 
     impl ReadTask {
         /// Create new read io task
-        fn new(io: UnixStream, state: ReadContext) -> Self {
+        fn new(io: Rc<RefCell<UnixStream>>, state: ReadContext) -> Self {
             Self { io, state }
         }
     }
@@ -596,15 +465,15 @@ mod unixstream {
     impl Future for ReadTask {
         type Output = ();
 
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let mut this = self.as_mut();
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let this = self.as_ref();
 
             loop {
                 match ready!(this.state.poll_ready(cx)) {
                     ReadStatus::Ready => {
                         let pool = this.state.memory_pool();
-                        let mut buf = this.state.get_read_buf();
-                        let io = &mut this.io;
+                        let mut io = this.io.borrow_mut();
+                        let mut buf = self.state.get_read_buf();
                         let (hw, lw) = pool.read_params().unpack();
 
                         // read data from socket
@@ -618,14 +487,14 @@ mod unixstream {
                                 buf.reserve(hw - remaining);
                             }
 
-                            match poll_read_buf(Pin::new(&mut io.0), cx, &mut buf) {
+                            match poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
                                 Poll::Pending => {
                                     pending = true;
                                     break;
                                 }
                                 Poll::Ready(Ok(n)) => {
                                     if n == 0 {
-                                        log::trace!("async-std stream is disconnected");
+                                        log::trace!("unix stream is disconnected");
                                         close = true;
                                     } else {
                                         new_bytes += n;
@@ -670,13 +539,13 @@ mod unixstream {
     /// Write io task
     struct WriteTask {
         st: IoWriteState,
-        io: UnixStream,
+        io: Rc<RefCell<UnixStream>>,
         state: WriteContext,
     }
 
     impl WriteTask {
         /// Create new write io task
-        fn new(io: UnixStream, state: WriteContext) -> Self {
+        fn new(io: Rc<RefCell<UnixStream>>, state: WriteContext) -> Self {
             Self {
                 io,
                 state,
@@ -706,13 +575,12 @@ mod unixstream {
                             }
 
                             // flush framed instance
-                            match flush_io(&mut this.io.0, &this.state, cx) {
+                            match flush_io(&mut *this.io.borrow_mut(), &this.state, cx) {
                                 Poll::Pending | Poll::Ready(true) => Poll::Pending,
                                 Poll::Ready(false) => Poll::Ready(()),
                             }
                         }
                         Poll::Ready(WriteStatus::Timeout(time)) => {
-                            log::trace!("initiate timeout delay for {:?}", time);
                             if delay.is_none() {
                                 *delay = Some(sleep(time));
                             }
@@ -733,7 +601,7 @@ mod unixstream {
                         Poll::Ready(WriteStatus::Terminate) => {
                             log::trace!("write task is instructed to terminate");
 
-                            let _ = Pin::new(&mut this.io.0).poll_close(cx);
+                            let _ = Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx);
                             this.state.close(None);
                             Poll::Ready(())
                         }
@@ -747,15 +615,10 @@ mod unixstream {
                         match st {
                             Shutdown::None => {
                                 // flush write buffer
-                                match flush_io(&mut this.io.0, &this.state, cx) {
+                                match flush_io(&mut *this.io.borrow_mut(), &this.state, cx)
+                                {
                                     Poll::Ready(true) => {
-                                        if let Err(_) =
-                                            this.io.0.shutdown(std::net::Shutdown::Write)
-                                        {
-                                            this.state.close(None);
-                                            return Poll::Ready(());
-                                        }
-                                        *st = Shutdown::Stopping(0);
+                                        *st = Shutdown::Flushed;
                                         continue;
                                     }
                                     Poll::Ready(false) => {
@@ -768,26 +631,40 @@ mod unixstream {
                                     _ => (),
                                 }
                             }
+                            Shutdown::Flushed => {
+                                // shutdown WRITE side
+                                match Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx)
+                                {
+                                    Poll::Ready(Ok(_)) => {
+                                        *st = Shutdown::Stopping(0);
+                                        continue;
+                                    }
+                                    Poll::Ready(Err(e)) => {
+                                        log::trace!(
+                                            "write task is closed with err during shutdown"
+                                        );
+                                        this.state.close(Some(e));
+                                        return Poll::Ready(());
+                                    }
+                                    _ => (),
+                                }
+                            }
                             Shutdown::Stopping(ref mut count) => {
                                 // read until 0 or err
                                 let mut buf = [0u8; 512];
-                                let io = &mut this.io;
+                                let mut io = this.io.borrow_mut();
                                 loop {
-                                    match Pin::new(&mut io.0).poll_read(cx, &mut buf) {
-                                        Poll::Ready(Err(e)) => {
-                                            log::trace!("write task is stopped");
-                                            this.state.close(Some(e));
-                                            return Poll::Ready(());
-                                        }
-                                        Poll::Ready(Ok(0)) => {
-                                            log::trace!(
-                                                "async-std unix socket is disconnected"
-                                            );
+                                    let mut read_buf = ReadBuf::new(&mut buf);
+                                    match Pin::new(&mut *io).poll_read(cx, &mut read_buf) {
+                                        Poll::Ready(Err(_)) | Poll::Ready(Ok(_))
+                                            if read_buf.filled().is_empty() =>
+                                        {
                                             this.state.close(None);
+                                            log::trace!("write task is stopped");
                                             return Poll::Ready(());
                                         }
-                                        Poll::Ready(Ok(n)) => {
-                                            *count += n as u16;
+                                        Poll::Pending => {
+                                            *count += read_buf.filled().len() as u16;
                                             if *count > 4096 {
                                                 log::trace!(
                                                     "write task is stopped, too much input"
@@ -795,8 +672,9 @@ mod unixstream {
                                                 this.state.close(None);
                                                 return Poll::Ready(());
                                             }
+                                            break;
                                         }
-                                        Poll::Pending => break,
+                                        _ => (),
                                     }
                                 }
                             }
@@ -808,11 +686,42 @@ mod unixstream {
                         }
                         log::trace!("write task is stopped after delay");
                         this.state.close(None);
-                        let _ = Pin::new(&mut this.io.0).poll_close(cx);
                         return Poll::Ready(());
                     }
                 }
             }
         }
     }
+}
+
+pub fn poll_read_buf<T: AsyncRead>(
+    io: Pin<&mut T>,
+    cx: &mut Context<'_>,
+    buf: &mut BytesMut,
+) -> Poll<io::Result<usize>> {
+    if !buf.has_remaining_mut() {
+        return Poll::Ready(Ok(0));
+    }
+
+    let n = {
+        let dst =
+            unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [mem::MaybeUninit<u8>]) };
+        let mut buf = ReadBuf::uninit(dst);
+        let ptr = buf.filled().as_ptr();
+        if io.poll_read(cx, &mut buf)?.is_pending() {
+            return Poll::Pending;
+        }
+
+        // Ensure the pointer does not change from under us
+        assert_eq!(ptr, buf.filled().as_ptr());
+        buf.filled().len()
+    };
+
+    // Safety: This is guaranteed to be the number of initialized (and read)
+    // bytes due to the invariants provided by `ReadBuf::filled`.
+    unsafe {
+        buf.advance_mut(n);
+    }
+
+    Poll::Ready(Ok(n))
 }

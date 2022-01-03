@@ -18,13 +18,6 @@ mod tasks;
 mod timer;
 pub mod utils;
 
-#[cfg(feature = "async-std")]
-mod asyncstd_rt;
-#[cfg(any(feature = "tokio-traits", feature = "tokio"))]
-mod tokio_impl;
-#[cfg(feature = "tokio")]
-mod tokio_rt;
-
 use ntex_bytes::BytesMut;
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Millis;
@@ -178,24 +171,6 @@ where
                 write!(fmt, "DispatchItem::Disconnect({:?})", e)
             }
         }
-    }
-}
-
-pub mod rt {
-    //! async runtime helpers
-
-    #[cfg(feature = "tokio")]
-    pub use crate::tokio_rt::*;
-
-    #[cfg(all(not(feature = "tokio"), feature = "async-std"))]
-    pub use crate::asyncstd_rt::*;
-
-    #[cfg(all(not(feature = "tokio"), not(feature = "async-std")))]
-    pub fn spawn<F>(_: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = F::Output>>>
-    where
-        F: std::future::Future + 'static,
-    {
-        unimplemented!()
     }
 }
 

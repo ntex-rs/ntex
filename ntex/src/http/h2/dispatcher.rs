@@ -14,7 +14,7 @@ use crate::http::header::{
 use crate::http::{
     message::ResponseHead, payload::Payload, request::Request, response::Response,
 };
-use crate::io::{Filter, Io, IoRef};
+use crate::io::{IoRef, TokioIoBoxed};
 use crate::service::Service;
 use crate::time::{now, Sleep};
 use crate::util::{Bytes, BytesMut};
@@ -23,19 +23,18 @@ const CHUNK_SIZE: usize = 16_384;
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/2 protocol
-    pub struct Dispatcher<F, S: Service<Request>, B: MessageBody, X, U> {
+    pub struct Dispatcher<S: Service<Request>, B: MessageBody, X, U> {
         io: IoRef,
         config: Rc<DispatcherConfig<S, X, U>>,
-        connection: Connection<Io<F>, Bytes>,
+        connection: Connection<TokioIoBoxed, Bytes>,
         ka_expire: time::Instant,
         ka_timer: Option<Sleep>,
         _t: PhantomData<B>,
     }
 }
 
-impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
+impl<S, B, X, U> Dispatcher<S, B, X, U>
 where
-    F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -44,7 +43,7 @@ where
     pub(in crate::http) fn new(
         io: IoRef,
         config: Rc<DispatcherConfig<S, X, U>>,
-        connection: Connection<Io<F>, Bytes>,
+        connection: Connection<TokioIoBoxed, Bytes>,
         timeout: Option<Sleep>,
     ) -> Self {
         // keep-alive timer
@@ -69,9 +68,8 @@ where
     }
 }
 
-impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
+impl<S, B, X, U> Future for Dispatcher<S, B, X, U>
 where
-    F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,

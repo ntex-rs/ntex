@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.1] - 2022-01-03
+
+* Refactor async runtimes support
+
 ## [0.4.0] - 2021-12-30
 
 * 0.4 release

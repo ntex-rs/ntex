@@ -606,10 +606,10 @@ where
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
-        let srv = sys.exec(move || {
+        sys.run(move || {
             let builder = Server::build().workers(1).disable_signals();
 
-            match cfg.stream {
+            let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg =
@@ -689,11 +689,11 @@ where
                 },
             }
             .unwrap()
-            .run()
-        });
+            .run();
 
-        tx.send((System::current(), srv, local_addr)).unwrap();
-        sys.run()
+            tx.send((System::current(), srv, local_addr)).unwrap();
+            Ok(())
+        })
     });
 
     let (system, server, addr) = rx.recv().unwrap();

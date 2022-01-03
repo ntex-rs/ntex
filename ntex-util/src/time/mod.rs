@@ -201,9 +201,6 @@ mod tests {
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
     #[ntex_macros::rt_test2]
     async fn lowres_time_does_not_immediately_change() {
-        crate::set_spawn_fn(|f| {
-            ntex_rt::spawn(f);
-        });
         assert_eq!(now(), now())
     }
 
@@ -213,10 +210,6 @@ mod tests {
     /// and second value is greater than the first one at least by a 1ms interval.
     #[ntex_macros::rt_test2]
     async fn lowres_time_updates_after_resolution_interval() {
-        crate::set_spawn_fn(|f| {
-            ntex_rt::spawn(f);
-        });
-
         let first_time = now();
 
         sleep(Millis(25)).await;
@@ -230,10 +223,6 @@ mod tests {
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
     #[ntex_macros::rt_test2]
     async fn system_time_service_time_does_not_immediately_change() {
-        crate::set_spawn_fn(|f| {
-            ntex_rt::spawn(f);
-        });
-
         assert_eq!(system_time(), system_time());
     }
 
@@ -243,10 +232,6 @@ mod tests {
     /// and second value is greater than the first one at least by a resolution interval.
     #[ntex_macros::rt_test2]
     async fn system_time_service_time_updates_after_resolution_interval() {
-        crate::set_spawn_fn(|f| {
-            ntex_rt::spawn(f);
-        });
-
         let wait_time = 300;
 
         let first_time = system_time()
@@ -264,10 +249,6 @@ mod tests {
 
     #[ntex_macros::rt_test2]
     async fn test_interval() {
-        crate::set_spawn_fn(|f| {
-            ntex_rt::spawn(f);
-        });
-
         let mut int = interval(Millis(250));
 
         let time = time::Instant::now();
@@ -293,10 +274,6 @@ mod tests {
 
     #[ntex_macros::rt_test2]
     async fn test_interval_one_sec() {
-        crate::set_spawn_fn(|f| {
-            ntex_rt::spawn(f);
-        });
-
         let int = interval(Millis::ONE_SEC);
 
         for _i in 0..3 {

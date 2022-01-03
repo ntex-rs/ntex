@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.6] - 2022-01-03
+
+* Use ntex-rt::spawn
+
 ## [0.1.5] - 2021-12-27
 
 * Fix borrow error when timer get dropped immidietly after start

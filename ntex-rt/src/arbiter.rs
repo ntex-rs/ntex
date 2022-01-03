@@ -5,9 +5,9 @@ use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, th
 
 use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
-use ntex_util::Stream;
+use futures_core::stream::Stream;
 
-use crate::{system::System, Runtime};
+use crate::system::System;
 
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = RefCell::new(None);
@@ -50,16 +50,14 @@ impl Clone for Arbiter {
 
 impl Arbiter {
     #[allow(clippy::borrowed_box)]
-    pub(super) fn new_system(rt: &Box<dyn Runtime>) -> Self {
+    pub(super) fn new_system() -> (Self, ArbiterController) {
         let (tx, rx) = unbounded();
 
         let arb = Arbiter::with_sender(tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         STORAGE.with(|cell| cell.borrow_mut().clear());
 
-        rt.spawn(Box::pin(ArbiterController { stop: None, rx }));
-
-        arb
+        (arb, ArbiterController { stop: None, rx })
     }
 
     /// Returns the current thread's arbiter's address. If no Arbiter is present, then this
@@ -88,7 +86,6 @@ impl Arbiter {
         let handle = thread::Builder::new()
             .name(name.clone())
             .spawn(move || {
-                let rt = crate::create_runtime();
                 let arb = Arbiter::with_sender(arb_tx);
 
                 let (stop, stop_rx) = oneshot::oneshot();
@@ -96,22 +93,22 @@ impl Arbiter {
 
                 System::set_current(sys);
 
-                // start arbiter controller
-                rt.spawn(Box::pin(ArbiterController {
-                    stop: Some(stop),
-                    rx: arb_rx,
-                }));
-                ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
+                crate::block_on(async move {
+                    // start arbiter controller
+                    crate::spawn(ArbiterController {
+                        stop: Some(stop),
+                        rx: arb_rx,
+                    });
+                    ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
 
-                // register arbiter
-                let _ = System::current()
-                    .sys()
-                    .try_send(SystemCommand::RegisterArbiter(id, arb));
+                    // register arbiter
+                    let _ = System::current()
+                        .sys()
+                        .try_send(SystemCommand::RegisterArbiter(id, arb));
 
-                // run loop
-                rt.block_on(Box::pin(async move {
+                    // run loop
                     let _ = stop_rx.await;
-                }));
+                });
 
                 // unregister arbiter
                 let _ = System::current()
@@ -232,7 +229,7 @@ impl Arbiter {
     }
 }
 
-struct ArbiterController {
+pub(crate) struct ArbiterController {
     stop: Option<oneshot::Sender<i32>>,
     rx: Receiver<ArbiterCommand>,
 }

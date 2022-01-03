@@ -15,8 +15,8 @@ async fn test_run() {
     thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
 
-        let srv = sys.exec(move || {
-            HttpServer::new(|| {
+        sys.run(move || {
+            let srv = HttpServer::new(|| {
                 App::new().service(
                     web::resource("/")
                         .route(web::to(|| async { HttpResponse::Ok().body("test") })),
@@ -35,11 +35,10 @@ async fn test_run() {
             .disable_signals()
             .bind(format!("{}", addr))
             .unwrap()
-            .run()
-        });
-
-        let _ = tx.send((srv, ntex::rt::System::current()));
-        let _ = sys.run();
+            .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok(())
+        })
     });
     let (srv, sys) = rx.recv().unwrap();
 
@@ -107,8 +106,8 @@ async fn test_openssl() {
         let sys = ntex::rt::System::new("test");
         let builder = ssl_acceptor().unwrap();
 
-        let srv = sys.exec(move || {
-            HttpServer::new(|| {
+        sys.run(move || {
+            let srv = HttpServer::new(|| {
                 App::new().service(web::resource("/").route(web::to(
                     |req: HttpRequest| async move {
                         assert!(req.app_config().secure());
@@ -122,11 +121,10 @@ async fn test_openssl() {
             .disable_signals()
             .bind_openssl(format!("{}", addr), builder)
             .unwrap()
-            .run()
-        });
-
-        let _ = tx.send((srv, ntex::rt::System::current()));
-        let _ = sys.run();
+            .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok(())
+        })
     });
     let (srv, sys) = rx.recv().unwrap();
 
@@ -172,8 +170,8 @@ async fn test_rustls() {
             .with_single_cert(cert_chain, keys)
             .unwrap();
 
-        let srv = sys.exec(move || {
-            HttpServer::new(|| {
+        sys.run(move || {
+            let srv = HttpServer::new(|| {
                 App::new().service(web::resource("/").route(web::to(
                     |req: HttpRequest| async move {
                         assert!(req.app_config().secure());
@@ -187,11 +185,10 @@ async fn test_rustls() {
             .disable_signals()
             .bind_rustls(format!("{}", addr), config)
             .unwrap()
-            .run()
-        });
-
-        let _ = tx.send((srv, ntex::rt::System::current()));
-        let _ = sys.run();
+            .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok(())
+        })
     });
     let (srv, sys) = rx.recv().unwrap();
 
@@ -215,8 +212,8 @@ async fn test_bind_uds() {
     thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
 
-        let srv = sys.exec(move || {
-            HttpServer::new(|| {
+        sys.run(move || {
+            let srv = HttpServer::new(|| {
                 App::new().service(
                     web::resource("/")
                         .route(web::to(|| async { HttpResponse::Ok().body("test") })),
@@ -228,11 +225,10 @@ async fn test_bind_uds() {
             .disable_signals()
             .bind_uds("/tmp/uds-test")
             .unwrap()
-            .run()
-        });
-
-        let _ = tx.send((srv, ntex::rt::System::current()));
-        let _ = sys.run();
+            .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok(())
+        })
     });
     let (srv, sys) = rx.recv().unwrap();
 
@@ -265,11 +261,11 @@ async fn test_listen_uds() {
     thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
 
-        let srv = sys.exec(|| {
+        sys.run(move || {
             let _ = std::fs::remove_file("/tmp/uds-test2");
             let lst = std::os::unix::net::UnixListener::bind("/tmp/uds-test2").unwrap();
 
-            HttpServer::new(|| {
+            let srv = HttpServer::new(|| {
                 App::new().service(
                     web::resource("/")
                         .route(web::to(|| async { HttpResponse::Ok().body("test") })),
@@ -281,11 +277,10 @@ async fn test_listen_uds() {
             .disable_signals()
             .listen_uds(lst)
             .unwrap()
-            .run()
-        });
-
-        let _ = tx.send((srv, ntex::rt::System::current()));
-        let _ = sys.run();
+            .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok(())
+        })
     });
     let (srv, sys) = rx.recv().unwrap();
 

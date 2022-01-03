@@ -98,13 +98,13 @@ impl System {
         &self.arbiter
     }
 
-    /// This function will start tokio runtime and will finish once the
+    /// This function will start async runtime and will finish once the
     /// `System::stop()` message get called.
-    /// Function `f` get called within tokio runtime context.
+    /// Function `f` get called within async runtime context.
     pub fn run<F>(f: F) -> io::Result<()>
     where
-        F: FnOnce() + 'static,
+        F: FnOnce() -> io::Result<()> + 'static,
     {
-        Builder::new().run(f)
+        Builder::new().finish().run(f)
     }
 }
