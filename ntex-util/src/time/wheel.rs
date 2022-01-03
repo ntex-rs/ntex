@@ -646,10 +646,6 @@ mod tests {
 
     #[ntex_macros::rt_test2]
     async fn test_timer() {
-        crate::set_spawn_fn(|f| {
-            ntex_rt::spawn(f);
-        });
-
         crate::spawn(async {
             let s = interval(Millis(25));
             loop {

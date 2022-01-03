@@ -21,7 +21,7 @@ name = "ntex"
 path = "src/lib.rs"
 
 [features]
-default = ["tokio"]
+default = []
 
 # openssl
 openssl = ["tls-openssl", "ntex-tls/openssl"]
