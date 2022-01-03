@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.6] - 2022-01-03
+
+* web: Restore `App::finish()` method
+
 ## [0.5.5] - 2022-01-03
 
 * Disable default runtime selection

@@ -449,6 +449,28 @@ where
     F::Future: 'static,
     Err: ErrorRenderer,
 {
+    /// Construct service factory with default `AppConfig`, suitable for `http::HttpService`.
+    ///
+    /// ```rust,no_run
+    /// use ntex::{web, http, server};
+    ///
+    /// #[ntex::main]
+    /// async fn main() -> std::io::Result<()> {
+    ///     server::build().bind("http", "127.0.0.1:0", |_|
+    ///         http::HttpService::build().finish(
+    ///             web::App::new()
+    ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))
+    ///                 .finish()
+    ///         )
+    ///     )?
+    ///     .run()
+    ///     .await
+    /// }
+    /// ```
+    pub fn finish(self) -> AppFactory<M, F, Err> {
+        IntoServiceFactory::<AppFactory<M, F, Err>, Request, ()>::into_factory(self)
+    }
+
     /// Construct service factory suitable for `http::HttpService`.
     ///
     /// ```rust,no_run
