@@ -6,9 +6,10 @@ use std::{
     fmt, future::Future, marker, marker::PhantomData, pin::Pin, task::Context, task::Poll,
 };
 
-use crate::service::{IntoService, Service, Transform};
+use ntex_service::{IntoService, Service, Transform};
+
+use crate::future::Either;
 use crate::time::{sleep, Millis, Sleep};
-use crate::util::Either;
 
 /// Applies a timeout to requests.
 ///
@@ -214,13 +215,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use derive_more::Display;
     use std::task::{Context, Poll};
     use std::time::Duration;
 
+    use derive_more::Display;
+    use ntex_service::{apply, fn_factory, Service, ServiceFactory};
+
     use super::*;
-    use crate::service::{apply, fn_factory, Service, ServiceFactory};
-    use crate::util::lazy;
+    use crate::future::lazy;
 
     #[derive(Clone, Debug, PartialEq)]
     struct SleepService(Duration);
@@ -254,7 +256,7 @@ mod tests {
         }
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_success() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
@@ -268,7 +270,7 @@ mod tests {
             .is_pending());
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_zero() {
         let wait_time = Duration::from_millis(50);
         let resolution = Duration::from_millis(0);
@@ -278,7 +280,7 @@ mod tests {
         assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_timeout() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
@@ -287,7 +289,7 @@ mod tests {
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     #[allow(clippy::redundant_clone)]
     async fn test_timeout_newservice() {
         let resolution = Duration::from_millis(100);

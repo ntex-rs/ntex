@@ -29,6 +29,7 @@ async fn main() -> io::Result<()> {
         .send(Bytes::from_static(b"hello"), &codec::BytesCodec)
         .await
         .map_err(Either::into_inner)?;
+    println!("Send result: {:?}", result);
 
     let resp = io
         .recv(&codec::BytesCodec)

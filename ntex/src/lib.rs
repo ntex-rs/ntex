@@ -36,7 +36,6 @@ pub(crate) use ntex_macros::rt_test2 as rt_test;
 pub mod connect;
 pub mod http;
 pub mod server;
-pub mod util;
 pub mod web;
 pub mod ws;
 
@@ -98,4 +97,9 @@ pub mod testing {
 pub mod tls {
     //! TLS support for ntex ecosystem.
     pub use ntex_tls::*;
+}
+
+pub mod util {
+    pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut, Pool, PoolId, PoolRef};
+    pub use ntex_util::{future::*, ready, services::*, HashMap, HashSet};
 }

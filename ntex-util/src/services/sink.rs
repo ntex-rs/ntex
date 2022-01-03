@@ -3,8 +3,9 @@ use std::{
 };
 
 use futures_sink::Sink;
+use ntex_service::Service;
 
-use crate::{service::Service, util::Ready};
+use crate::future::Ready;
 
 /// `SinkService` forwards incoming requests to the provided `Sink`
 pub struct SinkService<S, I> {

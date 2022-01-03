@@ -1,13 +1,11 @@
-use std::cell::Cell;
-use std::rc::Rc;
-use std::task;
+use std::{cell::Cell, rc::Rc, task};
 
 use crate::task::LocalWaker;
 
 /// Simple counter with ability to notify task on reaching specific number
 ///
 /// Counter could be cloned, total count is shared across all clones.
-pub struct Counter(Rc<CounterInner>);
+pub(super) struct Counter(Rc<CounterInner>);
 
 struct CounterInner {
     count: Cell<usize>,
@@ -17,7 +15,7 @@ struct CounterInner {
 
 impl Counter {
     /// Create `Counter` instance and set max value.
-    pub fn new(capacity: usize) -> Self {
+    pub(super) fn new(capacity: usize) -> Self {
         Counter(Rc::new(CounterInner {
             capacity,
             count: Cell::new(0),
@@ -26,27 +24,27 @@ impl Counter {
     }
 
     /// Get counter guard.
-    pub fn get(&self) -> CounterGuard {
+    pub(super) fn get(&self) -> CounterGuard {
         CounterGuard::new(self.0.clone())
     }
 
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
-    pub fn available(&self, cx: &mut task::Context<'_>) -> bool {
+    pub(super) fn available(&self, cx: &mut task::Context<'_>) -> bool {
         self.0.available(cx)
     }
 
     /// Get total number of acquired counts
-    pub fn total(&self) -> usize {
+    pub(super) fn total(&self) -> usize {
         self.0.count.get()
     }
 
-    pub(crate) fn priv_clone(&self) -> Self {
+    pub(super) fn priv_clone(&self) -> Self {
         Counter(self.0.clone())
     }
 }
 
-pub struct CounterGuard(Rc<CounterInner>);
+pub(super) struct CounterGuard(Rc<CounterInner>);
 
 impl CounterGuard {
     fn new(inner: Rc<CounterInner>) -> Self {
