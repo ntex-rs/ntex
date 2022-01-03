@@ -1,215 +1,18 @@
-#![allow(dead_code)]
-use std::future::Future;
-use std::task::{Context, Poll};
-use std::{any, cell::RefCell, io, net, net::SocketAddr, pin::Pin, rc::Rc};
+use std::{any, future::Future, io, pin::Pin, task::Context, task::Poll};
 
-use async_oneshot as oneshot;
 use async_std::io::{Read, Write};
-use ntex_bytes::{Buf, BufMut, BytesMut, PoolRef};
+use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_io::{
-    types, Handle, Io, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
+    types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
 };
-use ntex_util::{future::lazy, ready, time::sleep, time::Sleep};
+use ntex_util::{ready, time::sleep, time::Sleep};
 
-use crate::{Runtime, Signal};
-
-#[derive(Debug, Copy, Clone, derive_more::Display)]
-pub struct JoinError;
-
-impl std::error::Error for JoinError {}
-
-#[derive(Clone)]
-struct TcpStream(async_std::net::TcpStream);
-
-#[cfg(unix)]
-#[derive(Clone)]
-struct UnixStream(async_std::os::unix::net::UnixStream);
-
-/// Create new single-threaded async-std runtime.
-pub fn create_runtime() -> Box<dyn Runtime> {
-    Box::new(AsyncStdRuntime::new().unwrap())
-}
-
-/// Opens a TCP connection to a remote host.
-pub async fn tcp_connect(addr: SocketAddr) -> Result<Io, io::Error> {
-    let sock = async_std::net::TcpStream::connect(addr).await?;
-    sock.set_nodelay(true)?;
-    Ok(Io::new(TcpStream(sock)))
-}
-
-/// Opens a TCP connection to a remote host and use specified memory pool.
-pub async fn tcp_connect_in(addr: SocketAddr, pool: PoolRef) -> Result<Io, io::Error> {
-    let sock = async_std::net::TcpStream::connect(addr).await?;
-    sock.set_nodelay(true)?;
-    Ok(Io::with_memory_pool(TcpStream(sock), pool))
-}
-
-#[cfg(unix)]
-/// Opens a unix stream connection.
-pub async fn unix_connect<P>(addr: P) -> Result<Io, io::Error>
-where
-    P: AsRef<async_std::path::Path>,
-{
-    let sock = async_std::os::unix::net::UnixStream::connect(addr).await?;
-    Ok(Io::new(UnixStream(sock)))
-}
-
-#[cfg(unix)]
-/// Opens a unix stream connection and specified memory pool.
-pub async fn unix_connect_in<P>(addr: P, pool: PoolRef) -> Result<Io, io::Error>
-where
-    P: AsRef<async_std::path::Path>,
-{
-    let sock = async_std::os::unix::net::UnixStream::connect(addr).await?;
-    Ok(Io::with_memory_pool(UnixStream(sock), pool))
-}
-
-/// Convert std TcpStream to async-std's TcpStream
-pub fn from_tcp_stream(stream: net::TcpStream) -> Result<Io, io::Error> {
-    stream.set_nonblocking(true)?;
-    stream.set_nodelay(true)?;
-    Ok(Io::new(TcpStream(async_std::net::TcpStream::from(stream))))
-}
-
-#[cfg(unix)]
-/// Convert std UnixStream to async-std's UnixStream
-pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> Result<Io, io::Error> {
-    stream.set_nonblocking(true)?;
-    Ok(Io::new(UnixStream(From::from(stream))))
-}
-
-/// Spawn a future on the current thread. This does not create a new Arbiter
-/// or Arbiter address, it is simply a helper for spawning futures on the current
-/// thread.
-///
-/// # Panics
-///
-/// This function panics if ntex system is not running.
-#[inline]
-pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
-where
-    F: Future + 'static,
-{
-    JoinHandle {
-        fut: async_std::task::spawn_local(f),
-    }
-}
-
-/// Executes a future on the current thread. This does not create a new Arbiter
-/// or Arbiter address, it is simply a helper for executing futures on the current
-/// thread.
-///
-/// # Panics
-///
-/// This function panics if ntex system is not running.
-#[inline]
-pub fn spawn_fn<F, R>(f: F) -> JoinHandle<R::Output>
-where
-    F: FnOnce() -> R + 'static,
-    R: Future + 'static,
-{
-    spawn(async move {
-        let r = lazy(|_| f()).await;
-        r.await
-    })
-}
-
-/// Spawns a blocking task.
-///
-/// The task will be spawned onto a thread pool specifically dedicated
-/// to blocking tasks. This is useful to prevent long-running synchronous
-/// operations from blocking the main futures executor.
-pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    JoinHandle {
-        fut: async_std::task::spawn_blocking(f),
-    }
-}
-
-pub struct JoinHandle<T> {
-    fut: async_std::task::JoinHandle<T>,
-}
-
-impl<T> Future for JoinHandle<T> {
-    type Output = Result<T, JoinError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(Ok(ready!(Pin::new(&mut self.fut).poll(cx))))
-    }
-}
-
-thread_local! {
-    static SRUN: RefCell<bool> = RefCell::new(false);
-    static SHANDLERS: Rc<RefCell<Vec<oneshot::Sender<Signal>>>> = Default::default();
-}
-
-/// Register signal handler.
-///
-/// Signals are handled by oneshots, you have to re-register
-/// after each signal.
-pub fn signal() -> Option<oneshot::Receiver<Signal>> {
-    if !SRUN.with(|v| *v.borrow()) {
-        spawn(Signals::new());
-    }
-    SHANDLERS.with(|handlers| {
-        let (tx, rx) = oneshot::oneshot();
-        handlers.borrow_mut().push(tx);
-        Some(rx)
-    })
-}
-
-/// Single-threaded async-std runtime.
-#[derive(Debug)]
-struct AsyncStdRuntime {}
-
-impl AsyncStdRuntime {
-    /// Returns a new runtime initialized with default configuration values.
-    fn new() -> io::Result<Self> {
-        Ok(Self {})
-    }
-}
-
-impl Runtime for AsyncStdRuntime {
-    /// Spawn a future onto the single-threaded runtime.
-    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()>>>) {
-        async_std::task::spawn_local(future);
-    }
-
-    /// Runs the provided future, blocking the current thread until the future
-    /// completes.
-    fn block_on(&self, f: Pin<Box<dyn Future<Output = ()>>>) {
-        // set ntex-util spawn fn
-        ntex_util::set_spawn_fn(|fut| {
-            async_std::task::spawn_local(fut);
-        });
-
-        async_std::task::block_on(f);
-    }
-}
-
-struct Signals {}
-
-impl Signals {
-    pub(super) fn new() -> Signals {
-        Self {}
-    }
-}
-
-impl Future for Signals {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(())
-    }
-}
+use crate::TcpStream;
 
 impl IoStream for TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        spawn(ReadTask::new(self.clone(), read));
-        spawn(WriteTask::new(self.clone(), write));
+        async_std::task::spawn_local(ReadTask::new(self.clone(), read));
+        async_std::task::spawn_local(WriteTask::new(self.clone(), write));
         Some(Box::new(self))
     }
 }
@@ -571,11 +374,12 @@ pub fn poll_read_buf<T: Read>(
 #[cfg(unix)]
 mod unixstream {
     use super::*;
+    use crate::UnixStream;
 
     impl IoStream for UnixStream {
         fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-            spawn(ReadTask::new(self.clone(), read));
-            spawn(WriteTask::new(self.clone(), write));
+            async_std::task::spawn_local(ReadTask::new(self.clone(), read));
+            async_std::task::spawn_local(WriteTask::new(self.clone(), write));
             None
         }
     }

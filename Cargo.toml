@@ -11,6 +11,7 @@ members = [
   "ntex-macros",
   "ntex-util",
   "ntex-tokio",
+  "ntex-async-std",
 ]
 
 [patch.crates-io]
@@ -26,3 +27,4 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 ntex-tokio = { path = "ntex-tokio" }
+ntex-async-std = { path = "ntex-async-std" }

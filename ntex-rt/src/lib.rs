@@ -12,6 +12,7 @@ pub use self::system::System;
 #[cfg(feature = "tokio")]
 mod tokio {
     use std::future::Future;
+    pub use tokio::task::{spawn_blocking, JoinError, JoinHandle};
 
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
@@ -98,6 +99,21 @@ mod asyncstd {
         R: Future + 'static,
     {
         spawn(async move { f().await })
+    }
+
+    /// Spawns a blocking task.
+    ///
+    /// The task will be spawned onto a thread pool specifically dedicated
+    /// to blocking tasks. This is useful to prevent long-running synchronous
+    /// operations from blocking the main futures executor.
+    pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        JoinHandle {
+            fut: async_std::task::spawn_blocking(f),
+        }
     }
 
     #[derive(Debug, Copy, Clone, derive_more::Display)]

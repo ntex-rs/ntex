@@ -42,7 +42,7 @@ url = ["url-pkg"]
 tokio = ["ntex-rt/tokio"]
 
 # async-std runtime
-async-std = ["ntex-rt/async-std"]
+async-std = ["ntex-rt/async-std", "ntex-async-std"]
 
 [dependencies]
 ntex-codec = "0.6.0"
@@ -55,6 +55,7 @@ ntex-tls = "0.1.0"
 ntex-rt = "0.4.0"
 ntex-io = "0.1.0"
 ntex-tokio = "0.1.0"
+ntex-async-std = { version = "0.1.0", optional = true }
 
 base64 = "0.13"
 bitflags = "1.3"
