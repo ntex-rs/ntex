@@ -1,8 +1,9 @@
 //! Service that limits number of in-flight async requests.
 use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
+use ntex_service::{IntoService, Service, Transform};
+
 use super::counter::{Counter, CounterGuard};
-use crate::{IntoService, Service, Transform};
 
 /// InFlight - service factory for service that can limit number of in-flight
 /// async requests.
@@ -108,12 +109,11 @@ impl<T: Service<R>, R> Future for InFlightServiceResponse<T, R> {
 
 #[cfg(test)]
 mod tests {
-    use std::task::{Context, Poll};
-    use std::time::Duration;
+    use ntex_service::{apply, fn_factory, Service, ServiceFactory};
+    use std::{task::Context, task::Poll, time::Duration};
 
     use super::*;
-    use crate::service::{apply, fn_factory, Service, ServiceFactory};
-    use crate::util::lazy;
+    use crate::future::lazy;
 
     struct SleepService(Duration);
 
@@ -135,7 +135,7 @@ mod tests {
         }
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_transform() {
         let wait_time = Duration::from_millis(50);
 
@@ -151,7 +151,7 @@ mod tests {
         assert!(lazy(|cx| srv.poll_shutdown(cx, false)).await.is_ready());
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_newtransform() {
         let wait_time = Duration::from_millis(50);
 

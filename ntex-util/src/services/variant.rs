@@ -1,7 +1,7 @@
 //! Contains `Variant` service and related types and functions.
 use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
-use crate::service::{IntoServiceFactory, Service, ServiceFactory};
+use ntex_service::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Construct `Variant` service factory.
 ///
@@ -292,11 +292,11 @@ variant_impl_and!(VariantFactory7, VariantFactory8, V8, V8R, v8, (V2, V3, V4, V5
 
 #[cfg(test)]
 mod tests {
+    use ntex_service::{fn_factory, Service, ServiceFactory};
     use std::task::{Context, Poll};
 
     use super::*;
-    use crate::service::{fn_factory, Service, ServiceFactory};
-    use crate::util::{lazy, Ready};
+    use crate::future::{lazy, Ready};
 
     #[derive(Clone)]
     struct Srv1;
@@ -340,7 +340,7 @@ mod tests {
         }
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_variant() {
         let factory = variant(fn_factory(|| async { Ok::<_, ()>(Srv1) }))
             .v2(fn_factory(|| async { Ok::<_, ()>(Srv2) }))

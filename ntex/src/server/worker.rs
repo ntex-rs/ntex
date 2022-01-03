@@ -7,12 +7,11 @@ use futures_core::Stream as FutStream;
 
 use crate::rt::{spawn, Arbiter};
 use crate::time::{sleep, Millis, Sleep};
-use crate::util::{counter::Counter, join_all};
+use crate::util::join_all;
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
-use super::socket::Stream;
-use super::Token;
+use super::{counter::Counter, socket::Stream, Token};
 
 #[derive(Debug)]
 pub(super) struct WorkerCommand(Connection);

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.1] - 2022-01-03
+
+* Do not depend on ntex-util
+
 ## [0.3.0] - 2021-12-30
 
 * Remove fn_transform

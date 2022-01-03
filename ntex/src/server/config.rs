@@ -5,14 +5,14 @@ use std::{
 
 use log::error;
 
-use crate::util::{counter::CounterGuard, HashMap, Ready};
+use crate::util::{HashMap, Ready};
 use crate::{io::Io, service, util::PoolId};
 
-use super::builder::bind_addr;
 use super::service::{
     BoxedServerService, InternalServiceFactory, ServerMessage, StreamService,
 };
 use super::Token;
+use super::{builder::bind_addr, counter::CounterGuard};
 
 #[derive(Clone)]
 pub struct Config(pub(super) Rc<InnerServiceConfig>);

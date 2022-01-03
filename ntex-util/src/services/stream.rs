@@ -1,8 +1,10 @@
 use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 
+use log::trace;
+use ntex_service::{IntoService, Service};
+
 use crate::channel::mpsc;
-use crate::service::{IntoService, Service};
-use crate::{util::poll_fn, Sink, Stream};
+use crate::{future::poll_fn, Sink, Stream};
 
 pin_project_lite::pin_project! {
     pub struct Dispatcher<Req, R, S, T, U>
@@ -64,7 +66,7 @@ where
 
         if let Some(is_err) = this.shutdown {
             if let Some(mut sink) = this.sink.take() {
-                crate::rt::spawn(async move {
+                crate::spawn(async move {
                     if poll_fn(|cx| Pin::new(&mut sink).poll_flush(cx))
                         .await
                         .is_ok()
@@ -131,7 +133,7 @@ where
                     Poll::Ready(Some(Ok(item))) => {
                         let tx = this.rx.sender();
                         let fut = this.service.call(item);
-                        crate::rt::spawn(async move {
+                        crate::spawn(async move {
                             let res = fut.await;
                             let _ = tx.send(res);
                         });
@@ -163,11 +165,13 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use super::*;
-    use crate::util::{next, ByteString, BytesMut};
-    use crate::{channel::mpsc, codec::Encoder, time::sleep, time::Millis, ws};
+    use ntex::{codec::Encoder, ws};
+    use ntex_bytes::{ByteString, BytesMut};
 
-    #[crate::rt_test]
+    use super::*;
+    use crate::{channel::mpsc, future::next, time::sleep, time::Millis};
+
+    #[ntex_macros::rt_test2]
     async fn test_basic() {
         let counter = Rc::new(Cell::new(0));
         let counter2 = counter.clone();
@@ -180,12 +184,12 @@ mod tests {
         let disp = Dispatcher::new(
             decoder,
             encoder,
-            crate::service::fn_service(move |_| {
+            ntex_service::fn_service(move |_| {
                 counter2.set(counter2.get() + 1);
                 async { Ok(Some(ws::Message::Text(ByteString::from_static("test")))) }
             }),
         );
-        crate::rt::spawn(async move {
+        crate::spawn(async move {
             let _ = disp.await;
         });
 

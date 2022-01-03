@@ -7,6 +7,7 @@ use async_oneshot as oneshot;
 mod accept;
 mod builder;
 mod config;
+mod counter;
 mod service;
 mod socket;
 mod test;

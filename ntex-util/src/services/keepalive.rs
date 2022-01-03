@@ -1,8 +1,10 @@
 use std::task::{Context, Poll};
 use std::{cell::Cell, convert::Infallible, marker, time::Duration, time::Instant};
 
+use ntex_service::{Service, ServiceFactory};
+
+use crate::future::Ready;
 use crate::time::{now, sleep, Millis, Sleep};
-use crate::{util::Ready, Service, ServiceFactory};
 
 /// KeepAlive service factory
 ///
@@ -118,14 +120,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use ntex_service::{Service, ServiceFactory};
+
     use super::*;
-    use crate::service::{Service, ServiceFactory};
-    use crate::util::lazy;
+    use crate::future::lazy;
 
     #[derive(Debug, PartialEq)]
     struct TestErr;
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_ka() {
         let factory = KeepAlive::new(Millis(100), || TestErr);
         let _ = factory.clone();

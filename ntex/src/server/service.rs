@@ -5,10 +5,10 @@ use log::error;
 
 use crate::io::Io;
 use crate::service::{Service, ServiceFactory};
-use crate::util::{counter::CounterGuard, Pool, PoolId, Ready};
+use crate::util::{Pool, PoolId, Ready};
 use crate::{rt::spawn, time::Millis};
 
-use super::{socket::Stream, Config, Token};
+use super::{counter::CounterGuard, socket::Stream, Config, Token};
 
 /// Server message
 pub(super) enum ServerMessage {

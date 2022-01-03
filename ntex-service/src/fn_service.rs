@@ -1,7 +1,5 @@
 use std::task::{Context, Poll};
-use std::{cell::Cell, future::Future, marker::PhantomData};
-
-use ntex_util::future::Ready;
+use std::{cell::Cell, future::ready, future::Future, future::Ready, marker::PhantomData};
 
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
@@ -304,18 +302,18 @@ where
 
     type Service = FnService<F, Fut, Req, Res, Err, FShut>;
     type InitError = ();
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     #[inline]
     fn new_service(&self, _: Cfg) -> Self::Future {
         let f = self.f_shutdown.take();
         self.f_shutdown.set(f.clone());
 
-        Ready::Ok(FnService {
+        ready(Ok(FnService {
             f: self.f.clone(),
             f_shutdown: Cell::new(f),
             _t: PhantomData,
-        })
+        }))
     }
 }
 

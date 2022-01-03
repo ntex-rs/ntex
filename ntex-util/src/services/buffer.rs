@@ -3,10 +3,9 @@ use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
-use crate::channel::oneshot;
-use crate::service::{IntoService, Service, Transform};
-use crate::task::LocalWaker;
-use crate::util::Either;
+use ntex_service::{IntoService, Service, Transform};
+
+use crate::{channel::oneshot, future::Either, task::LocalWaker};
 
 /// Buffer - service factory for service that can buffer incoming request.
 ///
@@ -229,11 +228,11 @@ impl<R, S: Service<R, Error = E>, E> Future for BufferServiceResponse<R, S, E> {
 
 #[cfg(test)]
 mod tests {
+    use ntex_service::{apply, fn_factory, Service, ServiceFactory};
     use std::task::{Context, Poll};
 
     use super::*;
-    use crate::service::{apply, fn_factory, Service, ServiceFactory};
-    use crate::util::{lazy, Ready};
+    use crate::future::{lazy, Ready};
 
     #[derive(Clone)]
     struct TestService(Rc<Inner>);
@@ -265,7 +264,7 @@ mod tests {
         }
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_transform() {
         let inner = Rc::new(Inner {
             ready: Cell::new(false),
@@ -313,7 +312,7 @@ mod tests {
         assert!(lazy(|cx| srv.poll_shutdown(cx, false)).await.is_ready());
     }
 
-    #[crate::rt_test]
+    #[ntex_macros::rt_test2]
     async fn test_newtransform() {
         let inner = Rc::new(Inner {
             ready: Cell::new(false),

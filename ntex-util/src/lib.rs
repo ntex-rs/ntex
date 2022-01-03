@@ -1,6 +1,7 @@
 //! Utilities for ntex framework
 pub mod channel;
 pub mod future;
+pub mod services;
 pub mod task;
 pub mod time;
 
