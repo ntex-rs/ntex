@@ -3,8 +3,7 @@ use std::{
 };
 
 use tokio::sync::oneshot;
-
-use super::spawn;
+use tokio::task::spawn_local;
 
 thread_local! {
     static SRUN: RefCell<bool> = RefCell::new(false);
@@ -30,7 +29,7 @@ pub enum Signal {
 /// after each signal.
 pub fn signal() -> Option<oneshot::Receiver<Signal>> {
     if !SRUN.with(|v| *v.borrow()) {
-        spawn(Signals::new());
+        spawn_local(Signals::new());
     }
     SHANDLERS.with(|handlers| {
         let (tx, rx) = oneshot::channel();

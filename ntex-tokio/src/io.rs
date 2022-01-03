@@ -2,29 +2,30 @@ use std::task::{Context, Poll};
 use std::{any, cell::RefCell, cmp, future::Future, io, mem, pin::Pin, rc::Rc};
 
 use ntex_bytes::{Buf, BufMut, BytesMut};
-use ntex_util::{ready, time::sleep, time::Sleep};
-use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tok_io::net::TcpStream;
-
-use crate::{
+use ntex_io::{
     types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, ReadStatus, WriteContext,
     WriteStatus,
 };
+use ntex_util::{ready, time::sleep, time::Sleep};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
 
-impl IoStream for TcpStream {
+impl IoStream for crate::TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        let io = Rc::new(RefCell::new(self));
+        let io = Rc::new(RefCell::new(self.0));
 
-        tok_io::task::spawn_local(ReadTask::new(io.clone(), read));
-        tok_io::task::spawn_local(WriteTask::new(io.clone(), write));
-        Some(Box::new(io))
+        tokio::task::spawn_local(ReadTask::new(io.clone(), read));
+        tokio::task::spawn_local(WriteTask::new(io.clone(), write));
+        Some(Box::new(HandleWrapper(io)))
     }
 }
 
-impl Handle for Rc<RefCell<TcpStream>> {
+struct HandleWrapper(Rc<RefCell<TcpStream>>);
+
+impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            if let Ok(addr) = self.borrow().peer_addr() {
+            if let Ok(addr) = self.0.borrow().peer_addr() {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
         }
@@ -367,62 +368,43 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
-impl<F: Filter> AsyncRead for Io<F> {
+pub struct TokioIoBoxed(IoBoxed);
+
+impl std::ops::Deref for TokioIoBoxed {
+    type Target = IoBoxed;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<IoBoxed> for TokioIoBoxed {
+    fn from(io: IoBoxed) -> TokioIoBoxed {
+        TokioIoBoxed(io)
+    }
+}
+
+impl<F: Filter> From<Io<F>> for TokioIoBoxed {
+    fn from(io: Io<F>) -> TokioIoBoxed {
+        TokioIoBoxed(IoBoxed::from(io))
+    }
+}
+
+impl AsyncRead for TokioIoBoxed {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let len = self.with_read_buf(|src| {
+        let len = self.0.with_read_buf(|src| {
             let len = cmp::min(src.len(), buf.remaining());
             buf.put_slice(&src.split_to(len));
             len
         });
 
         if len == 0 {
-            match ready!(self.poll_read_ready(cx)) {
-                Ok(Some(())) => Poll::Pending,
-                Ok(None) => Poll::Ready(Ok(())),
-                Err(e) => Poll::Ready(Err(e)),
-            }
-        } else {
-            Poll::Ready(Ok(()))
-        }
-    }
-}
-
-impl<F: Filter> AsyncWrite for Io<F> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.write(buf).map(|_| buf.len()))
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Io::poll_flush(&*self, cx, false)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Io::poll_shutdown(&*self, cx)
-    }
-}
-
-impl AsyncRead for IoBoxed {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let len = self.with_read_buf(|src| {
-            let len = cmp::min(src.len(), buf.remaining());
-            buf.put_slice(&src.split_to(len));
-            len
-        });
-
-        if len == 0 {
-            match ready!(self.poll_read_ready(cx)) {
+            match ready!(self.0.poll_read_ready(cx)) {
                 Ok(Some(())) => Poll::Pending,
                 Err(e) => Poll::Ready(Err(e)),
                 Ok(None) => Poll::Ready(Ok(())),
@@ -433,36 +415,36 @@ impl AsyncRead for IoBoxed {
     }
 }
 
-impl AsyncWrite for IoBoxed {
+impl AsyncWrite for TokioIoBoxed {
     fn poll_write(
         self: Pin<&mut Self>,
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.write(buf).map(|_| buf.len()))
+        Poll::Ready(self.0.write(buf).map(|_| buf.len()))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        (&*self.as_ref()).poll_flush(cx, false)
+        (*self.as_ref()).0.poll_flush(cx, false)
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        (&*self.as_ref()).poll_shutdown(cx)
+        (*self.as_ref()).0.poll_shutdown(cx)
     }
 }
 
 #[cfg(unix)]
 mod unixstream {
-    use tok_io::net::UnixStream;
+    use tokio::net::UnixStream;
 
     use super::*;
 
-    impl IoStream for UnixStream {
+    impl IoStream for crate::UnixStream {
         fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-            let io = Rc::new(RefCell::new(self));
+            let io = Rc::new(RefCell::new(self.0));
 
-            tok_io::task::spawn_local(ReadTask::new(io.clone(), read));
-            tok_io::task::spawn_local(WriteTask::new(io, write));
+            tokio::task::spawn_local(ReadTask::new(io.clone(), read));
+            tokio::task::spawn_local(WriteTask::new(io, write));
             None
         }
     }

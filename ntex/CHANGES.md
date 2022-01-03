@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.5] - 2022-01-03
+
+* Disable default runtime selection
+
 ## [0.5.4] - 2022-01-02
 
 * http1: Unregister keep-alive timer after request is received

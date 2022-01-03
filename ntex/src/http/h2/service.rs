@@ -8,7 +8,7 @@ use crate::http::config::{DispatcherConfig, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::request::Request;
 use crate::http::response::Response;
-use crate::io::{types, Filter, Io, IoRef};
+use crate::io::{types, Filter, Io, IoRef, TokioIoBoxed};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::time::Millis;
 use crate::util::Bytes;
@@ -171,7 +171,7 @@ where
 {
     type Response = ();
     type Error = DispatchError;
-    type Future = H2ServiceHandlerResponse<F, S, B>;
+    type Future = H2ServiceHandlerResponse<S, B>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -197,39 +197,36 @@ where
             state: State::Handshake(
                 io.get_ref(),
                 self.config.clone(),
-                server::Builder::new().handshake(io),
+                server::Builder::new().handshake(TokioIoBoxed::from(io)),
             ),
         }
     }
 }
 
-enum State<F, S: Service<Request>, B: MessageBody>
+enum State<S: Service<Request>, B: MessageBody>
 where
-    F: Filter,
     S: 'static,
 {
-    Incoming(Dispatcher<F, S, B, (), ()>),
+    Incoming(Dispatcher<S, B, (), ()>),
     Handshake(
         IoRef,
         Rc<DispatcherConfig<S, (), ()>>,
-        Handshake<Io<F>, Bytes>,
+        Handshake<TokioIoBoxed, Bytes>,
     ),
 }
 
-pub struct H2ServiceHandlerResponse<F, S, B>
+pub struct H2ServiceHandlerResponse<S, B>
 where
-    F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
-    state: State<F, S, B>,
+    state: State<S, B>,
 }
 
-impl<F, S, B> Future for H2ServiceHandlerResponse<F, S, B>
+impl<S, B> Future for H2ServiceHandlerResponse<S, B>
 where
-    F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,

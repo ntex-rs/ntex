@@ -1,9 +1,10 @@
 use std::{cell::RefCell, future::Future, io, rc::Rc};
 
-use async_channel::{unbounded, Sender};
+use async_channel::unbounded;
 use async_oneshot as oneshot;
 
-use crate::{arbiter::Arbiter, arbiter::SystemArbiter, arbiter::SystemCommand, System};
+use crate::arbiter::{Arbiter, ArbiterController, SystemArbiter};
+use crate::System;
 
 /// Builder struct for a ntex runtime.
 ///
@@ -48,6 +49,9 @@ impl Builder {
         let (sys_sender, sys_receiver) = unbounded();
         let stop_on_panic = self.stop_on_panic;
 
+        let (arb, arb_controller) = Arbiter::new_system();
+        let system = System::construct(sys_sender, arb, stop_on_panic);
+
         // system arbiter
         let arb = SystemArbiter::new(stop_tx, sys_receiver);
 
@@ -55,8 +59,8 @@ impl Builder {
         SystemRunner {
             stop,
             arb,
-            sys_sender,
-            stop_on_panic,
+            arb_controller,
+            system,
         }
     }
 }
@@ -66,33 +70,38 @@ impl Builder {
 pub struct SystemRunner {
     stop: oneshot::Receiver<i32>,
     arb: SystemArbiter,
-    sys_sender: Sender<SystemCommand>,
-    stop_on_panic: bool,
+    arb_controller: ArbiterController,
+    system: System,
 }
 
 impl SystemRunner {
+    /// Get current system.
+    pub fn system(&self) -> System {
+        self.system.clone()
+    }
+
     /// This function will start event loop and will finish once the
     /// `System::stop()` function is called.
-    pub fn run(self) -> io::Result<()> {
-        self.run_with(|| ())
+    pub fn run_until_stop(self) -> io::Result<()> {
+        self.run(|| Ok(()))
     }
 
     /// This function will start event loop and will finish once the
     /// `System::stop()` function is called.
     #[inline]
-    pub fn run_with<F>(self, f: F) -> io::Result<()>
+    pub fn run<F>(self, f: F) -> io::Result<()>
     where
-        F: FnOnce() + 'static,
+        F: FnOnce() -> io::Result<()> + 'static,
     {
         let SystemRunner {
             stop,
             arb,
-            sys_sender,
-            stop_on_panic,
+            arb_controller,
+            ..
         } = self;
 
         // run loop
-        match block_on(stop, arb, sys_sender, stop_on_panic, f).take() {
+        match block_on(stop, arb, arb_controller, f).take()? {
             Ok(code) => {
                 if code != 0 {
                     Err(io::Error::new(
@@ -106,6 +115,26 @@ impl SystemRunner {
             Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Closed")),
         }
     }
+
+    /// Execute a future and wait for result.
+    #[inline]
+    pub fn block_on<F, R>(self, fut: F) -> R
+    where
+        F: Future<Output = R> + 'static,
+        R: 'static,
+    {
+        let SystemRunner {
+            arb,
+            arb_controller,
+            ..
+        } = self;
+
+        // run loop
+        match block_on(fut, arb, arb_controller, || Ok(())).take() {
+            Ok(result) => result,
+            Err(_) => unreachable!(),
+        }
+    }
 }
 
 pub struct BlockResult<T>(Rc<RefCell<Option<T>>>);
@@ -117,26 +146,28 @@ impl<T> BlockResult<T> {
 }
 
 #[inline]
-fn block_on<F, F1, R>(
+fn block_on<F, R, F1>(
     fut: F,
     arb: SystemArbiter,
-    sys_sender: Sender<SystemCommand>,
-    stop_on_panic: bool,
+    arb_controller: ArbiterController,
     f: F1,
-) -> BlockResult<R>
+) -> BlockResult<io::Result<R>>
 where
     F: Future<Output = R> + 'static,
     R: 'static,
-    F1: FnOnce() + 'static,
+    F1: FnOnce() -> io::Result<()> + 'static,
 {
     let result = Rc::new(RefCell::new(None));
     let result_inner = result.clone();
     crate::block_on(Box::pin(async move {
-        let _system = System::construct(sys_sender, Arbiter::new_system(), stop_on_panic);
         crate::spawn(arb);
-        f();
-        let r = fut.await;
-        *result_inner.borrow_mut() = Some(r);
+        crate::spawn(arb_controller);
+        if let Err(e) = f() {
+            *result_inner.borrow_mut() = Some(Err(e));
+        } else {
+            let r = fut.await;
+            *result_inner.borrow_mut() = Some(Ok(r));
+        }
     }));
     BlockResult(result)
 }

@@ -5,9 +5,9 @@ use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::{IntoService, Service};
 use ntex_util::time::Seconds;
-use ntex_util::{future::Either, ready};
+use ntex_util::{future::Either, ready, spawn};
 
-use crate::{rt::spawn, DispatchItem, IoBoxed, IoRef, IoStatusUpdate, RecvError};
+use crate::{DispatchItem, IoBoxed, IoRef, IoStatusUpdate, RecvError};
 
 type Response<U> = <U as Encoder>::Item;
 

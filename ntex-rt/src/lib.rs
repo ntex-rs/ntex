@@ -1,6 +1,5 @@
 //! A runtime implementation that runs everything on the current thread.
 #![allow(clippy::return_self_not_must_use)]
-use std::future::Future;
 
 mod arbiter;
 mod builder;
@@ -12,14 +11,16 @@ pub use self::system::System;
 
 #[cfg(feature = "tokio")]
 mod tokio {
+    use std::future::Future;
+
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
-        let rt = runtime::Builder::new_current_thread()
+        let rt = tok_io::runtime::Builder::new_current_thread()
             .enable_io()
             .build()
             .unwrap();
-        LocalSet::new().block_on(&rt, fut);
+        tok_io::task::LocalSet::new().block_on(&rt, fut);
     }
 
     /// Spawn a future on the current thread. This does not create a new Arbiter
@@ -30,11 +31,11 @@ mod tokio {
     ///
     /// This function panics if ntex system is not running.
     #[inline]
-    pub fn spawn<F>(f: F) -> tokio::task::JoinHandle<F::Output>
+    pub fn spawn<F>(f: F) -> tok_io::task::JoinHandle<F::Output>
     where
         F: Future + 'static,
     {
-        tokio::task::spawn_local(f)
+        tok_io::task::spawn_local(f)
     }
 
     /// Executes a future on the current thread. This does not create a new Arbiter
@@ -45,24 +46,25 @@ mod tokio {
     ///
     /// This function panics if ntex system is not running.
     #[inline]
-    pub fn spawn_fn<F, R>(f: F) -> tokio::task::JoinHandle<R::Output>
+    pub fn spawn_fn<F, R>(f: F) -> tok_io::task::JoinHandle<R::Output>
     where
         F: FnOnce() -> R + 'static,
         R: Future + 'static,
     {
-        spawn(async move {
-            let r = lazy(|_| f()).await;
-            r.await
-        })
+        spawn(async move { f().await })
     }
 }
 
+#[allow(dead_code)]
 #[cfg(feature = "async-std")]
 mod asyncstd {
+    use futures_core::ready;
+    use std::{future::Future, pin::Pin, task::Context, task::Poll};
+
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
-        async_std::task::block_on(f);
+        async_std::task::block_on(fut);
     }
 
     /// Spawn a future on the current thread. This does not create a new Arbiter
@@ -95,10 +97,7 @@ mod asyncstd {
         F: FnOnce() -> R + 'static,
         R: Future + 'static,
     {
-        spawn(async move {
-            let r = lazy(|_| f()).await;
-            r.await
-        })
+        spawn(async move { f().await })
     }
 
     #[derive(Debug, Copy, Clone, derive_more::Display)]
@@ -127,7 +126,7 @@ pub use self::asyncstd::*;
 /// Runs the provided future, blocking the current thread until the future
 /// completes.
 #[cfg(all(not(feature = "tokio"), not(feature = "async-std")))]
-pub fn block_on<F: Future<Output = ()>>(_: F) {
+pub fn block_on<F: std::future::Future<Output = ()>>(_: F) {
     panic!("async runtime is not configured");
 }
 

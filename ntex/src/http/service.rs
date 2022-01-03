@@ -4,7 +4,7 @@ use std::{cell, error, fmt, future, marker, pin::Pin, rc::Rc};
 use h2::server::{self, Handshake};
 use ntex_tls::types::HttpProtocol;
 
-use crate::io::{types, Filter, Io, IoRef};
+use crate::io::{types, Filter, Io, IoRef, TokioIoBoxed};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
 use crate::util::Bytes;
@@ -382,7 +382,7 @@ where
                 state: ResponseState::H2Handshake {
                     data: Some((
                         io.get_ref(),
-                        server::Builder::new().handshake(io),
+                        server::Builder::new().handshake(TokioIoBoxed::from(io)),
                         self.config.clone(),
                     )),
                 },
@@ -437,11 +437,11 @@ pin_project_lite::pin_project! {
         U: 'static,
     {
         H1 { #[pin] fut: h1::Dispatcher<F, S, B, X, U> },
-        H2 { fut: Dispatcher<F, S, B, X, U> },
+        H2 { fut: Dispatcher<S, B, X, U> },
         H2Handshake { data:
                       Option<(
                           IoRef,
-                Handshake<Io<F>, Bytes>,
+                Handshake<TokioIoBoxed, Bytes>,
                 Rc<DispatcherConfig<S, X, U>>,
             )>,
         },

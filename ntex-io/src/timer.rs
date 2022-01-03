@@ -1,9 +1,9 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Duration, time::Instant};
 
 use ntex_util::time::{now, sleep, Millis};
-use ntex_util::HashSet;
+use ntex_util::{spawn, HashSet};
 
-use crate::{io::IoState, rt::spawn, IoRef};
+use crate::{io::IoState, IoRef};
 
 thread_local! {
     static TIMER: Rc<RefCell<Inner>> = Rc::new(RefCell::new(

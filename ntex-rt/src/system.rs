@@ -103,8 +103,8 @@ impl System {
     /// Function `f` get called within async runtime context.
     pub fn run<F>(f: F) -> io::Result<()>
     where
-        F: FnOnce() + 'static,
+        F: FnOnce() -> io::Result<()> + 'static,
     {
-        Builder::new().finish().run_with(f)
+        Builder::new().finish().run(f)
     }
 }

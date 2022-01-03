@@ -64,6 +64,9 @@ pub mod router {
 pub mod rt {
     //! A runtime implementation that runs everything on the current thread.
     pub use ntex_rt::*;
+
+    #[cfg(feature = "tokio")]
+    pub use ntex_tokio::*;
 }
 
 pub mod service {
@@ -78,6 +81,8 @@ pub mod time {
 pub mod io {
     //! IO streaming utilities.
     pub use ntex_io::*;
+
+    pub use ntex_tokio::TokioIoBoxed;
 }
 
 pub mod testing {

@@ -351,11 +351,11 @@ impl IoStream for IoTest {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(self);
 
-        crate::rt::spawn(ReadTask {
+        ntex_util::spawn(ReadTask {
             io: io.clone(),
             state: read,
         });
-        crate::rt::spawn(WriteTask {
+        ntex_util::spawn(WriteTask {
             io: io.clone(),
             state: write,
             st: IoWriteState::Processing(None),

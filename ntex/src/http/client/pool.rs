@@ -7,7 +7,7 @@ use http::uri::Authority;
 use ntex_tls::types::HttpProtocol;
 
 use crate::channel::pool;
-use crate::io::IoBoxed;
+use crate::io::{IoBoxed, TokioIoBoxed};
 use crate::rt::spawn;
 use crate::service::Service;
 use crate::task::LocalWaker;
@@ -357,7 +357,7 @@ struct OpenConnection<F> {
             Box<
                 dyn Future<
                     Output = Result<
-                        (SendRequest<Bytes>, H2Connection<IoBoxed, Bytes>),
+                        (SendRequest<Bytes>, H2Connection<TokioIoBoxed, Bytes>),
                         h2::Error,
                     >,
                 >,
@@ -443,7 +443,8 @@ where
                 if io.query::<HttpProtocol>().get() == Some(HttpProtocol::Http2) {
                     log::trace!("Connection is established, start http2 handshake");
                     // init http2 handshake
-                    this.h2 = Some(Box::pin(Builder::new().handshake(io)));
+                    this.h2 =
+                        Some(Box::pin(Builder::new().handshake(TokioIoBoxed::from(io))));
                     self.poll(cx)
                 } else {
                     log::trace!("Connection is established, init http1 connection");

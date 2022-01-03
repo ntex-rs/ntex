@@ -17,16 +17,16 @@ fn test_bind() {
 
     let h = thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
-        let srv = sys.exec(move || {
-            Server::build()
+        sys.run(move || {
+            let srv = Server::build()
                 .workers(1)
                 .disable_signals()
                 .bind("test", addr, move |_| fn_service(|_| ok::<_, ()>(())))
                 .unwrap()
-                .run()
-        });
-        let _ = tx.send((srv, ntex::rt::System::current()));
-        let _ = sys.run();
+                .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok(())
+        })
     });
     let (_, sys) = rx.recv().unwrap();
 
@@ -44,16 +44,16 @@ fn test_listen() {
     let h = thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
         let lst = net::TcpListener::bind(addr).unwrap();
-        sys.exec(move || {
+        sys.run(move || {
             Server::build()
                 .disable_signals()
                 .workers(1)
                 .listen("test", lst, move |_| fn_service(|_| ok::<_, ()>(())))
                 .unwrap()
-                .run()
-        });
-        let _ = tx.send(ntex::rt::System::current());
-        let _ = sys.run();
+                .run();
+            let _ = tx.send(ntex::rt::System::current());
+            Ok(())
+        })
     });
     let sys = rx.recv().unwrap();
 
@@ -71,8 +71,8 @@ fn test_run() {
 
     let h = thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
-        let srv = sys.exec(move || {
-            Server::build()
+        sys.run(move || {
+            let srv = Server::build()
                 .backlog(100)
                 .disable_signals()
                 .bind("test", addr, move |_| {
@@ -84,11 +84,10 @@ fn test_run() {
                     })
                 })
                 .unwrap()
-                .run()
-        });
-
-        let _ = tx.send((srv, ntex::rt::System::current()));
-        let _ = sys.run();
+                .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok(())
+        })
     });
     let (srv, sys) = rx.recv().unwrap();
 
@@ -141,8 +140,8 @@ fn test_on_worker_start() {
         let num = num2.clone();
         let num2 = num2.clone();
         let sys = ntex::rt::System::new("test");
-        let srv = sys.exec(move || {
-            Server::build()
+        sys.run(move || {
+            let srv = Server::build()
                 .disable_signals()
                 .configure(move |cfg| {
                     let num = num.clone();
@@ -170,10 +169,10 @@ fn test_on_worker_start() {
                     Ready::Ok::<_, io::Error>(())
                 })
                 .workers(1)
-                .run()
-        });
-        let _ = tx.send((srv, ntex::rt::System::current()));
-        let _ = sys.run();
+                .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok(())
+        })
     });
     let (_, sys) = rx.recv().unwrap();
     thread::sleep(time::Duration::from_millis(500));
@@ -198,9 +197,9 @@ fn test_panic_in_worker() {
     let h = thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
         let counter = counter2.clone();
-        let srv = sys.exec(move || {
+        sys.run(move || {
             let counter = counter.clone();
-            Server::build()
+            let srv = Server::build()
                 .workers(1)
                 .disable_signals()
                 .bind("test", addr, move |_| {
@@ -212,11 +211,11 @@ fn test_panic_in_worker() {
                     })
                 })
                 .unwrap()
-                .run()
-        });
-        let _ = tx.send((srv.clone(), ntex::rt::System::current()));
-        sys.exec(move || ntex::rt::spawn(srv.map(|_| ())));
-        let _ = sys.run();
+                .run();
+            let _ = tx.send((srv.clone(), ntex::rt::System::current()));
+            ntex::rt::spawn(srv.map(|_| ()));
+            Ok(())
+        })
     });
     let (_, sys) = rx.recv().unwrap();
 

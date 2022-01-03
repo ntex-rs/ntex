@@ -50,16 +50,14 @@ impl Clone for Arbiter {
 
 impl Arbiter {
     #[allow(clippy::borrowed_box)]
-    pub(super) fn new_system() -> Self {
+    pub(super) fn new_system() -> (Self, ArbiterController) {
         let (tx, rx) = unbounded();
 
         let arb = Arbiter::with_sender(tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         STORAGE.with(|cell| cell.borrow_mut().clear());
 
-        crate::spawn(Box::pin(ArbiterController { stop: None, rx }));
-
-        arb
+        (arb, ArbiterController { stop: None, rx })
     }
 
     /// Returns the current thread's arbiter's address. If no Arbiter is present, then this
@@ -231,7 +229,7 @@ impl Arbiter {
     }
 }
 
-struct ArbiterController {
+pub(crate) struct ArbiterController {
     stop: Option<oneshot::Sender<i32>>,
     rx: Receiver<ArbiterCommand>,
 }
