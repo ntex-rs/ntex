@@ -1,0 +1,25 @@
+[package]
+name = "ntex-tokio"
+version = "0.1.0"
+authors = ["ntex contributors <team@ntex.rs>"]
+description = "tokio intergration for ntex framework"
+keywords = ["network", "framework", "async", "futures"]
+homepage = "https://ntex.rs"
+repository = "https://github.com/ntex-rs/ntex.git"
+documentation = "https://docs.rs/ntex-rt-tokio/"
+categories = ["network-programming", "asynchronous"]
+license = "MIT"
+edition = "2018"
+
+[lib]
+name = "ntex_rt_tokio"
+path = "src/lib.rs"
+
+[dependencies]
+ntex-bytes = "0.1.8"
+ntex-io = "0.1.0"
+ntex-util = "0.1.4"
+ntex-rt = "0.4.0"
+log = "0.4"
+pin-project-lite = "0.2"
+tokio = { version = "1", default-features = false, features = ["rt", "net", "sync", "signal"] }

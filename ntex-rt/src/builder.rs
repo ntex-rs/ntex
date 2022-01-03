@@ -1,11 +1,9 @@
 use std::{cell::RefCell, future::Future, io, rc::Rc};
 
-use async_channel::unbounded;
+use async_channel::{unbounded, Sender};
 use async_oneshot as oneshot;
-use ntex_util::future::lazy;
 
-use crate::arbiter::{Arbiter, SystemArbiter};
-use crate::{create_runtime, Runtime, System};
+use crate::{arbiter::Arbiter, arbiter::SystemArbiter, arbiter::SystemCommand, System};
 
 /// Builder struct for a ntex runtime.
 ///
@@ -46,58 +44,55 @@ impl Builder {
     ///
     /// This method panics if it can not create tokio runtime
     pub fn finish(self) -> SystemRunner {
-        self.create_runtime(|| {})
-    }
-
-    /// This function will start tokio runtime and will finish once the
-    /// `System::stop()` message get called.
-    /// Function `f` get called within tokio runtime context.
-    pub fn run<F>(self, f: F) -> io::Result<()>
-    where
-        F: FnOnce() + 'static,
-    {
-        self.create_runtime(f).run()
-    }
-
-    fn create_runtime<F>(self, f: F) -> SystemRunner
-    where
-        F: FnOnce() + 'static,
-    {
         let (stop_tx, stop) = oneshot::oneshot();
         let (sys_sender, sys_receiver) = unbounded();
-
-        let rt = create_runtime();
+        let stop_on_panic = self.stop_on_panic;
 
         // system arbiter
-        let _system =
-            System::construct(sys_sender, Arbiter::new_system(&rt), self.stop_on_panic);
         let arb = SystemArbiter::new(stop_tx, sys_receiver);
-        rt.spawn(Box::pin(arb));
 
         // init system arbiter and run configuration method
-        let runner = SystemRunner { rt, stop, _system };
-        runner.block_on(lazy(move |_| f()));
-
-        runner
+        SystemRunner {
+            stop,
+            arb,
+            sys_sender,
+            stop_on_panic,
+        }
     }
 }
 
 /// Helper object that runs System's event loop
 #[must_use = "SystemRunner must be run"]
 pub struct SystemRunner {
-    rt: Box<dyn Runtime>,
     stop: oneshot::Receiver<i32>,
-    _system: System,
+    arb: SystemArbiter,
+    sys_sender: Sender<SystemCommand>,
+    stop_on_panic: bool,
 }
 
 impl SystemRunner {
     /// This function will start event loop and will finish once the
     /// `System::stop()` function is called.
     pub fn run(self) -> io::Result<()> {
-        let SystemRunner { rt, stop, .. } = self;
+        self.run_with(|| ())
+    }
+
+    /// This function will start event loop and will finish once the
+    /// `System::stop()` function is called.
+    #[inline]
+    pub fn run_with<F>(self, f: F) -> io::Result<()>
+    where
+        F: FnOnce() + 'static,
+    {
+        let SystemRunner {
+            stop,
+            arb,
+            sys_sender,
+            stop_on_panic,
+        } = self;
 
         // run loop
-        match block_on(&rt, stop).take() {
+        match block_on(stop, arb, sys_sender, stop_on_panic, f).take() {
             Ok(code) => {
                 if code != 0 {
                     Err(io::Error::new(
@@ -111,26 +106,6 @@ impl SystemRunner {
             Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Closed")),
         }
     }
-
-    /// Execute a future and wait for result.
-    #[inline]
-    pub fn block_on<F, R>(&self, fut: F) -> R
-    where
-        F: Future<Output = R> + 'static,
-        R: 'static,
-    {
-        block_on(&self.rt, fut).take()
-    }
-
-    /// Execute a function with enabled executor.
-    #[inline]
-    pub fn exec<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce() -> R + 'static,
-        R: 'static,
-    {
-        self.block_on(lazy(|_| f()))
-    }
 }
 
 pub struct BlockResult<T>(Rc<RefCell<Option<T>>>);
@@ -142,15 +117,24 @@ impl<T> BlockResult<T> {
 }
 
 #[inline]
-#[allow(clippy::borrowed_box)]
-fn block_on<F, R>(rt: &Box<dyn Runtime>, fut: F) -> BlockResult<R>
+fn block_on<F, F1, R>(
+    fut: F,
+    arb: SystemArbiter,
+    sys_sender: Sender<SystemCommand>,
+    stop_on_panic: bool,
+    f: F1,
+) -> BlockResult<R>
 where
     F: Future<Output = R> + 'static,
     R: 'static,
+    F1: FnOnce() + 'static,
 {
     let result = Rc::new(RefCell::new(None));
     let result_inner = result.clone();
-    rt.block_on(Box::pin(async move {
+    crate::block_on(Box::pin(async move {
+        let _system = System::construct(sys_sender, Arbiter::new_system(), stop_on_panic);
+        crate::spawn(arb);
+        f();
         let r = fut.await;
         *result_inner.borrow_mut() = Some(r);
     }));
