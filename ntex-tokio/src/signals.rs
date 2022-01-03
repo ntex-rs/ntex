@@ -40,7 +40,7 @@ pub fn signal() -> Option<oneshot::Receiver<Signal>> {
 
 struct Signals {
     #[cfg(not(unix))]
-    signal: Pin<Box<dyn Future<Output = io::Result<()>>>>,
+    signal: Pin<Box<dyn Future<Output = std::io::Result<()>>>>,
     #[cfg(unix)]
     signals: Vec<(Signal, tokio::signal::unix::Signal)>,
 }
