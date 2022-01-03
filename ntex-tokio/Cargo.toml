@@ -12,7 +12,7 @@ license = "MIT"
 edition = "2018"
 
 [lib]
-name = "ntex_rt_tokio"
+name = "ntex_tokio"
 path = "src/lib.rs"
 
 [dependencies]
@@ -22,4 +22,4 @@ ntex-util = "0.1.4"
 ntex-rt = "0.4.0"
 log = "0.4"
 pin-project-lite = "0.2"
-tokio = { version = "1", default-features = false, features = ["rt", "net", "sync", "signal"] }
+tokio = { version = "1", default-features = false, features = ["net", "sync", "signal"] }

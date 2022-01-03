@@ -5,10 +5,8 @@ use ntex_io::Io;
 use ntex_util::future::lazy;
 pub use tokio::task::{spawn_blocking, JoinError, JoinHandle};
 
-mod rt;
 mod signals;
 
-pub use rt::block_on;
 pub use signals::{signal, Signal};
 
 /// Opens a TCP connection to a remote host.
