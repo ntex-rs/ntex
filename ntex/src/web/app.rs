@@ -467,7 +467,14 @@ where
     ///     .await
     /// }
     /// ```
-    pub fn finish(self) -> AppFactory<M, F, Err> {
+    pub fn finish(
+        self,
+    ) -> impl ServiceFactory<
+        Request,
+        Response = WebResponse,
+        Error = Err::Container,
+        InitError = (),
+    > {
         IntoServiceFactory::<AppFactory<M, F, Err>, Request, ()>::into_factory(self)
     }
 
