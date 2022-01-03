@@ -4,6 +4,8 @@
 
 * Use ntex-rt::spawn
 
+* Move ntex::util services
+
 ## [0.1.5] - 2021-12-27
 
 * Fix borrow error when timer get dropped immidietly after start
