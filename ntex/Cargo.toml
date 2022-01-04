@@ -14,7 +14,7 @@ license = "MIT"
 edition = "2018"
 
 [package.metadata.docs.rs]
-features = ["openssl", "rustls", "compress", "cookie"]
+features = ["tokio", "openssl", "rustls", "compress", "cookie"]
 
 [lib]
 name = "ntex"

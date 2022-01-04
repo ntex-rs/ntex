@@ -1,6 +1,6 @@
 <div align="center">
  <p><h1>ntex</h1> </p>
-  <p><strong>Framework for composable network services. This project uses *unsafe*!</strong> </p>
+  <p><strong>Framework for composable network services.</strong> </p>
   <p>
 
 [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Linux)") 
@@ -20,6 +20,16 @@
 | Linux            | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Linux)") |
 | macOS            | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28OSX%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(OSX)") |
 | Windows          | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Windows%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Windows)") |
+
+## Usage
+
+Starting ntex v0.5 async runtime must be selected as a feature. Available options are `tokio`
+or `async-std`.
+
+```toml
+[dependencies]
+ntex = { version = "0.5", features = ["tokio"] }
+```
 
 ## Documentation & community resources
 
