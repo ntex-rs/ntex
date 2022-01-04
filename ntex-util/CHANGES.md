@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.7] - 2022-01-04
+
+* Add time::timeout_checked, if duration is zero then timeout is disabled
+
 ## [0.1.6] - 2022-01-03
 
 * Use ntex-rt::spawn

@@ -40,6 +40,20 @@ where
     Timeout::new_with_delay(future, Sleep::new(dur.into()))
 }
 
+/// Require a `Future` to complete before the specified duration has elapsed.
+///
+/// If the future completes before the duration has elapsed, then the completed
+/// value is returned. Otherwise, an error is returned and the future is
+/// canceled. If duration value is zero then timeout is disabled.
+#[inline]
+pub fn timeout_checked<T, U>(dur: U, future: T) -> TimeoutChecked<T>
+where
+    T: Future,
+    U: Into<Millis>,
+{
+    TimeoutChecked::new_with_delay(future, dur.into())
+}
+
 /// Future returned by [`sleep`](sleep).
 ///
 /// # Examples
@@ -137,6 +151,53 @@ where
         match this.delay.poll_elapsed(cx) {
             Poll::Ready(()) => Poll::Ready(Err(())),
             Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// Future returned by [`timeout_checked`](timeout_checked).
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
+    pub struct TimeoutChecked<T> {
+        #[pin]
+        state: TimeoutCheckedState<T>,
+    }
+}
+
+pin_project_lite::pin_project! {
+    #[project = TimeoutCheckedStateProject]
+    enum TimeoutCheckedState<T> {
+        Timeout{ #[pin] fut: Timeout<T> },
+        NoTimeout{ #[pin] fut: T },
+    }
+}
+
+impl<T> TimeoutChecked<T> {
+    pub(crate) fn new_with_delay(value: T, delay: Millis) -> TimeoutChecked<T> {
+        if delay.is_zero() {
+            TimeoutChecked {
+                state: TimeoutCheckedState::NoTimeout { fut: value },
+            }
+        } else {
+            TimeoutChecked {
+                state: TimeoutCheckedState::Timeout {
+                    fut: Timeout::new_with_delay(value, sleep(delay)),
+                },
+            }
+        }
+    }
+}
+
+impl<T> Future for TimeoutChecked<T>
+where
+    T: Future,
+{
+    type Output = Result<T::Output, ()>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        match self.project().state.as_mut().project() {
+            TimeoutCheckedStateProject::Timeout { fut } => fut.poll(cx),
+            TimeoutCheckedStateProject::NoTimeout { fut } => fut.poll(cx).map(Result::Ok),
         }
     }
 }
@@ -287,5 +348,17 @@ mod tests {
                 elapsed
             );
         }
+    }
+
+    #[ntex_macros::rt_test2]
+    async fn test_timeout_checked() {
+        let result = timeout_checked(Millis(200), sleep(Millis(100))).await;
+        assert!(result.is_ok());
+
+        let result = timeout_checked(Millis(5), sleep(Millis(100))).await;
+        assert!(result.is_err());
+
+        let result = timeout_checked(Millis(0), sleep(Millis(100))).await;
+        assert!(result.is_ok());
     }
 }
