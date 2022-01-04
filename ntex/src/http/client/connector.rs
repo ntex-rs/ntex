@@ -78,7 +78,7 @@ impl Connector {
         }
         #[cfg(all(not(feature = "openssl"), feature = "rustls"))]
         {
-            use rust_tls::{OwnedTrustAnchor, RootCertStore};
+            use tls_rustls::{OwnedTrustAnchor, RootCertStore};
 
             let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
             let mut cert_store = RootCertStore::empty();

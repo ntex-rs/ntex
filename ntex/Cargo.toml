@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.5.6"
+version = "0.5.7"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -27,7 +27,7 @@ default = []
 openssl = ["tls-openssl", "ntex-tls/openssl"]
 
 # rustls support
-rustls = ["tls-rustls", "ntex-tls/rustls"]
+rustls = ["tls-rustls", "webpki-roots", "ntex-tls/rustls"]
 
 # enable compressison support
 compress = ["flate2", "brotli2"]
@@ -94,6 +94,7 @@ tls-openssl = { version="0.10", package = "openssl", optional = true }
 
 # rustls
 tls-rustls = { version = "0.20", package = "rustls", optional = true }
+webpki-roots = { version = "0.22", optional = true }
 
 # compression
 brotli2 = { version="0.3.2", optional = true }

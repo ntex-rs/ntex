@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.7] - 2022-01-05
+
+* http: fix rustls feature
+
 ## [0.5.6] - 2022-01-03
 
 * web: Restore `App::finish()` method
