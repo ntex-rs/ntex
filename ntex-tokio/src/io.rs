@@ -1,12 +1,12 @@
 use std::task::{Context, Poll};
-use std::{any, cell::RefCell, cmp, future::Future, io, mem, pin::Pin, rc::Rc};
+use std::{any, cell::RefCell, cmp, future::Future, io, mem, pin::Pin, rc::Rc, rc::Weak};
 
 use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_io::{
     types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, ReadStatus, WriteContext,
     WriteStatus,
 };
-use ntex_util::{ready, time::sleep, time::Sleep};
+use ntex_util::{ready, time::sleep, time::Millis, time::Sleep};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 
@@ -28,6 +28,8 @@ impl Handle for HandleWrapper {
             if let Ok(addr) = self.0.borrow().peer_addr() {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
+        } else if id == any::TypeId::of::<SocketOptions>() {
+            return Some(Box::new(SocketOptions(Rc::downgrade(&self.0))));
         }
         None
     }
@@ -199,7 +201,15 @@ impl Future for WriteTask {
                     Poll::Ready(WriteStatus::Terminate) => {
                         log::trace!("write task is instructed to terminate");
 
-                        let _ = Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx);
+                        if !matches!(
+                            this.io.borrow().linger(),
+                            Ok(Some(std::time::Duration::ZERO))
+                        ) {
+                            // call shutdown to prevent flushing data on terminated Io. when
+                            // linger is set to zero, closing will reset the connection, so
+                            // shutdown is not neccessary.
+                            let _ = Pin::new(&mut *this.io.borrow_mut()).poll_shutdown(cx);
+                        }
                         this.state.close(None);
                         Poll::Ready(())
                     }
@@ -430,6 +440,26 @@ impl AsyncWrite for TokioIoBoxed {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         (*self.as_ref()).0.poll_shutdown(cx)
+    }
+}
+
+/// Query TCP Io connections for a handle to set socket options
+pub struct SocketOptions(Weak<RefCell<TcpStream>>);
+
+impl SocketOptions {
+    pub fn set_linger(&self, dur: Option<Millis>) -> io::Result<()> {
+        self.try_self()
+            .and_then(|s| s.borrow().set_linger(dur.map(|d| d.into())))
+    }
+
+    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
+        self.try_self().and_then(|s| s.borrow().set_ttl(ttl))
+    }
+
+    fn try_self(&self) -> io::Result<Rc<RefCell<TcpStream>>> {
+        self.0
+            .upgrade()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket is gone"))
     }
 }
 
