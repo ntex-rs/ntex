@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.8] - 2022-01-10
+
+* Add pool::Receiver::poll_recv() method.
+
+* Add oneshot::Receiver::poll_recv() method.
+
 ## [0.1.7] - 2022-01-04
 
 * Add time::timeout_checked, if duration is zero then timeout is disabled

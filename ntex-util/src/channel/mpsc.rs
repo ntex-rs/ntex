@@ -5,7 +5,7 @@ use futures_core::Stream;
 use futures_sink::Sink;
 
 use super::cell::{Cell, WeakCell};
-use crate::task::LocalWaker;
+use crate::{future::poll_fn, task::LocalWaker};
 
 /// Creates a unbounded in-memory channel with buffered storage.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -163,6 +163,13 @@ impl<T> Receiver<T> {
     /// Returns whether this channel is closed without needing a context.
     pub fn is_closed(&self) -> bool {
         self.shared.strong_count() == 1 || !self.shared.get_ref().has_receiver
+    }
+
+    /// Attempt to pull out the next value of this receiver, registering
+    /// the current task for wakeup if the value is not yet available,
+    /// and returning None if the stream is exhausted.
+    pub async fn recv(&self) -> Option<T> {
+        poll_fn(|cx| self.poll_recv(cx)).await
     }
 
     /// Attempt to pull out the next value of this receiver, registering

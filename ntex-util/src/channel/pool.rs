@@ -3,7 +3,7 @@ use slab::Slab;
 use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::{cell::Cell, Canceled};
-use crate::task::LocalWaker;
+use crate::{future::poll_fn, task::LocalWaker};
 
 /// Creates a new futures-aware, pool of one-shot's.
 pub fn new<T>() -> Pool<T> {
@@ -138,6 +138,31 @@ impl<T> Drop for Sender<T> {
     }
 }
 
+impl<T> Receiver<T> {
+    /// Wait until the oneshot is ready and return value
+    pub async fn recv(&self) -> Result<T, Canceled> {
+        poll_fn(|cx| self.poll_recv(cx)).await
+    }
+
+    /// Polls the oneshot to determine if value is ready
+    pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Result<T, Canceled>> {
+        let inner = get_inner(&self.inner, self.token);
+
+        // If we've got a value, then skip the logic below as we're done.
+        if let Some(val) = inner.value.take() {
+            return Poll::Ready(Ok(val));
+        }
+
+        // Check if sender is dropped and return error if it is.
+        if !inner.flags.contains(Flags::SENDER) {
+            Poll::Ready(Err(Canceled))
+        } else {
+            inner.rx_waker.register(cx.waker());
+            Poll::Pending
+        }
+    }
+}
+
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
         let inner = get_inner(&self.inner, self.token);
@@ -154,21 +179,7 @@ impl<T> Future for Receiver<T> {
     type Output = Result<T, Canceled>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        let inner = get_inner(&this.inner, this.token);
-
-        // If we've got a value, then skip the logic below as we're done.
-        if let Some(val) = inner.value.take() {
-            return Poll::Ready(Ok(val));
-        }
-
-        // Check if sender is dropped and return error if it is.
-        if !inner.flags.contains(Flags::SENDER) {
-            Poll::Ready(Err(Canceled))
-        } else {
-            inner.rx_waker.register(cx.waker());
-            Poll::Pending
-        }
+        self.poll_recv(cx)
     }
 }
 

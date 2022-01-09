@@ -2,7 +2,7 @@
 use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::{cell::Cell, Canceled};
-use crate::task::LocalWaker;
+use crate::{future::poll_fn, task::LocalWaker};
 
 /// Creates a new futures-aware, one-shot channel.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
@@ -77,24 +77,34 @@ impl<T> Drop for Sender<T> {
     }
 }
 
-impl<T> Future for Receiver<T> {
-    type Output = Result<T, Canceled>;
+impl<T> Receiver<T> {
+    /// Wait until the oneshot is ready and return value
+    pub async fn recv(&self) -> Result<T, Canceled> {
+        poll_fn(|cx| self.poll_recv(cx)).await
+    }
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
+    /// Polls the oneshot to determine if value is ready
+    pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Result<T, Canceled>> {
         // If we've got a value, then skip the logic below as we're done.
-        if let Some(val) = this.inner.get_mut().value.take() {
+        if let Some(val) = self.inner.get_mut().value.take() {
             return Poll::Ready(Ok(val));
         }
 
         // Check if sender is dropped and return error if it is.
-        if this.inner.strong_count() == 1 {
+        if self.inner.strong_count() == 1 {
             Poll::Ready(Err(Canceled))
         } else {
-            this.inner.get_ref().rx_task.register(cx.waker());
+            self.inner.get_ref().rx_task.register(cx.waker());
             Poll::Pending
         }
+    }
+}
+
+impl<T> Future for Receiver<T> {
+    type Output = Result<T, Canceled>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.poll_recv(cx)
     }
 }
 

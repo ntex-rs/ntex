@@ -2,7 +2,7 @@ use slab::Slab;
 use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::cell::Cell;
-use crate::task::LocalWaker;
+use crate::{future::poll_fn, task::LocalWaker};
 
 /// Condition allows to notify multiple waiters at the same time
 #[derive(Clone)]
@@ -57,6 +57,12 @@ pub struct Waiter {
 }
 
 impl Waiter {
+    /// Returns readiness state of the condition.
+    pub async fn ready(&self) {
+        poll_fn(|cx| self.poll_ready(cx)).await
+    }
+
+    /// Returns readiness state of the condition.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
         let inner = unsafe { self.inner.get_mut().data.get_unchecked_mut(self.token) };
         if inner.is_none() {
