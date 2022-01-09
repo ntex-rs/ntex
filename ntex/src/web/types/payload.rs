@@ -14,8 +14,8 @@ use crate::web::{FromRequest, HttpRequest};
 /// ## Example
 ///
 /// ```rust
-/// use futures::{Future, Stream};
-/// use ntex::util::BytesMut;
+/// use std::future::Future;
+/// use ntex::util::{BytesMut, Stream};
 /// use ntex::web::{self, error, App, HttpResponse};
 ///
 /// /// extract binary data from request
@@ -64,8 +64,8 @@ impl Stream for Payload {
 /// ## Example
 ///
 /// ```rust
-/// use futures::{Future, Stream};
-/// use ntex::util::BytesMut;
+/// use std::future::Future;
+/// use ntex::util::{BytesMut, Stream};
 /// use ntex::web::{self, error, App, Error, HttpResponse};
 ///
 /// /// extract binary data from request

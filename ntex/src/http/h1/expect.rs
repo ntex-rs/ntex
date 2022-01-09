@@ -2,7 +2,7 @@ use std::io;
 use std::task::{Context, Poll};
 
 use crate::http::request::Request;
-use crate::{util::Ready, Service, ServiceFactory};
+use crate::{service::Service, service::ServiceFactory, util::Ready};
 
 pub struct ExpectHandler;
 

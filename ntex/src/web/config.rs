@@ -131,7 +131,7 @@ mod tests {
     use crate::http::{Method, StatusCode};
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, App, HttpRequest, HttpResponse};
-    use crate::{util::Bytes, Service};
+    use crate::{service::Service, util::Bytes};
 
     #[crate::rt_test]
     async fn test_configure_data() {

@@ -1,9 +1,7 @@
 use std::{io, marker::PhantomData, task::Context, task::Poll};
 
-use crate::http::h1::Codec;
-use crate::http::request::Request;
-use crate::io::Io;
-use crate::{util::Ready, Service, ServiceFactory};
+use crate::http::{h1::Codec, request::Request};
+use crate::{io::Io, service::Service, service::ServiceFactory, util::Ready};
 
 pub struct UpgradeHandler<F>(PhantomData<F>);
 

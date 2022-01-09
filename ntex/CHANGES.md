@@ -4,6 +4,8 @@
 
 * Remove usage of ntex::io::Boxed types
 
+* Remove unneeded re-exports
+
 ## [0.5.7] - 2022-01-05
 
 * http: fix rustls feature

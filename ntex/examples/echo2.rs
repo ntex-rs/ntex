@@ -1,11 +1,9 @@
 use std::{env, io};
 
-use futures::StreamExt;
+use futures_util::StreamExt;
 use log::info;
-use ntex::http::header::HeaderValue;
-use ntex::http::{HttpService, Request, Response};
-use ntex::server::Server;
-use ntex::util::BytesMut;
+use ntex::http::{header::HeaderValue, HttpService, Request, Response};
+use ntex::{server::Server, util::BytesMut};
 
 async fn handle_request(mut req: Request) -> Result<Response, io::Error> {
     let mut body = BytesMut::new();

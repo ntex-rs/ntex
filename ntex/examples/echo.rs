@@ -1,11 +1,10 @@
 use std::{env, io};
 
-use futures::StreamExt;
+use futures_util::StreamExt;
 use log::info;
 use ntex::http::header::HeaderValue;
 use ntex::http::{HttpService, Request, Response};
-use ntex::server::Server;
-use ntex::{time::Seconds, util::BytesMut};
+use ntex::{server::Server, time::Seconds, util::BytesMut};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {

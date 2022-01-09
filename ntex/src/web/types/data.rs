@@ -133,9 +133,9 @@ mod tests {
 
     use super::*;
     use crate::http::StatusCode;
+    use crate::service::Service;
     use crate::web::test::{self, init_service, TestRequest};
     use crate::web::{self, App, HttpResponse};
-    use crate::Service;
 
     #[crate::rt_test]
     async fn test_data_extractor() {

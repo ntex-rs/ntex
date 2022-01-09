@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::connect::Connect;
 use ntex::io::{types::PeerAddr, Io};
 use ntex::server::test_server;
-use ntex::service::{fn_service, Service, ServiceFactory};
+use ntex::service::{fn_service, pipeline_factory, Service, ServiceFactory};
 use ntex::util::Bytes;
 
 #[cfg(feature = "openssl")]
@@ -29,7 +29,7 @@ async fn test_openssl_string() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     let srv = test_server(|| {
-        ntex::pipeline_factory(fn_service(|io: Io<_>| async move {
+        pipeline_factory(fn_service(|io: Io<_>| async move {
             let res = io.read_ready().await;
             assert!(res.is_ok());
             Ok(io)
@@ -60,7 +60,7 @@ async fn test_openssl_read_before_error() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     let srv = test_server(|| {
-        ntex::pipeline_factory(fn_service(|io: Io<_>| async move {
+        pipeline_factory(fn_service(|io: Io<_>| async move {
             let res = io.read_ready().await;
             assert!(res.is_ok());
             Ok(io)

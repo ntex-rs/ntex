@@ -1,6 +1,6 @@
 use std::{future::Future, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use crate::{http::Method, util::Ready, Service, ServiceFactory};
+use crate::{http::Method, service::Service, service::ServiceFactory, util::Ready};
 
 use super::error::ErrorRenderer;
 use super::error_default::DefaultError;

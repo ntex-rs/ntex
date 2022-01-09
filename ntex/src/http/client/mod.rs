@@ -1,7 +1,7 @@
 //! HTTP Client
 //!
 //! ```rust
-//! use futures::future::{lazy, Future};
+//! use futures_util::future::{lazy, Future};
 //! use ntex::http::client::Client;
 //!
 //! #[ntex::main]

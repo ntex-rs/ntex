@@ -7,7 +7,7 @@ use crate::http::body::MessageBody;
 use crate::http::error::{BlockingError, ResponseError};
 use crate::http::header::ContentEncoding;
 use crate::http::{Method, Request, Response};
-use crate::{IntoServiceFactory, ServiceFactory};
+use crate::service::{IntoServiceFactory, ServiceFactory};
 
 use super::config::AppConfig;
 use super::error::ErrorRenderer;

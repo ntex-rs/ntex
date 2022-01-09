@@ -2,7 +2,7 @@ use std::{convert::TryFrom, fmt, rc::Rc};
 
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::{time::Millis, Service};
+use crate::{service::Service, time::Millis};
 
 use super::connect::ConnectorWrapper;
 use super::error::ConnectError;

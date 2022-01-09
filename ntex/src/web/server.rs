@@ -9,7 +9,7 @@ use crate::http::{
     body::MessageBody, HttpService, KeepAlive, Request, Response, ResponseError,
 };
 use crate::server::{Server, ServerBuilder};
-use crate::{service::map_config, IntoServiceFactory, ServiceFactory};
+use crate::service::{map_config, IntoServiceFactory, ServiceFactory};
 use crate::{time::Seconds, util::PoolId};
 
 use super::config::AppConfig;

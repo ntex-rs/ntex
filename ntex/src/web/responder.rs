@@ -420,9 +420,8 @@ pub(crate) mod tests {
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::http::{Response as HttpResponse, StatusCode};
-    use crate::web;
     use crate::web::test::{init_service, TestRequest};
-    use crate::{util::Bytes, util::BytesMut, Service};
+    use crate::{service::Service, util::Bytes, util::BytesMut, web};
 
     fn responder<T: Responder<DefaultError>>(
         responder: T,
