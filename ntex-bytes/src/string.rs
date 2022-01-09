@@ -179,7 +179,7 @@ impl ops::Deref for ByteString {
     fn deref(&self) -> &str {
         let bytes = self.0.as_ref();
         // SAFETY:
-        // UTF-8 validity is guaranteed at during construction.
+        // UTF-8 validity is guaranteed during construction.
         unsafe { str::from_utf8_unchecked(bytes) }
     }
 }
@@ -213,42 +213,54 @@ impl<'a> From<borrow::Cow<'a, str>> for ByteString {
 }
 
 impl TryFrom<&[u8]> for ByteString {
-    type Error = str::Utf8Error;
+    type Error = ();
 
     #[inline]
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        let _ = str::from_utf8(value)?;
-        Ok(ByteString(Bytes::copy_from_slice(value)))
+        if utf8::is_valid(&value) {
+            Ok(ByteString(Bytes::copy_from_slice(value)))
+        } else {
+            Err(())
+        }
     }
 }
 
 impl TryFrom<Vec<u8>> for ByteString {
-    type Error = str::Utf8Error;
+    type Error = ();
 
     #[inline]
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        let buf = String::from_utf8(value).map_err(|err| err.utf8_error())?;
-        Ok(ByteString(Bytes::from(buf)))
+        if utf8::is_valid(&value) {
+            Ok(ByteString(Bytes::from(value)))
+        } else {
+            Err(())
+        }
     }
 }
 
 impl TryFrom<Bytes> for ByteString {
-    type Error = str::Utf8Error;
+    type Error = ();
 
     #[inline]
     fn try_from(value: Bytes) -> Result<Self, Self::Error> {
-        let _ = str::from_utf8(value.as_ref())?;
-        Ok(ByteString(value))
+        if utf8::is_valid(&value) {
+            Ok(ByteString(value))
+        } else {
+            Err(())
+        }
     }
 }
 
 impl TryFrom<BytesMut> for ByteString {
-    type Error = str::Utf8Error;
+    type Error = ();
 
     #[inline]
     fn try_from(value: crate::BytesMut) -> Result<Self, Self::Error> {
-        let _ = str::from_utf8(&value)?;
-        Ok(ByteString(value.freeze()))
+        if utf8::is_valid(&value) {
+            Ok(ByteString(value.freeze()))
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -288,6 +300,20 @@ mod serde {
         {
             String::deserialize(deserializer).map(ByteString::from)
         }
+    }
+}
+
+#[cfg(feature = "simd")]
+mod utf8 {
+    pub(super) fn is_valid(input: &[u8]) -> bool {
+        simdutf8::basic::from_utf8(input).is_ok()
+    }
+}
+
+#[cfg(not(feature = "simd"))]
+mod utf8 {
+    pub(super) fn is_valid(input: &[u8]) -> bool {
+        std::str::from_utf8(input).is_ok()
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "ntex-bytes"
-version = "0.1.8"
+version = "0.1.9"
 license = "MIT"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>", "Carl Lerche <me@carllerche.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
@@ -11,13 +11,20 @@ keywords = ["buffers", "zero-copy", "io"]
 categories = ["network-programming", "data-structures"]
 edition = "2018"
 
+[features]
+default = []
+
+# simd utf8 check support
+simd = ["simdutf8"]
+
 [dependencies]
 bitflags = "1.3"
 bytes = "1.0.0"
 serde = "1.0.0"
 futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
+simdutf8 = { version = "0.1.3", optional = true }
 
 [dev-dependencies]
 serde_test = "1.0"
 serde_json = "1.0"
-ntex = "0.5.0-b.0"
+ntex = "0.5.0"

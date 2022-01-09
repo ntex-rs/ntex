@@ -18,7 +18,7 @@ default = ["http"]
 
 [dependencies]
 serde = "1.0"
-ntex-bytes = "0.1"
+ntex-bytes = "0.1.9"
 log = "0.4"
 http = { version = "0.2", optional = true }
 regex = { version = "1.5.4", default-features = false, features = ["std"] }

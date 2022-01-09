@@ -25,7 +25,7 @@ openssl = ["tls_openssl"]
 rustls = ["tls_rust"]
 
 [dependencies]
-ntex-bytes = "0.1.8"
+ntex-bytes = "0.1.9"
 ntex-io = "0.1.2"
 ntex-util = "0.1.8"
 ntex-service = "0.3.1"

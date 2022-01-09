@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.9] (2022-01-10)
+
+* Add optional simd utf8 validation
+
 ## [0.1.8] (2021-12-18)
 
 * Remove futures patch dependency
