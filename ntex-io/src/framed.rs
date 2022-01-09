@@ -13,10 +13,7 @@ pub struct Framed<U> {
     codec: U,
 }
 
-impl<U> Framed<U>
-where
-    U: Decoder + Encoder,
-{
+impl<U> Framed<U> {
     #[inline]
     /// Provides an interface for reading and writing to
     /// `Io` object, using `Decode` and `Encode` traits of codec.
@@ -43,6 +40,17 @@ where
     }
 
     #[inline]
+    /// Return inner types of framed object
+    pub fn into_inner(self) -> (IoBoxed, U) {
+        (self.io, self.codec)
+    }
+}
+
+impl<U> Framed<U>
+where
+    U: Decoder + Encoder,
+{
+    #[inline]
     /// Wake write task and instruct to flush data.
     ///
     /// This is async version of .poll_flush() method.
@@ -68,17 +76,6 @@ where
     }
 }
 
-impl<U> fmt::Debug for Framed<U>
-where
-    U: fmt::Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Framed")
-            .field("codec", &self.codec)
-            .finish()
-    }
-}
-
 impl<U> Framed<U>
 where
     U: Encoder,
@@ -90,6 +87,17 @@ where
         item: <U as Encoder>::Item,
     ) -> Result<(), Either<U::Error, io::Error>> {
         self.io.send(item, &self.codec).await
+    }
+}
+
+impl<U> fmt::Debug for Framed<U>
+where
+    U: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Framed")
+            .field("codec", &self.codec)
+            .finish()
     }
 }
 

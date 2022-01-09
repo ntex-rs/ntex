@@ -1,3 +1,4 @@
+//! Query related types
 use std::{any, fmt, marker::PhantomData, net::SocketAddr};
 
 #[derive(Copy, Clone, PartialEq, Eq)]

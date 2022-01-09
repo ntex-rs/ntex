@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.2] - 2022-01-10
+
+* Remove unneeded boxed types
+
+* Add Framed::into_inner() helper method
+
 ## [0.1.1] - 2022-01-03
 
 * Move tokio support to separate crate

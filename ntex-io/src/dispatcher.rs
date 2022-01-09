@@ -93,9 +93,10 @@ where
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io, F: IntoService<S, DispatchItem<U>>>(io: Io, codec: U, service: F) -> Self
+    pub fn new<Io, F>(io: Io, codec: U, service: F) -> Self
     where
         IoBoxed: From<Io>,
+        F: IntoService<S, DispatchItem<U>>,
     {
         let io = IoBoxed::from(io);
         let ka_timeout = Cell::new(Seconds(30).into());
