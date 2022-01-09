@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.1] - 2022-01-10
+
+* Remove usage of ntex::io::Boxed types
+
 ## [0.1.0] - 2021-12-30
 
 * Upgrade to ntex-io 0.1

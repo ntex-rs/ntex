@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::service::{fn_service, pipeline_factory};
-use ntex::{codec, io::utils::filter, io::Io, server, util::Either};
+use ntex::{codec, io::filter, io::Io, server, util::Either};
 use ntex_tls::openssl::{PeerCert, PeerCertChain, SslAcceptor};
 use tls_openssl::ssl::{self, SslFiletype, SslMethod, SslVerifyMode};
 
