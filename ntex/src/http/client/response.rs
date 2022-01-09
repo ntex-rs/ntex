@@ -11,8 +11,7 @@ use crate::http::error::PayloadError;
 use crate::http::header::{AsName, HeaderValue, CONTENT_LENGTH};
 use crate::http::{HeaderMap, StatusCode, Version};
 use crate::http::{HttpMessage, Payload, ResponseHead};
-use crate::util::{Bytes, BytesMut, Extensions};
-use crate::Stream;
+use crate::util::{Bytes, BytesMut, Extensions, Stream};
 
 use super::error::JsonPayloadError;
 

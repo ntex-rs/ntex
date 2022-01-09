@@ -10,7 +10,7 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{
     uri, ConnectionType, Method, RequestHead, RequestHeadType, Uri, Version,
 };
-use crate::{time::Millis, util::Bytes, Stream};
+use crate::{time::Millis, util::Bytes, util::Stream};
 
 use super::error::{FreezeRequestError, InvalidUrl};
 use super::frozen::FrozenClientRequest;

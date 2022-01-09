@@ -7,8 +7,7 @@ use crate::http::header::{HeaderMap, HeaderValue, HOST};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::{Payload, PayloadStream};
 use crate::io::{IoBoxed, RecvError};
-use crate::util::{poll_fn, ready, BufMut, Bytes, BytesMut};
-use crate::Stream;
+use crate::util::{poll_fn, ready, BufMut, Bytes, BytesMut, Stream};
 
 use super::connection::{Connection, ConnectionType};
 use super::error::{ConnectError, SendRequestError};

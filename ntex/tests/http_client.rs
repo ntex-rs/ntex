@@ -1,11 +1,9 @@
 use std::io;
 
-use futures::future::{self, ok};
-
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Method, Request, Response};
 use ntex::service::ServiceFactory;
-use ntex::util::Bytes;
+use ntex::util::{Bytes, Ready};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -32,8 +30,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 #[ntex::test]
 async fn test_h1_v2() {
     let srv = test_server(move || {
-        HttpService::build()
-            .finish(|_| future::ok::<_, io::Error>(Response::Ok().body(STR)))
+        HttpService::build().finish(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
     });
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
@@ -59,7 +56,7 @@ async fn test_h1_v2() {
 async fn test_connection_close() {
     let srv = test_server(move || {
         HttpService::build()
-            .finish(|_| ok::<_, io::Error>(Response::Ok().body(STR)))
+            .finish(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
             .map(|_| ())
     });
 
@@ -78,9 +75,9 @@ async fn test_with_query_parameter() {
         HttpService::build()
             .finish(|req: Request| {
                 if req.uri().query().unwrap().contains("qp=") {
-                    ok::<_, io::Error>(Response::Ok().finish())
+                    Ready::Ok::<_, io::Error>(Response::Ok().finish())
                 } else {
-                    ok::<_, io::Error>(Response::BadRequest().finish())
+                    Ready::Ok::<_, io::Error>(Response::BadRequest().finish())
                 }
             })
             .map(|_| ())

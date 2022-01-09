@@ -3,11 +3,10 @@ use std::{future::Future, pin::Pin, sync::Arc, task::Context, task::Poll};
 
 use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
-use futures_core::Stream as FutStream;
 
 use crate::rt::{spawn, Arbiter};
 use crate::time::{sleep, Millis, Sleep};
-use crate::util::join_all;
+use crate::util::{join_all, Stream as FutStream};
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.8] - 2022-01-10
+
+* Remove usage of ntex::io::Boxed types
+
 ## [0.5.7] - 2022-01-05
 
 * http: fix rustls feature

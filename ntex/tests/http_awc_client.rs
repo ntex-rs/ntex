@@ -6,7 +6,7 @@ use std::sync::Arc;
 use brotli2::write::BrotliEncoder;
 use coo_kie::Cookie;
 use flate2::{read::GzDecoder, write::GzEncoder, write::ZlibEncoder, Compression};
-use futures::{future::ok, stream::once};
+use futures_util::stream::once;
 use rand::Rng;
 
 use ntex::http::client::error::{JsonPayloadError, SendRequestError};
@@ -17,7 +17,7 @@ use ntex::service::{map_config, pipeline_factory};
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
 use ntex::web::{self, test, App, BodyEncoding, Error, HttpRequest, HttpResponse};
-use ntex::{time::sleep, time::Millis, time::Seconds, util::Bytes};
+use ntex::{time::sleep, time::Millis, time::Seconds, util::Bytes, util::Ready};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -210,7 +210,7 @@ async fn test_connection_reuse() {
         let num2 = num2.clone();
         pipeline_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            ok(io)
+            Ready::Ok(io)
         })
         .and_then(HttpService::new(map_config(
             App::new().service(
@@ -245,7 +245,7 @@ async fn test_connection_force_close() {
         let num2 = num2.clone();
         pipeline_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            ok(io)
+            Ready::Ok(io)
         })
         .and_then(HttpService::new(map_config(
             App::new().service(
@@ -281,7 +281,7 @@ async fn test_connection_server_close() {
         let num2 = num2.clone();
         pipeline_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            ok(io)
+            Ready::Ok(io)
         })
         .and_then(HttpService::new(map_config(
             App::new().service(web::resource("/").route(web::to(|| async {
@@ -316,7 +316,7 @@ async fn test_connection_wait_queue() {
         let num2 = num2.clone();
         pipeline_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            ok(io)
+            Ready::Ok(io)
         })
         .and_then(HttpService::new(map_config(
             App::new().service(
@@ -362,7 +362,7 @@ async fn test_connection_wait_queue_force_close() {
         let num2 = num2.clone();
         pipeline_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            ok(io)
+            Ready::Ok(io)
         })
         .and_then(HttpService::new(map_config(
             App::new().service(web::resource("/").route(web::to(|| async {
@@ -612,7 +612,9 @@ async fn test_client_brotli_encoding_large_random() {
     // client stream request
     let mut response = srv
         .post("/")
-        .send_stream(once(ok::<_, JsonPayloadError>(Bytes::from(data.clone()))))
+        .send_stream(once(Ready::Ok::<_, JsonPayloadError>(Bytes::from(
+            data.clone(),
+        ))))
         .await
         .unwrap();
     assert!(response.status().is_success());
@@ -625,7 +627,9 @@ async fn test_client_brotli_encoding_large_random() {
     // frozen request
     let request = srv.post("/").timeout(Seconds(30)).freeze().unwrap();
     let mut response = request
-        .send_stream(once(ok::<_, JsonPayloadError>(Bytes::from(data.clone()))))
+        .send_stream(once(Ready::Ok::<_, JsonPayloadError>(Bytes::from(
+            data.clone(),
+        ))))
         .await
         .unwrap();
     assert!(response.status().is_success());
@@ -637,7 +641,9 @@ async fn test_client_brotli_encoding_large_random() {
 
     let mut response = request
         .extra_header("x-test2", "222")
-        .send_stream(once(ok::<_, JsonPayloadError>(Bytes::from(data.clone()))))
+        .send_stream(once(Ready::Ok::<_, JsonPayloadError>(Bytes::from(
+            data.clone(),
+        ))))
         .await
         .unwrap();
     assert!(response.status().is_success());

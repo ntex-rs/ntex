@@ -1,6 +1,6 @@
 use std::io;
 
-use futures::StreamExt;
+use futures_util::StreamExt;
 use ntex::http::StatusCode;
 use ntex::service::{fn_factory_with_config, fn_service};
 use ntex::util::{ByteString, Bytes};

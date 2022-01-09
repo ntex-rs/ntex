@@ -3,8 +3,8 @@ use std::{
 };
 
 use super::{error::ProtocolError, Codec, Frame, Message};
-use crate::util::{Bytes, BytesMut};
-use crate::{codec::Decoder, codec::Encoder, Sink, Stream};
+use crate::util::{Bytes, BytesMut, Sink, Stream};
+use crate::{codec::Decoder, codec::Encoder};
 
 /// Stream error
 #[derive(Debug, Display)]

@@ -2,7 +2,7 @@ use std::{
     error::Error, fmt, marker::PhantomData, mem, pin::Pin, task::Context, task::Poll,
 };
 
-use crate::{util::Bytes, util::BytesMut, Stream};
+use crate::util::{Bytes, BytesMut, Stream};
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 /// Body size hint
@@ -505,7 +505,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::stream;
+    use futures_util::stream;
     use std::io;
 
     use super::*;

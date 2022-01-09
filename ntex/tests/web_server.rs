@@ -1,13 +1,10 @@
-use std::io::{self, Read, Write};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{future::Future, io, io::Read, io::Write, pin::Pin, task::Context, task::Poll};
 
 use brotli2::write::{BrotliDecoder, BrotliEncoder};
 use derive_more::Display;
 use flate2::read::GzDecoder;
 use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
-use futures::{future::ready, ready, Future};
 use rand::{distributions::Alphanumeric, Rng};
 
 use ntex::http::body::Body;
@@ -17,7 +14,7 @@ use ntex::http::header::{
 };
 use ntex::http::{Method, StatusCode};
 use ntex::time::{sleep, Millis, Seconds, Sleep};
-use ntex::util::Bytes;
+use ntex::util::{ready, Bytes, Ready, Stream};
 
 use ntex::web::middleware::Compress;
 use ntex::web::{
@@ -62,7 +59,7 @@ impl TestBody {
     }
 }
 
-impl futures::Stream for TestBody {
+impl Stream for TestBody {
     type Item = Result<Bytes, io::Error>;
 
     fn poll_next(
@@ -226,7 +223,7 @@ async fn test_body_gzip_large() {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::to(move || {
-                ready(HttpResponse::Ok().body(data.clone()))
+                Ready::Ok::<_, io::Error>(HttpResponse::Ok().body(data.clone()))
             })))
     });
 
@@ -263,7 +260,7 @@ async fn test_body_gzip_large_random() {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::to(move || {
-                ready(HttpResponse::Ok().body(data.clone()))
+                Ready::Ok::<_, io::Error>(HttpResponse::Ok().body(data.clone()))
             })))
     });
 

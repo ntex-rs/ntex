@@ -1,8 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-use std::sync::{mpsc, Arc};
-use std::{io, io::Read, net, thread, time};
-
-use futures::future::{ok, FutureExt};
+use std::{io, io::Read, net, sync::mpsc, sync::Arc, thread, time};
 
 use ntex::codec::BytesCodec;
 use ntex::io::Io;
@@ -21,7 +18,9 @@ fn test_bind() {
             let srv = Server::build()
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, move |_| fn_service(|_| ok::<_, ()>(())))
+                .bind("test", addr, move |_| {
+                    fn_service(|_| Ready::Ok::<_, ()>(()))
+                })
                 .unwrap()
                 .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
@@ -48,7 +47,7 @@ fn test_listen() {
             Server::build()
                 .disable_signals()
                 .workers(1)
-                .listen("test", lst, move |_| fn_service(|_| ok::<_, ()>(())))
+                .listen("test", lst, move |_| fn_service(|_| Ready::Ok::<_, ()>(())))
                 .unwrap()
                 .run();
             let _ = tx.send(ntex::rt::System::current());
@@ -154,8 +153,8 @@ fn test_on_worker_start() {
                         .on_worker_start(move |rt| {
                             let num = num.clone();
                             async move {
-                                rt.service("addr1", fn_service(|_| ok::<_, ()>(())));
-                                rt.service("addr3", fn_service(|_| ok::<_, ()>(())));
+                                rt.service("addr1", fn_service(|_| Ready::Ok::<_, ()>(())));
+                                rt.service("addr3", fn_service(|_| Ready::Ok::<_, ()>(())));
                                 let _ = num.fetch_add(1, Relaxed);
                                 Ok::<_, io::Error>(())
                             }
@@ -207,13 +206,15 @@ fn test_panic_in_worker() {
                     fn_service(move |_| {
                         counter.fetch_add(1, Relaxed);
                         panic!();
-                        ok::<_, ()>(())
+                        Ready::Ok::<_, ()>(())
                     })
                 })
                 .unwrap()
                 .run();
             let _ = tx.send((srv.clone(), ntex::rt::System::current()));
-            ntex::rt::spawn(srv.map(|_| ()));
+            ntex::rt::spawn(async move {
+                let _ = srv.await;
+            });
             Ok(())
         })
     });

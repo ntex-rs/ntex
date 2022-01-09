@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, future::Future, io, net::SocketAddr, pin::Pin};
 
-use crate::io::{types, utils::Boxed, Io};
+use crate::io::{types, Io};
 use crate::rt::tcp_connect_in;
 use crate::service::{Service, ServiceFactory};
 use crate::util::{Either, PoolId, PoolRef, Ready};
@@ -42,11 +42,6 @@ impl<T: Address> Connector<T> {
             state: ConnectState::Resolve(self.resolver.call(message.into())),
             pool: self.pool,
         }
-    }
-
-    /// Produce sealed io stream (IoBoxed)
-    pub fn seal(self) -> Boxed<Connector<T>, Connect<T>> {
-        Boxed::new(self)
     }
 }
 

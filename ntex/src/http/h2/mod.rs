@@ -9,7 +9,7 @@ mod service;
 
 pub use self::dispatcher::Dispatcher;
 pub use self::service::H2Service;
-use crate::{http::error::PayloadError, util::Bytes, Stream};
+use crate::{http::error::PayloadError, util::Bytes, util::Stream};
 
 /// H2 receive stream
 #[derive(Debug)]

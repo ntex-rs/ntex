@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 use std::{cell::RefCell, collections::VecDeque, pin::Pin};
 
 use crate::http::error::PayloadError;
-use crate::{task::LocalWaker, util::Bytes, Stream};
+use crate::{task::LocalWaker, util::Bytes, util::Stream};
 
 /// max buffer size 32k
 const MAX_BUFFER_SIZE: usize = 32_768;

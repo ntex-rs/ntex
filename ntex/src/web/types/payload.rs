@@ -5,10 +5,9 @@ use encoding_rs::UTF_8;
 use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
-use crate::util::{next, Bytes, BytesMut, Either, Ready};
+use crate::util::{next, Bytes, BytesMut, Either, Ready, Stream};
 use crate::web::error::{ErrorRenderer, PayloadError};
 use crate::web::{FromRequest, HttpRequest};
-use crate::Stream;
 
 /// Payload extractor returns request 's payload stream.
 ///

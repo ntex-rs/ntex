@@ -174,10 +174,10 @@ enum ContentEncoder {
 
 impl ContentEncoder {
     fn can_encode(encoding: ContentEncoding) -> bool {
-        match encoding {
-            ContentEncoding::Deflate | ContentEncoding::Gzip | ContentEncoding::Br => true,
-            _ => false,
-        }
+        matches!(
+            encoding,
+            ContentEncoding::Deflate | ContentEncoding::Gzip | ContentEncoding::Br
+        )
     }
 
     fn encoder(encoding: ContentEncoding) -> Option<Self> {

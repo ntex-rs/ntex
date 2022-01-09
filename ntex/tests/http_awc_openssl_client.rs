@@ -2,7 +2,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use futures::future::ok;
 use tls_openssl::ssl::{
     AlpnError, SslAcceptor, SslConnector, SslFiletype, SslMethod, SslVerifyMode,
 };
@@ -11,8 +10,8 @@ use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Version};
 use ntex::service::{map_config, pipeline_factory, ServiceFactory};
-use ntex::time::Seconds;
 use ntex::web::{self, dev::AppConfig, App, HttpResponse};
+use ntex::{time::Seconds, util::Ready};
 
 fn ssl_acceptor() -> SslAcceptor {
     // load ssl keys
@@ -44,7 +43,7 @@ async fn test_connection_reuse_h2() {
         let num2 = num2.clone();
         pipeline_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
-            ok(io)
+            Ready::Ok(io)
         })
         .and_then(
             HttpService::build()

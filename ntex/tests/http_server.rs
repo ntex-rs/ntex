@@ -1,7 +1,7 @@
 use std::{io, io::Read, io::Write, net};
 
-use futures::future::{self, ready, FutureExt};
-use futures::stream::{once, StreamExt};
+use futures_util::future::{self, FutureExt};
+use futures_util::stream::{once, StreamExt};
 use regex::Regex;
 
 use ntex::http::header::{HeaderName, HeaderValue};
@@ -106,7 +106,7 @@ async fn test_chunked_payload() {
                     Ok(pl) => pl,
                     Err(e) => panic!("Error reading payload: {}", e),
                 })
-                .fold(0usize, |acc, chunk| ready(acc + chunk.len()))
+                .fold(0usize, |acc, chunk| async move { acc + chunk.len() })
                 .map(|req_size| {
                     Ok::<_, io::Error>(Response::Ok().body(format!("size={}", req_size)))
                 })

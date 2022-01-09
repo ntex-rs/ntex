@@ -3,7 +3,7 @@ use std::{fmt, mem, pin::Pin, task::Context, task::Poll};
 use h2::RecvStream;
 
 use super::{error::PayloadError, h1, h2 as h2d};
-use crate::{util::Bytes, Stream};
+use crate::util::{Bytes, Stream};
 
 /// Type represent boxed payload
 pub type PayloadStream = Pin<Box<dyn Stream<Item = Result<Bytes, PayloadError>>>>;

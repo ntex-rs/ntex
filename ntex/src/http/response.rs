@@ -11,7 +11,7 @@ use crate::http::error::{HttpError, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{ConnectionType, Message, ResponseHead};
 use crate::http::StatusCode;
-use crate::{util::Bytes, util::BytesMut, util::Extensions, Stream};
+use crate::util::{Bytes, BytesMut, Extensions, Stream};
 
 /// An HTTP Response
 pub struct Response<B = Body> {

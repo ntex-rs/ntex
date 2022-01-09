@@ -45,8 +45,6 @@ pub use self::service::{
     Transform,
 };
 
-pub use futures_core::stream::Stream;
-pub use futures_sink::Sink;
 pub use ntex_util::channel;
 pub use ntex_util::task;
 

@@ -2,14 +2,14 @@ use std::{fmt, future::Future, io, marker, mem, net, pin::Pin, task::Context, ta
 
 use async_channel::{unbounded, Receiver};
 use async_oneshot as oneshot;
-use futures_core::Stream;
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::io::Io;
 use crate::rt::{spawn, Signal, System};
-use crate::service::ServiceFactory;
-use crate::{time::sleep, time::Millis, util::join_all};
+use crate::{
+    io::Io, service::ServiceFactory, time::sleep, time::Millis, util::join_all,
+    util::Stream,
+};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{

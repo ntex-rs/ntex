@@ -8,7 +8,7 @@ use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::RequestHeadType;
 use crate::time::{sleep, Millis, Sleep};
-use crate::{util::Bytes, Stream};
+use crate::util::{Bytes, Stream};
 
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;

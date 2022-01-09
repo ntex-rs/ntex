@@ -7,7 +7,7 @@ use crate::http::error::PayloadError;
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{error::HandshakeError, handshake};
-use crate::{channel::mpsc, rt, util::Bytes, ws, Sink, Stream};
+use crate::{channel::mpsc, rt, util::Bytes, util::Sink, util::Stream, ws};
 
 pub type WebSocketsSink =
     ws::StreamEncoder<mpsc::Sender<Result<Bytes, Box<dyn error::Error>>>>;

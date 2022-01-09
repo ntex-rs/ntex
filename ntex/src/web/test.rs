@@ -19,9 +19,9 @@ use crate::service::{
     map_config, IntoService, IntoServiceFactory, Service, ServiceFactory,
 };
 use crate::time::{sleep, Millis, Seconds};
-use crate::util::{next, Bytes, BytesMut, Extensions, Ready};
+use crate::util::{next, Bytes, BytesMut, Extensions, Ready, Stream};
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
-use crate::{io::Sealed, rt::System, server::Server, Stream};
+use crate::{io::Sealed, rt::System, server::Server};
 
 use crate::web::config::AppConfig;
 use crate::web::error::{DefaultError, ErrorRenderer};
