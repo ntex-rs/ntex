@@ -217,7 +217,7 @@ impl TryFrom<&[u8]> for ByteString {
 
     #[inline]
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        if utf8::is_valid(&value) {
+        if utf8::is_valid(value) {
             Ok(ByteString(Bytes::copy_from_slice(value)))
         } else {
             Err(())

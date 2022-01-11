@@ -11,7 +11,7 @@ mod tree;
 pub use self::de::PathDeserializer;
 pub use self::path::{Path, PathIter};
 pub use self::resource::ResourceDef;
-pub use self::router::{Router, RouterBuilder};
+pub use self::router::{ResourceId, Router, RouterBuilder};
 
 #[doc(hidden)]
 pub struct ResourceInfo;
