@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.2] - 2022-01-11
+
+* Enable all features for tokio runtime
+
 ## [0.4.1] - 2022-01-03
 
 * Refactor async runtimes support

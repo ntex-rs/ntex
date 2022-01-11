@@ -18,7 +18,7 @@ mod tokio {
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
         let rt = tok_io::runtime::Builder::new_current_thread()
-            .enable_io()
+            .enable_all()
             .build()
             .unwrap();
         tok_io::task::LocalSet::new().block_on(&rt, fut);
