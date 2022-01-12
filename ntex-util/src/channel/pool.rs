@@ -49,6 +49,11 @@ impl<T> Pool<T> {
             },
         )
     }
+
+    /// Shrinks the capacity of the pool as much as possible.
+    pub fn shrink_to_fit(&self) {
+        self.0.get_mut().shrink_to_fit()
+    }
 }
 
 impl<T> Clone for Pool<T> {
