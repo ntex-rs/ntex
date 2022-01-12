@@ -92,7 +92,7 @@ impl<F: Filter> Filter for WsTransport<F> {
 
     #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
-        self.inner.get_read_buf().or_else(|| self.read_buf.take())
+        self.read_buf.take()
     }
 
     #[inline]
@@ -100,40 +100,40 @@ impl<F: Filter> Filter for WsTransport<F> {
         None
     }
 
-    fn release_read_buf(
-        &self,
-        io: &IoRef,
-        src: BytesMut,
-        dst: &mut Option<BytesMut>,
-        nbytes: usize,
-    ) -> io::Result<usize> {
-        // store to read_buf
-        let mut src = {
-            let mut dst = None;
-            let result = self.inner.release_read_buf(io, src, &mut dst, nbytes);
-            if let Err(err) = result {
-                io.want_shutdown(Some(err));
-            }
-            if let Some(dst) = dst {
-                dst
-            } else {
-                return Ok(0);
-            }
-        };
-        let (hw, lw) = self.pool.read_params().unpack();
+    #[inline]
+    fn release_read_buf(&self, buf: BytesMut) {
+        self.read_buf.set(Some(buf));
+    }
 
-        // get inner filter buffer
-        if dst.is_none() {
-            *dst = Some(self.pool.get_read_buf());
+    fn process_read_buf(&self, io: &IoRef, nbytes: usize) -> io::Result<(usize, usize)> {
+        // ask inner filter to process read buf
+        match self.inner.process_read_buf(io, nbytes) {
+            Err(err) => io.want_shutdown(Some(err)),
+            Ok((_, 0)) => return Ok((0, 0)),
+            Ok(_) => (),
         }
-        let buf = dst.as_mut().unwrap();
-        let buf_len = buf.len();
+
+        // get inner buffer
+        let mut src = if let Some(src) = self.inner.get_read_buf() {
+            src
+        } else {
+            return Ok((0, 0));
+        };
+
+        // get processed buffer
+        let mut dst = if let Some(dst) = self.read_buf.take() {
+            dst
+        } else {
+            self.pool.get_read_buf()
+        };
+        let dst_len = dst.len();
+        let (hw, lw) = self.pool.read_params().unpack();
 
         loop {
             // make sure we've got room
-            let remaining = buf.remaining_mut();
+            let remaining = dst.remaining_mut();
             if remaining < lw {
-                buf.reserve(hw - remaining);
+                dst.reserve(hw - remaining);
             }
 
             let frame = if let Some(frame) = self.codec.decode(&mut src).map_err(|e| {
@@ -147,20 +147,20 @@ impl<F: Filter> Filter for WsTransport<F> {
             };
 
             match frame {
-                Frame::Binary(bin) => buf.extend_from_slice(&bin),
+                Frame::Binary(bin) => dst.extend_from_slice(&bin),
                 Frame::Continuation(Item::FirstBinary(bin)) => {
                     self.insert_flags(Flags::CONTINUATION);
-                    buf.extend_from_slice(&bin);
+                    dst.extend_from_slice(&bin);
                 }
                 Frame::Continuation(Item::Continue(bin)) => {
                     self.continuation_must_start("Continuation frame is not started")?;
-                    buf.extend_from_slice(&bin);
+                    dst.extend_from_slice(&bin);
                 }
                 Frame::Continuation(Item::Last(bin)) => {
                     self.continuation_must_start(
                         "Continuation frame is not started, last frame is received",
                     )?;
-                    buf.extend_from_slice(&bin);
+                    dst.extend_from_slice(&bin);
                     self.remove_flags(Flags::CONTINUATION);
                 }
                 Frame::Continuation(Item::FirstText(_)) => {
@@ -193,12 +193,16 @@ impl<F: Filter> Filter for WsTransport<F> {
             };
         }
 
+        let dlen = dst.len();
+        let nbytes = dlen - dst_len;
+
         if src.is_empty() {
             self.pool.release_read_buf(src);
         } else {
-            self.read_buf.set(Some(src));
+            self.inner.release_read_buf(src);
         }
-        Ok(buf.len() - buf_len)
+        self.read_buf.set(Some(dst));
+        Ok((dlen, nbytes))
     }
 
     fn release_write_buf(&self, src: BytesMut) -> Result<(), io::Error> {
@@ -243,13 +247,12 @@ impl<F: Filter> FilterFactory<F> for WsTransportFactory {
         let pool = st.memory_pool();
 
         Ready::from(st.map_filter(|inner: F| {
-            let read_buf = inner.get_read_buf();
             Ok(WsTransport {
                 pool,
                 inner,
                 codec: self.codec,
                 flags: Cell::new(Flags::empty()),
-                read_buf: Cell::new(read_buf),
+                read_buf: Cell::new(None),
             })
         }))
     }
