@@ -26,6 +26,7 @@ log = "0.4"
 pin-project-lite = "0.2"
 
 [dev-dependencies]
-ntex = "0.5.0"
 rand = "0.8"
 env_logger = "0.9"
+
+ntex = { version = "0.5", features = ["tokio"] }

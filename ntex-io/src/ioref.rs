@@ -355,16 +355,14 @@ mod tests {
             self.inner.get_read_buf()
         }
 
-        fn release_read_buf(
-            &self,
-            io: &IoRef,
-            buf: BytesMut,
-            dst: &mut Option<BytesMut>,
-            new_bytes: usize,
-        ) -> io::Result<usize> {
-            let result = self.inner.release_read_buf(io, buf, dst, new_bytes)?;
+        fn release_read_buf(&self, buf: BytesMut) {
+            self.inner.release_read_buf(buf)
+        }
+
+        fn process_read_buf(&self, io: &IoRef, n: usize) -> io::Result<(usize, usize)> {
+            let result = self.inner.process_read_buf(io, n)?;
             self.read_order.borrow_mut().push(self.idx);
-            self.in_bytes.set(self.in_bytes.get() + result);
+            self.in_bytes.set(self.in_bytes.get() + result.1);
             Ok(result)
         }
 
