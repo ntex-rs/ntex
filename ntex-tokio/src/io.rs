@@ -92,6 +92,7 @@ impl Future for ReadTask {
                             }
                             Poll::Ready(Err(err)) => {
                                 log::trace!("read task failed on io {:?}", err);
+                                drop(io);
                                 let _ = this.state.release_read_buf(buf, new_bytes);
                                 this.state.close(Some(err));
                                 return Poll::Ready(());
@@ -99,6 +100,7 @@ impl Future for ReadTask {
                         }
                     }
 
+                    drop(io);
                     if new_bytes == 0 && close {
                         this.state.close(None);
                         return Poll::Ready(());
@@ -258,10 +260,11 @@ impl Future for WriteTask {
                         Shutdown::Stopping(ref mut count) => {
                             // read until 0 or err
                             let mut buf = [0u8; 512];
-                            let mut io = this.io.borrow_mut();
                             loop {
                                 let mut read_buf = ReadBuf::new(&mut buf);
-                                match Pin::new(&mut *io).poll_read(cx, &mut read_buf) {
+                                match Pin::new(&mut *this.io.borrow_mut())
+                                    .poll_read(cx, &mut read_buf)
+                                {
                                     Poll::Ready(Err(_)) | Poll::Ready(Ok(_))
                                         if read_buf.filled().is_empty() =>
                                     {
@@ -536,6 +539,7 @@ mod unixstream {
                                 }
                                 Poll::Ready(Err(err)) => {
                                     log::trace!("read task failed on io {:?}", err);
+                                    drop(io);
                                     let _ = this.state.release_read_buf(buf, new_bytes);
                                     this.state.close(Some(err));
                                     return Poll::Ready(());
@@ -543,6 +547,7 @@ mod unixstream {
                             }
                         }
 
+                        drop(io);
                         if new_bytes == 0 && close {
                             this.state.close(None);
                             return Poll::Ready(());
@@ -682,10 +687,11 @@ mod unixstream {
                             Shutdown::Stopping(ref mut count) => {
                                 // read until 0 or err
                                 let mut buf = [0u8; 512];
-                                let mut io = this.io.borrow_mut();
                                 loop {
                                     let mut read_buf = ReadBuf::new(&mut buf);
-                                    match Pin::new(&mut *io).poll_read(cx, &mut read_buf) {
+                                    match Pin::new(&mut *this.io.borrow_mut())
+                                        .poll_read(cx, &mut read_buf)
+                                    {
                                         Poll::Ready(Err(_)) | Poll::Ready(Ok(_))
                                             if read_buf.filled().is_empty() =>
                                         {

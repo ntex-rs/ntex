@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.2] - 2022-01-12
+
+* Fix potential BorrowMutError
+
 ## [0.1.1] - 2022-01-10
 
 * Allow to set socket options
