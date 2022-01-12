@@ -78,19 +78,16 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn release_read_buf(
-        &self,
-        _: &IoRef,
-        buf: BytesMut,
-        dst: &mut Option<BytesMut>,
-        nbytes: usize,
-    ) -> io::Result<usize> {
-        if let Some(ref mut dst) = dst {
-            dst.extend_from_slice(&buf)
-        } else {
-            *dst = Some(buf)
-        }
-        Ok(nbytes)
+    fn release_read_buf(&self, buf: BytesMut) {
+        self.0 .0.read_buf.set(Some(buf));
+    }
+
+    #[inline]
+    fn process_read_buf(&self, _: &IoRef, n: usize) -> io::Result<(usize, usize)> {
+        let buf = self.0 .0.read_buf.as_ptr();
+        let ref_buf = unsafe { buf.as_ref().unwrap() };
+        let total = ref_buf.as_ref().map(|v| v.len()).unwrap_or(0);
+        Ok((total, n))
     }
 
     #[inline]
@@ -144,14 +141,10 @@ impl Filter for NullFilter {
         None
     }
 
-    fn release_read_buf(
-        &self,
-        _: &IoRef,
-        _: BytesMut,
-        _: &mut Option<BytesMut>,
-        _: usize,
-    ) -> io::Result<usize> {
-        Ok(0)
+    fn release_read_buf(&self, _: BytesMut) {}
+
+    fn process_read_buf(&self, _: &IoRef, _: usize) -> io::Result<(usize, usize)> {
+        Ok((0, 0))
     }
 
     fn release_write_buf(&self, _: BytesMut) -> Result<(), io::Error> {

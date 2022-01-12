@@ -177,18 +177,19 @@ impl IoState {
     where
         Fn: FnOnce(&mut Option<BytesMut>) -> Ret,
     {
-        let buf = self.read_buf.as_ptr();
-        let ref_buf = unsafe { buf.as_mut().unwrap() };
-        let result = f(ref_buf);
+        let filter = self.filter.get();
+        let mut buf = filter.get_read_buf();
+        let result = f(&mut buf);
 
-        // release buffer
-        if release {
-            if let Some(ref buf) = ref_buf {
+        if let Some(buf) = buf {
+            if release {
+                // release buffer
                 if buf.is_empty() {
-                    let buf = mem::take(ref_buf).unwrap();
                     self.pool.get().release_read_buf(buf);
+                    return result;
                 }
             }
+            filter.release_read_buf(buf);
         }
         result
     }

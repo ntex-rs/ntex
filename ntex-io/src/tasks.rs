@@ -28,8 +28,9 @@ impl ReadContext {
     /// Get read buffer
     pub fn get_read_buf(&self) -> BytesMut {
         self.0
-            .filter()
-            .get_read_buf()
+             .0
+            .read_buf
+            .take()
             .unwrap_or_else(|| self.0.memory_pool().get_read_buf())
     }
 
@@ -39,35 +40,28 @@ impl ReadContext {
         if buf.is_empty() {
             self.0.memory_pool().release_read_buf(buf);
         } else {
+            self.0 .0.read_buf.set(Some(buf));
             let filter = self.0.filter();
-            let mut dst = self.0 .0.read_buf.take();
-            let result = filter.release_read_buf(&self.0, buf, &mut dst, nbytes);
-            let nbytes = result.as_ref().map(|i| *i).unwrap_or(0);
-
-            if let Some(dst) = dst {
-                if nbytes > 0 {
-                    if dst.len() > self.0.memory_pool().read_params().high as usize {
-                        log::trace!(
-                            "buffer is too large {}, enable read back-pressure",
-                            dst.len()
-                        );
-                        self.0 .0.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
-                    } else {
+            match filter.process_read_buf(&self.0, nbytes) {
+                Ok((total, nbytes)) => {
+                    if nbytes > 0 {
+                        if total > self.0.memory_pool().read_params().high as usize {
+                            log::trace!(
+                                "buffer is too large {}, enable read back-pressure",
+                                total
+                            );
+                            self.0 .0.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
+                        }
+                        self.0 .0.dispatch_task.wake();
                         self.0 .0.insert_flags(Flags::RD_READY);
                         log::trace!("new {} bytes available, wakeup dispatcher", nbytes);
                     }
-                    self.0 .0.dispatch_task.wake();
                 }
-                self.0 .0.read_buf.set(Some(dst));
-            } else if nbytes > 0 {
-                self.0 .0.dispatch_task.wake();
-                self.0 .0.insert_flags(Flags::RD_READY);
-            }
-
-            if let Err(err) = result {
-                self.0 .0.dispatch_task.wake();
-                self.0 .0.insert_flags(Flags::RD_READY);
-                self.0.want_shutdown(Some(err));
+                Err(err) => {
+                    self.0 .0.dispatch_task.wake();
+                    self.0 .0.insert_flags(Flags::RD_READY);
+                    self.0.want_shutdown(Some(err));
+                }
             }
         }
 

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.3] - 2022-01-12
+
+* Refactor Filter trait, fix read buffer processing
+
 ## [0.1.2] - 2022-01-10
 
 * Remove unneeded boxed types

@@ -55,15 +55,14 @@ pub trait Filter: 'static {
 
     fn get_read_buf(&self) -> Option<BytesMut>;
 
-    fn get_write_buf(&self) -> Option<BytesMut>;
+    fn release_read_buf(&self, buf: BytesMut);
 
-    fn release_read_buf(
-        &self,
-        io: &IoRef,
-        src: BytesMut,
-        dst: &mut Option<BytesMut>,
-        nbytes: usize,
-    ) -> sio::Result<usize>;
+    /// Process read buffer
+    ///
+    /// Returns tuple (total bytes, new bytes)
+    fn process_read_buf(&self, io: &IoRef, n: usize) -> sio::Result<(usize, usize)>;
+
+    fn get_write_buf(&self) -> Option<BytesMut>;
 
     fn release_write_buf(&self, buf: BytesMut) -> sio::Result<()>;
 
