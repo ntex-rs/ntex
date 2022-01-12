@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.2] - 2022-01-12
+
+* Update Filter trait usage
+
 ## [0.1.1] - 2022-01-10
 
 * Remove usage of ntex::io::Boxed types

@@ -1,9 +1,9 @@
 #![allow(clippy::type_complexity)]
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::sync::Arc;
-use std::{any, future::Future, io, pin::Pin, task::Context, task::Poll};
+use std::{any, cmp, future::Future, io, pin::Pin, task::Context, task::Poll};
 
-use ntex_bytes::BytesMut;
+use ntex_bytes::{BytesMut, PoolRef};
 use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::time::Millis;
 use tls_rust::{ClientConfig, ServerConfig, ServerName};
@@ -101,16 +101,18 @@ impl<F: Filter> Filter for TlsFilter<F> {
     }
 
     #[inline]
-    fn release_read_buf(
-        &self,
-        io: &IoRef,
-        src: BytesMut,
-        dst: &mut Option<BytesMut>,
-        nb: usize,
-    ) -> io::Result<usize> {
+    fn release_read_buf(&self, buf: BytesMut) {
         match self.inner {
-            InnerTlsFilter::Server(ref f) => f.release_read_buf(io, src, dst, nb),
-            InnerTlsFilter::Client(ref f) => f.release_read_buf(io, src, dst, nb),
+            InnerTlsFilter::Server(ref f) => f.release_read_buf(buf),
+            InnerTlsFilter::Client(ref f) => f.release_read_buf(buf),
+        }
+    }
+
+    #[inline]
+    fn process_read_buf(&self, io: &IoRef, nb: usize) -> io::Result<(usize, usize)> {
+        match self.inner {
+            InnerTlsFilter::Server(ref f) => f.process_read_buf(io, nb),
+            InnerTlsFilter::Client(ref f) => f.process_read_buf(io, nb),
         }
     }
 
@@ -227,5 +229,50 @@ impl<F: Filter> FilterFactory<F> for TlsConnectorConfigured {
         let server_name = self.server_name;
 
         Box::pin(async move { TlsClientFilter::create(st, cfg, server_name).await })
+    }
+}
+
+pub(crate) struct IoInner<F> {
+    filter: F,
+    pool: PoolRef,
+    read_buf: Option<BytesMut>,
+    write_buf: Option<BytesMut>,
+}
+
+pub(crate) struct Wrapper<'a, F>(&'a mut IoInner<F>);
+
+impl<'a, F: Filter> io::Read for Wrapper<'a, F> {
+    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+        if let Some(mut read_buf) = self.0.filter.get_read_buf() {
+            let len = cmp::min(read_buf.len(), dst.len());
+            let result = if len > 0 {
+                dst[..len].copy_from_slice(&read_buf.split_to(len));
+                Ok(len)
+            } else {
+                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+            };
+            self.0.filter.release_read_buf(read_buf);
+            result
+        } else {
+            Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+        }
+    }
+}
+
+impl<'a, F: Filter> io::Write for Wrapper<'a, F> {
+    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
+        let mut buf = if let Some(mut buf) = self.0.filter.get_write_buf() {
+            buf.reserve(src.len());
+            buf
+        } else {
+            BytesMut::with_capacity_in(src.len(), self.0.pool)
+        };
+        buf.extend_from_slice(src);
+        self.0.filter.release_write_buf(buf)?;
+        Ok(src.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }

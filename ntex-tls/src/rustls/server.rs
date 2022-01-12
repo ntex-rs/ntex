@@ -1,26 +1,19 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::io::{self, Read as IoRead, Write as IoWrite};
-use std::sync::Arc;
-use std::{any, cell::RefCell, cmp, task::Context, task::Poll};
+use std::{any, cell::RefCell, sync::Arc, task::Context, task::Poll};
 
-use ntex_bytes::{BufMut, BytesMut, PoolRef};
+use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Filter, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_rust::{ServerConfig, ServerConnection};
 
-use crate::{rustls::TlsFilter, types};
+use crate::rustls::{IoInner, TlsFilter, Wrapper};
+use crate::types;
 
 /// An implementation of SSL streams
 pub struct TlsServerFilter<F> {
     inner: RefCell<IoInner<F>>,
     session: RefCell<ServerConnection>,
-}
-
-struct IoInner<F> {
-    inner: F,
-    pool: PoolRef,
-    read_buf: Option<BytesMut>,
-    write_buf: Option<BytesMut>,
 }
 
 impl<F: Filter> Filter for TlsServerFilter<F> {
@@ -42,85 +35,74 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
             };
             Some(Box::new(proto))
         } else {
-            self.inner.borrow().inner.query(id)
+            self.inner.borrow().filter.query(id)
         }
     }
 
     #[inline]
     fn poll_shutdown(&self) -> Poll<io::Result<()>> {
-        self.inner.borrow().inner.poll_shutdown()
+        self.inner.borrow().filter.poll_shutdown()
     }
 
     #[inline]
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
-        self.inner.borrow().inner.poll_read_ready(cx)
+        self.inner.borrow().filter.poll_read_ready(cx)
     }
 
     #[inline]
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
-        self.inner.borrow().inner.poll_write_ready(cx)
+        self.inner.borrow().filter.poll_write_ready(cx)
     }
 
     #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
-        if let Some(buf) = self.inner.borrow_mut().read_buf.take() {
-            if !buf.is_empty() {
-                return Some(buf);
-            }
-        }
-        None
+        self.inner.borrow_mut().read_buf.take()
     }
 
     #[inline]
     fn get_write_buf(&self) -> Option<BytesMut> {
-        if let Some(buf) = self.inner.borrow_mut().write_buf.take() {
-            if !buf.is_empty() {
-                return Some(buf);
-            }
-        }
-        None
+        self.inner.borrow_mut().write_buf.take()
     }
 
-    fn release_read_buf(
-        &self,
-        io: &IoRef,
-        src: BytesMut,
-        dst: &mut Option<BytesMut>,
-        nbytes: usize,
-    ) -> io::Result<usize> {
+    #[inline]
+    fn release_read_buf(&self, buf: BytesMut) {
+        self.inner.borrow_mut().read_buf = Some(buf);
+    }
+
+    fn process_read_buf(&self, io: &IoRef, nbytes: usize) -> io::Result<(usize, usize)> {
         let mut inner = self.inner.borrow_mut();
         let mut session = self.session.borrow_mut();
 
-        if session.is_handshaking() {
-            inner.read_buf = Some(src);
-            Ok(1)
-        } else {
-            let mut src = {
-                let mut dst = None;
-                if let Err(e) = inner.inner.release_read_buf(io, src, &mut dst, nbytes) {
-                    io.want_shutdown(Some(e));
-                }
+        // ask inner filter to process read buf
+        match inner.filter.process_read_buf(io, nbytes) {
+            Err(err) => io.want_shutdown(Some(err)),
+            Ok((_, 0)) => return Ok((0, 0)),
+            Ok(_) => (),
+        }
 
-                if let Some(dst) = dst {
-                    dst
-                } else {
-                    return Ok(0);
-                }
+        if session.is_handshaking() {
+            Ok((0, 1))
+        } else {
+            // get processed buffer
+            let mut dst = if let Some(dst) = inner.read_buf.take() {
+                dst
+            } else {
+                inner.pool.get_read_buf()
             };
             let (hw, lw) = inner.pool.read_params().unpack();
 
-            // get inner filter buffer
-            if dst.is_none() {
-                *dst = Some(inner.pool.get_read_buf());
-            }
-            let buf = dst.as_mut().unwrap();
+            let mut src = if let Some(src) = inner.filter.get_read_buf() {
+                src
+            } else {
+                return Ok((0, 0));
+            };
 
             let mut new_bytes = 0;
             loop {
                 // make sure we've got room
-                let remaining = buf.remaining_mut();
+                let remaining = dst.remaining_mut();
                 if remaining < lw {
-                    buf.reserve(hw - remaining);
+                    dst.reserve(hw - remaining);
                 }
 
                 let mut cursor = io::Cursor::new(&src);
@@ -132,21 +114,21 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
 
                 let new_b = state.plaintext_bytes_to_read();
                 if new_b > 0 {
-                    buf.reserve(new_b);
+                    dst.reserve(new_b);
                     let chunk: &mut [u8] =
-                        unsafe { std::mem::transmute(&mut *buf.chunk_mut()) };
+                        unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
                     let v = session.reader().read(chunk)?;
-                    unsafe { buf.advance_mut(v) };
+                    unsafe { dst.advance_mut(v) };
                     new_bytes += v;
                 } else {
                     break;
                 }
             }
 
-            if !src.is_empty() {
-                inner.read_buf = Some(src);
-            }
-            Ok(new_bytes)
+            let dst_len = dst.len();
+            inner.read_buf = Some(dst);
+            inner.filter.release_read_buf(src);
+            Ok((dst_len, new_bytes))
         }
     }
 
@@ -174,42 +156,6 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
     }
 }
 
-struct Wrapper<'a, F>(&'a mut IoInner<F>);
-
-impl<'a, F: Filter> io::Read for Wrapper<'a, F> {
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        if let Some(read_buf) = self.0.read_buf.as_mut() {
-            let len = cmp::min(read_buf.len(), dst.len());
-            if len > 0 {
-                dst[..len].copy_from_slice(&read_buf.split_to(len));
-                Ok(len)
-            } else {
-                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
-            }
-        } else {
-            Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
-        }
-    }
-}
-
-impl<'a, F: Filter> io::Write for Wrapper<'a, F> {
-    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        let mut buf = if let Some(mut buf) = self.0.inner.get_write_buf() {
-            buf.reserve(src.len());
-            buf
-        } else {
-            BytesMut::with_capacity_in(src.len(), self.0.pool)
-        };
-        buf.extend_from_slice(src);
-        self.0.inner.release_write_buf(buf)?;
-        Ok(src.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 impl<F: Filter> TlsServerFilter<F> {
     pub(crate) async fn create(
         io: Io<F>,
@@ -222,12 +168,11 @@ impl<F: Filter> TlsServerFilter<F> {
                 Ok(session) => session,
                 Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
             };
-            let io = io.map_filter(|inner: F| {
-                let read_buf = inner.get_read_buf();
+            let io = io.map_filter(|filter: F| {
                 let inner = IoInner {
                     pool,
-                    inner,
-                    read_buf,
+                    filter,
+                    read_buf: None,
                     write_buf: None,
                 };
 

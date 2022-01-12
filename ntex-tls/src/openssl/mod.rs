@@ -27,25 +27,26 @@ pub struct PeerCertChain(pub Vec<X509>);
 /// An implementation of SSL streams
 pub struct SslFilter<F = Base> {
     inner: RefCell<SslStream<IoInner<F>>>,
+    pool: PoolRef,
     handshake: Cell<bool>,
+    read_buf: Cell<Option<BytesMut>>,
 }
 
 struct IoInner<F> {
     inner: F,
     pool: PoolRef,
-    read_buf: Option<BytesMut>,
     write_buf: Option<BytesMut>,
 }
 
 impl<F: Filter> io::Read for IoInner<F> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        if let Some(ref mut buf) = self.read_buf {
+        if let Some(mut buf) = self.inner.get_read_buf() {
             if buf.is_empty() {
-                buf.clear();
                 Err(io::Error::from(io::ErrorKind::WouldBlock))
             } else {
                 let len = cmp::min(buf.len(), dst.len());
                 dst[..len].copy_from_slice(&buf.split_to(len));
+                self.inner.release_read_buf(buf);
                 Ok(len)
             }
         } else {
@@ -139,70 +140,54 @@ impl<F: Filter> Filter for SslFilter<F> {
 
     #[inline]
     fn get_read_buf(&self) -> Option<BytesMut> {
-        if let Some(buf) = self.inner.borrow_mut().get_mut().read_buf.take() {
-            if !buf.is_empty() {
-                return Some(buf);
-            }
-        }
-        None
+        self.read_buf.take()
     }
 
     #[inline]
     fn get_write_buf(&self) -> Option<BytesMut> {
-        if let Some(buf) = self.inner.borrow_mut().get_mut().write_buf.take() {
-            if !buf.is_empty() {
-                return Some(buf);
-            }
-        }
-        None
+        self.inner.borrow_mut().get_mut().write_buf.take()
     }
 
-    fn release_read_buf(
-        &self,
-        io: &IoRef,
-        src: BytesMut,
-        dst: &mut Option<BytesMut>,
-        nbytes: usize,
-    ) -> io::Result<usize> {
-        // store to read_buf
-        let pool = {
-            let mut inner = self.inner.borrow_mut();
-            let mut dst = None;
-            let result = inner
-                .get_ref()
-                .inner
-                .release_read_buf(io, src, &mut dst, nbytes);
-            if let Err(err) = result {
-                io.want_shutdown(Some(err));
-            }
-            if dst.is_some() {
-                inner.get_mut().read_buf = dst;
-                inner.get_ref().pool
-            } else {
-                return Ok(0);
-            }
-        };
-        let (hw, lw) = pool.read_params().unpack();
+    #[inline]
+    fn release_read_buf(&self, buf: BytesMut) {
+        self.read_buf.set(Some(buf));
+    }
 
-        // get inner filter buffer
-        if dst.is_none() {
-            *dst = Some(pool.get_read_buf());
+    fn process_read_buf(&self, io: &IoRef, nbytes: usize) -> io::Result<(usize, usize)> {
+        // ask inner filter to process read buf
+        match self
+            .inner
+            .borrow_mut()
+            .get_ref()
+            .inner
+            .process_read_buf(io, nbytes)
+        {
+            Err(err) => io.want_shutdown(Some(err)),
+            Ok((n, 0)) => return Ok((n, 0)),
+            Ok((_, _)) => (),
         }
-        let buf = dst.as_mut().unwrap();
+
+        // get processed buffer
+        let mut dst = if let Some(dst) = self.get_read_buf() {
+            dst
+        } else {
+            self.pool.get_read_buf()
+        };
+        let (hw, lw) = self.pool.read_params().unpack();
 
         let mut new_bytes = 0;
         loop {
             // make sure we've got room
-            let remaining = buf.remaining_mut();
+            let remaining = dst.remaining_mut();
             if remaining < lw {
-                buf.reserve(hw - remaining);
+                dst.reserve(hw - remaining);
             }
 
-            let chunk: &mut [u8] = unsafe { std::mem::transmute(&mut *buf.chunk_mut()) };
+            let chunk: &mut [u8] = unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
             let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
-            return match ssl_result {
+            let result = match ssl_result {
                 Ok(v) => {
-                    unsafe { buf.advance_mut(v) };
+                    unsafe { dst.advance_mut(v) };
                     new_bytes += v;
                     continue;
                 }
@@ -216,14 +201,16 @@ impl<F: Filter> Filter for SslFilter<F> {
                             self.handshake.set(false);
                         }
                     }
-                    Ok(new_bytes)
+                    Ok((dst.len(), new_bytes))
                 }
                 Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
                     io.want_shutdown(None);
-                    Ok(new_bytes)
+                    Ok((dst.len(), new_bytes))
                 }
                 Err(e) => Err(map_to_ioerr(e)),
             };
+            self.release_read_buf(dst);
+            return result;
         }
     }
 
@@ -299,18 +286,18 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
                 let ssl = ctx_result.map_err(map_to_ioerr)?;
                 let pool = st.memory_pool();
                 let st = st.map_filter(|inner: F| {
-                    let read_buf = inner.get_read_buf();
                     let inner = IoInner {
                         pool,
                         inner,
-                        read_buf,
                         write_buf: None,
                     };
                     let ssl_stream = ssl::SslStream::new(ssl, inner)?;
 
                     Ok::<_, Box<dyn Error>>(SslFilter {
-                        inner: RefCell::new(ssl_stream),
+                        pool,
+                        read_buf: Cell::new(None),
                         handshake: Cell::new(true),
+                        inner: RefCell::new(ssl_stream),
                     })
                 })?;
 
@@ -352,18 +339,18 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
             let ssl = self.ssl;
             let pool = st.memory_pool();
             let st = st.map_filter(|inner: F| {
-                let read_buf = inner.get_read_buf();
                 let inner = IoInner {
                     pool,
                     inner,
-                    read_buf,
                     write_buf: None,
                 };
                 let ssl_stream = ssl::SslStream::new(ssl, inner)?;
 
                 Ok::<_, Box<dyn Error>>(SslFilter {
-                    inner: RefCell::new(ssl_stream),
+                    pool,
+                    read_buf: Cell::new(None),
                     handshake: Cell::new(true),
+                    inner: RefCell::new(ssl_stream),
                 })
             })?;
 
