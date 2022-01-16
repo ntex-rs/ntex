@@ -204,9 +204,8 @@ async fn test_rustls() {
     sys.stop();
 }
 
-#[cfg(not(feature = "glommio"))]
 #[ntex::test]
-#[cfg(unix)]
+#[cfg(all(feature = "tokio", unix))]
 async fn test_bind_uds() {
     let (tx, rx) = mpsc::channel();
 
@@ -254,9 +253,8 @@ async fn test_bind_uds() {
     sys.stop();
 }
 
-#[cfg(not(feature = "glommio"))]
 #[ntex::test]
-#[cfg(unix)]
+#[cfg(all(feature = "tokio", unix))]
 async fn test_listen_uds() {
     let (tx, rx) = mpsc::channel();
 
