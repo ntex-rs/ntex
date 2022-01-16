@@ -3,6 +3,7 @@ use std::{any, future::Future, io, pin::Pin};
 
 use futures_lite::future::FutureExt;
 use futures_lite::io::{AsyncRead, AsyncWrite};
+use glommio::Task;
 use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_io::{
     types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
@@ -13,16 +14,16 @@ use crate::net_impl::{TcpStream, UnixStream};
 
 impl IoStream for TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        ntex_rt::spawn(ReadTask::new(self.clone(), read));
-        ntex_rt::spawn(WriteTask::new(self.clone(), write));
+        Task::local(ReadTask::new(self.clone(), read)).detach();
+        Task::local(WriteTask::new(self.clone(), write)).detach();
         Some(Box::new(self))
     }
 }
 
 impl IoStream for UnixStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        ntex_rt::spawn(UnixReadTask::new(self.clone(), read));
-        ntex_rt::spawn(UnixWriteTask::new(self, write));
+        Task::local(UnixReadTask::new(self.clone(), read)).detach();
+        Task::local(UnixWriteTask::new(self, write)).detach();
         None
     }
 }
