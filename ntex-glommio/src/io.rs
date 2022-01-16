@@ -9,7 +9,7 @@ use ntex_io::{
 };
 use ntex_util::{ready, time::sleep, time::Sleep};
 
-use crate::{TcpStream, UnixStream};
+use crate::net_impl::{TcpStream, UnixStream};
 
 impl IoStream for TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {

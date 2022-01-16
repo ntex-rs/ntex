@@ -17,7 +17,7 @@ mod net_impl {
     pub type JoinError = futures_channel::oneshot::Canceled;
 
     #[derive(Clone)]
-    struct TcpStream(Rc<RefCell<glommio::net::TcpStream>>);
+    pub(crate) struct TcpStream(pub(crate) Rc<RefCell<glommio::net::TcpStream>>);
 
     impl TcpStream {
         fn new(io: glommio::net::TcpStream) -> Self {
@@ -26,7 +26,7 @@ mod net_impl {
     }
 
     #[derive(Clone)]
-    struct UnixStream(Rc<RefCell<glommio::net::UnixStream>>);
+    pub(crate) struct UnixStream(pub(crate) Rc<RefCell<glommio::net::UnixStream>>);
 
     impl UnixStream {
         fn new(io: glommio::net::UnixStream) -> Self {

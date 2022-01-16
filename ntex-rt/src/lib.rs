@@ -15,7 +15,7 @@ mod glommio {
     use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
     use futures_channel::oneshot::{self, Canceled};
-    pub use glomm_io::{task, Task};
+    use glomm_io::{task, Task};
     use once_cell::sync::Lazy;
     use parking_lot::Mutex;
     use threadpool::ThreadPool;
