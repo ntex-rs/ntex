@@ -23,12 +23,12 @@
 
 ## Usage
 
-Starting ntex v0.5 async runtime must be selected as a feature. Available options are `tokio`
-or `async-std`.
+Starting ntex v0.5 async runtime must be selected as a feature. Available options are `glommio`,
+`tokio` or `async-std`.
 
 ```toml
 [dependencies]
-ntex = { version = "0.5", features = ["tokio"] }
+ntex = { version = "0.5", features = ["glommio"] }
 ```
 
 ## Documentation & community resources
