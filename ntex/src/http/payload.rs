@@ -3,7 +3,7 @@ use std::{fmt, mem, pin::Pin, task::Context, task::Poll};
 use h2::RecvStream;
 
 use super::{error::PayloadError, h1, h2 as h2d};
-use crate::util::{Bytes, Stream};
+use crate::util::{poll_fn, Bytes, Stream};
 
 /// Type represent boxed payload
 pub type PayloadStream = Pin<Box<dyn Stream<Item = Result<Bytes, PayloadError>>>>;
@@ -70,6 +70,28 @@ impl Payload {
     {
         Payload::Stream(Box::pin(stream))
     }
+
+    #[inline]
+    /// Attempt to pull out the next value of this payload.
+    pub async fn recv(&mut self) -> Option<Result<Bytes, PayloadError>> {
+        poll_fn(|cx| self.poll_recv(cx)).await
+    }
+
+    #[inline]
+    /// Attempt to pull out the next value of this payload, registering
+    /// the current task for wakeup if the value is not yet available,
+    /// and returning None if the payload is exhausted.
+    pub fn poll_recv(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, PayloadError>>> {
+        match self {
+            Payload::None => Poll::Ready(None),
+            Payload::H1(ref mut pl) => pl.readany(cx),
+            Payload::H2(ref mut pl) => Pin::new(pl).poll_next(cx),
+            Payload::Stream(ref mut pl) => Pin::new(pl).poll_next(cx),
+        }
+    }
 }
 
 impl Stream for Payload {
@@ -77,12 +99,7 @@ impl Stream for Payload {
 
     #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.get_mut() {
-            Payload::None => Poll::Ready(None),
-            Payload::H1(ref mut pl) => pl.readany(cx),
-            Payload::H2(ref mut pl) => Pin::new(pl).poll_next(cx),
-            Payload::Stream(ref mut pl) => Pin::new(pl).poll_next(cx),
-        }
+        self.get_mut().poll_recv(cx)
     }
 }
 

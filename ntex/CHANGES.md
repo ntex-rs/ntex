@@ -6,6 +6,8 @@
 
 * http: Use Io::take() method for http/1 dispatcher
 
+* http: Add Payload::recv() and Payload::poll_recv() methods
+
 ## [0.5.9] - 2022-01-12
 
 * Update ws::WsTransport
