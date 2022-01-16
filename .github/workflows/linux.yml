@@ -63,6 +63,13 @@ jobs:
           cd ntex
           cargo test --no-default-features --no-fail-fast --features="async-std,cookie,url,compress,openssl,rustls" --lib -- --test-threads 1
 
+      - name: Run glommio tests
+        timeout-minutes: 40
+        continue-on-error: true
+        run: |
+          cd ntex
+          cargo test --no-default-features --no-fail-fast --features="glommio,cookie,url,compress,openssl,rustls" --lib -- --test-threads 1
+
       - name: Install tarpaulin
         if: matrix.version == '1.56.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
         continue-on-error: true
@@ -81,6 +88,13 @@ jobs:
         run: |
           cd ntex
           cargo tarpaulin --out Xml --output-dir=.. --no-default-features --features="async-std,cookie,url,compress,openssl,rustls" --lib
+
+      - name: Generate coverage report (glommio)
+        if: matrix.version == '1.56.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
+        continue-on-error: true
+        run: |
+          cd ntex
+          cargo tarpaulin --out Xml --output-dir=.. --no-default-features --features=glommio,cookie,url,compress,openssl,rustls" --lib
 
       - name: Upload to Codecov
         if: matrix.version == '1.56.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')

@@ -896,8 +896,6 @@ mod tests {
             .set_write_params(15 * 1024, 1024);
         h1.inner
             .io
-            .as_ref()
-            .unwrap()
             .set_memory_pool(crate::util::PoolId::P0.pool_ref());
 
         let mut decoder = ClientCodec::default();

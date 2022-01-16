@@ -41,6 +41,9 @@ url = ["url-pkg"]
 # tokio runtime
 tokio = ["ntex-rt/tokio"]
 
+# glommio runtime
+glommio = ["ntex-rt/glommio", "ntex-glommio"]
+
 # async-std runtime
 async-std = ["ntex-rt/async-std", "ntex-async-std"]
 
@@ -55,6 +58,7 @@ ntex-tls = "0.1.2"
 ntex-rt = "0.4.1"
 ntex-io = "0.1.4"
 ntex-tokio = "0.1.2"
+ntex-glommio = { version = "0.1.0", optional = true }
 ntex-async-std = { version = "0.1.0", optional = true }
 
 base64 = "0.13"

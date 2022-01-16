@@ -64,8 +64,19 @@ pub mod rt {
     #[cfg(feature = "tokio")]
     pub use ntex_tokio::*;
 
-    #[cfg(all(not(feature = "tokio"), feature = "async-std"))]
+    #[cfg(all(
+        feature = "async-std",
+        not(feature = "tokio"),
+        not(feature = "glommio")
+    ))]
     pub use ntex_async_std::*;
+
+    #[cfg(all(
+        feature = "glommio",
+        not(feature = "tokio"),
+        not(feature = "async-std")
+    ))]
+    pub use ntex_glommio::*;
 }
 
 pub mod service {

@@ -10,6 +10,7 @@ members = [
   "ntex-tls",
   "ntex-macros",
   "ntex-util",
+  "ntex-glommio",
   "ntex-tokio",
   "ntex-async-std",
 ]
@@ -26,5 +27,6 @@ ntex-tls = { path = "ntex-tls" }
 ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
+ntex-glommio = { path = "ntex-glommio" }
 ntex-tokio = { path = "ntex-tokio" }
 ntex-async-std = { path = "ntex-async-std" }
