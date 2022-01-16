@@ -35,12 +35,13 @@ futures-core = "0.3"
 log = "0.4"
 pin-project-lite = "0.2"
 
+tok-io = { version = "1", package = "tokio", default-features = false, features = ["rt", "net"], optional = true }
+async_std = { version = "1", package = "async-std", optional = true }
+
+[target.'cfg(linux)'.dependencies]
 glomm-io = { version = "0.6", package = "glommio", optional = true }
 threadpool = { version = "1.8.1", optional = true }
 parking_lot = { version = "0.11.2", optional = true }
 once_cell =  { version = "1.9.0", optional = true }
 num_cpus = { version = "1.13", optional = true }
 futures-channel = { version = "0.3", optional = true }
-
-tok-io = { version = "1", package = "tokio", default-features = false, features = ["rt", "net"], optional = true }
-async_std = { version = "1", package = "async-std", optional = true }

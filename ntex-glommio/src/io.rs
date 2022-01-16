@@ -86,7 +86,7 @@ impl Future for ReadTask {
                             }
                             Poll::Ready(Ok(n)) => {
                                 if n == 0 {
-                                    log::trace!("async-std stream is disconnected");
+                                    log::trace!("glommio stream is disconnected");
                                     close = true;
                                 } else {
                                     new_bytes += n;
@@ -257,7 +257,7 @@ impl Future for WriteTask {
                                         return Poll::Ready(());
                                     }
                                     Poll::Ready(Ok(0)) => {
-                                        log::trace!("async-std socket is disconnected");
+                                        log::trace!("glommio socket is disconnected");
                                         this.state.close(None);
                                         return Poll::Ready(());
                                     }
@@ -436,7 +436,7 @@ impl Future for UnixReadTask {
                             }
                             Poll::Ready(Ok(n)) => {
                                 if n == 0 {
-                                    log::trace!("async-std stream is disconnected");
+                                    log::trace!("glommio stream is disconnected");
                                     close = true;
                                 } else {
                                     new_bytes += n;
@@ -597,9 +597,7 @@ impl Future for UnixWriteTask {
                                         return Poll::Ready(());
                                     }
                                     Poll::Ready(Ok(0)) => {
-                                        log::trace!(
-                                            "async-std unix socket is disconnected"
-                                        );
+                                        log::trace!("glommio unix socket is disconnected");
                                         this.state.close(None);
                                         return Poll::Ready(());
                                     }

@@ -16,7 +16,6 @@ name = "ntex_glommio"
 path = "src/lib.rs"
 
 [dependencies]
-glommio = "0.6"
 ntex-bytes = "0.1.9"
 ntex-io = "0.1.4"
 ntex-rt = "0.4.3"
@@ -27,3 +26,6 @@ futures-channel = "0.3"
 derive_more = "0.99"
 log = "0.4"
 pin-project-lite = "0.2"
+
+[target.'cfg(linux)'.dependencies]
+glommio = "0.6"

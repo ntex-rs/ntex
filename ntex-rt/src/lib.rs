@@ -10,7 +10,7 @@ pub use self::builder::{Builder, SystemRunner};
 pub use self::system::System;
 
 #[allow(dead_code)]
-#[cfg(feature = "glommio")]
+#[cfg(all(feature = "glommio", target_os = "linux"))]
 mod glommio {
     use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
@@ -270,7 +270,8 @@ pub use self::tokio::*;
 #[cfg(all(
     not(feature = "tokio"),
     not(feature = "glommio"),
-    feature = "async-std"
+    feature = "async-std",
+    target_os = "linux"
 ))]
 pub use self::asyncstd::*;
 
