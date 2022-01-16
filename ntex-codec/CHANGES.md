@@ -1,5 +1,9 @@
 # Changes
 
+## [0.6.1] - 2022-01-17
+
+* Removed unused Decoder::decode_eof() method
+
 ## [0.6.0] - 2021-12-18
 
 * Remove Framed type

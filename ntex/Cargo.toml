@@ -48,7 +48,7 @@ glommio = ["ntex-rt/glommio", "ntex-glommio"]
 async-std = ["ntex-rt/async-std", "ntex-async-std"]
 
 [dependencies]
-ntex-codec = "0.6.0"
+ntex-codec = "0.6.1"
 ntex-router = "0.5.1"
 ntex-service = "0.3.1"
 ntex-macros = "0.1.3"
