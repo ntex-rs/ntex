@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.10] - 2022-01-xx
+
+* http: Use Io::take() method for http/1 dispatcher
+
 ## [0.5.9] - 2022-01-12
 
 * Update ws::WsTransport

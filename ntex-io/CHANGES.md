@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.4] - 2022-01-xx
+
+* Add Io::take() method
+
 ## [0.1.3] - 2022-01-12
 
 * Refactor Filter trait, fix read buffer processing

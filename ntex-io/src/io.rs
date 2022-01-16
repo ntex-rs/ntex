@@ -296,6 +296,37 @@ impl<F> Io<F> {
     pub fn set_disconnect_timeout(&self, timeout: Millis) {
         self.0 .0.disconnect_timeout.set(timeout);
     }
+
+    #[inline]
+    /// Clone current io object.
+    ///
+    /// Current io object becomes closed.
+    pub fn take(&mut self) -> Self {
+        let inner = Rc::new(IoState {
+            pool: self.0 .0.pool.clone(),
+            flags: Cell::new(
+                Flags::DSP_STOP
+                    | Flags::IO_STOPPED
+                    | Flags::IO_STOPPING
+                    | Flags::IO_STOPPING_FILTERS,
+            ),
+            error: Cell::new(None),
+            disconnect_timeout: Cell::new(Millis::ONE_SEC),
+            dispatch_task: LocalWaker::new(),
+            read_task: LocalWaker::new(),
+            write_task: LocalWaker::new(),
+            read_buf: Cell::new(None),
+            write_buf: Cell::new(None),
+            filter: Cell::new(NullFilter::get()),
+            handle: Cell::new(None),
+            on_disconnect: RefCell::new(Vec::new()),
+            keepalive: Cell::new(None),
+        });
+
+        let state = mem::replace(&mut self.0, IoRef(inner));
+        let filter = mem::replace(&mut self.1, FilterItem::Ptr(ptr::null_mut()));
+        Self(state, filter)
+    }
 }
 
 impl<F> Io<F> {

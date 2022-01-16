@@ -66,7 +66,7 @@ pin_project_lite::pin_project! {
 }
 
 struct DispatcherInner<F, S, B, X, U> {
-    io: Option<Io<F>>,
+    io: Io<F>,
     flags: Flags,
     codec: Codec,
     state: IoRef,
@@ -100,10 +100,10 @@ where
             call: CallState::None,
             st: State::ReadRequest,
             inner: DispatcherInner {
+                io,
                 codec,
                 state,
                 config,
-                io: Some(io),
                 flags: Flags::KEEPALIVE_REG,
                 error: None,
                 payload: None,
@@ -231,7 +231,7 @@ where
                     log::trace!("trying to read http message");
 
                     // decode incoming bytes stream
-                    match this.inner.io().poll_recv(&this.inner.codec, cx) {
+                    match this.inner.io.poll_recv(&this.inner.codec, cx) {
                         Poll::Ready(Ok((mut req, pl))) => {
                             log::trace!(
                                 "http message is received: {:?} and payload {:?}",
@@ -265,7 +265,7 @@ where
                             // slow-request first request
                             this.inner.flags.insert(Flags::STARTED);
                             this.inner.flags.remove(Flags::KEEPALIVE_REG);
-                            this.inner.io().remove_keepalive_timer();
+                            this.inner.io.remove_keepalive_timer();
 
                             if upgrade {
                                 // Handle UPGRADE request
@@ -294,8 +294,7 @@ where
                             }
                         }
                         Poll::Ready(Err(RecvError::WriteBackpressure)) => {
-                            if let Err(err) = ready!(this.inner.io().poll_flush(cx, false))
-                            {
+                            if let Err(err) = ready!(this.inner.io.poll_flush(cx, false)) {
                                 log::trace!("peer is gone with {:?}", err);
                                 *this.st = State::Stop;
                                 this.inner.error = Some(DispatchError::PeerGone(Some(err)));
@@ -337,7 +336,7 @@ where
                             {
                                 this.inner.flags.insert(Flags::KEEPALIVE_REG);
                                 this.inner
-                                    .io()
+                                    .io
                                     .start_keepalive_timer(this.inner.config.keep_alive);
                             }
                             return Poll::Pending;
@@ -355,7 +354,7 @@ where
                 }
                 // send response body
                 State::SendPayload { ref mut body } => {
-                    if this.inner.io().is_closed() {
+                    if this.inner.io.is_closed() {
                         *this.st = State::Stop;
                     } else {
                         if let Poll::Ready(Err(err)) = this.inner.poll_request_payload(cx) {
@@ -363,7 +362,7 @@ where
                             this.inner.flags.insert(Flags::SENDPAYLOAD_AND_STOP);
                         }
                         loop {
-                            let _ = ready!(this.inner.io().poll_flush(cx, false));
+                            let _ = ready!(this.inner.io.poll_flush(cx, false));
                             let item = ready!(body.poll_next_chunk(cx));
                             if let Some(st) = this.inner.send_payload(item) {
                                 *this.st = st;
@@ -376,7 +375,7 @@ where
                 State::Upgrade(ref mut req) => {
                     log::trace!("switching to upgrade service");
 
-                    let io = this.inner.io.take().unwrap();
+                    let io = this.inner.io.take();
                     let req = req.take().unwrap();
 
                     // Handle UPGRADE request
@@ -391,9 +390,7 @@ where
                 State::Stop => {
                     this.inner.unregister_keepalive();
 
-                    return if let Err(e) =
-                        ready!(this.inner.io.as_ref().unwrap().poll_shutdown(cx))
-                    {
+                    return if let Err(e) = ready!(this.inner.io.poll_shutdown(cx)) {
                         // get io error
                         if let Some(e) = this.inner.error.take() {
                             Poll::Ready(Err(e))
@@ -416,10 +413,6 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
-    fn io(&self) -> &Io<T> {
-        self.io.as_ref().unwrap()
-    }
-
     fn switch_to_read_request(&mut self) -> State<B> {
         // connection is not keep-alive, disconnect
         if !self.flags.contains(Flags::KEEPALIVE) || !self.codec.keepalive_enabled() {
@@ -432,7 +425,7 @@ where
 
     fn unregister_keepalive(&mut self) {
         if self.flags.contains(Flags::KEEPALIVE) {
-            self.io().remove_keepalive_timer();
+            self.io.remove_keepalive_timer();
             self.flags.remove(Flags::KEEPALIVE);
         }
     }
@@ -468,7 +461,7 @@ where
             State::Stop
         } else {
             let result = self
-                .io()
+                .io
                 .encode(Message::Item((msg, body.size())), &self.codec)
                 .map_err(|err| {
                     if let Some(mut payload) = self.payload.take() {
@@ -505,7 +498,7 @@ where
         match item {
             Some(Ok(item)) => {
                 trace!("got response chunk: {:?}", item.len());
-                match self.io().encode(Message::Chunk(Some(item)), &self.codec) {
+                match self.io.encode(Message::Chunk(Some(item)), &self.codec) {
                     Ok(_) => None,
                     Err(err) => {
                         self.error = Some(DispatchError::Encode(err));
@@ -515,7 +508,7 @@ where
             }
             None => {
                 trace!("response payload eof");
-                if let Err(err) = self.io().encode(Message::Chunk(None), &self.codec) {
+                if let Err(err) = self.io.encode(Message::Chunk(None), &self.codec) {
                     self.error = Some(DispatchError::Encode(err));
                     Some(State::Stop)
                 } else if self.flags.contains(Flags::SENDPAYLOAD_AND_STOP) {
@@ -547,7 +540,7 @@ where
         };
         match payload.1.poll_data_required(cx) {
             PayloadStatus::Read => {
-                let io = self.io.as_ref().unwrap();
+                let io = &self.io;
 
                 // read request payload
                 let mut updated = false;
