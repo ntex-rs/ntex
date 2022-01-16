@@ -1,6 +1,6 @@
 # Changes
 
-## [0.4.3] - 2022-01-xx
+## [0.4.3] - 2022-01-17
 
 * Add glommio runtime support
 
