@@ -204,6 +204,7 @@ async fn test_rustls() {
     sys.stop();
 }
 
+#[cfg(not(feature = "glommio"))]
 #[ntex::test]
 #[cfg(unix)]
 async fn test_bind_uds() {
@@ -253,6 +254,7 @@ async fn test_bind_uds() {
     sys.stop();
 }
 
+#[cfg(not(feature = "glommio"))]
 #[ntex::test]
 #[cfg(unix)]
 async fn test_listen_uds() {

@@ -1,26 +1,30 @@
 [package]
-name = "ntex-async-std"
+name = "ntex-glommio"
 version = "0.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
-description = "async-std intergration for ntex framework"
+description = "glommio intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
 homepage = "https://ntex.rs"
 repository = "https://github.com/ntex-rs/ntex.git"
-documentation = "https://docs.rs/ntex-rt-async-std/"
+documentation = "https://docs.rs/ntex-rt-glommio/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT"
 edition = "2018"
 
 [lib]
-name = "ntex_async_std"
+name = "ntex_glommio"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-bytes = "0.1.8"
-ntex-io = "0.1.0"
-ntex-util = "0.1.6"
+ntex-bytes = "0.1.9"
+ntex-io = "0.1.4"
+ntex-util = "0.1.9"
 async-oneshot = "0.5.0"
+futures-lite = "1.12"
+futures-channel = "0.3"
 derive_more = "0.99"
 log = "0.4"
 pin-project-lite = "0.2"
-async-std = { version = "1", features = ["unstable"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+glommio = "0.6"

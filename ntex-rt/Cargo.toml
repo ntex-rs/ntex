@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "0.4.2"
+version = "0.4.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -18,6 +18,9 @@ path = "src/lib.rs"
 [features]
 default = []
 
+# glommio support
+glommio = ["glomm-io", "threadpool", "parking_lot", "once_cell", "num_cpus", "futures-channel"]
+
 # tokio support
 tokio = ["tok-io"]
 
@@ -34,3 +37,11 @@ pin-project-lite = "0.2"
 
 tok-io = { version = "1", package = "tokio", default-features = false, features = ["rt", "net"], optional = true }
 async_std = { version = "1", package = "async-std", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+glomm-io = { version = "0.6", package = "glommio", optional = true }
+threadpool = { version = "1.8.1", optional = true }
+parking_lot = { version = "0.11.2", optional = true }
+once_cell =  { version = "1.9.0", optional = true }
+num_cpus = { version = "1.13", optional = true }
+futures-channel = { version = "0.3", optional = true }
