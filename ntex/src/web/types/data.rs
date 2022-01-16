@@ -231,6 +231,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
+    #[cfg(not(feature = "glommio"))]
     #[crate::rt_test]
     async fn test_data_drop() {
         struct TestData(Arc<AtomicUsize>);
