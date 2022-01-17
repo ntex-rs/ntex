@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.10] - 2022-01-17
+
+* Add time::query_system_time(), it does not use async runtime
+
 ## [0.1.9] - 2022-01-12
 
 * Add Pool::shrink_to_fit() method

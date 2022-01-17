@@ -5,7 +5,7 @@ mod types;
 mod wheel;
 
 pub use self::types::{Millis, Seconds};
-pub use self::wheel::{now, system_time, TimerHandle};
+pub use self::wheel::{now, query_system_time, system_time, TimerHandle};
 
 /// Waits until `duration` has elapsed.
 ///

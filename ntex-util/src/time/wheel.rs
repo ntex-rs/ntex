@@ -83,6 +83,15 @@ pub fn system_time() -> SystemTime {
     TIMER.with(|t| t.borrow_mut().system_time(t))
 }
 
+/// Returns the system time corresponding to “now”.
+///
+/// If low resolution system time is not set, use system time.
+/// This method does not start timer driver.
+#[inline]
+pub fn query_system_time() -> SystemTime {
+    TIMER.with(|t| t.borrow().query_system_time())
+}
+
 #[derive(Debug)]
 pub struct TimerHandle(usize);
 
@@ -208,6 +217,14 @@ impl Timer {
                 LowresTimerDriver::start(self, inner);
             }
             now
+        }
+    }
+
+    fn query_system_time(&self) -> SystemTime {
+        if let Some(cur) = self.lowres_stime {
+            cur
+        } else {
+            SystemTime::now()
         }
     }
 
