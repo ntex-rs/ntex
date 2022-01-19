@@ -169,7 +169,7 @@ mod tests {
     use ntex_bytes::{ByteString, BytesMut};
 
     use super::*;
-    use crate::{channel::mpsc, future::next, time::sleep, time::Millis};
+    use crate::{channel::mpsc, future::stream_recv, time::sleep, time::Millis};
 
     #[ntex_macros::rt_test2]
     async fn test_basic() {
@@ -200,12 +200,12 @@ mod tests {
             .unwrap();
         tx.send(Ok::<_, ()>(buf.split().freeze())).unwrap();
 
-        let data = next(&mut rx).await.unwrap().unwrap();
+        let data = stream_recv(&mut rx).await.unwrap().unwrap();
         assert_eq!(data, b"\x81\x04test".as_ref());
 
         drop(tx);
         sleep(Millis(10)).await;
-        assert!(next(&mut rx).await.is_none());
+        assert!(stream_recv(&mut rx).await.is_none());
 
         assert_eq!(counter.get(), 1);
     }

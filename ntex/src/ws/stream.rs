@@ -169,7 +169,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{channel::mpsc, util::next, util::poll_fn, util::send, util::ByteString};
+    use crate::{
+        channel::mpsc, util::poll_fn, util::send, util::stream_recv, util::ByteString,
+    };
 
     #[crate::rt_test]
     async fn test_decoder() {
@@ -186,12 +188,12 @@ mod tests {
             .unwrap();
 
         tx.send(Ok::<_, ()>(buf.split().freeze())).unwrap();
-        let frame = next(&mut decoder).await.unwrap().unwrap();
+        let frame = stream_recv(&mut decoder).await.unwrap().unwrap();
         match frame {
             Frame::Text(data) => assert_eq!(data, b"test1"[..]),
             _ => panic!(),
         }
-        let frame = next(&mut decoder).await.unwrap().unwrap();
+        let frame = stream_recv(&mut decoder).await.unwrap().unwrap();
         match frame {
             Frame::Text(data) => assert_eq!(data, b"test2"[..]),
             _ => panic!(),
@@ -216,8 +218,8 @@ mod tests {
             .await
             .unwrap();
 
-        let data = next(&mut rx).await.unwrap().unwrap();
+        let data = stream_recv(&mut rx).await.unwrap().unwrap();
         assert_eq!(data, b"\x81\x04test".as_ref());
-        assert!(next(&mut rx).await.is_none());
+        assert!(stream_recv(&mut rx).await.is_none());
     }
 }

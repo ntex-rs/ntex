@@ -632,7 +632,7 @@ mod tests {
     use crate::http::{body, Request, ResponseHead, StatusCode};
     use crate::io::{self as nio, Base};
     use crate::service::{boxed, fn_service, IntoService};
-    use crate::util::{lazy, next, Bytes, BytesMut};
+    use crate::util::{lazy, stream_recv, Bytes, BytesMut};
     use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis, time::Seconds};
 
     const BUFFER_SIZE: usize = 32_768;
@@ -797,7 +797,7 @@ mod tests {
 
         spawn_h1(server, |mut req: Request| async move {
             let mut p = req.take_payload();
-            while let Some(_) = next(&mut p).await {}
+            while let Some(_) = stream_recv(&mut p).await {}
             Ok::<_, io::Error>(Response::Ok().finish())
         });
 
@@ -934,7 +934,7 @@ mod tests {
             async move {
                 // read one chunk
                 let mut pl = req.take_payload();
-                let _ = next(&mut pl).await.unwrap().unwrap();
+                let _ = stream_recv(&mut pl).await.unwrap().unwrap();
                 m.store(true, Ordering::Relaxed);
                 // sleep
                 sleep(Millis(999_999_000)).await;

@@ -445,7 +445,7 @@ mod tests {
             .await
             .unwrap()
             .into_inner();
-        let b = next(&mut s).await.unwrap().unwrap();
+        let b = stream_recv(&mut s).await.unwrap().unwrap();
         assert_eq!(b, Bytes::from_static(b"hello=world"));
     }
 

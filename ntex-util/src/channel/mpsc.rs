@@ -241,7 +241,7 @@ impl<T> SendError<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{future::lazy, future::next, Stream};
+    use crate::{future::lazy, future::stream_recv, Stream};
     use futures_sink::Sink;
 
     #[ntex_macros::rt_test2]
@@ -251,11 +251,11 @@ mod tests {
         assert!(format!("{:?}", rx).contains("Receiver"));
 
         tx.send("test").unwrap();
-        assert_eq!(next(&mut rx).await.unwrap(), "test");
+        assert_eq!(stream_recv(&mut rx).await.unwrap(), "test");
 
         let tx2 = tx.clone();
         tx2.send("test2").unwrap();
-        assert_eq!(next(&mut rx).await.unwrap(), "test2");
+        assert_eq!(stream_recv(&mut rx).await.unwrap(), "test2");
 
         assert_eq!(
             lazy(|cx| Pin::new(&mut rx).poll_next(cx)).await,
@@ -270,7 +270,7 @@ mod tests {
 
         let (tx, mut rx) = channel::<String>();
         tx.close();
-        assert_eq!(next(&mut rx).await, None);
+        assert_eq!(stream_recv(&mut rx).await, None);
 
         let (tx, _rx) = channel::<String>();
         let weak_tx = tx.downgrade();
@@ -303,8 +303,8 @@ mod tests {
             assert!(Pin::new(&mut tx).poll_close(cx).is_ready());
         })
         .await;
-        assert_eq!(next(&mut rx).await.unwrap(), "test");
-        assert_eq!(next(&mut rx).await, None);
+        assert_eq!(stream_recv(&mut rx).await.unwrap(), "test");
+        assert_eq!(stream_recv(&mut rx).await, None);
     }
 
     #[ntex_macros::rt_test2]
