@@ -46,6 +46,7 @@ where
 }
 
 #[doc(hidden)]
+#[deprecated(since = "0.1.4", note = "Use stream_recv() fn instead")]
 pub async fn next<S>(stream: &mut S) -> Option<S::Item>
 where
     S: Stream + Unpin,

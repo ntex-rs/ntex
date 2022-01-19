@@ -8,7 +8,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::util::{next, BytesMut};
+use crate::util::{stream_recv, BytesMut};
 use crate::web::error::{ErrorRenderer, UrlencodedError, WebResponseError};
 use crate::web::responder::{Ready, Responder};
 use crate::web::{FromRequest, HttpRequest};
@@ -309,7 +309,7 @@ where
         self.fut = Some(Box::pin(async move {
             let mut body = BytesMut::with_capacity(8192);
 
-            while let Some(item) = next(&mut stream).await {
+            while let Some(item) = stream_recv(&mut stream).await {
                 let chunk = item?;
                 if (body.len() + chunk.len()) > limit {
                     return Err(UrlencodedError::Overflow {

@@ -19,7 +19,7 @@ use crate::service::{
     map_config, IntoService, IntoServiceFactory, Service, ServiceFactory,
 };
 use crate::time::{sleep, Millis, Seconds};
-use crate::util::{next, Bytes, BytesMut, Extensions, Ready, Stream};
+use crate::util::{stream_recv, Bytes, BytesMut, Extensions, Ready, Stream};
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
 use crate::{io::Sealed, rt::System, server::Server};
 
@@ -149,7 +149,7 @@ where
 
     let mut body = resp.take_body();
     let mut bytes = BytesMut::new();
-    while let Some(item) = next(&mut body).await {
+    while let Some(item) = stream_recv(&mut body).await {
         bytes.extend_from_slice(&item.unwrap());
     }
     bytes.freeze()
@@ -184,7 +184,7 @@ where
 pub async fn read_body(mut res: WebResponse) -> Bytes {
     let mut body = res.take_body();
     let mut bytes = BytesMut::new();
-    while let Some(item) = next(&mut body).await {
+    while let Some(item) = stream_recv(&mut body).await {
         bytes.extend_from_slice(&item.unwrap());
     }
     bytes.freeze()
@@ -196,7 +196,7 @@ where
     S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
 {
     let mut data = BytesMut::new();
-    while let Some(item) = next(&mut stream).await {
+    while let Some(item) = stream_recv(&mut stream).await {
         data.extend_from_slice(&item?);
     }
     Ok(data.freeze())

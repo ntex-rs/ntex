@@ -5,7 +5,7 @@ use encoding_rs::UTF_8;
 use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
-use crate::util::{next, Bytes, BytesMut, Either, Ready, Stream};
+use crate::util::{stream_recv, Bytes, BytesMut, Either, Ready, Stream};
 use crate::web::error::{ErrorRenderer, PayloadError};
 use crate::web::{FromRequest, HttpRequest};
 
@@ -41,9 +41,27 @@ use crate::web::{FromRequest, HttpRequest};
 pub struct Payload(pub crate::http::Payload);
 
 impl Payload {
+    #[inline]
     /// Deconstruct to a inner value
     pub fn into_inner(self) -> crate::http::Payload {
         self.0
+    }
+
+    #[inline]
+    /// Attempt to pull out the next value of this payload.
+    pub async fn recv(&mut self) -> Option<Result<Bytes, error::PayloadError>> {
+        self.0.recv().await
+    }
+
+    #[inline]
+    /// Attempt to pull out the next value of this payload, registering
+    /// the current task for wakeup if the value is not yet available,
+    /// and returning None if the payload is exhausted.
+    pub fn poll_recv(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, error::PayloadError>>> {
+        self.0.poll_recv(cx)
     }
 }
 
@@ -55,7 +73,7 @@ impl Stream for Payload {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.0).poll_next(cx)
+        self.poll_recv(cx)
     }
 }
 
@@ -378,7 +396,7 @@ impl Future for HttpMessageBody {
         self.fut = Some(Box::pin(async move {
             let mut body = BytesMut::with_capacity(8192);
 
-            while let Some(item) = next(&mut stream).await {
+            while let Some(item) = stream_recv(&mut stream).await {
                 let chunk = item?;
                 if body.len() + chunk.len() > limit {
                     return Err(PayloadError::from(error::PayloadError::Overflow));

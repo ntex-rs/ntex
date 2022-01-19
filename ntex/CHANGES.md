@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.11] - 2022-01-xx
+
+* web: Add types::Payload::recv() and types::Payload::poll_recv() methods
+
 ## [0.5.10] - 2022-01-17
 
 * rt: Add glommio runtime support
