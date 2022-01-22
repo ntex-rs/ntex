@@ -691,7 +691,7 @@ mod tests {
 
         #[derive(Debug, Deserialize)]
         struct S {
-            inner: (String,),
+            _inner: (String,),
         }
         let s: Result<S, de::value::Error> =
             de::Deserialize::deserialize(PathDeserializer::new(&path));

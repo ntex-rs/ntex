@@ -4,7 +4,7 @@ use bitflags::bitflags;
 
 use crate::http::header::HeaderMap;
 use crate::http::{header, Method, StatusCode, Uri, Version};
-use crate::io::{types, IoRef};
+use crate::io::{types, IoBoxed, IoRef};
 use crate::util::Extensions;
 
 /// Represents various types of connection
@@ -28,7 +28,6 @@ bitflags! {
     }
 }
 
-#[doc(hidden)]
 pub(crate) trait Head: Default + 'static {
     fn clear(&mut self);
 
@@ -38,20 +37,37 @@ pub(crate) trait Head: Default + 'static {
 }
 
 #[derive(Debug)]
+pub(crate) enum CurrentIo {
+    Ref(IoRef),
+    Io(IoBoxed),
+    None,
+}
+
+impl CurrentIo {
+    pub(crate) fn as_ref(&self) -> Option<&IoRef> {
+        match self {
+            CurrentIo::Ref(ref io) => Some(io),
+            CurrentIo::Io(ref io) => Some(io.as_ref()),
+            CurrentIo::None => None,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct RequestHead {
     pub uri: Uri,
     pub method: Method,
     pub version: Version,
     pub headers: HeaderMap,
     pub extensions: RefCell<Extensions>,
-    pub io: Option<IoRef>,
+    pub(crate) io: CurrentIo,
     pub(crate) flags: Flags,
 }
 
 impl Default for RequestHead {
     fn default() -> RequestHead {
         RequestHead {
-            io: None,
+            io: CurrentIo::None,
             uri: Uri::default(),
             method: Method::default(),
             version: Version::HTTP_11,
@@ -64,7 +80,7 @@ impl Default for RequestHead {
 
 impl Head for RequestHead {
     fn clear(&mut self) {
-        self.io = None;
+        self.io = CurrentIo::None;
         self.flags = Flags::empty();
         self.headers.clear();
         self.extensions.get_mut().clear();

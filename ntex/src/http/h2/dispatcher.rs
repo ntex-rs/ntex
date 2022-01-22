@@ -11,9 +11,8 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::header::{
     HeaderValue, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING,
 };
-use crate::http::{
-    message::ResponseHead, payload::Payload, request::Request, response::Response,
-};
+use crate::http::message::{CurrentIo, ResponseHead};
+use crate::http::{payload::Payload, request::Request, response::Response};
 use crate::io::{IoRef, TokioIoBoxed};
 use crate::service::Service;
 use crate::time::{now, Sleep};
@@ -105,7 +104,7 @@ where
                     head.method = parts.method;
                     head.version = parts.version;
                     head.headers = parts.headers.into();
-                    head.io = Some(this.io.clone());
+                    head.io = CurrentIo::Ref(this.io.clone());
 
                     crate::rt::spawn(ServiceResponse {
                         state: ServiceResponseState::ServiceCall {

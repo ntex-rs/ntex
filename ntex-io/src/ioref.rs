@@ -1,4 +1,4 @@
-use std::{any, fmt, io};
+use std::{any, fmt, hash, io};
 
 use ntex_bytes::{BufMut, BytesMut, PoolRef};
 use ntex_codec::{Decoder, Encoder};
@@ -187,6 +187,22 @@ impl IoRef {
     /// Notify when io stream get disconnected
     pub fn on_disconnect(&self) -> OnDisconnect {
         OnDisconnect::new(self.0.clone())
+    }
+}
+
+impl Eq for IoRef {}
+
+impl PartialEq for IoRef {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq(&other.0)
+    }
+}
+
+impl hash::Hash for IoRef {
+    #[inline]
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
     }
 }
 
