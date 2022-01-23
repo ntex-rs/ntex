@@ -115,10 +115,6 @@ async fn test_body() {
     let response = request.send().await.unwrap();
     assert!(response.status().is_success());
 
-    let request = srv.request(Method::CONNECT, srv.url("/test"));
-    let response = request.send().await.unwrap();
-    assert!(response.status().is_success());
-
     let request = srv.request(Method::OPTIONS, srv.url("/test"));
     let response = request.send().await.unwrap();
     assert!(response.status().is_success());

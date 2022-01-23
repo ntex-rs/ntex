@@ -754,7 +754,6 @@ mod tests {
 
     #[ntex::test]
     async fn test_keepalive() {
-        env_logger::init();
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
