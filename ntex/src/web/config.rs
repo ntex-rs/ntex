@@ -5,7 +5,7 @@ use crate::router::ResourceDef;
 use super::resource::Resource;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
-use super::types::data::{Data, DataFactory};
+use super::types::state::{State, StateFactory};
 use super::{DefaultError, ErrorRenderer};
 
 /// Application configuration
@@ -61,7 +61,7 @@ impl Default for AppConfig {
 /// modularization of big application configuration.
 pub struct ServiceConfig<Err = DefaultError> {
     pub(super) services: Vec<Box<dyn AppServiceFactory<Err>>>,
-    pub(super) data: Vec<Box<dyn DataFactory>>,
+    pub(super) state: Vec<Box<dyn StateFactory>>,
     pub(super) external: Vec<ResourceDef>,
 }
 
@@ -69,17 +69,17 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     pub(crate) fn new() -> Self {
         Self {
             services: Vec::new(),
-            data: Vec::new(),
+            state: Vec::new(),
             external: Vec::new(),
         }
     }
 
-    /// Set application data. Application data could be accessed
-    /// by using `Data<T>` extractor where `T` is data type.
+    /// Set application state. Application state could be accessed
+    /// by using `State<T>` extractor where `T` is state type.
     ///
-    /// This is same as `App::data()` method.
-    pub fn data<S: 'static>(&mut self, data: S) -> &mut Self {
-        self.data.push(Box::new(Data::new(data)));
+    /// This is same as `App::state()` method.
+    pub fn state<S: 'static>(&mut self, st: S) -> &mut Self {
+        self.state.push(Box::new(State::new(st)));
         self
     }
 
@@ -134,15 +134,15 @@ mod tests {
     use crate::{service::Service, util::Bytes};
 
     #[crate::rt_test]
-    async fn test_configure_data() {
+    async fn test_configure_state() {
         let cfg = |cfg: &mut ServiceConfig<_>| {
-            cfg.data(10usize);
+            cfg.state(10usize);
         };
 
         let srv = init_service(
             App::new().configure(cfg).service(
                 web::resource("/")
-                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+                    .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
             ),
         )
         .await;

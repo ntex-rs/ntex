@@ -106,7 +106,7 @@ where
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         let limit = req
-            .app_data::<FormConfig>()
+            .app_state::<FormConfig>()
             .map(|c| c.limit)
             .unwrap_or(16384);
 

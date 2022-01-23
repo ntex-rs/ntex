@@ -170,7 +170,7 @@ where
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         let req2 = req.clone();
         let (limit, ctype) = req
-            .app_data::<JsonConfig>()
+            .app_state::<JsonConfig>()
             .map(|c| (c.limit, c.content_type.clone()))
             .unwrap_or((32768, None));
 
@@ -210,7 +210,7 @@ where
 /// fn main() {
 ///     let app = App::new().service(
 ///         web::resource("/index.html")
-///             .app_data(
+///             .app_state(
 ///                 // change json extractor configuration
 ///                 web::types::JsonConfig::default()
 ///                    .limit(4096)
@@ -458,7 +458,7 @@ mod tests {
                 header::HeaderValue::from_static("16"),
             )
             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-            .data(JsonConfig::default().limit(10))
+            .state(JsonConfig::default().limit(10))
             .to_http_parts();
 
         let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
@@ -529,7 +529,7 @@ mod tests {
             header::HeaderValue::from_static("16"),
         )
         .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-        .data(JsonConfig::default().limit(4096))
+        .state(JsonConfig::default().limit(4096))
         .to_http_parts();
 
         let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
@@ -547,7 +547,7 @@ mod tests {
             header::HeaderValue::from_static("16"),
         )
         .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-        .data(JsonConfig::default().content_type(|mime: mime::Mime| {
+        .state(JsonConfig::default().content_type(|mime: mime::Mime| {
             mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
         }))
         .to_http_parts();
@@ -567,7 +567,7 @@ mod tests {
             header::HeaderValue::from_static("16"),
         )
         .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
-        .data(JsonConfig::default().content_type(|mime: mime::Mime| {
+        .state(JsonConfig::default().content_type(|mime: mime::Mime| {
             mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
         }))
         .to_http_parts();

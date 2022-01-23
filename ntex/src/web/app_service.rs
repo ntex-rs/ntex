@@ -15,7 +15,7 @@ use super::request::WebRequest;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
 use super::service::{AppServiceFactory, WebServiceConfig};
-use super::types::data::DataFactory;
+use super::types::state::StateFactory;
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
@@ -24,11 +24,11 @@ type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type BoxResponse<Err: ErrorRenderer> =
     Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
-type FnDataFactory =
-    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Box<dyn DataFactory>, ()>>>>>;
+type FnStateFactory =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Box<dyn StateFactory>, ()>>>>>;
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
-/// It also executes data factories.
+/// It also executes state factories.
 pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
@@ -43,8 +43,8 @@ where
     pub(super) middleware: Rc<T>,
     pub(super) filter: PipelineFactory<F, WebRequest<Err>>,
     pub(super) extensions: RefCell<Option<Extensions>>,
-    pub(super) data: Rc<Vec<Box<dyn DataFactory>>>,
-    pub(super) data_factories: Rc<Vec<FnDataFactory>>,
+    pub(super) state: Rc<Vec<Box<dyn StateFactory>>>,
+    pub(super) state_factories: Rc<Vec<FnStateFactory>>,
     pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,
     pub(super) default: Option<Rc<HttpNewService<Err>>>,
     pub(super) external: RefCell<Vec<ResourceDef>>,
@@ -105,7 +105,7 @@ where
         });
 
         // App config
-        let mut config = WebServiceConfig::new(config, default.clone(), self.data.clone());
+        let mut config = WebServiceConfig::new(config, default.clone(), self.state.clone());
 
         // register services
         std::mem::take(&mut *self.services.borrow_mut())
@@ -139,8 +139,8 @@ where
         rmap.finish(rmap.clone());
 
         let filter_fut = self.filter.new_service(());
-        let data = self.data.clone();
-        let data_factories = self.data_factories.clone();
+        let state = self.state.clone();
+        let state_factories = self.state_factories.clone();
         let mut extensions = self
             .extensions
             .borrow_mut()
@@ -166,13 +166,13 @@ where
                 routing: Rc::new(routing),
             };
 
-            // create app data container
-            for f in data.iter() {
+            // create app state container
+            for f in state.iter() {
                 f.create(&mut extensions);
             }
 
-            // async data factories
-            for fut in data_factories.iter() {
+            // async state factories
+            for fut in state_factories.iter() {
                 if let Ok(f) = fut().await {
                     f.create(&mut extensions);
                 }
@@ -182,7 +182,7 @@ where
                 rmap,
                 config,
                 service: middleware.new_transform(service),
-                data: Rc::new(extensions),
+                state: Rc::new(extensions),
                 pool: HttpRequestPool::create(),
                 _t: PhantomData,
             })
@@ -199,7 +199,7 @@ where
     service: T,
     rmap: Rc<ResourceMap>,
     config: AppConfig,
-    data: Rc<Extensions>,
+    state: Rc<Extensions>,
     pool: &'static HttpRequestPool,
     _t: PhantomData<Err>,
 }
@@ -231,7 +231,7 @@ where
             inner.path.set(head.uri.clone());
             inner.head = head;
             inner.payload = payload;
-            inner.app_data = self.data.clone();
+            inner.app_state = self.state.clone();
             req
         } else {
             HttpRequest::new(
@@ -240,7 +240,7 @@ where
                 payload,
                 self.rmap.clone(),
                 self.config.clone(),
-                self.data.clone(),
+                self.state.clone(),
                 self.pool,
             )
         };
@@ -388,7 +388,7 @@ mod tests {
         {
             let app = init_service(
                 App::new()
-                    .data(DropData(data.clone()))
+                    .state(DropData(data.clone()))
                     .service(web::resource("/test").to(|| async { HttpResponse::Ok() })),
             )
             .await;

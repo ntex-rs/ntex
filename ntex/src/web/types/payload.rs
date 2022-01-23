@@ -149,7 +149,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
         let tmp;
-        let cfg = if let Some(cfg) = req.app_data::<PayloadConfig>() {
+        let cfg = if let Some(cfg) = req.app_state::<PayloadConfig>() {
             cfg
         } else {
             tmp = PayloadConfig::default();
@@ -186,7 +186,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
 /// fn main() {
 ///     let app = App::new().service(
 ///         web::resource("/index.html")
-///             .app_data(
+///             .app_state(
 ///                 web::types::PayloadConfig::new(4096)  // <- limit size of the payload
 ///             )
 ///             .route(web::get().to(index))  // <- register handler with extractor params
@@ -203,7 +203,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
         let tmp;
-        let cfg = if let Some(cfg) = req.app_data::<PayloadConfig>() {
+        let cfg = if let Some(cfg) = req.app_state::<PayloadConfig>() {
             cfg
         } else {
             tmp = PayloadConfig::default();
@@ -460,7 +460,7 @@ mod tests {
 
         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .set_payload(Bytes::from_static(b"hello=world"))
-            .data(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
+            .state(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
             .to_http_parts();
         assert!(from_request::<Bytes>(&req, &mut pl).await.is_err());
     }
@@ -483,7 +483,7 @@ mod tests {
 
         let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
             .set_payload(Bytes::from_static(b"hello=world"))
-            .data(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
+            .state(PayloadConfig::default().mimetype(mime::APPLICATION_JSON))
             .to_http_parts();
         assert!(from_request::<String>(&req, &mut pl).await.is_err());
     }
