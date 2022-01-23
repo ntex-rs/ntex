@@ -22,7 +22,7 @@ use crate::web::{FromRequest, HttpRequest};
 /// async fn index(mut body: web::types::Payload) -> Result<HttpResponse, error::PayloadError>
 /// {
 ///     let mut bytes = BytesMut::new();
-///     while let Some(item) = ntex::util::next(&mut body).await {
+///     while let Some(item) = ntex::util::stream_recv(&mut body).await {
 ///         bytes.extend_from_slice(&item?);
 ///     }
 ///
@@ -90,7 +90,7 @@ impl Stream for Payload {
 /// async fn index(mut body: web::types::Payload) -> Result<HttpResponse, error::PayloadError>
 /// {
 ///     let mut bytes = BytesMut::new();
-///     while let Some(item) = ntex::util::next(&mut body).await {
+///     while let Some(item) = ntex::util::stream_recv(&mut body).await {
 ///         bytes.extend_from_slice(&item?);
 ///     }
 ///
