@@ -1,8 +1,8 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{error::Error, future::Future, io, marker, pin::Pin, rc::Rc};
+use std::{cell::RefCell, error::Error, future::Future, io, marker, pin::Pin, rc::Rc};
 
-use crate::io::{Filter, Io, RecvError};
+use crate::io::{Filter, Io, IoBoxed, RecvError};
 use crate::{service::Service, util::ready, util::Bytes};
 
 use crate::http;
@@ -27,8 +27,10 @@ bitflags::bitflags! {
         const KEEPALIVE_REG        = 0b0000_0100;
         /// Upgrade request
         const UPGRADE              = 0b0000_1000;
+        /// Handling upgrade
+        const UPGRADE_HND          = 0b0001_0000;
         /// Stop after sending payload
-        const SENDPAYLOAD_AND_STOP = 0b0001_0000;
+        const SENDPAYLOAD_AND_STOP = 0b0010_0000;
     }
 }
 
@@ -53,6 +55,8 @@ enum State<B> {
     },
     #[display(fmt = "State::Upgrade")]
     Upgrade(Option<Request>),
+    #[display(fmt = "State::StopIo")]
+    StopIo(Box<(IoBoxed, Codec)>),
     Stop,
 }
 
@@ -61,6 +65,7 @@ pin_project_lite::pin_project! {
     enum CallState<S: Service<Request>, X: Service<Request>> {
         None,
         Service { #[pin] fut: S::Future },
+        ServiceUpgrade { #[pin] fut: S::Future },
         Expect { #[pin] fut: X::Future },
         Filter { fut: Pin<Box<dyn Future<Output = Result<Request, Response>>>> }
     }
@@ -136,7 +141,7 @@ where
                                 Poll::Ready(result) => match result {
                                     Ok(res) => {
                                         let (res, body) = res.into().into_parts();
-                                        *this.st = this.inner.send_response(res, body)
+                                        *this.st = this.inner.send_response(res, body);
                                     }
                                     Err(e) => *this.st = this.inner.handle_error(e, false),
                                 },
@@ -153,6 +158,43 @@ where
                                     } else {
                                         return Poll::Pending;
                                     }
+                                }
+                            }
+                            None
+                        }
+                        // special handling for upgrade requests.
+                        // we cannot continue to handle requests, because Io<F> get
+                        // converted to IoBoxed before we set it to request,
+                        // so we have to send response and disconnect. request payload
+                        // handling should be handled by service
+                        CallStateProject::ServiceUpgrade { fut } => {
+                            let result = ready!(fut.poll(cx));
+                            match result {
+                                Ok(res) => {
+                                    let (msg, body) = res.into().into_parts();
+                                    let item = if let Some(item) = msg.head().take_io() {
+                                        item
+                                    } else {
+                                        return Poll::Ready(Ok(()));
+                                    };
+
+                                    let _ = item
+                                        .0
+                                        .encode(Message::Item((msg, body.size())), &item.1);
+                                    match body.size() {
+                                        BodySize::None | BodySize::Empty => {}
+                                        _ => {
+                                            log::error!("Stream responses are not supported for upgrade requests");
+                                        }
+                                    }
+                                    *this.st = State::StopIo(item);
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "Cannot handle error for upgrade handler: {:?}",
+                                        e
+                                    );
+                                    return Poll::Ready(Ok(()));
                                 }
                             }
                             None
@@ -175,6 +217,11 @@ where
                                     *this.st = State::Upgrade(Some(req));
                                     this = self.as_mut().project();
                                     continue;
+                                } else if this.inner.flags.contains(Flags::UPGRADE_HND) {
+                                    // Handle upgrade requests
+                                    Some(CallState::ServiceUpgrade {
+                                        fut: this.inner.config.service.call(req),
+                                    })
                                 } else {
                                     Some(CallState::Service {
                                         fut: this.inner.config.service.call(req),
@@ -197,6 +244,12 @@ where
                                         // Handle normal requests with EXPECT: 100-Continue` header
                                         Some(CallState::Expect {
                                             fut: this.inner.config.expect.call(req),
+                                        })
+                                    } else if this.inner.flags.contains(Flags::UPGRADE_HND)
+                                    {
+                                        // Handle upgrade requests
+                                        Some(CallState::ServiceUpgrade {
+                                            fut: this.inner.config.service.call(req),
                                         })
                                     } else {
                                         // Handle normal requests
@@ -232,7 +285,6 @@ where
                                 req,
                                 pl
                             );
-                            req.head_mut().io = CurrentIo::Ref(this.inner.io.get_ref());
 
                             // configure request payload
                             let upgrade = match pl {
@@ -266,6 +318,20 @@ where
                                 log::trace!("prep io for upgrade handler");
                                 *this.st = State::Upgrade(Some(req));
                             } else {
+                                if req.upgrade() {
+                                    this.inner.flags.insert(Flags::UPGRADE_HND);
+                                    let io: IoBoxed = this.inner.io.take().into();
+                                    req.head_mut().io = CurrentIo::Io(Rc::new((
+                                        io.get_ref(),
+                                        RefCell::new(Some(Box::new((
+                                            io,
+                                            this.inner.codec.clone(),
+                                        )))),
+                                    )));
+                                } else {
+                                    req.head_mut().io =
+                                        CurrentIo::Ref(this.inner.io.get_ref());
+                                }
                                 *this.st = State::Call;
                                 this.call.set(
                                     if let Some(ref f) = this.inner.config.on_request {
@@ -277,6 +343,12 @@ where
                                         // Handle normal requests with EXPECT: 100-Continue` header
                                         CallState::Expect {
                                             fut: this.inner.config.expect.call(req),
+                                        }
+                                    } else if this.inner.flags.contains(Flags::UPGRADE_HND)
+                                    {
+                                        // Handle upgrade requests
+                                        CallState::ServiceUpgrade {
+                                            fut: this.inner.config.service.call(req),
                                         }
                                     } else {
                                         // Handle normal requests
@@ -394,6 +466,10 @@ where
                     } else {
                         Poll::Ready(Ok(()))
                     };
+                }
+                // prepare to shutdown
+                State::StopIo(ref item) => {
+                    return item.0.poll_shutdown(cx).map_err(From::from)
                 }
             }
         }

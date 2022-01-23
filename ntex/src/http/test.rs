@@ -10,7 +10,7 @@ use crate::{time::Millis, time::Seconds, util::Bytes};
 
 use super::client::{Client, ClientRequest, ClientResponse, Connector};
 use super::error::{HttpError, PayloadError};
-use super::header::{HeaderMap, HeaderName, HeaderValue};
+use super::header::{self, HeaderMap, HeaderName, HeaderValue};
 use super::payload::Payload;
 use super::{Method, Request, Uri, Version};
 
@@ -147,6 +147,14 @@ impl TestRequest {
         head.method = inner.method;
         head.version = inner.version;
         head.headers = inner.headers;
+
+        if let Some(conn) = head.headers.get(header::CONNECTION) {
+            if let Ok(s) = conn.to_str() {
+                if s.to_lowercase().contains("upgrade") {
+                    head.set_upgrade()
+                }
+            }
+        }
 
         #[cfg(feature = "cookie")]
         {
