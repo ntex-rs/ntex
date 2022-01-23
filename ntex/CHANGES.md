@@ -4,6 +4,8 @@
 
 * web: Refactor ws support
 
+* web: Rename data to state
+
 * web: Add types::Payload::recv() and types::Payload::poll_recv() methods
 
 ## [0.5.10] - 2022-01-17

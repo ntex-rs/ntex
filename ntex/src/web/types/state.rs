@@ -42,9 +42,9 @@ pub(crate) trait StateFactory {
 /// }
 ///
 /// /// Use `State<T>` extractor to access data in handler.
-/// async fn index(st: web::types::State<Mutex<MyData>>) -> HttpResponse {
+/// async fn index(st: web::types::State<Mutex<MyState>>) -> HttpResponse {
 ///     let mut data = st.lock().unwrap();
-///     st.counter += 1;
+///     data.counter += 1;
 ///     HttpResponse::Ok().into()
 /// }
 ///
@@ -139,7 +139,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_data_extractor() {
-        let srv = init_service(App::new().data("TEST".to_string()).service(
+        let srv = init_service(App::new().state("TEST".to_string()).service(
             web::resource("/").to(|data: web::types::State<String>| async move {
                 assert_eq!(data.to_lowercase(), "test");
                 HttpResponse::Ok()
@@ -152,7 +152,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(
-            App::new().data(10u32).service(
+            App::new().state(10u32).service(
                 web::resource("/")
                     .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
             ),
@@ -166,7 +166,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_app_data_extractor() {
         let srv = init_service(
-            App::new().app_data(State::new(10usize)).service(
+            App::new().app_state(State::new(10usize)).service(
                 web::resource("/")
                     .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
             ),
@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(
-            App::new().app_data(State::new(10u32)).service(
+            App::new().app_state(State::new(10u32)).service(
                 web::resource("/")
                     .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
             ),
@@ -191,20 +191,21 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_route_data_extractor() {
-        let srv = init_service(App::new().service(web::resource("/").data(10usize).route(
-            web::get().to(|data: web::types::State<usize>| async move {
-                let _ = data.clone();
-                HttpResponse::Ok()
-            }),
-        )))
-        .await;
+        let srv =
+            init_service(App::new().service(web::resource("/").state(10usize).route(
+                web::get().to(|data: web::types::State<usize>| async move {
+                    let _ = data.clone();
+                    HttpResponse::Ok()
+                }),
+            )))
+            .await;
 
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // different type
-        let srv = init_service(App::new().service(web::resource("/").data(10u32).route(
+        let srv = init_service(App::new().service(web::resource("/").state(10u32).route(
             web::get().to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
         )))
         .await;
@@ -215,8 +216,8 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_override_data() {
-        let srv = init_service(App::new().data(1usize).service(
-            web::resource("/").data(10usize).route(web::get().to(
+        let srv = init_service(App::new().state(1usize).service(
+            web::resource("/").state(10usize).route(web::get().to(
                 |data: web::types::State<usize>| async move {
                     assert_eq!(**data, 10);
                     let _ = data.clone();
@@ -265,8 +266,8 @@ mod tests {
             let data = data.clone();
 
             App::new()
-                .data(data)
-                .service(web::resource("/").to(|_data: Data<TestData>| async { "ok" }))
+                .state(data)
+                .service(web::resource("/").to(|_data: State<TestData>| async { "ok" }))
         });
 
         assert!(srv.get("/").send().await.unwrap().status().is_success());

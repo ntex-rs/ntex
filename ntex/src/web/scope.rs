@@ -1195,10 +1195,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_override_data() {
-        let srv = init_service(App::new().data(1usize).service(
-            web::scope("app").data(10usize).route(
+        let srv = init_service(App::new().state(1usize).service(
+            web::scope("app").state(10usize).route(
                 "/t",
-                web::get().to(|data: web::types::Data<usize>| {
+                web::get().to(|data: web::types::State<usize>| {
                     assert_eq!(**data, 10);
                     async { HttpResponse::Ok() }
                 }),
@@ -1214,17 +1214,19 @@ mod tests {
     #[crate::rt_test]
     async fn test_override_app_data() {
         let srv = init_service(
-            App::new().app_data(web::types::Data::new(1usize)).service(
-                web::scope("app")
-                    .app_data(web::types::Data::new(10usize))
-                    .route(
-                        "/t",
-                        web::get().to(|data: web::types::Data<usize>| {
-                            assert_eq!(**data, 10);
-                            async { HttpResponse::Ok() }
-                        }),
-                    ),
-            ),
+            App::new()
+                .app_state(web::types::State::new(1usize))
+                .service(
+                    web::scope("app")
+                        .app_state(web::types::State::new(10usize))
+                        .route(
+                            "/t",
+                            web::get().to(|data: web::types::State<usize>| {
+                                assert_eq!(**data, 10);
+                                async { HttpResponse::Ok() }
+                            }),
+                        ),
+                ),
         )
         .await;
 
@@ -1236,7 +1238,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_scope_config() {
         let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
-            s.data("teat");
+            s.state("teat");
             s.route("/path1", web::get().to(|| async { HttpResponse::Ok() }));
         })))
         .await;
