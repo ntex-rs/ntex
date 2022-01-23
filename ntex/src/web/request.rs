@@ -202,12 +202,12 @@ impl<Err> WebRequest<Err> {
     }
 
     #[inline]
-    /// Get an application data stored with `App::app_data()` method during
+    /// Get an application state stored with `App::app_state()` method during
     /// application configuration.
     ///
-    /// To get data stored with `App::data()` use `web::types::Data<T>` as type.
-    pub fn app_data<T: 'static>(&self) -> Option<&T> {
-        (self.req).0.app_data.get::<T>()
+    /// To get state stored with `App::state()` use `web::types::State<T>` as type.
+    pub fn app_state<T: 'static>(&self) -> Option<&T> {
+        (self.req).0.app_state.get::<T>()
     }
 
     #[inline]
@@ -223,9 +223,9 @@ impl<Err> WebRequest<Err> {
     }
 
     #[doc(hidden)]
-    /// Set new app data container
-    pub fn set_data_container(&mut self, extensions: Rc<Extensions>) {
-        Rc::get_mut(&mut (self.req).0).unwrap().app_data = extensions;
+    /// Set new app state container
+    pub fn set_state_container(&mut self, extensions: Rc<Extensions>) {
+        Rc::get_mut(&mut (self.req).0).unwrap().app_state = extensions;
     }
 
     /// Request extensions

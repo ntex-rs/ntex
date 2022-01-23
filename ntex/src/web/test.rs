@@ -304,7 +304,7 @@ pub struct TestRequest {
     config: AppConfig,
     path: Path<Uri>,
     peer_addr: Option<SocketAddr>,
-    app_data: Extensions,
+    app_state: Extensions,
 }
 
 impl Default for TestRequest {
@@ -315,7 +315,7 @@ impl Default for TestRequest {
             config: AppConfig::default(),
             path: Path::new(Uri::default()),
             peer_addr: None,
-            app_data: Extensions::new(),
+            app_state: Extensions::new(),
         }
     }
 }
@@ -439,8 +439,8 @@ impl TestRequest {
 
     /// Set application data. This is equivalent of `App::data()` method
     /// for testing purpose.
-    pub fn data<T: 'static>(mut self, data: T) -> Self {
-        self.app_data.insert(data);
+    pub fn state<T: 'static>(mut self, data: T) -> Self {
+        self.app_state.insert(data);
         self
     }
 
@@ -467,7 +467,7 @@ impl TestRequest {
             payload,
             Rc::new(self.rmap),
             self.config.clone(),
-            Rc::new(self.app_data),
+            Rc::new(self.app_state),
             HttpRequestPool::create(),
         ))
     }
@@ -488,7 +488,7 @@ impl TestRequest {
             payload,
             Rc::new(self.rmap),
             self.config.clone(),
-            Rc::new(self.app_data),
+            Rc::new(self.app_state),
             HttpRequestPool::create(),
         )
     }
@@ -504,7 +504,7 @@ impl TestRequest {
             Payload::None,
             Rc::new(self.rmap),
             self.config.clone(),
-            Rc::new(self.app_data),
+            Rc::new(self.app_state),
             HttpRequestPool::create(),
         );
 
@@ -980,7 +980,7 @@ mod tests {
             .version(Version::HTTP_2)
             .header(header::DATE, "some date")
             .param("test", "123")
-            .data(web::types::Data::new(20u64))
+            .state(web::types::State::new(20u64))
             .peer_addr("127.0.0.1:8081".parse().unwrap())
             .to_http_request();
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
@@ -988,7 +988,7 @@ mod tests {
         // assert_eq!(req.peer_addr(), Some("127.0.0.1:8081".parse().unwrap()));
         assert_eq!(&req.match_info()["test"], "123");
         assert_eq!(req.version(), Version::HTTP_2);
-        let data = req.app_data::<web::types::Data<u64>>().unwrap();
+        let data = req.app_state::<web::types::State<u64>>().unwrap();
         assert_eq!(*data.get_ref(), 20);
 
         assert_eq!(format!("{:?}", StreamType::Tcp), "StreamType::Tcp");
@@ -1152,13 +1152,13 @@ mod tests {
     }
 
     #[crate::rt_test]
-    async fn test_server_data() {
-        async fn handler(data: web::types::Data<usize>) -> crate::http::ResponseBuilder {
+    async fn test_server_state() {
+        async fn handler(data: web::types::State<usize>) -> crate::http::ResponseBuilder {
             assert_eq!(**data, 10);
             HttpResponse::Ok()
         }
 
-        let app = init_service(App::new().data(10usize).service(
+        let app = init_service(App::new().state(10usize).service(
             web::resource("/index.html").to(crate::web::dev::__assert_handler1(handler)),
         ))
         .await;

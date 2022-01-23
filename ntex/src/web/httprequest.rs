@@ -21,7 +21,7 @@ pub(crate) struct HttpRequestInner {
     pub(crate) head: Message<RequestHead>,
     pub(crate) path: Path<Uri>,
     pub(crate) payload: Payload,
-    pub(crate) app_data: Rc<Extensions>,
+    pub(crate) app_state: Rc<Extensions>,
     rmap: Rc<ResourceMap>,
     config: AppConfig,
     pool: &'static HttpRequestPool,
@@ -35,14 +35,14 @@ impl HttpRequest {
         payload: Payload,
         rmap: Rc<ResourceMap>,
         config: AppConfig,
-        app_data: Rc<Extensions>,
+        app_state: Rc<Extensions>,
         pool: &'static HttpRequestPool,
     ) -> HttpRequest {
         HttpRequest(Rc::new(HttpRequestInner {
             head,
             path,
             payload,
-            app_data,
+            app_state,
             rmap,
             config,
             pool,
@@ -216,16 +216,16 @@ impl HttpRequest {
         &self.0.config
     }
 
-    /// Get an application data object stored with `App::data` or `App::app_data`
+    /// Get an application state object stored with `App::state()` or `App::app_state()`
     /// methods during application configuration.
     ///
-    /// If `App::data` was used to store object, use `Data<T>`:
+    /// If `App::state()` was used to store object, use `State<T>`:
     ///
     /// ```rust,ignore
-    /// let opt_t = req.app_data::<Data<T>>();
+    /// let opt_t = req.app_data::<State<T>>();
     /// ```
-    pub fn app_data<T: 'static>(&self) -> Option<&T> {
-        self.0.app_data.get::<T>()
+    pub fn app_state<T: 'static>(&self) -> Option<&T> {
+        self.0.app_state.get::<T>()
     }
 }
 
@@ -466,10 +466,10 @@ mod tests {
     }
 
     #[crate::rt_test]
-    async fn test_data() {
-        let srv = init_service(App::new().app_data(10usize).service(
+    async fn test_state() {
+        let srv = init_service(App::new().app_state(10usize).service(
             web::resource("/").to(|req: HttpRequest| async move {
-                if req.app_data::<usize>().is_some() {
+                if req.app_state::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {
                     HttpResponse::BadRequest()
@@ -482,9 +482,9 @@ mod tests {
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let srv = init_service(App::new().app_data(10u32).service(web::resource("/").to(
+        let srv = init_service(App::new().app_state(10u32).service(web::resource("/").to(
             |req: HttpRequest| async move {
-                if req.app_data::<usize>().is_some() {
+                if req.app_state::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {
                     HttpResponse::BadRequest()
@@ -515,7 +515,7 @@ mod tests {
         let tracker = Rc::new(RefCell::new(Tracker { dropped: false }));
         {
             let tracker2 = Rc::clone(&tracker);
-            let srv = init_service(App::new().data(10u32).service(web::resource("/").to(
+            let srv = init_service(App::new().state(10u32).service(web::resource("/").to(
                 move |req: HttpRequest| {
                     req.extensions_mut().insert(Foo {
                         tracker: Rc::clone(&tracker2),

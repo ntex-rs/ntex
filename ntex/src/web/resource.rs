@@ -12,13 +12,12 @@ use crate::util::{Either, Extensions, Ready};
 use super::dev::{insert_slesh, WebServiceConfig, WebServiceFactory};
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
-use super::guard::Guard;
 use super::handler::Handler;
 use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
 use super::route::{IntoRoutes, Route, RouteService};
-use super::{app::Filter, app::Stack, types::Data};
+use super::{app::Filter, app::Stack, guard::Guard, types::State};
 
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
@@ -53,7 +52,7 @@ pub struct Resource<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     rdef: Vec<String>,
     name: Option<String>,
     routes: Vec<Route<Err>>,
-    data: Option<Extensions>,
+    state: Option<Extensions>,
     guards: Vec<Box<dyn Guard>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
 }
@@ -67,7 +66,7 @@ impl<Err: ErrorRenderer> Resource<Err> {
             middleware: Identity,
             filter: pipeline_factory(Filter::new()),
             guards: Vec::new(),
-            data: None,
+            state: None,
             default: Rc::new(RefCell::new(None)),
         }
     }
@@ -170,10 +169,10 @@ where
         self
     }
 
-    /// Provide resource specific data. This method allows to add extractor
-    /// configuration or specific state available via `Data<T>` extractor.
-    /// Provided data is available for all routes registered for the current resource.
-    /// Resource data overrides data registered by `App::data()` method.
+    /// Provide resource specific state. This method allows to add extractor
+    /// configuration or specific state available via `State<T>` extractor.
+    /// Provided state is available for all routes registered for the current resource.
+    /// Resource state overrides state registered by `App::state()` method.
     ///
     /// ```rust
     /// use ntex::web::{self, App, FromRequest};
@@ -187,7 +186,7 @@ where
     ///     let app = App::new().service(
     ///         web::resource("/index.html")
     ///           // limit size of the payload
-    ///           .app_data(web::types::PayloadConfig::new(4096))
+    ///           .app_state(web::types::PayloadConfig::new(4096))
     ///           .route(
     ///               web::get()
     ///                  // register handler
@@ -195,18 +194,18 @@ where
     ///           ));
     /// }
     /// ```
-    pub fn data<D: 'static>(self, data: D) -> Self {
-        self.app_data(Data::new(data))
+    pub fn state<D: 'static>(self, st: D) -> Self {
+        self.app_state(State::new(st))
     }
 
-    /// Set or override application data.
+    /// Set or override application state.
     ///
-    /// This method overrides data stored with [`App::app_data()`](#method.app_data)
-    pub fn app_data<D: 'static>(mut self, data: D) -> Self {
-        if self.data.is_none() {
-            self.data = Some(Extensions::new());
+    /// This method overrides state stored with [`App::app_state()`](#method.app_state)
+    pub fn app_state<D: 'static>(mut self, st: D) -> Self {
+        if self.state.is_none() {
+            self.state = Some(Extensions::new());
         }
-        self.data.as_mut().unwrap().insert(data);
+        self.state.as_mut().unwrap().insert(st);
         self
     }
 
@@ -273,7 +272,7 @@ where
             guards: self.guards,
             routes: self.routes,
             default: self.default,
-            data: self.data,
+            state: self.state,
         }
     }
 
@@ -293,7 +292,7 @@ where
             guards: self.guards,
             routes: self.routes,
             default: self.default,
-            data: self.data,
+            state: self.state,
         }
     }
 
@@ -344,13 +343,13 @@ where
             *rdef.name_mut() = name.clone();
         }
         // custom app data storage
-        if let Some(ref mut ext) = self.data {
-            config.set_service_data(ext);
+        if let Some(ref mut ext) = self.state {
+            config.set_service_state(ext);
         }
 
         let router_factory = ResourceRouterFactory {
             routes: self.routes,
-            data: self.data.map(Rc::new),
+            state: self.state.map(Rc::new),
             default: self.default,
         };
 
@@ -388,7 +387,7 @@ where
     ) -> ResourceServiceFactory<Err, M, PipelineFactory<T, WebRequest<Err>>> {
         let router_factory = ResourceRouterFactory {
             routes: self.routes,
-            data: self.data.map(Rc::new),
+            state: self.state.map(Rc::new),
             default: self.default,
         };
 
@@ -507,7 +506,7 @@ where
 
 struct ResourceRouterFactory<Err: ErrorRenderer> {
     routes: Vec<Route<Err>>,
-    data: Option<Rc<Extensions>>,
+    state: Option<Rc<Extensions>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
 }
 
@@ -519,7 +518,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
     type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
-        let data = self.data.clone();
+        let state = self.state.clone();
         let routes = self.routes.iter().map(|route| route.service()).collect();
         let default_fut = self.default.borrow().as_ref().map(|f| f.new_service(()));
 
@@ -532,7 +531,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
 
             Ok(ResourceRouter {
                 routes,
-                data,
+                state,
                 default,
             })
         })
@@ -541,7 +540,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
 
 struct ResourceRouter<Err: ErrorRenderer> {
     routes: Vec<RouteService<Err>>,
-    data: Option<Rc<Extensions>>,
+    state: Option<Rc<Extensions>>,
     default: Option<HttpService<Err>>,
 }
 
@@ -561,8 +560,8 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ResourceRouter<Err> {
     fn call(&self, mut req: WebRequest<Err>) -> Self::Future {
         for route in self.routes.iter() {
             if route.check(&mut req) {
-                if let Some(ref data) = self.data {
-                    req.set_data_container(data.clone());
+                if let Some(ref state) = self.state {
+                    req.set_state_container(state.clone());
                 }
                 return Either::Right(route.call(req));
             }
@@ -745,21 +744,21 @@ mod tests {
     }
 
     #[crate::rt_test]
-    async fn test_data() {
+    async fn test_state() {
         let srv = init_service(
             App::new()
-                .data(1i32)
-                .data(1usize)
-                .app_data(web::types::Data::new('-'))
+                .state(1i32)
+                .state(1usize)
+                .app_state(web::types::State::new('-'))
                 .service(
                     web::resource("/test")
-                        .data(10usize)
-                        .app_data(web::types::Data::new('*'))
+                        .state(10usize)
+                        .app_state(web::types::State::new('*'))
                         .guard(guard::Get())
                         .to(
-                            |data1: web::types::Data<usize>,
-                             data2: web::types::Data<char>,
-                             data3: web::types::Data<i32>| {
+                            |data1: web::types::State<usize>,
+                             data2: web::types::State<char>,
+                             data3: web::types::State<i32>| {
                                 assert_eq!(**data1, 10);
                                 assert_eq!(**data2, '*');
                                 assert_eq!(**data3, 1);

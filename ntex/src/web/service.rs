@@ -11,7 +11,7 @@ use super::guard::Guard;
 use super::request::WebRequest;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
-use super::types::data::DataFactory;
+use super::types::state::StateFactory;
 
 pub trait WebServiceFactory<Err: ErrorRenderer> {
     fn register(self, config: &mut WebServiceConfig<Err>);
@@ -60,7 +60,7 @@ pub struct WebServiceConfig<Err: ErrorRenderer> {
         Option<Guards>,
         Option<Rc<ResourceMap>>,
     )>,
-    service_data: Rc<Vec<Box<dyn DataFactory>>>,
+    service_state: Rc<Vec<Box<dyn StateFactory>>>,
 }
 
 impl<Err: ErrorRenderer> WebServiceConfig<Err> {
@@ -68,12 +68,12 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
     pub(crate) fn new(
         config: AppConfig,
         default: Rc<HttpServiceFactory<Err>>,
-        service_data: Rc<Vec<Box<dyn DataFactory>>>,
+        service_state: Rc<Vec<Box<dyn StateFactory>>>,
     ) -> Self {
         WebServiceConfig {
             config,
             default,
-            service_data,
+            service_state,
             root: true,
             services: Vec::new(),
         }
@@ -104,7 +104,7 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
             default: self.default.clone(),
             services: Vec::new(),
             root: false,
-            service_data: self.service_data.clone(),
+            service_state: self.service_state.clone(),
         }
     }
 
@@ -118,12 +118,12 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         self.default.clone()
     }
 
-    /// Set global route data
-    pub fn set_service_data(&self, extensions: &mut Extensions) -> bool {
-        for f in self.service_data.iter() {
+    /// Set global route state
+    pub fn set_service_state(&self, extensions: &mut Extensions) -> bool {
+        for f in self.service_state.iter() {
             f.create(extensions);
         }
-        !self.service_data.is_empty()
+        !self.service_state.is_empty()
     }
 
     /// Register http service

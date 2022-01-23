@@ -7,69 +7,69 @@ use crate::web::extract::FromRequest;
 use crate::web::httprequest::HttpRequest;
 
 /// Application data factory
-pub(crate) trait DataFactory {
+pub(crate) trait StateFactory {
     fn create(&self, extensions: &mut Extensions) -> bool;
 }
 
-/// Application data.
+/// Application state.
 ///
-/// Application data is an arbitrary data attached to the app.
-/// Application data is available to all routes and could be added
+/// Application state is an arbitrary data attached to the app.
+/// Application state is available to all routes and could be added
 /// during application configuration process
-/// with `App::data()` method.
+/// with `App::state()` method.
 ///
-/// Application data could be accessed by using `Data<T>`
-/// extractor where `T` is data type.
+/// Application state could be accessed by using `State<T>`
+/// extractor where `T` is state type.
 ///
 /// **Note**: http server accepts an application factory rather than
 /// an application instance. Http server constructs an application
 /// instance for each thread, thus application data must be constructed
-/// multiple times. If you want to share data between different
+/// multiple times. If you want to share state between different
 /// threads, a shareable object should be used, e.g. `Send + Sync`. Application
-/// data does not need to be `Send` or `Sync`. Internally `Data` type
-/// uses `Arc`. if your data implements `Send` + `Sync` traits you can
-/// use `web::types::Data::new()` and avoid double `Arc`.
+/// state does not need to be `Send` or `Sync`. Internally `State` type
+/// uses `Arc`. if your state implements `Send` + `Sync` traits you can
+/// use `web::types::State::new()` and avoid double `Arc`.
 ///
-/// If route data is not set for a handler, using `Data<T>` extractor would
+/// If state is not set for a handler, using `State<T>` extractor would
 /// cause *Internal Server Error* response.
 ///
 /// ```rust
 /// use std::sync::Mutex;
 /// use ntex::web::{self, App, HttpResponse};
 ///
-/// struct MyData {
+/// struct MyState {
 ///     counter: usize,
 /// }
 ///
-/// /// Use `Data<T>` extractor to access data in handler.
-/// async fn index(data: web::types::Data<Mutex<MyData>>) -> HttpResponse {
-///     let mut data = data.lock().unwrap();
+/// /// Use `State<T>` extractor to access data in handler.
+/// async fn index(st: web::types::State<Mutex<MyState>>) -> HttpResponse {
+///     let mut data = st.lock().unwrap();
 ///     data.counter += 1;
 ///     HttpResponse::Ok().into()
 /// }
 ///
 /// fn main() {
-///     let data = web::types::Data::new(Mutex::new(MyData{ counter: 0 }));
+///     let st = web::types::State::new(Mutex::new(MyState{ counter: 0 }));
 ///
 ///     let app = App::new()
-///         // Store `MyData` in application storage.
-///         .app_data(data.clone())
+///         // Store `MyState` in application storage.
+///         .app_state(st.clone())
 ///         .service(
 ///             web::resource("/index.html").route(
 ///                 web::get().to(index)));
 /// }
 /// ```
 #[derive(Debug)]
-pub struct Data<T>(Arc<T>);
+pub struct State<T>(Arc<T>);
 
-impl<T> Data<T> {
-    /// Create new `Data` instance.
+impl<T> State<T> {
+    /// Create new `State` instance.
     ///
-    /// Internally `Data` type uses `Arc`. if your data implements
-    /// `Send` + `Sync` traits you can use `web::types::Data::new()` and
+    /// Internally `State` type uses `Arc`. if your state implements
+    /// `Send` + `Sync` traits you can use `web::types::State::new()` and
     /// avoid double `Arc`.
-    pub fn new(state: T) -> Data<T> {
-        Data(Arc::new(state))
+    pub fn new(state: T) -> State<T> {
+        State(Arc::new(state))
     }
 
     /// Get reference to inner app data.
@@ -83,7 +83,7 @@ impl<T> Data<T> {
     }
 }
 
-impl<T> Deref for Data<T> {
+impl<T> Deref for State<T> {
     type Target = Arc<T>;
 
     fn deref(&self) -> &Arc<T> {
@@ -91,19 +91,19 @@ impl<T> Deref for Data<T> {
     }
 }
 
-impl<T> Clone for Data<T> {
-    fn clone(&self) -> Data<T> {
-        Data(self.0.clone())
+impl<T> Clone for State<T> {
+    fn clone(&self) -> State<T> {
+        State(self.0.clone())
     }
 }
 
-impl<T: 'static, E: ErrorRenderer> FromRequest<E> for Data<T> {
+impl<T: 'static, E: ErrorRenderer> FromRequest<E> for State<T> {
     type Error = DataExtractorError;
     type Future = Ready<Self, Self::Error>;
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        if let Some(st) = req.app_data::<Data<T>>() {
+        if let Some(st) = req.app_state::<State<T>>() {
             Ready::Ok(st.clone())
         } else {
             log::debug!(
@@ -116,10 +116,10 @@ impl<T: 'static, E: ErrorRenderer> FromRequest<E> for Data<T> {
     }
 }
 
-impl<T: 'static> DataFactory for Data<T> {
+impl<T: 'static> StateFactory for State<T> {
     fn create(&self, extensions: &mut Extensions) -> bool {
-        if !extensions.contains::<Data<T>>() {
-            extensions.insert(Data(self.0.clone()));
+        if !extensions.contains::<State<T>>() {
+            extensions.insert(State(self.0.clone()));
             true
         } else {
             false
@@ -139,8 +139,8 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_data_extractor() {
-        let srv = init_service(App::new().data("TEST".to_string()).service(
-            web::resource("/").to(|data: web::types::Data<String>| async move {
+        let srv = init_service(App::new().state("TEST".to_string()).service(
+            web::resource("/").to(|data: web::types::State<String>| async move {
                 assert_eq!(data.to_lowercase(), "test");
                 HttpResponse::Ok()
             }),
@@ -152,9 +152,9 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(
-            App::new().data(10u32).service(
+            App::new().state(10u32).service(
                 web::resource("/")
-                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+                    .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
             ),
         )
         .await;
@@ -166,9 +166,9 @@ mod tests {
     #[crate::rt_test]
     async fn test_app_data_extractor() {
         let srv = init_service(
-            App::new().app_data(Data::new(10usize)).service(
+            App::new().app_state(State::new(10usize)).service(
                 web::resource("/")
-                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+                    .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
             ),
         )
         .await;
@@ -178,9 +178,9 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(
-            App::new().app_data(Data::new(10u32)).service(
+            App::new().app_state(State::new(10u32)).service(
                 web::resource("/")
-                    .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+                    .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
             ),
         )
         .await;
@@ -191,21 +191,22 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_route_data_extractor() {
-        let srv = init_service(App::new().service(web::resource("/").data(10usize).route(
-            web::get().to(|data: web::types::Data<usize>| async move {
-                let _ = data.clone();
-                HttpResponse::Ok()
-            }),
-        )))
-        .await;
+        let srv =
+            init_service(App::new().service(web::resource("/").state(10usize).route(
+                web::get().to(|data: web::types::State<usize>| async move {
+                    let _ = data.clone();
+                    HttpResponse::Ok()
+                }),
+            )))
+            .await;
 
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // different type
-        let srv = init_service(App::new().service(web::resource("/").data(10u32).route(
-            web::get().to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+        let srv = init_service(App::new().service(web::resource("/").state(10u32).route(
+            web::get().to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
         )))
         .await;
         let req = TestRequest::default().to_request();
@@ -215,9 +216,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_override_data() {
-        let srv = init_service(App::new().data(1usize).service(
-            web::resource("/").data(10usize).route(web::get().to(
-                |data: web::types::Data<usize>| async move {
+        let srv = init_service(App::new().state(1usize).service(
+            web::resource("/").state(10usize).route(web::get().to(
+                |data: web::types::State<usize>| async move {
                     assert_eq!(**data, 10);
                     let _ = data.clone();
                     HttpResponse::Ok()
@@ -265,8 +266,8 @@ mod tests {
             let data = data.clone();
 
             App::new()
-                .data(data)
-                .service(web::resource("/").to(|_data: Data<TestData>| async { "ok" }))
+                .state(data)
+                .service(web::resource("/").to(|_data: State<TestData>| async { "ok" }))
         });
 
         assert!(srv.get("/").send().await.unwrap().status().is_success());

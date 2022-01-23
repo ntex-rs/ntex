@@ -106,7 +106,7 @@ where
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         let limit = req
-            .app_data::<FormConfig>()
+            .app_state::<FormConfig>()
             .map(|c| c.limit)
             .unwrap_or(16384);
 
@@ -172,7 +172,7 @@ where
 ///     let app = App::new().service(
 ///         web::resource("/index.html")
 ///             // change `Form` extractor configuration
-///             .app_data(
+///             .app_state(
 ///                 web::types::FormConfig::default().limit(4097)
 ///             )
 ///             .route(web::get().to(index))

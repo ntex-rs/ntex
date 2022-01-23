@@ -16,13 +16,13 @@ use super::resource::Resource;
 use super::response::WebResponse;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
-use super::types::data::{Data, DataFactory};
+use super::types::state::{State, StateFactory};
 use super::{DefaultError, ErrorRenderer};
 
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
-type FnDataFactory =
-    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Box<dyn DataFactory>, ()>>>>>;
+type FnStateFactory =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Box<dyn StateFactory>, ()>>>>>;
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
@@ -31,8 +31,8 @@ pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     filter: PipelineFactory<F, WebRequest<Err>>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
-    data: Vec<Box<dyn DataFactory>>,
-    data_factories: Vec<FnDataFactory>,
+    state: Vec<Box<dyn StateFactory>>,
+    state_factories: Vec<FnStateFactory>,
     external: Vec<ResourceDef>,
     extensions: Extensions,
     error_renderer: Err,
@@ -45,8 +45,8 @@ impl App<Identity, Filter<DefaultError>, DefaultError> {
         App {
             middleware: Identity,
             filter: pipeline_factory(Filter::new()),
-            data: Vec::new(),
-            data_factories: Vec::new(),
+            state: Vec::new(),
+            state_factories: Vec::new(),
             services: Vec::new(),
             default: None,
             external: Vec::new(),
@@ -63,8 +63,8 @@ impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
         App {
             middleware: Identity,
             filter: pipeline_factory(Filter::new()),
-            data: Vec::new(),
-            data_factories: Vec::new(),
+            state: Vec::new(),
+            state_factories: Vec::new(),
             services: Vec::new(),
             default: None,
             external: Vec::new(),
@@ -86,62 +86,68 @@ where
     T::Future: 'static,
     Err: ErrorRenderer,
 {
-    /// Set application data. Application data could be accessed
-    /// by using `Data<T>` extractor where `T` is data type.
+    /// Set application state. Application state could be accessed
+    /// by using `State<T>` extractor where `T` is state type.
     ///
     /// **Note**: http server accepts an application factory rather than
     /// an application instance. Http server constructs an application
-    /// instance for each thread, thus application data must be constructed
-    /// multiple times. If you want to share data between different
-    /// threads, a shared object should be used, e.g. `Arc`. Internally `Data` type
-    /// uses `Arc` so data could be created outside of app factory and clones could
-    /// be stored via `App::app_data()` method.
+    /// instance for each thread, thus application state must be constructed
+    /// multiple times. If you want to share state between different
+    /// threads, a shared object should be used, e.g. `Arc`. Internally `State` type
+    /// uses `Arc` so statw could be created outside of app factory and clones could
+    /// be stored via `App::app_state()` method.
     ///
     /// ```rust
     /// use std::cell::Cell;
     /// use ntex::web::{self, App, HttpResponse};
     ///
-    /// struct MyData {
+    /// struct MyState {
     ///     counter: Cell<usize>,
     /// }
     ///
-    /// async fn index(data: web::types::Data<MyData>) -> HttpResponse {
-    ///     data.counter.set(data.counter.get() + 1);
+    /// async fn index(st: web::types::State<MyState>) -> HttpResponse {
+    ///     st.counter.set(st.counter.get() + 1);
     ///     HttpResponse::Ok().into()
     /// }
     ///
     /// let app = App::new()
-    ///     .data(MyData{ counter: Cell::new(0) })
+    ///     .state(MyState{ counter: Cell::new(0) })
     ///     .service(
     ///         web::resource("/index.html").route(web::get().to(index))
     ///     );
     /// ```
-    pub fn data<U: 'static>(mut self, data: U) -> Self {
-        self.data.push(Box::new(Data::new(data)));
+    pub fn state<U: 'static>(mut self, state: U) -> Self {
+        self.state.push(Box::new(State::new(state)));
         self
     }
 
-    /// Set application data factory. This function is
-    /// similar to `.data()` but it accepts data factory. Data object get
+    #[deprecated]
+    #[doc(hidden)]
+    pub fn data<U: 'static>(self, data: U) -> Self {
+        self.state(data)
+    }
+
+    /// Set application state factory. This function is
+    /// similar to `.state()` but it accepts state factory. State object get
     /// constructed asynchronously during application initialization.
-    pub fn data_factory<F, Out, D, E>(mut self, data: F) -> Self
+    pub fn state_factory<F, Out, D, E>(mut self, state: F) -> Self
     where
         F: Fn() -> Out + 'static,
         Out: Future<Output = Result<D, E>> + 'static,
         D: 'static,
-        E: std::fmt::Debug,
+        E: fmt::Debug,
     {
-        self.data_factories.push(Box::new(move || {
-            let fut = data();
+        self.state_factories.push(Box::new(move || {
+            let fut = state();
             Box::pin(async move {
                 match fut.await {
                     Err(e) => {
-                        log::error!("Cannot construct data instance: {:?}", e);
+                        log::error!("Cannot construct state instance: {:?}", e);
                         Err(())
                     }
-                    Ok(data) => {
-                        let data: Box<dyn DataFactory> = Box::new(Data::new(data));
-                        Ok(data)
+                    Ok(st) => {
+                        let st: Box<dyn StateFactory> = Box::new(State::new(st));
+                        Ok(st)
                     }
                 }
             })
@@ -149,14 +155,14 @@ where
         self
     }
 
-    /// Set application level arbitrary data item.
+    /// Set application level arbitrary state item.
     ///
-    /// Application data stored with `App::app_data()` method is available
-    /// via `HttpRequest::app_data()` method at runtime.
+    /// Application state stored with `App::app_state()` method is available
+    /// via `HttpRequest::app_state()` method at runtime.
     ///
-    /// This method could be used for storing `Data<T>` as well, in that case
-    /// data could be accessed by using `Data<T>` extractor.
-    pub fn app_data<U: 'static>(mut self, ext: U) -> Self {
+    /// This method could be used for storing `State<T>` as well, in that case
+    /// state could be accessed by using `State<T>` extractor.
+    pub fn app_state<U: 'static>(mut self, ext: U) -> Self {
         self.extensions.insert(ext);
         self
     }
@@ -192,7 +198,7 @@ where
     {
         let mut cfg = ServiceConfig::new();
         f(&mut cfg);
-        self.data.extend(cfg.data);
+        self.state.extend(cfg.state);
         self.services.extend(cfg.services);
         self.external.extend(cfg.external);
         self
@@ -375,8 +381,8 @@ where
         App {
             filter: self.filter.and_then(filter.into_factory()),
             middleware: self.middleware,
-            data: self.data,
-            data_factories: self.data_factories,
+            state: self.state,
+            state_factories: self.state_factories,
             services: self.services,
             default: self.default,
             external: self.external,
@@ -416,8 +422,8 @@ where
         App {
             middleware: Stack::new(self.middleware, mw),
             filter: self.filter,
-            data: self.data,
-            data_factories: self.data_factories,
+            state: self.state,
+            state_factories: self.state_factories,
             services: self.services,
             default: self.default,
             external: self.external,
@@ -508,8 +514,8 @@ where
         let app = AppFactory {
             filter: self.filter,
             middleware: Rc::new(self.middleware),
-            data: Rc::new(self.data),
-            data_factories: Rc::new(self.data_factories),
+            state: Rc::new(self.state),
+            state_factories: Rc::new(self.state_factories),
             services: Rc::new(RefCell::new(self.services)),
             external: RefCell::new(self.external),
             default: self.default,
@@ -538,8 +544,8 @@ where
         AppFactory {
             filter: self.filter,
             middleware: Rc::new(self.middleware),
-            data: Rc::new(self.data),
-            data_factories: Rc::new(self.data_factories),
+            state: Rc::new(self.state),
+            state_factories: Rc::new(self.state_factories),
             services: Rc::new(RefCell::new(self.services)),
             external: RefCell::new(self.external),
             default: self.default,
@@ -566,8 +572,8 @@ where
         AppFactory {
             filter: self.filter,
             middleware: Rc::new(self.middleware),
-            data: Rc::new(self.data),
-            data_factories: Rc::new(self.data_factories),
+            state: Rc::new(self.state),
+            state_factories: Rc::new(self.state_factories),
             services: Rc::new(RefCell::new(self.services)),
             external: RefCell::new(self.external),
             default: self.default,
@@ -696,13 +702,13 @@ mod tests {
     }
 
     #[crate::rt_test]
-    async fn test_data_factory() {
+    async fn test_state_factory() {
         let srv = init_service(
             App::new()
-                .data_factory(|| async { Ok::<_, ()>(10usize) })
+                .state_factory(|| async { Ok::<_, ()>(10usize) })
                 .service(
                     web::resource("/")
-                        .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+                        .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
                 ),
         )
         .await;
@@ -712,10 +718,10 @@ mod tests {
 
         let srv = init_service(
             App::new()
-                .data_factory(|| async { Ok::<_, ()>(10u32) })
+                .state_factory(|| async { Ok::<_, ()>(10u32) })
                 .service(
                     web::resource("/")
-                        .to(|_: web::types::Data<usize>| async { HttpResponse::Ok() }),
+                        .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
                 ),
         )
         .await;
@@ -726,9 +732,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_extension() {
-        let srv = init_service(App::new().app_data(10usize).service(
+        let srv = init_service(App::new().app_state(10usize).service(
             web::resource("/").to(|req: HttpRequest| async move {
-                assert_eq!(*req.app_data::<usize>().unwrap(), 10);
+                assert_eq!(*req.app_state::<usize>().unwrap(), 10);
                 HttpResponse::Ok()
             }),
         ))

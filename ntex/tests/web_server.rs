@@ -680,7 +680,7 @@ async fn test_brotli_encoding_large() {
     let srv = test::server_with(test::config().h1(), || {
         App::new().service(
             web::resource("/")
-                .app_data(web::types::PayloadConfig::new(320_000))
+                .app_state(web::types::PayloadConfig::new(320_000))
                 .route(web::to(move |body: Bytes| async {
                     HttpResponse::Ok().streaming(TestBody::new(body, 10240))
                 })),

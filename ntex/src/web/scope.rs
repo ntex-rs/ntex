@@ -20,7 +20,7 @@ use super::response::WebResponse;
 use super::rmap::ResourceMap;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper};
-use super::types::Data;
+use super::types::State;
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
@@ -63,7 +63,7 @@ pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
     filter: PipelineFactory<T, WebRequest<Err>>,
     rdef: Vec<String>,
-    data: Option<Extensions>,
+    state: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     guards: Vec<Box<dyn Guard>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
@@ -78,7 +78,7 @@ impl<Err: ErrorRenderer> Scope<Err> {
             middleware: Identity,
             filter: pipeline_factory(Filter::new()),
             rdef: path.patterns(),
-            data: None,
+            state: None,
             guards: Vec::new(),
             services: Vec::new(),
             default: Rc::new(RefCell::new(None)),
@@ -123,44 +123,44 @@ where
         self
     }
 
-    /// Set or override application data. Application data could be accessed
-    /// by using `Data<T>` extractor where `T` is data type.
+    /// Set or override application state. Application state could be accessed
+    /// by using `State<T>` extractor where `T` is state type.
     ///
     /// ```rust
     /// use std::cell::Cell;
     /// use ntex::web::{self, App, HttpResponse};
     ///
-    /// struct MyData {
+    /// struct MyState {
     ///     counter: Cell<usize>,
     /// }
     ///
-    /// async fn index(data: web::types::Data<MyData>) -> HttpResponse {
-    ///     data.counter.set(data.counter.get() + 1);
+    /// async fn index(st: web::types::State<MyState>) -> HttpResponse {
+    ///     st.counter.set(st.counter.get() + 1);
     ///     HttpResponse::Ok().into()
     /// }
     ///
     /// fn main() {
     ///     let app = App::new().service(
     ///         web::scope("/app")
-    ///             .data(MyData{ counter: Cell::new(0) })
+    ///             .state(MyState{ counter: Cell::new(0) })
     ///             .service(
     ///                 web::resource("/index.html").route(
     ///                     web::get().to(index)))
     ///     );
     /// }
     /// ```
-    pub fn data<D: 'static>(self, data: D) -> Self {
-        self.app_data(Data::new(data))
+    pub fn state<D: 'static>(self, st: D) -> Self {
+        self.app_state(State::new(st))
     }
 
-    /// Set or override application data.
+    /// Set or override application state.
     ///
-    /// This method overrides data stored with [`App::app_data()`](#method.app_data)
-    pub fn app_data<D: 'static>(mut self, data: D) -> Self {
-        if self.data.is_none() {
-            self.data = Some(Extensions::new());
+    /// This method overrides state stored with [`App::app_state()`](#method.app_state)
+    pub fn app_state<D: 'static>(mut self, st: D) -> Self {
+        if self.state.is_none() {
+            self.state = Some(Extensions::new());
         }
-        self.data.as_mut().unwrap().insert(data);
+        self.state.as_mut().unwrap().insert(st);
         self
     }
 
@@ -209,14 +209,14 @@ where
         self.services.extend(cfg.services);
         self.external.extend(cfg.external);
 
-        if !cfg.data.is_empty() {
-            let mut data = self.data.unwrap_or_else(Extensions::new);
+        if !cfg.state.is_empty() {
+            let mut state = self.state.unwrap_or_else(Extensions::new);
 
-            for value in cfg.data.iter() {
-                value.create(&mut data);
+            for value in cfg.state.iter() {
+                value.create(&mut state);
             }
 
-            self.data = Some(data);
+            self.state = Some(state);
         }
         self
     }
@@ -338,7 +338,7 @@ where
             filter: self.filter.and_then(filter.into_factory()),
             middleware: self.middleware,
             rdef: self.rdef,
-            data: self.data,
+            state: self.state,
             guards: self.guards,
             services: self.services,
             default: self.default,
@@ -362,7 +362,7 @@ where
             middleware: Stack::new(self.middleware, mw),
             filter: self.filter,
             rdef: self.rdef,
-            data: self.data,
+            state: self.state,
             guards: self.guards,
             services: self.services,
             default: self.default,
@@ -405,13 +405,13 @@ where
         }
 
         // custom app data storage
-        if let Some(ref mut ext) = self.data {
-            config.set_service_data(ext);
+        if let Some(ref mut ext) = self.state {
+            config.set_service_state(ext);
         }
 
         // complete scope pipeline creation
         let router_factory = ScopeRouterFactory {
-            data: self.data.take().map(Rc::new),
+            state: self.state.take().map(Rc::new),
             default: self.default.clone(),
             case_insensitive: self.case_insensitive,
             services: Rc::new(
@@ -560,7 +560,7 @@ where
 }
 
 struct ScopeRouterFactory<Err: ErrorRenderer> {
-    data: Option<Rc<Extensions>>,
+    state: Option<Rc<Extensions>>,
     services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
     case_insensitive: bool,
@@ -576,7 +576,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
     fn new_service(&self, _: ()) -> Self::Future {
         let services = self.services.clone();
         let case_insensitive = self.case_insensitive;
-        let data = self.data.clone();
+        let state = self.state.clone();
         let default_fut = self
             .default
             .borrow()
@@ -601,7 +601,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
             };
 
             Ok(ScopeRouter {
-                data,
+                state,
                 default,
                 router: router.finish(),
             })
@@ -610,7 +610,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
 }
 
 struct ScopeRouter<Err: ErrorRenderer> {
-    data: Option<Rc<Extensions>>,
+    state: Option<Rc<Extensions>>,
     router: Router<HttpService<Err>, Vec<Box<dyn Guard>>>,
     default: Option<HttpService<Err>>,
 }
@@ -638,8 +638,8 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
         });
 
         if let Some((srv, _info)) = res {
-            if let Some(ref data) = self.data {
-                req.set_data_container(data.clone());
+            if let Some(ref state) = self.state {
+                req.set_state_container(state.clone());
             }
             Either::Left(srv.call(req))
         } else if let Some(ref default) = self.default {
@@ -1195,10 +1195,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_override_data() {
-        let srv = init_service(App::new().data(1usize).service(
-            web::scope("app").data(10usize).route(
+        let srv = init_service(App::new().state(1usize).service(
+            web::scope("app").state(10usize).route(
                 "/t",
-                web::get().to(|data: web::types::Data<usize>| {
+                web::get().to(|data: web::types::State<usize>| {
                     assert_eq!(**data, 10);
                     async { HttpResponse::Ok() }
                 }),
@@ -1214,17 +1214,19 @@ mod tests {
     #[crate::rt_test]
     async fn test_override_app_data() {
         let srv = init_service(
-            App::new().app_data(web::types::Data::new(1usize)).service(
-                web::scope("app")
-                    .app_data(web::types::Data::new(10usize))
-                    .route(
-                        "/t",
-                        web::get().to(|data: web::types::Data<usize>| {
-                            assert_eq!(**data, 10);
-                            async { HttpResponse::Ok() }
-                        }),
-                    ),
-            ),
+            App::new()
+                .app_state(web::types::State::new(1usize))
+                .service(
+                    web::scope("app")
+                        .app_state(web::types::State::new(10usize))
+                        .route(
+                            "/t",
+                            web::get().to(|data: web::types::State<usize>| {
+                                assert_eq!(**data, 10);
+                                async { HttpResponse::Ok() }
+                            }),
+                        ),
+                ),
         )
         .await;
 
@@ -1236,7 +1238,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_scope_config() {
         let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
-            s.data("teat");
+            s.state("teat");
             s.route("/path1", web::get().to(|| async { HttpResponse::Ok() }));
         })))
         .await;
