@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.5] - 2022-01-23
+
+* Add Eq,PartialEq,Hash,Debug impls to Io asn IoRef
+
 ## [0.1.4] - 2022-01-17
 
 * Add Io::take() method

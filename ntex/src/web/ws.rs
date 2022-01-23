@@ -1,111 +1,106 @@
-use std::{error, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+//! WebSockets protocol support
+use std::fmt;
 
-pub use crate::ws::{CloseCode, CloseReason, Frame, Message};
+pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
-use crate::http::body::{Body, BoxedBodyStream};
-use crate::http::error::PayloadError;
-use crate::service::{IntoServiceFactory, Service, ServiceFactory};
+use crate::http::{body::BodySize, h1, StatusCode};
+use crate::service::{
+    apply_fn, fn_factory_with_config, IntoServiceFactory, Service, ServiceFactory,
+};
 use crate::web::{HttpRequest, HttpResponse};
-use crate::ws::{error::HandshakeError, handshake};
-use crate::{channel::mpsc, rt, util::Bytes, util::Sink, util::Stream, ws};
+use crate::ws::{error::HandshakeError, error::WsError, handshake};
+use crate::{io::DispatchItem, rt, util::Either, util::Ready, ws};
 
-pub type WebSocketsSink =
-    ws::StreamEncoder<mpsc::Sender<Result<Bytes, Box<dyn error::Error>>>>;
-
-// TODO: fix close frame handling
 /// Do websocket handshake and start websockets service.
-pub async fn start<T, F, S, Err>(
-    req: HttpRequest,
-    payload: S,
-    factory: F,
-) -> Result<HttpResponse, Err>
+pub async fn start<T, F, Err>(req: HttpRequest, factory: F) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<Frame, WebSocketsSink, Response = Option<Message>> + 'static,
-    T::Error: error::Error,
-    F: IntoServiceFactory<T, Frame, WebSocketsSink>,
-    S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
+    T: ServiceFactory<Frame, WsSink, Response = Option<Message>> + 'static,
+    T::Error: fmt::Debug,
+    F: IntoServiceFactory<T, Frame, WsSink>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
-    let (tx, rx) = mpsc::channel();
+    let inner_factory = factory.into_factory().map_err(WsError::Service);
 
-    start_with(req, payload, tx, rx, factory).await
+    let factory = fn_factory_with_config(move |sink: WsSink| {
+        let fut = inner_factory.new_service(sink.clone());
+
+        async move {
+            let srv = fut.await?;
+            Ok::<_, T::InitError>(apply_fn(srv, move |req, srv| match req {
+                DispatchItem::Item(item) => {
+                    let s = if matches!(item, Frame::Close(_)) {
+                        Some(sink.clone())
+                    } else {
+                        None
+                    };
+                    let fut = srv.call(item);
+                    Either::Left(async move {
+                        let result = fut.await;
+                        if let Some(s) = s {
+                            rt::spawn(async move { s.io().close() });
+                        }
+                        result
+                    })
+                }
+                DispatchItem::WBackPressureEnabled
+                | DispatchItem::WBackPressureDisabled => Either::Right(Ready::Ok(None)),
+                DispatchItem::KeepAliveTimeout => {
+                    Either::Right(Ready::Err(WsError::KeepAlive))
+                }
+                DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
+                    Either::Right(Ready::Err(WsError::Protocol(e)))
+                }
+                DispatchItem::Disconnect(e) => {
+                    Either::Right(Ready::Err(WsError::Disconnected(e)))
+                }
+            }))
+        }
+    });
+
+    start_with(req, factory).await
 }
 
 /// Do websocket handshake and start websockets service.
-pub async fn start_with<T, F, S, Err, Tx, Rx>(
+pub async fn start_with<T, F, Err>(
     req: HttpRequest,
-    payload: S,
-    tx: Tx,
-    rx: Rx,
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<Frame, ws::StreamEncoder<Tx>, Response = Option<Message>> + 'static,
-    T::Error: error::Error,
-    F: IntoServiceFactory<T, Frame, ws::StreamEncoder<Tx>>,
-    S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
+    T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>>
+        + 'static,
+    T::Error: fmt::Debug,
+    F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
     Err: From<T::InitError> + From<HandshakeError>,
-    Tx: Sink<Result<Bytes, Box<dyn error::Error>>> + Clone + Unpin + 'static,
-    Tx::Error: error::Error,
-    Rx: Stream<Item = Result<Bytes, Box<dyn error::Error>>> + Unpin + 'static,
 {
-    // ws handshake
-    let mut res = handshake(req.head())?;
+    log::trace!("Start ws handshake verification for {:?}", req.path());
 
-    // converter wraper from ws::Message to Bytes
-    let sink = ws::StreamEncoder::new(tx);
+    // ws handshake
+    let res = handshake(req.head())?.finish().into_parts().0;
+
+    // extract io
+    let item = req
+        .head()
+        .take_io()
+        .ok_or(HandshakeError::NoWebsocketUpgrade)?;
+    let io = item.0;
+    let codec = item.1;
+
+    io.encode(h1::Message::Item((res, BodySize::Empty)), &codec)
+        .map_err(|_| HandshakeError::NoWebsocketUpgrade)?;
+    log::trace!("Ws handshake verification completed for {:?}", req.path());
+
+    // create sink
+    let codec = ws::Codec::new();
+    let sink = WsSink::new(io.get_ref(), codec.clone());
 
     // create ws service
-    let srv = factory
-        .into_factory()
-        .new_service(sink.clone())
-        .await?
-        .map_err(|e| {
-            let e: Box<dyn error::Error> = Box::new(e);
-            e
-        });
+    let srv = factory.into_factory().new_service(sink).await?;
 
     // start websockets service dispatcher
-    rt::spawn(crate::util::stream::Dispatcher::new(
-        // wrap bytes stream to ws::Frame's stream
-        MapStream {
-            stream: ws::StreamDecoder::new(payload),
-            _t: PhantomData,
-        },
-        // converter wraper from ws::Message to Bytes
-        sink,
-        // websockets handler service
-        srv,
-    ));
+    rt::spawn(async move {
+        let res = crate::io::Dispatcher::new(io, codec, srv).await;
+        log::trace!("Ws handler is terminated: {:?}", res);
+    });
 
-    Ok(res.body(Body::from_message(BoxedBodyStream::new(rx))))
-}
-
-pin_project_lite::pin_project! {
-    struct MapStream<S, I, E>{
-        #[pin]
-        stream: S,
-        _t: PhantomData<(I, E)>,
-    }
-}
-
-impl<S, I, E> Stream for MapStream<S, I, E>
-where
-    S: Stream<Item = Result<I, E>>,
-    E: error::Error + 'static,
-{
-    type Item = Result<I, Box<dyn error::Error>>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.project().stream.poll_next(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Some(Ok(item))) => Poll::Ready(Some(Ok(item))),
-            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(Box::new(err)))),
-            Poll::Ready(None) => Poll::Ready(None),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.stream.size_hint()
-    }
+    Ok(HttpResponse::new(StatusCode::OK))
 }

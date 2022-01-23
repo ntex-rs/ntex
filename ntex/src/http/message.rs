@@ -3,8 +3,8 @@ use std::{cell::Ref, cell::RefCell, cell::RefMut, net, rc::Rc};
 use bitflags::bitflags;
 
 use crate::http::header::HeaderMap;
-use crate::http::{header, Method, StatusCode, Uri, Version};
-use crate::io::{types, IoRef};
+use crate::http::{h1::Codec, Method, StatusCode, Uri, Version};
+use crate::io::{types, IoBoxed, IoRef};
 use crate::util::Extensions;
 
 /// Represents various types of connection
@@ -28,13 +28,29 @@ bitflags! {
     }
 }
 
-#[doc(hidden)]
 pub(crate) trait Head: Default + 'static {
     fn clear(&mut self);
 
     fn with_pool<F, R>(f: F) -> R
     where
         F: FnOnce(&MessagePool<Self>) -> R;
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum CurrentIo {
+    Ref(IoRef),
+    Io(Rc<(IoRef, RefCell<Option<Box<(IoBoxed, Codec)>>>)>),
+    None,
+}
+
+impl CurrentIo {
+    pub(crate) fn as_ref(&self) -> Option<&IoRef> {
+        match self {
+            CurrentIo::Ref(ref io) => Some(io),
+            CurrentIo::Io(ref io) => Some(&io.0),
+            CurrentIo::None => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -44,14 +60,14 @@ pub struct RequestHead {
     pub version: Version,
     pub headers: HeaderMap,
     pub extensions: RefCell<Extensions>,
-    pub io: Option<IoRef>,
+    pub(crate) io: CurrentIo,
     pub(crate) flags: Flags,
 }
 
 impl Default for RequestHead {
     fn default() -> RequestHead {
         RequestHead {
-            io: None,
+            io: CurrentIo::None,
             uri: Uri::default(),
             method: Method::default(),
             version: Version::HTTP_11,
@@ -64,7 +80,7 @@ impl Default for RequestHead {
 
 impl Head for RequestHead {
     fn clear(&mut self) {
-        self.io = None;
+        self.io = CurrentIo::None;
         self.flags = Flags::empty();
         self.headers.clear();
         self.extensions.get_mut().clear();
@@ -127,17 +143,16 @@ impl RequestHead {
         }
     }
 
+    #[inline]
     /// Connection upgrade status
     pub fn upgrade(&self) -> bool {
-        if let Some(hdr) = self.headers().get(header::CONNECTION) {
-            if let Ok(s) = hdr.to_str() {
-                s.to_ascii_lowercase().contains("upgrade")
-            } else {
-                false
-            }
-        } else {
-            false
-        }
+        self.flags.contains(Flags::UPGRADE)
+    }
+
+    #[inline]
+    /// Request contains `EXPECT` header
+    pub fn expect(&self) -> bool {
+        self.flags.contains(Flags::EXPECT)
     }
 
     #[inline]
@@ -156,14 +171,13 @@ impl RequestHead {
     }
 
     #[inline]
-    /// Request contains `EXPECT` header
-    pub fn expect(&self) -> bool {
-        self.flags.contains(Flags::EXPECT)
+    pub(crate) fn set_expect(&mut self) {
+        self.flags.insert(Flags::EXPECT);
     }
 
     #[inline]
-    pub(crate) fn set_expect(&mut self) {
-        self.flags.insert(Flags::EXPECT);
+    pub(crate) fn set_upgrade(&mut self) {
+        self.flags.insert(Flags::UPGRADE);
     }
 
     /// Peer socket address
@@ -177,6 +191,16 @@ impl RequestHead {
                 .get()
                 .map(types::PeerAddr::into_inner)
         })
+    }
+
+    /// Take io and codec for current request
+    ///
+    /// This objects are set only for upgrade requests
+    pub fn take_io(&self) -> Option<Box<(IoBoxed, Codec)>> {
+        match self.io {
+            CurrentIo::Io(ref inner) => inner.1.borrow_mut().take(),
+            _ => None,
+        }
     }
 }
 
@@ -216,6 +240,7 @@ pub struct ResponseHead {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub reason: Option<&'static str>,
+    pub(crate) io: CurrentIo,
     pub(crate) extensions: RefCell<Extensions>,
     flags: Flags,
 }
@@ -230,6 +255,7 @@ impl ResponseHead {
             headers: HeaderMap::with_capacity(12),
             reason: None,
             flags: Flags::empty(),
+            io: CurrentIo::None,
             extensions: RefCell::new(Extensions::new()),
         }
     }
@@ -335,6 +361,17 @@ impl ResponseHead {
             self.flags.remove(Flags::NO_CHUNKING);
         }
     }
+
+    pub(crate) fn set_io(&mut self, head: &RequestHead) {
+        self.io = head.io.clone();
+    }
+
+    pub(crate) fn take_io(&self) -> Option<Box<(IoBoxed, Codec)>> {
+        match self.io {
+            CurrentIo::Io(ref inner) => inner.1.borrow_mut().take(),
+            _ => None,
+        }
+    }
 }
 
 impl Default for ResponseHead {
@@ -347,6 +384,7 @@ impl Head for ResponseHead {
     fn clear(&mut self) {
         self.reason = None;
         self.headers.clear();
+        self.io = CurrentIo::None;
         self.flags = Flags::empty();
     }
 

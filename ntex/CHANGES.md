@@ -1,6 +1,8 @@
 # Changes
 
-## [0.5.11] - 2022-01-xx
+## [0.5.11] - 2022-01-23
+
+* web: Refactor ws support
 
 * web: Add types::Payload::recv() and types::Payload::poll_recv() methods
 

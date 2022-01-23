@@ -17,7 +17,7 @@ use crate::http::{body::BodySize, client::ClientResponse, error::HttpError, h1};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Sealed};
 use crate::service::{apply_fn, into_service, IntoService, Service};
-use crate::util::{sink, Either, Ready};
+use crate::util::{Either, Ready};
 use crate::{channel::mpsc, rt, time::timeout, time::Millis, ws};
 
 use super::error::{WsClientBuilderError, WsClientError, WsError};
@@ -695,29 +695,25 @@ impl<F> WsConnection<F> {
 impl WsConnection<Sealed> {
     // TODO: fix close frame handling
     /// Start client websockets with `SinkService` and `mpsc::Receiver<Frame>`
-    pub fn start_default(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
+    pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
         rt::spawn(async move {
+            let tx2 = tx.clone();
             let io = self.io.get_ref();
-            let srv = sink::SinkService::new(tx.clone()).map(|_| None);
 
-            if let Err(err) = self
-                .start(into_service(move |item| {
-                    let io = io.clone();
-                    let close = matches!(item, ws::Frame::Close(_));
-                    let fut = srv.call(Ok::<_, WsError<()>>(item));
-                    async move {
-                        let result = fut.await.map_err(|_| ());
-                        if close {
-                            io.close();
-                        }
-                        result
-                    }
+            let result = self
+                .start(into_service(move |item: ws::Frame| {
+                    match tx.send(Ok(item)) {
+                        Ok(()) => (),
+                        Err(_) => io.close(),
+                    };
+                    Ready::Ok::<Option<ws::Message>, ()>(None)
                 }))
-                .await
-            {
-                let _ = tx.send(Err(err));
+                .await;
+
+            if let Err(e) = result {
+                let _ = tx2.send(Err(e));
             }
         });
 

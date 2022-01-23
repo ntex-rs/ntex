@@ -699,6 +699,39 @@ impl<F> AsRef<IoRef> for Io<F> {
     }
 }
 
+impl<F> Eq for Io<F> {}
+
+impl<F> PartialEq for Io<F> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq(&other.0)
+    }
+}
+
+impl<F> hash::Hash for Io<F> {
+    #[inline]
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl<F> fmt::Debug for Io<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Io")
+            .field("open", &!self.is_closed())
+            .finish()
+    }
+}
+
+impl<F> Deref for Io<F> {
+    type Target = IoRef;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
         self.remove_keepalive_timer();
@@ -724,23 +757,6 @@ impl<F> Drop for Io<F> {
             self.force_close();
             self.0 .0.filter.set(NullFilter::get());
         }
-    }
-}
-
-impl fmt::Debug for Io {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Io")
-            .field("open", &!self.is_closed())
-            .finish()
-    }
-}
-
-impl<F> Deref for Io<F> {
-    type Target = IoRef;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 

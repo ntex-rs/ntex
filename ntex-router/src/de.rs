@@ -691,12 +691,12 @@ mod tests {
 
         #[derive(Debug, Deserialize)]
         struct S {
-            inner: (String,),
+            _inner: (String,),
         }
         let s: Result<S, de::value::Error> =
             de::Deserialize::deserialize(PathDeserializer::new(&path));
         assert!(s.is_err());
-        assert!(format!("{:?}", s).contains("missing field `inner`"));
+        assert!(format!("{:?}", s).contains("missing field `_inner`"));
 
         let path = Path::new("");
         let s: Result<&str, de::value::Error> =

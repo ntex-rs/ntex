@@ -256,10 +256,12 @@ impl MessageType for Request {
             PayloadLength::Payload(pl) => pl,
             PayloadLength::Upgrade => {
                 // upgrade(websocket)
+                msg.head_mut().set_upgrade();
                 PayloadType::Stream(PayloadDecoder::eof())
             }
             PayloadLength::None => {
                 if method == Method::CONNECT {
+                    msg.head_mut().set_upgrade();
                     PayloadType::Stream(PayloadDecoder::eof())
                 } else {
                     PayloadType::None

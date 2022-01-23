@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.11] - 2022-01-23
+
+* Remove useless stream::Dispatcher and sink::SinkService
+
 ## [0.1.10] - 2022-01-17
 
 * Add time::query_system_time(), it does not use async runtime

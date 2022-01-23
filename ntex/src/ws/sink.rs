@@ -3,6 +3,7 @@ use std::{future::Future, rc::Rc};
 use crate::io::{IoRef, OnDisconnect};
 use crate::ws;
 
+#[derive(Clone)]
 pub struct WsSink(Rc<WsSinkInner>);
 
 struct WsSinkInner {
@@ -13,6 +14,11 @@ struct WsSinkInner {
 impl WsSink {
     pub(crate) fn new(io: IoRef, codec: ws::Codec) -> Self {
         Self(Rc::new(WsSinkInner { io, codec }))
+    }
+
+    /// Io reference
+    pub fn io(&self) -> &IoRef {
+        &self.0.io
     }
 
     /// Endcode and send message to the peer.

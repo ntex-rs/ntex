@@ -108,9 +108,7 @@ impl WebResponse {
     pub fn take_body(&mut self) -> ResponseBody<Body> {
         self.response.take_body()
     }
-}
 
-impl WebResponse {
     /// Set a new body
     pub fn map_body<F>(self, f: F) -> WebResponse
     where
@@ -126,7 +124,11 @@ impl WebResponse {
 }
 
 impl From<WebResponse> for Response<Body> {
-    fn from(res: WebResponse) -> Response<Body> {
+    fn from(mut res: WebResponse) -> Response<Body> {
+        let head = res.response.head_mut();
+        if head.upgrade() {
+            head.set_io(res.request.head());
+        }
         res.response
     }
 }
