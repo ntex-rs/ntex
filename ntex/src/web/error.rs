@@ -27,8 +27,7 @@ pub trait ErrorContainer: error::ResponseError + Sized {
 }
 
 /// Error that can be rendered to a `Response`
-pub trait WebResponseError<Err = DefaultError>:
-    fmt::Debug + fmt::Display + 'static
+pub trait WebResponseError<Err = DefaultError>: std::error::Error + 'static
 where
     Err: ErrorRenderer,
 {
@@ -84,6 +83,8 @@ pub enum DataExtractorError {
     NotConfigured,
 }
 
+impl std::error::Error for DataExtractorError {}
+
 /// Errors which can occur when attempting to generate resource uri.
 #[derive(Debug, PartialEq, Display, From)]
 pub enum UrlGenerationError {
@@ -98,6 +99,8 @@ pub enum UrlGenerationError {
     #[display(fmt = "{}", _0)]
     ParseError(UrlParseError),
 }
+
+impl std::error::Error for UrlGenerationError {}
 
 /// A set of errors that can occur during parsing urlencoded payloads
 #[derive(Debug, Display, From)]
@@ -126,6 +129,8 @@ pub enum UrlencodedError {
     Payload(error::PayloadError),
 }
 
+impl std::error::Error for UrlencodedError {}
+
 /// A set of errors that can occur during parsing json payloads
 #[derive(Debug, Display, From)]
 pub enum JsonPayloadError {
@@ -143,6 +148,8 @@ pub enum JsonPayloadError {
     Payload(error::PayloadError),
 }
 
+impl std::error::Error for JsonPayloadError {}
+
 /// A set of errors that can occur during parsing request paths
 #[derive(Debug, Display, From)]
 pub enum PathError {
@@ -151,6 +158,8 @@ pub enum PathError {
     Deserialize(serde::de::value::Error),
 }
 
+impl std::error::Error for PathError {}
+
 /// A set of errors that can occur during parsing query strings
 #[derive(Debug, Display, From)]
 pub enum QueryPayloadError {
@@ -158,6 +167,8 @@ pub enum QueryPayloadError {
     #[display(fmt = "Query deserialize error: {}", _0)]
     Deserialize(serde::de::value::Error),
 }
+
+impl std::error::Error for QueryPayloadError {}
 
 #[derive(Debug, Display, From)]
 pub enum PayloadError {
@@ -171,6 +182,8 @@ pub enum PayloadError {
     #[display(fmt = "Cannot decode body")]
     Decoding,
 }
+
+impl std::error::Error for PayloadError {}
 
 /// Helper type that can wrap any error and generate custom response.
 ///
@@ -244,6 +257,8 @@ where
         fmt::Display::fmt(&self.cause, f)
     }
 }
+
+impl<T: fmt::Display + fmt::Debug + 'static, E> std::error::Error for InternalError<T, E> {}
 
 impl<T, E> WebResponseError<E> for InternalError<T, E>
 where

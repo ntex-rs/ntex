@@ -150,6 +150,8 @@ pub enum HandshakeError {
     BadWebsocketKey,
 }
 
+impl std::error::Error for HandshakeError {}
+
 impl ResponseError for HandshakeError {
     fn error_response(&self) -> Response {
         match *self {

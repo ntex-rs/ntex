@@ -1094,6 +1094,7 @@ async fn test_slow_request() {
 async fn test_custom_error() {
     #[derive(Debug, Display)]
     struct TestError;
+    impl std::error::Error for TestError {}
 
     #[derive(Debug, Display)]
     struct JsonContainer(Box<dyn WebResponseError<JsonRenderer>>);
