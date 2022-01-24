@@ -1,5 +1,4 @@
 //! Utilities for ntex framework
-#![allow(clippy::return_self_not_must_use)]
 pub mod channel;
 pub mod future;
 pub mod services;

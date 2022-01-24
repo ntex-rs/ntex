@@ -1889,7 +1889,7 @@ impl Inner {
         // Store data in vec
         let mut vec = Vec::with_capacity(cap + SHARED_VEC_SIZE);
         unsafe {
-            #![allow(clippy::uninit_vec)]
+            #![allow(clippy::unit_arg)]
             vec.set_len(SHARED_VEC_SIZE);
             vec.extend_from_slice(src);
 

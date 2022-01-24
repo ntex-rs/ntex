@@ -18,8 +18,7 @@
     clippy::borrow_interior_mutable_const,
     clippy::needless_doctest_main,
     clippy::too_many_arguments,
-    clippy::new_without_default,
-    clippy::return_self_not_must_use
+    clippy::new_without_default
 )]
 
 #[macro_use]
