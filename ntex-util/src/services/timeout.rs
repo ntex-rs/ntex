@@ -52,6 +52,8 @@ impl<E: fmt::Display> fmt::Display for TimeoutError<E> {
     }
 }
 
+impl<E: fmt::Display + fmt::Debug> std::error::Error for TimeoutError<E> {}
+
 impl<E: PartialEq> PartialEq for TimeoutError<E> {
     fn eq(&self, other: &TimeoutError<E>) -> bool {
         match self {

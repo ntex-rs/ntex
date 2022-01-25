@@ -3,8 +3,8 @@ use std::task::Poll;
 
 use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, PoolId};
 
-const LONG: &'static [u8] = b"mary had a little lamb, little lamb, little lamb";
-const SHORT: &'static [u8] = b"hello world";
+const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb";
+const SHORT: &[u8] = b"hello world";
 
 fn inline_cap() -> usize {
     use std::mem;
@@ -267,7 +267,7 @@ fn split_off_to_loop() {
 #[test]
 fn split_to_1() {
     // Inline
-    let mut a = Bytes::from(&SHORT[..]);
+    let mut a = Bytes::from(SHORT);
     let b = a.split_to(4);
 
     assert_eq!(SHORT[4..], a);
@@ -568,7 +568,7 @@ fn from_iter_no_size_hint() {
 
 fn test_slice_ref(bytes: &Bytes, start: usize, end: usize, expected: &[u8]) {
     let slice = &(bytes.as_ref()[start..end]);
-    let sub = bytes.slice_ref(&slice);
+    let sub = bytes.slice_ref(slice);
     assert_eq!(&sub[..], expected);
 }
 
@@ -588,7 +588,7 @@ fn slice_ref_empty() {
     let bytes = Bytes::from(&b""[..]);
     let slice = &(bytes.as_ref()[0..0]);
 
-    let sub = bytes.slice_ref(&slice);
+    let sub = bytes.slice_ref(slice);
     assert_eq!(&sub[..], b"");
 }
 

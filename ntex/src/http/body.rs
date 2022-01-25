@@ -514,7 +514,7 @@ mod tests {
     impl Body {
         pub(crate) fn get_ref(&self) -> &[u8] {
             match *self {
-                Body::Bytes(ref bin) => &bin,
+                Body::Bytes(ref bin) => bin,
                 _ => panic!(),
             }
         }

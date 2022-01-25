@@ -1,5 +1,4 @@
 //! Utilities for abstructing io streams
-#![allow(clippy::return_self_not_must_use)]
 use std::{
     any::Any, any::TypeId, fmt, future::Future, io as sio, io::Error as IoError,
     task::Context, task::Poll,

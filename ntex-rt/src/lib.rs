@@ -1,6 +1,4 @@
 //! A runtime implementation that runs everything on the current thread.
-#![allow(clippy::return_self_not_must_use)]
-
 mod arbiter;
 mod builder;
 mod system;

@@ -1888,8 +1888,8 @@ impl Inner {
     fn from_slice(cap: usize, src: &[u8], pool: PoolRef) -> Inner {
         // Store data in vec
         let mut vec = Vec::with_capacity(cap + SHARED_VEC_SIZE);
+        #[allow(clippy::uninit_vec)]
         unsafe {
-            #![allow(clippy::uninit_vec)]
             vec.set_len(SHARED_VEC_SIZE);
             vec.extend_from_slice(src);
 

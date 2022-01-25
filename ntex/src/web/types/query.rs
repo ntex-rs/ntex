@@ -1,5 +1,4 @@
 //! Query extractor
-
 use std::{fmt, ops};
 
 use serde::de;
@@ -163,10 +162,10 @@ mod tests {
     #[crate::rt_test]
     async fn test_service_request_extract() {
         let req = TestRequest::with_uri("/name/user1/").to_srv_request();
-        assert!(Query::<Id>::from_query(&req.query_string()).is_err());
+        assert!(Query::<Id>::from_query(req.query_string()).is_err());
 
         let req = TestRequest::with_uri("/name/user1/?id=test").to_srv_request();
-        let mut s = Query::<Id>::from_query(&req.query_string()).unwrap();
+        let mut s = Query::<Id>::from_query(req.query_string()).unwrap();
 
         assert_eq!(s.id, "test");
         assert_eq!(format!("{}, {:?}", s, s), "test, Id { id: \"test\" }");

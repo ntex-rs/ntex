@@ -233,6 +233,8 @@ pub enum ContentTypeError {
     Expected,
 }
 
+impl std::error::Error for ContentTypeError {}
+
 /// Blocking operation execution error
 #[derive(Debug, Display)]
 pub enum BlockingError<E: fmt::Debug> {
