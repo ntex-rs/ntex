@@ -27,7 +27,8 @@ pub trait ErrorContainer: error::ResponseError + Sized {
 }
 
 /// Error that can be rendered to a `Response`
-pub trait WebResponseError<Err = DefaultError>: std::error::Error + 'static
+pub trait WebResponseError<Err = DefaultError>:
+    fmt::Display + fmt::Debug + 'static
 where
     Err: ErrorRenderer,
 {

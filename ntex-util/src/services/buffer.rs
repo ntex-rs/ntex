@@ -321,7 +321,7 @@ mod tests {
         });
 
         let srv = apply(
-            Buffer::new(|| ()).buf_size(2).clone(),
+            Buffer::new(|| ()).buf_size(2),
             fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
         );
 

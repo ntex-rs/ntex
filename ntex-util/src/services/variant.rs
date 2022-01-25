@@ -346,7 +346,7 @@ mod tests {
             .v2(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
-        let service = factory.new_service(&()).await.clone().unwrap();
+        let service = factory.new_service(&()).await.unwrap();
 
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
         assert!(lazy(|cx| service.poll_shutdown(cx, true)).await.is_ready());

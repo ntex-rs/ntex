@@ -421,7 +421,7 @@ mod tests {
             let in_bytes = self.1.clone();
             let out_bytes = self.2.clone();
             let read_order = self.3.clone();
-            let write_order = self.4.clone();
+            let write_order = self.4;
             Ready::Ok(
                 io.map_filter(|inner| {
                     Ok::<_, ()>(Counter {

@@ -491,7 +491,7 @@ mod tests {
             let state = Io::new(io);
             let ka_timeout = Cell::new(Seconds(1).into());
             let shared = Rc::new(DispatcherShared {
-                codec: codec,
+                codec,
                 error: Cell::new(None),
                 inflight: Cell::new(0),
             });
