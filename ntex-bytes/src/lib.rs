@@ -56,7 +56,6 @@
 //    missing_debug_implementations,
     rust_2018_idioms
 )]
-#![allow(clippy::return_self_not_must_use)]
 #![doc(html_root_url = "https://docs.rs/ntex-bytes/")]
 
 pub mod buf;

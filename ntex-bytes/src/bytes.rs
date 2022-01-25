@@ -766,7 +766,7 @@ impl Bytes {
     ///
     /// assert_eq!(&a[..4], b"bary");
     /// ```
-    pub fn try_mut(mut self) -> Result<BytesMut, Bytes> {
+    pub fn try_mut(self) -> Result<BytesMut, Bytes> {
         if self.inner.is_mut_safe() {
             Ok(BytesMut { inner: self.inner })
         } else {
@@ -2252,7 +2252,7 @@ impl Inner {
     }
 
     /// Checks if it is safe to mutate the memory
-    fn is_mut_safe(&mut self) -> bool {
+    fn is_mut_safe(&self) -> bool {
         let kind = self.kind();
 
         // Always check `inline` first, because if the handle is using inline
@@ -2446,7 +2446,7 @@ impl Inner {
 
     /// Used for `debug_assert` statements
     #[inline]
-    fn is_static(&mut self) -> bool {
+    fn is_static(&self) -> bool {
         matches!(self.kind(), KIND_STATIC)
     }
 

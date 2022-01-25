@@ -1,4 +1,4 @@
-//#![deny(warnings, rust_2018_idioms)]
+#![deny(warnings, rust_2018_idioms)]
 use std::task::Poll;
 
 use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, PoolId};
@@ -665,15 +665,15 @@ async fn pool_usage() {
 
     let buf = BytesMut::with_capacity_in(11 * 1024, p_ref);
     assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
-    assert!(p1.is_pending());
+    assert!(!p1.is_ready());
     assert_eq!(Poll::Pending, util::lazy(|cx| p2.poll_ready(cx)).await);
-    assert!(p2.is_pending());
+    assert!(!p2.is_ready());
     time::sleep(time::Millis(50)).await;
     drop(buf);
 
     time::sleep(time::Millis(50)).await;
-    assert!(!p1.is_pending());
-    assert!(!p2.is_pending());
+    assert!(p1.is_ready());
+    assert!(p2.is_ready());
 
     assert_eq!(Poll::Ready(()), util::lazy(|cx| p1.poll_ready(cx)).await);
     assert_eq!(Poll::Ready(()), util::lazy(|cx| p2.poll_ready(cx)).await);
@@ -687,13 +687,13 @@ async fn pool_usage() {
     // pool has some space
     let buf = BytesMut::with_capacity_in(10100, p_ref);
     time::sleep(time::Millis(50)).await;
-    assert!(!p1.is_pending());
-    assert!(p2.is_pending());
+    assert!(p1.is_ready());
+    assert!(!p2.is_ready());
 
     // new pools should wait for next update
     assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
     drop(buf);
     time::sleep(time::Millis(50)).await;
-    assert!(!p1.is_pending());
-    assert!(!p2.is_pending());
+    assert!(p1.is_ready());
+    assert!(p2.is_ready());
 }

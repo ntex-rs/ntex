@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.10] (2022-01-xx)
+
+* Rename Pool::is_pending() to is_ready()
+
+* Use u32 instead of u16 for read/write params
+
 ## [0.1.9] (2022-01-10)
 
 * Add optional simd utf8 validation

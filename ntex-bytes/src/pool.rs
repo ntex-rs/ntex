@@ -21,8 +21,8 @@ pub struct PoolId(u8);
 
 #[derive(Copy, Clone)]
 pub struct BufParams {
-    pub high: u16,
-    pub low: u16,
+    pub high: u32,
+    pub low: u32,
 }
 
 bitflags::bitflags! {
@@ -99,14 +99,14 @@ impl PoolId {
 
     #[doc(hidden)]
     #[inline]
-    pub fn set_read_params(self, h: u16, l: u16) -> Self {
+    pub fn set_read_params(self, h: u32, l: u32) -> Self {
         self.pool_ref().set_read_params(h, l);
         self
     }
 
     #[doc(hidden)]
     #[inline]
-    pub fn set_write_params(self, h: u16, l: u16) -> Self {
+    pub fn set_write_params(self, h: u32, l: u32) -> Self {
         self.pool_ref().set_write_params(h, l);
         self
     }
@@ -246,7 +246,7 @@ impl PoolRef {
 
     #[doc(hidden)]
     #[inline]
-    pub fn set_read_params(self, h: u16, l: u16) -> Self {
+    pub fn set_read_params(self, h: u32, l: u32) -> Self {
         assert!(l < h);
         self.0.read_wm.set(BufParams { high: h, low: l });
         self
@@ -266,7 +266,7 @@ impl PoolRef {
 
     #[doc(hidden)]
     #[inline]
-    pub fn set_write_params(self, h: u16, l: u16) -> Self {
+    pub fn set_write_params(self, h: u32, l: u32) -> Self {
         assert!(l < h);
         self.0.write_wm.set(BufParams { high: h, low: l });
         self
@@ -459,7 +459,7 @@ impl fmt::Debug for Pool {
         f.debug_struct("Pool")
             .field("id", &self.id().0)
             .field("allocated", &self.inner.size.load(Relaxed))
-            .field("ready", &!self.is_pending())
+            .field("ready", &self.is_ready())
             .finish()
     }
 }
@@ -472,17 +472,25 @@ impl Pool {
     }
 
     #[inline]
-    /// Check if pool is pedning
-    pub fn is_pending(&self) -> bool {
+    /// Check if pool is ready
+    pub fn is_ready(&self) -> bool {
         let idx = self.idx.get();
         if idx > 0 {
             if let Some(Entry::Occupied(_)) =
                 self.inner.waiters.borrow().entries.get(idx - 1)
             {
-                return true;
+                return false;
             }
         }
-        false
+        true
+    }
+
+    #[inline]
+    #[doc(hidden)]
+    #[deprecated]
+    /// Check if pool is pedning
+    pub fn is_pending(&self) -> bool {
+        !self.is_ready()
     }
 
     #[doc(hidden)]
