@@ -2,7 +2,7 @@ use std::{convert::TryInto, ops};
 
 /// A Duration type to represent a span of time.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Millis(pub u64);
+pub struct Millis(pub u32);
 
 impl Millis {
     /// Zero milliseconds value
@@ -12,8 +12,8 @@ impl Millis {
     pub const ONE_SEC: Millis = Millis(1_000);
 
     #[inline]
-    pub const fn from_secs(secs: u32) -> Millis {
-        Millis((secs as u64) * 1000)
+    pub const fn from_secs(secs: u16) -> Millis {
+        Millis((secs as u32) * 1000)
     }
 
     #[inline]
@@ -52,7 +52,7 @@ impl ops::Add<Millis> for Millis {
 
     #[inline]
     fn add(self, other: Millis) -> Millis {
-        Millis(self.0.checked_add(other.0).unwrap_or(u64::MAX))
+        Millis(self.0.checked_add(other.0).unwrap_or(u32::MAX))
     }
 }
 
@@ -64,8 +64,8 @@ impl ops::Add<Seconds> for Millis {
     fn add(self, other: Seconds) -> Millis {
         Millis(
             self.0
-                .checked_add((other.0 as u64) * 1000)
-                .unwrap_or(u64::MAX),
+                .checked_add((other.0 as u32).checked_mul(1000).unwrap_or(u32::MAX))
+                .unwrap_or(u32::MAX),
         )
     }
 }
@@ -91,7 +91,7 @@ impl ops::Add<Millis> for std::time::Duration {
 impl From<Seconds> for Millis {
     #[inline]
     fn from(s: Seconds) -> Millis {
-        Millis((s.0 as u64) * 1000)
+        Millis((s.0 as u32).checked_mul(1000).unwrap_or(u32::MAX))
     }
 }
 
@@ -108,7 +108,7 @@ impl From<std::time::Duration> for Millis {
 impl From<Millis> for std::time::Duration {
     #[inline]
     fn from(d: Millis) -> std::time::Duration {
-        std::time::Duration::from_millis(d.0)
+        std::time::Duration::from_millis(d.0 as u64)
     }
 }
 

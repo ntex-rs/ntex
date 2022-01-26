@@ -1,5 +1,8 @@
 use std::task::{Context, Poll};
-use std::{cell::Cell, convert::Infallible, marker, time::Duration, time::Instant};
+use std::{
+    cell::Cell, convert::Infallible, convert::TryInto, marker, time::Duration,
+    time::Instant,
+};
 
 use ntex_service::{Service, ServiceFactory};
 
@@ -103,7 +106,8 @@ where
                     Poll::Ready(Err((self.f)()))
                 } else {
                     let expire = expire - now;
-                    self.sleep.reset(Millis(expire.as_millis() as u64));
+                    self.sleep
+                        .reset(Millis(expire.as_millis().try_into().unwrap_or(u32::MAX)));
                     let _ = self.sleep.poll_elapsed(cx);
                     Poll::Ready(Ok(()))
                 }
