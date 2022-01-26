@@ -12,8 +12,8 @@ impl Millis {
     pub const ONE_SEC: Millis = Millis(1_000);
 
     #[inline]
-    pub const fn from_secs(secs: u16) -> Millis {
-        Millis((secs as u32) * 1000)
+    pub const fn from_secs(secs: u32) -> Millis {
+        Millis(secs * 1000)
     }
 
     #[inline]
