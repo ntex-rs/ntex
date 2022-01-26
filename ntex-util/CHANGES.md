@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.12] - 2022-01-xx
+## [0.1.12] - 2022-01-27
 
 * Reduce size of Millis
 

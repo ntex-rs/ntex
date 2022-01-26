@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.6] - 2022-01-xx
+## [0.1.6] - 2022-01-27
 
 * Optimize Io memory layout
 
