@@ -66,6 +66,7 @@ pub(crate) struct IoState {
     pub(super) write_buf: Cell<Option<BytesMut>>,
     pub(super) filter: Cell<&'static dyn Filter>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
+    #[allow(clippy::box_collection)]
     pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
     keepalive: Cell<time::Instant>,
 }
@@ -889,9 +890,7 @@ impl OnDisconnect {
     #[inline]
     /// Check if connection is disconnected
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if self.token == usize::MAX {
-            Poll::Ready(())
-        } else if self.inner.flags.get().contains(Flags::IO_STOPPED) {
+        if self.token == usize::MAX || self.inner.flags.get().contains(Flags::IO_STOPPED) {
             Poll::Ready(())
         } else if let Some(on_disconnect) = self.inner.on_disconnect.take() {
             on_disconnect[self.token].register(cx.waker());
