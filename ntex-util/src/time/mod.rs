@@ -81,7 +81,7 @@ impl Sleep {
     #[inline]
     pub fn new(duration: Millis) -> Sleep {
         Sleep {
-            hnd: TimerHandle::new(duration.0),
+            hnd: TimerHandle::new(duration.0 as u64),
         }
     }
 
@@ -99,7 +99,7 @@ impl Sleep {
     /// This function can be called both before and after the future has
     /// completed.
     pub fn reset<T: Into<Millis>>(&self, millis: T) {
-        self.hnd.reset(millis.into().0);
+        self.hnd.reset(millis.into().0 as u64);
     }
 
     #[inline]
@@ -209,7 +209,7 @@ where
 #[derive(Debug)]
 pub struct Interval {
     hnd: TimerHandle,
-    period: u64,
+    period: u32,
 }
 
 impl Interval {
@@ -217,7 +217,7 @@ impl Interval {
     #[inline]
     pub fn new(period: Millis) -> Interval {
         Interval {
-            hnd: TimerHandle::new(period.0),
+            hnd: TimerHandle::new(period.0 as u64),
             period: period.0,
         }
     }
@@ -230,7 +230,7 @@ impl Interval {
     #[inline]
     pub fn poll_tick(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         if self.hnd.poll_elapsed(cx).is_ready() {
-            self.hnd.reset(self.period);
+            self.hnd.reset(self.period as u64);
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -305,7 +305,7 @@ mod tests {
             .duration_since(time::SystemTime::UNIX_EPOCH)
             .unwrap();
 
-        assert!(second_time - first_time >= time::Duration::from_millis(wait_time));
+        assert!(second_time - first_time >= time::Duration::from_millis(wait_time as u64));
     }
 
     #[ntex_macros::rt_test2]

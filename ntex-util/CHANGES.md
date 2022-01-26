@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.12] - 2022-01-27
+
+* Reduce size of Millis
+
 ## [0.1.11] - 2022-01-23
 
 * Remove useless stream::Dispatcher and sink::SinkService

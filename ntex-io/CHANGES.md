@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.6] - 2022-01-27
+
+* Optimize Io memory layout
+
 ## [0.1.5] - 2022-01-23
 
 * Add Eq,PartialEq,Hash,Debug impls to Io asn IoRef

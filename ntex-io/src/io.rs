@@ -1,10 +1,14 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::task::{Context, Poll};
-use std::{fmt, future::Future, hash, io, mem, ops::Deref, pin::Pin, ptr, rc::Rc, time};
+use std::{
+    fmt, future::Future, hash, io, marker, mem, ops::Deref, pin::Pin, ptr, rc::Rc, time,
+};
 
 use ntex_bytes::{BytesMut, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Millis};
+use ntex_util::{
+    future::poll_fn, future::Either, task::LocalWaker, time::now, time::Millis,
+};
 
 use super::filter::{Base, NullFilter};
 use super::seal::Sealed;
@@ -38,12 +42,10 @@ bitflags::bitflags! {
         const DSP_STOP            = 0b0000_0010_0000_0000;
         /// keep-alive timeout occured
         const DSP_KEEPALIVE       = 0b0000_0100_0000_0000;
-    }
-}
 
-enum FilterItem<F> {
-    Boxed(Sealed),
-    Ptr(*mut F),
+        /// keep-alive timeout started
+        const KEEPALIVE           = 0b0001_0000_0000_0000;
+    }
 }
 
 /// Interface object to underlying io stream
@@ -64,8 +66,8 @@ pub(crate) struct IoState {
     pub(super) write_buf: Cell<Option<BytesMut>>,
     pub(super) filter: Cell<&'static dyn Filter>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
-    pub(super) on_disconnect: RefCell<Vec<Option<LocalWaker>>>,
-    keepalive: Cell<Option<time::Instant>>,
+    pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
+    keepalive: Cell<time::Instant>,
 }
 
 impl IoState {
@@ -87,19 +89,19 @@ impl IoState {
     pub(super) fn notify_keepalive(&self) {
         log::trace!("keep-alive timeout, notify dispatcher");
         let mut flags = self.flags.get();
+        flags.remove(Flags::KEEPALIVE);
         if !flags.contains(Flags::DSP_KEEPALIVE) {
             flags.insert(Flags::DSP_KEEPALIVE);
-            self.flags.set(flags);
             self.dispatch_task.wake();
         }
+        self.flags.set(flags);
     }
 
     #[inline]
     pub(super) fn notify_disconnect(&self) {
-        let mut on_disconnect = self.on_disconnect.borrow_mut();
-        for item in &mut *on_disconnect {
-            if let Some(waker) = item.take() {
-                waker.wake();
+        if let Some(on_disconnect) = self.on_disconnect.take() {
+            for item in on_disconnect.into_iter() {
+                item.wake();
             }
         }
     }
@@ -255,8 +257,8 @@ impl Io {
             write_buf: Cell::new(None),
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
-            on_disconnect: RefCell::new(Vec::new()),
-            keepalive: Cell::new(None),
+            on_disconnect: Cell::new(None),
+            keepalive: Cell::new(now()),
         });
 
         let filter = Box::new(Base::new(IoRef(inner.clone())));
@@ -272,7 +274,7 @@ impl Io {
         let hnd = io.start(ReadContext::new(&io_ref), WriteContext::new(&io_ref));
         io_ref.0.handle.set(hnd);
 
-        Io(io_ref, FilterItem::Ptr(Box::into_raw(filter)))
+        Io(io_ref, FilterItem::with_filter(filter))
     }
 }
 
@@ -319,12 +321,12 @@ impl<F> Io<F> {
             write_buf: Cell::new(None),
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
-            on_disconnect: RefCell::new(Vec::new()),
-            keepalive: Cell::new(None),
+            on_disconnect: Cell::new(None),
+            keepalive: Cell::new(now()),
         });
 
         let state = mem::replace(&mut self.0, IoRef(inner));
-        let filter = mem::replace(&mut self.1, FilterItem::Ptr(ptr::null_mut()));
+        let filter = mem::replace(&mut self.1, FilterItem::null());
         Self(state, filter)
     }
 }
@@ -346,22 +348,20 @@ impl<F> Io<F> {
     #[inline]
     /// Start keep-alive timer
     pub fn start_keepalive_timer(&self, timeout: time::Duration) {
-        if let Some(expire) = self.0 .0.keepalive.take() {
-            timer::unregister(expire, &self.0)
+        if self.flags().contains(Flags::KEEPALIVE) {
+            timer::unregister(self.0 .0.keepalive.get(), &self.0);
         }
         if timeout != time::Duration::ZERO {
-            self.0
-                 .0
-                .keepalive
-                .set(Some(timer::register(timeout, &self.0)));
+            self.0 .0.insert_flags(Flags::KEEPALIVE);
+            self.0 .0.keepalive.set(timer::register(timeout, &self.0));
         }
     }
 
     #[inline]
     /// Remove keep-alive timer
     pub fn remove_keepalive_timer(&self) {
-        if let Some(expire) = self.0 .0.keepalive.take() {
-            timer::unregister(expire, &self.0)
+        if self.flags().contains(Flags::KEEPALIVE) {
+            timer::unregister(self.0 .0.keepalive.get(), &self.0)
         }
     }
 
@@ -375,12 +375,7 @@ impl<F: Filter> Io<F> {
     #[inline]
     /// Get referece to a filter
     pub fn filter(&self) -> &F {
-        if let FilterItem::Ptr(p) = self.1 {
-            if let Some(r) = unsafe { p.as_ref() } {
-                return r;
-            }
-        }
-        panic!()
+        self.1.filter()
     }
 
     #[inline]
@@ -388,12 +383,7 @@ impl<F: Filter> Io<F> {
     pub fn seal(mut self) -> Io<Sealed> {
         // get current filter
         let filter = unsafe {
-            let item = mem::replace(&mut self.1, FilterItem::Ptr(ptr::null_mut()));
-            let filter: Sealed = match item {
-                FilterItem::Boxed(b) => b,
-                FilterItem::Ptr(p) => Sealed(Box::new(*Box::from_raw(p))),
-            };
-
+            let filter = self.1.seal();
             let filter_ref: &'static dyn Filter = {
                 let filter: &dyn Filter = filter.0.as_ref();
                 std::mem::transmute(filter)
@@ -402,7 +392,7 @@ impl<F: Filter> Io<F> {
             filter
         };
 
-        Io(self.0.clone(), FilterItem::Boxed(filter))
+        Io(self.0.clone(), FilterItem::with_sealed(filter))
     }
 
     #[inline]
@@ -423,14 +413,7 @@ impl<F: Filter> Io<F> {
     {
         // replace current filter
         let filter = unsafe {
-            let item = mem::replace(&mut self.1, FilterItem::Ptr(ptr::null_mut()));
-            let filter = match item {
-                FilterItem::Boxed(_) => panic!(),
-                FilterItem::Ptr(p) => {
-                    assert!(!p.is_null());
-                    Box::new(map(*Box::from_raw(p))?)
-                }
-            };
+            let filter = Box::new(map(*(self.1.get_filter()))?);
             let filter_ref: &'static dyn Filter = {
                 let filter: &dyn Filter = filter.as_ref();
                 std::mem::transmute(filter)
@@ -439,7 +422,7 @@ impl<F: Filter> Io<F> {
             filter
         };
 
-        Ok(Io(self.0.clone(), FilterItem::Ptr(Box::into_raw(filter))))
+        Ok(Io(self.0.clone(), FilterItem::with_filter(filter)))
     }
 }
 
@@ -735,27 +718,139 @@ impl<F> Deref for Io<F> {
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
         self.remove_keepalive_timer();
+        if self.1.is_set() {
+            log::trace!(
+                "io is dropped, force stopping io streams {:?}",
+                self.0.flags()
+            );
 
-        if let FilterItem::Ptr(p) = self.1 {
-            if p.is_null() {
-                return;
+            self.force_close();
+            self.1.drop_filter();
+            self.0 .0.filter.set(NullFilter::get());
+        }
+    }
+}
+
+const KIND_SEALED: u8 = 0b01;
+const KIND_PTR: u8 = 0b10;
+const KIND_MASK: u8 = 0b11;
+const KIND_UNMASK: u8 = !KIND_MASK;
+const KIND_MASK_USIZE: usize = 0b11;
+const KIND_UNMASK_USIZE: usize = !KIND_MASK_USIZE;
+const SEALED_SIZE: usize = mem::size_of::<Sealed>();
+
+#[cfg(target_endian = "little")]
+const KIND_IDX: usize = 0;
+
+#[cfg(target_endian = "big")]
+const KIND_IDX: usize = SEALED_SIZE - 1;
+
+struct FilterItem<F> {
+    data: [u8; SEALED_SIZE],
+    _t: marker::PhantomData<F>,
+}
+
+impl<F> FilterItem<F> {
+    fn null() -> Self {
+        Self {
+            data: [0; 16],
+            _t: marker::PhantomData,
+        }
+    }
+
+    fn with_filter(f: Box<F>) -> Self {
+        let mut slf = Self {
+            data: [0; 16],
+            _t: marker::PhantomData,
+        };
+
+        unsafe {
+            let ptr = &mut slf.data as *mut _ as *mut *mut F;
+            ptr.write(Box::into_raw(f));
+            slf.data[KIND_IDX] |= KIND_PTR;
+        }
+        slf
+    }
+
+    fn with_sealed(f: Sealed) -> Self {
+        let mut slf = Self {
+            data: [0; 16],
+            _t: marker::PhantomData,
+        };
+
+        unsafe {
+            let ptr = &mut slf.data as *mut _ as *mut Sealed;
+            ptr.write(f);
+            slf.data[KIND_IDX] |= KIND_SEALED;
+        }
+        slf
+    }
+
+    /// Get filter, panic if it is not filter
+    fn filter(&self) -> &F {
+        if self.data[KIND_IDX] & KIND_PTR != 0 {
+            let ptr = &self.data as *const _ as *const *mut F;
+            unsafe {
+                let p = (ptr.read() as *const _ as usize) & KIND_UNMASK_USIZE;
+                (p as *const F as *mut F).as_ref().unwrap()
             }
-            log::trace!(
-                "io is dropped, force stopping io streams {:?}",
-                self.0.flags()
-            );
-
-            self.force_close();
-            self.0 .0.filter.set(NullFilter::get());
-            let _ = mem::replace(&mut self.1, FilterItem::Ptr(ptr::null_mut()));
-            unsafe { Box::from_raw(p) };
         } else {
-            log::trace!(
-                "io is dropped, force stopping io streams {:?}",
-                self.0.flags()
+            panic!("Wrong filter item");
+        }
+    }
+
+    /// Get filter, panic if it is not filter
+    fn get_filter(&mut self) -> Box<F> {
+        if self.data[KIND_IDX] & KIND_PTR != 0 {
+            self.data[KIND_IDX] &= KIND_UNMASK;
+            let ptr = &mut self.data as *mut _ as *mut *mut F;
+            unsafe { Box::from_raw(*ptr) }
+        } else {
+            panic!(
+                "Wrong filter item {:?} expected: {:?}",
+                self.data[KIND_IDX], KIND_PTR
             );
-            self.force_close();
-            self.0 .0.filter.set(NullFilter::get());
+        }
+    }
+
+    /// Get sealed, panic if it is not sealed
+    fn get_sealed(&mut self) -> Sealed {
+        if self.data[KIND_IDX] & KIND_SEALED != 0 {
+            self.data[KIND_IDX] &= KIND_UNMASK;
+            let ptr = &mut self.data as *mut _ as *mut Sealed;
+            unsafe { ptr.read() }
+        } else {
+            panic!(
+                "Wrong filter item {:?} expected: {:?}",
+                self.data[KIND_IDX], KIND_SEALED
+            );
+        }
+    }
+
+    fn is_set(&self) -> bool {
+        self.data[KIND_IDX] & KIND_MASK != 0
+    }
+
+    fn drop_filter(&mut self) {
+        if self.data[KIND_IDX] & KIND_PTR != 0 {
+            self.get_filter();
+        } else if self.data[KIND_IDX] & KIND_SEALED != 0 {
+            self.get_sealed();
+        }
+    }
+}
+
+impl<F: Filter> FilterItem<F> {
+    fn seal(&mut self) -> Sealed {
+        if self.data[KIND_IDX] & KIND_PTR != 0 {
+            Sealed(Box::new(*self.get_filter()))
+        } else if self.data[KIND_IDX] & KIND_SEALED != 0 {
+            self.get_sealed()
+        } else {
+            panic!(
+                "Wrong filter item {:?} expected: {:?}",
+                self.data[KIND_IDX], KIND_PTR
+            );
         }
     }
 }
@@ -776,10 +871,16 @@ impl OnDisconnect {
         let token = if disconnected {
             usize::MAX
         } else {
-            let mut on_disconnect = inner.on_disconnect.borrow_mut();
-            let token = on_disconnect.len();
-            on_disconnect.push(Some(LocalWaker::default()));
-            drop(on_disconnect);
+            let mut on_disconnect = inner.on_disconnect.take();
+            let token = if let Some(ref mut on_disconnect) = on_disconnect {
+                let token = on_disconnect.len();
+                on_disconnect.push(LocalWaker::default());
+                token
+            } else {
+                on_disconnect = Some(Box::new(vec![LocalWaker::default()]));
+                0
+            };
+            inner.on_disconnect.set(on_disconnect);
             token
         };
         Self { token, inner }
@@ -790,17 +891,13 @@ impl OnDisconnect {
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
         if self.token == usize::MAX {
             Poll::Ready(())
+        } else if self.inner.flags.get().contains(Flags::IO_STOPPED) {
+            Poll::Ready(())
+        } else if let Some(on_disconnect) = self.inner.on_disconnect.take() {
+            on_disconnect[self.token].register(cx.waker());
+            Poll::Pending
         } else {
-            let on_disconnect = self.inner.on_disconnect.borrow();
-            if on_disconnect[self.token].is_some() {
-                on_disconnect[self.token]
-                    .as_ref()
-                    .unwrap()
-                    .register(cx.waker());
-                Poll::Pending
-            } else {
-                Poll::Ready(())
-            }
+            Poll::Ready(())
         }
     }
 }
@@ -821,13 +918,5 @@ impl Future for OnDisconnect {
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.poll_ready(cx)
-    }
-}
-
-impl Drop for OnDisconnect {
-    fn drop(&mut self) {
-        if self.token != usize::MAX {
-            self.inner.on_disconnect.borrow_mut()[self.token].take();
-        }
     }
 }

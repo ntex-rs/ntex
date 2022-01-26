@@ -1,6 +1,6 @@
 # Changes
 
-## [0.5.12] - 2022-01-xx
+## [0.5.12] - 2022-01-27
 
 * Replace derive_more with thiserror
 

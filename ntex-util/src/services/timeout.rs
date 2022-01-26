@@ -217,10 +217,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::task::{Context, Poll};
-    use std::time::Duration;
+    use std::{fmt, task::Context, task::Poll, time::Duration};
 
-    use derive_more::Display;
     use ntex_service::{apply, fn_factory, Service, ServiceFactory};
 
     use super::*;
@@ -229,8 +227,14 @@ mod tests {
     #[derive(Clone, Debug, PartialEq)]
     struct SleepService(Duration);
 
-    #[derive(Clone, Debug, Display, PartialEq)]
+    #[derive(Clone, Debug, PartialEq)]
     struct SrvError;
+
+    impl fmt::Display for SrvError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "SrvError")
+        }
+    }
 
     impl Service<()> for SleepService {
         type Response = ();
