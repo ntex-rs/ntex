@@ -718,10 +718,138 @@ impl<F> Deref for Io<F> {
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
         self.remove_keepalive_timer();
-        if self.1.drop_filter() {
+        if self.1.is_set() {
             log::trace!(
                 "io is dropped, force stopping io streams {:?}",
                 self.0.flags()
+            );
+
+            self.force_close();
+            self.1.drop_filter();
+            self.0 .0.filter.set(NullFilter::get());
+        }
+    }
+}
+
+const KIND_SEALED: u8 = 0b01;
+const KIND_PTR: u8 = 0b10;
+const KIND_MASK: u8 = 0b11;
+const KIND_UNMASK: u8 = !KIND_MASK;
+const KIND_MASK_USIZE: usize = 0b11;
+const KIND_UNMASK_USIZE: usize = !KIND_MASK_USIZE;
+const SEALED_SIZE: usize = mem::size_of::<Sealed>();
+
+#[cfg(target_endian = "little")]
+const KIND_IDX: usize = 0;
+
+#[cfg(target_endian = "big")]
+const KIND_IDX: usize = SEALED_SIZE - 1;
+
+struct FilterItem<F> {
+    data: [u8; SEALED_SIZE],
+    _t: marker::PhantomData<F>,
+}
+
+impl<F> FilterItem<F> {
+    fn null() -> Self {
+        Self {
+            data: [0; 16],
+            _t: marker::PhantomData,
+        }
+    }
+
+    fn with_filter(f: Box<F>) -> Self {
+        let mut slf = Self {
+            data: [0; 16],
+            _t: marker::PhantomData,
+        };
+
+        unsafe {
+            let ptr = &mut slf.data as *mut _ as *mut *mut F;
+            ptr.write(Box::into_raw(f));
+            slf.data[KIND_IDX] |= KIND_PTR;
+        }
+        slf
+    }
+
+    fn with_sealed(f: Sealed) -> Self {
+        let mut slf = Self {
+            data: [0; 16],
+            _t: marker::PhantomData,
+        };
+
+        unsafe {
+            let ptr = &mut slf.data as *mut _ as *mut Sealed;
+            ptr.write(f);
+            slf.data[KIND_IDX] |= KIND_SEALED;
+        }
+        slf
+    }
+
+    /// Get filter, panic if it is not filter
+    fn filter(&self) -> &F {
+        if self.data[KIND_IDX] & KIND_PTR != 0 {
+            let ptr = &self.data as *const _ as *const *mut F;
+            unsafe {
+                let p = (ptr.read() as *const _ as usize) & KIND_UNMASK_USIZE;
+                (p as *const F as *mut F).as_ref().unwrap()
+            }
+        } else {
+            panic!("Wrong filter item");
+        }
+    }
+
+    /// Get filter, panic if it is not filter
+    fn get_filter(&mut self) -> Box<F> {
+        if self.data[KIND_IDX] & KIND_PTR != 0 {
+            self.data[KIND_IDX] &= KIND_UNMASK;
+            let ptr = &mut self.data as *mut _ as *mut *mut F;
+            unsafe { Box::from_raw(*ptr) }
+        } else {
+            panic!(
+                "Wrong filter item {:?} expected: {:?}",
+                self.data[KIND_IDX], KIND_PTR
+            );
+        }
+    }
+
+    /// Get sealed, panic if it is not sealed
+    fn get_sealed(&mut self) -> Sealed {
+        if self.data[KIND_IDX] & KIND_SEALED != 0 {
+            self.data[KIND_IDX] &= KIND_UNMASK;
+            let ptr = &mut self.data as *mut _ as *mut Sealed;
+            unsafe { ptr.read() }
+        } else {
+            panic!(
+                "Wrong filter item {:?} expected: {:?}",
+                self.data[KIND_IDX], KIND_SEALED
+            );
+        }
+    }
+
+    fn is_set(&self) -> bool {
+        self.data[KIND_IDX] & KIND_MASK != 0
+    }
+
+    fn drop_filter(&mut self) {
+        if self.data[KIND_IDX] & KIND_PTR != 0 {
+            self.get_filter();
+        } else if self.data[KIND_IDX] & KIND_SEALED != 0 {
+            self.get_sealed();
+        }
+    }
+}
+
+impl<F: Filter> FilterItem<F> {
+    fn seal(&mut self) -> Sealed {
+        if self.data[KIND_IDX] & KIND_PTR != 0 {
+            Sealed(Box::new(*self.get_filter()))
+        } else if self.data[KIND_IDX] & KIND_SEALED != 0 {
+            self.get_sealed()
+        } else {
+            panic!(
+                "Wrong filter item {:?} expected: {:?}",
+                self.data[KIND_IDX], KIND_PTR
             );
         }
     }
@@ -790,130 +918,5 @@ impl Future for OnDisconnect {
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.poll_ready(cx)
-    }
-}
-
-const KIND_SEALED: u8 = 0b01;
-const KIND_PTR: u8 = 0b10;
-const KIND_MASK: u8 = 0b11;
-const KIND_UNMASK: u8 = !KIND_MASK;
-const SEALED_SIZE: usize = mem::size_of::<Sealed>();
-
-#[cfg(target_endian = "little")]
-const KIND_IDX: usize = 0;
-
-#[cfg(target_endian = "big")]
-const KIND_IDX: usize = SEALED_SIZE - 1;
-
-struct FilterItem<F> {
-    data: [u8; SEALED_SIZE],
-    _t: marker::PhantomData<F>,
-}
-
-impl<F> FilterItem<F> {
-    fn null() -> Self {
-        Self {
-            data: [0; 16],
-            _t: marker::PhantomData,
-        }
-    }
-
-    fn with_filter(f: Box<F>) -> Self {
-        let mut slf = Self {
-            data: [0; 16],
-            _t: marker::PhantomData,
-        };
-
-        unsafe {
-            let ptr = &mut slf.data as *mut _ as *mut *mut F;
-            ptr.write(Box::into_raw(f));
-            slf.data[KIND_IDX] |= KIND_PTR;
-        }
-        slf
-    }
-
-    fn with_sealed(f: Sealed) -> Self {
-        let mut slf = Self {
-            data: [0; 16],
-            _t: marker::PhantomData,
-        };
-
-        unsafe {
-            let ptr = &mut slf.data as *mut _ as *mut Sealed;
-            ptr.write(f);
-            slf.data[KIND_IDX] |= KIND_SEALED;
-        }
-        slf
-    }
-
-    /// Get filter, panic if it is not filter
-    fn filter(&self) -> &F {
-        if self.data[KIND_IDX] & KIND_PTR != 0 {
-            let ptr = &self.data as *const _ as *const F;
-            unsafe { ptr.as_ref().unwrap() }
-        } else {
-            panic!("Wrong filter item");
-        }
-    }
-
-    /// Get filter, panic if it is not filter
-    fn get_filter(&mut self) -> Box<F> {
-        if self.data[KIND_IDX] & KIND_PTR != 0 {
-            self.data[KIND_IDX] &= KIND_UNMASK;
-            let ptr = &mut self.data as *mut _ as *mut *mut F;
-            unsafe { Box::from_raw(*ptr) }
-        } else {
-            panic!(
-                "Wrong filter item {:?} expected: {:?}",
-                self.data[KIND_IDX], KIND_PTR
-            );
-        }
-    }
-
-    /// Get sealed, panic if it is not sealed
-    fn get_sealed(&mut self) -> Sealed {
-        if self.data[KIND_IDX] & KIND_SEALED != 0 {
-            self.data[KIND_IDX] &= KIND_UNMASK;
-            let ptr = &mut self.data as *mut _ as *mut Sealed;
-            unsafe { ptr.read() }
-        } else {
-            panic!(
-                "Wrong filter item {:?} expected: {:?}",
-                self.data[KIND_IDX], KIND_SEALED
-            );
-        }
-    }
-
-    fn drop_filter(&mut self) -> bool {
-        if self.data[KIND_IDX] & KIND_PTR != 0 {
-            self.get_filter();
-            true
-        } else if self.data[KIND_IDX] & KIND_SEALED != 0 {
-            self.get_sealed();
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl<F> Drop for FilterItem<F> {
-    fn drop(&mut self) {
-        self.drop_filter();
-    }
-}
-
-impl<F: Filter> FilterItem<F> {
-    fn seal(&mut self) -> Sealed {
-        if self.data[KIND_IDX] & KIND_PTR != 0 {
-            Sealed(Box::new(*self.get_filter()))
-        } else if self.data[KIND_IDX] & KIND_SEALED != 0 {
-            self.get_sealed()
-        } else {
-            panic!(
-                "Wrong filter item {:?} expected: {:?}",
-                self.data[KIND_IDX], KIND_PTR
-            );
-        }
     }
 }
