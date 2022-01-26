@@ -1,11 +1,11 @@
 use std::{future::Future, io, io::Read, io::Write, pin::Pin, task::Context, task::Poll};
 
 use brotli2::write::{BrotliDecoder, BrotliEncoder};
-use derive_more::Display;
 use flate2::read::GzDecoder;
 use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use rand::{distributions::Alphanumeric, Rng};
+use thiserror::Error;
 
 use ntex::http::body::Body;
 use ntex::http::header::{
@@ -1092,11 +1092,12 @@ async fn test_slow_request() {
 
 #[ntex::test]
 async fn test_custom_error() {
-    #[derive(Debug, Display)]
+    #[derive(Error, Debug)]
+    #[error("TestError")]
     struct TestError;
-    impl std::error::Error for TestError {}
 
-    #[derive(Debug, Display)]
+    #[derive(Error, Debug)]
+    #[error("JsonContainer({0})")]
     struct JsonContainer(Box<dyn WebResponseError<JsonRenderer>>);
 
     impl ntex::web::ErrorContainer for JsonContainer {

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.12] - 2022-01-xx
+
+* Replace derive_more with thiserror
+
 ## [0.5.11] - 2022-01-23
 
 * web: Refactor ws support

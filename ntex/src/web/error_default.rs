@@ -23,6 +23,7 @@ impl ErrorRenderer for DefaultError {
 }
 
 /// Generic error container for errors that supports `DefaultError` renderer.
+#[derive(thiserror::Error)]
 pub struct Error {
     cause: Box<dyn WebResponseError<DefaultError>>,
 }
@@ -48,8 +49,6 @@ impl<T: WebResponseError<DefaultError>> From<T> for Error {
         }
     }
 }
-
-impl std::error::Error for Error {}
 
 impl ErrorContainer for Error {
     fn error_response(&self, req: &HttpRequest) -> HttpResponse {

@@ -19,10 +19,12 @@ use super::error::{FreezeRequestError, InvalidUrl, SendRequestError};
 use super::response::ClientResponse;
 use super::ClientConfig;
 
-#[derive(Debug, From)]
+#[derive(thiserror::Error, Debug)]
 pub(crate) enum PrepForSendingError {
-    Url(InvalidUrl),
-    Http(HttpError),
+    #[error("Invalid url {0}")]
+    Url(#[from] InvalidUrl),
+    #[error("Invalid http request {0}")]
+    Http(#[from] HttpError),
 }
 
 impl From<PrepForSendingError> for FreezeRequestError {

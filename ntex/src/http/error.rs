@@ -57,41 +57,40 @@ impl ResponseError for io::Error {}
 impl ResponseError for serde_json::error::Error {}
 
 /// A set of errors that can occur during parsing HTTP streams
-#[derive(Debug, Display, From)]
+#[derive(thiserror::Error, Debug)]
 pub enum ParseError {
     /// An invalid `Method`, such as `GE.T`.
-    #[display(fmt = "Invalid Method specified")]
+    #[error("Invalid Method specified")]
     Method,
     /// An invalid `Uri`, such as `exam ple.domain`.
-    #[display(fmt = "Uri error: {}", _0)]
-    Uri(InvalidUri),
+    #[error("Uri error: {0}")]
+    Uri(#[from] InvalidUri),
     /// An invalid `HttpVersion`, such as `HTP/1.1`
-    #[display(fmt = "Invalid HTTP version specified")]
+    #[error("Invalid HTTP version specified")]
     Version,
     /// An invalid `Header`.
-    #[display(fmt = "Invalid Header provided")]
+    #[error("Invalid Header provided")]
     Header,
     /// A message head is too large to be reasonable.
-    #[display(fmt = "Message head is too large")]
+    #[error("Message head is too large")]
     TooLarge,
     /// A message reached EOF, but is not complete.
-    #[display(fmt = "Message is incomplete")]
+    #[error("Message is incomplete")]
     Incomplete,
     /// An invalid `Status`, such as `1337 ELITE`.
-    #[display(fmt = "Invalid Status provided")]
+    #[error("Invalid Status provided")]
     Status,
     /// A timeout occurred waiting for an IO event.
     #[allow(dead_code)]
-    #[display(fmt = "Timeout during parse")]
+    #[error("Timeout during parse")]
     Timeout,
     /// An `InvalidInput` occurred while trying to parse incoming stream.
+    #[error("`InvalidInput` occurred while trying to parse incoming stream: {0}")]
     InvalidInput(&'static str),
     /// Parsing a field as string failed
-    #[display(fmt = "UTF8 error: {}", _0)]
-    Utf8(Utf8Error),
+    #[error("UTF8 error: {0}")]
+    Utf8(#[from] Utf8Error),
 }
-
-impl std::error::Error for ParseError {}
 
 impl From<FromUtf8Error> for ParseError {
     fn from(err: FromUtf8Error) -> ParseError {
@@ -113,35 +112,31 @@ impl From<httparse::Error> for ParseError {
     }
 }
 
-#[derive(Display, Debug, From)]
+#[derive(thiserror::Error, Debug)]
 /// A set of errors that can occur during payload parsing
 pub enum PayloadError {
     /// A payload reached EOF, but is not complete.
-    #[display(
-        fmt = "A payload reached EOF, but is not complete. With error: {:?}",
-        _0
-    )]
+    #[error("A payload reached EOF, but is not complete. With error: {0:?}")]
     Incomplete(Option<io::Error>),
     /// Content encoding stream corruption
-    #[display(fmt = "Cannot decode content-encoding.")]
+    #[error("Cannot decode content-encoding.")]
     EncodingCorrupted,
     /// A payload reached size limit.
-    #[display(fmt = "A payload reached size limit.")]
+    #[error("A payload reached size limit.")]
     Overflow,
     /// A payload length is unknown.
-    #[display(fmt = "A payload length is unknown.")]
+    #[error("A payload length is unknown.")]
     UnknownLength,
     /// Http2 payload error
-    #[display(fmt = "{}", _0)]
-    Http2Payload(h2::Error),
+    #[error("{0}")]
+    Http2Payload(#[from] h2::Error),
     /// Parse error
-    Parse(ParseError),
+    #[error("Parse error: {0}")]
+    Parse(#[from] ParseError),
     /// Io error
-    #[display(fmt = "{}", _0)]
-    Io(io::Error),
+    #[error("{0}")]
+    Io(#[from] io::Error),
 }
-
-impl std::error::Error for PayloadError {}
 
 impl From<Either<PayloadError, io::Error>> for PayloadError {
     fn from(err: Either<PayloadError, io::Error>) -> Self {
@@ -152,63 +147,61 @@ impl From<Either<PayloadError, io::Error>> for PayloadError {
     }
 }
 
-#[derive(Debug, Display, From)]
+#[derive(thiserror::Error, Debug)]
 /// A set of errors that can occur during dispatching http requests
 pub enum DispatchError {
     /// Service error
+    #[error("Service error")]
     Service(Box<dyn ResponseError>),
 
-    #[from(ignore)]
     /// Upgrade service error
+    #[error("Upgrade service error: {0}")]
     Upgrade(Box<dyn std::error::Error>),
 
     /// Peer is disconnected, error indicates that peer is disconnected because of it
-    #[display(fmt = "Disconnected: {:?}", _0)]
+    #[error("Disconnected: {0:?}")]
     PeerGone(Option<io::Error>),
 
     /// Http request parse error.
-    #[display(fmt = "Parse error: {}", _0)]
-    Parse(ParseError),
+    #[error("Parse error: {0}")]
+    Parse(#[from] ParseError),
 
     /// Http response encoding error.
-    #[display(fmt = "Encode error: {}", _0)]
-    #[from(ignore)]
+    #[error("Encode error: {0}")]
     Encode(io::Error),
 
     /// Http/2 error
-    #[display(fmt = "{}", _0)]
-    H2(h2::Error),
+    #[error("{0}")]
+    H2(#[from] h2::Error),
 
     /// The first request did not complete within the specified timeout.
-    #[display(fmt = "The first request did not complete within the specified timeout")]
+    #[error("The first request did not complete within the specified timeout")]
     SlowRequestTimeout,
 
     /// Disconnect timeout. Makes sense for ssl streams.
-    #[display(fmt = "Connection shutdown timeout")]
+    #[error("Connection shutdown timeout")]
     DisconnectTimeout,
 
     /// Payload is not consumed
-    #[display(fmt = "Task is completed but request's payload is not consumed")]
+    #[error("Task is completed but request's payload is not consumed")]
     PayloadIsNotConsumed,
 
     /// Malformed request
-    #[display(fmt = "Malformed request")]
+    #[error("Malformed request")]
     MalformedRequest,
 
     /// Response body processing error
-    #[display(fmt = "Response body processing error: {}", _0)]
+    #[error("Response body processing error: {0}")]
     ResponsePayload(Box<dyn std::error::Error>),
 
     /// Internal error
-    #[display(fmt = "Internal error")]
+    #[error("Internal error")]
     InternalError,
 
     /// Unknown error
-    #[display(fmt = "Unknown error")]
+    #[error("Unknown error")]
     Unknown,
 }
-
-impl std::error::Error for DispatchError {}
 
 impl From<io::Error> for DispatchError {
     fn from(err: io::Error) -> Self {
@@ -217,34 +210,30 @@ impl From<io::Error> for DispatchError {
 }
 
 /// A set of error that can occure during parsing content type
-#[derive(PartialEq, Debug, Display)]
+#[derive(thiserror::Error, PartialEq, Debug)]
 pub enum ContentTypeError {
     /// Cannot parse content type
-    #[display(fmt = "Cannot parse content type")]
+    #[error("Cannot parse content type")]
     ParseError,
     /// Unknown content encoding
-    #[display(fmt = "Unknown content encoding")]
+    #[error("Unknown content encoding")]
     UnknownEncoding,
     /// Unexpected Content-Type
-    #[display(fmt = "Unexpected Content-Type")]
+    #[error("Unexpected Content-Type")]
     Unexpected,
     /// Content-Type is expected
-    #[display(fmt = "Content-Type is expected")]
+    #[error("Content-Type is expected")]
     Expected,
 }
 
-impl std::error::Error for ContentTypeError {}
-
 /// Blocking operation execution error
-#[derive(Debug, Display)]
+#[derive(thiserror::Error, Debug)]
 pub enum BlockingError<E: fmt::Debug> {
-    #[display(fmt = "{:?}", _0)]
+    #[error("{0:?}")]
     Error(E),
-    #[display(fmt = "Thread pool is gone")]
+    #[error("Thread pool is gone")]
     Canceled,
 }
-
-impl<E: fmt::Debug> std::error::Error for BlockingError<E> {}
 
 impl From<crate::rt::JoinError> for PayloadError {
     fn from(_: crate::rt::JoinError) -> Self {

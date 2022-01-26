@@ -1,7 +1,7 @@
 //! Web error
 use std::{cell::RefCell, fmt, io::Write, marker::PhantomData};
 
-use derive_more::{Display, From};
+use thiserror::Error;
 
 pub use http::Error as HttpError;
 pub use serde_json::error::Error as JsonError;
@@ -78,113 +78,97 @@ where
 }
 
 /// Errors which can occur when attempting to work with `Data` extractor
-#[derive(Debug, PartialEq, Display)]
+#[derive(Error, Debug, PartialEq)]
 pub enum DataExtractorError {
-    #[display(fmt = "App data is not configured, to configure use App::data()")]
+    #[error("App data is not configured, to configure use App::data()")]
     NotConfigured,
 }
 
-impl std::error::Error for DataExtractorError {}
-
 /// Errors which can occur when attempting to generate resource uri.
-#[derive(Debug, PartialEq, Display, From)]
+#[derive(Error, Debug, PartialEq)]
 pub enum UrlGenerationError {
     /// Resource not found
-    #[display(fmt = "Resource not found")]
+    #[error("Resource not found")]
     ResourceNotFound,
     /// Not all path pattern covered
-    #[display(fmt = "Not all path pattern covered")]
+    #[error("Not all path pattern covered")]
     NotEnoughElements,
     /// URL parse error
     #[cfg(feature = "url")]
-    #[display(fmt = "{}", _0)]
-    ParseError(UrlParseError),
+    #[error("{0}")]
+    ParseError(#[from] UrlParseError),
 }
 
-impl std::error::Error for UrlGenerationError {}
-
 /// A set of errors that can occur during parsing urlencoded payloads
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum UrlencodedError {
     /// Cannot decode chunked transfer encoding
-    #[display(fmt = "Cannot decode chunked transfer encoding")]
+    #[error("Cannot decode chunked transfer encoding")]
     Chunked,
     /// Payload size is bigger than allowed. (default: 256kB)
-    #[display(
-        fmt = "Urlencoded payload size is bigger ({} bytes) than allowed (default: {} bytes)",
-        size,
-        limit
+    #[error(
+        "Urlencoded payload size is bigger ({size} bytes) than allowed (default: {limit} bytes)",
     )]
     Overflow { size: usize, limit: usize },
     /// Payload size is unknown
-    #[display(fmt = "Payload size is unknown")]
+    #[error("Payload size is unknown")]
     UnknownLength,
     /// Content type error
-    #[display(fmt = "Content type error")]
+    #[error("Content type error")]
     ContentType,
     /// Parse error
-    #[display(fmt = "Parse error")]
+    #[error("Parse error")]
     Parse,
     /// Payload error
-    #[display(fmt = "Error that occur during reading payload: {}", _0)]
-    Payload(error::PayloadError),
+    #[error("Error that occur during reading payload: {0}")]
+    Payload(#[from] error::PayloadError),
 }
-
-impl std::error::Error for UrlencodedError {}
 
 /// A set of errors that can occur during parsing json payloads
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum JsonPayloadError {
     /// Payload size is bigger than allowed. (default: 32kB)
-    #[display(fmt = "Json payload size is bigger than allowed")]
+    #[error("Json payload size is bigger than allowed")]
     Overflow,
     /// Content type error
-    #[display(fmt = "Content type error")]
+    #[error("Content type error")]
     ContentType,
     /// Deserialize error
-    #[display(fmt = "Json deserialize error: {}", _0)]
-    Deserialize(serde_json::error::Error),
+    #[error("Json deserialize error: {0}")]
+    Deserialize(#[from] serde_json::error::Error),
     /// Payload error
-    #[display(fmt = "Error that occur during reading payload: {}", _0)]
-    Payload(error::PayloadError),
+    #[error("Error that occur during reading payload: {0}")]
+    Payload(#[from] error::PayloadError),
 }
-
-impl std::error::Error for JsonPayloadError {}
 
 /// A set of errors that can occur during parsing request paths
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum PathError {
     /// Deserialize error
-    #[display(fmt = "Path deserialize error: {}", _0)]
-    Deserialize(serde::de::value::Error),
+    #[error("Path deserialize error: {0}")]
+    Deserialize(#[from] serde::de::value::Error),
 }
-
-impl std::error::Error for PathError {}
 
 /// A set of errors that can occur during parsing query strings
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum QueryPayloadError {
     /// Deserialize error
-    #[display(fmt = "Query deserialize error: {}", _0)]
-    Deserialize(serde::de::value::Error),
+    #[error("Query deserialize error: {0}")]
+    Deserialize(#[from] serde::de::value::Error),
 }
 
-impl std::error::Error for QueryPayloadError {}
-
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum PayloadError {
     /// Http error.
-    #[display(fmt = "{:?}", _0)]
-    Http(error::HttpError),
-    #[display(fmt = "{}", _0)]
-    Payload(error::PayloadError),
-    #[display(fmt = "{}", _0)]
-    ContentType(error::ContentTypeError),
-    #[display(fmt = "Cannot decode body")]
+    #[error("{0:?}")]
+    Http(#[from] error::HttpError),
+    #[error("{0}")]
+    Payload(#[from] error::PayloadError),
+    #[error("{0}")]
+    ContentType(#[from] error::ContentTypeError),
+    #[error("Cannot decode body")]
     Decoding,
 }
-
-impl std::error::Error for PayloadError {}
 
 /// Helper type that can wrap any error and generate custom response.
 ///

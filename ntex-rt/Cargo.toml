@@ -30,7 +30,6 @@ async-std = ["async_std/unstable"]
 [dependencies]
 async-oneshot = "0.5.0"
 async-channel = "1.6.1"
-derive_more = "0.99.14"
 futures-core = "0.3"
 log = "0.4"
 pin-project-lite = "0.2"

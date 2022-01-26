@@ -175,14 +175,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use derive_more::Display;
-
     use super::*;
     use crate::router::Router;
     use crate::web::test::{from_request, TestRequest};
 
-    #[derive(serde::Deserialize, Debug, Display)]
-    #[display(fmt = "MyStruct({}, {})", key, value)]
+    #[derive(thiserror::Error, serde::Deserialize, Debug)]
+    #[error("MyStruct({key}, {value})")]
     struct MyStruct {
         key: String,
         value: String,

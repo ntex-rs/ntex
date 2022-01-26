@@ -1,28 +1,26 @@
 use std::io;
 
-use derive_more::{Display, From};
-
-#[derive(Debug, From, Display)]
+#[derive(thiserror::Error, Debug)]
 pub enum ConnectError {
     /// Failed to resolve the hostname
-    #[from(ignore)]
-    #[display(fmt = "Failed resolving hostname: {}", _0)]
+    #[error("Failed resolving hostname: {0}")]
     Resolver(io::Error),
 
     /// No dns records
-    #[display(fmt = "No dns records found for the input")]
+    #[error("No dns records found for the input")]
     NoRecords,
 
     /// Invalid input
+    #[error("Invalid input")]
     InvalidInput,
 
     /// Unresolved host name
-    #[display(fmt = "Connector received `Connect` method with unresolved host")]
+    #[error("Connector received `Connect` method with unresolved host")]
     Unresolved,
 
     /// Connection io error
-    #[display(fmt = "{}", _0)]
-    Io(io::Error),
+    #[error("{0}")]
+    Io(#[from] io::Error),
 }
 
 impl Clone for ConnectError {

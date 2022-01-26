@@ -1,116 +1,112 @@
 //! WebSocket protocol related errors.
-use std::{error, io};
+use std::io;
 
-use derive_more::{Display, From};
+use thiserror::Error;
 
-use crate::connect::ConnectError;
 use crate::http::error::{HttpError, ParseError, ResponseError};
 use crate::http::{header::HeaderValue, header::ALLOW, Response, StatusCode};
-use crate::util::Either;
+use crate::{connect::ConnectError, util::Either};
 
 use super::OpCode;
 
 /// Websocket service errors
-#[derive(Debug, Display)]
+#[derive(Error, Debug)]
 pub enum WsError<E> {
+    #[error("Service error")]
     Service(E),
     /// Keep-alive error
+    #[error("Keep-alive error")]
     KeepAlive,
     /// Ws protocol level error
+    #[error("Ws protocol level error")]
     Protocol(ProtocolError),
     /// Peer has been disconnected
-    #[display(fmt = "Peer has been disconnected: {:?}", _0)]
+    #[error("Peer has been disconnected: {0:?}")]
     Disconnected(Option<io::Error>),
 }
 
 /// Websocket protocol errors
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum ProtocolError {
     /// Received an unmasked frame from client
-    #[display(fmt = "Received an unmasked frame from client")]
+    #[error("Received an unmasked frame from client")]
     UnmaskedFrame,
     /// Received a masked frame from server
-    #[display(fmt = "Received a masked frame from server")]
+    #[error("Received a masked frame from server")]
     MaskedFrame,
     /// Encountered invalid opcode
-    #[display(fmt = "Invalid opcode: {}", _0)]
+    #[error("Invalid opcode: {0}")]
     InvalidOpcode(u8),
     /// Invalid control frame length
-    #[display(fmt = "Invalid control frame length: {}", _0)]
+    #[error("Invalid control frame length: {0}")]
     InvalidLength(usize),
     /// Bad web socket op code
-    #[display(fmt = "Bad web socket op code")]
+    #[error("Bad web socket op code")]
     BadOpCode,
     /// A payload reached size limit.
-    #[display(fmt = "A payload reached size limit.")]
+    #[error("A payload reached size limit.")]
     Overflow,
     /// Continuation is not started
-    #[display(fmt = "Continuation is not started.")]
+    #[error("Continuation is not started.")]
     ContinuationNotStarted,
     /// Received new continuation but it is already started
-    #[display(fmt = "Received new continuation but it is already started")]
+    #[error("Received new continuation but it is already started")]
     ContinuationStarted,
     /// Unknown continuation fragment
-    #[display(fmt = "Unknown continuation fragment.")]
+    #[error("Unknown continuation fragment {0}")]
     ContinuationFragment(OpCode),
 }
 
-impl std::error::Error for ProtocolError {}
-
 /// Websocket client error
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum WsClientBuilderError {
-    #[display(fmt = "Missing url scheme")]
+    #[error("Missing url scheme")]
     MissingScheme,
-    #[display(fmt = "Unknown url scheme")]
+    #[error("Unknown url scheme")]
     UnknownScheme,
-    #[display(fmt = "Missing host name")]
+    #[error("Missing host name")]
     MissingHost,
-    #[display(fmt = "Url parse error: {}", _0)]
-    Http(HttpError),
+    #[error("Url parse error: {0}")]
+    Http(#[from] HttpError),
 }
 
-impl std::error::Error for WsClientBuilderError {}
-
 /// Websocket client error
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum WsClientError {
     /// Invalid response
-    #[display(fmt = "Invalid response")]
-    InvalidResponse(ParseError),
+    #[error("Invalid response")]
+    InvalidResponse(#[from] ParseError),
     /// Invalid response status
-    #[display(fmt = "Invalid response status")]
+    #[error("Invalid response status")]
     InvalidResponseStatus(StatusCode),
     /// Invalid upgrade header
-    #[display(fmt = "Invalid upgrade header")]
+    #[error("Invalid upgrade header")]
     InvalidUpgradeHeader,
     /// Invalid connection header
-    #[display(fmt = "Invalid connection header")]
+    #[error("Invalid connection header")]
     InvalidConnectionHeader(HeaderValue),
     /// Missing CONNECTION header
-    #[display(fmt = "Missing CONNECTION header")]
+    #[error("Missing CONNECTION header")]
     MissingConnectionHeader,
     /// Missing SEC-WEBSOCKET-ACCEPT header
-    #[display(fmt = "Missing SEC-WEBSOCKET-ACCEPT header")]
+    #[error("Missing SEC-WEBSOCKET-ACCEPT header")]
     MissingWebSocketAcceptHeader,
     /// Invalid challenge response
-    #[display(fmt = "Invalid challenge response")]
+    #[error("Invalid challenge response")]
     InvalidChallengeResponse(String, HeaderValue),
     /// Protocol error
-    #[display(fmt = "{}", _0)]
-    Protocol(ProtocolError),
+    #[error("{0}")]
+    Protocol(#[from] ProtocolError),
     /// Response took too long
-    #[display(fmt = "Timeout out while waiting for response")]
+    #[error("Timeout out while waiting for response")]
     Timeout,
     /// Failed to connect to host
-    #[display(fmt = "Failed to connect to host: {}", _0)]
-    Connect(ConnectError),
+    #[error("Failed to connect to host: {0}")]
+    Connect(#[from] ConnectError),
     /// Connector has been disconnected
-    #[display(fmt = "Connector has been disconnected: {:?}", _0)]
+    #[error("Connector has been disconnected: {0:?}")]
     Disconnected(Option<io::Error>),
 }
-
-impl error::Error for WsClientError {}
 
 impl From<Either<ParseError, io::Error>> for WsClientError {
     fn from(err: Either<ParseError, io::Error>) -> Self {
@@ -128,29 +124,27 @@ impl From<Either<io::Error, io::Error>> for WsClientError {
 }
 
 /// Websocket handshake errors
-#[derive(PartialEq, Debug, Display)]
+#[derive(Error, PartialEq, Debug)]
 pub enum HandshakeError {
     /// Only get method is allowed
-    #[display(fmt = "Method not allowed")]
+    #[error("Method not allowed")]
     GetMethodRequired,
     /// Upgrade header if not set to websocket
-    #[display(fmt = "Websocket upgrade is expected")]
+    #[error("Websocket upgrade is expected")]
     NoWebsocketUpgrade,
     /// Connection header is not set to upgrade
-    #[display(fmt = "Connection upgrade is expected")]
+    #[error("Connection upgrade is expected")]
     NoConnectionUpgrade,
     /// Websocket version header is not set
-    #[display(fmt = "Websocket version header is required")]
+    #[error("Websocket version header is required")]
     NoVersionHeader,
     /// Unsupported websocket version
-    #[display(fmt = "Unsupported version")]
+    #[error("Unsupported version")]
     UnsupportedVersion,
     /// Websocket key is not set or wrong
-    #[display(fmt = "Unknown websocket key")]
+    #[error("Unknown websocket key")]
     BadWebsocketKey,
 }
-
-impl std::error::Error for HandshakeError {}
 
 impl ResponseError for HandshakeError {
     fn error_response(&self) -> Response {

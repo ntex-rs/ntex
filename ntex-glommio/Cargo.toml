@@ -22,7 +22,6 @@ ntex-util = "0.1.9"
 async-oneshot = "0.5.0"
 futures-lite = "1.12"
 futures-channel = "0.3"
-derive_more = "0.99"
 log = "0.4"
 pin-project-lite = "0.2"
 

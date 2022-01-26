@@ -376,9 +376,8 @@ mod tests {
     use crate::util::Bytes;
     use crate::web::test::{from_request, respond_to, TestRequest};
 
-    #[derive(
-        serde::Serialize, serde::Deserialize, PartialEq, Debug, derive_more::Display,
-    )]
+    #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, thiserror::Error)]
+    #[error("MyObject({name})")]
     struct MyObject {
         name: String,
     }

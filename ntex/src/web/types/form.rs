@@ -344,8 +344,8 @@ mod tests {
     use crate::util::Bytes;
     use crate::web::test::{from_request, respond_to, TestRequest};
 
-    #[derive(Deserialize, Serialize, Debug, PartialEq, derive_more::Display)]
-    #[display(fmt = "{}", "hello")]
+    #[derive(Deserialize, Serialize, Debug, PartialEq, thiserror::Error)]
+    #[error("Info({hello})")]
     struct Info {
         hello: String,
         counter: i64,

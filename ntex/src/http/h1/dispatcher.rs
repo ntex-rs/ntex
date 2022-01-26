@@ -44,19 +44,21 @@ pin_project_lite::pin_project! {
     }
 }
 
-#[derive(derive_more::Display)]
+#[derive(thiserror::Error)]
 enum State<B> {
+    #[error("State::Call")]
     Call,
+    #[error("State::ReadRequest")]
     ReadRequest,
+    #[error("State::ReadPayload")]
     ReadPayload,
-    #[display(fmt = "State::SendPayload")]
-    SendPayload {
-        body: ResponseBody<B>,
-    },
-    #[display(fmt = "State::Upgrade")]
+    #[error("State::SendPayload")]
+    SendPayload { body: ResponseBody<B> },
+    #[error("State::Upgrade")]
     Upgrade(Option<Request>),
-    #[display(fmt = "State::StopIo")]
+    #[error("State::StopIo")]
     StopIo(Box<(IoBoxed, Codec)>),
+    #[error("State::Stop")]
     Stop,
 }
 

@@ -1,8 +1,8 @@
 //! Http client errors
 use std::{error::Error, io};
 
-use derive_more::{Display, From};
 use serde_json::error::Error as JsonError;
+use thiserror::Error;
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl::{HandshakeError, SslError};
@@ -11,65 +11,60 @@ use crate::http::error::{HttpError, ParseError, PayloadError};
 use crate::util::Either;
 
 /// A set of errors that can occur during parsing json payloads
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum JsonPayloadError {
     /// Content type error
-    #[display(fmt = "Content type error")]
+    #[error("Content type error")]
     ContentType,
     /// Deserialize error
-    #[display(fmt = "Json deserialize error: {}", _0)]
-    Deserialize(JsonError),
+    #[error("Json deserialize error: {0}")]
+    Deserialize(#[from] JsonError),
     /// Payload error
-    #[display(fmt = "Error that occur during reading payload: {}", _0)]
-    Payload(PayloadError),
+    #[error("Error that occur during reading payload: {0}")]
+    Payload(#[from] PayloadError),
 }
 
-impl std::error::Error for JsonPayloadError {}
-
 /// A set of errors that can occur while connecting to an HTTP host
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum ConnectError {
     /// SSL feature is not enabled
-    #[display(fmt = "SSL is not supported")]
+    #[error("SSL is not supported")]
     SslIsNotSupported,
 
     /// SSL error
     #[cfg(feature = "openssl")]
-    #[display(fmt = "{}", _0)]
-    SslError(SslError),
+    #[error("{0}")]
+    SslError(#[from] SslError),
 
     /// SSL Handshake error
     #[cfg(feature = "openssl")]
-    #[display(fmt = "{}", _0)]
+    #[error("{0}")]
     SslHandshakeError(String),
 
     /// Failed to resolve the hostname
-    #[from(ignore)]
-    #[display(fmt = "Failed resolving hostname: {}", _0)]
-    Resolver(io::Error),
+    #[error("Failed resolving hostname: {0}")]
+    Resolver(#[from] io::Error),
 
     /// No dns records
-    #[display(fmt = "No dns records found for the input")]
+    #[error("No dns records found for the input")]
     NoRecords,
 
     /// Http2 error
-    #[display(fmt = "{}", _0)]
-    H2(h2::Error),
+    #[error("{0}")]
+    H2(#[from] h2::Error),
 
     /// Connecting took too long
-    #[display(fmt = "Timeout out while establishing connection")]
+    #[error("Timeout out while establishing connection")]
     Timeout,
 
     /// Connector has been disconnected
-    #[display(fmt = "Connector has been disconnected")]
+    #[error("Connector has been disconnected")]
     Disconnected(Option<io::Error>),
 
     /// Unresolved host name
-    #[display(fmt = "Connector received `Connect` method with unresolved host")]
+    #[error("Connector received `Connect` method with unresolved host")]
     Unresolved,
 }
-
-impl std::error::Error for ConnectError {}
 
 impl From<crate::connect::ConnectError> for ConnectError {
     fn from(err: crate::connect::ConnectError) -> ConnectError {
@@ -90,50 +85,49 @@ impl<T: std::fmt::Debug> From<HandshakeError<T>> for ConnectError {
     }
 }
 
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum InvalidUrl {
-    #[display(fmt = "Missing url scheme")]
+    #[error("Missing url scheme")]
     MissingScheme,
-    #[display(fmt = "Unknown url scheme")]
+    #[error("Unknown url scheme")]
     UnknownScheme,
-    #[display(fmt = "Missing host name")]
+    #[error("Missing host name")]
     MissingHost,
-    #[display(fmt = "Url parse error: {}", _0)]
-    Http(HttpError),
+    #[error("Url parse error: {0}")]
+    Http(#[from] HttpError),
 }
-
-impl std::error::Error for InvalidUrl {}
 
 /// A set of errors that can occur during request sending and response reading
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum SendRequestError {
     /// Invalid URL
-    #[display(fmt = "Invalid URL: {}", _0)]
-    Url(InvalidUrl),
+    #[error("Invalid URL: {0}")]
+    Url(#[from] InvalidUrl),
     /// Failed to connect to host
-    #[display(fmt = "Failed to connect to host: {}", _0)]
-    Connect(ConnectError),
+    #[error("Failed to connect to host: {0}")]
+    Connect(#[from] ConnectError),
     /// Error sending request
-    Send(io::Error),
+    #[error("Error sending request: {0}")]
+    Send(#[from] io::Error),
     /// Error parsing response
-    Response(ParseError),
+    #[error("Error during response parsing: {0}")]
+    Response(#[from] ParseError),
     /// Http error
-    #[display(fmt = "{}", _0)]
-    Http(HttpError),
+    #[error("{0}")]
+    Http(#[from] HttpError),
     /// Http2 error
-    #[display(fmt = "{}", _0)]
-    H2(h2::Error),
+    #[error("Http2 error {0}")]
+    H2(#[from] h2::Error),
     /// Response took too long
-    #[display(fmt = "Timeout out while waiting for response")]
+    #[error("Timeout out while waiting for response")]
     Timeout,
     /// Tunnels are not supported for http2 connection
-    #[display(fmt = "Tunnels are not supported for http2 connection")]
+    #[error("Tunnels are not supported for http2 connection")]
     TunnelNotSupported,
     /// Error sending request body
-    Error(Box<dyn Error>),
+    #[error("Error sending request body {0}")]
+    Error(#[from] Box<dyn Error>),
 }
-
-impl std::error::Error for SendRequestError {}
 
 impl From<Either<io::Error, io::Error>> for SendRequestError {
     fn from(err: Either<io::Error, io::Error>) -> Self {
@@ -154,17 +148,15 @@ impl From<Either<ParseError, io::Error>> for SendRequestError {
 }
 
 /// A set of errors that can occur during freezing a request
-#[derive(Debug, Display, From)]
+#[derive(Error, Debug)]
 pub enum FreezeRequestError {
     /// Invalid URL
-    #[display(fmt = "Invalid URL: {}", _0)]
-    Url(InvalidUrl),
+    #[error("Invalid URL: {0}")]
+    Url(#[from] InvalidUrl),
     /// Http error
-    #[display(fmt = "{}", _0)]
-    Http(HttpError),
+    #[error("{0}")]
+    Http(#[from] HttpError),
 }
-
-impl std::error::Error for FreezeRequestError {}
 
 impl From<FreezeRequestError> for SendRequestError {
     fn from(e: FreezeRequestError) -> Self {

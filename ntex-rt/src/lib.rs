@@ -189,7 +189,7 @@ mod tokio {
 #[cfg(feature = "async-std")]
 mod asyncstd {
     use futures_core::ready;
-    use std::{future::Future, pin::Pin, task::Context, task::Poll};
+    use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
@@ -245,8 +245,15 @@ mod asyncstd {
         }
     }
 
-    #[derive(Debug, Copy, Clone, derive_more::Display)]
+    #[derive(Debug, Copy, Clone)]
     pub struct JoinError;
+
+    impl fmt::Display for JoinError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "JoinError")
+        }
+    }
+
     impl std::error::Error for JoinError {}
 
     pub struct JoinHandle<T> {
