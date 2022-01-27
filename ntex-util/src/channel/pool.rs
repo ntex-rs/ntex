@@ -10,6 +10,8 @@ pub fn new<T>() -> Pool<T> {
     Pool(Cell::new(Slab::new()))
 }
 
+pub type OneshotsPool<T> = Pool<T>;
+
 /// Futures-aware, pool of one-shot's.
 pub struct Pool<T>(Cell<Slab<Inner<T>>>);
 
@@ -26,6 +28,12 @@ struct Inner<T> {
     value: Option<T>,
     tx_waker: LocalWaker,
     rx_waker: LocalWaker,
+}
+
+impl<T> Default for Pool<T> {
+    fn default() -> Pool<T> {
+        new()
+    }
 }
 
 impl<T> Pool<T> {

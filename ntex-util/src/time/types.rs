@@ -1,6 +1,9 @@
 use std::{convert::TryInto, ops};
 
 /// A Duration type to represent a span of time.
+///
+/// This type is designed for timeouts. Milliseconds resolution
+/// is too small to keep generic time.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Millis(pub u32);
 

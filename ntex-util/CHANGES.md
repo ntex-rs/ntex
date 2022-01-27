@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.13] - 2022-01-28
+
+* Add Default impl to oneshots pool
+
 ## [0.1.12] - 2022-01-27
 
 * Reduce size of Millis
