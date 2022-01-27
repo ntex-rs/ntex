@@ -27,7 +27,7 @@ fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
 use tls_rustls::ServerConfig;
 #[cfg(feature = "rustls")]
 fn tls_acceptor() -> Arc<ServerConfig> {
-    use rustls_pemfile::{certs, rsa_private_keys};
+    use rustls_pemfile::{certs, pkcs8_private_keys};
     use std::fs::File;
     use std::io::BufReader;
     use tls_rustls::{Certificate, PrivateKey};
@@ -39,13 +39,34 @@ fn tls_acceptor() -> Arc<ServerConfig> {
         .iter()
         .map(|c| Certificate(c.to_vec()))
         .collect();
-    let keys = PrivateKey(rsa_private_keys(key_file).unwrap().remove(0));
+    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
     let config = ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert_chain, keys)
         .unwrap();
     Arc::new(config)
+}
+
+mod danger {
+    use std::time::SystemTime;
+    use tls_rustls::{Certificate, ServerName};
+
+    pub struct NoCertificateVerification {}
+
+    impl tls_rustls::client::ServerCertVerifier for NoCertificateVerification {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &Certificate,
+            _intermediates: &[Certificate],
+            _server_name: &ServerName,
+            _scts: &mut dyn Iterator<Item = &[u8]>,
+            _ocsp_response: &[u8],
+            _now: SystemTime,
+        ) -> Result<tls_rustls::client::ServerCertVerified, tls_rustls::Error> {
+            Ok(tls_rustls::client::ServerCertVerified::assertion())
+        }
+    }
 }
 
 #[cfg(feature = "openssl")]
@@ -134,7 +155,7 @@ async fn test_rustls_string() {
     use rustls_pemfile::certs;
     use std::fs::File;
     use std::io::BufReader;
-    use tls_rustls::{Certificate, ClientConfig, OwnedTrustAnchor, RootCertStore};
+    use tls_rustls::{Certificate, ClientConfig};
 
     let srv = test_server(|| {
         pipeline_factory(fn_service(|io: Io<_>| async move {
@@ -151,19 +172,9 @@ async fn test_rustls_string() {
         }))
     });
 
-    let mut cert_store = RootCertStore::empty();
-    cert_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(
-        |ta| {
-            OwnedTrustAnchor::from_subject_spki_name_constraints(
-                ta.subject,
-                ta.spki,
-                ta.name_constraints,
-            )
-        },
-    ));
     let config = ClientConfig::builder()
         .with_safe_defaults()
-        .with_root_certificates(cert_store)
+        .with_custom_certificate_verifier(Arc::new(danger::NoCertificateVerification {}))
         .with_no_client_auth();
 
     let conn = ntex::connect::rustls::Connector::new(config);
