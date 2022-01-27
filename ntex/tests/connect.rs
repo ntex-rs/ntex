@@ -27,9 +27,9 @@ fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
 use tls_rustls::ServerConfig;
 #[cfg(feature = "rustls")]
 fn tls_acceptor() -> Arc<ServerConfig> {
+    use rustls_pemfile::{certs, rsa_private_keys};
     use std::fs::File;
     use std::io::BufReader;
-    use rustls_pemfile::{certs, rsa_private_keys};
     use tls_rustls::{Certificate, PrivateKey};
 
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
@@ -53,7 +53,10 @@ fn tls_acceptor() -> Arc<ServerConfig> {
 async fn test_openssl_string() {
     use ntex::server::openssl;
     use ntex_tls::openssl::PeerCert;
-    use tls_openssl::{ssl::{SslConnector, SslMethod, SslVerifyMode}, x509::X509};
+    use tls_openssl::{
+        ssl::{SslConnector, SslMethod, SslVerifyMode},
+        x509::X509,
+    };
 
     let srv = test_server(|| {
         pipeline_factory(fn_service(|io: Io<_>| async move {
@@ -78,7 +81,15 @@ async fn test_openssl_string() {
     let con = conn.call(addr.into()).await.unwrap();
     assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
     let cert = X509::from_pem(include_bytes!("cert.pem")).unwrap();
-    assert_eq!(con.query::<PeerCert>().as_ref().unwrap().0.to_der().unwrap(), cert.to_der().unwrap());
+    assert_eq!(
+        con.query::<PeerCert>()
+            .as_ref()
+            .unwrap()
+            .0
+            .to_der()
+            .unwrap(),
+        cert.to_der().unwrap()
+    );
     let item = con.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
 }
@@ -95,13 +106,13 @@ async fn test_openssl_read_before_error() {
             assert!(res.is_ok());
             Ok(io)
         }))
-            .and_then(openssl::Acceptor::new(ssl_acceptor()))
-            .and_then(fn_service(|io: Io<_>| async move {
-                io.send(Bytes::from_static(b"test"), &BytesCodec)
-                    .await
-                    .unwrap();
-                Ok::<_, Box<dyn std::error::Error>>(())
-            }))
+        .and_then(openssl::Acceptor::new(ssl_acceptor()))
+        .and_then(fn_service(|io: Io<_>| async move {
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
+                .await
+                .unwrap();
+            Ok::<_, Box<dyn std::error::Error>>(())
+        }))
     });
 
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
@@ -118,11 +129,11 @@ async fn test_openssl_read_before_error() {
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_string() {
+    use ntex::server::rustls;
+    use ntex_tls::rustls::PeerCert;
+    use rustls_pemfile::certs;
     use std::fs::File;
     use std::io::BufReader;
-    use ntex_tls::rustls::PeerCert;
-    use ntex::server::rustls;
-    use rustls_pemfile::certs;
     use tls_rustls::{Certificate, ClientConfig, OwnedTrustAnchor, RootCertStore};
 
     let srv = test_server(|| {
@@ -131,13 +142,13 @@ async fn test_rustls_string() {
             assert!(res.is_ok());
             Ok(io)
         }))
-            .and_then(rustls::Acceptor::new(tls_acceptor()))
-            .and_then(fn_service(|io: Io<_>| async move {
-                io.send(Bytes::from_static(b"test"), &BytesCodec)
-                    .await
-                    .unwrap();
-                Ok::<_, std::io::Error>(())
-            }))
+        .and_then(rustls::Acceptor::new(tls_acceptor()))
+        .and_then(fn_service(|io: Io<_>| async move {
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
+                .await
+                .unwrap();
+            Ok::<_, std::io::Error>(())
+        }))
     });
 
     let mut cert_store = RootCertStore::empty();
@@ -165,7 +176,10 @@ async fn test_rustls_string() {
         .iter()
         .map(|c| Certificate(c.to_vec()))
         .collect();
-    assert_eq!(con.query::<PeerCert>().as_ref().unwrap().0, *cert_chain.first().unwrap());
+    assert_eq!(
+        con.query::<PeerCert>().as_ref().unwrap().0,
+        *cert_chain.first().unwrap()
+    );
     let item = con.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
 }
