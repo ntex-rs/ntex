@@ -6,7 +6,7 @@ use async_oneshot as oneshot;
 
 use crate::rt::{spawn, Arbiter};
 use crate::time::{sleep, Millis, Sleep};
-use crate::util::{join_all, Stream as FutStream};
+use crate::util::{join_all, ready, Stream as FutStream};
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
@@ -326,10 +326,11 @@ impl Future for Worker {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // `StopWorker` message handler
+        let stop = Pin::new(&mut self.rx2).poll_next(cx);
         if let Poll::Ready(Some(StopCommand {
             graceful,
             mut result,
-        })) = Pin::new(&mut self.rx2).poll_next(cx)
+        })) = stop
         {
             self.availability.set(false);
             let num = num_connections();
@@ -464,24 +465,23 @@ impl Future for Worker {
                         }
                     }
 
-                    match Pin::new(&mut self.rx).poll_next(cx) {
+                    let next = ready!(Pin::new(&mut self.rx).poll_next(cx));
+                    if let Some(WorkerCommand(msg)) = next {
                         // handle incoming io stream
-                        Poll::Ready(Some(WorkerCommand(msg))) => {
-                            let guard = self.conns.get();
-                            let srv = &self.services[msg.token.0];
+                        let guard = self.conns.get();
+                        let srv = &self.services[msg.token.0];
 
-                            if log::log_enabled!(log::Level::Trace) {
-                                trace!(
-                                    "Got socket for service: {:?}",
-                                    self.factories[srv.factory].name(msg.token)
-                                );
-                            }
-                            let _ = srv
-                                .service
-                                .call((Some(guard), ServerMessage::Connect(msg.io)));
+                        if log::log_enabled!(log::Level::Trace) {
+                            trace!(
+                                "Got socket for service: {:?}",
+                                self.factories[srv.factory].name(msg.token)
+                            );
                         }
-                        Poll::Pending => return Poll::Pending,
-                        Poll::Ready(None) => return Poll::Ready(()),
+                        let _ = srv
+                            .service
+                            .call((Some(guard), ServerMessage::Connect(msg.io)));
+                    } else {
+                        return Poll::Ready(());
                     }
                 }
             }

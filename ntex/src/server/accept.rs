@@ -373,13 +373,18 @@ impl Accept {
     }
 
     fn accept_one(&mut self, mut msg: Connection) {
-        log::trace!("Accepting connection: {:?}", msg.io);
+        log::trace!(
+            "Accepting connection: {:?} bp: {}",
+            msg.io,
+            self.backpressure
+        );
 
         if self.backpressure {
             while !self.workers.is_empty() {
                 match self.workers[self.next].send(msg) {
                     Ok(_) => (),
                     Err(tmp) => {
+                        log::trace!("Worker failed while processing connection");
                         self.update_status(ServerStatus::WorkerFailed);
                         self.srv.worker_faulted(self.workers[self.next].idx);
                         msg = tmp;
@@ -403,6 +408,7 @@ impl Accept {
                 if self.workers[self.next].available() {
                     match self.workers[self.next].send(msg) {
                         Ok(_) => {
+                            log::trace!("Sent to worker {:?}", self.next);
                             self.next = (self.next + 1) % self.workers.len();
                             return;
                         }

@@ -1,4 +1,4 @@
-use std::{fmt, time};
+use std::{cell::RefCell, fmt, rc::Rc, time};
 
 use h2::client::SendRequest;
 use ntex_tls::types::HttpProtocol;
@@ -15,7 +15,42 @@ use super::{h1proto, h2proto};
 
 pub(super) enum ConnectionType {
     H1(IoBoxed),
-    H2(SendRequest<Bytes>),
+    H2(H2Sender),
+}
+
+impl fmt::Debug for ConnectionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConnectionType::H1(_) => write!(f, "http/1"),
+            ConnectionType::H2(_) => write!(f, "http/2"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct H2Sender(Rc<RefCell<H2SenderInner>>);
+
+struct H2SenderInner {
+    io: SendRequest<Bytes>,
+    closed: bool,
+}
+
+impl H2Sender {
+    pub(super) fn new(io: SendRequest<Bytes>) -> Self {
+        Self(Rc::new(RefCell::new(H2SenderInner { io, closed: false })))
+    }
+
+    pub(super) fn is_closed(&self) -> bool {
+        self.0.borrow().closed
+    }
+
+    pub(super) fn close(&self) {
+        self.0.borrow_mut().closed = true;
+    }
+
+    pub(super) fn get_sender(&self) -> SendRequest<Bytes> {
+        self.0.borrow().io.clone()
+    }
 }
 
 #[doc(hidden)]
@@ -80,9 +115,7 @@ impl Connection {
             ConnectionType::H1(io) => {
                 h1proto::send_request(io, head.into(), body, self.created, self.pool).await
             }
-            ConnectionType::H2(io) => {
-                h2proto::send_request(io, head.into(), body, self.created, self.pool).await
-            }
+            ConnectionType::H2(io) => h2proto::send_request(io, head.into(), body).await,
         }
     }
 }

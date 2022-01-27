@@ -1,6 +1,6 @@
-use std::{convert::TryFrom, time};
+use std::convert::TryFrom;
 
-use h2::{client::SendRequest, SendStream};
+use h2::SendStream;
 use http::header::{HeaderValue, CONNECTION, CONTENT_LENGTH, TRANSFER_ENCODING};
 use http::{request::Request, Method, Version};
 
@@ -10,16 +10,13 @@ use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
 use crate::util::{poll_fn, Bytes};
 
-use super::connection::{Connection, ConnectionType};
+use super::connection::H2Sender;
 use super::error::SendRequestError;
-use super::pool::Acquired;
 
 pub(super) async fn send_request<B>(
-    mut io: SendRequest<Bytes>,
+    io: H2Sender,
     head: RequestHeadType,
     body: B,
-    created: time::Instant,
-    pool: Option<Acquired>,
 ) -> Result<(ResponseHead, Payload), SendRequestError>
 where
     B: MessageBody,
@@ -82,24 +79,21 @@ where
         req.headers_mut().append(key, value.clone());
     }
 
-    let res = poll_fn(|cx| io.poll_ready(cx)).await;
+    let mut sender = io.get_sender();
+    let res = poll_fn(|cx| sender.poll_ready(cx)).await;
     if let Err(e) = res {
         log::trace!("SendRequest readiness failed: {:?}", e);
-        release(io, pool, created, e.is_io());
         return Err(SendRequestError::from(e));
     }
 
-    let resp = match io.send_request(req, eof) {
+    let resp = match sender.send_request(req, eof) {
         Ok((fut, send)) => {
-            release(io, pool, created, false);
-
             if !eof {
                 send_body(body, send).await?;
             }
             fut.await.map_err(SendRequestError::from)?
         }
         Err(e) => {
-            release(io, pool, created, e.is_io());
             return Err(e.into());
         }
     };
@@ -155,22 +149,6 @@ async fn send_body<B: MessageBody>(
                 }
             }
             Some(Err(e)) => return Err(e.into()),
-        }
-    }
-}
-
-// release SendRequest object
-fn release(
-    io: SendRequest<Bytes>,
-    pool: Option<Acquired>,
-    created: time::Instant,
-    close: bool,
-) {
-    if let Some(mut pool) = pool {
-        if close {
-            pool.close(Connection::new(ConnectionType::H2(io), created, None));
-        } else {
-            pool.release(Connection::new(ConnectionType::H2(io), created, None));
         }
     }
 }

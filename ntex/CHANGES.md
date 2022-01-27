@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.13] - 2022-01-28
+
+* http: Refactor client pool support for http/2 connections
+
 ## [0.5.12] - 2022-01-27
 
 * Replace derive_more with thiserror
