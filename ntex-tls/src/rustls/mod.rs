@@ -6,7 +6,7 @@ use std::{any, cmp, future::Future, io, pin::Pin, task::Context, task::Poll};
 use ntex_bytes::{BytesMut, PoolRef};
 use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::time::Millis;
-use tls_rust::{ClientConfig, ServerConfig, ServerName};
+use tls_rust::{Certificate, ClientConfig, ServerConfig, ServerName};
 
 mod accept;
 mod client;
@@ -15,6 +15,14 @@ pub use accept::{Acceptor, AcceptorService};
 
 use self::client::TlsClientFilter;
 use self::server::TlsServerFilter;
+
+/// Connection's peer cert
+#[derive(Debug)]
+pub struct PeerCert(pub Certificate);
+
+/// Connection's peer cert chain
+#[derive(Debug)]
+pub struct PeerCertChain(pub Vec<Certificate>);
 
 /// An implementation of SSL streams
 pub struct TlsFilter<F = Base> {

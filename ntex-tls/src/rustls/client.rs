@@ -5,18 +5,12 @@ use std::{any, cell::RefCell, sync::Arc, task::Context, task::Poll};
 use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Filter, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready};
-use tls_rust::{Certificate, ClientConfig, ClientConnection, ServerName};
+use tls_rust::{ClientConfig, ClientConnection, ServerName};
 
 use crate::rustls::{IoInner, TlsFilter, Wrapper};
 use crate::types;
 
-/// Connection's peer cert
-#[derive(Debug)]
-pub struct PeerCert(pub Certificate);
-
-/// Connection's peer cert chain
-#[derive(Debug)]
-pub struct PeerCertChain(pub Vec<Certificate>);
+use super::{PeerCert, PeerCertChain};
 
 /// An implementation of SSL streams
 pub struct TlsClientFilter<F> {
