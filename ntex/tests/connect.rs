@@ -99,11 +99,11 @@ async fn test_openssl_string() {
 
     let conn = ntex::connect::openssl::Connector::new(builder.build());
     let addr = format!("127.0.0.1:{}", srv.addr().port());
-    let con = conn.call(addr.into()).await.unwrap();
-    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    let io = conn.call(addr.into()).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
     let cert = X509::from_pem(include_bytes!("cert.pem")).unwrap();
     assert_eq!(
-        con.query::<PeerCert>()
+        io.query::<PeerCert>()
             .as_ref()
             .unwrap()
             .0
@@ -111,7 +111,7 @@ async fn test_openssl_string() {
             .unwrap(),
         cert.to_der().unwrap()
     );
-    let item = con.recv(&BytesCodec).await.unwrap().unwrap();
+    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
 }
 
@@ -179,8 +179,8 @@ async fn test_rustls_string() {
 
     let conn = ntex::connect::rustls::Connector::new(config);
     let addr = format!("localhost:{}", srv.addr().port());
-    let con = conn.call(addr.into()).await.unwrap();
-    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    let io = conn.call(addr.into()).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let cert_chain: Vec<Certificate> = certs(cert_file)
         .unwrap()
@@ -188,10 +188,10 @@ async fn test_rustls_string() {
         .map(|c| Certificate(c.to_vec()))
         .collect();
     assert_eq!(
-        con.query::<PeerCert>().as_ref().unwrap().0,
+        io.query::<PeerCert>().as_ref().unwrap().0,
         *cert_chain.first().unwrap()
     );
-    let item = con.recv(&BytesCodec).await.unwrap().unwrap();
+    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
 }
 
@@ -208,13 +208,13 @@ async fn test_static_str() {
 
     let conn = ntex::connect::Connector::new();
 
-    let con = conn.call(Connect::with("10", srv.addr())).await.unwrap();
-    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 
     let connect = Connect::new("127.0.0.1".to_owned());
     let conn = ntex::connect::Connector::new();
-    let con = conn.call(connect).await;
-    assert!(con.is_err());
+    let io = conn.call(connect).await;
+    assert!(io.is_err());
 }
 
 #[ntex::test]
@@ -230,8 +230,8 @@ async fn test_new_service() {
 
     let factory = ntex::connect::Connector::new();
     let conn = factory.new_service(()).await.unwrap();
-    let con = conn.call(Connect::with("10", srv.addr())).await.unwrap();
-    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
 #[cfg(feature = "openssl")]
@@ -252,8 +252,8 @@ async fn test_uri() {
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
             .unwrap();
-    let con = conn.call(addr.into()).await.unwrap();
-    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    let io = conn.call(addr.into()).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
 #[cfg(feature = "rustls")]
@@ -274,6 +274,6 @@ async fn test_rustls_uri() {
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
             .unwrap();
-    let con = conn.call(addr.into()).await.unwrap();
-    assert_eq!(con.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    let io = conn.call(addr.into()).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
