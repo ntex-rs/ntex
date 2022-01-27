@@ -5,10 +5,18 @@ use std::{any, cell::RefCell, sync::Arc, task::Context, task::Poll};
 use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Filter, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready};
-use tls_rust::{ClientConfig, ClientConnection, ServerName};
+use tls_rust::{Certificate, ClientConfig, ClientConnection, ServerName};
 
 use crate::rustls::{IoInner, TlsFilter, Wrapper};
 use crate::types;
+
+/// Connection's peer cert
+#[derive(Debug)]
+pub struct PeerCert(pub Certificate);
+
+/// Connection's peer cert chain
+#[derive(Debug)]
+pub struct PeerCertChain(pub Vec<Certificate>);
 
 /// An implementation of SSL streams
 pub struct TlsClientFilter<F> {
@@ -34,6 +42,22 @@ impl<F: Filter> Filter for TlsClientFilter<F> {
                 types::HttpProtocol::Http1
             };
             Some(Box::new(proto))
+        } else if id == any::TypeId::of::<PeerCert>() {
+            if let Some(cert_chain) = self.session.borrow().peer_certificates() {
+                if let Some(cert) = cert_chain.first() {
+                    Some(Box::new(PeerCert(cert.to_owned())))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else if id == any::TypeId::of::<PeerCertChain>() {
+            if let Some(cert_chain) = self.session.borrow().peer_certificates() {
+                Some(Box::new(PeerCertChain(cert_chain.to_vec())))
+            } else {
+                None
+            }
         } else {
             self.inner.borrow().filter.query(id)
         }

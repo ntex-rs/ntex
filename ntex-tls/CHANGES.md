@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.3] - 2022-01-27
+
+* Add PeerCert and PeerCertChain for rustls
+
 ## [0.1.2] - 2022-01-12
 
 * Update Filter trait usage
