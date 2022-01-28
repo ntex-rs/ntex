@@ -5,7 +5,7 @@ use crate::map::{Map, MapServiceFactory};
 use crate::map_err::{MapErr, MapErrServiceFactory};
 use crate::map_init_err::MapInitErr;
 use crate::then::{Then, ThenFactory};
-use crate::transform::{ApplyTransform, Transform};
+use crate::transform::{ApplyMiddleware, Middleware};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Constructs new pipeline with one service in pipeline chain.
@@ -174,15 +174,15 @@ impl<T: ServiceFactory<R, C>, R, C> PipelineFactory<T, R, C> {
         }
     }
 
-    /// Apply transform to current service factory.
+    /// Apply middleware to current service factory.
     ///
-    /// Short version of `apply(transform, pipeline_factory(...))`
-    pub fn apply<U>(self, tr: U) -> PipelineFactory<ApplyTransform<U, T, R, C>, R, C>
+    /// Short version of `apply(middleware, pipeline_factory(...))`
+    pub fn apply<U>(self, tr: U) -> PipelineFactory<ApplyMiddleware<U, T, R, C>, R, C>
     where
-        U: Transform<T::Service>,
+        U: Middleware<T::Service>,
     {
         PipelineFactory {
-            factory: ApplyTransform::new(tr, self.factory),
+            factory: ApplyMiddleware::new(tr, self.factory),
             _t: PhantomData,
         }
     }

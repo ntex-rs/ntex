@@ -23,7 +23,7 @@ pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::map_config::{map_config, map_config_service, unit_config};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
-pub use self::transform::{apply, Identity, Transform};
+pub use self::transform::{apply, Identity, Middleware};
 
 /// An asynchronous function of `Request` to a `Response`.
 ///
@@ -343,5 +343,5 @@ pub mod dev {
     pub use crate::map_err::{MapErr, MapErrServiceFactory};
     pub use crate::map_init_err::MapInitErr;
     pub use crate::then::{Then, ThenFactory};
-    pub use crate::transform::ApplyTransform;
+    pub use crate::transform::ApplyMiddleware;
 }
