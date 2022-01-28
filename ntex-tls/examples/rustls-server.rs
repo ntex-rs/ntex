@@ -3,7 +3,7 @@ use std::{fs::File, io, io::BufReader, sync::Arc};
 use ntex::service::{fn_service, pipeline_factory};
 use ntex::{codec, io::filter, io::Io, server, util::Either};
 use ntex_tls::rustls::TlsAcceptor;
-use rustls_pemfile::{certs, rsa_private_keys};
+use rustls_pemfile::{certs, pkcs8_private_keys};
 use tls_rust::{Certificate, PrivateKey, ServerConfig};
 
 #[ntex::main]
@@ -17,7 +17,7 @@ async fn main() -> io::Result<()> {
     let cert_file =
         &mut BufReader::new(File::open("../ntex-tls/examples/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("../ntex-tls/examples/key.pem").unwrap());
-    let keys = PrivateKey(rsa_private_keys(key_file).unwrap().remove(0));
+    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
     let cert_chain = certs(cert_file)
         .unwrap()
         .iter()

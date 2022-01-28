@@ -103,12 +103,7 @@ async fn test_openssl_string() {
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
     let cert = X509::from_pem(include_bytes!("cert.pem")).unwrap();
     assert_eq!(
-        io.query::<PeerCert>()
-            .as_ref()
-            .unwrap()
-            .0
-            .to_der()
-            .unwrap(),
+        io.query::<PeerCert>().as_ref().unwrap().0.to_der().unwrap(),
         cert.to_der().unwrap()
     );
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
