@@ -39,11 +39,11 @@ fn tls_acceptor() -> Arc<ServerConfig> {
         .iter()
         .map(|c| Certificate(c.to_vec()))
         .collect();
-    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let key = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
     let config = ServerConfig::builder()
         .with_safe_defaults()
         .with_no_client_auth()
-        .with_single_cert(cert_chain, keys)
+        .with_single_cert(cert_chain, key)
         .unwrap();
     Arc::new(config)
 }
