@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.11] (2022-01-30)
+
+* Add BytesVec type
+
 ## [0.1.10] (2022-01-26)
 
 * Rename Pool::is_pending() to is_ready()

@@ -1,7 +1,6 @@
 use std::{marker::PhantomData, task::Context, task::Poll};
 
 use crate::and_then::{AndThen, AndThenFactory};
-// use crate::and_then_apply_fn::{AndThenApplyFn, AndThenApplyFnFactory};
 use crate::map::{Map, MapServiceFactory};
 use crate::map_err::{MapErr, MapErrServiceFactory};
 use crate::map_init_err::MapInitErr;
@@ -60,28 +59,6 @@ impl<T: Service<R>, R> Pipeline<T, R> {
             _t: PhantomData,
         }
     }
-
-    // /// Apply function to specified service and use it as a next service in
-    // /// chain.
-    // ///
-    // /// Short version of `pipeline_factory(...).and_then(apply_fn_factory(...))`
-    // pub fn and_then_apply_fn<U, I, F, Fut, Res, Err>(
-    //     self,
-    //     service: I,
-    //     f: F,
-    // ) -> Pipeline<impl Service<Request = T::Request, Response = Res, Error = Err> + Clone>
-    // where
-    //     Self: Sized,
-    //     I: IntoService<U>,
-    //     U: Service,
-    //     F: Fn(T::Response, &U) -> Fut,
-    //     Fut: Future<Output = Result<Res, Err>>,
-    //     Err: From<T::Error> + From<U::Error>,
-    // {
-    //     Pipeline {
-    //         service: AndThenApplyFn::new(self.service, service.into_service(), f),
-    //     }
-    // }
 
     /// Chain on a computation for when a call to the service finished,
     /// passing the result of the call to the next service `U`.
@@ -196,39 +173,6 @@ impl<T: ServiceFactory<R, C>, R, C> PipelineFactory<T, R, C> {
             _t: PhantomData,
         }
     }
-
-    // /// Apply function to specified service and use it as a next service in
-    // /// chain.
-    // ///
-    // /// Short version of `pipeline_factory(...).and_then(apply_fn_factory(...))`
-    // pub fn and_then_apply_fn<U, I, F, Fut, Res, Err>(
-    //     self,
-    //     factory: I,
-    //     f: F,
-    // ) -> PipelineFactory<
-    //     impl ServiceFactory<
-    //             Request = T::Request,
-    //             Response = Res,
-    //             Error = Err,
-    //             Config = T::Config,
-    //             InitError = T::InitError,
-    //             Service = impl Service<Request = T::Request, Response = Res, Error = Err>
-    //                           + Clone,
-    //         > + Clone,
-    // >
-    // where
-    //     Self: Sized,
-    //     T::Config: Clone,
-    //     I: IntoServiceFactory<U>,
-    //     U: ServiceFactory<Config = T::Config, InitError = T::InitError>,
-    //     F: Fn(T::Response, &U::Service) -> Fut + Clone,
-    //     Fut: Future<Output = Result<Res, Err>>,
-    //     Err: From<T::Error> + From<U::Error>,
-    // {
-    //     PipelineFactory {
-    //         factory: AndThenApplyFnFactory::new(self.factory, factory.into_factory(), f),
-    //     }
-    // }
 
     /// Apply transform to current service factory.
     ///

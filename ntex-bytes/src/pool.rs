@@ -2,11 +2,11 @@
 use std::sync::atomic::Ordering::{Relaxed, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::task::{Context, Poll, Waker};
-use std::{cell::Cell, cell::RefCell, fmt, future::Future, mem, pin::Pin, rc::Rc};
+use std::{cell::Cell, cell::RefCell, fmt, future::Future, mem, pin::Pin, ptr, rc::Rc};
 
 use futures_core::task::__internal::AtomicWaker;
 
-use crate::BytesMut;
+use crate::{BytesMut, BytesVec};
 
 pub struct Pool {
     idx: Cell<usize>,
@@ -191,9 +191,20 @@ impl PoolRef {
     }
 
     #[inline]
+    pub fn move_vec_in(self, buf: &mut BytesVec) {
+        buf.move_to_pool(self);
+    }
+
+    #[inline]
     /// Creates a new `BytesMut` with the specified capacity.
     pub fn buf_with_capacity(self, cap: usize) -> BytesMut {
         BytesMut::with_capacity_in_priv(cap, self)
+    }
+
+    #[inline]
+    /// Creates a new `BytesVec` with the specified capacity.
+    pub fn vec_with_capacity(self, cap: usize) -> BytesVec {
+        BytesVec::with_capacity_in_priv(cap, self)
     }
 
     #[doc(hidden)]
@@ -375,6 +386,14 @@ impl fmt::Debug for PoolRef {
             .field("id", &self.id().0)
             .field("allocated", &self.allocated())
             .finish()
+    }
+}
+
+impl Eq for PoolRef {}
+
+impl PartialEq for PoolRef {
+    fn eq(&self, other: &PoolRef) -> bool {
+        ptr::eq(&self.0, &other.0)
     }
 }
 
