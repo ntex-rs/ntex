@@ -10,6 +10,8 @@ use tls_rust::{ServerConfig, ServerConnection};
 use crate::rustls::{IoInner, TlsFilter, Wrapper};
 use crate::types;
 
+use super::{PeerCert, PeerCertChain};
+
 /// An implementation of SSL streams
 pub struct TlsServerFilter<F> {
     inner: RefCell<IoInner<F>>,
@@ -34,6 +36,22 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
                 types::HttpProtocol::Http1
             };
             Some(Box::new(proto))
+        } else if id == any::TypeId::of::<PeerCert>() {
+            if let Some(cert_chain) = self.session.borrow().peer_certificates() {
+                if let Some(cert) = cert_chain.first() {
+                    Some(Box::new(PeerCert(cert.to_owned())))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else if id == any::TypeId::of::<PeerCertChain>() {
+            if let Some(cert_chain) = self.session.borrow().peer_certificates() {
+                Some(Box::new(PeerCertChain(cert_chain.to_vec())))
+            } else {
+                None
+            }
         } else {
             self.inner.borrow().filter.query(id)
         }

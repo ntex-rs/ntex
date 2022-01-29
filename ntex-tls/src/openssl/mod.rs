@@ -75,17 +75,21 @@ impl<F: Filter> io::Write for IoInner<F> {
 
 impl<F: Filter> Filter for SslFilter<F> {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+        const H2: &[u8] = b"h2";
+
         if id == any::TypeId::of::<types::HttpProtocol>() {
-            let proto =
-                if let Some(protos) = self.inner.borrow().ssl().selected_alpn_protocol() {
-                    if protos.windows(2).any(|window| window == b"h2") {
-                        types::HttpProtocol::Http2
-                    } else {
-                        types::HttpProtocol::Http1
-                    }
-                } else {
-                    types::HttpProtocol::Http1
-                };
+            let h2 = self
+                .inner
+                .borrow()
+                .ssl()
+                .selected_alpn_protocol()
+                .map(|protos| protos.windows(2).any(|w| w == H2))
+                .unwrap_or(false);
+            let proto = if h2 {
+                types::HttpProtocol::Http2
+            } else {
+                types::HttpProtocol::Http1
+            };
             Some(Box::new(proto))
         } else if id == any::TypeId::of::<PeerCert>() {
             if let Some(cert) = self.inner.borrow().ssl().peer_certificate() {
