@@ -144,6 +144,7 @@ async fn test_openssl_read_before_error() {
 
 #[cfg(feature = "rustls")]
 #[ntex::test]
+#[ignore]
 async fn test_rustls_string() {
     use ntex::server::rustls;
     use ntex_tls::rustls::PeerCert;
