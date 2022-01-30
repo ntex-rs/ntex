@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.3] - 2022-01-30
+
+* Update to ntex-io 0.1.7
+
 ## [0.1.2] - 2022-01-12
 
 * Fix potential BorrowMutError

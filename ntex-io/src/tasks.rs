@@ -1,6 +1,6 @@
 use std::{io, task::Context, task::Poll};
 
-use ntex_bytes::{BytesMut, PoolRef};
+use ntex_bytes::{BytesVec, PoolRef};
 
 use super::{io::Flags, IoRef, ReadStatus, WriteStatus};
 
@@ -26,7 +26,7 @@ impl ReadContext {
 
     #[inline]
     /// Get read buffer
-    pub fn get_read_buf(&self) -> BytesMut {
+    pub fn get_read_buf(&self) -> BytesVec {
         self.0
              .0
             .read_buf
@@ -36,7 +36,7 @@ impl ReadContext {
 
     #[inline]
     /// Release read buffer after io read operations
-    pub fn release_read_buf(&self, buf: BytesMut, nbytes: usize) {
+    pub fn release_read_buf(&self, buf: BytesVec, nbytes: usize) {
         if buf.is_empty() {
             self.0.memory_pool().release_read_buf(buf);
         } else {
@@ -99,13 +99,13 @@ impl WriteContext {
 
     #[inline]
     /// Get write buffer
-    pub fn get_write_buf(&self) -> Option<BytesMut> {
+    pub fn get_write_buf(&self) -> Option<BytesVec> {
         self.0 .0.write_buf.take()
     }
 
     #[inline]
     /// Release write buffer after io write operations
-    pub fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error> {
+    pub fn release_write_buf(&self, buf: BytesVec) -> Result<(), io::Error> {
         let pool = self.0.memory_pool();
         let mut flags = self.0.flags();
 

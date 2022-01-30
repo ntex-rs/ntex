@@ -469,15 +469,15 @@ impl Decoder for PayloadDecoder {
                     let len = src.len() as u64;
                     let buf;
                     if *remaining > len {
-                        buf = src.split().freeze();
+                        buf = src.split();
                         *remaining -= len;
                     } else {
-                        buf = src.split_to(*remaining as usize).freeze();
+                        buf = src.split_to(*remaining as usize);
                         *remaining = 0;
                     };
                     self.kind.set(kind);
                     log::trace!("Length read: {}", buf.len());
-                    Ok(Some(PayloadItem::Chunk(buf)))
+                    Ok(Some(PayloadItem::Chunk(buf.freeze())))
                 }
             }
             Kind::Chunked(ref mut state, ref mut size) => {
@@ -630,13 +630,13 @@ impl ChunkedState {
         } else {
             let slice;
             if *rem > len {
-                slice = rdr.split().freeze();
+                slice = rdr.split();
                 *rem -= len;
             } else {
-                slice = rdr.split_to(*rem as usize).freeze();
+                slice = rdr.split_to(*rem as usize);
                 *rem = 0;
             }
-            *buf = Some(slice);
+            *buf = Some(slice.freeze());
             if *rem > 0 {
                 Poll::Ready(Ok(ChunkedState::Body))
             } else {

@@ -4,7 +4,7 @@ use std::{
     fmt, future::Future, hash, io, marker, mem, ops::Deref, pin::Pin, ptr, rc::Rc, time,
 };
 
-use ntex_bytes::{BytesMut, PoolId, PoolRef};
+use ntex_bytes::{BytesVec, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::{
     future::poll_fn, future::Either, task::LocalWaker, time::now, time::Millis,
@@ -62,8 +62,8 @@ pub(crate) struct IoState {
     pub(super) read_task: LocalWaker,
     pub(super) write_task: LocalWaker,
     pub(super) dispatch_task: LocalWaker,
-    pub(super) read_buf: Cell<Option<BytesMut>>,
-    pub(super) write_buf: Cell<Option<BytesMut>>,
+    pub(super) read_buf: Cell<Option<BytesVec>>,
+    pub(super) write_buf: Cell<Option<BytesVec>>,
     pub(super) filter: Cell<&'static dyn Filter>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     #[allow(clippy::box_collection)]
@@ -134,9 +134,6 @@ impl IoState {
         {
             log::trace!("initiate io shutdown {:?}", self.flags.get());
             self.insert_flags(Flags::IO_STOPPING_FILTERS);
-            self.read_task.wake();
-            self.write_task.wake();
-            self.dispatch_task.wake();
             self.shutdown_filters();
         }
     }
@@ -178,7 +175,7 @@ impl IoState {
     #[inline]
     pub(super) fn with_read_buf<Fn, Ret>(&self, release: bool, f: Fn) -> Ret
     where
-        Fn: FnOnce(&mut Option<BytesMut>) -> Ret,
+        Fn: FnOnce(&mut Option<BytesVec>) -> Ret,
     {
         let filter = self.filter.get();
         let mut buf = filter.get_read_buf();
@@ -200,7 +197,7 @@ impl IoState {
     #[inline]
     pub(super) fn with_write_buf<Fn, Ret>(&self, f: Fn) -> Ret
     where
-        Fn: FnOnce(&mut Option<BytesMut>) -> Ret,
+        Fn: FnOnce(&mut Option<BytesVec>) -> Ret,
     {
         let buf = self.write_buf.as_ptr();
         let ref_buf = unsafe { buf.as_mut().unwrap() };
@@ -284,11 +281,11 @@ impl<F> Io<F> {
     /// Set memory pool
     pub fn set_memory_pool(&self, pool: PoolRef) {
         if let Some(mut buf) = self.0 .0.read_buf.take() {
-            pool.move_in(&mut buf);
+            pool.move_vec_in(&mut buf);
             self.0 .0.read_buf.set(Some(buf));
         }
         if let Some(mut buf) = self.0 .0.write_buf.take() {
-            pool.move_in(&mut buf);
+            pool.move_vec_in(&mut buf);
             self.0 .0.write_buf.set(Some(buf));
         }
         self.0 .0.pool.set(pool);

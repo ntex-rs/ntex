@@ -17,7 +17,7 @@ mod tasks;
 mod timer;
 mod utils;
 
-use ntex_bytes::BytesMut;
+use ntex_bytes::BytesVec;
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Millis;
 
@@ -52,18 +52,18 @@ pub enum WriteStatus {
 pub trait Filter: 'static {
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
 
-    fn get_read_buf(&self) -> Option<BytesMut>;
+    fn get_read_buf(&self) -> Option<BytesVec>;
 
-    fn release_read_buf(&self, buf: BytesMut);
+    fn release_read_buf(&self, buf: BytesVec);
 
     /// Process read buffer
     ///
     /// Returns tuple (total bytes, new bytes)
     fn process_read_buf(&self, io: &IoRef, n: usize) -> sio::Result<(usize, usize)>;
 
-    fn get_write_buf(&self) -> Option<BytesMut>;
+    fn get_write_buf(&self) -> Option<BytesVec>;
 
-    fn release_write_buf(&self, buf: BytesMut) -> sio::Result<()>;
+    fn release_write_buf(&self, buf: BytesVec) -> sio::Result<()>;
 
     /// Check readiness for read operations
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus>;

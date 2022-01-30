@@ -5,7 +5,7 @@ use nanorand::{Rng, WyRand};
 
 use super::proto::{CloseCode, CloseReason, OpCode};
 use super::{error::ProtocolError, mask::apply_mask};
-use crate::util::{Buf, BufMut, BytesMut};
+use crate::util::{Buf, BufMut, Bytes, BytesMut};
 
 /// WebSocket frame parser.
 #[derive(Debug)]
@@ -92,7 +92,7 @@ impl Parser {
         src: &mut BytesMut,
         server: bool,
         max_size: usize,
-    ) -> Result<Option<(bool, OpCode, Option<BytesMut>)>, ProtocolError> {
+    ) -> Result<Option<(bool, OpCode, Option<Bytes>)>, ProtocolError> {
         // try to parse ws frame metadata
         let (idx, finished, opcode, length, mask) =
             match Parser::parse_metadata(src, server, max_size)? {
@@ -113,8 +113,6 @@ impl Parser {
             return Ok(Some((finished, opcode, None)));
         }
 
-        let mut data = src.split_to(length);
-
         // control frames must have length <= 125
         match opcode {
             OpCode::Ping | OpCode::Pong if length > 125 => {
@@ -129,10 +127,14 @@ impl Parser {
 
         // unmask
         if let Some(mask) = mask {
-            apply_mask(&mut data, mask);
+            apply_mask(&mut src[..length], mask);
         }
 
-        Ok(Some((finished, opcode, Some(data))))
+        Ok(Some((
+            finished,
+            opcode,
+            Some(src.split_to(length).freeze()),
+        )))
     }
 
     /// Parse the payload of a close frame.
@@ -225,21 +227,19 @@ mod tests {
         payload: Bytes,
     }
 
-    fn is_none(
-        frm: &Result<Option<(bool, OpCode, Option<BytesMut>)>, ProtocolError>,
-    ) -> bool {
+    fn is_none(frm: &Result<Option<(bool, OpCode, Option<Bytes>)>, ProtocolError>) -> bool {
         match *frm {
             Ok(None) => true,
             _ => false,
         }
     }
 
-    fn extract(frm: Result<Option<(bool, OpCode, Option<BytesMut>)>, ProtocolError>) -> F {
+    fn extract(frm: Result<Option<(bool, OpCode, Option<Bytes>)>, ProtocolError>) -> F {
         match frm {
             Ok(Some((finished, opcode, payload))) => F {
                 finished,
                 opcode,
-                payload: payload.map(|b| b.freeze()).unwrap_or_else(Bytes::new),
+                payload: payload.unwrap_or_else(Bytes::new),
             },
             _ => unreachable!("error"),
         }

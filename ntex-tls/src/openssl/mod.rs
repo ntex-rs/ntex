@@ -5,7 +5,7 @@ use std::{
     any, cmp, error::Error, future::Future, io, pin::Pin, task::Context, task::Poll,
 };
 
-use ntex_bytes::{BufMut, BytesMut, PoolRef};
+use ntex_bytes::{BufMut, BytesVec, PoolRef};
 use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_openssl::ssl::{self, SslStream};
@@ -29,13 +29,13 @@ pub struct SslFilter<F = Base> {
     inner: RefCell<SslStream<IoInner<F>>>,
     pool: PoolRef,
     handshake: Cell<bool>,
-    read_buf: Cell<Option<BytesMut>>,
+    read_buf: Cell<Option<BytesVec>>,
 }
 
 struct IoInner<F> {
     inner: F,
     pool: PoolRef,
-    write_buf: Option<BytesMut>,
+    write_buf: Option<BytesVec>,
 }
 
 impl<F: Filter> io::Read for IoInner<F> {
@@ -61,7 +61,7 @@ impl<F: Filter> io::Write for IoInner<F> {
             buf.reserve(src.len());
             buf
         } else {
-            BytesMut::with_capacity_in(src.len(), self.pool)
+            BytesVec::with_capacity_in(src.len(), self.pool)
         };
         buf.extend_from_slice(src);
         self.inner.release_write_buf(buf)?;
@@ -143,17 +143,17 @@ impl<F: Filter> Filter for SslFilter<F> {
     }
 
     #[inline]
-    fn get_read_buf(&self) -> Option<BytesMut> {
+    fn get_read_buf(&self) -> Option<BytesVec> {
         self.read_buf.take()
     }
 
     #[inline]
-    fn get_write_buf(&self) -> Option<BytesMut> {
+    fn get_write_buf(&self) -> Option<BytesVec> {
         self.inner.borrow_mut().get_mut().write_buf.take()
     }
 
     #[inline]
-    fn release_read_buf(&self, buf: BytesMut) {
+    fn release_read_buf(&self, buf: BytesVec) {
         self.read_buf.set(Some(buf));
     }
 
@@ -218,7 +218,7 @@ impl<F: Filter> Filter for SslFilter<F> {
         }
     }
 
-    fn release_write_buf(&self, mut buf: BytesMut) -> Result<(), io::Error> {
+    fn release_write_buf(&self, mut buf: BytesVec) -> Result<(), io::Error> {
         loop {
             if buf.is_empty() {
                 return Ok(());

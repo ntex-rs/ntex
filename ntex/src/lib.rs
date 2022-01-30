@@ -105,6 +105,8 @@ pub mod tls {
 }
 
 pub mod util {
-    pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut, Pool, PoolId, PoolRef};
+    pub use ntex_bytes::{
+        Buf, BufMut, ByteString, Bytes, BytesMut, BytesVec, Pool, PoolId, PoolRef,
+    };
     pub use ntex_util::{future::*, ready, services::*, HashMap, HashSet};
 }

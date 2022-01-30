@@ -3,7 +3,7 @@ use std::{any, cell::Cell, cmp, io, task::Context, task::Poll};
 
 use crate::codec::{Decoder, Encoder};
 use crate::io::{Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
-use crate::util::{BufMut, BytesMut, PoolRef, Ready};
+use crate::util::{BufMut, BytesVec, PoolRef, Ready};
 
 use super::{CloseCode, CloseReason, Codec, Frame, Item, Message};
 
@@ -21,7 +21,7 @@ pub struct WsTransport<F = Base> {
     pool: PoolRef,
     codec: Codec,
     flags: Cell<Flags>,
-    read_buf: Cell<Option<BytesMut>>,
+    read_buf: Cell<Option<BytesVec>>,
 }
 
 impl<F: Filter> WsTransport<F> {
@@ -67,7 +67,7 @@ impl<F: Filter> Filter for WsTransport<F> {
             } else {
                 CloseCode::Normal
             };
-            let _ = self.codec.encode(
+            let _ = self.codec.encode_vec(
                 Message::Close(Some(CloseReason {
                     code,
                     description: None,
@@ -91,17 +91,17 @@ impl<F: Filter> Filter for WsTransport<F> {
     }
 
     #[inline]
-    fn get_read_buf(&self) -> Option<BytesMut> {
+    fn get_read_buf(&self) -> Option<BytesVec> {
         self.read_buf.take()
     }
 
     #[inline]
-    fn get_write_buf(&self) -> Option<BytesMut> {
+    fn get_write_buf(&self) -> Option<BytesVec> {
         None
     }
 
     #[inline]
-    fn release_read_buf(&self, buf: BytesMut) {
+    fn release_read_buf(&self, buf: BytesVec) {
         self.read_buf.set(Some(buf));
     }
 
@@ -136,11 +136,12 @@ impl<F: Filter> Filter for WsTransport<F> {
                 dst.reserve(hw - remaining);
             }
 
-            let frame = if let Some(frame) = self.codec.decode(&mut src).map_err(|e| {
-                log::trace!("Failed to decode ws codec frames: {:?}", e);
-                self.insert_flags(Flags::PROTO_ERR);
-                io::Error::new(io::ErrorKind::Other, e)
-            })? {
+            let frame = if let Some(frame) =
+                self.codec.decode_vec(&mut src).map_err(|e| {
+                    log::trace!("Failed to decode ws codec frames: {:?}", e);
+                    self.insert_flags(Flags::PROTO_ERR);
+                    io::Error::new(io::ErrorKind::Other, e)
+                })? {
                 frame
             } else {
                 break;
@@ -182,7 +183,7 @@ impl<F: Filter> Filter for WsTransport<F> {
                         .inner
                         .get_write_buf()
                         .unwrap_or_else(|| self.pool.get_write_buf());
-                    let _ = self.codec.encode(Message::Pong(msg), &mut b);
+                    let _ = self.codec.encode_vec(Message::Pong(msg), &mut b);
                     self.release_write_buf(b)?;
                 }
                 Frame::Pong(_) => (),
@@ -205,7 +206,7 @@ impl<F: Filter> Filter for WsTransport<F> {
         Ok((dlen, nbytes))
     }
 
-    fn release_write_buf(&self, src: BytesMut) -> Result<(), io::Error> {
+    fn release_write_buf(&self, src: BytesVec) -> Result<(), io::Error> {
         let mut buf = if let Some(buf) = self.inner.get_write_buf() {
             buf
         } else {
@@ -220,7 +221,9 @@ impl<F: Filter> Filter for WsTransport<F> {
         }
 
         // Encoder ws::Codec do not fail
-        let _ = self.codec.encode(Message::Binary(src.freeze()), &mut buf);
+        let _ = self
+            .codec
+            .encode_vec(Message::Binary(src.freeze()), &mut buf);
         self.inner.release_write_buf(buf)
     }
 }

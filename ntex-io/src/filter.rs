@@ -1,6 +1,6 @@
 use std::{any, io, task::Context, task::Poll};
 
-use ntex_bytes::BytesMut;
+use ntex_bytes::BytesVec;
 
 use super::io::Flags;
 use super::{Filter, IoRef, ReadStatus, WriteStatus};
@@ -68,17 +68,17 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn get_read_buf(&self) -> Option<BytesMut> {
+    fn get_read_buf(&self) -> Option<BytesVec> {
         self.0 .0.read_buf.take()
     }
 
     #[inline]
-    fn get_write_buf(&self) -> Option<BytesMut> {
+    fn get_write_buf(&self) -> Option<BytesVec> {
         self.0 .0.write_buf.take()
     }
 
     #[inline]
-    fn release_read_buf(&self, buf: BytesMut) {
+    fn release_read_buf(&self, buf: BytesVec) {
         self.0 .0.read_buf.set(Some(buf));
     }
 
@@ -91,7 +91,7 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error> {
+    fn release_write_buf(&self, buf: BytesVec) -> Result<(), io::Error> {
         let pool = self.0.memory_pool();
         if buf.is_empty() {
             pool.release_write_buf(buf);
@@ -133,21 +133,21 @@ impl Filter for NullFilter {
         Poll::Ready(WriteStatus::Terminate)
     }
 
-    fn get_read_buf(&self) -> Option<BytesMut> {
+    fn get_read_buf(&self) -> Option<BytesVec> {
         None
     }
 
-    fn get_write_buf(&self) -> Option<BytesMut> {
+    fn get_write_buf(&self) -> Option<BytesVec> {
         None
     }
 
-    fn release_read_buf(&self, _: BytesMut) {}
+    fn release_read_buf(&self, _: BytesVec) {}
 
     fn process_read_buf(&self, _: &IoRef, _: usize) -> io::Result<(usize, usize)> {
         Ok((0, 0))
     }
 
-    fn release_write_buf(&self, _: BytesMut) -> Result<(), io::Error> {
+    fn release_write_buf(&self, _: BytesVec) -> Result<(), io::Error> {
         Ok(())
     }
 }

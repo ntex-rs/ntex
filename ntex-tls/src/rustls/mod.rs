@@ -1,9 +1,9 @@
 #![allow(clippy::type_complexity)]
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::sync::Arc;
 use std::{any, cmp, future::Future, io, pin::Pin, task::Context, task::Poll};
+use std::{cell::Cell, sync::Arc};
 
-use ntex_bytes::{BytesMut, PoolRef};
+use ntex_bytes::{BytesVec, PoolRef};
 use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::time::Millis;
 use tls_rust::{Certificate, ClientConfig, ServerConfig, ServerName};
@@ -93,7 +93,7 @@ impl<F: Filter> Filter for TlsFilter<F> {
     }
 
     #[inline]
-    fn get_read_buf(&self) -> Option<BytesMut> {
+    fn get_read_buf(&self) -> Option<BytesVec> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.get_read_buf(),
             InnerTlsFilter::Client(ref f) => f.get_read_buf(),
@@ -101,7 +101,7 @@ impl<F: Filter> Filter for TlsFilter<F> {
     }
 
     #[inline]
-    fn get_write_buf(&self) -> Option<BytesMut> {
+    fn get_write_buf(&self) -> Option<BytesVec> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.get_write_buf(),
             InnerTlsFilter::Client(ref f) => f.get_write_buf(),
@@ -109,7 +109,7 @@ impl<F: Filter> Filter for TlsFilter<F> {
     }
 
     #[inline]
-    fn release_read_buf(&self, buf: BytesMut) {
+    fn release_read_buf(&self, buf: BytesVec) {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.release_read_buf(buf),
             InnerTlsFilter::Client(ref f) => f.release_read_buf(buf),
@@ -125,7 +125,7 @@ impl<F: Filter> Filter for TlsFilter<F> {
     }
 
     #[inline]
-    fn release_write_buf(&self, src: BytesMut) -> Result<(), io::Error> {
+    fn release_write_buf(&self, src: BytesVec) -> Result<(), io::Error> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.release_write_buf(src),
             InnerTlsFilter::Client(ref f) => f.release_write_buf(src),
@@ -243,11 +243,12 @@ impl<F: Filter> FilterFactory<F> for TlsConnectorConfigured {
 pub(crate) struct IoInner<F> {
     filter: F,
     pool: PoolRef,
-    read_buf: Option<BytesMut>,
-    write_buf: Option<BytesMut>,
+    read_buf: Cell<Option<BytesVec>>,
+    write_buf: Cell<Option<BytesVec>>,
+    handshake: Cell<bool>,
 }
 
-pub(crate) struct Wrapper<'a, F>(&'a mut IoInner<F>);
+pub(crate) struct Wrapper<'a, F>(&'a IoInner<F>);
 
 impl<'a, F: Filter> io::Read for Wrapper<'a, F> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
@@ -273,7 +274,7 @@ impl<'a, F: Filter> io::Write for Wrapper<'a, F> {
             buf.reserve(src.len());
             buf
         } else {
-            BytesMut::with_capacity_in(src.len(), self.0.pool)
+            BytesVec::with_capacity_in(src.len(), self.0.pool)
         };
         buf.extend_from_slice(src);
         self.0.filter.release_write_buf(buf)?;

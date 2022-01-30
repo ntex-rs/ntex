@@ -1,12 +1,11 @@
-use std::io;
-use std::sync::Arc;
+use std::{io, sync::Arc};
 
 use ntex::codec::BytesCodec;
 use ntex::connect::Connect;
 use ntex::io::{types::PeerAddr, Io};
 use ntex::server::test_server;
 use ntex::service::{fn_service, pipeline_factory, Service, ServiceFactory};
-use ntex::util::Bytes;
+use ntex::{time, util::Bytes};
 
 #[cfg(feature = "openssl")]
 fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
@@ -90,6 +89,7 @@ async fn test_openssl_string() {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
+            time::sleep(time::Millis(100)).await;
             Ok::<_, Box<dyn std::error::Error>>(())
         }))
     });
@@ -144,7 +144,6 @@ async fn test_openssl_read_before_error() {
 
 #[cfg(feature = "rustls")]
 #[ntex::test]
-#[ignore]
 async fn test_rustls_string() {
     use ntex::server::rustls;
     use ntex_tls::rustls::PeerCert;

@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{any, cell::RefCell, cmp, future::Future, io, mem, pin::Pin, rc::Rc, rc::Weak};
 
-use ntex_bytes::{Buf, BufMut, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{
     types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, ReadStatus, WriteContext,
     WriteStatus,
@@ -733,7 +733,7 @@ mod unixstream {
 pub fn poll_read_buf<T: AsyncRead>(
     io: Pin<&mut T>,
     cx: &mut Context<'_>,
-    buf: &mut BytesMut,
+    buf: &mut BytesVec,
 ) -> Poll<io::Result<usize>> {
     if !buf.has_remaining_mut() {
         return Poll::Ready(Ok(0));

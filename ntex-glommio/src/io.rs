@@ -4,7 +4,7 @@ use std::{any, future::Future, io, pin::Pin};
 use futures_lite::future::FutureExt;
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use glommio::Task;
-use ntex_bytes::{Buf, BufMut, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{
     types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
 };
@@ -371,7 +371,7 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
 pub fn poll_read_buf<T: AsyncRead>(
     io: Pin<&mut T>,
     cx: &mut Context<'_>,
-    buf: &mut BytesMut,
+    buf: &mut BytesVec,
 ) -> Poll<io::Result<usize>> {
     if !buf.has_remaining_mut() {
         return Poll::Ready(Ok(0));

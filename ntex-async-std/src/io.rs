@@ -1,7 +1,7 @@
 use std::{any, future::Future, io, pin::Pin, task::Context, task::Poll};
 
 use async_std::io::{Read, Write};
-use ntex_bytes::{Buf, BufMut, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{
     types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
 };
@@ -356,7 +356,7 @@ pub(super) fn flush_io<T: Read + Write + Unpin>(
 pub fn poll_read_buf<T: Read>(
     io: Pin<&mut T>,
     cx: &mut Context<'_>,
-    buf: &mut BytesMut,
+    buf: &mut BytesVec,
 ) -> Poll<io::Result<usize>> {
     if !buf.has_remaining_mut() {
         return Poll::Ready(Ok(0));

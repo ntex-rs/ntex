@@ -610,11 +610,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_bytes_mut() {
-        let mut b = BytesMut::from("test");
-        assert_eq!(Body::from(b.clone()).size(), BodySize::Sized(4));
-        assert_eq!(Body::from(b.clone()).get_ref(), b"test");
-
+        let mut b = Body::from(BytesMut::from("test"));
         assert_eq!(b.size(), BodySize::Sized(4));
+        assert_eq!(b.get_ref(), b"test");
         assert_eq!(
             poll_fn(|cx| b.poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.14] - 2022-01-30
+
+* Update ntex-io to 0.1.7
+
 ## [0.5.13] - 2022-01-28
 
 * http: Refactor client pool support for http/2 connections

@@ -508,15 +508,7 @@ impl Bytes {
 
     /// Creates `Bytes` instance from slice, by copying it.
     pub fn copy_from_slice(data: &[u8]) -> Self {
-        if data.len() <= INLINE_CAP {
-            Bytes {
-                inner: Inner::from_slice_inline(data),
-            }
-        } else {
-            Bytes {
-                inner: BytesMut::copy_from_slice_in(data, PoolId::DEFAULT.pool_ref()).inner,
-            }
-        }
+        Self::copy_from_slice_in(data, PoolId::DEFAULT)
     }
 
     /// Creates `Bytes` instance from slice, by copying it.
@@ -530,7 +522,7 @@ impl Bytes {
             }
         } else {
             Bytes {
-                inner: BytesMut::copy_from_slice_in(data, pool).inner,
+                inner: Inner::from_slice(data.len(), data, pool.into()),
             }
         }
     }
@@ -578,19 +570,18 @@ impl Bytes {
         assert!(end <= len);
 
         if end - begin <= INLINE_CAP {
-            return Bytes {
+            Bytes {
                 inner: Inner::from_slice_inline(&self[begin..end]),
-            };
+            }
+        } else {
+            let mut ret = self.clone();
+
+            unsafe {
+                ret.inner.set_end(end);
+                ret.inner.set_start(begin);
+            }
+            ret
         }
-
-        let mut ret = self.clone();
-
-        unsafe {
-            ret.inner.set_end(end);
-            ret.inner.set_start(begin);
-        }
-
-        ret
     }
 
     /// Returns a slice of self that is equivalent to the given `subset`.
@@ -664,11 +655,11 @@ impl Bytes {
         }
 
         if at == 0 {
-            return mem::replace(self, Bytes::new());
-        }
-
-        Bytes {
-            inner: self.inner.split_off(at, true),
+            mem::replace(self, Bytes::new())
+        } else {
+            Bytes {
+                inner: self.inner.split_off(at, true),
+            }
         }
     }
 
@@ -703,11 +694,11 @@ impl Bytes {
         }
 
         if at == 0 {
-            return Bytes::new();
-        }
-
-        Bytes {
-            inner: self.inner.split_to(at, true),
+            Bytes::new()
+        } else {
+            Bytes {
+                inner: self.inner.split_to(at, true),
+            }
         }
     }
 
@@ -764,7 +755,7 @@ impl Bytes {
                 }
             } else {
                 Bytes {
-                    inner: BytesMut::copy_from_slice_in(self, self.inner.pool()).inner,
+                    inner: Inner::from_slice(self.len(), self, self.inner.pool()),
                 }
             };
         }
@@ -1148,13 +1139,6 @@ impl BytesMut {
     {
         BytesMut {
             inner: Inner::with_capacity(capacity, pool.into()),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn with_capacity_in_priv(capacity: usize, pool: PoolRef) -> BytesMut {
-        BytesMut {
-            inner: Inner::with_capacity(capacity, pool),
         }
     }
 
@@ -1949,13 +1933,6 @@ impl BytesVec {
         }
     }
 
-    #[inline]
-    pub(crate) fn with_capacity_in_priv(capacity: usize, pool: PoolRef) -> BytesVec {
-        BytesVec {
-            inner: InnerVec::with_capacity(capacity, pool),
-        }
-    }
-
     /// Creates a new `BytesVec` from slice, by copying it.
     pub fn copy_from_slice(src: &[u8]) -> Self {
         Self::copy_from_slice_in(src, PoolId::DEFAULT)
@@ -2096,8 +2073,7 @@ impl BytesVec {
     ///
     /// assert_eq!(other, b"hello world"[..]);
     /// ```
-    pub fn split(&mut self) -> Bytes {
-        // let len = self.len();
+    pub fn split(&mut self) -> BytesMut {
         self.split_to(self.len())
     }
 
@@ -2126,10 +2102,10 @@ impl BytesVec {
     /// # Panics
     ///
     /// Panics if `at > len`.
-    pub fn split_to(&mut self, at: usize) -> Bytes {
+    pub fn split_to(&mut self, at: usize) -> BytesMut {
         assert!(at <= self.len());
 
-        Bytes {
+        BytesMut {
             inner: self.inner.split_to(at, false),
         }
     }
@@ -2779,10 +2755,10 @@ impl InnerVec {
     }
 
     fn split_to(&mut self, at: usize, create_inline: bool) -> Inner {
-        let other = unsafe {
+        unsafe {
             let ptr = self.as_ptr();
 
-            if create_inline && at <= INLINE_CAP {
+            let other = if create_inline && at <= INLINE_CAP {
                 Inner::from_ptr_inline(ptr, at)
             } else {
                 let inner = self.as_inner();
@@ -2799,13 +2775,11 @@ impl InnerVec {
                         (self.0.as_ptr() as usize ^ KIND_VEC) as *mut Shared,
                     ),
                 }
-            }
-        };
-        unsafe {
+            };
             self.set_start(at as u32);
-        }
 
-        other
+            other
+        }
     }
 
     fn truncate(&mut self, len: usize) {
@@ -2862,11 +2836,13 @@ impl InnerVec {
             // try to reclaim the buffer. This is possible if the current
             // handle is the only outstanding handle pointing to the buffer.
             if inner.is_unique() && vec_cap >= new_cap {
+                let offset = inner.offset;
                 inner.offset = SHARED_VEC_SIZE as u32;
 
                 // The capacity is sufficient, reclaim the buffer
-                let ptr = (self.0.as_ptr() as *mut u8).add(SHARED_VEC_SIZE);
-                ptr::copy(self.as_ptr(), ptr, len);
+                let src = (self.0.as_ptr() as *mut u8).add(offset as usize);
+                let dst = (self.0.as_ptr() as *mut u8).add(SHARED_VEC_SIZE);
+                ptr::copy(src, dst, len);
             } else {
                 // Create a new vector storage
                 let pool = inner.pool;

@@ -1,6 +1,6 @@
 use std::{any, fmt, hash, io};
 
-use ntex_bytes::{BufMut, BytesMut, PoolRef};
+use ntex_bytes::{BufMut, BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
 use super::io::{Flags, IoRef, OnDisconnect};
@@ -106,7 +106,7 @@ impl IoRef {
                 }
 
                 // encode item and wake write task
-                codec.encode(item, buf)
+                codec.encode_vec(item, buf)
             })
             .map_or_else(
                 |err| {
@@ -130,7 +130,9 @@ impl IoRef {
         U: Decoder,
     {
         self.0.with_read_buf(false, |buf| {
-            buf.as_mut().map(|b| codec.decode(b)).unwrap_or(Ok(None))
+            buf.as_mut()
+                .map(|b| codec.decode_vec(b))
+                .unwrap_or(Ok(None))
         })
     }
 
@@ -152,7 +154,7 @@ impl IoRef {
     /// Get mut access to write buffer
     pub fn with_write_buf<F, R>(&self, f: F) -> Result<R, io::Error>
     where
-        F: FnOnce(&mut BytesMut) -> R,
+        F: FnOnce(&mut BytesVec) -> R,
     {
         let filter = self.0.filter.get();
         let mut buf = filter
@@ -172,7 +174,7 @@ impl IoRef {
     /// Get mut access to read buffer
     pub fn with_read_buf<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesMut) -> R,
+        F: FnOnce(&mut BytesVec) -> R,
     {
         self.0.with_read_buf(true, |buf| {
             // set buf
@@ -302,7 +304,7 @@ mod tests {
         assert_eq!(io.read_ready().await.unwrap(), Some(()));
         assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
 
-        let item = io.with_read_buf(|buffer| buffer.clone());
+        let item = io.with_read_buf(|buffer| buffer.split());
         assert_eq!(item, Bytes::from_static(BIN));
 
         client.write(TEXT);
@@ -367,11 +369,11 @@ mod tests {
             self.inner.poll_read_ready(cx)
         }
 
-        fn get_read_buf(&self) -> Option<BytesMut> {
+        fn get_read_buf(&self) -> Option<BytesVec> {
             self.inner.get_read_buf()
         }
 
-        fn release_read_buf(&self, buf: BytesMut) {
+        fn release_read_buf(&self, buf: BytesVec) {
             self.inner.release_read_buf(buf)
         }
 
@@ -386,7 +388,7 @@ mod tests {
             self.inner.poll_write_ready(cx)
         }
 
-        fn get_write_buf(&self) -> Option<BytesMut> {
+        fn get_write_buf(&self) -> Option<BytesVec> {
             if let Some(buf) = self.inner.get_write_buf() {
                 self.out_bytes.set(self.out_bytes.get() - buf.len());
                 Some(buf)
@@ -395,7 +397,7 @@ mod tests {
             }
         }
 
-        fn release_write_buf(&self, buf: BytesMut) -> Result<(), io::Error> {
+        fn release_write_buf(&self, buf: BytesVec) -> Result<(), io::Error> {
             self.write_order.borrow_mut().push(self.idx);
             self.out_bytes.set(self.out_bytes.get() + buf.len());
             self.inner.release_write_buf(buf)

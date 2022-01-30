@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::{any, cmp, fmt, future::Future, io, mem, net, pin::Pin, rc::Rc};
 
-use ntex_bytes::{Buf, BufMut, BytesMut};
+use ntex_bytes::{Buf, BufMut, Bytes, BytesVec};
 use ntex_util::future::poll_fn;
 use ntex_util::time::{sleep, Millis, Sleep};
 
@@ -60,7 +60,7 @@ struct State {
 
 #[derive(Default, Debug)]
 struct Channel {
-    buf: BytesMut,
+    buf: BytesVec,
     buf_cap: usize,
     flags: IoTestFlags,
     waker: AtomicWaker,
@@ -159,7 +159,7 @@ impl IoTest {
     /// Access read buffer.
     pub fn local_buffer<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesMut) -> R,
+        F: FnOnce(&mut BytesVec) -> R,
     {
         let guard = self.local.lock().unwrap();
         let mut ch = guard.borrow_mut();
@@ -169,7 +169,7 @@ impl IoTest {
     /// Access remote buffer.
     pub fn remote_buffer<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesMut) -> R,
+        F: FnOnce(&mut BytesVec) -> R,
     {
         let guard = self.remote.lock().unwrap();
         let mut ch = guard.borrow_mut();
@@ -205,12 +205,12 @@ impl IoTest {
     }
 
     /// Read any available data
-    pub fn read_any(&self) -> BytesMut {
-        self.local.lock().unwrap().borrow_mut().buf.split()
+    pub fn read_any(&self) -> Bytes {
+        self.local.lock().unwrap().borrow_mut().buf.split().freeze()
     }
 
     /// Read data, if data is not available wait for it
-    pub async fn read(&self) -> Result<BytesMut, io::Error> {
+    pub async fn read(&self) -> Result<Bytes, io::Error> {
         if self.local.lock().unwrap().borrow().buf.is_empty() {
             poll_fn(|cx| {
                 let guard = self.local.lock().unwrap();
@@ -237,13 +237,13 @@ impl IoTest {
             })
             .await;
         }
-        Ok(self.local.lock().unwrap().borrow_mut().buf.split())
+        Ok(self.local.lock().unwrap().borrow_mut().buf.split().freeze())
     }
 
     pub fn poll_read_buf(
         &self,
         cx: &mut Context<'_>,
-        buf: &mut BytesMut,
+        buf: &mut BytesVec,
     ) -> Poll<io::Result<usize>> {
         let guard = self.local.lock().unwrap();
         let mut ch = guard.borrow_mut();
@@ -551,7 +551,7 @@ impl Future for WriteTask {
                             // read until 0 or err
                             let io = &this.io;
                             loop {
-                                let mut buf = BytesMut::new();
+                                let mut buf = BytesVec::new();
                                 match io.poll_read_buf(cx, &mut buf) {
                                     Poll::Ready(Err(e)) => {
                                         this.state.close(Some(e));

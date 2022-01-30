@@ -50,9 +50,9 @@ struct MemoryPool {
 
     // io read/write cache and params
     read_wm: Cell<BufParams>,
-    read_cache: RefCell<Vec<BytesMut>>,
+    read_cache: RefCell<Vec<BytesVec>>,
     write_wm: Cell<BufParams>,
-    write_cache: RefCell<Vec<BytesMut>>,
+    write_cache: RefCell<Vec<BytesVec>>,
 
     spawn: RefCell<Option<Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)>>>,
 }
@@ -198,13 +198,13 @@ impl PoolRef {
     #[inline]
     /// Creates a new `BytesMut` with the specified capacity.
     pub fn buf_with_capacity(self, cap: usize) -> BytesMut {
-        BytesMut::with_capacity_in_priv(cap, self)
+        BytesMut::with_capacity_in(cap, self)
     }
 
     #[inline]
     /// Creates a new `BytesVec` with the specified capacity.
     pub fn vec_with_capacity(self, cap: usize) -> BytesVec {
-        BytesVec::with_capacity_in_priv(cap, self)
+        BytesVec::with_capacity_in(cap, self)
     }
 
     #[doc(hidden)]
@@ -285,18 +285,18 @@ impl PoolRef {
 
     #[doc(hidden)]
     #[inline]
-    pub fn get_read_buf(self) -> BytesMut {
+    pub fn get_read_buf(self) -> BytesVec {
         if let Some(buf) = self.0.read_cache.borrow_mut().pop() {
             buf
         } else {
-            BytesMut::with_capacity_in_priv(self.0.read_wm.get().high as usize, self)
+            BytesVec::with_capacity_in(self.0.read_wm.get().high as usize, self)
         }
     }
 
     #[doc(hidden)]
     #[inline]
     /// Release read buffer, buf must be allocated from this pool
-    pub fn release_read_buf(self, mut buf: BytesMut) {
+    pub fn release_read_buf(self, mut buf: BytesVec) {
         let cap = buf.capacity();
         let (hw, lw) = self.0.read_wm.get().unpack();
         if cap > lw && cap <= hw {
@@ -310,18 +310,18 @@ impl PoolRef {
 
     #[doc(hidden)]
     #[inline]
-    pub fn get_write_buf(self) -> BytesMut {
+    pub fn get_write_buf(self) -> BytesVec {
         if let Some(buf) = self.0.write_cache.borrow_mut().pop() {
             buf
         } else {
-            BytesMut::with_capacity_in_priv(self.0.write_wm.get().high as usize, self)
+            BytesVec::with_capacity_in(self.0.write_wm.get().high as usize, self)
         }
     }
 
     #[doc(hidden)]
     #[inline]
     /// Release write buffer, buf must be allocated from this pool
-    pub fn release_write_buf(self, mut buf: BytesMut) {
+    pub fn release_write_buf(self, mut buf: BytesVec) {
         let cap = buf.capacity();
         let (hw, lw) = self.0.write_wm.get().unpack();
         if cap > lw && cap <= hw {

@@ -844,14 +844,14 @@ mod tests {
 
         client.write("GET /test1 HTTP/1.1\r\n\r\n");
 
-        let mut buf = client.read().await.unwrap();
+        let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
         client.write("GET /test2 HTTP/1.1\r\n\r\n");
         client.write("GET /test3 HTTP/1.1\r\n\r\n");
 
-        let mut buf = client.read().await.unwrap();
+        let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(decoder.decode(&mut buf).unwrap().is_none());
@@ -877,13 +877,13 @@ mod tests {
         sleep(Millis(50)).await;
         client.write("xxxxx");
 
-        let mut buf = client.read().await.unwrap();
+        let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
         client.write("GET /test2 HTTP/1.1\r\n\r\n");
 
-        let mut buf = client.read().await.unwrap();
+        let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(decoder.decode(&mut buf).unwrap().is_none());
         assert!(!client.is_server_dropped());
@@ -904,7 +904,7 @@ mod tests {
 
         client.write("GET /test HTTP/1.1\r\n\r\n");
 
-        let mut buf = client.read().await.unwrap();
+        let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(!client.is_server_dropped());
 
@@ -913,10 +913,10 @@ mod tests {
         sleep(Millis(50)).await;
         client.write("GET /test HTTP/1.1\r\n\r\n");
 
-        let mut buf = client.read().await.unwrap();
+        let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
 
-        let mut buf = client.read().await.unwrap();
+        let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(decoder.decode(&mut buf).unwrap().is_none());
         assert!(!client.is_server_dropped());
@@ -984,13 +984,12 @@ mod tests {
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
-        // required because io shutdown is async oper
-        let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await;
-        sleep(Millis(550)).await;
-        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        crate::util::poll_fn(|cx| Pin::new(&mut h1).poll(cx))
+            .await
+            .unwrap();
         assert!(h1.inner.io.is_closed());
 
-        let mut buf = client.read().await.unwrap();
+        let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert_eq!(load(&mut decoder, &mut buf).status, StatusCode::BAD_REQUEST);
     }
 
@@ -1129,7 +1128,7 @@ mod tests {
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
 
         let mut decoder = ClientCodec::default();
-        let mut buf = client.read().await.unwrap();
+        let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
 
@@ -1157,7 +1156,7 @@ mod tests {
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         sleep(Millis(50)).await;
         assert!(h1.inner.io.is_closed());
-        let buf = client.local_buffer(|buf| buf.split().freeze());
+        let buf = client.local_buffer(|buf| buf.split());
         assert_eq!(&buf[..28], b"HTTP/1.1 500 Internal Server");
         assert_eq!(&buf[buf.len() - 5..], b"error");
     }
