@@ -1,8 +1,8 @@
 # Changes
 
-## [0.1.7] - 2022-01-xx
+## [0.1.7] - 2022-01-30
 
-* Add BytesVec type
+* Use BytesVec type for buffers and Filter trait
 
 ## [0.1.6] - 2022-01-27
 
