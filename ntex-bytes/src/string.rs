@@ -1,7 +1,7 @@
 //! A UTF-8 encoded read-only string using Bytes as storage.
 use std::{borrow, convert::TryFrom, fmt, hash, ops, slice, str};
 
-use crate::{Bytes, BytesMut};
+use crate::{Bytes, BytesMut, BytesVec};
 
 /// An immutable UTF-8 encoded string with [`Bytes`] as a storage.
 #[derive(Clone, Default, Eq, PartialOrd, Ord)]
@@ -255,7 +255,20 @@ impl TryFrom<BytesMut> for ByteString {
     type Error = ();
 
     #[inline]
-    fn try_from(value: crate::BytesMut) -> Result<Self, Self::Error> {
+    fn try_from(value: BytesMut) -> Result<Self, Self::Error> {
+        if utf8::is_valid(&value) {
+            Ok(ByteString(value.freeze()))
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl TryFrom<BytesVec> for ByteString {
+    type Error = ();
+
+    #[inline]
+    fn try_from(value: BytesVec) -> Result<Self, Self::Error> {
         if utf8::is_valid(&value) {
             Ok(ByteString(value.freeze()))
         } else {
@@ -326,11 +339,27 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_partial_eq() {
-        let s: ByteString = ByteString::from_static("test");
+    fn test_basics() {
+        let s = ByteString::from_static("test");
         assert_eq!(s, "test");
         assert_eq!(s, *"test");
         assert_eq!(s, "test".to_owned());
+
+        assert_eq!(format!("{}", s), "test");
+        assert_eq!(format!("{:?}", s), "\"test\"");
+    }
+
+    #[test]
+    fn test_split() {
+        let mut s = ByteString::from_static("helloworld");
+        let s1 = s.split_off(5);
+        assert_eq!(s, "hello");
+        assert_eq!(s1, "world");
+
+        let mut s = ByteString::from_static("helloworld");
+        let s1 = s.split_to(5);
+        assert_eq!(s, "world");
+        assert_eq!(s1, "hello");
     }
 
     #[test]
@@ -369,28 +398,21 @@ mod test {
     }
 
     #[test]
-    fn test_try_from_slice() {
+    fn test_try_from() {
+        let _ = ByteString::try_from(&b"nice bytes"[..]).unwrap();
+        let _ = ByteString::try_from(b"nice bytes".to_vec()).unwrap();
         let _ = ByteString::try_from(Bytes::from_static(b"nice bytes")).unwrap();
+        let _ = ByteString::try_from(BytesMut::from(&b"nice bytes"[..])).unwrap();
+        let _ =
+            ByteString::try_from(BytesVec::copy_from_slice(&b"nice bytes"[..])).unwrap();
     }
 
-    #[test]
-    fn test_try_from_bytes() {
-        let _ = ByteString::try_from(Bytes::from_static(b"nice bytes")).unwrap();
-    }
-
-    #[test]
-    fn test_try_from_bytes_mut() {
-        let _ = ByteString::try_from(crate::BytesMut::from(&b"nice bytes"[..])).unwrap();
-    }
-
-    #[cfg(feature = "serde")]
     #[test]
     fn test_serialize() {
         let s: ByteString = serde_json::from_str(r#""nice bytes""#).unwrap();
         assert_eq!(s, "nice bytes");
     }
 
-    #[cfg(feature = "serde")]
     #[test]
     fn test_deserialize() {
         let s = serde_json::to_string(&ByteString::from_static("nice bytes")).unwrap();

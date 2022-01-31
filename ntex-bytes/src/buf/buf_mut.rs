@@ -968,3 +968,132 @@ impl BufMut for &mut [u8] {
 // The existence of this function makes the compiler catch if the BufMut
 // trait is "object-safe" or not.
 fn _assert_trait_object(_b: &dyn BufMut) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BytesMut, BytesVec};
+
+    #[test]
+    fn buf_mut_tests() {
+        let mut buf = vec![];
+        buf.put_u8(0x01);
+        assert_eq!(buf, b"\x01");
+
+        let mut buf = BytesMut::new();
+        buf.put_u8(0x01);
+        assert_eq!(buf, b"\x01"[..]);
+
+        let mut buf = BytesVec::new();
+        buf.put_u8(0x01);
+        assert_eq!(buf, b"\x01"[..]);
+
+        let mut buf = vec![];
+        buf.put_i8(0x01);
+        assert_eq!(buf, b"\x01");
+
+        let mut buf = BytesMut::new();
+        buf.put_i8(0x01);
+        assert_eq!(buf, b"\x01"[..]);
+
+        let mut buf = BytesVec::new();
+        buf.put_i8(0x01);
+        assert_eq!(buf, b"\x01"[..]);
+
+        let mut buf = vec![];
+        buf.put_i16(0x0809);
+        assert_eq!(buf, b"\x08\x09");
+
+        let mut buf = vec![];
+        buf.put_i16_le(0x0809);
+        assert_eq!(buf, b"\x09\x08");
+
+        let mut buf = vec![];
+        buf.put_u32(0x0809A0A1);
+        assert_eq!(buf, b"\x08\x09\xA0\xA1");
+
+        let mut buf = vec![];
+        buf.put_i32(0x0809A0A1);
+        assert_eq!(buf, b"\x08\x09\xA0\xA1");
+
+        let mut buf = vec![];
+        buf.put_i32_le(0x0809A0A1);
+        assert_eq!(buf, b"\xA1\xA0\x09\x08");
+
+        let mut buf = vec![];
+        buf.put_u64(0x0102030405060708);
+        assert_eq!(buf, b"\x01\x02\x03\x04\x05\x06\x07\x08");
+
+        let mut buf = vec![];
+        buf.put_u64_le(0x0102030405060708);
+        assert_eq!(buf, b"\x08\x07\x06\x05\x04\x03\x02\x01");
+
+        let mut buf = vec![];
+        buf.put_i64(0x0102030405060708);
+        assert_eq!(buf, b"\x01\x02\x03\x04\x05\x06\x07\x08");
+
+        let mut buf = vec![];
+        buf.put_i64_le(0x0102030405060708);
+        assert_eq!(buf, b"\x08\x07\x06\x05\x04\x03\x02\x01");
+
+        let mut buf = vec![];
+        buf.put_u128(0x01020304050607080910111213141516);
+        assert_eq!(
+            buf,
+            b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16"
+        );
+
+        let mut buf = vec![];
+        buf.put_u128_le(0x01020304050607080910111213141516);
+        assert_eq!(
+            buf,
+            b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01"
+        );
+
+        let mut buf = vec![];
+        buf.put_i128(0x01020304050607080910111213141516);
+        assert_eq!(
+            buf,
+            b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16"
+        );
+
+        let mut buf = vec![];
+        buf.put_i128_le(0x01020304050607080910111213141516);
+        assert_eq!(
+            buf,
+            b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01"
+        );
+
+        let mut buf = vec![];
+        buf.put_uint(0x010203, 3);
+        assert_eq!(buf, b"\x01\x02\x03");
+
+        let mut buf = vec![];
+        buf.put_uint_le(0x010203, 3);
+        assert_eq!(buf, b"\x03\x02\x01");
+
+        let mut buf = vec![];
+        buf.put_int(0x010203, 3);
+        assert_eq!(buf, b"\x01\x02\x03");
+
+        let mut buf = vec![];
+        buf.put_int_le(0x010203, 3);
+        assert_eq!(buf, b"\x03\x02\x01");
+
+        let mut buf = vec![];
+        buf.put_f32(1.2f32);
+        assert_eq!(buf, b"\x3F\x99\x99\x9A");
+
+        let mut buf = vec![];
+        buf.put_f32_le(1.2f32);
+        assert_eq!(buf, b"\x9A\x99\x99\x3F");
+
+        let mut buf = vec![];
+        buf.put_f64(1.2f64);
+        assert_eq!(buf, b"\x3F\xF3\x33\x33\x33\x33\x33\x33");
+
+        let mut buf = vec![];
+        buf.put_f64_le(1.2f64);
+        assert_eq!(buf, b"\x33\x33\x33\x33\x33\x33\xF3\x3F");
+    }
+}

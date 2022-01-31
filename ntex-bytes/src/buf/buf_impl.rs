@@ -920,3 +920,107 @@ impl<T: AsRef<[u8]>> Buf for std::io::Cursor<T> {
 // The existence of this function makes the compiler catch if the Buf
 // trait is "object-safe" or not.
 fn _assert_trait_object(_b: &dyn Buf) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buf_tests() {
+        let mut buf = &b"a"[..];
+        assert!(buf.has_remaining());
+        buf.get_u8();
+        assert!(!buf.has_remaining());
+
+        let mut buf = &b"hello world"[..];
+        let mut dst = [0; 5];
+        buf.copy_to_slice(&mut dst);
+        assert_eq!(&b"hello"[..], &dst);
+        assert_eq!(6, buf.remaining());
+
+        let mut buf = &b"\x08 hello"[..];
+        assert_eq!(8, buf.get_u8());
+
+        let mut buf = &b"\x08 hello"[..];
+        assert_eq!(8, buf.get_i8());
+
+        let mut buf = &b"\x08\x09 hello"[..];
+        assert_eq!(0x0809, buf.get_u16());
+
+        let mut buf = &b"\x09\x08 hello"[..];
+        assert_eq!(0x0809, buf.get_u16_le());
+
+        let mut buf = &b"\x08\x09 hello"[..];
+        assert_eq!(0x0809, buf.get_i16());
+
+        let mut buf = &b"\x09\x08 hello"[..];
+        assert_eq!(0x0809, buf.get_i16_le());
+
+        let mut buf = &b"\x08\x09\xA0\xA1 hello"[..];
+        assert_eq!(0x0809A0A1, buf.get_u32());
+
+        let mut buf = &b"\xA1\xA0\x09\x08 hello"[..];
+        assert_eq!(0x0809A0A1, buf.get_u32_le());
+
+        let mut buf = &b"\x08\x09\xA0\xA1 hello"[..];
+        assert_eq!(0x0809A0A1, buf.get_i32());
+
+        let mut buf = &b"\xA1\xA0\x09\x08 hello"[..];
+        assert_eq!(0x0809A0A1, buf.get_i32_le());
+
+        let mut buf = &b"\x01\x02\x03\x04\x05\x06\x07\x08 hello"[..];
+        assert_eq!(0x0102030405060708, buf.get_u64());
+
+        let mut buf = &b"\x08\x07\x06\x05\x04\x03\x02\x01 hello"[..];
+        assert_eq!(0x0102030405060708, buf.get_u64_le());
+
+        let mut buf = &b"\x01\x02\x03\x04\x05\x06\x07\x08 hello"[..];
+        assert_eq!(0x0102030405060708, buf.get_i64());
+
+        let mut buf = &b"\x08\x07\x06\x05\x04\x03\x02\x01 hello"[..];
+        assert_eq!(0x0102030405060708, buf.get_i64_le());
+
+        let mut buf =
+            &b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16 hello"[..];
+        assert_eq!(0x01020304050607080910111213141516, buf.get_u128());
+
+        let mut buf =
+            &b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01 hello"[..];
+        assert_eq!(0x01020304050607080910111213141516, buf.get_u128_le());
+
+        let mut buf =
+            &b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16 hello"[..];
+        assert_eq!(0x01020304050607080910111213141516, buf.get_i128());
+
+        let mut buf =
+            &b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01 hello"[..];
+        assert_eq!(0x01020304050607080910111213141516, buf.get_i128_le());
+
+        let mut buf = &b"\x01\x02\x03 hello"[..];
+        assert_eq!(0x010203, buf.get_uint(3));
+
+        let mut buf = &b"\x03\x02\x01 hello"[..];
+        assert_eq!(0x010203, buf.get_uint_le(3));
+
+        let mut buf = &b"\x01\x02\x03 hello"[..];
+        assert_eq!(0x010203, buf.get_int(3));
+
+        let mut buf = &b"\x03\x02\x01 hello"[..];
+        assert_eq!(0x010203, buf.get_int_le(3));
+
+        let mut buf = &b"\x3F\x99\x99\x9A hello"[..];
+        assert_eq!(1.2f32, buf.get_f32());
+
+        let mut buf = &b"\x9A\x99\x99\x3F hello"[..];
+        assert_eq!(1.2f32, buf.get_f32_le());
+
+        let mut buf = &b"\x3F\xF3\x33\x33\x33\x33\x33\x33 hello"[..];
+        assert_eq!(1.2f64, buf.get_f64());
+
+        let mut buf = &b"\x33\x33\x33\x33\x33\x33\xF3\x3F hello"[..];
+        assert_eq!(1.2f64, buf.get_f64_le());
+
+        let bytes = "hello world".to_bytes();
+        assert_eq!(&bytes[..], &b"hello world"[..]);
+    }
+}

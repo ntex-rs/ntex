@@ -414,8 +414,6 @@ const INLINE_CAP: usize = 4 * 8 - 2;
 #[cfg(target_pointer_width = "32")]
 const INLINE_CAP: usize = 4 * 4 - 2;
 
-const EMPTY: &[u8] = &[];
-
 /*
  *
  * ===== Bytes =====
@@ -746,18 +744,16 @@ impl Bytes {
 
         // trim down only if buffer is not inline or static and
         // buffer's unused space is greater than 64 bytes
-        if !(kind == KIND_INLINE || kind == KIND_STATIC)
-            && (self.inner.capacity() - self.inner.len() >= 64)
-        {
-            *self = if self.len() <= INLINE_CAP {
-                Bytes {
+        if !(kind == KIND_INLINE || kind == KIND_STATIC) {
+            if self.inner.len() <= INLINE_CAP {
+                *self = Bytes {
                     inner: Inner::from_slice_inline(self),
-                }
-            } else {
-                Bytes {
+                };
+            } else if self.inner.capacity() - self.inner.len() >= 64 {
+                *self = Bytes {
                     inner: Inner::from_slice(self.len(), self, self.inner.pool()),
                 }
-            };
+            }
         }
     }
 
@@ -774,7 +770,7 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn clear(&mut self) {
-        self.inner = Inner::from_static(EMPTY);
+        self.inner = Inner::empty_inline();
     }
 
     /// Attempts to convert into a `BytesMut` handle.
@@ -1143,12 +1139,19 @@ impl BytesMut {
     }
 
     /// Creates a new `BytesMut` from slice, by copying it.
-    pub fn copy_from_slice_in<T>(src: &[u8], pool: T) -> Self
+    pub fn copy_from_slice<T: AsRef<[u8]>>(src: T) -> Self {
+        Self::copy_from_slice_in(src, PoolId::DEFAULT)
+    }
+
+    /// Creates a new `BytesMut` from slice, by copying it.
+    pub fn copy_from_slice_in<T, U>(src: T, pool: U) -> Self
     where
-        PoolRef: From<T>,
+        T: AsRef<[u8]>,
+        PoolRef: From<U>,
     {
+        let s = src.as_ref();
         BytesMut {
-            inner: Inner::from_slice(src.len(), src, pool.into()),
+            inner: Inner::from_slice(s.len(), s, pool.into()),
         }
     }
 
@@ -2452,7 +2455,7 @@ impl Eq for BytesVec {}
 impl PartialEq for BytesVec {
     #[inline]
     fn eq(&self, other: &BytesVec) -> bool {
-        unsafe { ptr::eq(self.inner.as_ptr(), other.inner.as_ptr()) }
+        self.inner.as_ref() == other.inner.as_ref()
     }
 }
 
@@ -4136,4 +4139,46 @@ impl Drop for Abort {
 fn abort() {
     let _a = Abort;
     panic!();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::TryFrom;
+
+    use super::*;
+
+    const LONG: &[u8] =
+        b"mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
+        mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
+        mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb";
+
+    #[test]
+    fn trimdown() {
+        let mut b = Bytes::from(LONG.to_vec());
+        assert_eq!(b.inner.capacity(), 263);
+        unsafe { b.inner.set_len(68) };
+        assert_eq!(b.len(), 68);
+        assert_eq!(b.inner.capacity(), 263);
+        b.trimdown();
+        assert_eq!(b.inner.capacity(), 96);
+
+        unsafe { b.inner.set_len(16) };
+        b.trimdown();
+        assert!(b.is_inline());
+    }
+
+    #[test]
+    fn bytes() {
+        let mut b = Bytes::from(LONG.to_vec());
+        b.clear();
+        assert!(b.is_inline());
+        assert!(b.is_empty());
+        assert!(b.len() == 0);
+
+        let b = Bytes::from(BytesMut::from(LONG));
+        assert_eq!(b, LONG);
+
+        let b = BytesMut::try_from(b).unwrap();
+        assert_eq!(b, LONG);
+    }
 }
