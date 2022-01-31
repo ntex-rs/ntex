@@ -1937,17 +1937,19 @@ impl BytesVec {
     }
 
     /// Creates a new `BytesVec` from slice, by copying it.
-    pub fn copy_from_slice(src: &[u8]) -> Self {
+    pub fn copy_from_slice<T: AsRef<[u8]>>(src: T) -> Self {
         Self::copy_from_slice_in(src, PoolId::DEFAULT)
     }
 
     /// Creates a new `BytesVec` from slice, by copying it.
-    pub fn copy_from_slice_in<T>(src: &[u8], pool: T) -> Self
+    pub fn copy_from_slice_in<T, U>(src: T, pool: U) -> Self
     where
-        PoolRef: From<T>,
+        T: AsRef<[u8]>,
+        PoolRef: From<U>,
     {
+        let s = src.as_ref();
         BytesVec {
-            inner: InnerVec::from_slice(src.len(), src, pool.into()),
+            inner: InnerVec::from_slice(s.len(), s, pool.into()),
         }
     }
 

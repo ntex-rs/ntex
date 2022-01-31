@@ -442,6 +442,15 @@ fn fns_defined_for_bytes() {
     let mut bytes = Bytes::from(&b"hello world"[..]);
     bytes.as_ptr();
 
+    assert!(bytes > "g");
+    assert!(bytes > "g".to_string());
+    assert!(bytes > "g".as_bytes().to_vec());
+    assert!(bytes > Bytes::from(&"g"[..]));
+    assert!("g" > bytes);
+    assert!("g".to_string() > bytes);
+    assert!("g".as_bytes().to_vec() > bytes);
+    assert!(Bytes::from(&"g"[..]) < bytes);
+
     assert_eq!(bytes, "hello world");
     assert_eq!(bytes, "hello world".as_bytes().to_vec());
     assert_eq!(bytes, "hello world".to_string());
@@ -450,6 +459,9 @@ fn fns_defined_for_bytes() {
     assert_eq!(bytes, BytesMut::copy_from_slice(b"hello world"));
 
     // Iterator
+    let v: Vec<u8> = (&bytes).iter().cloned().collect();
+    assert_eq!(&v[..], bytes);
+
     let v: Vec<u8> = bytes.as_ref().iter().cloned().collect();
     assert_eq!(&v[..], bytes);
 
@@ -470,6 +482,15 @@ fn fns_defined_for_bytes_mut() {
     bytes.as_ptr();
     bytes.as_mut_ptr();
 
+    assert!(bytes > "g");
+    assert!(bytes > "g".to_string());
+    assert!(bytes > "g".as_bytes().to_vec());
+    assert!(bytes > BytesMut::from(&"g"[..]));
+    assert!("g" > bytes);
+    assert!("g".to_string() > bytes);
+    assert!("g".as_bytes().to_vec() > bytes);
+    assert!(BytesMut::from(&"g"[..]) < bytes);
+
     assert_eq!(bytes, "hello world");
     assert_eq!(bytes, "hello world".as_bytes().to_vec());
     assert_eq!(bytes, "hello world".to_string());
@@ -478,6 +499,9 @@ fn fns_defined_for_bytes_mut() {
     assert_eq!(bytes, BytesVec::copy_from_slice(b"hello world"));
 
     // Iterator
+    let v: Vec<u8> = (&bytes).iter().cloned().collect();
+    assert_eq!(&v[..], bytes);
+
     let v: Vec<u8> = bytes.as_ref().iter().cloned().collect();
     assert_eq!(&v[..], bytes);
 
@@ -519,6 +543,15 @@ fn fns_defined_for_bytes_vec() {
     bytes.as_ptr();
     bytes.as_mut_ptr();
 
+    assert!(bytes > "g");
+    assert!(bytes > "g".to_string());
+    assert!(bytes > "g".as_bytes().to_vec());
+    assert!(bytes > BytesVec::copy_from_slice("g"));
+    assert!("g" > bytes);
+    assert!("g".to_string() > bytes);
+    assert!("g".as_bytes().to_vec() > bytes);
+    assert!(BytesVec::copy_from_slice(&"g"[..]) < bytes);
+
     assert_eq!(bytes, "hello world");
     assert_eq!(bytes, "hello world".as_bytes().to_vec());
     assert_eq!(bytes, "hello world".to_string());
@@ -527,6 +560,9 @@ fn fns_defined_for_bytes_vec() {
     assert_eq!(bytes, BytesMut::copy_from_slice(b"hello world"));
 
     // Iterator
+    let v: Vec<u8> = (&bytes).iter().cloned().collect();
+    assert_eq!(&v[..], bytes);
+
     let v: Vec<u8> = bytes.as_ref().iter().cloned().collect();
     assert_eq!(&v[..], bytes);
 

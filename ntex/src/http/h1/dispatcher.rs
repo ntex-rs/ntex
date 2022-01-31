@@ -213,6 +213,10 @@ where
                                     buf.extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n")
                                 });
                                 if result.is_err() {
+                                    log::error!(
+                                        "Expect handler returned error: {:?}",
+                                        result.err().unwrap()
+                                    );
                                     *this.st = State::Stop;
                                     this = self.as_mut().project();
                                     continue;
