@@ -71,7 +71,7 @@ mod danger {
 #[ntex::test]
 async fn test_openssl_string() {
     use ntex::server::openssl;
-    use ntex_tls::{openssl::PeerCert, types::HttpProtocol};
+    use ntex_tls::{openssl::PeerCert, openssl::PeerCertChain, types::HttpProtocol};
     use tls_openssl::{
         ssl::{SslConnector, SslMethod, SslVerifyMode},
         x509::X509,
@@ -109,6 +109,7 @@ async fn test_openssl_string() {
         io.query::<PeerCert>().as_ref().unwrap().0.to_der().unwrap(),
         cert.to_der().unwrap()
     );
+    assert_eq!(io.query::<PeerCertChain>().as_ref().unwrap().0.len(), 1);
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
 }

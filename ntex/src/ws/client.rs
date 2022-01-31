@@ -768,6 +768,14 @@ impl<F: Filter> WsConnection<F> {
     }
 }
 
+impl<F> fmt::Debug for WsConnection<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WsConnection")
+            .field("response", &self.res)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

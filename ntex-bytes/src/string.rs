@@ -208,7 +208,10 @@ impl From<&str> for ByteString {
 impl<'a> From<borrow::Cow<'a, str>> for ByteString {
     #[inline]
     fn from(value: borrow::Cow<'a, str>) -> Self {
-        Self::from(value.to_owned())
+        match value {
+            borrow::Cow::Owned(s) => Self::from(s),
+            borrow::Cow::Borrowed(s) => Self::from(s),
+        }
     }
 }
 
@@ -340,7 +343,7 @@ mod test {
 
     #[test]
     fn test_basics() {
-        let s = ByteString::from_static("test");
+        let mut s = ByteString::from_static("test");
         s.trimdown();
         assert_eq!(s, "test");
         assert_eq!(s, *"test");

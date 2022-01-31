@@ -3,7 +3,8 @@ use std::io;
 use ntex::http::StatusCode;
 use ntex::service::{fn_factory_with_config, fn_service};
 use ntex::util::{ByteString, Bytes};
-use ntex::web::{self, test, ws, App, HttpRequest};
+use ntex::web::{self, test, ws, App, HttpRequest, HttpResponse};
+use ntex::ws::error::WsClientError;
 
 async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
     let msg = match msg {
@@ -63,6 +64,26 @@ async fn web_ws() {
 
     let item = io.recv(&codec).await.unwrap().unwrap();
     assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
+}
+
+#[ntex::test]
+async fn web_no_ws() {
+    let srv = test::server(|| {
+        App::new()
+            .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
+            .service(web::resource("/ws_error").route(web::to(|| async {
+                Err::<HttpResponse, _>(io::Error::new(io::ErrorKind::Other, "test"))
+            })))
+    });
+
+    assert!(matches!(
+        srv.ws().await.err().unwrap(),
+        WsClientError::InvalidResponseStatus(StatusCode::OK)
+    ));
+    assert!(matches!(
+        srv.ws_at("/ws_error").await.err().unwrap(),
+        WsClientError::InvalidResponseStatus(StatusCode::INTERNAL_SERVER_ERROR)
+    ));
 }
 
 #[ntex::test]

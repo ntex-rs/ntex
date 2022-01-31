@@ -177,6 +177,7 @@ where
                                     let item = if let Some(item) = msg.head().take_io() {
                                         item
                                     } else {
+                                        log::trace!("Handler service consumed io, exit");
                                         return Poll::Ready(Ok(()));
                                     };
 

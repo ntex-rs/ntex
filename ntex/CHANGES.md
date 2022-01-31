@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.15] - 2022-02-xx
+
+* web: Fix unsupported web ws handling
+
 ## [0.5.14] - 2022-01-30
 
 * Update ntex-io to 0.1.7

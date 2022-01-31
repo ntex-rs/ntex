@@ -126,7 +126,7 @@ impl WebResponse {
 impl From<WebResponse> for Response<Body> {
     fn from(mut res: WebResponse) -> Response<Body> {
         let head = res.response.head_mut();
-        if head.upgrade() {
+        if res.request.head().upgrade() {
             head.set_io(res.request.head());
         }
         res.response
