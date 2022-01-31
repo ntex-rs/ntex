@@ -858,65 +858,6 @@ impl Buf for &str {
     }
 }
 
-impl Buf for Option<[u8; 1]> {
-    fn remaining(&self) -> usize {
-        if self.is_some() {
-            1
-        } else {
-            0
-        }
-    }
-
-    fn chunk(&self) -> &[u8] {
-        self.as_ref().map(AsRef::as_ref).unwrap_or_default()
-    }
-
-    fn advance(&mut self, cnt: usize) {
-        if cnt == 0 {
-            return;
-        }
-
-        if self.is_none() {
-            panic!("overflow");
-        } else {
-            assert_eq!(1, cnt);
-            *self = None;
-        }
-    }
-}
-
-impl<T: AsRef<[u8]>> Buf for std::io::Cursor<T> {
-    fn remaining(&self) -> usize {
-        let len = self.get_ref().as_ref().len();
-        let pos = self.position();
-
-        if pos >= len as u64 {
-            return 0;
-        }
-
-        len - pos as usize
-    }
-
-    fn chunk(&self) -> &[u8] {
-        let len = self.get_ref().as_ref().len();
-        let pos = self.position();
-
-        if pos >= len as u64 {
-            return &[];
-        }
-
-        &self.get_ref().as_ref()[pos as usize..]
-    }
-
-    fn advance(&mut self, cnt: usize) {
-        let pos = (self.position() as usize)
-            .checked_add(cnt)
-            .expect("overflow");
-
-        assert!(pos <= self.get_ref().as_ref().len());
-        self.set_position(pos as u64);
-    }
-}
 // The existence of this function makes the compiler catch if the Buf
 // trait is "object-safe" or not.
 fn _assert_trait_object(_b: &dyn Buf) {}
@@ -937,6 +878,12 @@ mod tests {
         buf.copy_to_slice(&mut dst);
         assert_eq!(&b"hello"[..], &dst);
         assert_eq!(6, buf.remaining());
+
+        let mut buf = Box::new(buf);
+        assert_eq!(buf.remaining(), 6);
+        assert_eq!(buf.chunk(), b" world");
+        buf.advance(1);
+        assert_eq!(buf.chunk(), b"world");
 
         let mut buf = &b"\x08 hello"[..];
         assert_eq!(8, buf.get_u8());

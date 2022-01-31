@@ -2528,6 +2528,15 @@ impl fmt::Write for BytesVec {
     }
 }
 
+impl IntoIterator for BytesVec {
+    type Item = u8;
+    type IntoIter = IntoIter<BytesVec>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter::new(self)
+    }
+}
+
 impl<'a> IntoIterator for &'a BytesVec {
     type Item = &'a u8;
     type IntoIter = std::slice::Iter<'a, u8>;

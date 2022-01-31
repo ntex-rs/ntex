@@ -341,12 +341,16 @@ mod test {
     #[test]
     fn test_basics() {
         let s = ByteString::from_static("test");
+        s.trimdown();
         assert_eq!(s, "test");
         assert_eq!(s, *"test");
         assert_eq!(s, "test".to_owned());
+        assert_eq!(s.as_slice(), b"test");
+        assert_eq!(s.as_bytes(), &Bytes::copy_from_slice(b"test"));
 
         assert_eq!(format!("{}", s), "test");
         assert_eq!(format!("{:?}", s), "\"test\"");
+        assert_eq!(s.into_bytes(), Bytes::copy_from_slice(b"test"));
     }
 
     #[test]

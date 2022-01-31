@@ -438,13 +438,55 @@ fn split_off_to_at_gt_len() {
 }
 
 #[test]
+fn fns_defined_for_bytes() {
+    let mut bytes = Bytes::from(&b"hello world"[..]);
+    bytes.as_ptr();
+
+    assert_eq!(bytes, "hello world");
+    assert_eq!(bytes, "hello world".as_bytes().to_vec());
+    assert_eq!(bytes, "hello world".to_string());
+    assert_eq!(bytes, &"hello world"[..]);
+    assert_eq!(bytes, BytesVec::copy_from_slice(b"hello world"));
+    assert_eq!(bytes, BytesMut::copy_from_slice(b"hello world"));
+
+    // Iterator
+    let v: Vec<u8> = bytes.as_ref().iter().cloned().collect();
+    assert_eq!(&v[..], bytes);
+
+    let b2: Bytes = v.iter().collect();
+    assert_eq!(b2, bytes);
+    assert_eq!(&v[..], b2);
+
+    bytes.truncate(5);
+    assert_eq!(bytes, b"hello"[..]);
+
+    bytes.clear();
+    assert!(bytes.is_empty());
+}
+
+#[test]
 fn fns_defined_for_bytes_mut() {
     let mut bytes = BytesMut::from(&b"hello world"[..]);
     bytes.as_ptr();
     bytes.as_mut_ptr();
 
+    assert_eq!(bytes, "hello world");
+    assert_eq!(bytes, "hello world".as_bytes().to_vec());
+    assert_eq!(bytes, "hello world".to_string());
+    assert_eq!(bytes, &"hello world"[..]);
+    assert_eq!(bytes, Bytes::copy_from_slice(b"hello world"));
+    assert_eq!(bytes, BytesVec::copy_from_slice(b"hello world"));
+
     // Iterator
     let v: Vec<u8> = bytes.as_ref().iter().cloned().collect();
+    assert_eq!(&v[..], bytes);
+
+    let v: Vec<u8> = bytes.iter().cloned().collect();
+    assert_eq!(&v[..], bytes);
+
+    let v: Vec<u8> = bytes.clone().into_iter().collect();
+
+    let mut bytes = BytesMut::copy_from_slice(b"hello world");
     assert_eq!(&v[..], bytes);
 
     let b2: BytesMut = v.iter().collect();
@@ -460,13 +502,40 @@ fn fns_defined_for_bytes_mut() {
     bytes.resize(10, b'1');
     assert_eq!(bytes, b"1111111111"[..]);
 
+    assert_eq!(bytes.remaining(), 10);
+    assert_eq!(bytes.chunk(), &b"1111111111"[..]);
+
+    bytes.as_mut()[0] = b'2';
+    assert_eq!(bytes, b"2111111111"[..]);
+
+    let b = BytesMut::default();
+    assert!(b.is_empty());
+}
+
+#[test]
+fn fns_defined_for_bytes_vec() {
     // BytesVec
     let mut bytes = BytesVec::copy_from_slice(&b"hello world"[..]);
     bytes.as_ptr();
     bytes.as_mut_ptr();
 
+    assert_eq!(bytes, "hello world");
+    assert_eq!(bytes, "hello world".as_bytes().to_vec());
+    assert_eq!(bytes, "hello world".to_string());
+    assert_eq!(bytes, &"hello world"[..]);
+    assert_eq!(bytes, Bytes::copy_from_slice(b"hello world"));
+    assert_eq!(bytes, BytesMut::copy_from_slice(b"hello world"));
+
     // Iterator
     let v: Vec<u8> = bytes.as_ref().iter().cloned().collect();
+    assert_eq!(&v[..], bytes);
+
+    let v: Vec<u8> = bytes.iter().cloned().collect();
+    assert_eq!(&v[..], bytes);
+
+    let v: Vec<u8> = bytes.into_iter().collect();
+
+    let mut bytes = BytesVec::copy_from_slice(b"hello world");
     assert_eq!(&v[..], bytes);
 
     let b2: BytesVec = v.iter().collect();
@@ -481,6 +550,15 @@ fn fns_defined_for_bytes_mut() {
 
     bytes.resize(10, b'1');
     assert_eq!(bytes, b"1111111111"[..]);
+
+    assert_eq!(bytes.remaining(), 10);
+    assert_eq!(bytes.chunk(), &b"1111111111"[..]);
+
+    bytes.as_mut()[0] = b'2';
+    assert_eq!(bytes, b"2111111111"[..]);
+
+    let b = BytesMut::default();
+    assert!(b.is_empty());
 }
 
 #[test]

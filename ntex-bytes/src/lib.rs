@@ -51,7 +51,7 @@
 //! [struct docs]: struct.Bytes.html
 
 #![deny(
-//    warnings,
+    warnings,
 //    missing_docs,
 //    missing_debug_implementations,
     rust_2018_idioms

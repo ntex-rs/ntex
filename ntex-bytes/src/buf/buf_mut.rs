@@ -980,6 +980,16 @@ mod tests {
         buf.put_u8(0x01);
         assert_eq!(buf, b"\x01");
 
+        assert_eq!(buf.remaining_mut(), usize::MAX - 1);
+        assert_eq!((&buf).remaining_mut(), usize::MAX - 1);
+        assert_eq!(Box::new(buf).remaining_mut(), usize::MAX - 1);
+
+        let mut buf = [b'1'; 10];
+        let mut b = buf.as_mut();
+        assert_eq!(b.remaining_mut(), 10);
+        b.put_slice(b"123");
+        assert_eq!(&buf[..], b"1231111111");
+
         let mut buf = BytesMut::new();
         buf.put_u8(0x01);
         assert_eq!(buf, b"\x01"[..]);
