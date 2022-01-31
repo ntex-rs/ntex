@@ -2730,7 +2730,9 @@ impl InnerVec {
                     )
                 } else if kind == KIND_VEC {
                     let ptr = buf.inner.shared_vec();
-                    let offset = buf.inner.arc.as_ptr() as usize - ptr as usize;
+                    let offset = buf.inner.ptr as usize - ptr as usize;
+
+                    // we cannot use shared vec if BytesMut points to inside of vec
                     if buf.inner.cap < (*ptr).cap - offset {
                         InnerVec::from_slice(
                             buf.inner.capacity(),
@@ -2738,11 +2740,11 @@ impl InnerVec {
                             buf.inner.pool(),
                         )
                     } else {
+                        // BytesMut owns rest of the vec, so re-use
                         (*ptr).len = buf.len() as u32;
                         (*ptr).offset = offset as u32;
                         let inner = InnerVec(NonNull::new_unchecked(ptr));
-                        // reuse bytes
-                        mem::forget(buf);
+                        mem::forget(buf); // reuse bytes
                         inner
                     }
                 } else {

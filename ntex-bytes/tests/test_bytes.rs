@@ -824,6 +824,7 @@ fn bytes_vec_freeze() {
 fn bytes_vec() {
     let mut bytes = BytesVec::copy_from_slice(LONG);
     bytes.with_bytes_mut(|buf| {
+        assert_eq!(buf, LONG);
         assert_eq!(buf.split_to(4), &LONG[..4]);
     });
     assert_eq!(bytes, &LONG[4..]);
