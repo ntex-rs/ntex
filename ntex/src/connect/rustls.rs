@@ -121,10 +121,12 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use tls_rustls::{OwnedTrustAnchor, RootCertStore};
 
     use super::*;
     use crate::service::{Service, ServiceFactory};
+    use crate::util::lazy;
 
     #[crate::rt_test]
     async fn test_rustls_connect() {
@@ -146,9 +148,12 @@ mod tests {
             .with_safe_defaults()
             .with_root_certificates(cert_store)
             .with_no_client_auth();
-        let factory = Connector::new(config).clone();
+        let _ = Connector::<&'static str>::new(config.clone()).clone();
+        let factory = Connector::from(Arc::new(config)).memory_pool(PoolId::P5);
 
         let srv = factory.new_service(()).await.unwrap();
+        // always ready
+        assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv
             .call(Connect::new("www.rust-lang.org").set_addr(Some(server.addr())))
             .await;

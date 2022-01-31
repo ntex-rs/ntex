@@ -3,9 +3,8 @@ use std::{io, sync::Arc};
 use ntex::codec::BytesCodec;
 use ntex::connect::Connect;
 use ntex::io::{types::PeerAddr, Io};
-use ntex::server::test_server;
 use ntex::service::{fn_service, pipeline_factory, Service, ServiceFactory};
-use ntex::{time, util::Bytes};
+use ntex::{server::test_server, util::Bytes};
 
 #[cfg(feature = "openssl")]
 fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
@@ -72,7 +71,7 @@ mod danger {
 #[ntex::test]
 async fn test_openssl_string() {
     use ntex::server::openssl;
-    use ntex_tls::openssl::PeerCert;
+    use ntex_tls::{openssl::PeerCert, types::HttpProtocol};
     use tls_openssl::{
         ssl::{SslConnector, SslMethod, SslVerifyMode},
         x509::X509,
@@ -89,7 +88,7 @@ async fn test_openssl_string() {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
-            time::sleep(time::Millis(100)).await;
+            assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
             Ok::<_, Box<dyn std::error::Error>>(())
         }))
     });
@@ -101,6 +100,10 @@ async fn test_openssl_string() {
     let addr = format!("127.0.0.1:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    assert_eq!(
+        io.query::<HttpProtocol>().get().unwrap(),
+        HttpProtocol::Http1
+    );
     let cert = X509::from_pem(include_bytes!("cert.pem")).unwrap();
     assert_eq!(
         io.query::<PeerCert>().as_ref().unwrap().0.to_der().unwrap(),
@@ -139,6 +142,10 @@ async fn test_openssl_read_before_error() {
     let io = conn.call(addr.into()).await.unwrap();
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
+
+    io.send(Bytes::from_static(b"test"), &BytesCodec)
+        .await
+        .unwrap();
     assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
@@ -146,7 +153,7 @@ async fn test_openssl_read_before_error() {
 #[ntex::test]
 async fn test_rustls_string() {
     use ntex::server::rustls;
-    use ntex_tls::rustls::PeerCert;
+    use ntex_tls::{rustls::PeerCert, rustls::PeerCertChain, types::HttpProtocol};
     use rustls_pemfile::certs;
     use std::fs::File;
     use std::io::BufReader;
@@ -163,6 +170,7 @@ async fn test_rustls_string() {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
+            assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
             Ok::<_, std::io::Error>(())
         }))
     });
@@ -176,6 +184,10 @@ async fn test_rustls_string() {
     let addr = format!("localhost:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    assert_eq!(
+        io.query::<HttpProtocol>().get().unwrap(),
+        HttpProtocol::Http1
+    );
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let cert_chain: Vec<Certificate> = certs(cert_file)
         .unwrap()
@@ -186,8 +198,14 @@ async fn test_rustls_string() {
         io.query::<PeerCert>().as_ref().unwrap().0,
         *cert_chain.first().unwrap()
     );
+    assert_eq!(io.query::<PeerCertChain>().as_ref().unwrap().0, cert_chain);
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
+
+    io.send(Bytes::from_static(b"test"), &BytesCodec)
+        .await
+        .unwrap();
+    assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
 #[ntex::test]

@@ -240,7 +240,7 @@ mod tests {
             crate::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let srv = Connector::default();
+        let srv = Connector::default().memory_pool(PoolId::P5);
         let result = srv.connect("").await;
         assert!(result.is_err());
         let result = srv.connect("localhost:99999").await;

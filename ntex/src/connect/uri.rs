@@ -35,3 +35,27 @@ fn port(scheme: Option<&str>) -> Option<u16> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_tests() {
+        for (s, p) in [
+            ("http", 80),
+            ("https", 443),
+            ("ws", 80),
+            ("wss", 443),
+            ("amqp", 5672),
+            ("amqps", 5671),
+            ("sb", 5671),
+            ("mqtt", 1883),
+            ("mqtts", 8883),
+        ] {
+            assert_eq!(port(Some(s)), Some(p))
+        }
+        assert_eq!(port(Some("unknowns")), None);
+        assert_eq!(port(None), None);
+    }
+}

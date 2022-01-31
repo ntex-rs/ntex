@@ -92,7 +92,7 @@ impl<T: Address> Resolver<T> {
 
 impl<T> Default for Resolver<T> {
     fn default() -> Resolver<T> {
-        Resolver(marker::PhantomData)
+        Resolver::new()
     }
 }
 
@@ -138,7 +138,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn resolver() {
-        let resolver = Resolver::new();
+        let resolver = Resolver::default().clone();
         assert!(format!("{:?}", resolver).contains("Resolver"));
         let srv = resolver.new_service(()).await.unwrap();
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());

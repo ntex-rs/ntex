@@ -72,32 +72,6 @@ impl<A, B> Either<A, B> {
     }
 }
 
-impl<A, B, T> Either<(T, A), (T, B)> {
-    #[inline]
-    /// Factor out a homogeneous type from an either of pairs.
-    ///
-    /// Here, the homogeneous type is the first element of the pairs.
-    pub fn factor_first(self) -> (T, Either<A, B>) {
-        match self {
-            Either::Left((x, a)) => (x, Either::Left(a)),
-            Either::Right((x, b)) => (x, Either::Right(b)),
-        }
-    }
-}
-
-impl<A, B, T> Either<(A, T), (B, T)> {
-    #[inline]
-    /// Factor out a homogeneous type from an either of pairs.
-    ///
-    /// Here, the homogeneous type is the second element of the pairs.
-    pub fn factor_second(self) -> (Either<A, B>, T) {
-        match self {
-            Either::Left((a, x)) => (Either::Left(a), x),
-            Either::Right((b, x)) => (Either::Right(b), x),
-        }
-    }
-}
-
 impl<T> Either<T, T> {
     #[inline]
     /// Extract the value of an either over two equivalent types.
@@ -143,5 +117,39 @@ where
             Either::Left(x) => x.poll(cx),
             Either::Right(x) => x.poll(cx),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn either() {
+        let mut e = Either::<(), ()>::Left(());
+        assert_eq!(e.is_left(), true);
+        assert_eq!(e.is_right(), false);
+        assert!(e.left().is_some());
+        assert!(e.right().is_none());
+        e.as_ref();
+        e.as_mut();
+
+        let e = Either::<(), ()>::Right(());
+        assert_eq!(e.is_left(), false);
+        assert_eq!(e.is_right(), true);
+        assert!(e.left().is_none());
+        assert!(e.right().is_some());
+
+        assert_eq!(Either::<(), ()>::Left(()).into_inner(), ());
+        assert_eq!(Either::<(), ()>::Right(()).into_inner(), ());
+
+        assert_eq!(
+            format!("{}", Either::<_, &'static str>::Left("test")),
+            "test"
+        );
+        assert_eq!(
+            format!("{}", Either::<&'static str, _>::Right("test")),
+            "test"
+        );
     }
 }

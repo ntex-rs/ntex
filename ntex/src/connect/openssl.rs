@@ -128,7 +128,7 @@ mod tests {
         });
 
         let ssl = SslConnector::builder(SslMethod::tls()).unwrap();
-        let factory = Connector::new(ssl.build()).clone();
+        let factory = Connector::new(ssl.build()).clone().memory_pool(PoolId::P5);
 
         let srv = factory.new_service(()).await.unwrap();
         let result = srv

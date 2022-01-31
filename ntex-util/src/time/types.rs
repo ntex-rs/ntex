@@ -192,3 +192,57 @@ impl From<Seconds> for std::time::Duration {
         std::time::Duration::from_secs(d.0 as u64)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn time_types() {
+        let m = Millis::default();
+        assert_eq!(m.0, 0);
+
+        let m = Millis(10) + Millis(20);
+        assert_eq!(m.0, 30);
+
+        let m = Millis(10) + Millis(u32::MAX);
+        assert_eq!(m.0, u32::MAX);
+
+        let m = Millis(10) + Seconds(1);
+        assert_eq!(m.0, 1010);
+
+        let m = Millis(u32::MAX) + Seconds(1);
+        assert_eq!(m.0, u32::MAX);
+
+        let m = Millis(10) + Duration::from_millis(100);
+        assert_eq!(m.0, 110);
+
+        let m = Duration::from_millis(100) + Millis(10);
+        assert_eq!(m, Duration::from_millis(110));
+
+        let m = Millis::from(Seconds(1));
+        assert_eq!(m.0, 1000);
+
+        let m = Millis::from(Duration::from_secs(1));
+        assert_eq!(m.0, 1000);
+
+        let s = Seconds::new(10);
+        assert_eq!(s.0, 10);
+
+        let s = Seconds::checked_new(u16::MAX as usize + 10);
+        assert_eq!(s.0, u16::MAX);
+
+        assert!(Seconds::ZERO.is_zero());
+        assert!(!Seconds::ZERO.non_zero());
+
+        let s = Seconds::new(10);
+        assert_eq!(s.seconds(), 10);
+
+        let s = Seconds::default();
+        assert_eq!(s.0, 0);
+
+        let s = Seconds::new(10) + Seconds::new(10);
+        assert_eq!(s.seconds(), 20);
+    }
+}

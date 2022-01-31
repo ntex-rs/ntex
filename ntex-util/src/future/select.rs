@@ -41,3 +41,20 @@ where
         Poll::Pending
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures_util::future::pending;
+
+    use super::*;
+    use crate::{future::Ready, time};
+
+    #[ntex_macros::rt_test2]
+    async fn select_tests() {
+        let res = select(Ready::<_, ()>::Ok("test"), pending::<()>()).await;
+        assert_eq!(res, Either::Left(Ok("test")));
+
+        let res = select(pending::<()>(), time::sleep(time::Millis(50))).await;
+        assert_eq!(res, Either::Right(()));
+    }
+}

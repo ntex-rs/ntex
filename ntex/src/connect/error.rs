@@ -38,3 +38,18 @@ impl Clone for ConnectError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connect_error_clone() {
+        let _ =
+            ConnectError::Resolver(io::Error::new(io::ErrorKind::Other, "test")).clone();
+        let _ = ConnectError::NoRecords.clone();
+        let _ = ConnectError::InvalidInput.clone();
+        let _ = ConnectError::Unresolved.clone();
+        let _ = ConnectError::Io(io::Error::new(io::ErrorKind::Other, "test")).clone();
+    }
+}
