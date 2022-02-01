@@ -4,3 +4,4 @@ ignore: # ignore codecoverage on following paths
   - "**/examples"
   - "ntex-macros"
   - "ntex-rt-macros"
+  - "ntex-async-std"
