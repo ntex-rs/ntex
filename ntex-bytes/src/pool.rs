@@ -16,7 +16,7 @@ pub struct Pool {
 #[derive(Copy, Clone)]
 pub struct PoolRef(&'static MemoryPool);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct PoolId(u8);
 
 #[derive(Copy, Clone)]
@@ -502,21 +502,6 @@ impl Pool {
             }
         }
         true
-    }
-
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated]
-    /// Check if pool is pedning
-    pub fn is_pending(&self) -> bool {
-        !self.is_ready()
-    }
-
-    #[doc(hidden)]
-    #[inline]
-    /// Check if pool is pedning
-    pub fn windows(&self) -> [(usize, usize); 10] {
-        self.inner.windows.get()
     }
 
     #[inline]

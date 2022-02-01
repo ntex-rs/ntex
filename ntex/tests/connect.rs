@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::connect::Connect;
 use ntex::io::{types::PeerAddr, Io};
 use ntex::service::{fn_service, pipeline_factory, Service, ServiceFactory};
-use ntex::{server::test_server, util::Bytes};
+use ntex::{server::test_server, time, util::Bytes};
 
 #[cfg(feature = "openssl")]
 fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
@@ -131,6 +131,7 @@ async fn test_openssl_read_before_error() {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
+            time::sleep(time::Millis(100)).await;
             Ok::<_, Box<dyn std::error::Error>>(())
         }))
     });
@@ -216,6 +217,7 @@ async fn test_static_str() {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
+            time::sleep(time::Millis(100)).await;
             Ok::<_, io::Error>(())
         })
     });

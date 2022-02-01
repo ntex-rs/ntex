@@ -950,51 +950,9 @@ impl From<&'static str> for Bytes {
     }
 }
 
-impl FromIterator<u8> for BytesMut {
-    fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> Self {
-        let iter = into_iter.into_iter();
-        let (min, maybe_max) = iter.size_hint();
-
-        let mut out = BytesMut::with_capacity(maybe_max.unwrap_or(min));
-        for i in iter {
-            out.reserve(1);
-            out.put_u8(i);
-        }
-
-        out
-    }
-}
-
-impl FromIterator<u8> for BytesVec {
-    fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> Self {
-        let iter = into_iter.into_iter();
-        let (min, maybe_max) = iter.size_hint();
-
-        let mut out = BytesVec::with_capacity(maybe_max.unwrap_or(min));
-        for i in iter {
-            out.reserve(1);
-            out.put_u8(i);
-        }
-
-        out
-    }
-}
-
 impl FromIterator<u8> for Bytes {
     fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> Self {
         BytesMut::from_iter(into_iter).freeze()
-    }
-}
-
-impl<'a> FromIterator<&'a u8> for BytesMut {
-    fn from_iter<T: IntoIterator<Item = &'a u8>>(into_iter: T) -> Self {
-        into_iter.into_iter().copied().collect::<BytesMut>()
-    }
-}
-
-impl<'a> FromIterator<&'a u8> for BytesVec {
-    fn from_iter<T: IntoIterator<Item = &'a u8>>(into_iter: T) -> Self {
-        into_iter.into_iter().copied().collect::<BytesVec>()
     }
 }
 
@@ -1003,6 +961,8 @@ impl<'a> FromIterator<&'a u8> for Bytes {
         BytesMut::from_iter(into_iter).freeze()
     }
 }
+
+impl Eq for Bytes {}
 
 impl PartialEq for Bytes {
     fn eq(&self, other: &Bytes) -> bool {
@@ -1021,8 +981,6 @@ impl Ord for Bytes {
         self.inner.as_ref().cmp(other.inner.as_ref())
     }
 }
-
-impl Eq for Bytes {}
 
 impl Default for Bytes {
     #[inline]
@@ -1228,7 +1186,7 @@ impl BytesMut {
     /// use ntex_bytes::BytesMut;
     ///
     /// let b = BytesMut::with_capacity(64);
-    /// assert_eq!(b.capacity(), 96);
+    /// assert_eq!(b.capacity(), 64);
     /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
@@ -1323,7 +1281,7 @@ impl BytesMut {
     /// let other = buf.split();
     ///
     /// assert!(buf.is_empty());
-    /// assert_eq!(1045, buf.capacity());
+    /// assert_eq!(1013, buf.capacity());
     ///
     /// assert_eq!(other, b"hello world"[..]);
     /// ```
@@ -1515,12 +1473,12 @@ impl BytesMut {
     /// let other = buf.split();
     ///
     /// assert!(buf.is_empty());
-    /// assert_eq!(buf.capacity(), 96);
+    /// assert_eq!(buf.capacity(), 64);
     ///
     /// drop(other);
     /// buf.reserve(128);
     ///
-    /// assert_eq!(buf.capacity(), 160);
+    /// assert_eq!(buf.capacity(), 128);
     /// assert_eq!(buf.as_ptr(), ptr);
     /// ```
     ///
@@ -1671,19 +1629,19 @@ impl AsRef<[u8]> for BytesMut {
     }
 }
 
+impl AsMut<[u8]> for BytesMut {
+    #[inline]
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.inner.as_mut()
+    }
+}
+
 impl Deref for BytesMut {
     type Target = [u8];
 
     #[inline]
     fn deref(&self) -> &[u8] {
         self.as_ref()
-    }
-}
-
-impl AsMut<[u8]> for BytesMut {
-    #[inline]
-    fn as_mut(&mut self) -> &mut [u8] {
-        self.inner.as_mut()
     }
 }
 
@@ -1740,6 +1698,8 @@ impl From<Bytes> for BytesMut {
     }
 }
 
+impl Eq for BytesMut {}
+
 impl PartialEq for BytesMut {
     #[inline]
     fn eq(&self, other: &BytesMut) -> bool {
@@ -1747,43 +1707,10 @@ impl PartialEq for BytesMut {
     }
 }
 
-impl PartialOrd for BytesMut {
-    #[inline]
-    fn partial_cmp(&self, other: &BytesMut) -> Option<cmp::Ordering> {
-        self.inner.as_ref().partial_cmp(other.inner.as_ref())
-    }
-}
-
-impl Ord for BytesMut {
-    #[inline]
-    fn cmp(&self, other: &BytesMut) -> cmp::Ordering {
-        self.inner.as_ref().cmp(other.inner.as_ref())
-    }
-}
-
-impl Eq for BytesMut {}
-
 impl Default for BytesMut {
     #[inline]
     fn default() -> BytesMut {
         BytesMut::new()
-    }
-}
-
-impl fmt::Debug for BytesMut {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&debug::BsDebug(self.inner.as_ref()), fmt)
-    }
-}
-
-impl hash::Hash for BytesMut {
-    #[inline]
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: hash::Hasher,
-    {
-        let s: &[u8] = self.as_ref();
-        s.hash(state);
     }
 }
 
@@ -1798,6 +1725,12 @@ impl BorrowMut<[u8]> for BytesMut {
     #[inline]
     fn borrow_mut(&mut self) -> &mut [u8] {
         self.as_mut()
+    }
+}
+
+impl fmt::Debug for BytesMut {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&debug::BsDebug(self.inner.as_ref()), fmt)
     }
 }
 
@@ -1842,6 +1775,27 @@ impl<'a> IntoIterator for &'a BytesMut {
 
     fn into_iter(self) -> Self::IntoIter {
         self.as_ref().iter()
+    }
+}
+
+impl FromIterator<u8> for BytesMut {
+    fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> Self {
+        let iter = into_iter.into_iter();
+        let (min, maybe_max) = iter.size_hint();
+
+        let mut out = BytesMut::with_capacity(maybe_max.unwrap_or(min));
+        for i in iter {
+            out.reserve(1);
+            out.put_u8(i);
+        }
+
+        out
+    }
+}
+
+impl<'a> FromIterator<&'a u8> for BytesMut {
+    fn from_iter<T: IntoIterator<Item = &'a u8>>(into_iter: T) -> Self {
+        into_iter.into_iter().copied().collect::<BytesMut>()
     }
 }
 
@@ -2015,7 +1969,7 @@ impl BytesVec {
     /// use ntex_bytes::BytesVec;
     ///
     /// let b = BytesVec::with_capacity(64);
-    /// assert_eq!(b.capacity(), 96);
+    /// assert_eq!(b.capacity(), 64);
     /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
@@ -2074,7 +2028,7 @@ impl BytesVec {
     /// let other = buf.split();
     ///
     /// assert!(buf.is_empty());
-    /// assert_eq!(1045, buf.capacity());
+    /// assert_eq!(1013, buf.capacity());
     ///
     /// assert_eq!(other, b"hello world"[..]);
     /// ```
@@ -2264,12 +2218,12 @@ impl BytesVec {
     /// let other = buf.split();
     ///
     /// assert!(buf.is_empty());
-    /// assert_eq!(buf.capacity(), 96);
+    /// assert_eq!(buf.capacity(), 64);
     ///
     /// drop(other);
     /// buf.reserve(128);
     ///
-    /// assert_eq!(buf.capacity(), 160);
+    /// assert_eq!(buf.capacity(), 128);
     /// assert_eq!(buf.as_ptr(), ptr);
     /// ```
     ///
@@ -2461,41 +2415,10 @@ impl PartialEq for BytesVec {
     }
 }
 
-impl Ord for BytesVec {
-    #[inline]
-    fn cmp(&self, other: &BytesVec) -> cmp::Ordering {
-        self.inner.as_ref().cmp(other.inner.as_ref())
-    }
-}
-
-impl PartialOrd for BytesVec {
-    #[inline]
-    fn partial_cmp(&self, other: &BytesVec) -> Option<cmp::Ordering> {
-        self.inner.as_ref().partial_cmp(other.inner.as_ref())
-    }
-}
-
 impl Default for BytesVec {
     #[inline]
     fn default() -> BytesVec {
         BytesVec::new()
-    }
-}
-
-impl fmt::Debug for BytesVec {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&debug::BsDebug(self.inner.as_ref()), fmt)
-    }
-}
-
-impl hash::Hash for BytesVec {
-    #[inline]
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: hash::Hasher,
-    {
-        let s: &[u8] = self.as_ref();
-        s.hash(state);
     }
 }
 
@@ -2510,6 +2433,12 @@ impl BorrowMut<[u8]> for BytesVec {
     #[inline]
     fn borrow_mut(&mut self) -> &mut [u8] {
         self.as_mut()
+    }
+}
+
+impl fmt::Debug for BytesVec {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&debug::BsDebug(self.inner.as_ref()), fmt)
     }
 }
 
@@ -2548,6 +2477,27 @@ impl<'a> IntoIterator for &'a BytesVec {
     }
 }
 
+impl FromIterator<u8> for BytesVec {
+    fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> Self {
+        let iter = into_iter.into_iter();
+        let (min, maybe_max) = iter.size_hint();
+
+        let mut out = BytesVec::with_capacity(maybe_max.unwrap_or(min));
+        for i in iter {
+            out.reserve(1);
+            out.put_u8(i);
+        }
+
+        out
+    }
+}
+
+impl<'a> FromIterator<&'a u8> for BytesVec {
+    fn from_iter<T: IntoIterator<Item = &'a u8>>(into_iter: T) -> Self {
+        into_iter.into_iter().copied().collect::<BytesVec>()
+    }
+}
+
 impl Extend<u8> for BytesVec {
     fn extend<T>(&mut self, iter: T)
     where
@@ -2583,9 +2533,12 @@ impl InnerVec {
 
     #[inline]
     fn from_slice(cap: usize, src: &[u8], pool: PoolRef) -> InnerVec {
-        // TODO: vec must be aligned to SharedVec instead of u8
-        let mut vec = Vec::<SharedVec>::with_capacity((cap / SHARED_VEC_SIZE) + 2);
-        #[allow(clippy::uninit_vec)]
+        // vec must be aligned to SharedVec instead of u8
+        let mut vec_cap = (cap / SHARED_VEC_SIZE) + 1;
+        if cap % SHARED_VEC_SIZE != 0 {
+            vec_cap += 1;
+        }
+        let mut vec = Vec::<SharedVec>::with_capacity(vec_cap);
         unsafe {
             // Store data in vec
             let len = src.len() as u32;
@@ -2961,9 +2914,12 @@ impl Inner {
 
     #[inline]
     fn from_slice(cap: usize, src: &[u8], pool: PoolRef) -> Inner {
-        // TODO: vec must be aligned to SharedVec instead of u8
-        let mut vec = Vec::<SharedVec>::with_capacity((cap / SHARED_VEC_SIZE) + 2);
-        #[allow(clippy::uninit_vec)]
+        // vec must be aligned to SharedVec instead of u8
+        let mut vec_cap = (cap / SHARED_VEC_SIZE) + 1;
+        if cap % SHARED_VEC_SIZE != 0 {
+            vec_cap += 1;
+        }
+        let mut vec = Vec::<SharedVec>::with_capacity(vec_cap);
         unsafe {
             // Store data in vec
             let len = src.len();
@@ -3692,12 +3648,6 @@ impl PartialEq<[u8]> for BytesMut {
     }
 }
 
-impl PartialOrd<[u8]> for BytesMut {
-    fn partial_cmp(&self, other: &[u8]) -> Option<cmp::Ordering> {
-        (**self).partial_cmp(other)
-    }
-}
-
 impl PartialEq<BytesMut> for [u8] {
     fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
@@ -3716,21 +3666,9 @@ impl PartialEq<str> for BytesMut {
     }
 }
 
-impl PartialOrd<str> for BytesMut {
-    fn partial_cmp(&self, other: &str) -> Option<cmp::Ordering> {
-        (**self).partial_cmp(other.as_bytes())
-    }
-}
-
 impl PartialEq<BytesMut> for str {
     fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
-    }
-}
-
-impl PartialOrd<BytesMut> for str {
-    fn partial_cmp(&self, other: &BytesMut) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
     }
 }
 
@@ -3740,21 +3678,9 @@ impl PartialEq<Vec<u8>> for BytesMut {
     }
 }
 
-impl PartialOrd<Vec<u8>> for BytesMut {
-    fn partial_cmp(&self, other: &Vec<u8>) -> Option<cmp::Ordering> {
-        (**self).partial_cmp(&other[..])
-    }
-}
-
 impl PartialEq<BytesMut> for Vec<u8> {
     fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
-    }
-}
-
-impl PartialOrd<BytesMut> for Vec<u8> {
-    fn partial_cmp(&self, other: &BytesMut) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
     }
 }
 
@@ -3764,21 +3690,9 @@ impl PartialEq<String> for BytesMut {
     }
 }
 
-impl PartialOrd<String> for BytesMut {
-    fn partial_cmp(&self, other: &String) -> Option<cmp::Ordering> {
-        (**self).partial_cmp(other.as_bytes())
-    }
-}
-
 impl PartialEq<BytesMut> for String {
     fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
-    }
-}
-
-impl PartialOrd<BytesMut> for String {
-    fn partial_cmp(&self, other: &BytesMut) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
     }
 }
 
@@ -3791,36 +3705,15 @@ where
     }
 }
 
-impl<'a, T: ?Sized> PartialOrd<&'a T> for BytesMut
-where
-    BytesMut: PartialOrd<T>,
-{
-    fn partial_cmp(&self, other: &&'a T) -> Option<cmp::Ordering> {
-        self.partial_cmp(*other)
-    }
-}
-
 impl PartialEq<BytesMut> for &[u8] {
     fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
 }
 
-impl PartialOrd<BytesMut> for &[u8] {
-    fn partial_cmp(&self, other: &BytesMut) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
 impl PartialEq<BytesMut> for &str {
     fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
-    }
-}
-
-impl PartialOrd<BytesMut> for &str {
-    fn partial_cmp(&self, other: &BytesMut) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
     }
 }
 
@@ -4016,21 +3909,9 @@ impl PartialEq<BytesVec> for [u8] {
     }
 }
 
-impl PartialOrd<BytesVec> for [u8] {
-    fn partial_cmp(&self, other: &BytesVec) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
 impl PartialEq<str> for BytesVec {
     fn eq(&self, other: &str) -> bool {
         &**self == other.as_bytes()
-    }
-}
-
-impl PartialOrd<str> for BytesVec {
-    fn partial_cmp(&self, other: &str) -> Option<cmp::Ordering> {
-        (**self).partial_cmp(other.as_bytes())
     }
 }
 
@@ -4040,21 +3921,9 @@ impl PartialEq<BytesVec> for str {
     }
 }
 
-impl PartialOrd<BytesVec> for str {
-    fn partial_cmp(&self, other: &BytesVec) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
 impl PartialEq<Vec<u8>> for BytesVec {
     fn eq(&self, other: &Vec<u8>) -> bool {
         *self == other[..]
-    }
-}
-
-impl PartialOrd<Vec<u8>> for BytesVec {
-    fn partial_cmp(&self, other: &Vec<u8>) -> Option<cmp::Ordering> {
-        (**self).partial_cmp(&other[..])
     }
 }
 
@@ -4064,33 +3933,15 @@ impl PartialEq<BytesVec> for Vec<u8> {
     }
 }
 
-impl PartialOrd<BytesVec> for Vec<u8> {
-    fn partial_cmp(&self, other: &BytesVec) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
 impl PartialEq<String> for BytesVec {
     fn eq(&self, other: &String) -> bool {
         *self == other[..]
     }
 }
 
-impl PartialOrd<String> for BytesVec {
-    fn partial_cmp(&self, other: &String) -> Option<cmp::Ordering> {
-        (**self).partial_cmp(other.as_bytes())
-    }
-}
-
 impl PartialEq<BytesVec> for String {
     fn eq(&self, other: &BytesVec) -> bool {
         *other == *self
-    }
-}
-
-impl PartialOrd<BytesVec> for String {
-    fn partial_cmp(&self, other: &BytesVec) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
     }
 }
 
@@ -4103,36 +3954,15 @@ where
     }
 }
 
-impl<'a, T: ?Sized> PartialOrd<&'a T> for BytesVec
-where
-    BytesVec: PartialOrd<T>,
-{
-    fn partial_cmp(&self, other: &&'a T) -> Option<cmp::Ordering> {
-        self.partial_cmp(*other)
-    }
-}
-
 impl PartialEq<BytesVec> for &[u8] {
     fn eq(&self, other: &BytesVec) -> bool {
         *other == *self
     }
 }
 
-impl PartialOrd<BytesVec> for &[u8] {
-    fn partial_cmp(&self, other: &BytesVec) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
 impl PartialEq<BytesVec> for &str {
     fn eq(&self, other: &BytesVec) -> bool {
         *other == *self
-    }
-}
-
-impl PartialOrd<BytesVec> for &str {
-    fn partial_cmp(&self, other: &BytesVec) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
     }
 }
 

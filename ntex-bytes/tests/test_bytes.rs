@@ -1,7 +1,6 @@
-#![deny(warnings, rust_2018_idioms)]
-use std::task::Poll;
+use std::{borrow::Borrow, borrow::BorrowMut, task::Poll};
 
-use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, BytesVec, PoolId};
+use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, BytesVec, Pool, PoolId, PoolRef};
 
 const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb";
 const SHORT: &[u8] = b"hello world";
@@ -263,7 +262,7 @@ fn split_off_uninitialized() {
     assert_eq!(bytes.capacity(), 128);
 
     assert_eq!(other.len(), 0);
-    assert_eq!(other.capacity(), 928);
+    assert_eq!(other.capacity(), 896);
 }
 
 #[test]
@@ -441,6 +440,7 @@ fn split_off_to_at_gt_len() {
 fn fns_defined_for_bytes() {
     let mut bytes = Bytes::from(&b"hello world"[..]);
     bytes.as_ptr();
+    assert_eq!(Borrow::<[u8]>::borrow(&bytes), b"hello world");
 
     assert!(bytes > "g");
     assert!(bytes > "g".to_string());
@@ -465,6 +465,12 @@ fn fns_defined_for_bytes() {
     let v: Vec<u8> = bytes.as_ref().iter().cloned().collect();
     assert_eq!(&v[..], bytes);
 
+    let v: Vec<u8> = bytes.clone().into_iter().collect();
+    assert_eq!(&v[..], bytes);
+
+    let v: Vec<u8> = bytes.as_ref().into_iter().cloned().collect();
+    assert_eq!(&v[..], bytes);
+
     let b2: Bytes = v.iter().collect();
     assert_eq!(b2, bytes);
     assert_eq!(&v[..], b2);
@@ -481,15 +487,8 @@ fn fns_defined_for_bytes_mut() {
     let mut bytes = BytesMut::from(&b"hello world"[..]);
     bytes.as_ptr();
     bytes.as_mut_ptr();
-
-    assert!(bytes > "g");
-    assert!(bytes > "g".to_string());
-    assert!(bytes > "g".as_bytes().to_vec());
-    assert!(bytes > BytesMut::from(&"g"[..]));
-    assert!("g" > bytes);
-    assert!("g".to_string() > bytes);
-    assert!("g".as_bytes().to_vec() > bytes);
-    assert!(BytesMut::from(&"g"[..]) < bytes);
+    assert_eq!(Borrow::<[u8]>::borrow(&bytes), b"hello world");
+    assert_eq!(BorrowMut::<[u8]>::borrow_mut(&mut bytes), b"hello world");
 
     assert_eq!(bytes, "hello world");
     assert_eq!(bytes, "hello world".as_bytes().to_vec());
@@ -542,15 +541,8 @@ fn fns_defined_for_bytes_vec() {
     let mut bytes = BytesVec::copy_from_slice(&b"hello world"[..]);
     bytes.as_ptr();
     bytes.as_mut_ptr();
-
-    assert!(bytes > "g");
-    assert!(bytes > "g".to_string());
-    assert!(bytes > "g".as_bytes().to_vec());
-    assert!(bytes > BytesVec::copy_from_slice("g"));
-    assert!("g" > bytes);
-    assert!("g".to_string() > bytes);
-    assert!("g".as_bytes().to_vec() > bytes);
-    assert!(BytesVec::copy_from_slice(&"g"[..]) < bytes);
+    assert_eq!(Borrow::<[u8]>::borrow(&bytes), b"hello world");
+    assert_eq!(BorrowMut::<[u8]>::borrow_mut(&mut bytes), b"hello world");
 
     assert_eq!(bytes, "hello world");
     assert_eq!(bytes, "hello world".as_bytes().to_vec());
@@ -567,6 +559,9 @@ fn fns_defined_for_bytes_vec() {
     assert_eq!(&v[..], bytes);
 
     let v: Vec<u8> = bytes.iter().cloned().collect();
+    assert_eq!(&v[..], bytes);
+
+    let v: Vec<u8> = bytes.as_ref().into_iter().cloned().collect();
     assert_eq!(&v[..], bytes);
 
     let v: Vec<u8> = bytes.into_iter().collect();
@@ -956,13 +951,19 @@ fn bytes_vec() {
 
 #[test]
 fn pool() {
+    assert_eq!(PoolRef::default().id(), PoolId::DEFAULT);
+    assert!(format!("{:?}", PoolRef::default()).contains("PoolRef"));
+
+    assert_eq!(Pool::from(PoolRef::default()).id(), PoolId::DEFAULT);
+    assert!(format!("{:?}", Pool::from(PoolId::DEFAULT)).contains("Pool"));
+
     // Pool
     let p1 = PoolId::P1.pool_ref();
     assert_eq!(p1.allocated(), 0);
     let mut buf = BytesMut::with_capacity_in(1024, p1);
-    assert_eq!(p1.allocated(), 1056 + shared_vec());
+    assert_eq!(p1.allocated(), 1024 + shared_vec());
     buf.reserve(2048);
-    assert_eq!(p1.allocated(), 2080 + shared_vec());
+    assert_eq!(p1.allocated(), 2048 + shared_vec());
     drop(buf);
     assert_eq!(p1.allocated(), 0);
 
@@ -970,26 +971,43 @@ fn pool() {
     let p = PoolId::DEFAULT.pool_ref();
     assert_eq!(p.allocated(), 0);
     let mut buf = BytesMut::with_capacity(1024);
-    assert_eq!(p.allocated(), 1056 + shared_vec());
+    assert_eq!(p.allocated(), 1024 + shared_vec());
     buf.reserve(2048);
-    assert_eq!(p.allocated(), 2080 + shared_vec());
+    assert_eq!(p.allocated(), 2048 + shared_vec());
     drop(buf);
     assert_eq!(p.allocated(), 0);
 
     let mut buf = BytesMut::with_capacity(1024);
-    assert_eq!(p.allocated(), 1056 + shared_vec());
+    assert_eq!(p.allocated(), 1024 + shared_vec());
     assert_eq!(p1.allocated(), 0);
     p1.move_in(&mut buf);
     assert_eq!(p.allocated(), 0);
-    assert_eq!(p1.allocated(), 1056 + shared_vec());
+    assert_eq!(p1.allocated(), 1024 + shared_vec());
+
+    let mut buf = BytesMut::from(Vec::with_capacity(1024));
+    assert_eq!(p.allocated(), 992 + shared_vec());
+    assert_eq!(p1.allocated(), 1056);
+    p1.move_in(&mut buf);
+    assert_eq!(p.allocated(), 0);
+    assert_eq!(p1.allocated(), 2048 + shared_vec());
 
     let p1 = PoolId::P2.pool_ref();
     let mut buf = BytesVec::with_capacity(1024);
-    assert_eq!(p.allocated(), 1056 + shared_vec());
+    assert_eq!(p.allocated(), 1024 + shared_vec());
     assert_eq!(p1.allocated(), 0);
     p1.move_vec_in(&mut buf);
     assert_eq!(p.allocated(), 0);
-    assert_eq!(p1.allocated(), 1056 + shared_vec());
+    assert_eq!(p1.allocated(), 1024 + shared_vec());
+
+    let p3 = PoolId::P3.pool_ref();
+    assert_eq!(p3.id(), PoolId::P3);
+    let b: BytesMut = p3.buf_with_capacity(1024);
+    assert_eq!(b.capacity(), 992 + shared_vec());
+    assert_eq!(p3.allocated(), 1024 + shared_vec());
+
+    let b: BytesVec = p3.vec_with_capacity(1024);
+    assert_eq!(b.capacity(), 992 + shared_vec());
+    assert_eq!(p3.allocated(), 2080 + shared_vec());
 }
 
 #[ntex::test]
