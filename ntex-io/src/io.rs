@@ -811,7 +811,7 @@ impl<F> FilterItem<F> {
         }
     }
 
-    /// Get sealed, panic if it is not sealed
+    /// Get sealed, panic if it is already sealed
     fn get_sealed(&mut self) -> Sealed {
         if self.data[KIND_IDX] & KIND_SEALED != 0 {
             self.data[KIND_IDX] &= KIND_UNMASK;

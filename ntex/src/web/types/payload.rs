@@ -441,11 +441,19 @@ mod tests {
             .set_payload(Bytes::from_static(b"hello=world"))
             .to_http_parts();
 
-        let mut s = from_request::<Payload>(&req, &mut pl)
-            .await
-            .unwrap()
-            .into_inner();
+        let mut s = from_request::<Payload>(&req, &mut pl).await.unwrap();
         let b = stream_recv(&mut s).await.unwrap().unwrap();
+        assert_eq!(b, Bytes::from_static(b"hello=world"));
+    }
+
+    #[crate::rt_test]
+    async fn test_payload_recv() {
+        let (req, mut pl) = TestRequest::with_header(header::CONTENT_LENGTH, "11")
+            .set_payload(Bytes::from_static(b"hello=world"))
+            .to_http_parts();
+
+        let mut s = from_request::<Payload>(&req, &mut pl).await.unwrap();
+        let b = s.recv().await.unwrap().unwrap();
         assert_eq!(b, Bytes::from_static(b"hello=world"));
     }
 

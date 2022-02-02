@@ -493,6 +493,10 @@ mod tests {
             .on_shutdown(|| {
                 *shutdown.borrow_mut() = true;
             })
+            .clone()
+            .new_service(())
+            .await
+            .unwrap()
             .clone();
 
         let res = srv.call(()).await;

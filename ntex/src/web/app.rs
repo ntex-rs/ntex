@@ -121,12 +121,6 @@ where
         self
     }
 
-    #[deprecated]
-    #[doc(hidden)]
-    pub fn data<U: 'static>(self, data: U) -> Self {
-        self.state(data)
-    }
-
     /// Set application state factory. This function is
     /// similar to `.state()` but it accepts state factory. State object get
     /// constructed asynchronously during application initialization.
@@ -658,10 +652,12 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_default_resource() {
-        let srv = init_service(
-            App::new().service(web::resource("/test").to(|| async { HttpResponse::Ok() })),
-        )
-        .await;
+        let srv = App::new()
+            .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
+            .finish()
+            .new_service(())
+            .await
+            .unwrap();
         let req = TestRequest::with_uri("/test").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -670,21 +666,22 @@ mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
-        let srv = init_service(
-            App::new()
-                .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
-                .service(
-                    web::resource("/test2")
-                        .default_service(|r: WebRequest<DefaultError>| async move {
-                            Ok(r.into_response(HttpResponse::Created()))
-                        })
-                        .route(web::get().to(|| async { HttpResponse::Ok() })),
-                )
-                .default_service(|r: WebRequest<DefaultError>| async move {
-                    Ok(r.into_response(HttpResponse::MethodNotAllowed()))
-                }),
-        )
-        .await;
+        let srv = App::new()
+            .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
+            .service(
+                web::resource("/test2")
+                    .default_service(|r: WebRequest<DefaultError>| async move {
+                        Ok(r.into_response(HttpResponse::Created()))
+                    })
+                    .route(web::get().to(|| async { HttpResponse::Ok() })),
+            )
+            .default_service(|r: WebRequest<DefaultError>| async move {
+                Ok(r.into_response(HttpResponse::MethodNotAllowed()))
+            })
+            .with_config(Default::default())
+            .new_service(())
+            .await
+            .unwrap();
 
         let req = TestRequest::with_uri("/blah").to_request();
         let resp = srv.call(req).await.unwrap();

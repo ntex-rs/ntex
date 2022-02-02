@@ -3,13 +3,15 @@ use slab::Slab;
 use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::{cell::Cell, Canceled};
-use crate::{future::poll_fn, task::LocalWaker};
+use crate::task::LocalWaker;
 
 /// Creates a new futures-aware, pool of one-shot's.
 pub fn new<T>() -> Pool<T> {
     Pool(Cell::new(Slab::new()))
 }
 
+#[doc(hidden)]
+/// Futures-aware, pool of one-shot's.
 pub type OneshotsPool<T> = Pool<T>;
 
 /// Futures-aware, pool of one-shot's.
@@ -152,11 +154,6 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Receiver<T> {
-    /// Wait until the oneshot is ready and return value
-    pub async fn recv(&self) -> Result<T, Canceled> {
-        poll_fn(|cx| self.poll_recv(cx)).await
-    }
-
     /// Polls the oneshot to determine if value is ready
     pub fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Result<T, Canceled>> {
         let inner = get_inner(&self.inner, self.token);
@@ -207,6 +204,8 @@ mod tests {
         let (tx, rx) = p.channel();
         tx.send("test").unwrap();
         assert_eq!(rx.await.unwrap(), "test");
+        assert!(format!("{}", Canceled).contains("canceled"));
+        assert!(format!("{:?}", Canceled).contains("Canceled"));
 
         let p2 = p.clone();
         let (tx, rx) = p2.channel();
@@ -241,5 +240,10 @@ mod tests {
             lazy(|cx| Pin::new(&mut tx).poll_canceled(cx)).await,
             Poll::Ready(())
         );
+
+        let p = Pool::default();
+        let (tx, rx) = p.channel();
+        tx.send("test").unwrap();
+        assert_eq!(rx.await.unwrap(), "test");
     }
 }

@@ -669,13 +669,17 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_scope() {
-        let srv = init_service(
-            App::new().service(
-                web::scope("/app")
-                    .service(web::resource("/path1").to(|| async { HttpResponse::Ok() })),
-            ),
-        )
-        .await;
+        let srv =
+            init_service(
+                App::new()
+                    .service(web::scope("/app").service(
+                        web::resource("/path1").to(|| async { HttpResponse::Ok() }),
+                    ))
+                    .service(web::scope("/app2").case_insensitive_routing().service(
+                        web::resource("/path1").to(|| async { HttpResponse::Ok() }),
+                    )),
+            )
+            .await;
 
         let req = TestRequest::with_uri("/app/path1").to_request();
         let resp = srv.call(req).await.unwrap();
@@ -684,6 +688,14 @@ mod tests {
         let req = TestRequest::with_uri("/app/path10").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let req = TestRequest::with_uri("/app2/path1").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let req = TestRequest::with_uri("/app2/Path1").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[crate::rt_test]

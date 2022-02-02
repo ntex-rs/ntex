@@ -169,6 +169,8 @@ async fn test_rustls_string() {
         }))
         .and_then(rustls::Acceptor::new(tls_acceptor()))
         .and_then(fn_service(|io: Io<_>| async move {
+            assert!(io.query::<PeerCert>().as_ref().is_none());
+            assert!(io.query::<PeerCertChain>().as_ref().is_none());
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();

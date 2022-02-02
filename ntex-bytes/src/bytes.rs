@@ -3654,12 +3654,6 @@ impl PartialEq<BytesMut> for [u8] {
     }
 }
 
-impl PartialOrd<BytesMut> for [u8] {
-    fn partial_cmp(&self, other: &BytesMut) -> Option<cmp::Ordering> {
-        other.partial_cmp(self)
-    }
-}
-
 impl PartialEq<str> for BytesMut {
     fn eq(&self, other: &str) -> bool {
         &**self == other.as_bytes()
@@ -3894,12 +3888,6 @@ impl PartialEq<BytesVec> for BytesMut {
 impl PartialEq<[u8]> for BytesVec {
     fn eq(&self, other: &[u8]) -> bool {
         &**self == other
-    }
-}
-
-impl PartialOrd<[u8]> for BytesVec {
-    fn partial_cmp(&self, other: &[u8]) -> Option<cmp::Ordering> {
-        (**self).partial_cmp(other)
     }
 }
 

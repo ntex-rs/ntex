@@ -320,5 +320,11 @@ mod tests {
         let (tx, rx) = channel::<()>();
         rx.close();
         assert!(tx.is_closed());
+
+        let (tx, rx) = channel::<()>();
+        drop(tx);
+        assert!(rx.is_closed());
+        let _tx = rx.sender();
+        assert!(!rx.is_closed());
     }
 }
