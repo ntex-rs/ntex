@@ -500,6 +500,18 @@ mod tests {
         tree.insert(&ResourceDef::new("/name/"), 2);
         assert_eq!(tree.find(&mut Path::new("/name")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/name/")), Some(2));
+
+        let mut tree = Tree::new(&ResourceDef::new(""), 1);
+        tree.insert(&ResourceDef::new("/test/index.html"), 2);
+        assert_eq!(tree.find_checked(&mut Path::new(""), &|_, _| true), Some(1));
+        assert_eq!(
+            tree.find_checked(&mut Path::new("index.html"), &|_, _| true),
+            None
+        );
+        assert_eq!(
+            tree.find_checked(&mut Path::new("test/index.html"), &|_, _| true),
+            Some(2)
+        );
     }
 
     #[test]

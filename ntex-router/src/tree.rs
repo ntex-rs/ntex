@@ -247,23 +247,7 @@ impl Tree {
                                 return Some(v);
                             }
                         }
-                        Item::Subtree(ref tree) => {
-                            let result = tree.find_inner_wrapped(
-                                "",
-                                resource,
-                                check,
-                                1,
-                                &mut segments,
-                                insensitive,
-                                base_skip,
-                            );
-                            if let Some((val, skip)) = result {
-                                let path = resource.resource_path();
-                                path.segments = segments;
-                                path.skip += skip as u16;
-                                return Some(val);
-                            }
-                        }
+                        _ => continue,
                     }
                 }
             } else {

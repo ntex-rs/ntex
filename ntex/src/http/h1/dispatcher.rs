@@ -446,10 +446,10 @@ where
                 }
                 // stop io tasks and call upgrade service
                 State::Upgrade(ref mut req) => {
-                    log::trace!("switching to upgrade service");
-
                     let io = this.inner.io.take();
                     let req = req.take().unwrap();
+
+                    log::trace!("switching to upgrade service for {:?}", req);
 
                     // Handle UPGRADE request
                     crate::rt::spawn(this.inner.config.upgrade.as_ref().unwrap().call((
