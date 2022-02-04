@@ -2,7 +2,9 @@
 
 ## [0.1.13] (2022-02-04)
 
-* add some tests for BytesVec #102
+* Remove unused impls for BytesMut and BytesVec
+
+* Add some tests for BytesVec #102
 
 ## [0.1.12] (2022-01-31)
 
