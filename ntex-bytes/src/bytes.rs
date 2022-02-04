@@ -3840,6 +3840,12 @@ where
     }
 }
 
+impl From<BytesVec> for Bytes {
+    fn from(b: BytesVec) -> Self {
+        b.freeze()
+    }
+}
+
 impl<'a, T: ?Sized> PartialOrd<&'a T> for Bytes
 where
     Bytes: PartialOrd<T>,
@@ -4011,5 +4017,31 @@ mod tests {
 
         let b = BytesMut::try_from(b).unwrap();
         assert_eq!(b, LONG);
+    }
+    #[test]
+    fn bytes_vec() {
+        let bv = BytesVec::copy_from_slice(&LONG[..]);
+        // SharedVec size is 32
+        assert_eq!(bv.capacity(), mem::size_of::<SharedVec>() * 9);
+        assert_eq!(bv.len(), 263);
+        assert_eq!(bv.as_ref().len(), 263);
+        assert_eq!(bv.as_ref(), &LONG[..]);
+
+        let mut bv = BytesVec::copy_from_slice(&b"hello"[..]);
+        assert_eq!(bv.capacity(), mem::size_of::<SharedVec>());
+        assert_eq!(bv.len(), 5);
+        assert_eq!(bv.as_ref().len(), 5);
+        assert_eq!(bv.as_ref()[0], b"h"[0]);
+        bv.put_u8(b" "[0]);
+        assert_eq!(bv.as_ref(), &b"hello "[..]);
+        bv.put("world");
+        assert_eq!(bv, "hello world");
+
+        let b = Bytes::from(bv);
+        assert_eq!(b, "hello world");
+
+        let mut b = BytesMut::try_from(b).unwrap();
+        b.put(".");
+        assert_eq!(b, "hello world.");
     }
 }

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.13] (2022-02-04)
+
+* add some tests for BytesVec #102
+
 ## [0.1.12] (2022-01-31)
 
 * Fix conversion from BytesVec to BytesMut and back (BytesVec::with_bytes_mut())
