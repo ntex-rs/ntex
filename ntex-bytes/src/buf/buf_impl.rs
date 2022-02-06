@@ -858,6 +858,39 @@ impl Buf for &str {
     }
 }
 
+impl<T: AsRef<[u8]>> Buf for std::io::Cursor<T> {
+    fn remaining(&self) -> usize {
+        let len = self.get_ref().as_ref().len();
+        let pos = self.position();
+
+        if pos >= len as u64 {
+            return 0;
+        }
+
+        len - pos as usize
+    }
+
+    fn chunk(&self) -> &[u8] {
+        let len = self.get_ref().as_ref().len();
+        let pos = self.position();
+
+        if pos >= len as u64 {
+            return &[];
+        }
+
+        &self.get_ref().as_ref()[pos as usize..]
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        let pos = (self.position() as usize)
+            .checked_add(cnt)
+            .expect("overflow");
+
+        assert!(pos <= self.get_ref().as_ref().len());
+        self.set_position(pos as u64);
+    }
+}
+
 // The existence of this function makes the compiler catch if the Buf
 // trait is "object-safe" or not.
 fn _assert_trait_object(_b: &dyn Buf) {}
@@ -884,6 +917,15 @@ mod tests {
         assert_eq!(buf.chunk(), b" world");
         buf.advance(1);
         assert_eq!(buf.chunk(), b"world");
+
+        let mut buf = std::io::Cursor::new(b" world");
+        assert_eq!(buf.remaining(), 6);
+        assert_eq!(buf.chunk(), b" world");
+        buf.advance(1);
+        assert_eq!(buf.chunk(), b"world");
+        buf.advance(5);
+        assert_eq!(buf.remaining(), 0);
+        assert_eq!(buf.chunk(), b"");
 
         let mut buf = &b"\x08 hello"[..];
         assert_eq!(8, buf.get_u8());

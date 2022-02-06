@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.14] (2022-02-06)
+
+* Restore Buf impl for Cursor
+
 ## [0.1.13] (2022-02-04)
 
 * Remove unused impls for BytesMut and BytesVec
