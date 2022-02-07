@@ -2,30 +2,28 @@ use std::{cell::RefCell, convert::Infallible, fmt, future::Future, pin::Pin, rc:
 
 use crate::http::Request;
 use crate::router::ResourceDef;
-use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{map_config, pipeline_factory, PipelineFactory};
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::Extensions;
 
 use super::app_service::{AppFactory, AppService};
+use super::boxed::{self, BoxServiceFactory};
 use super::config::{AppConfig, ServiceConfig};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
 use super::stack::{Filter, Next, Stack};
 use super::types::state::{State, StateFactory};
 use super::{DefaultError, ErrorRenderer, Resource, Route, WebRequest, WebResponse};
 
-type HttpNewService<Err: ErrorRenderer> =
-    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type FnStateFactory =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Box<dyn StateFactory>, ()>>>>>;
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
-pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
+pub struct App<'a, M, F, Err: ErrorRenderer = DefaultError> {
     middleware: M,
-    filter: PipelineFactory<F, WebRequest<Err>>,
-    services: Vec<Box<dyn AppServiceFactory<Err>>>,
-    default: Option<Rc<HttpNewService<Err>>>,
+    filter: PipelineFactory<F, &'a mut WebRequest<Err>>,
+    services: Vec<Box<dyn AppServiceFactory<'a, Err>>>,
+    default: Option<Rc<BoxServiceFactory<'a, Err>>>,
     state: Vec<Box<dyn StateFactory>>,
     state_factories: Vec<FnStateFactory>,
     external: Vec<ResourceDef>,
@@ -34,47 +32,49 @@ pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     case_insensitive: bool,
 }
 
-impl App<Identity, Filter<DefaultError>, DefaultError> {
+impl<'a> App<'a, Identity, Filter<DefaultError>, DefaultError> {
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
-        App {
-            middleware: Identity,
-            filter: pipeline_factory(Filter::new()),
-            state: Vec::new(),
-            state_factories: Vec::new(),
-            services: Vec::new(),
-            default: None,
-            external: Vec::new(),
-            extensions: Extensions::new(),
-            error_renderer: DefaultError,
-            case_insensitive: false,
-        }
+        // App {
+        //     middleware: Identity,
+        //     filter: pipeline_factory(Filter::new()),
+        //     state: Vec::new(),
+        //     state_factories: Vec::new(),
+        //     services: Vec::new(),
+        //     default: None,
+        //     external: Vec::new(),
+        //     extensions: Extensions::new(),
+        //     error_renderer: DefaultError,
+        //     case_insensitive: false,
+        // }
+        todo!()
     }
 }
 
-impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
+impl<'a, Err: ErrorRenderer> App<'a, Identity, Filter<Err>, Err> {
     /// Create application builder with custom error renderer.
     pub fn with(err: Err) -> Self {
-        App {
-            middleware: Identity,
-            filter: pipeline_factory(Filter::new()),
-            state: Vec::new(),
-            state_factories: Vec::new(),
-            services: Vec::new(),
-            default: None,
-            external: Vec::new(),
-            extensions: Extensions::new(),
-            error_renderer: err,
-            case_insensitive: false,
-        }
+        // App {
+        //     middleware: Identity,
+        //     filter: pipeline_factory(Filter::new()),
+        //     state: Vec::new(),
+        //     state_factories: Vec::new(),
+        //     services: Vec::new(),
+        //     default: None,
+        //     external: Vec::new(),
+        //     extensions: Extensions::new(),
+        //     error_renderer: err,
+        //     case_insensitive: false,
+        // }
+        todo!()
     }
 }
 
-impl<M, T, Err> App<M, T, Err>
+impl<'a, M, T, Err> App<'a, M, T, Err>
 where
     T: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
+        &'a mut WebRequest<Err>,
+        Response = &'a mut WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
     >,
@@ -183,7 +183,7 @@ where
     /// ```
     pub fn configure<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut ServiceConfig<Err>),
+        F: FnOnce(&mut ServiceConfig<'a, Err>),
     {
         let mut cfg = ServiceConfig::new();
         f(&mut cfg);
@@ -213,11 +213,12 @@ where
     /// }
     /// ```
     pub fn route(self, path: &str, mut route: Route<Err>) -> Self {
-        self.service(
-            Resource::new(path)
-                .add_guards(route.take_guards())
-                .route(route),
-        )
+        // self.service(
+        //     Resource::new(path)
+        //         .add_guards(route.take_guards())
+        //         .route(route),
+        // )
+        self
     }
 
     /// Register http service.
@@ -231,7 +232,7 @@ where
     /// * "StaticFiles" is a service for static files support
     pub fn service<F>(mut self, factory: F) -> Self
     where
-        F: WebServiceFactory<Err> + 'static,
+        F: WebServiceFactory<'a, Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));
@@ -274,15 +275,18 @@ where
     /// ```
     pub fn default_service<F, U>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<U, WebRequest<Err>>,
-        U: ServiceFactory<WebRequest<Err>, Response = WebResponse, Error = Err::Container>
-            + 'static,
+        F: IntoServiceFactory<U, &'a mut WebRequest<Err>>,
+        U: ServiceFactory<
+                &'a mut WebRequest<Err>,
+                Response = WebResponse,
+                Error = Err::Container,
+            > + 'static,
         U::InitError: fmt::Debug,
     {
-        // create and configure default resource
-        self.default = Some(Rc::new(boxed::factory(f.into_factory().map_init_err(
-            |e| log::error!("Cannot construct default service: {:?}", e),
-        ))));
+        // // create and configure default resource
+        // self.default = Some(Rc::new(boxed::factory(f.into_factory().map_init_err(
+        //     |e| log::error!("Cannot construct default service: {:?}", e),
+        // ))));
 
         self
     }
@@ -349,10 +353,11 @@ where
         self,
         filter: U,
     ) -> App<
+        'a,
         M,
         impl ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
+            &'a mut WebRequest<Err>,
+            Response = &'a mut WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         >,
@@ -360,12 +365,12 @@ where
     >
     where
         S: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
+            &'a mut WebRequest<Err>,
+            Response = &'a mut WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         >,
-        U: IntoServiceFactory<S, WebRequest<Err>>,
+        U: IntoServiceFactory<S, &'a mut WebRequest<Err>>,
     {
         App {
             filter: self.filter.and_then(filter.into_factory()),
@@ -407,7 +412,7 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn wrap<U>(self, mw: U) -> App<Stack<M, U, Err>, T, Err> {
+    pub fn wrap<U>(self, mw: U) -> App<'a, Stack<M, U, Err>, T, Err> {
         App {
             middleware: Stack::new(self.middleware, mw),
             filter: self.filter,
@@ -431,13 +436,14 @@ where
     }
 }
 
-impl<M, F, Err> App<M, F, Err>
+impl<'a, M, F, Err> App<'a, M, F, Err>
 where
-    M: Transform<Next<AppService<F::Service, Err>, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    M: Transform<Next<AppService<'a, F::Service, Err>, Err>> + 'static,
+    M::Service:
+        Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
+            &'a mut WebRequest<Err>,
+            Response = &'a mut WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
@@ -468,8 +474,8 @@ where
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
-    > {
-        IntoServiceFactory::<AppFactory<M, F, Err>, Request, ()>::into_factory(self)
+    > + 'a {
+        IntoServiceFactory::<AppFactory<'a, M, F, Err>, Request, ()>::into_factory(self)
     }
 
     /// Construct service factory suitable for `http::HttpService`.
@@ -498,7 +504,7 @@ where
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
-    > {
+    > + 'a {
         let app = AppFactory {
             filter: self.filter,
             middleware: Rc::new(self.middleware),
@@ -514,20 +520,21 @@ where
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, AppConfig>
-    for App<M, F, Err>
+impl<'a, M, F, Err> IntoServiceFactory<AppFactory<'a, M, F, Err>, Request, AppConfig>
+    for App<'a, M, F, Err>
 where
-    M: Transform<Next<AppService<F::Service, Err>, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    M: Transform<Next<AppService<'a, F::Service, Err>, Err>> + 'static,
+    M::Service:
+        Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
+            &'a mut WebRequest<Err>,
+            Response = &'a mut WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,
 {
-    fn into_factory(self) -> AppFactory<M, F, Err> {
+    fn into_factory(self) -> AppFactory<'a, M, F, Err> {
         AppFactory {
             filter: self.filter,
             middleware: Rc::new(self.middleware),
@@ -542,19 +549,21 @@ where
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, ()> for App<M, F, Err>
+impl<'a, M, F, Err> IntoServiceFactory<AppFactory<'a, M, F, Err>, Request, ()>
+    for App<'a, M, F, Err>
 where
-    M: Transform<Next<AppService<F::Service, Err>, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    M: Transform<Next<AppService<'a, F::Service, Err>, Err>> + 'static,
+    M::Service:
+        Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
+            &'a mut WebRequest<Err>,
+            Response = &'a mut WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,
 {
-    fn into_factory(self) -> AppFactory<M, F, Err> {
+    fn into_factory(self) -> AppFactory<'a, M, F, Err> {
         AppFactory {
             filter: self.filter,
             middleware: Rc::new(self.middleware),

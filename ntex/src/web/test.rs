@@ -248,13 +248,13 @@ where
         .unwrap_or_else(|_| panic!("read_response_json failed during deserialization"))
 }
 
-/// Helper method for extractors testing
-pub async fn from_request<'a, T: FromRequest<'a, DefaultError>>(
-    req: &'a HttpRequest,
-    payload: &'a mut Payload,
-) -> Result<T, T::Error> + 'a {
-    T::from_request(req, payload).await
-}
+// /// Helper method for extractors testing
+// pub async fn from_request<'a, T: FromRequest<'a, DefaultError>>(
+//     req: &'a HttpRequest,
+//     payload: &'a mut Payload,
+// ) -> Result<T, T::Error> {
+//     T::from_request(req, payload).await
+// }
 
 /// Helper method for responders testing
 pub async fn respond_to<T: Responder<DefaultError>>(

@@ -18,7 +18,7 @@ use super::rmap::ResourceMap;
 ///
 /// WebRequest allows mutable access to request's internal structures
 pub struct WebRequest<Err> {
-    req: HttpRequest,
+    pub(super) req: HttpRequest,
     _t: PhantomData<Err>,
 }
 
@@ -26,7 +26,7 @@ impl<Err: ErrorRenderer> WebRequest<Err> {
     /// Create web response for error
     #[inline]
     pub fn render_error<E: WebResponseError<Err>>(self, err: E) -> WebResponse {
-        WebResponse::new(err.error_response(&self.req), self.req)
+        WebResponse::new(err.error_response(&self.req))
     }
 
     /// Create web response for error
@@ -86,7 +86,7 @@ impl<Err> WebRequest<Err> {
     /// Create web response
     #[inline]
     pub fn into_response<R: Into<Response>>(self, res: R) -> WebResponse {
-        WebResponse::new(res.into(), self.req)
+        WebResponse::new(res.into())
     }
 
     /// Io reference for current connection

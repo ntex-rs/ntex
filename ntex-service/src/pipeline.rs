@@ -158,10 +158,7 @@ pub struct PipelineFactory<T, R, C = ()> {
 
 impl<T: ServiceFactory<R, C>, R, C> PipelineFactory<T, R, C> {
     /// Call another service after call to this one has resolved successfully.
-    pub fn and_then<F, U>(
-        self,
-        factory: F,
-    ) -> PipelineFactory<AndThenFactory<T, U, R, C>, R, C>
+    pub fn and_then<F, U>(self, factory: F) -> PipelineFactory<AndThenFactory<T, U>, R, C>
     where
         Self: Sized,
         C: Clone,

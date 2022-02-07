@@ -15,7 +15,7 @@ use super::extract::FromRequest;
 use super::handler::Handler;
 use super::resource::Resource;
 use super::route::Route;
-use super::scope::Scope;
+// use super::scope::Scope;
 use super::server::HttpServer;
 use super::service::WebServiceAdapter;
 use super::{HttpResponse, HttpResponseBuilder};
@@ -53,33 +53,33 @@ pub fn resource<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<Err> {
     Resource::new(path)
 }
 
-/// Configure scope for common root path.
-///
-/// Scopes collect multiple paths under a common path prefix.
-/// Scope path can contain variable path segments as resources.
-///
-/// ```rust
-/// use ntex::web;
-///
-/// let app = web::App::new().service(
-///     web::scope("/{project_id}")
-///         .service(web::resource("/path1").to(|| async { web::HttpResponse::Ok() }))
-///         .service(web::resource("/path2").to(|| async { web::HttpResponse::Ok() }))
-///         .service(web::resource("/path3").to(|| async { web::HttpResponse::MethodNotAllowed() }))
-/// );
-/// ```
-///
-/// In the above example, three routes get added:
-///  * /{project_id}/path1
-///  * /{project_id}/path2
-///  * /{project_id}/path3
-///
-pub fn scope<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Scope<Err> {
-    Scope::new(path)
-}
+// /// Configure scope for common root path.
+// ///
+// /// Scopes collect multiple paths under a common path prefix.
+// /// Scope path can contain variable path segments as resources.
+// ///
+// /// ```rust
+// /// use ntex::web;
+// ///
+// /// let app = web::App::new().service(
+// ///     web::scope("/{project_id}")
+// ///         .service(web::resource("/path1").to(|| async { web::HttpResponse::Ok() }))
+// ///         .service(web::resource("/path2").to(|| async { web::HttpResponse::Ok() }))
+// ///         .service(web::resource("/path3").to(|| async { web::HttpResponse::MethodNotAllowed() }))
+// /// );
+// /// ```
+// ///
+// /// In the above example, three routes get added:
+// ///  * /{project_id}/path1
+// ///  * /{project_id}/path2
+// ///  * /{project_id}/path3
+// ///
+// pub fn scope<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Scope<Err> {
+//     Scope::new(path)
+// }
 
 /// Create *route* without configuration.
-pub fn route<Err: ErrorRenderer>() -> Route<Err> {
+pub fn route<'a, Err: ErrorRenderer>() -> Route<Err> {
     Route::new()
 }
 
@@ -97,7 +97,7 @@ pub fn route<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `GET` route gets added:
 ///  * /{project_id}
 ///
-pub fn get<Err: ErrorRenderer>() -> Route<Err> {
+pub fn get<'a, Err: ErrorRenderer>() -> Route<Err> {
     method(Method::GET)
 }
 
@@ -115,7 +115,7 @@ pub fn get<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `POST` route gets added:
 ///  * /{project_id}
 ///
-pub fn post<Err: ErrorRenderer>() -> Route<Err> {
+pub fn post<'a, Err: ErrorRenderer>() -> Route<Err> {
     method(Method::POST)
 }
 
@@ -133,7 +133,7 @@ pub fn post<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `PUT` route gets added:
 ///  * /{project_id}
 ///
-pub fn put<Err: ErrorRenderer>() -> Route<Err> {
+pub fn put<'a, Err: ErrorRenderer>() -> Route<Err> {
     method(Method::PUT)
 }
 
@@ -151,7 +151,7 @@ pub fn put<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `PATCH` route gets added:
 ///  * /{project_id}
 ///
-pub fn patch<Err: ErrorRenderer>() -> Route<Err> {
+pub fn patch<'a, Err: ErrorRenderer>() -> Route<Err> {
     method(Method::PATCH)
 }
 
@@ -169,7 +169,7 @@ pub fn patch<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `DELETE` route gets added:
 ///  * /{project_id}
 ///
-pub fn delete<Err: ErrorRenderer>() -> Route<Err> {
+pub fn delete<'a, Err: ErrorRenderer>() -> Route<Err> {
     method(Method::DELETE)
 }
 
@@ -187,7 +187,7 @@ pub fn delete<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `HEAD` route gets added:
 ///  * /{project_id}
 ///
-pub fn head<Err: ErrorRenderer>() -> Route<Err> {
+pub fn head<'a, Err: ErrorRenderer>() -> Route<Err> {
     method(Method::HEAD)
 }
 
@@ -205,7 +205,7 @@ pub fn head<Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `GET` route gets added:
 ///  * /{project_id}
 ///
-pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
+pub fn method<'a, Err: ErrorRenderer>(method: Method) -> Route<Err> {
     Route::new().method(method)
 }
 
@@ -225,7 +225,7 @@ pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
 pub fn to<'a, F, Args, Err>(handler: F) -> Route<Err>
 where
     F: Handler<Args, Err>,
-    Args: FromRequest<'a, Err> + 'static,
+    Args: FromRequest<Err> + 'static,
     Err: ErrorRenderer,
     Err::Container: From<Args::Error>,
 {

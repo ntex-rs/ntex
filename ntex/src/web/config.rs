@@ -59,13 +59,13 @@ impl Default for AppConfig {
 /// Part of application configuration could be offloaded
 /// to set of external methods. This could help with
 /// modularization of big application configuration.
-pub struct ServiceConfig<Err = DefaultError> {
-    pub(super) services: Vec<Box<dyn AppServiceFactory<Err>>>,
+pub struct ServiceConfig<'a, Err = DefaultError> {
+    pub(super) services: Vec<Box<dyn AppServiceFactory<'a, Err>>>,
     pub(super) state: Vec<Box<dyn StateFactory>>,
     pub(super) external: Vec<ResourceDef>,
 }
 
-impl<Err: ErrorRenderer> ServiceConfig<Err> {
+impl<'a, Err: ErrorRenderer> ServiceConfig<'a, Err> {
     pub(crate) fn new() -> Self {
         Self {
             services: Vec::new(),
@@ -87,11 +87,12 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     ///
     /// This is same as `App::route()` method.
     pub fn route(&mut self, path: &str, mut route: Route<Err>) -> &mut Self {
-        self.service(
-            Resource::new(path)
-                .add_guards(route.take_guards())
-                .route(route),
-        )
+        // self.service(
+        //     Resource::new(path)
+        //         .add_guards(route.take_guards())
+        //         .route(route),
+        // )
+        self
     }
 
     /// Register http service.
@@ -99,7 +100,7 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     /// This is same as `App::service()` method.
     pub fn service<F>(&mut self, factory: F) -> &mut Self
     where
-        F: WebServiceFactory<Err> + 'static,
+        F: WebServiceFactory<'a, Err> + 'static,
     {
         self.services
             .push(Box::new(ServiceFactoryWrapper::new(factory)));

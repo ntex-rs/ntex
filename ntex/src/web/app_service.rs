@@ -4,10 +4,12 @@ use std::{cell::RefCell, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
-use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{fn_service, PipelineFactory, Service, ServiceFactory, Transform};
+use crate::service::{
+    fn_service, into_service, PipelineFactory, Service, ServiceFactory, Transform,
+};
 use crate::util::{ready, Extensions};
 
+use super::boxed::{self, BoxService, BoxServiceFactory};
 use super::config::AppConfig;
 use super::guard::Guard;
 use super::httprequest::{HttpRequest, HttpRequestPool};
@@ -18,45 +20,42 @@ use super::types::state::StateFactory;
 use super::{ErrorRenderer, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpService<Err: ErrorRenderer> =
-    BoxService<WebRequest<Err>, WebResponse, Err::Container>;
-type HttpNewService<Err: ErrorRenderer> =
-    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
-type BoxResponse<Err: ErrorRenderer> =
-    Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
+type BoxResponse<'a, Err: ErrorRenderer> =
+    Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>> + 'a>>;
 type FnStateFactory =
     Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Box<dyn StateFactory>, ()>>>>>;
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes state factories.
-pub struct AppFactory<T, F, Err: ErrorRenderer>
+pub struct AppFactory<'a, T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
+            &'a mut WebRequest<Err>,
+            Response = &'a mut WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
-    pub(super) filter: PipelineFactory<F, WebRequest<Err>>,
+    pub(super) filter: PipelineFactory<F, &'a mut WebRequest<Err>>,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) state: Rc<Vec<Box<dyn StateFactory>>>,
     pub(super) state_factories: Rc<Vec<FnStateFactory>>,
-    pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,
-    pub(super) default: Option<Rc<HttpNewService<Err>>>,
+    pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<'a, Err>>>>>,
+    pub(super) default: Option<Rc<BoxServiceFactory<'a, Err>>>,
     pub(super) external: RefCell<Vec<ResourceDef>>,
     pub(super) case_insensitive: bool,
 }
 
-impl<T, F, Err> ServiceFactory<Request> for AppFactory<T, F, Err>
+impl<'a, T, F, Err> ServiceFactory<Request> for AppFactory<'a, T, F, Err>
 where
-    T: Transform<Next<AppService<F::Service, Err>, Err>> + 'static,
-    T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    T: Transform<Next<AppService<'a, F::Service, Err>, Err>> + 'static,
+    T::Service:
+        Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
+            &'a mut WebRequest<Err>,
+            Response = &'a mut WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
@@ -65,21 +64,23 @@ where
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
-    type Service = AppFactoryService<T::Service, Err>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Service = AppFactoryService<'a, T::Service, Err>;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'a>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         ServiceFactory::<Request, AppConfig>::new_service(self, AppConfig::default())
     }
 }
 
-impl<T, F, Err> ServiceFactory<Request, AppConfig> for AppFactory<T, F, Err>
+impl<'a, T, F, Err> ServiceFactory<Request, AppConfig> for AppFactory<'a, T, F, Err>
 where
-    T: Transform<Next<AppService<F::Service, Err>, Err>> + 'static,
-    T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    T: Transform<Next<AppService<'a, F::Service, Err>, Err>> + 'static,
+    T::Service:
+        Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
+            &'a mut WebRequest<Err>,
+            Response = &'a mut WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
@@ -88,18 +89,24 @@ where
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
-    type Service = AppFactoryService<T::Service, Err>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Service = AppFactoryService<'a, T::Service, Err>;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'a>>;
 
     fn new_service(&self, config: AppConfig) -> Self::Future {
         // update resource default service
-        let default = self.default.clone().unwrap_or_else(|| {
-            Rc::new(boxed::factory(fn_service(
-                |req: WebRequest<Err>| async move {
-                    Ok(req.into_response(Response::NotFound().finish()))
-                },
-            )))
-        });
+        let default = self.default.clone().unwrap_or_else(|| panic!());
+
+        //     .unwrap_or_else(|| {
+        //     Rc::new(boxed::factory(into_service(
+        //         |req: &'a mut WebRequest<Err>| {
+        //             let res = req.into_response(Response::NotFound().finish());
+        //             async move {
+        //                 Ok(res)
+        //             }
+        //         }
+        //     )))
+        // });
 
         // App config
         let mut config = WebServiceConfig::new(config, default.clone(), self.state.clone());
@@ -188,9 +195,9 @@ where
 }
 
 /// Service to convert `Request` to a `WebRequest<Err>`
-pub struct AppFactoryService<T, Err>
+pub struct AppFactoryService<'a, T, Err>
 where
-    T: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    T: Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     Err: ErrorRenderer,
 {
     service: T,
@@ -198,17 +205,17 @@ where
     config: AppConfig,
     state: Rc<Extensions>,
     pool: &'static HttpRequestPool,
-    _t: PhantomData<Err>,
+    _t: PhantomData<&'a Err>,
 }
 
-impl<T, Err> Service<Request> for AppFactoryService<T, Err>
+impl<'a, T, Err> Service<Request> for AppFactoryService<'a, T, Err>
 where
-    T: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    T: Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future = AppFactoryServiceResponse<T, Err>;
+    type Future = AppFactoryServiceResponse<'a, T, Err>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -242,15 +249,16 @@ where
                 self.pool,
             )
         };
-        AppFactoryServiceResponse {
-            fut: self.service.call(WebRequest::new(req)),
-        }
+        let mut req = WebRequest::new(req);
+        let fut = self.service.call(&mut req);
+
+        AppFactoryServiceResponse { fut, req }
     }
 }
 
-impl<T, Err> Drop for AppFactoryService<T, Err>
+impl<'a, T, Err> Drop for AppFactoryService<'a, T, Err>
 where
-    T: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    T: Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     Err: ErrorRenderer,
 {
     fn drop(&mut self) {
@@ -259,15 +267,16 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct AppFactoryServiceResponse<T: Service<WebRequest<Err>>, Err>{
+    pub struct AppFactoryServiceResponse<'a, T: Service<&'a mut WebRequest<Err>>, Err>{
         #[pin]
-        fut: T::Future
+        fut: T::Future,
+        req: WebRequest<Err>,
     }
 }
 
-impl<T, Err> Future for AppFactoryServiceResponse<T, Err>
+impl<'a, T, Err> Future for AppFactoryServiceResponse<'a, T, Err>
 where
-    T: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    T: Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     Err: ErrorRenderer,
 {
     type Output = Result<WebResponse, Err::Container>;
@@ -277,23 +286,23 @@ where
     }
 }
 
-struct AppRouting<Err: ErrorRenderer> {
-    router: Router<HttpService<Err>, Guards>,
-    default: Option<HttpService<Err>>,
+struct AppRouting<'a, Err: ErrorRenderer> {
+    router: Router<BoxService<'a, Err>, Guards>,
+    default: Option<BoxService<'a, Err>>,
 }
 
-impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
+impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<Err>> for AppRouting<'a, Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future = BoxResponse<Err>;
+    type Future = BoxResponse<'a, Err>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&self, mut req: WebRequest<Err>) -> Self::Future {
-        let res = self.router.recognize_checked(&mut req, |req, guards| {
+    fn call(&self, mut req: &'a mut WebRequest<Err>) -> Self::Future {
+        let res = self.router.recognize_checked(req, |req, guards| {
             if let Some(guards) = guards {
                 for f in guards {
                     if !f.check(req.head()) {
@@ -310,25 +319,29 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
             default.call(req)
         } else {
             let req = req.into_parts().0;
-            Box::pin(async { Ok(WebResponse::new(Response::NotFound().finish(), req)) })
+            Box::pin(async { Ok(WebResponse::new(Response::NotFound().finish())) })
         }
     }
 }
 
 /// Web app service
-pub struct AppService<F, Err: ErrorRenderer> {
+pub struct AppService<'a, F, Err: ErrorRenderer> {
     filter: F,
-    routing: Rc<AppRouting<Err>>,
+    routing: Rc<AppRouting<'a, Err>>,
 }
 
-impl<F, Err> Service<WebRequest<Err>> for AppService<F, Err>
+impl<'a, F, Err> Service<&'a mut WebRequest<Err>> for AppService<'a, F, Err>
 where
-    F: Service<WebRequest<Err>, Response = WebRequest<Err>, Error = Err::Container>,
+    F: Service<
+        &'a mut WebRequest<Err>,
+        Response = &'a mut WebRequest<Err>,
+        Error = Err::Container,
+    >,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future = AppServiceResponse<F, Err>;
+    type Future = AppServiceResponse<'a, F, Err>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -341,7 +354,7 @@ where
         }
     }
 
-    fn call(&self, req: WebRequest<Err>) -> Self::Future {
+    fn call(&self, req: &'a mut WebRequest<Err>) -> Self::Future {
         AppServiceResponse {
             filter: self.filter.call(req),
             routing: self.routing.clone(),
@@ -351,17 +364,21 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct AppServiceResponse<F: Service<WebRequest<Err>>, Err: ErrorRenderer> {
+    pub struct AppServiceResponse<'a, F: Service<&'a mut WebRequest<Err>>, Err: ErrorRenderer> {
         #[pin]
         filter: F::Future,
-        routing: Rc<AppRouting<Err>>,
-        endpoint: Option<BoxResponse<Err>>,
+        routing: Rc<AppRouting<'a, Err>>,
+        endpoint: Option<BoxResponse<'a, Err>>,
     }
 }
 
-impl<F, Err> Future for AppServiceResponse<F, Err>
+impl<'a, F, Err> Future for AppServiceResponse<'a, F, Err>
 where
-    F: Service<WebRequest<Err>, Response = WebRequest<Err>, Error = Err::Container>,
+    F: Service<
+        &'a mut WebRequest<Err>,
+        Response = &'a mut WebRequest<Err>,
+        Error = Err::Container,
+    >,
     Err: ErrorRenderer,
 {
     type Output = Result<WebResponse, Err::Container>;

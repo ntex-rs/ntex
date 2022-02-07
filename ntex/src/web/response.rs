@@ -8,14 +8,14 @@ use super::httprequest::HttpRequest;
 
 /// An service http response
 pub struct WebResponse {
-    request: HttpRequest,
+    // request: HttpRequest,
     response: Response<Body>,
 }
 
 impl WebResponse {
     /// Create web response instance
-    pub fn new(response: Response<Body>, request: HttpRequest) -> Self {
-        WebResponse { request, response }
+    pub fn new(response: Response<Body>) -> Self {
+        WebResponse { response }
     }
 
     /// Create web response from the error
@@ -33,7 +33,6 @@ impl WebResponse {
         }
 
         WebResponse {
-            request,
             response: res.into_body(),
         }
     }
@@ -44,19 +43,21 @@ impl WebResponse {
         self,
         err: E,
     ) -> Self {
-        Self::from_err::<Err, E>(err, self.request)
+        // Self::from_err::<Err, E>(err) //, self.request)
+        todo!()
     }
 
     /// Create web response
     #[inline]
     pub fn into_response(self, response: Response) -> WebResponse {
-        WebResponse::new(response, self.request)
+        WebResponse::new(response)
     }
 
     /// Get reference to original request
     #[inline]
     pub fn request(&self) -> &HttpRequest {
-        &self.request
+        //&self.request
+        todo!()
     }
 
     /// Get reference to response
@@ -98,7 +99,7 @@ impl WebResponse {
     {
         if let Err(err) = f(&mut self) {
             let res: Response = err.into().into();
-            WebResponse::new(res, self.request)
+            WebResponse::new(res) //, self.request)
         } else {
             self
         }
@@ -118,7 +119,7 @@ impl WebResponse {
 
         WebResponse {
             response,
-            request: self.request,
+            // request: self.request,
         }
     }
 }
@@ -126,9 +127,9 @@ impl WebResponse {
 impl From<WebResponse> for Response<Body> {
     fn from(mut res: WebResponse) -> Response<Body> {
         let head = res.response.head_mut();
-        if res.request.head().upgrade() {
-            head.set_io(res.request.head());
-        }
+        // if res.request.head().upgrade() {
+        // head.set_io(res.request.head());
+        // }
         res.response
     }
 }

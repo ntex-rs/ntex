@@ -17,7 +17,7 @@ pub struct Route<Err: ErrorRenderer = DefaultError> {
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
 
-impl<Err: ErrorRenderer> Route<Err> {
+impl<'a, Err: ErrorRenderer> Route<Err> {
     /// Create new route which matches any request.
     pub fn new() -> Route<Err> {
         Route {
@@ -46,12 +46,12 @@ impl<Err: ErrorRenderer> Route<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
+impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<Err>> for Route<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
     type Service = RouteService<Err>;
-    type Future = Ready<RouteService<Err>, ()>;
+    type Future = Ready<Self::Service, ()>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         Ok(self.service()).into()
@@ -79,10 +79,10 @@ impl<Err: ErrorRenderer> RouteService<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
+impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<Err>> for RouteService<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + 'a>>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -90,7 +90,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
     }
 
     #[inline]
-    fn call(&self, req: WebRequest<Err>) -> Self::Future {
+    fn call(&self, req: &'a mut WebRequest<Err>) -> Self::Future {
         self.handler.call(req)
     }
 }
@@ -181,7 +181,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     pub fn to<F, Args>(mut self, handler: F) -> Self
     where
         F: Handler<Args, Err>,
-        Args: FromRequest<'_, Err> + 'static,
+        Args: FromRequest<Err> + 'static,
         Args::Error: Into<Err::Container>,
     {
         self.handler = Box::new(HandlerWrapper::new(handler));
@@ -234,18 +234,18 @@ macro_rules! array_routes({$num:tt, $($T:ident),+} => {
 mod m {
     use super::*;
 
-tuple_routes!((0,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>),(9,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>),(9,Route<Err>),(10,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>),(9,Route<Err>),(10,Route<Err>),(11,Route<Err>));
+    tuple_routes!((0,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>),(9,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>),(9,Route<Err>),(10,Route<Err>));
+    tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>),(9,Route<Err>),(10,Route<Err>),(11,Route<Err>));
 }
 
 array_routes!(1, a);

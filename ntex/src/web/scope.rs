@@ -643,7 +643,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
             let req = req.into_parts().0;
             Either::Right(Ready::Ok(WebResponse::new(
                 Response::NotFound().finish(),
-                req,
+                // req,
             )))
         }
     }

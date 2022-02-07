@@ -61,6 +61,13 @@
 //! * `compress` - enables content encoding compression support
 //! * `openssl` - enables ssl support via `openssl` crate
 //! * `rustls` - enables ssl support via `rustls` crate
+#![allow(
+    unused_imports,
+    unused_variables,
+    unused_mut,
+    dead_code,
+    unreachable_pub
+)]
 
 mod app;
 mod app_service;
@@ -79,7 +86,8 @@ mod responder;
 mod response;
 mod rmap;
 mod route;
-mod scope;
+// mod scope;
+mod boxed;
 mod server;
 mod service;
 mod stack;
@@ -115,7 +123,7 @@ pub use self::resource::Resource;
 pub use self::responder::Responder;
 pub use self::response::WebResponse;
 pub use self::route::Route;
-pub use self::scope::Scope;
+// pub use self::scope::Scope;
 pub use self::server::HttpServer;
 pub use self::service::WebServiceFactory;
 pub use self::util::*;
