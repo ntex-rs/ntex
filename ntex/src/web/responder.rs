@@ -1,9 +1,8 @@
 use std::task::{Context, Poll};
 use std::{convert::TryFrom, future::Future, marker::PhantomData, pin::Pin};
 
-use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
-use crate::http::{Response, ResponseBuilder, StatusCode};
+use crate::http::{error::HttpError, Response, ResponseBuilder, StatusCode};
 use crate::util::{Bytes, BytesMut, Either};
 
 use super::error::{
@@ -34,9 +33,6 @@ impl<T> Future for Ready<T> {
 ///
 /// Types that implement this trait can be used as the return type of a handler.
 pub trait Responder<Err = DefaultError> {
-    /// The associated error which can be returned.
-    type Error;
-
     /// The future response value.
     type Future: Future<Output = Response>;
 
@@ -93,7 +89,6 @@ pub trait Responder<Err = DefaultError> {
 }
 
 impl<Err: ErrorRenderer> Responder<Err> for Response {
-    type Error = Err::Container;
     type Future = Ready<Response>;
 
     #[inline]
@@ -103,7 +98,6 @@ impl<Err: ErrorRenderer> Responder<Err> for Response {
 }
 
 impl<Err: ErrorRenderer> Responder<Err> for ResponseBuilder {
-    type Error = Err::Container;
     type Future = Ready<Response>;
 
     #[inline]
@@ -117,7 +111,6 @@ where
     T: Responder<Err>,
     Err: ErrorRenderer,
 {
-    type Error = T::Error;
     type Future = Either<T::Future, Ready<Response>>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
@@ -136,7 +129,6 @@ where
     E: Into<Err::Container>,
     Err: ErrorRenderer,
 {
-    type Error = T::Error;
     type Future = Either<T::Future, Ready<Response>>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
@@ -152,7 +144,6 @@ where
     T: Responder<Err>,
     Err: ErrorRenderer,
 {
-    type Error = T::Error;
     type Future = CustomResponderFut<T, Err>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
@@ -165,7 +156,6 @@ where
 }
 
 impl<Err: ErrorRenderer> Responder<Err> for &'static str {
-    type Error = Err::Container;
     type Future = Ready<Response>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
@@ -178,7 +168,6 @@ impl<Err: ErrorRenderer> Responder<Err> for &'static str {
 }
 
 impl<Err: ErrorRenderer> Responder<Err> for &'static [u8] {
-    type Error = Err::Container;
     type Future = Ready<Response>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
@@ -191,7 +180,6 @@ impl<Err: ErrorRenderer> Responder<Err> for &'static [u8] {
 }
 
 impl<Err: ErrorRenderer> Responder<Err> for String {
-    type Error = Err::Container;
     type Future = Ready<Response>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
@@ -204,7 +192,6 @@ impl<Err: ErrorRenderer> Responder<Err> for String {
 }
 
 impl<'a, Err: ErrorRenderer> Responder<Err> for &'a String {
-    type Error = Err::Container;
     type Future = Ready<Response>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
@@ -217,7 +204,6 @@ impl<'a, Err: ErrorRenderer> Responder<Err> for &'a String {
 }
 
 impl<Err: ErrorRenderer> Responder<Err> for Bytes {
-    type Error = Err::Container;
     type Future = Ready<Response>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
@@ -230,7 +216,6 @@ impl<Err: ErrorRenderer> Responder<Err> for Bytes {
 }
 
 impl<Err: ErrorRenderer> Responder<Err> for BytesMut {
-    type Error = Err::Container;
     type Future = Ready<Response>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
@@ -322,7 +307,6 @@ impl<T: Responder<Err>, Err> CustomResponder<T, Err> {
 }
 
 impl<T: Responder<Err>, Err: ErrorRenderer> Responder<Err> for CustomResponder<T, Err> {
-    type Error = T::Error;
     type Future = CustomResponderFut<T, Err>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
@@ -390,7 +374,6 @@ where
     B: Responder<Err>,
     Err: ErrorRenderer,
 {
-    type Error = Err::Container;
     type Future = Either<A::Future, B::Future>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
@@ -406,7 +389,6 @@ where
     T: std::fmt::Debug + std::fmt::Display + 'static,
     Err: ErrorRenderer,
 {
-    type Error = Err::Container;
     type Future = Ready<Response>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
@@ -423,9 +405,7 @@ pub(crate) mod tests {
     use crate::web::test::{init_service, TestRequest};
     use crate::{service::Service, util::Bytes, util::BytesMut, web};
 
-    fn responder<T: Responder<DefaultError>>(
-        responder: T,
-    ) -> impl Responder<DefaultError, Error = T::Error> {
+    fn responder<T: Responder<DefaultError>>(responder: T) -> impl Responder<DefaultError> {
         responder
     }
 

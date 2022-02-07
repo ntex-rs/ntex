@@ -112,7 +112,6 @@ impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Json<T>
 where
     Err::Container: From<JsonError>,
 {
-    type Error = JsonError;
     type Future = Ready<Response>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {

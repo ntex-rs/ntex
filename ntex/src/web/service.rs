@@ -5,13 +5,10 @@ use crate::service::{boxed, IntoServiceFactory, ServiceFactory};
 use crate::util::Extensions;
 
 use super::config::AppConfig;
-use super::dev::insert_slesh;
-use super::error::ErrorRenderer;
-use super::guard::Guard;
-use super::request::WebRequest;
-use super::response::WebResponse;
+use super::dev::insert_slash;
 use super::rmap::ResourceMap;
 use super::types::state::StateFactory;
+use super::{guard::Guard, ErrorRenderer, WebRequest, WebResponse};
 
 pub trait WebServiceFactory<Err: ErrorRenderer> {
     fn register(self, config: &mut WebServiceConfig<Err>);
@@ -255,7 +252,7 @@ where
         };
 
         let mut rdef = if config.is_root() || !self.rdef.is_empty() {
-            ResourceDef::new(insert_slesh(self.rdef))
+            ResourceDef::new(insert_slash(self.rdef))
         } else {
             ResourceDef::new(self.rdef)
         };

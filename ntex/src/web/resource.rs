@@ -1,6 +1,6 @@
-use std::{
-    cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll,
-};
+use std::convert::Infallible;
+use std::task::{Context, Poll};
+use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
@@ -9,15 +9,11 @@ use crate::service::{pipeline_factory, PipelineFactory};
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::{Either, Extensions, Ready};
 
-use super::dev::{insert_slesh, WebServiceConfig, WebServiceFactory};
-use super::error::ErrorRenderer;
+use super::dev::{insert_slash, WebServiceConfig, WebServiceFactory};
 use super::extract::FromRequest;
-use super::handler::Handler;
-use super::request::WebRequest;
-use super::responder::Responder;
-use super::response::WebResponse;
 use super::route::{IntoRoutes, Route, RouteService};
-use super::{app::Filter, app::Stack, guard::Guard, types::State};
+use super::stack::{Filter, Next, Stack, Middleware, MiddlewareStack};
+use super::{guard::Guard, types::State, ErrorRenderer, Handler, WebRequest, WebResponse};
 
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
@@ -231,9 +227,8 @@ where
     pub fn to<F, Args>(mut self, handler: F) -> Self
     where
         F: Handler<Args, Err>,
-        Args: FromRequest<Err> + 'static,
+        Args: FromRequest<'_, Err> + 'static,
         Args::Error: Into<Err::Container>,
-        <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     {
         self.routes.push(Route::new().to(handler));
         self
@@ -283,7 +278,7 @@ where
     /// type (i.e modify response's body).
     ///
     /// **Note**: middlewares get called in opposite order of middlewares registration.
-    pub fn wrap<U>(self, mw: U) -> Resource<Err, Stack<M, U>, T> {
+    pub fn wrap<U>(self, mw: U) -> Resource<Err, Stack<M, U, Err>, T> {
         Resource {
             middleware: Stack::new(self.middleware, mw),
             filter: self.filter,
@@ -324,8 +319,8 @@ where
             Error = Err::Container,
             InitError = (),
         > + 'static,
-    M: Transform<ResourceService<T::Service, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M: Transform<Next<ResourceService<T::Service, Err>, Err>> + 'static,
+    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<Err>) {
@@ -335,7 +330,7 @@ where
             Some(std::mem::take(&mut self.guards))
         };
         let mut rdef = if config.is_root() || !self.rdef.is_empty() {
-            ResourceDef::new(insert_slesh(self.rdef.clone()))
+            ResourceDef::new(insert_slash(self.rdef.clone()))
         } else {
             ResourceDef::new(self.rdef.clone())
         };
@@ -357,7 +352,7 @@ where
             rdef,
             guards,
             ResourceServiceFactory {
-                middleware: Rc::new(self.middleware),
+                middleware: Rc::new(MiddlewareStack::new(self.middleware)),
                 filter: self.filter,
                 routing: router_factory,
             },
@@ -378,8 +373,8 @@ where
             Error = Err::Container,
             InitError = (),
         > + 'static,
-    M: Transform<ResourceService<T::Service, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M: Transform<Next<ResourceService<T::Service, Err>, Err>> + 'static,
+    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     Err: ErrorRenderer,
 {
     fn into_factory(
@@ -392,7 +387,7 @@ where
         };
 
         ResourceServiceFactory {
-            middleware: Rc::new(self.middleware),
+            middleware: Rc::new(MiddlewareStack::new(self.middleware)),
             filter: self.filter,
             routing: router_factory,
         }
@@ -401,15 +396,15 @@ where
 
 /// Resource service
 pub struct ResourceServiceFactory<Err: ErrorRenderer, M, T> {
-    middleware: Rc<M>,
+    middleware: Rc<MiddlewareStack<M, Err>>,
     filter: T,
     routing: ResourceRouterFactory<Err>,
 }
 
 impl<Err, M, F> ServiceFactory<WebRequest<Err>> for ResourceServiceFactory<Err, M, F>
 where
-    M: Transform<ResourceService<F::Service, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M: Transform<Next<ResourceService<F::Service, Err>, Err>> + 'static,
+    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
             WebRequest<Err>,
             Response = WebRequest<Err>,
@@ -420,7 +415,7 @@ where
 {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Service = M::Service;
+    type Service = Middleware<M::Service, Err>;
     type InitError = ();
     type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 

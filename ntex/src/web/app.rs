@@ -1,23 +1,18 @@
-use std::{
-    cell::RefCell, fmt, future::Future, marker::PhantomData, pin::Pin, rc::Rc, task,
-};
+use std::{cell::RefCell, convert::Infallible, fmt, future::Future, pin::Pin, rc::Rc};
 
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{map_config, pipeline_factory, PipelineFactory};
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
-use crate::util::{Extensions, Ready};
+use crate::util::Extensions;
 
 use super::app_service::{AppFactory, AppService};
 use super::config::{AppConfig, ServiceConfig};
-use super::request::WebRequest;
-use super::resource::Resource;
-use super::response::WebResponse;
-use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
+use super::stack::{Filter, Next, Stack};
 use super::types::state::{State, StateFactory};
-use super::{DefaultError, ErrorRenderer};
+use super::{DefaultError, ErrorRenderer, Resource, Route, WebRequest, WebResponse};
 
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
@@ -412,7 +407,7 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn wrap<U>(self, mw: U) -> App<Stack<M, U>, T, Err> {
+    pub fn wrap<U>(self, mw: U) -> App<Stack<M, U, Err>, T, Err> {
         App {
             middleware: Stack::new(self.middleware, mw),
             filter: self.filter,
@@ -438,15 +433,14 @@ where
 
 impl<M, F, Err> App<M, F, Err>
 where
-    M: Transform<AppService<F::Service, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M: Transform<Next<AppService<F::Service, Err>, Err>> + 'static,
+    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
-    F::Future: 'static,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        > + 'static,
     Err: ErrorRenderer,
 {
     /// Construct service factory with default `AppConfig`, suitable for `http::HttpService`.
@@ -523,15 +517,14 @@ where
 impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, AppConfig>
     for App<M, F, Err>
 where
-    M: Transform<AppService<F::Service, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M: Transform<Next<AppService<F::Service, Err>, Err>> + 'static,
+    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
-    F::Future: 'static,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        > + 'static,
     Err: ErrorRenderer,
 {
     fn into_factory(self) -> AppFactory<M, F, Err> {
@@ -551,15 +544,14 @@ where
 
 impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, ()> for App<M, F, Err>
 where
-    M: Transform<AppService<F::Service, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M: Transform<Next<AppService<F::Service, Err>, Err>> + 'static,
+    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
-    F::Future: 'static,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        > + 'static,
     Err: ErrorRenderer,
 {
     fn into_factory(self) -> AppFactory<M, F, Err> {
@@ -574,66 +566,6 @@ where
             extensions: RefCell::new(Some(self.extensions)),
             case_insensitive: self.case_insensitive,
         }
-    }
-}
-
-pub struct Stack<Inner, Outer> {
-    inner: Inner,
-    outer: Outer,
-}
-
-impl<Inner, Outer> Stack<Inner, Outer> {
-    pub(super) fn new(inner: Inner, outer: Outer) -> Self {
-        Stack { inner, outer }
-    }
-}
-
-impl<S, Inner, Outer> Transform<S> for Stack<Inner, Outer>
-where
-    Inner: Transform<S>,
-    Outer: Transform<Inner::Service>,
-{
-    type Service = Outer::Service;
-
-    fn new_transform(&self, service: S) -> Self::Service {
-        self.outer.new_transform(self.inner.new_transform(service))
-    }
-}
-
-pub struct Filter<Err>(PhantomData<Err>);
-
-impl<Err: ErrorRenderer> Filter<Err> {
-    pub(super) fn new() -> Self {
-        Filter(PhantomData)
-    }
-}
-
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Filter<Err> {
-    type Response = WebRequest<Err>;
-    type Error = Err::Container;
-    type InitError = ();
-    type Service = Filter<Err>;
-    type Future = Ready<Filter<Err>, ()>;
-
-    #[inline]
-    fn new_service(&self, _: ()) -> Self::Future {
-        Ready::Ok(Filter(PhantomData))
-    }
-}
-
-impl<Err: ErrorRenderer> Service<WebRequest<Err>> for Filter<Err> {
-    type Response = WebRequest<Err>;
-    type Error = Err::Container;
-    type Future = Ready<WebRequest<Err>, Err::Container>;
-
-    #[inline]
-    fn poll_ready(&self, _: &mut task::Context<'_>) -> task::Poll<Result<(), Self::Error>> {
-        task::Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn call(&self, req: WebRequest<Err>) -> Self::Future {
-        Ready::Ok(req)
     }
 }
 

@@ -82,6 +82,7 @@ mod route;
 mod scope;
 mod server;
 mod service;
+mod stack;
 pub mod test;
 pub mod types;
 mod util;
@@ -131,8 +132,9 @@ pub mod dev {
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::route::IntoRoutes;
     pub use crate::web::service::{WebServiceAdapter, WebServiceConfig, WebServiceFactory};
+    pub use crate::web::stack::Stack;
 
-    pub(crate) fn insert_slesh(mut patterns: Vec<String>) -> Vec<String> {
+    pub(crate) fn insert_slash(mut patterns: Vec<String>) -> Vec<String> {
         for path in &mut patterns {
             if !path.is_empty() && !path.starts_with('/') {
                 path.insert(0, '/');
@@ -141,55 +143,55 @@ pub mod dev {
         patterns
     }
 
-    #[doc(hidden)]
-    #[inline(always)]
-    pub fn __assert_extractor<Err, T>()
-    where
-        T: super::FromRequest<Err>,
-        Err: super::ErrorRenderer,
-        <T as super::FromRequest<Err>>::Error: Into<Err::Container>,
-    {
-    }
+    // #[doc(hidden)]
+    // #[inline(always)]
+    // pub fn __assert_extractor<'a, Err, T>()
+    // where
+    //     T: super::FromRequest<'a, Err>,
+    //     Err: super::ErrorRenderer,
+    //     <T as super::FromRequest<'a, Err>>::Error: Into<Err::Container>,
+    // {
+    // }
 
-    #[doc(hidden)]
-    #[inline(always)]
-    pub fn __assert_handler<Err, Fun, Fut>(
-        f: Fun,
-    ) -> impl Handler<(), Err, Future = Fut, Output = Fut::Output>
-    where
-        Err: super::ErrorRenderer,
-        Fun: Fn() -> Fut + Clone + 'static,
-        Fut: std::future::Future + 'static,
-        Fut::Output: super::Responder<Err>,
-    {
-        f
-    }
+    // #[doc(hidden)]
+    // #[inline(always)]
+    // pub fn __assert_handler<Err, Fun, Fut>(
+    //     f: Fun,
+    // ) -> impl Handler<(), Err, Future = Fut, Output = Fut::Output>
+    // where
+    //     Err: super::ErrorRenderer,
+    //     Fun: Fn() -> Fut + Clone + 'static,
+    //     Fut: std::future::Future + 'static,
+    //     Fut::Output: super::Responder<Err>,
+    // {
+    //     f
+    // }
 
-    macro_rules! assert_handler ({ $name:ident, $($T:ident),+} => {
-        #[doc(hidden)]
-        #[inline(always)]
-        pub fn $name<Err, Fun, Fut, $($T,)+>(
-            f: Fun,
-        ) -> impl Handler<($($T,)+), Err, Future = Fut, Output = Fut::Output>
-        where
-            Err: $crate::web::ErrorRenderer,
-            Fun: Fn($($T,)+) -> Fut + Clone + 'static,
-            Fut: std::future::Future + 'static,
-            Fut::Output: $crate::web::Responder<Err>,
-        $($T: $crate::web::FromRequest<Err>),+,
-        {
-            f
-        }
-    });
+    // macro_rules! assert_handler ({ $name:ident, $($T:ident),+} => {
+    //     #[doc(hidden)]
+    //     #[inline(always)]
+    //     pub fn $name<'a, Err, Fun, Fut, $($T,)+>(
+    //         f: Fun,
+    //     ) -> impl Handler<($($T,)+), Err, Future = Fut, Output = Fut::Output>
+    //     where
+    //         Err: $crate::web::ErrorRenderer,
+    //         Fun: Fn($($T,)+) -> Fut + Clone + 'static,
+    //         Fut: std::future::Future + 'static,
+    //         Fut::Output: $crate::web::Responder<Err>,
+    //     $($T: $crate::web::FromRequest<'a, Err>),+,
+    //     {
+    //         f
+    //     }
+    // });
 
-    assert_handler!(__assert_handler1, A);
-    assert_handler!(__assert_handler2, A, B);
-    assert_handler!(__assert_handler3, A, B, C);
-    assert_handler!(__assert_handler4, A, B, C, D);
-    assert_handler!(__assert_handler5, A, B, C, D, E);
-    assert_handler!(__assert_handler6, A, B, C, D, E, F);
-    assert_handler!(__assert_handler7, A, B, C, D, E, F, G);
-    assert_handler!(__assert_handler8, A, B, C, D, E, F, G, H);
-    assert_handler!(__assert_handler9, A, B, C, D, E, F, G, H, I);
-    assert_handler!(__assert_handler10, A, B, C, D, E, F, G, H, I, J);
+    // assert_handler!(__assert_handler1, A);
+    // assert_handler!(__assert_handler2, A, B);
+    // assert_handler!(__assert_handler3, A, B, C);
+    // assert_handler!(__assert_handler4, A, B, C, D);
+    // assert_handler!(__assert_handler5, A, B, C, D, E);
+    // assert_handler!(__assert_handler6, A, B, C, D, E, F);
+    // assert_handler!(__assert_handler7, A, B, C, D, E, F, G);
+    // assert_handler!(__assert_handler8, A, B, C, D, E, F, G, H);
+    // assert_handler!(__assert_handler9, A, B, C, D, E, F, G, H, I);
+    // assert_handler!(__assert_handler10, A, B, C, D, E, F, G, H, I, J);
 }

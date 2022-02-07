@@ -9,7 +9,7 @@ use crate::util::Extensions;
 
 use super::config::AppConfig;
 use super::error::{ErrorRenderer, WebResponseError};
-use super::httprequest::HttpRequest;
+use super::httprequest::{HttpRequest, WeakHttpRequest};
 use super::info::ConnectionInfo;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
@@ -43,6 +43,10 @@ impl<Err> WebRequest<Err> {
             req,
             _t: PhantomData,
         }
+    }
+
+    pub(super) fn weak_request(&self) -> WeakHttpRequest {
+        self.req.downgrade()
     }
 
     /// Deconstruct request into parts

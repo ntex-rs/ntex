@@ -2,15 +2,10 @@ use std::{future::Future, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use crate::{http::Method, service::Service, service::ServiceFactory, util::Ready};
 
-use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
-use super::extract::FromRequest;
 use super::guard::{self, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
-use super::request::WebRequest;
-use super::responder::Responder;
-use super::response::WebResponse;
-use super::HttpResponse;
+use super::{ErrorRenderer, FromRequest, HttpResponse, WebRequest, WebResponse};
 
 /// Resource route definition
 ///
@@ -186,9 +181,8 @@ impl<Err: ErrorRenderer> Route<Err> {
     pub fn to<F, Args>(mut self, handler: F) -> Self
     where
         F: Handler<Args, Err>,
-        Args: FromRequest<Err> + 'static,
+        Args: FromRequest<'_, Err> + 'static,
         Args::Error: Into<Err::Container>,
-        <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     {
         self.handler = Box::new(HandlerWrapper::new(handler));
         self

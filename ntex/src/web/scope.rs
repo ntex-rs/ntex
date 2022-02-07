@@ -1,6 +1,5 @@
-use std::{
-    cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll,
-};
+use std::task::{Context, Poll};
+use std::{cell::RefCell, fmt, future::Future, convert::Infallible, pin::Pin, rc::Rc};
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
@@ -9,18 +8,14 @@ use crate::service::{pipeline_factory, PipelineFactory};
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::{Either, Extensions, Ready};
 
-use super::app::{Filter, Stack};
 use super::config::ServiceConfig;
 use super::dev::{WebServiceConfig, WebServiceFactory};
-use super::error::ErrorRenderer;
 use super::guard::Guard;
-use super::request::WebRequest;
-use super::resource::Resource;
-use super::response::WebResponse;
 use super::rmap::ResourceMap;
-use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper};
+use super::stack::{Filter, Next, Stack, MiddlewareStack, Middleware};
 use super::types::State;
+use super::{ErrorRenderer, Resource, Route, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
@@ -357,7 +352,7 @@ where
     /// WebResponse.
     ///
     /// Use middleware when you need to read or modify *every* request in some way.
-    pub fn wrap<U>(self, mw: U) -> Scope<Err, Stack<M, U>, T> {
+    pub fn wrap<U>(self, mw: U) -> Scope<Err, Stack<M, U, Err>, T> {
         Scope {
             middleware: Stack::new(self.middleware, mw),
             filter: self.filter,
@@ -380,8 +375,8 @@ where
             Error = Err::Container,
             InitError = (),
         > + 'static,
-    M: Transform<ScopeService<T::Service, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M: Transform<Next<ScopeService<T::Service, Err>, Err>> + 'static,
+    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<Err>) {
@@ -445,7 +440,7 @@ where
             ResourceDef::root_prefix(self.rdef),
             guards,
             ScopeServiceFactory {
-                middleware: Rc::new(self.middleware),
+                middleware: Rc::new(MiddlewareStack::new(self.middleware)),
                 filter: self.filter,
                 routing: router_factory,
             },
@@ -456,15 +451,15 @@ where
 
 /// Scope service
 struct ScopeServiceFactory<M, F, Err: ErrorRenderer> {
-    middleware: Rc<M>,
+    middleware: Rc<MiddlewareStack<M, Err>>,
     filter: F,
     routing: ScopeRouterFactory<Err>,
 }
 
 impl<M, F, Err> ServiceFactory<WebRequest<Err>> for ScopeServiceFactory<M, F, Err>
 where
-    M: Transform<ScopeService<F::Service, Err>> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M: Transform<Next<ScopeService<F::Service, Err>, Err>> + 'static,
+    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
             WebRequest<Err>,
             Response = WebRequest<Err>,
@@ -475,7 +470,7 @@ where
 {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Service = M::Service;
+    type Service = Middleware<M::Service, Err>;
     type InitError = ();
     type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 

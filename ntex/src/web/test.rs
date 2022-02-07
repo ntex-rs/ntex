@@ -249,10 +249,10 @@ where
 }
 
 /// Helper method for extractors testing
-pub async fn from_request<T: FromRequest<DefaultError>>(
-    req: &HttpRequest,
-    payload: &mut Payload,
-) -> Result<T, T::Error> {
+pub async fn from_request<'a, T: FromRequest<'a, DefaultError>>(
+    req: &'a HttpRequest,
+    payload: &'a mut Payload,
+) -> Result<T, T::Error> + 'a {
     T::from_request(req, payload).await
 }
 

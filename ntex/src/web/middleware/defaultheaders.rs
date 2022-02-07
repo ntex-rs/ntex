@@ -1,6 +1,6 @@
 //! Middleware for setting default response headers
 use std::task::{Context, Poll};
-use std::{convert::TryFrom, future::Future, pin::Pin, rc::Rc};
+use std::{convert::Infallible, convert::TryFrom, future::Future, pin::Pin, rc::Rc};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
@@ -104,11 +104,11 @@ pub struct DefaultHeadersMiddleware<S> {
 
 impl<S, E> Service<WebRequest<E>> for DefaultHeadersMiddleware<S>
 where
-    S: Service<WebRequest<E>, Response = WebResponse>,
+    S: Service<WebRequest<E>, Response = WebResponse, Error = Infallible>,
     S::Future: 'static,
 {
     type Response = WebResponse;
-    type Error = S::Error;
+    type Error = Infallible;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
     #[inline]
@@ -154,7 +154,7 @@ mod tests {
     use crate::util::lazy;
     use crate::web::request::WebRequest;
     use crate::web::test::{ok_service, TestRequest};
-    use crate::web::{DefaultError, Error, HttpResponse};
+    use crate::web::{DefaultError, HttpResponse};
 
     #[crate::rt_test]
     async fn test_default_headers() {
@@ -171,7 +171,7 @@ mod tests {
 
         let req = TestRequest::default().to_srv_request();
         let srv = |req: WebRequest<DefaultError>| async move {
-            Ok::<_, Error>(
+            Ok::<_, Infallible>(
                 req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()),
             )
         };
@@ -185,7 +185,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_content_type() {
         let srv = |req: WebRequest<DefaultError>| async move {
-            Ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))
+            Ok::<_, Infallible>(req.into_response(HttpResponse::Ok().finish()))
         };
         let mw = DefaultHeaders::new()
             .content_type()

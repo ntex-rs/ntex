@@ -45,9 +45,8 @@ pub(super) trait HandlerFn<Err: ErrorRenderer> {
 pub(super) struct HandlerWrapper<F, T, Err>
 where
     F: Handler<T, Err>,
-    T: FromRequest<Err>,
+    T: FromRequest<'_, Err>,
     T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     hnd: F,
@@ -57,9 +56,8 @@ where
 impl<F, T, Err> HandlerWrapper<F, T, Err>
 where
     F: Handler<T, Err>,
-    T: FromRequest<Err>,
+    T: FromRequest<'_, Err>,
     T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     pub(super) fn new(hnd: F) -> Self {
@@ -73,9 +71,8 @@ where
 impl<F, T, Err> HandlerFn<Err> for HandlerWrapper<F, T, Err>
 where
     F: Handler<T, Err>,
-    T: FromRequest<Err> + 'static,
+    T: FromRequest<'_, Err> + 'static,
     T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     fn call(
@@ -105,9 +102,8 @@ pin_project_lite::pin_project! {
     pub(super) struct HandlerWrapperResponse<F, T, Err>
     where
         F: Handler<T, Err>,
-        T: FromRequest<Err>,
+        T: FromRequest<'_, Err>,
         T::Error: Into<Err::Container>,
-       <F::Output as Responder<Err>>::Error: Into<Err::Container>,
         Err: ErrorRenderer,
     {
         hnd: F,
@@ -124,9 +120,8 @@ pin_project_lite::pin_project! {
 impl<F, T, Err> Future for HandlerWrapperResponse<F, T, Err>
 where
     F: Handler<T, Err>,
-    T: FromRequest<Err>,
+    T: FromRequest<'_, Err>,
     T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     type Output = Result<WebResponse, Err::Container>;
