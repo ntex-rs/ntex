@@ -1,29 +1,27 @@
-use std::{
-    fmt, future::Future, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
-};
+use std::convert::Infallible;
+use std::{future::Future, marker::PhantomData, pin::Pin};
 
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
-use super::httprequest::HttpRequest;
 use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
 
 /// Async fn handler
-pub trait Handler<T, Err>: Clone + 'static
+pub trait Handler<'a, T, Err>: Clone + 'static
 where
     Err: ErrorRenderer,
 {
     type Output: Responder<Err>;
-    type Future: Future<Output = Self::Output> + 'static;
+    type Future: Future<Output = Self::Output> + 'a;
 
     fn call(&self, param: T) -> Self::Future;
 }
 
-impl<F, R, Err> Handler<(), Err> for F
+impl<'a, F, R, Err> Handler<'a, (), Err> for F
 where
     F: Fn() -> R + Clone + 'static,
-    R: Future + 'static,
+    R: Future + 'a,
     R::Output: Responder<Err>,
     Err: ErrorRenderer,
 {
@@ -35,13 +33,11 @@ where
     }
 }
 
-pub(super) trait HandlerFn<Err: ErrorRenderer> {
-    fn call<'b>(
+pub(super) trait HandlerFn<'a, Err: ErrorRenderer> {
+    fn call(
         &self,
-        _: &'b mut WebRequest<'b, Err>,
-    ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>> + 'b>>;
-
-    fn clone_handler(&self) -> Box<dyn HandlerFn<Err>>;
+        _: &'a mut WebRequest<'a, Err>,
+    ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Infallible>> + 'a>>;
 }
 
 pub(super) struct HandlerWrapper<F, T, Err> {
@@ -58,45 +54,38 @@ impl<F, T, Err> HandlerWrapper<F, T, Err> {
     }
 }
 
-impl<'a, F, T, Err> HandlerFn<Err> for HandlerWrapper<F, T, Err>
+impl<'a, F, T, Err> HandlerFn<'a, Err> for HandlerWrapper<F, T, Err>
 where
-    F: Handler<T, Err>,
-    T: FromRequest<'a, Err> + 'static,
-    T::Error: Into<Err::Container>,
+    F: Handler<'a, T, Err>,
+    T: FromRequest<'a, Err> + 'a,
     Err: ErrorRenderer,
 {
-    fn call<'b>(
+    fn call(
         &self,
-        req: &'b mut WebRequest<'b, Err>,
-    ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>> + 'b>> {
-        let mut pl = Rc::get_mut(&mut (req.req).0).unwrap().payload.take();
+        req: &'a mut WebRequest<'a, Err>,
+    ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Infallible>> + 'a>> {
         let hnd = self.hnd.clone();
 
         Box::pin(async move {
-            let params = if let Ok(p) = T::from_request(&req.req, &mut pl).await {
+            let r: &'a mut WebRequest<'a, Err> = unsafe { std::mem::transmute(&mut *req) };
+            let fut = r.with_params(|req, pl| T::from_request(req, pl));
+            let params = if let Ok(p) = fut.await {
                 p
             } else {
                 panic!();
             };
             let result = hnd.call(params).await;
-            let response = result.respond_to(&req.req).await;
+            let response = result.respond_to(req.http_request()).await;
             Ok(WebResponse::new(response))
-        })
-    }
-
-    fn clone_handler(&self) -> Box<dyn HandlerFn<Err>> {
-        Box::new(HandlerWrapper {
-            hnd: self.hnd.clone(),
-            _t: PhantomData,
         })
     }
 }
 
 /// FromRequest trait impl for tuples
 macro_rules! factory_tuple ({ $(($n:tt, $T:ident)),+} => {
-    impl<Func, $($T,)+ Res, Err> Handler<($($T,)+), Err> for Func
+    impl<'a, Func, $($T,)+ Res, Err> Handler<'a, ($($T,)+), Err> for Func
     where Func: Fn($($T,)+) -> Res + Clone + 'static,
-          Res: Future + 'static,
+          Res: Future + 'a,
           Res::Output: Responder<Err>,
           Err: ErrorRenderer,
     {
@@ -113,14 +102,14 @@ macro_rules! factory_tuple ({ $(($n:tt, $T:ident)),+} => {
 mod m {
     use super::*;
 
-factory_tuple!((0, A));
-factory_tuple!((0, A), (1, B));
-factory_tuple!((0, A), (1, B), (2, C));
-factory_tuple!((0, A), (1, B), (2, C), (3, D));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J));
+    factory_tuple!((0, A));
+    factory_tuple!((0, A), (1, B));
+    factory_tuple!((0, A), (1, B), (2, C));
+    factory_tuple!((0, A), (1, B), (2, C), (3, D));
+    factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E));
+    factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F));
+    factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G));
+    factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H));
+    factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I));
+    factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J));
 }

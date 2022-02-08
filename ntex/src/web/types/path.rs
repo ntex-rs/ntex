@@ -149,15 +149,15 @@ impl<T: fmt::Display> fmt::Display for Path<T> {
 ///     );
 /// }
 /// ```
-impl<T, Err: ErrorRenderer> FromRequest<Err> for Path<T>
+impl<'a, T, Err: ErrorRenderer> FromRequest<'a, Err> for Path<T>
 where
-    T: de::DeserializeOwned,
+    T: de::DeserializeOwned + 'a,
 {
     type Error = PathError;
     type Future = Ready<Self, Self::Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+    fn from_request(req: &'a HttpRequest, _: &'a mut Payload) -> Self::Future {
         Ready::from(
             de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
                 .map(|inner| Path { inner })

@@ -8,7 +8,7 @@ use crate::http::encoding::Decoder;
 use crate::http::header::CONTENT_LENGTH;
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::util::{stream_recv, BytesMut};
-use crate::web::error::{ErrorRenderer, JsonError, JsonPayloadError, WebResponseError};
+use crate::web::error::{Error, ErrorRenderer, JsonError, JsonPayloadError};
 use crate::web::responder::{Ready, Responder};
 use crate::web::{FromRequest, HttpRequest};
 
@@ -110,7 +110,7 @@ where
 
 impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Json<T>
 where
-    Err::Container: From<JsonError>,
+    JsonError: Error<Err>,
 {
     type Future = Ready<Response>;
 
@@ -158,15 +158,15 @@ where
 ///     );
 /// }
 /// ```
-impl<T, Err: ErrorRenderer> FromRequest<Err> for Json<T>
+impl<'a, T, Err: ErrorRenderer> FromRequest<'a, Err> for Json<T>
 where
-    T: DeserializeOwned + 'static,
+    T: DeserializeOwned + 'a,
 {
     type Error = JsonPayloadError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>> + 'a>>;
 
     #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
+    fn from_request(req: &'a HttpRequest, payload: &'a mut Payload) -> Self::Future {
         let req2 = req.clone();
         let (limit, ctype) = req
             .app_state::<JsonConfig>()
@@ -260,7 +260,7 @@ impl Default for JsonConfig {
 /// * content type is not `application/json`
 ///   (unless specified in [`JsonConfig`](struct.JsonConfig.html))
 /// * content length is greater than 256k
-struct JsonBody<U> {
+struct JsonBody<'a, U> {
     limit: usize,
     length: Option<usize>,
     #[cfg(feature = "compress")]
@@ -268,17 +268,17 @@ struct JsonBody<U> {
     #[cfg(not(feature = "compress"))]
     stream: Option<Payload>,
     err: Option<JsonPayloadError>,
-    fut: Option<Pin<Box<dyn Future<Output = Result<U, JsonPayloadError>>>>>,
+    fut: Option<Pin<Box<dyn Future<Output = Result<U, JsonPayloadError>> + 'a>>>,
 }
 
-impl<U> JsonBody<U>
+impl<'a, U> JsonBody<'a, U>
 where
-    U: DeserializeOwned + 'static,
+    U: DeserializeOwned + 'a,
 {
     /// Create `JsonBody` for request.
     fn new(
-        req: &HttpRequest,
-        payload: &mut Payload,
+        req: &'a HttpRequest,
+        payload: &'a mut Payload,
         ctype: Option<Arc<dyn Fn(mime::Mime) -> bool + Send + Sync>>,
     ) -> Self {
         // check content-type
@@ -327,9 +327,9 @@ where
     }
 }
 
-impl<U> Future for JsonBody<U>
+impl<'a, U> Future for JsonBody<'a, U>
 where
-    U: DeserializeOwned + 'static,
+    U: DeserializeOwned + 'a,
 {
     type Output = Result<U, JsonPayloadError>;
 

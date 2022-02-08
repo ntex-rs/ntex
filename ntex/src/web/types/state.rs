@@ -97,12 +97,12 @@ impl<T> Clone for State<T> {
     }
 }
 
-impl<T: 'static, E: ErrorRenderer> FromRequest<E> for State<T> {
+impl<'a, T: 'static, E: ErrorRenderer> FromRequest<'a, E> for State<T> {
     type Error = DataExtractorError;
     type Future = Ready<Self, Self::Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+    fn from_request(req: &'a HttpRequest, _: &'a mut Payload) -> Self::Future {
         if let Some(st) = req.app_state::<State<T>>() {
             Ready::Ok(st.clone())
         } else {

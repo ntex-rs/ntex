@@ -1,15 +1,13 @@
-use std::convert::Infallible;
 use std::task::{Context, Poll};
-use std::{cell::RefCell, fmt, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
+use std::{convert::Infallible, future::Future, pin::Pin, rc::Rc};
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
-use crate::service::{pipeline_factory, PipelineFactory};
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
-use crate::util::{Either, Extensions, Ready};
+use crate::util::{ready, Extensions, Ready};
 
-use super::boxed::{self, BoxService, BoxServiceFactory};
 use super::dev::{insert_slash, WebService, WebServiceConfig};
+use super::error::Error;
 use super::extract::FromRequest;
 use super::route::{IntoRoutes, Route, RouteService};
 use super::stack::{
@@ -50,7 +48,7 @@ pub struct Resource<Err: ErrorRenderer, M = Identity, F = Filter> {
     default: Route<Err>,
 }
 
-impl<'a, Err: ErrorRenderer> Resource<Err> {
+impl<Err: ErrorRenderer> Resource<Err> {
     pub fn new<T: IntoPattern>(path: T) -> Resource<Err> {
         Resource {
             routes: Vec::new(),
@@ -148,7 +146,7 @@ where
     /// ```
     pub fn route<R>(mut self, route: R) -> Self
     where
-        R: IntoRoutes<Err>,
+        R: IntoRoutes<'a, Err>,
     {
         for route in route.routes() {
             self.routes.push(route);
@@ -217,9 +215,9 @@ where
     /// ```
     pub fn to<H, Args>(mut self, handler: H) -> Self
     where
-        H: Handler<Args, Err>,
-        Args: FromRequest<Err> + 'static,
-        Args::Error: Into<Err::Container>,
+        H: Handler<'a, Args, Err>,
+        Args: FromRequest<'a, Err> + 'a,
+        Args::Error: Error<Err>,
     {
         self.routes.push(Route::new().to(handler));
         self
@@ -266,9 +264,9 @@ where
     /// default handler from `App` or `Scope`.
     pub fn default<H, Args>(mut self, handler: H) -> Self
     where
-        H: Handler<Args, Err>,
-        Args: FromRequest<Err> + 'static,
-        Args::Error: Into<Err::Container>,
+        H: Handler<'a, Args, Err>,
+        Args: FromRequest<'a, Err> + 'a,
+        Args::Error: Error<Err>,
     {
         self.default = Route::new().to(handler);
         self
@@ -382,7 +380,7 @@ where
     F: ServiceFactory<
             &'a mut WebRequest<'a, Err>,
             Response = &'a mut WebRequest<'a, Err>,
-            Error = Err::Container,
+            Error = Infallible,
             InitError = (),
         > + 'static,
     F::Service: 'static,
@@ -390,7 +388,7 @@ where
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
-    type Error = Err::Container;
+    type Error = Infallible;
     type Service = Middleware<M::Service, Err>;
     type InitError = ();
     type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
@@ -418,18 +416,18 @@ where
     F: Service<
         &'a mut WebRequest<'a, Err>,
         Response = &'a mut WebRequest<'a, Err>,
-        Error = Err::Container,
+        Error = Infallible,
     >,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
-    type Error = Err::Container;
+    type Error = Infallible;
     type Future = ResourceServiceResponse<'a, F, Err>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let ready1 = self.filter.poll_ready(cx)?.is_ready();
-        let ready2 = self.routing.poll_ready(cx)?.is_ready();
+        let ready1 = self.filter.poll_ready(cx).is_ready();
+        let ready2 = self.routing.poll_ready(cx).is_ready();
         if ready1 && ready2 {
             Poll::Ready(Ok(()))
         } else {
@@ -439,9 +437,12 @@ where
 
     fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
         ResourceServiceResponse {
-            filter: self.filter.call(req),
+            filter: self
+                .filter
+                .call(unsafe { (req as *mut WebRequest<'a, Err>).as_mut().unwrap() }),
             routing: self.routing.clone(),
             endpoint: None,
+            req,
         }
     }
 }
@@ -452,6 +453,7 @@ pin_project_lite::pin_project! {
         filter: F::Future,
         routing: Rc<ResourceRouter<Err>>,
         endpoint: Option<<ResourceRouter<Err> as Service<&'a mut WebRequest<'a, Err>>>::Future>,
+        req: &'a mut WebRequest<'a, Err>,
     }
 }
 
@@ -460,11 +462,11 @@ where
     F: Service<
         &'a mut WebRequest<'a, Err>,
         Response = &'a mut WebRequest<'a, Err>,
-        Error = Err::Container,
+        Error = Infallible,
     >,
     Err: ErrorRenderer,
 {
-    type Output = Result<WebResponse, Err::Container>;
+    type Output = Result<WebResponse, Infallible>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
@@ -472,12 +474,8 @@ where
         if let Some(fut) = this.endpoint.as_mut() {
             Pin::new(fut).poll(cx)
         } else {
-            let res = if let Poll::Ready(res) = this.filter.poll(cx) {
-                res?
-            } else {
-                return Poll::Pending;
-            };
-            *this.endpoint = Some(this.routing.call(res));
+            let req = ready!(this.filter.poll(cx)).unwrap();
+            *this.endpoint = Some(this.routing.call(req));
             self.poll(cx)
         }
     }
@@ -493,7 +491,7 @@ impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>>
     for ResourceRouterFactory<Err>
 {
     type Response = WebResponse;
-    type Error = Err::Container;
+    type Error = Infallible;
     type InitError = ();
     type Service = ResourceRouter<Err>;
     type Future = Ready<Self::Service, Self::InitError>;
@@ -519,15 +517,15 @@ struct ResourceRouter<Err: ErrorRenderer> {
 
 impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for ResourceRouter<Err> {
     type Response = WebResponse;
-    type Error = Err::Container;
-    type Future = Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>> + 'a>>;
+    type Error = Infallible;
+    type Future = Pin<Box<dyn Future<Output = Result<WebResponse, Infallible>> + 'a>>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&self, mut req: &'a mut WebRequest<'a, Err>) -> Self::Future {
+    fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
         for route in self.routes.iter() {
             if route.check(req) {
                 if let Some(ref state) = self.state {

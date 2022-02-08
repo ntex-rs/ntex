@@ -1,5 +1,5 @@
 //! Payload/Bytes/String extractors
-use std::{future::Future, pin::Pin, str, task::Context, task::Poll};
+use std::{convert::Infallible, future::Future, pin::Pin, str, task::Context, task::Poll};
 
 use encoding_rs::UTF_8;
 use mime::Mime;
@@ -105,12 +105,15 @@ impl Stream for Payload {
 ///     );
 /// }
 /// ```
-impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
-    type Error = Err::Container;
+impl<'a, Err: ErrorRenderer> FromRequest<'a, Err> for Payload {
+    type Error = Infallible;
     type Future = Ready<Payload, Self::Error>;
 
     #[inline]
-    fn from_request(_: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
+    fn from_request(
+        _: &'a HttpRequest,
+        payload: &'a mut crate::http::Payload,
+    ) -> Self::Future {
         Ready::Ok(Payload(payload.take()))
     }
 }
@@ -139,15 +142,18 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
 ///     );
 /// }
 /// ```
-impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
+impl<'a, Err: ErrorRenderer> FromRequest<'a, Err> for Bytes {
     type Error = PayloadError;
     type Future = Either<
-        Pin<Box<dyn Future<Output = Result<Bytes, Self::Error>>>>,
+        Pin<Box<dyn Future<Output = Result<Bytes, Self::Error>> + 'a>>,
         Ready<Bytes, Self::Error>,
     >;
 
     #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
+    fn from_request(
+        req: &'a HttpRequest,
+        payload: &'a mut crate::http::Payload,
+    ) -> Self::Future {
         let tmp;
         let cfg = if let Some(cfg) = req.app_state::<PayloadConfig>() {
             cfg
@@ -193,15 +199,18 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
 ///     );
 /// }
 /// ```
-impl<Err: ErrorRenderer> FromRequest<Err> for String {
+impl<'a, Err: ErrorRenderer> FromRequest<'a, Err> for String {
     type Error = PayloadError;
     type Future = Either<
-        Pin<Box<dyn Future<Output = Result<String, Self::Error>>>>,
+        Pin<Box<dyn Future<Output = Result<String, Self::Error>> + 'a>>,
         Ready<String, Self::Error>,
     >;
 
     #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
+    fn from_request(
+        req: &'a HttpRequest,
+        payload: &'a mut crate::http::Payload,
+    ) -> Self::Future {
         let tmp;
         let cfg = if let Some(cfg) = req.app_state::<PayloadConfig>() {
             cfg

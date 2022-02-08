@@ -234,6 +234,12 @@ impl<B> Response<B> {
     }
 }
 
+impl<B: MessageBody> fmt::Display for Response<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{:?}", self)
+    }
+}
+
 impl<B: MessageBody> fmt::Debug for Response<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let res = writeln!(

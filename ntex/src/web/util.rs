@@ -10,7 +10,7 @@ use crate::http::{Method, Request, Response};
 use crate::service::{IntoServiceFactory, ServiceFactory};
 
 use super::config::AppConfig;
-use super::error::ErrorRenderer;
+use super::error::{Error, ErrorRenderer};
 use super::extract::FromRequest;
 use super::handler::Handler;
 use super::resource::Resource;
@@ -79,7 +79,7 @@ pub fn resource<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<Err> {
 // }
 
 /// Create *route* without configuration.
-pub fn route<'a, Err: ErrorRenderer>() -> Route<Err> {
+pub fn route<Err: ErrorRenderer>() -> Route<Err> {
     Route::new()
 }
 
@@ -97,7 +97,7 @@ pub fn route<'a, Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `GET` route gets added:
 ///  * /{project_id}
 ///
-pub fn get<'a, Err: ErrorRenderer>() -> Route<Err> {
+pub fn get<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::GET)
 }
 
@@ -115,7 +115,7 @@ pub fn get<'a, Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `POST` route gets added:
 ///  * /{project_id}
 ///
-pub fn post<'a, Err: ErrorRenderer>() -> Route<Err> {
+pub fn post<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::POST)
 }
 
@@ -133,7 +133,7 @@ pub fn post<'a, Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `PUT` route gets added:
 ///  * /{project_id}
 ///
-pub fn put<'a, Err: ErrorRenderer>() -> Route<Err> {
+pub fn put<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::PUT)
 }
 
@@ -151,7 +151,7 @@ pub fn put<'a, Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `PATCH` route gets added:
 ///  * /{project_id}
 ///
-pub fn patch<'a, Err: ErrorRenderer>() -> Route<Err> {
+pub fn patch<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::PATCH)
 }
 
@@ -169,7 +169,7 @@ pub fn patch<'a, Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `DELETE` route gets added:
 ///  * /{project_id}
 ///
-pub fn delete<'a, Err: ErrorRenderer>() -> Route<Err> {
+pub fn delete<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::DELETE)
 }
 
@@ -187,7 +187,7 @@ pub fn delete<'a, Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `HEAD` route gets added:
 ///  * /{project_id}
 ///
-pub fn head<'a, Err: ErrorRenderer>() -> Route<Err> {
+pub fn head<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::HEAD)
 }
 
@@ -205,7 +205,7 @@ pub fn head<'a, Err: ErrorRenderer>() -> Route<Err> {
 /// In the above example, one `GET` route gets added:
 ///  * /{project_id}
 ///
-pub fn method<'a, Err: ErrorRenderer>(method: Method) -> Route<Err> {
+pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
     Route::new().method(method)
 }
 
@@ -224,10 +224,10 @@ pub fn method<'a, Err: ErrorRenderer>(method: Method) -> Route<Err> {
 /// ```
 pub fn to<'a, F, Args, Err>(handler: F) -> Route<Err>
 where
-    F: Handler<Args, Err>,
-    Args: FromRequest<Err> + 'static,
+    F: Handler<'a, Args, Err>,
+    Args: FromRequest<'a, Err> + 'a,
+    Args::Error: Error<Err>,
     Err: ErrorRenderer,
-    Err::Container: From<Args::Error>,
 {
     Route::new().to(handler)
 }

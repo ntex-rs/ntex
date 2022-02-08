@@ -9,7 +9,7 @@ use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::util::{stream_recv, BytesMut};
-use crate::web::error::{ErrorRenderer, UrlencodedError, WebResponseError};
+use crate::web::error::{Error, ErrorRenderer, UrlencodedError};
 use crate::web::responder::{Ready, Responder};
 use crate::web::{FromRequest, HttpRequest};
 
@@ -95,16 +95,16 @@ impl<T> ops::DerefMut for Form<T> {
     }
 }
 
-impl<T, Err> FromRequest<Err> for Form<T>
+impl<'a, T, Err> FromRequest<'a, Err> for Form<T>
 where
-    T: DeserializeOwned + 'static,
+    T: DeserializeOwned + 'a,
     Err: ErrorRenderer,
 {
     type Error = UrlencodedError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>> + 'a>>;
 
     #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
+    fn from_request(req: &'a HttpRequest, payload: &'a mut Payload) -> Self::Future {
         let limit = req
             .app_state::<FormConfig>()
             .map(|c| c.limit)
@@ -134,7 +134,7 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
 
 impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Form<T>
 where
-    Err::Container: From<serde_urlencoded::ser::Error>,
+    serde_urlencoded::ser::Error: Error<Err>,
 {
     type Future = Ready<Response>;
 
@@ -208,7 +208,7 @@ impl Default for FormConfig {
 /// * content type is not `application/x-www-form-urlencoded`
 /// * content-length is greater than 32k
 ///
-struct UrlEncoded<U> {
+struct UrlEncoded<'a, U> {
     #[cfg(feature = "compress")]
     stream: Option<Decoder<Payload>>,
     #[cfg(not(feature = "compress"))]
@@ -217,12 +217,12 @@ struct UrlEncoded<U> {
     length: Option<usize>,
     encoding: &'static Encoding,
     err: Option<UrlencodedError>,
-    fut: Option<Pin<Box<dyn Future<Output = Result<U, UrlencodedError>>>>>,
+    fut: Option<Pin<Box<dyn Future<Output = Result<U, UrlencodedError>> + 'a>>>,
 }
 
-impl<U> UrlEncoded<U> {
+impl<'a, U> UrlEncoded<'a, U> {
     /// Create a new future to URL encode a request
-    fn new(req: &HttpRequest, payload: &mut Payload) -> UrlEncoded<U> {
+    fn new(req: &'a HttpRequest, payload: &'a mut Payload) -> UrlEncoded<'a, U> {
         // check content type
         if req.content_type().to_lowercase() != "application/x-www-form-urlencoded" {
             return Self::err(UrlencodedError::ContentType);
@@ -278,9 +278,9 @@ impl<U> UrlEncoded<U> {
     }
 }
 
-impl<U> Future for UrlEncoded<U>
+impl<'a, U> Future for UrlEncoded<'a, U>
 where
-    U: DeserializeOwned + 'static,
+    U: DeserializeOwned + 'a,
 {
     type Output = Result<U, UrlencodedError>;
 

@@ -61,13 +61,6 @@
 //! * `compress` - enables content encoding compression support
 //! * `openssl` - enables ssl support via `openssl` crate
 //! * `rustls` - enables ssl support via `rustls` crate
-#![allow(
-    unused_imports,
-    unused_variables,
-    unused_mut,
-    dead_code,
-    unreachable_pub
-)]
 
 mod app;
 mod app_service;
@@ -79,7 +72,7 @@ pub mod guard;
 mod handler;
 mod httprequest;
 mod info;
-//pub mod middleware;
+pub mod middleware;
 mod request;
 mod resource;
 mod responder;
@@ -91,7 +84,7 @@ mod boxed;
 mod server;
 mod service;
 mod stack;
-//pub mod test;
+pub mod test;
 pub mod types;
 mod util;
 pub mod ws;
@@ -112,9 +105,7 @@ pub use crate::http::ResponseBuilder as HttpResponseBuilder;
 
 pub use self::app::App;
 pub use self::config::ServiceConfig;
-pub use self::error::{
-    DefaultError, Error, ErrorContainer, ErrorRenderer, WebResponseError,
-};
+pub use self::error::{DefaultError, Error, ErrorRenderer};
 pub use self::extract::FromRequest;
 pub use self::handler::Handler;
 pub use self::httprequest::HttpRequest;
@@ -157,15 +148,14 @@ pub mod dev {
     where
         T: super::FromRequest<'a, Err>,
         Err: super::ErrorRenderer,
-        <T as super::FromRequest<'a, Err>>::Error: Into<Err::Container>,
     {
     }
 
     #[doc(hidden)]
     #[inline(always)]
-    pub fn __assert_handler<Err, Fun, Fut>(
+    pub fn __assert_handler<'a, Err, Fun, Fut>(
         f: Fun,
-    ) -> impl Handler<(), Err, Future = Fut, Output = Fut::Output>
+    ) -> impl Handler<'a, (), Err, Future = Fut, Output = Fut::Output>
     where
         Err: super::ErrorRenderer,
         Fun: Fn() -> Fut + Clone + 'static,
@@ -180,11 +170,11 @@ pub mod dev {
         #[inline(always)]
         pub fn $name<'a, Err, Fun, Fut, $($T,)+>(
             f: Fun,
-        ) -> impl Handler<($($T,)+), Err, Future = Fut, Output = Fut::Output>
+        ) -> impl Handler<'a, ($($T,)+), Err, Future = Fut, Output = Fut::Output>
         where
             Err: $crate::web::ErrorRenderer,
             Fun: Fn($($T,)+) -> Fut + Clone + 'static,
-            Fut: std::future::Future + 'static,
+            Fut: std::future::Future + 'a,
             Fut::Output: $crate::web::Responder<Err>,
         $($T: $crate::web::FromRequest<'a, Err>),+,
         {

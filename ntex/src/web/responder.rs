@@ -5,10 +5,8 @@ use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
 use crate::http::{error::HttpError, Response, ResponseBuilder, StatusCode};
 use crate::util::{Bytes, BytesMut, Either};
 
-use super::error::{
-    DefaultError, ErrorContainer, ErrorRenderer, InternalError, WebResponseError,
-};
-use super::httprequest::HttpRequest;
+use super::error::{DefaultError, Error, ErrorRenderer, InternalError};
+use super::{HttpRequest, WebResponse};
 
 pub struct Ready<T>(Option<T>);
 
@@ -126,7 +124,7 @@ where
 impl<T, E, Err> Responder<Err> for Result<T, E>
 where
     T: Responder<Err>,
-    E: Into<Err::Container>,
+    E: Error<Err>,
     Err: ErrorRenderer,
 {
     type Future = Either<T::Future, Ready<Response>>;
@@ -134,7 +132,7 @@ where
     fn respond_to(self, req: &HttpRequest) -> Self::Future {
         match self {
             Ok(val) => Either::Left(val.respond_to(req)),
-            Err(e) => Either::Right(Ready(Some(e.into().error_response(req)))),
+            Err(e) => Either::Right(Ready(Some(WebResponse::from_err(e, req).into()))),
         }
     }
 }

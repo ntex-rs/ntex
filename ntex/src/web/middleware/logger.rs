@@ -130,9 +130,9 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<'a, S, E> Service<WebRequest<E>> for LoggerMiddleware<S>
+impl<'a, S, E> Service<&'a mut WebRequest<'a, E>> for LoggerMiddleware<S>
 where
-    S: Service<WebRequest<E>, Response = WebResponse>,
+    S: Service<&'a mut WebRequest<'a, E>, Response = WebResponse>,
     E: 'static,
 {
     type Response = WebResponse;
@@ -150,7 +150,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: WebRequest<E>) -> Self::Future {
+    fn call(&self, req: &'a mut WebRequest<'a, E>) -> Self::Future {
         if self.inner.exclude.contains(req.path()) {
             Either::Right(self.service.call(req))
         } else {
@@ -158,7 +158,7 @@ where
             let mut format = self.inner.format.clone();
 
             for unit in &mut format.0 {
-                unit.render_request(time, &req);
+                unit.render_request(time, req);
             }
             Either::Left(LoggerResponse {
                 time,
@@ -172,7 +172,7 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct LoggerResponse<'a, S: Service<WebRequest<E>>, E>
+    pub struct LoggerResponse<'a, S: Service<&'a mut WebRequest<'a, E>>, E>
     {
         #[pin]
         fut: S::Future,
@@ -184,7 +184,7 @@ pin_project_lite::pin_project! {
 
 impl<'a, S, E> Future for LoggerResponse<'a, S, E>
 where
-    S: Service<WebRequest<E>, Response = WebResponse>,
+    S: Service<&'a mut WebRequest<'a, E>, Response = WebResponse>,
 {
     type Output = Result<WebResponse, S::Error>;
 
@@ -396,7 +396,7 @@ impl FormatText {
         }
     }
 
-    fn render_request<E>(&mut self, now: time::SystemTime, req: &WebRequest<E>) {
+    fn render_request<E>(&mut self, now: time::SystemTime, req: &WebRequest<'_, E>) {
         match *self {
             FormatText::RequestLine => {
                 *self = if req.query_string().is_empty() {

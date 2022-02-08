@@ -3,7 +3,7 @@ use std::fmt;
 use crate::http::body::{Body, MessageBody, ResponseBody};
 use crate::http::{HeaderMap, Response, ResponseHead, StatusCode};
 
-use super::error::{ErrorContainer, ErrorRenderer};
+use super::error::{Error, ErrorRenderer};
 use super::httprequest::HttpRequest;
 
 /// An service http response
@@ -18,21 +18,18 @@ impl WebResponse {
     }
 
     /// Create web response from the error
-    pub fn from_err<Err: ErrorRenderer, E: Into<Err::Container>>(
+    pub fn from_err<Err: ErrorRenderer, E: Error<Err>>(
         err: E,
         request: &HttpRequest,
     ) -> Self {
-        let err = err.into();
-        let res: Response = err.error_response(request);
-
-        if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
+        if err.status_code() == StatusCode::INTERNAL_SERVER_ERROR {
             log::error!("Internal Server Error: {:?}", err);
         } else {
             log::debug!("Error in response: {:?}", err);
         }
 
         WebResponse {
-            response: res.into_body(),
+            response: err.error_response(request).into_body(),
         }
     }
 
@@ -99,6 +96,12 @@ impl From<WebResponse> for Response<Body> {
     #[inline]
     fn from(res: WebResponse) -> Response<Body> {
         res.response
+    }
+}
+
+impl fmt::Display for WebResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{:?}", self)
     }
 }
 

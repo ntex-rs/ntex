@@ -4,20 +4,15 @@ use std::{cell::RefCell, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
-use crate::service::{
-    fn_service, into_service, PipelineFactory, Service, ServiceFactory, Transform,
-};
-use crate::util::{ready, Extensions, Ready};
+use crate::service::{Service, ServiceFactory, Transform};
+use crate::util::{ready, Either, Extensions, Ready};
 
-use super::boxed::{self, BoxService, BoxServiceFactory};
-use super::config::AppConfig;
-use super::guard::Guard;
+use super::boxed::{BoxService, BoxServiceFactory};
 use super::httprequest::{HttpRequest, HttpRequestPool};
-use super::rmap::ResourceMap;
-use super::service::{WebService, WebServiceConfig, WebServiceWrapper};
-use super::stack::{Filter, FiltersFactory, Next};
+use super::service::{WebServiceConfig, WebServiceWrapper};
 use super::types::state::StateFactory;
-use super::{ErrorContainer, ErrorRenderer, WebRequest, WebResponse};
+use super::{config::AppConfig, guard::Guard, rmap::ResourceMap, stack::FiltersFactory};
+use super::{ErrorRenderer, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
 type BoxResponse<'a> = Pin<Box<dyn Future<Output = Result<WebResponse, Infallible>> + 'a>>;
@@ -153,19 +148,19 @@ impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>>
     for DefaultService<Err>
 {
     type Response = WebResponse;
-    type Error = Err::Container;
+    type Error = Infallible;
     type InitError = ();
     type Service = Self;
     type Future = Ready<Self::Service, Self::InitError>;
 
-    fn new_service(&self, cfg: ()) -> Self::Future {
+    fn new_service(&self, _: ()) -> Self::Future {
         Ready::Ok(DefaultService(PhantomData))
     }
 }
 
 impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for DefaultService<Err> {
     type Response = WebResponse;
-    type Error = Err::Container;
+    type Error = Infallible;
     type Future = Ready<Self::Response, Self::Error>;
 
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -280,36 +275,46 @@ where
                 let hnd: WebAppHandler2<'a> = Box::new(move |req: Request| {
                     let (head, payload) = req.into_parts();
 
-                    let mut req = if let Some(mut req) = pool.get_request() {
-                        let inner = Rc::get_mut(&mut req.0).unwrap();
-                        inner.path.set(head.uri.clone());
-                        inner.head = head;
-                        inner.payload = payload;
-                        inner.app_state = state.clone();
-                        req
+                    let http_req;
+                    let mut web_req = if let Some(mut req) = pool.get_request() {
+                        req.request.path.set(head.uri.clone());
+                        req.request.head = head;
+                        req.payload = payload;
+                        req.request.app_state = state.clone();
+                        let web_req = WebRequest::<Err>::new(unsafe {
+                            std::mem::transmute(&mut *req)
+                        });
+                        http_req = Either::Left(req);
+                        web_req
                     } else {
-                        HttpRequest::new(
+                        let mut req = HttpRequest::create(
                             Path::new(head.uri.clone()),
                             head,
                             payload,
                             rmap.clone(),
                             config.clone(),
                             state.clone(),
-                            pool,
-                        )
+                        );
+                        let web_req = WebRequest::<Err>::new(unsafe {
+                            std::mem::transmute(&mut req)
+                        });
+                        http_req = Either::Right(req);
+                        web_req
                     };
-                    let mut wreq =
-                        WebRequest::<Err>::new(unsafe { std::mem::transmute(&mut req) });
-                    let fut = service.call(unsafe { std::mem::transmute(&mut wreq) });
+                    let fut = service.call(unsafe { std::mem::transmute(&mut web_req) });
                     Box::pin(async move {
                         let mut res = fut.await.unwrap();
 
-                        let head = req.head();
+                        let head = web_req.head();
                         if head.upgrade() {
                             res.response.head_mut().set_io(head);
                         }
-                        drop(wreq);
-                        drop(req);
+                        drop(web_req);
+
+                        match http_req {
+                            Either::Left(req) => pool.release_boxed(req),
+                            Either::Right(req) => pool.release_unboxed(req),
+                        }
                         Ok(res)
                     })
                 });
@@ -335,7 +340,7 @@ where
     F: Service<
         &'a mut WebRequest<'a, Err>,
         Response = &'a mut WebRequest<'a, Err>,
-        Error = Err::Container,
+        Error = Infallible,
     >,
     F::Future: 'a,
     Err: ErrorRenderer,
@@ -350,7 +355,7 @@ where
         Poll::Ready(Ok(()))
     }
 
-    fn call(&self, mut req: &'a mut WebRequest<'a, Err>) -> Self::Future {
+    fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
         let r1 = unsafe { (req as *mut WebRequest<'a, Err>).as_mut().unwrap() };
         let r2 = unsafe { (req as *mut WebRequest<'a, Err>).as_mut().unwrap() };
 
@@ -358,10 +363,7 @@ where
         let router = self.router.clone();
 
         Box::pin(async move {
-            match fut.await {
-                Ok(res) => (),
-                Err(err) => return Ok(WebResponse::new(err.error_response(&req.req))),
-            }
+            let _ = fut.await.unwrap();
 
             let res = router.router.recognize_checked(req, |req, guards| {
                 if let Some(guards) = guards {
@@ -375,15 +377,9 @@ where
             });
 
             if let Some((srv, _info)) = res {
-                match srv.call(r2).await {
-                    Ok(res) => Ok(res),
-                    Err(err) => Ok(WebResponse::new(err.error_response(&req.req))),
-                }
+                srv.call(r2).await
             } else if let Some(ref default) = router.default {
-                match default.call(r2).await {
-                    Ok(res) => Ok(res),
-                    Err(err) => Ok(WebResponse::new(err.error_response(&req.req))),
-                }
+                default.call(r2).await
             } else {
                 Ok(WebResponse::new(Response::NotFound().finish()))
             }

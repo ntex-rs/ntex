@@ -122,16 +122,16 @@ impl<T: fmt::Display> fmt::Display for Query<T> {
 ///            .route(web::get().to(index))); // <- use `Query` extractor
 /// }
 /// ```
-impl<T, Err> FromRequest<Err> for Query<T>
+impl<'a, T, Err> FromRequest<'a, Err> for Query<T>
 where
-    T: de::DeserializeOwned,
+    T: de::DeserializeOwned + 'a,
     Err: ErrorRenderer,
 {
     type Error = QueryPayloadError;
     type Future = Ready<Self, Self::Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+    fn from_request(req: &'a HttpRequest, _: &'a mut Payload) -> Self::Future {
         serde_urlencoded::from_str::<T>(req.query_string())
             .map(|val| Ready::Ok(Query(val)))
             .unwrap_or_else(move |e| {

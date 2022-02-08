@@ -2,12 +2,12 @@ use ntex::http;
 use ntex::web::{self, middleware, App, HttpRequest, HttpResponse, HttpServer};
 
 #[web::get("/resource1/{name}/index.html")]
-async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {
+async fn index(req: &HttpRequest, name: web::types::Path<String>) -> String {
     println!("REQ: {:?}", req);
     format!("Hello: {}!\r\n", name)
 }
 
-async fn index_async(req: HttpRequest) -> &'static str {
+async fn index_async(req: &HttpRequest) -> &'static str {
     println!("REQ: {:?}", req);
     "Hello world!\r\n"
 }

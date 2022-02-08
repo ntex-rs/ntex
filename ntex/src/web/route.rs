@@ -1,18 +1,19 @@
-use std::{future::Future, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::convert::Infallible;
+use std::{cell::Cell, future::Future, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use crate::{http::Method, service::Service, service::ServiceFactory, util::Ready};
 
 use super::error_default::DefaultError;
 use super::guard::{self, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
-use super::{ErrorRenderer, FromRequest, HttpResponse, WebRequest, WebResponse};
+use super::{Error, ErrorRenderer, FromRequest, HttpResponse, WebRequest, WebResponse};
 
 /// Resource route definition
 ///
 /// Route uses builder-like pattern for configuration.
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
 pub struct Route<Err: ErrorRenderer = DefaultError> {
-    handler: Box<dyn HandlerFn<Err>>,
+    handler: Cell<Option<Box<dyn HandlerFn<'static, Err>>>>,
     methods: Vec<Method>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
@@ -21,7 +22,9 @@ impl<'a, Err: ErrorRenderer> Route<Err> {
     /// Create new route which matches any request.
     pub fn new() -> Route<Err> {
         Route {
-            handler: Box::new(HandlerWrapper::new(|| async { HttpResponse::NotFound() })),
+            handler: Cell::new(Some(Box::new(HandlerWrapper::new(|| async {
+                HttpResponse::NotFound()
+            })))),
             methods: Vec::new(),
             guards: Rc::new(Vec::new()),
         }
@@ -39,7 +42,7 @@ impl<'a, Err: ErrorRenderer> Route<Err> {
 
     pub(super) fn service(&self) -> RouteService<Err> {
         RouteService {
-            handler: self.handler.clone_handler(),
+            handler: self.handler.take().unwrap(),
             guards: self.guards.clone(),
             methods: self.methods.clone(),
         }
@@ -48,7 +51,7 @@ impl<'a, Err: ErrorRenderer> Route<Err> {
 
 impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>> for Route<Err> {
     type Response = WebResponse;
-    type Error = Err::Container;
+    type Error = Infallible;
     type InitError = ();
     type Service = RouteService<Err>;
     type Future = Ready<Self::Service, ()>;
@@ -59,7 +62,7 @@ impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>> for Rou
 }
 
 pub struct RouteService<Err: ErrorRenderer> {
-    handler: Box<dyn HandlerFn<Err>>,
+    handler: Box<dyn HandlerFn<'static, Err>>,
     methods: Vec<Method>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
@@ -81,7 +84,7 @@ impl<Err: ErrorRenderer> RouteService<Err> {
 
 impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for RouteService<Err> {
     type Response = WebResponse;
-    type Error = Err::Container;
+    type Error = Infallible;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + 'a>>;
 
     #[inline]
@@ -91,7 +94,9 @@ impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for RouteServi
 
     #[inline]
     fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
-        self.handler.call(req)
+        let handler: &dyn HandlerFn<'a, Err> =
+            unsafe { std::mem::transmute(&*self.handler) };
+        handler.call(req)
     }
 }
 
@@ -178,29 +183,31 @@ impl<Err: ErrorRenderer> Route<Err> {
     ///     );
     /// }
     /// ```
-    pub fn to<F, Args>(mut self, handler: F) -> Self
+    pub fn to<'a, F, Args>(self, handler: F) -> Self
     where
-        F: Handler<Args, Err>,
-        Args: FromRequest<'a, Err> + 'static,
-        Args::Error: Into<Err::Container>,
+        F: Handler<'a, Args, Err>,
+        Args: FromRequest<'a, Err> + 'a,
+        Args::Error: Error<Err>,
     {
-        self.handler = Box::new(HandlerWrapper::new(handler));
+        let handler: Box<dyn HandlerFn<'a, Err>> = Box::new(HandlerWrapper::new(handler));
+        self.handler
+            .set(Some(unsafe { std::mem::transmute(handler) }));
         self
     }
 }
 
 /// Convert object to a vec of routes
-pub trait IntoRoutes<Err: ErrorRenderer> {
+pub trait IntoRoutes<'a, Err: ErrorRenderer> {
     fn routes(self) -> Vec<Route<Err>>;
 }
 
-impl<Err: ErrorRenderer> IntoRoutes<Err> for Route<Err> {
+impl<'a, Err: ErrorRenderer> IntoRoutes<'a, Err> for Route<Err> {
     fn routes(self) -> Vec<Route<Err>> {
         vec![self]
     }
 }
 
-impl<Err: ErrorRenderer> IntoRoutes<Err> for Vec<Route<Err>> {
+impl<'a, Err: ErrorRenderer> IntoRoutes<'a, Err> for Vec<Route<Err>> {
     fn routes(self) -> Vec<Route<Err>> {
         self
     }
@@ -209,7 +216,7 @@ impl<Err: ErrorRenderer> IntoRoutes<Err> for Vec<Route<Err>> {
 macro_rules! tuple_routes({$(($n:tt, $T:ty)),+} => {
     /// IntoRoutes implementation for a tuple
     #[allow(unused_parens)]
-    impl<Err: ErrorRenderer> IntoRoutes<Err> for ($($T,)+) {
+    impl<'a, Err: ErrorRenderer> IntoRoutes<'a, Err> for ($($T,)+) {
         fn routes(self) -> Vec<Route<Err>> {
             vec![$(self.$n,)+]
         }
@@ -219,7 +226,7 @@ macro_rules! tuple_routes({$(($n:tt, $T:ty)),+} => {
 macro_rules! array_routes({$num:tt, $($T:ident),+} => {
     /// IntoRoutes implementation for an array
     #[allow(unused_parens)]
-    impl<Err: ErrorRenderer> IntoRoutes<Err> for [Route<Err>; $num]
+    impl<'a, Err: ErrorRenderer> IntoRoutes<'a, Err> for [Route<Err>; $num]
     where
         Err: ErrorRenderer,
     {

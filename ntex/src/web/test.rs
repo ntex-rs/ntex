@@ -25,24 +25,29 @@ use crate::{io::Sealed, rt::System, server::Server};
 
 use crate::web::config::AppConfig;
 use crate::web::error::{DefaultError, ErrorRenderer};
-use crate::web::httprequest::{HttpRequest, HttpRequestPool};
+use crate::web::httprequest::HttpRequest;
 use crate::web::rmap::ResourceMap;
 use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service<Err: ErrorRenderer>(
-) -> impl Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = std::convert::Infallible>
-{
+pub fn ok_service<'a, Err: ErrorRenderer>() -> impl Service<
+    &'a mut WebRequest<'a, Err>,
+    Response = WebResponse,
+    Error = std::convert::Infallible,
+> {
     default_service::<Err>(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
-pub fn default_service<Err: ErrorRenderer>(
+pub fn default_service<'a, Err: ErrorRenderer>(
     status_code: StatusCode,
-) -> impl Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = std::convert::Infallible>
-{
-    (move |req: &'a mut WebRequest<'a, Err>| {
-        Ready::Ok(req.into_response(HttpResponse::build(status_code).finish()))
+) -> impl Service<
+    &'a mut WebRequest<'a, Err>,
+    Response = WebResponse,
+    Error = std::convert::Infallible,
+> {
+    (move |_: &'a mut WebRequest<'a, Err>| {
+        Ready::Ok(HttpResponse::build(status_code).finish().into())
     })
     .into_service()
 }
@@ -249,11 +254,11 @@ where
 }
 
 /// Helper method for extractors testing
-pub async fn from_request<T: FromRequest<DefaultError>>(
-    req: &HttpRequest,
-    payload: &mut Payload,
-) -> Result<T, T::Error> {
-    T::from_request(req, payload).await
+pub fn from_request<'a, T: FromRequest<'a, DefaultError>>(
+    req: &'a HttpRequest,
+    payload: &'a mut Payload,
+) -> T::Future {
+    T::from_request(req, payload)
 }
 
 /// Helper method for responders testing
@@ -456,25 +461,25 @@ impl TestRequest {
         self.req.finish()
     }
 
-    /// Complete request creation and generate `WebRequest` instance
-    pub fn to_srv_request(mut self) -> WebRequest<DefaultError> {
-        let (head, payload) = self.req.finish().into_parts();
-        *self.path.get_mut() = head.uri.clone();
+    // /// Complete request creation and generate `WebRequest` instance
+    // pub fn to_srv_request(&'_ mut self) -> &'_ mut WebRequest<'_, DefaultError> {
+    //     let (head, payload) = self.req.finish().into_parts();
+    //     *self.path.get_mut() = head.uri.clone();
 
-        WebRequest::new(HttpRequest::new(
-            self.path,
-            head,
-            payload,
-            Rc::new(self.rmap),
-            self.config.clone(),
-            Rc::new(self.app_state),
-            HttpRequestPool::create(),
-        ))
-    }
+    //     WebRequest::new(HttpRequest::new(
+    //         self.path,
+    //         head,
+    //         payload,
+    //         Rc::new(self.rmap),
+    //         self.config.clone(),
+    //         Rc::new(self.app_state),
+    //         HttpRequestPool::create(),
+    //     ))
+    // }
 
     /// Complete request creation and generate `WebResponse` instance
     pub fn to_srv_response(self, res: HttpResponse) -> WebResponse {
-        self.to_srv_request().into_response(res)
+        res.into()
     }
 
     /// Complete request creation and generate `HttpRequest` instance
@@ -482,15 +487,15 @@ impl TestRequest {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
 
-        HttpRequest::new(
+        HttpRequest::create(
             self.path,
             head,
             payload,
             Rc::new(self.rmap),
             self.config.clone(),
             Rc::new(self.app_state),
-            HttpRequestPool::create(),
         )
+        .request
     }
 
     /// Complete request creation and generate `HttpRequest` and `Payload` instances
@@ -498,15 +503,15 @@ impl TestRequest {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
 
-        let req = HttpRequest::new(
+        let req = HttpRequest::create(
             self.path,
             head,
             Payload::None,
             Rc::new(self.rmap),
             self.config.clone(),
             Rc::new(self.app_state),
-            HttpRequestPool::create(),
-        );
+        )
+        .request;
 
         (req, payload)
     }

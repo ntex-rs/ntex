@@ -2,11 +2,10 @@ use std::{net::SocketAddr, rc::Rc};
 
 use crate::router::ResourceDef;
 
-use super::resource::Resource;
 use super::route::Route;
 use super::service::{create_web_service, WebService, WebServiceWrapper};
 use super::types::state::{State, StateFactory};
-use super::{DefaultError, ErrorRenderer};
+use super::{DefaultError, ErrorRenderer, Resource};
 
 /// Application configuration
 #[derive(Clone)]
@@ -87,12 +86,11 @@ impl<'a, Err: ErrorRenderer> ServiceConfig<'a, Err> {
     ///
     /// This is same as `App::route()` method.
     pub fn route(&mut self, path: &str, mut route: Route<Err>) -> &mut Self {
-        // self.service(
-        //     Resource::new(path)
-        //         .add_guards(route.take_guards())
-        //         .route(route),
-        // )
-        self
+        self.service(
+            Resource::new(path)
+                .add_guards(route.take_guards())
+                .route(route),
+        )
     }
 
     /// Register http service.

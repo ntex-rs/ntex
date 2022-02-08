@@ -1,16 +1,12 @@
 use std::{
-    convert::Infallible, future::Future, marker::PhantomData, pin::Pin, rc::Rc,
-    task::Context, task::Poll,
+    convert::Infallible, future::Future, marker::PhantomData, pin::Pin, task::Context,
+    task::Poll,
 };
 
-use crate::service::{
-    dev::AndThenFactory, pipeline_factory, PipelineFactory, Service, ServiceFactory,
-    Transform,
-};
+use crate::service::{dev::AndThenFactory, Service, ServiceFactory, Transform};
 use crate::util::{ready, Ready};
 
-use super::httprequest::HttpRequest;
-use super::{ErrorContainer, ErrorRenderer, WebRequest, WebResponse};
+use super::{Error, ErrorRenderer, WebRequest, WebResponse};
 
 pub struct Stack<Inner, Outer> {
     inner: Inner,
@@ -75,7 +71,7 @@ where
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
-    type Error = Err::Container;
+    type Error = Infallible;
     type Future = MiddlewareResponse<'a, S, Err>;
 
     #[inline]
@@ -104,7 +100,7 @@ where
     S: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = Infallible>,
     Err: ErrorRenderer,
 {
-    type Output = Result<WebResponse, Err::Container>;
+    type Output = Result<WebResponse, Infallible>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(Ok(ready!(self.project().fut.poll(cx)).unwrap()))
@@ -124,13 +120,13 @@ impl<S> Next<S> {
 impl<'a, S, Err> Service<&'a mut WebRequest<'a, Err>> for Next<S>
 where
     S: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse> + 'static,
-    S::Error: Into<Err::Container> + 'static,
+    S::Error: Error<Err>,
     S::Future: 'a,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
     type Error = Infallible;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + 'a>>;
+    type Future = NextResponse<'a, S, Err>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -142,13 +138,10 @@ where
     fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
         let r = unsafe { (req as *mut WebRequest<'a, Err>).as_mut().unwrap() };
 
-        let fut = self.next.call(r);
-        Box::pin(async move {
-            match fut.await {
-                Ok(res) => Ok(res),
-                Err(err) => Ok(WebResponse::new(err.into().error_response(&req.req))),
-            }
-        })
+        NextResponse {
+            req,
+            fut: self.next.call(r),
+        }
     }
 }
 
@@ -163,7 +156,7 @@ pin_project_lite::pin_project! {
 impl<'a, S, Err> Future for NextResponse<'a, S, Err>
 where
     S: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse>,
-    S::Error: Into<Err::Container>,
+    S::Error: Error<Err>,
     Err: ErrorRenderer,
 {
     type Output = Result<WebResponse, Infallible>;
@@ -173,8 +166,7 @@ where
         match ready!(this.fut.poll(cx)) {
             Ok(res) => Poll::Ready(Ok(res)),
             Err(err) => {
-                let req = this.req.req.clone();
-                Poll::Ready(Ok(WebResponse::new(err.into().error_response(&req))))
+                Poll::Ready(Ok(WebResponse::from_err(err, this.req.http_request())))
             }
         }
     }
@@ -192,7 +184,7 @@ impl<'a, Err: ErrorRenderer> FiltersFactory<'a, Err> for Filter {
 
 impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>> for Filter {
     type Response = &'a mut WebRequest<'a, Err>;
-    type Error = Err::Container;
+    type Error = Infallible;
     type InitError = ();
     type Service = Filter;
     type Future = Ready<Filter, ()>;
@@ -205,7 +197,7 @@ impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>> for Fil
 
 impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for Filter {
     type Response = &'a mut WebRequest<'a, Err>;
-    type Error = Err::Container;
+    type Error = Infallible;
     type Future = Ready<Self::Response, Self::Error>;
 
     #[inline]
@@ -236,7 +228,7 @@ where
     First: ServiceFactory<
             &'a mut WebRequest<'a, Err>,
             Response = &'a mut WebRequest<'a, Err>,
-            Error = Err::Container,
+            Error = Infallible,
             InitError = (),
         > + 'static,
     First::Service: 'static,
@@ -245,7 +237,7 @@ where
     Second::Service: ServiceFactory<
         &'a mut WebRequest<'a, Err>,
         Response = &'a mut WebRequest<'a, Err>,
-        Error = Err::Container,
+        Error = Infallible,
         InitError = (),
     >,
     <Second::Service as ServiceFactory<&'a mut WebRequest<'a, Err>>>::Service: 'static,
@@ -262,7 +254,7 @@ pub trait FiltersFactory<'a, Err: ErrorRenderer> {
     type Service: ServiceFactory<
             &'a mut WebRequest<'a, Err>,
             Response = &'a mut WebRequest<'a, Err>,
-            Error = Err::Container,
+            Error = Infallible,
             InitError = (),
         > + 'static;
 

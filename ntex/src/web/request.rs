@@ -1,88 +1,38 @@
 use std::{cell::Ref, cell::RefMut, fmt, marker::PhantomData, net, rc::Rc};
 
 use crate::http::{
-    header, HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version,
+    header, HeaderMap, HttpMessage, Method, Payload, RequestHead, Uri, Version,
 };
 use crate::io::{types, IoRef};
 use crate::router::{Path, Resource};
 use crate::util::Extensions;
 
 use super::config::AppConfig;
-use super::error::{ErrorRenderer, WebResponseError};
-use super::httprequest::HttpRequest;
+use super::error::ErrorRenderer;
+use super::httprequest::{HttpRequest, HttpRequestInner};
 use super::info::ConnectionInfo;
-use super::response::WebResponse;
 use super::rmap::ResourceMap;
 
 /// An service http request
 ///
 /// WebRequest allows mutable access to request's internal structures
 pub struct WebRequest<'a, Err> {
-    pub(super) req: &'a mut HttpRequest,
+    pub(super) req: &'a mut HttpRequestInner,
     _marker: PhantomData<fn(&'a ()) -> &'a Err>,
-}
-
-impl<'a, Err: ErrorRenderer> WebRequest<'a, Err> {
-    /// Create web response for error
-    #[inline]
-    pub fn render_error<E: WebResponseError<Err>>(self, err: E) -> WebResponse {
-        WebResponse::new(err.error_response(&self.req))
-    }
-
-    /// Create web response for error
-    #[inline]
-    pub fn error_response<E: Into<Err::Container>>(self, err: E) -> WebResponse {
-        WebResponse::from_err::<Err, E>(err, self.req)
-    }
 }
 
 impl<'a, Err> WebRequest<'a, Err> {
     /// Construct web request
-    pub(crate) fn new(req: &'a mut HttpRequest) -> Self {
+    pub(super) fn new(req: &'a mut HttpRequestInner) -> Self {
         WebRequest {
             req,
             _marker: PhantomData,
         }
     }
 
-    // /// Deconstruct request into parts
-    // pub fn into_parts(mut self) -> (HttpRequest, Payload) {
-    //     let pl = Rc::get_mut(&mut (self.req).0).unwrap().payload.take();
-    //     (self.req, pl)
-    // }
-
-    // /// Construct request from parts.
-    // ///
-    // /// `WebRequest` can be re-constructed only if `req` hasnt been cloned.
-    // pub fn from_parts(
-    //     mut req: HttpRequest,
-    //     pl: Payload,
-    // ) -> Result<Self, (HttpRequest, Payload)> {
-    //     if Rc::strong_count(&req.0) == 1 {
-    //         Rc::get_mut(&mut req.0).unwrap().payload = pl;
-    //         Ok(WebRequest::new(req))
-    //     } else {
-    //         Err((req, pl))
-    //     }
-    // }
-
-    // /// Construct request from request.
-    // ///
-    // /// `HttpRequest` implements `Clone` trait via `Rc` type. `WebRequest`
-    // /// can be re-constructed only if rc's strong pointers count eq 1 and
-    // /// weak pointers count is 0.
-    // pub fn from_request(req: HttpRequest) -> Result<Self, HttpRequest> {
-    //     if Rc::strong_count(&req.0) == 1 {
-    //         Ok(WebRequest::new(req))
-    //     } else {
-    //         Err(req)
-    //     }
-    // }
-
-    /// Create web response
-    #[inline]
-    pub fn into_response<R: Into<Response>>(self, res: R) -> WebResponse {
-        WebResponse::new(res.into())
+    /// Http request
+    pub fn http_request(&self) -> &HttpRequest {
+        &self.req.request
     }
 
     /// Io reference for current connection
@@ -94,13 +44,13 @@ impl<'a, Err> WebRequest<'a, Err> {
     /// This method returns reference to the request head
     #[inline]
     pub fn head(&self) -> &RequestHead {
-        self.req.head()
+        self.req.request.head()
     }
 
     /// This method returns reference to the request head
     #[inline]
     pub fn head_mut(&mut self) -> &mut RequestHead {
-        self.req.head_mut()
+        self.req.request.head_mut()
     }
 
     /// Request's uri.
@@ -180,25 +130,25 @@ impl<'a, Err> WebRequest<'a, Err> {
     /// access the matched value for that segment.
     #[inline]
     pub fn match_info(&self) -> &Path<Uri> {
-        self.req.match_info()
+        self.req.request.match_info()
     }
 
     #[inline]
     /// Get a mutable reference to the Path parameters.
     pub fn match_info_mut(&mut self) -> &mut Path<Uri> {
-        self.req.match_info_mut()
+        self.req.request.match_info_mut()
     }
 
     #[inline]
     /// Get a reference to a `ResourceMap` of current application.
     pub fn resource_map(&self) -> &ResourceMap {
-        self.req.resource_map()
+        self.req.request.resource_map()
     }
 
     /// Service configuration
     #[inline]
     pub fn app_config(&self) -> &AppConfig {
-        self.req.app_config()
+        self.req.request.app_config()
     }
 
     #[inline]
@@ -207,37 +157,59 @@ impl<'a, Err> WebRequest<'a, Err> {
     ///
     /// To get state stored with `App::state()` use `web::types::State<T>` as type.
     pub fn app_state<T: 'static>(&self) -> Option<&T> {
-        (self.req).0.app_state.get::<T>()
+        self.req.request.app_state.get::<T>()
+    }
+
+    #[inline]
+    /// Get request's payload
+    pub fn payload(&mut self) -> &Payload {
+        &self.req.payload
+    }
+
+    #[inline]
+    /// Get mutable request's payload
+    pub fn payload_mut(&mut self) -> &mut Payload {
+        &mut self.req.payload
     }
 
     #[inline]
     /// Get request's payload
     pub fn take_payload(&mut self) -> Payload {
-        Rc::get_mut(&mut (self.req).0).unwrap().payload.take()
+        self.req.payload.take()
     }
 
     #[inline]
     /// Set request payload.
     pub fn set_payload(&mut self, payload: Payload) {
-        Rc::get_mut(&mut (self.req).0).unwrap().payload = payload;
+        self.req.payload = payload;
     }
 
     #[doc(hidden)]
     /// Set new app state container
     pub fn set_state_container(&mut self, extensions: Rc<Extensions>) {
-        Rc::get_mut(&mut (self.req).0).unwrap().app_state = extensions;
+        self.req.request.app_state = extensions;
     }
 
     /// Request extensions
     #[inline]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
-        self.req.extensions()
+        self.req.request.extensions()
     }
 
     /// Mutable reference to a the request's extensions
     #[inline]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
-        self.req.extensions_mut()
+        self.req.request.extensions_mut()
+    }
+
+    #[inline]
+    /// Get request's payload
+    pub(super) fn with_params<F, R>(&'a mut self, f: F) -> R
+    where
+        F: FnOnce(&'a HttpRequest, &'a mut Payload) -> R,
+        R: 'a,
+    {
+        f(&self.req.request, &mut self.req.payload)
     }
 }
 
@@ -261,13 +233,13 @@ impl<'a, Err> HttpMessage for WebRequest<'a, Err> {
     /// Request extensions
     #[inline]
     fn message_extensions(&self) -> Ref<'_, Extensions> {
-        self.req.extensions()
+        self.req.request.extensions()
     }
 
     /// Mutable reference to a the request's extensions
     #[inline]
     fn message_extensions_mut(&self) -> RefMut<'_, Extensions> {
-        self.req.extensions_mut()
+        self.req.request.extensions_mut()
     }
 }
 

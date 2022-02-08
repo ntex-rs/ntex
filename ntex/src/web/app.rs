@@ -2,15 +2,14 @@ use std::{cell::RefCell, convert::Infallible, fmt, future::Future, pin::Pin, rc:
 
 use crate::http::Request;
 use crate::router::ResourceDef;
-use crate::service::{map_config, pipeline_factory, PipelineFactory};
+use crate::service::map_config;
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::Extensions;
 
-use super::app_service::{
-    AppFactory, AppFactoryInner, AppRouting, AppService, DefaultService,
-};
+use super::app_service::{AppFactory, AppFactoryInner, AppRouting, DefaultService};
 use super::boxed::{self, BoxServiceFactory};
 use super::config::{AppConfig, ServiceConfig};
+use super::error::Error;
 use super::service::{create_web_service, WebService, WebServiceWrapper};
 use super::stack::{Filter, Filters, FiltersFactory, Next, Stack};
 use super::types::state::{State, StateFactory};
@@ -267,18 +266,15 @@ where
     pub fn default<T, U>(mut self, f: T) -> Self
     where
         T: IntoServiceFactory<U, &'a mut WebRequest<'a, Err>>,
-        U: ServiceFactory<
-                &'a mut WebRequest<'a, Err>,
-                Response = WebResponse,
-                Error = Err::Container,
-            > + 'static,
+        U: ServiceFactory<&'a mut WebRequest<'a, Err>, Response = WebResponse> + 'static,
         U::Service: 'static,
         U::Future: 'static,
+        U::Error: Error<Err>,
         U::InitError: fmt::Debug + 'static,
     {
         // create and configure default resource
         self.default =
-            boxed::factory::<'a, _, _>(f.into_factory().map_init_err(|e| {
+            boxed::factory(f.into_factory().map_init_err(|e| {
                 log::error!("Cannot construct default service: {:?}", e)
             }));
 
@@ -343,9 +339,9 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn filter<U>(self, filter: U) -> App<'a, M, Filters<F, U>, Err> {
+    pub fn filter<U>(self, filter: U) -> App<'a, M, Filters<F, Next<U>>, Err> {
         App {
-            filter: Filters::new(self.filter, filter),
+            filter: Filters::new(self.filter, Next::new(filter)),
             middleware: self.middleware,
             state: self.state,
             state_factories: self.state_factories,

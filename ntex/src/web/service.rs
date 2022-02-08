@@ -1,16 +1,13 @@
-use std::task::{Context, Poll};
-use std::{convert::Infallible, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
+use std::rc::Rc;
 
 use crate::router::{IntoPattern, ResourceDef};
-use crate::service::{IntoServiceFactory, Service, ServiceFactory};
+use crate::service::{IntoServiceFactory, ServiceFactory};
 use crate::util::Extensions;
 
 use super::boxed::{self, BoxServiceFactory};
-use super::config::AppConfig;
-use super::dev::insert_slash;
-use super::rmap::ResourceMap;
 use super::types::state::StateFactory;
-use super::{guard::Guard, ErrorRenderer, WebRequest, WebResponse};
+use super::{config::AppConfig, dev::insert_slash, rmap::ResourceMap};
+use super::{error::Error, guard::Guard, ErrorRenderer, WebRequest, WebResponse};
 
 pub trait WebService<'a, Err: ErrorRenderer>: 'static {
     fn register(self, config: &mut WebServiceConfig<'a, Err>);
@@ -60,7 +57,7 @@ pub struct WebServiceConfig<'a, Err: ErrorRenderer> {
 
 impl<'a, Err: ErrorRenderer> WebServiceConfig<'a, Err> {
     /// Crate server settings instance
-    pub(crate) fn new(
+    pub(super) fn new(
         config: AppConfig,
         default: Rc<BoxServiceFactory<'a, Err>>,
         service_state: Rc<Vec<Box<dyn StateFactory>>>,
@@ -79,7 +76,7 @@ impl<'a, Err: ErrorRenderer> WebServiceConfig<'a, Err> {
         self.root
     }
 
-    pub(crate) fn into_services(
+    pub(super) fn into_services(
         self,
     ) -> (
         AppConfig,
@@ -132,11 +129,11 @@ impl<'a, Err: ErrorRenderer> WebServiceConfig<'a, Err> {
         S: ServiceFactory<
                 &'a mut WebRequest<'a, Err>,
                 Response = WebResponse,
-                Error = Err::Container,
                 InitError = (),
             > + 'static,
         S::Future: 'static,
         S::Service: 'static,
+        S::Error: Error<Err>,
     {
         self.services
             .push((rdef, boxed::factory(factory), guards, nested));
@@ -158,7 +155,8 @@ impl<'a, Err: ErrorRenderer> WebServiceConfig<'a, Err> {
 ///         .finish(my_service)
 /// );
 /// ```
-pub struct WebServiceAdapter {
+pub struct WebServiceAdapter<T = ()> {
+    srv: T,
     rdef: Vec<String>,
     name: Option<String>,
     guards: Vec<Box<dyn Guard>>,
@@ -168,6 +166,7 @@ impl WebServiceAdapter {
     /// Create new `WebServiceAdapter` instance.
     pub fn new<T: IntoPattern>(path: T) -> Self {
         WebServiceAdapter {
+            srv: (),
             rdef: path.patterns(),
             name: None,
             guards: Vec::new(),
@@ -205,65 +204,54 @@ impl WebServiceAdapter {
         self
     }
 
-    // /// Set a service factory implementation and generate web service.
-    // pub fn finish<'a, T, F, Err>(self, service: F) -> impl WebServiceFactory<'a, Err>
-    // where
-    //     F: IntoServiceFactory<T, &'a mut WebRequest<'a, Err>>,
-    //     T: ServiceFactory<
-    //             &'a mut WebRequest<'a, Err>,
-    //             Response = WebResponse,
-    //             Error = Err::Container,
-    //             InitError = (),
-    //         > + 'static,
-    //     Err: ErrorRenderer,
-    // {
-    //     WebServiceImpl {
-    //         srv: service.into_factory(),
-    //         rdef: self.rdef,
-    //         name: self.name,
-    //         guards: self.guards,
-    //         _t: PhantomData,
-    //     }
-    // }
+    /// Set a service factory implementation and generate web service.
+    pub fn finish<'a, T, F, Err>(self, service: F) -> WebServiceAdapter<T>
+    where
+        F: IntoServiceFactory<T, &'a mut WebRequest<'a, Err>>,
+        T: ServiceFactory<
+            &'a mut WebRequest<'a, Err>,
+            Response = WebResponse,
+            InitError = (),
+        >,
+        T::Error: Error<Err>,
+        Err: ErrorRenderer,
+    {
+        WebServiceAdapter {
+            srv: service.into_factory(),
+            rdef: self.rdef,
+            name: self.name,
+            guards: self.guards,
+        }
+    }
 }
 
-// struct WebServiceImpl<T> {
-//     srv: T,
-//     rdef: Vec<String>,
-//     name: Option<String>,
-//     guards: Vec<Box<dyn Guard>>,
-// }
+impl<'a, T, Err> WebService<'a, Err> for WebServiceAdapter<T>
+where
+    T: ServiceFactory<&'a mut WebRequest<'a, Err>, Response = WebResponse, InitError = ()>
+        + 'static,
+    T::Future: 'static,
+    T::Service: 'static,
+    T::Error: Error<Err>,
+    Err: ErrorRenderer,
+{
+    fn register(mut self, config: &mut WebServiceConfig<'a, Err>) {
+        let guards = if self.guards.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.guards))
+        };
 
-// impl<'a, T, Err> WebServiceFactory<'a, Err> for WebServiceImpl<T>
-// where
-//     T: ServiceFactory<
-//             &'a mut WebRequest<'a, Err>,
-//             Response = WebResponse,
-//             Error = Err::Container,
-//             InitError = (),
-//         > + 'static,
-//     T::Future: 'static,
-//     T::Service: 'static,
-//     Err: ErrorRenderer,
-// {
-//     fn register(mut self, config: &mut WebServiceConfig<'a, Err>) {
-//         let guards = if self.guards.is_empty() {
-//             None
-//         } else {
-//             Some(std::mem::take(&mut self.guards))
-//         };
-
-//         let mut rdef = if config.is_root() || !self.rdef.is_empty() {
-//             ResourceDef::new(insert_slash(self.rdef))
-//         } else {
-//             ResourceDef::new(self.rdef)
-//         };
-//         if let Some(ref name) = self.name {
-//             *rdef.name_mut() = name.clone();
-//         }
-//         config.register_service(rdef, guards, self.srv, None)
-//     }
-// }
+        let mut rdef = if config.is_root() || !self.rdef.is_empty() {
+            ResourceDef::new(insert_slash(self.rdef))
+        } else {
+            ResourceDef::new(self.rdef)
+        };
+        if let Some(ref name) = self.name {
+            *rdef.name_mut() = name.clone();
+        }
+        config.register_service(rdef, guards, self.srv, None)
+    }
+}
 
 // /// WebServiceFactory implementation for a Vec<T>
 // #[allow(unused_parens)]

@@ -59,9 +59,9 @@ pub struct CompressMiddleware<S> {
     encoding: ContentEncoding,
 }
 
-impl<'a, S, E> Service<WebRequest<E>> for CompressMiddleware<S>
+impl<'a, S, E> Service<&'a mut WebRequest<'a, E>> for CompressMiddleware<S>
 where
-    S: Service<WebRequest<E>, Response = WebResponse>,
+    S: Service<&'a mut WebRequest<'a, E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
     type Response = WebResponse;
@@ -78,7 +78,7 @@ where
         self.service.poll_shutdown(cx, is_error)
     }
 
-    fn call(&self, req: WebRequest<E>) -> Self::Future {
+    fn call(&self, req: &'a mut WebRequest<'a, E>) -> Self::Future {
         // negotiate content-encoding
         let encoding = if let Some(val) = req.headers().get(&ACCEPT_ENCODING) {
             if let Ok(enc) = val.to_str() {
@@ -100,7 +100,7 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct CompressResponse<'a, S: Service<WebRequest<E>>, E>
+    pub struct CompressResponse<'a, S: Service<&'a mut WebRequest<'a, E>>, E>
     {
         #[pin]
         fut: S::Future,
@@ -111,7 +111,7 @@ pin_project_lite::pin_project! {
 
 impl<'a, S, E> Future for CompressResponse<'a, S, E>
 where
-    S: Service<WebRequest<E>, Response = WebResponse>,
+    S: Service<&'a mut WebRequest<'a, E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
     type Output = Result<WebResponse, S::Error>;
