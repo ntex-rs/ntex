@@ -356,14 +356,11 @@ where
     }
 
     fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
-        let r1 = unsafe { (req as *mut WebRequest<'a, Err>).as_mut().unwrap() };
-        let r2 = unsafe { (req as *mut WebRequest<'a, Err>).as_mut().unwrap() };
-
-        let fut = self.filter.call(r1);
+        let fut = self.filter.call(req);
         let router = self.router.clone();
 
         Box::pin(async move {
-            let _ = fut.await.unwrap();
+            let req = fut.await.unwrap();
 
             let res = router.router.recognize_checked(req, |req, guards| {
                 if let Some(guards) = guards {
@@ -377,9 +374,9 @@ where
             });
 
             if let Some((srv, _info)) = res {
-                srv.call(r2).await
+                srv.call(req).await
             } else if let Some(ref default) = router.default {
-                default.call(r2).await
+                default.call(req).await
             } else {
                 Ok(WebResponse::new(Response::NotFound().finish()))
             }
