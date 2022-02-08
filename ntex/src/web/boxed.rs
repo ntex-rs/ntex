@@ -13,7 +13,7 @@ pub type BoxFactoryFuture<'a, Err: ErrorRenderer> =
 
 pub type BoxService<'a, Err: ErrorRenderer> = Box<
     dyn Service<
-            &'a mut WebRequest<Err>,
+            &'a mut WebRequest<'a, Err>,
             Response = WebResponse,
             Error = Err::Container,
             Future = BoxFuture<'a, Err>,
@@ -27,21 +27,21 @@ pub fn factory<'a, T, Err>(factory: T) -> BoxServiceFactory<'a, Err>
 where
     Err: ErrorRenderer,
     T: ServiceFactory<
-            &'a mut WebRequest<Err>,
+            &'a mut WebRequest<'a, Err>,
             Response = WebResponse,
             Error = Err::Container,
             InitError = (),
         > + 'static,
     T::Future: 'static,
     T::Service: 'static,
-    <T::Service as Service<&'a mut WebRequest<Err>>>::Future: 'a,
+    <T::Service as Service<&'a mut WebRequest<'a, Err>>>::Future: 'a,
 {
     BoxServiceFactory(FactoryWrapper::boxed(factory))
 }
 
 type Inner<'a, Err: ErrorRenderer + 'static> = Box<
     dyn ServiceFactory<
-            &'a mut WebRequest<Err>,
+            &'a mut WebRequest<'a, Err>,
             Response = WebResponse,
             Error = Err::Container,
             InitError = (),
@@ -50,7 +50,7 @@ type Inner<'a, Err: ErrorRenderer + 'static> = Box<
         > + 'static,
 >;
 
-impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<Err>>
+impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>>
     for BoxServiceFactory<'a, Err>
 {
     type Response = WebResponse;
@@ -73,14 +73,14 @@ impl<'a, T, Err> FactoryWrapper<T, Err>
 where
     Err: ErrorRenderer + 'static,
     T: ServiceFactory<
-            &'a mut WebRequest<Err>,
+            &'a mut WebRequest<'a, Err>,
             Response = WebResponse,
             Error = Err::Container,
             InitError = (),
         > + 'static,
     T::Future: 'static,
     T::Service: 'static,
-    <T::Service as Service<&'a mut WebRequest<Err>>>::Future: 'a,
+    <T::Service as Service<&'a mut WebRequest<'a, Err>>>::Future: 'a,
 {
     fn boxed(factory: T) -> Inner<'a, Err> {
         Box::new(Self {
@@ -90,18 +90,18 @@ where
     }
 }
 
-impl<'a, T, Err> ServiceFactory<&'a mut WebRequest<Err>> for FactoryWrapper<T, Err>
+impl<'a, T, Err> ServiceFactory<&'a mut WebRequest<'a, Err>> for FactoryWrapper<T, Err>
 where
     Err: ErrorRenderer + 'static,
     T: ServiceFactory<
-            &'a mut WebRequest<Err>,
+            &'a mut WebRequest<'a, Err>,
             Response = WebResponse,
             Error = Err::Container,
             InitError = (),
         > + 'static,
     T::Future: 'static,
     T::Service: 'static,
-    <T::Service as Service<&'a mut WebRequest<Err>>>::Future: 'a,
+    <T::Service as Service<&'a mut WebRequest<'a, Err>>>::Future: 'a,
 {
     type Response = WebResponse;
     type Error = Err::Container;
@@ -123,7 +123,7 @@ struct ServiceWrapper<T, Err>(T, PhantomData<Err>);
 impl<'a, T, Err> ServiceWrapper<T, Err>
 where
     Err: ErrorRenderer,
-    T: Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Err::Container>
+    T: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = Err::Container>
         + 'static,
     T::Future: 'a,
 {
@@ -132,10 +132,10 @@ where
     }
 }
 
-impl<'a, T, Err> Service<&'a mut WebRequest<Err>> for ServiceWrapper<T, Err>
+impl<'a, T, Err> Service<&'a mut WebRequest<'a, Err>> for ServiceWrapper<T, Err>
 where
     Err: ErrorRenderer,
-    T: Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Err::Container>
+    T: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = Err::Container>
         + 'static,
     T::Future: 'a,
 {
@@ -154,7 +154,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: &'a mut WebRequest<Err>) -> Self::Future {
+    fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
         Box::pin(self.0.call(req))
     }
 }

@@ -1,7 +1,8 @@
-use std::{marker::PhantomData, rc::Rc};
+use std::task::{Context, Poll};
+use std::{convert::Infallible, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use crate::router::{IntoPattern, ResourceDef};
-use crate::service::{IntoServiceFactory, ServiceFactory};
+use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::util::Extensions;
 
 use super::boxed::{self, BoxServiceFactory};
@@ -11,33 +12,31 @@ use super::rmap::ResourceMap;
 use super::types::state::StateFactory;
 use super::{guard::Guard, ErrorRenderer, WebRequest, WebResponse};
 
-pub trait WebServiceFactory<'a, Err: ErrorRenderer> {
+pub trait WebService<'a, Err: ErrorRenderer>: 'static {
     fn register(self, config: &mut WebServiceConfig<'a, Err>);
 }
 
-pub(super) trait AppServiceFactory<'a, Err: ErrorRenderer> {
+pub(super) trait WebServiceWrapper<'a, Err: ErrorRenderer> {
     fn register(&mut self, config: &mut WebServiceConfig<'a, Err>);
 }
 
-pub(super) struct ServiceFactoryWrapper<T> {
-    factory: Option<T>,
-}
-
-impl<T> ServiceFactoryWrapper<T> {
-    pub(super) fn new(factory: T) -> Self {
-        Self {
-            factory: Some(factory),
-        }
-    }
-}
-
-impl<'a, T, Err> AppServiceFactory<'a, Err> for ServiceFactoryWrapper<T>
+pub(super) fn create_web_service<'a, T, Err>(svc: T) -> Box<dyn WebServiceWrapper<'a, Err>>
 where
+    T: WebService<'a, Err> + 'static,
     Err: ErrorRenderer,
-    T: WebServiceFactory<'a, Err>,
+{
+    Box::new(WebServiceWrapperInner(Some(svc)))
+}
+
+struct WebServiceWrapperInner<T>(Option<T>);
+
+impl<'a, T, Err> WebServiceWrapper<'a, Err> for WebServiceWrapperInner<T>
+where
+    T: WebService<'a, Err> + 'static,
+    Err: ErrorRenderer,
 {
     fn register(&mut self, config: &mut WebServiceConfig<'a, Err>) {
-        if let Some(item) = self.factory.take() {
+        if let Some(item) = self.0.take() {
             item.register(config)
         }
     }
@@ -131,7 +130,7 @@ impl<'a, Err: ErrorRenderer> WebServiceConfig<'a, Err> {
         nested: Option<Rc<ResourceMap>>,
     ) where
         S: ServiceFactory<
-                &'a mut WebRequest<Err>,
+                &'a mut WebRequest<'a, Err>,
                 Response = WebResponse,
                 Error = Err::Container,
                 InitError = (),
@@ -209,9 +208,9 @@ impl WebServiceAdapter {
     // /// Set a service factory implementation and generate web service.
     // pub fn finish<'a, T, F, Err>(self, service: F) -> impl WebServiceFactory<'a, Err>
     // where
-    //     F: IntoServiceFactory<T, &'a mut WebRequest<Err>>,
+    //     F: IntoServiceFactory<T, &'a mut WebRequest<'a, Err>>,
     //     T: ServiceFactory<
-    //             &'a mut WebRequest<Err>,
+    //             &'a mut WebRequest<'a, Err>,
     //             Response = WebResponse,
     //             Error = Err::Container,
     //             InitError = (),
@@ -228,62 +227,62 @@ impl WebServiceAdapter {
     // }
 }
 
-struct WebServiceImpl<T> {
-    srv: T,
-    rdef: Vec<String>,
-    name: Option<String>,
-    guards: Vec<Box<dyn Guard>>,
-}
+// struct WebServiceImpl<T> {
+//     srv: T,
+//     rdef: Vec<String>,
+//     name: Option<String>,
+//     guards: Vec<Box<dyn Guard>>,
+// }
 
-impl<'a, T, Err> WebServiceFactory<'a, Err> for WebServiceImpl<T>
-where
-    T: ServiceFactory<
-            &'a mut WebRequest<Err>,
-            Response = WebResponse,
-            Error = Err::Container,
-            InitError = (),
-        > + 'static,
-    T::Future: 'static,
-    T::Service: 'static,
-    Err: ErrorRenderer,
-{
-    fn register(mut self, config: &mut WebServiceConfig<'a, Err>) {
-        let guards = if self.guards.is_empty() {
-            None
-        } else {
-            Some(std::mem::take(&mut self.guards))
-        };
+// impl<'a, T, Err> WebServiceFactory<'a, Err> for WebServiceImpl<T>
+// where
+//     T: ServiceFactory<
+//             &'a mut WebRequest<'a, Err>,
+//             Response = WebResponse,
+//             Error = Err::Container,
+//             InitError = (),
+//         > + 'static,
+//     T::Future: 'static,
+//     T::Service: 'static,
+//     Err: ErrorRenderer,
+// {
+//     fn register(mut self, config: &mut WebServiceConfig<'a, Err>) {
+//         let guards = if self.guards.is_empty() {
+//             None
+//         } else {
+//             Some(std::mem::take(&mut self.guards))
+//         };
 
-        let mut rdef = if config.is_root() || !self.rdef.is_empty() {
-            ResourceDef::new(insert_slash(self.rdef))
-        } else {
-            ResourceDef::new(self.rdef)
-        };
-        if let Some(ref name) = self.name {
-            *rdef.name_mut() = name.clone();
-        }
-        config.register_service(rdef, guards, self.srv, None)
-    }
-}
+//         let mut rdef = if config.is_root() || !self.rdef.is_empty() {
+//             ResourceDef::new(insert_slash(self.rdef))
+//         } else {
+//             ResourceDef::new(self.rdef)
+//         };
+//         if let Some(ref name) = self.name {
+//             *rdef.name_mut() = name.clone();
+//         }
+//         config.register_service(rdef, guards, self.srv, None)
+//     }
+// }
 
-/// WebServiceFactory implementation for a Vec<T>
-#[allow(unused_parens)]
-impl<'a, Err, T> WebServiceFactory<'a, Err> for Vec<T>
-where
-    Err: ErrorRenderer,
-    T: WebServiceFactory<'a, Err> + 'static,
-{
-    fn register(mut self, config: &mut WebServiceConfig<'a, Err>) {
-        for service in self.drain(..) {
-            service.register(config);
-        }
-    }
-}
+// /// WebServiceFactory implementation for a Vec<T>
+// #[allow(unused_parens)]
+// impl<'a, Err, T> WebServiceFactory<'a, Err> for Vec<T>
+// where
+//     Err: ErrorRenderer,
+//     T: WebServiceFactory<'a, Err> + 'static,
+// {
+//     fn register(mut self, config: &mut WebServiceConfig<'a, Err>) {
+//         for service in self.drain(..) {
+//             service.register(config);
+//         }
+//     }
+// }
 
 macro_rules! tuple_web_service({$(($n:tt, $T:ident)),+} => {
     /// WebServiceFactory implementation for a tuple
     #[allow(unused_parens)]
-    impl<'a, Err: ErrorRenderer, $($T: WebServiceFactory<'a, Err> + 'static),+> WebServiceFactory<'a, Err> for ($($T,)+) {
+    impl<'a, Err: ErrorRenderer, $($T: WebService<'a, Err> + 'static),+> WebService<'a, Err> for ($($T,)+) {
         fn register(self, config: &mut WebServiceConfig<'a, Err>) {
             $(
                 self.$n.register(config);
@@ -295,10 +294,10 @@ macro_rules! tuple_web_service({$(($n:tt, $T:ident)),+} => {
 macro_rules! array_web_service({$num:tt, $($T:ident),+} => {
     /// WebServiceFactory implementation for an array
     #[allow(unused_parens)]
-    impl<'a, Err, T> WebServiceFactory<'a, Err> for [T; $num]
+    impl<'a, Err, T> WebService<'a, Err> for [T; $num]
     where
         Err: ErrorRenderer,
-        T: WebServiceFactory<'a, Err> + 'static,
+        T: WebService<'a, Err> + 'static,
     {
         fn register(self, config: &mut WebServiceConfig<'a, Err>) {
             let [$($T,)+] = self;
@@ -315,45 +314,45 @@ macro_rules! array_web_service({$num:tt, $($T:ident),+} => {
 mod m {
     use super::*;
 
-array_web_service!(1,A);
-array_web_service!(2,A,B);
-array_web_service!(3,A,B,C);
-array_web_service!(4,A,B,C,D);
-array_web_service!(5,A,B,C,D,E);
-array_web_service!(6,A,B,C,D,E,F);
-array_web_service!(7,A,B,C,D,E,F,G);
-array_web_service!(8,A,B,C,D,E,F,G,H);
-array_web_service!(9,A,B,C,D,E,F,G,H,I);
-array_web_service!(10,A,B,C,D,E,F,G,H,I,J);
-array_web_service!(11,A,B,C,D,E,F,G,H,I,J,K);
-array_web_service!(12,A,B,C,D,E,F,G,H,I,J,K,L);
-array_web_service!(13,A,B,C,D,E,F,G,H,I,J,K,L,M);
-array_web_service!(14,A,B,C,D,E,F,G,H,I,J,K,L,M,N);
-array_web_service!(15,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O);
-array_web_service!(16,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P);
+    array_web_service!(1,A);
+    array_web_service!(2,A,B);
+    array_web_service!(3,A,B,C);
+    array_web_service!(4,A,B,C,D);
+    array_web_service!(5,A,B,C,D,E);
+    array_web_service!(6,A,B,C,D,E,F);
+    array_web_service!(7,A,B,C,D,E,F,G);
+    array_web_service!(8,A,B,C,D,E,F,G,H);
+    array_web_service!(9,A,B,C,D,E,F,G,H,I);
+    array_web_service!(10,A,B,C,D,E,F,G,H,I,J);
+    array_web_service!(11,A,B,C,D,E,F,G,H,I,J,K);
+    array_web_service!(12,A,B,C,D,E,F,G,H,I,J,K,L);
+    array_web_service!(13,A,B,C,D,E,F,G,H,I,J,K,L,M);
+    array_web_service!(14,A,B,C,D,E,F,G,H,I,J,K,L,M,N);
+    array_web_service!(15,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O);
+    array_web_service!(16,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P);
 
-tuple_web_service!((0,A));
-tuple_web_service!((0,A),(1,B));
-tuple_web_service!((0,A),(1,B),(2,C));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S),(19,T));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S),(19,T),(20,V));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S),(19,T),(20,V),(21,X));
+    tuple_web_service!((0,A));
+    tuple_web_service!((0,A),(1,B));
+    tuple_web_service!((0,A),(1,B),(2,C));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S),(19,T));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S),(19,T),(20,V));
+    tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S),(19,T),(20,V),(21,X));
 }
 
 #[cfg(test)]

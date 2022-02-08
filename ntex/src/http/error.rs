@@ -28,6 +28,8 @@ pub trait ResponseError: fmt::Display + fmt::Debug {
     }
 }
 
+impl ResponseError for std::convert::Infallible {}
+
 impl<'a, T: ResponseError> ResponseError for &'a T {
     fn error_response(&self) -> Response {
         (*self).error_response()

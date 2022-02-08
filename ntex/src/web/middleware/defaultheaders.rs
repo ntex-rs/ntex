@@ -5,7 +5,7 @@ use std::{convert::Infallible, convert::TryFrom, future::Future, pin::Pin, rc::R
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::service::{Service, Transform};
-use crate::web::{WebRequest, WebResponse};
+use crate::web::{WebRequest, WebResponse, ErrorRenderer};
 
 /// `Middleware` for setting default response headers.
 ///
@@ -102,14 +102,15 @@ pub struct DefaultHeadersMiddleware<S> {
     inner: Rc<Inner>,
 }
 
-impl<S, E> Service<WebRequest<E>> for DefaultHeadersMiddleware<S>
+impl<'a, S, E> Service<WebRequest<E>> for DefaultHeadersMiddleware<S>
 where
     S: Service<WebRequest<E>, Response = WebResponse, Error = Infallible>,
     S::Future: 'static,
+    E: ErrorRenderer,
 {
     type Response = WebResponse;
     type Error = Infallible;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + 'a>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

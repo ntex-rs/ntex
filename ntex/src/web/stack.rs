@@ -9,32 +9,24 @@ use crate::service::{
 };
 use crate::util::{ready, Ready};
 
-use super::httprequest::{HttpRequest, WeakHttpRequest};
+use super::httprequest::HttpRequest;
 use super::{ErrorContainer, ErrorRenderer, WebRequest, WebResponse};
 
-pub struct Stack<Inner, Outer, Err> {
+pub struct Stack<Inner, Outer> {
     inner: Inner,
     outer: Outer,
-    _t: PhantomData<Err>,
 }
 
-impl<Inner, Outer, Err> Stack<Inner, Outer, Err> {
+impl<Inner, Outer> Stack<Inner, Outer> {
     pub(super) fn new(inner: Inner, outer: Outer) -> Self {
-        Stack {
-            inner,
-            outer,
-            _t: PhantomData,
-        }
+        Stack { inner, outer }
     }
 }
 
-impl<S, Inner, Outer, Err> Transform<S> for Stack<Inner, Outer, Err>
+impl<S, Inner, Outer> Transform<S> for Stack<Inner, Outer>
 where
-    Err: ErrorRenderer,
     Inner: Transform<S>,
-    Inner::Service: Service<WebRequest<Err>, Response = WebResponse>,
-    <Inner::Service as Service<WebRequest<Err>>>::Error: Into<Err::Container>,
-    Outer: Transform<Next<Inner::Service, Err>>,
+    Outer: Transform<Next<Inner::Service>>,
 {
     type Service = Outer::Service;
 
@@ -77,9 +69,9 @@ pub struct Middleware<S, Err> {
     _t: PhantomData<Err>,
 }
 
-impl<'a, S, Err> Service<&'a mut WebRequest<Err>> for Middleware<S, Err>
+impl<'a, S, Err> Service<&'a mut WebRequest<'a, Err>> for Middleware<S, Err>
 where
-    S: Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    S: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = Infallible>,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
@@ -93,7 +85,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: &'a mut WebRequest<Err>) -> Self::Future {
+    fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
         MiddlewareResponse {
             fut: self.md.call(req),
         }
@@ -101,7 +93,7 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct MiddlewareResponse<'a, S: Service<&'a mut WebRequest<Err>>, Err> {
+    pub struct MiddlewareResponse<'a, S: Service<&'a mut WebRequest<'a, Err>>, Err> {
         #[pin]
         fut: S::Future,
     }
@@ -109,7 +101,7 @@ pin_project_lite::pin_project! {
 
 impl<'a, S, Err> Future for MiddlewareResponse<'a, S, Err>
 where
-    S: Service<&'a mut WebRequest<Err>, Response = WebResponse, Error = Infallible>,
+    S: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = Infallible>,
     Err: ErrorRenderer,
 {
     type Output = Result<WebResponse, Err::Container>;
@@ -119,23 +111,19 @@ where
     }
 }
 
-pub struct Next<S, Err> {
-    inner: Rc<S>,
-    _t: PhantomData<Err>,
+pub struct Next<S> {
+    next: S,
 }
 
-impl<S, Err> Next<S, Err> {
-    pub(super) fn new(inner: S) -> Self {
-        Next {
-            inner: Rc::new(inner),
-            _t: PhantomData,
-        }
+impl<S> Next<S> {
+    pub(super) fn new(next: S) -> Self {
+        Next { next }
     }
 }
 
-impl<'a, S, Err> Service<&'a mut WebRequest<Err>> for Next<S, Err>
+impl<'a, S, Err> Service<&'a mut WebRequest<'a, Err>> for Next<S>
 where
-    S: Service<&'a mut WebRequest<Err>, Response = WebResponse> + 'static,
+    S: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse> + 'static,
     S::Error: Into<Err::Container> + 'static,
     S::Future: 'a,
     Err: ErrorRenderer,
@@ -146,16 +134,17 @@ where
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let _ = ready!(self.inner.poll_ready(cx));
+        let _ = ready!(self.next.poll_ready(cx));
         Poll::Ready(Ok(()))
     }
 
     #[inline]
-    fn call(&self, req: &'a mut WebRequest<Err>) -> Self::Future {
-        let next = self.inner.clone();
+    fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
+        let r = unsafe { (req as *mut WebRequest<'a, Err>).as_mut().unwrap() };
+
+        let fut = self.next.call(r);
         Box::pin(async move {
-            let result = next.call(req).await;
-            match result {
+            match fut.await {
                 Ok(res) => Ok(res),
                 Err(err) => Ok(WebResponse::new(err.into().error_response(&req.req))),
             }
@@ -164,16 +153,16 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct NextResponse<'a, S: Service<&'a mut WebRequest<Err>>, Err> {
+    pub struct NextResponse<'a, S: Service<&'a mut WebRequest<'a, Err>>, Err> {
         #[pin]
         fut: S::Future,
-        req: &'a mut WebRequest<Err>,
+        req: &'a mut WebRequest<'a, Err>,
     }
 }
 
 impl<'a, S, Err> Future for NextResponse<'a, S, Err>
 where
-    S: Service<&'a mut WebRequest<Err>, Response = WebResponse>,
+    S: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse>,
     S::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
@@ -191,37 +180,31 @@ where
     }
 }
 
-pub struct Filter<Err>(PhantomData<Err>);
+pub struct Filter;
 
-impl<Err: ErrorRenderer> Filter<Err> {
-    pub(super) fn new() -> Self {
-        Filter(PhantomData)
-    }
-}
-
-impl<'a, Err: ErrorRenderer> FiltersFactory<'a, Err> for Filter<Err> {
-    type Service = Filter<Err>;
+impl<'a, Err: ErrorRenderer> FiltersFactory<'a, Err> for Filter {
+    type Service = Filter;
 
     fn create(self) -> Self::Service {
         self
     }
 }
 
-impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<Err>> for Filter<Err> {
-    type Response = &'a mut WebRequest<Err>;
+impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>> for Filter {
+    type Response = &'a mut WebRequest<'a, Err>;
     type Error = Err::Container;
     type InitError = ();
-    type Service = Filter<Err>;
-    type Future = Ready<Filter<Err>, ()>;
+    type Service = Filter;
+    type Future = Ready<Filter, ()>;
 
     #[inline]
     fn new_service(&self, _: ()) -> Self::Future {
-        Ready::Ok(Filter(PhantomData))
+        Ready::Ok(Filter)
     }
 }
 
-impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<Err>> for Filter<Err> {
-    type Response = &'a mut WebRequest<Err>;
+impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for Filter {
+    type Response = &'a mut WebRequest<'a, Err>;
     type Error = Err::Container;
     type Future = Ready<Self::Response, Self::Error>;
 
@@ -231,33 +214,28 @@ impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<Err>> for Filter<Err> {
     }
 
     #[inline]
-    fn call(&self, req: &'a mut WebRequest<Err>) -> Self::Future {
+    fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
         Ready::Ok(req)
     }
 }
 
-pub struct Filters<First, Second, Err> {
+pub struct Filters<First, Second> {
     first: First,
     second: Second,
-    _t: PhantomData<Err>,
 }
 
-impl<First, Second, Err> Filters<First, Second, Err> {
+impl<First, Second> Filters<First, Second> {
     pub(super) fn new(first: First, second: Second) -> Self {
-        Filters {
-            first,
-            second,
-            _t: PhantomData,
-        }
+        Filters { first, second }
     }
 }
 
-impl<'a, First, Second, Err> FiltersFactory<'a, Err> for Filters<First, Second, Err>
+impl<'a, First, Second, Err> FiltersFactory<'a, Err> for Filters<First, Second>
 where
     Err: ErrorRenderer,
     First: ServiceFactory<
-            &'a mut WebRequest<Err>,
-            Response = &'a mut WebRequest<Err>,
+            &'a mut WebRequest<'a, Err>,
+            Response = &'a mut WebRequest<'a, Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
@@ -265,13 +243,13 @@ where
     First::Future: 'static,
     Second: FiltersFactory<'a, Err>,
     Second::Service: ServiceFactory<
-        &'a mut WebRequest<Err>,
-        Response = &'a mut WebRequest<Err>,
+        &'a mut WebRequest<'a, Err>,
+        Response = &'a mut WebRequest<'a, Err>,
         Error = Err::Container,
         InitError = (),
     >,
-    <Second::Service as ServiceFactory<&'a mut WebRequest<Err>>>::Service: 'static,
-    <Second::Service as ServiceFactory<&'a mut WebRequest<Err>>>::Future: 'static,
+    <Second::Service as ServiceFactory<&'a mut WebRequest<'a, Err>>>::Service: 'static,
+    <Second::Service as ServiceFactory<&'a mut WebRequest<'a, Err>>>::Future: 'static,
 {
     type Service = AndThenFactory<First, Second::Service>;
 
@@ -282,8 +260,8 @@ where
 
 pub trait FiltersFactory<'a, Err: ErrorRenderer> {
     type Service: ServiceFactory<
-            &'a mut WebRequest<Err>,
-            Response = &'a mut WebRequest<Err>,
+            &'a mut WebRequest<'a, Err>,
+            Response = &'a mut WebRequest<'a, Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static;

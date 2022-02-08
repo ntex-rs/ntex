@@ -9,7 +9,7 @@ use crate::util::Extensions;
 
 use super::config::AppConfig;
 use super::error::{ErrorRenderer, WebResponseError};
-use super::httprequest::{HttpRequest, WeakHttpRequest};
+use super::httprequest::HttpRequest;
 use super::info::ConnectionInfo;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
@@ -17,12 +17,12 @@ use super::rmap::ResourceMap;
 /// An service http request
 ///
 /// WebRequest allows mutable access to request's internal structures
-pub struct WebRequest<Err> {
-    pub(super) req: HttpRequest,
-    _t: PhantomData<Err>,
+pub struct WebRequest<'a, Err> {
+    pub(super) req: &'a mut HttpRequest,
+    _marker: PhantomData<fn(&'a ()) -> &'a Err>,
 }
 
-impl<Err: ErrorRenderer> WebRequest<Err> {
+impl<'a, Err: ErrorRenderer> WebRequest<'a, Err> {
     /// Create web response for error
     #[inline]
     pub fn render_error<E: WebResponseError<Err>>(self, err: E) -> WebResponse {
@@ -36,52 +36,48 @@ impl<Err: ErrorRenderer> WebRequest<Err> {
     }
 }
 
-impl<Err> WebRequest<Err> {
+impl<'a, Err> WebRequest<'a, Err> {
     /// Construct web request
-    pub(crate) fn new(req: HttpRequest) -> Self {
+    pub(crate) fn new(req: &'a mut HttpRequest) -> Self {
         WebRequest {
             req,
-            _t: PhantomData,
+            _marker: PhantomData,
         }
     }
 
-    pub(super) fn weak_request(&self) -> WeakHttpRequest {
-        self.req.downgrade()
-    }
+    // /// Deconstruct request into parts
+    // pub fn into_parts(mut self) -> (HttpRequest, Payload) {
+    //     let pl = Rc::get_mut(&mut (self.req).0).unwrap().payload.take();
+    //     (self.req, pl)
+    // }
 
-    /// Deconstruct request into parts
-    pub fn into_parts(mut self) -> (HttpRequest, Payload) {
-        let pl = Rc::get_mut(&mut (self.req).0).unwrap().payload.take();
-        (self.req, pl)
-    }
+    // /// Construct request from parts.
+    // ///
+    // /// `WebRequest` can be re-constructed only if `req` hasnt been cloned.
+    // pub fn from_parts(
+    //     mut req: HttpRequest,
+    //     pl: Payload,
+    // ) -> Result<Self, (HttpRequest, Payload)> {
+    //     if Rc::strong_count(&req.0) == 1 {
+    //         Rc::get_mut(&mut req.0).unwrap().payload = pl;
+    //         Ok(WebRequest::new(req))
+    //     } else {
+    //         Err((req, pl))
+    //     }
+    // }
 
-    /// Construct request from parts.
-    ///
-    /// `WebRequest` can be re-constructed only if `req` hasnt been cloned.
-    pub fn from_parts(
-        mut req: HttpRequest,
-        pl: Payload,
-    ) -> Result<Self, (HttpRequest, Payload)> {
-        if Rc::strong_count(&req.0) == 1 {
-            Rc::get_mut(&mut req.0).unwrap().payload = pl;
-            Ok(WebRequest::new(req))
-        } else {
-            Err((req, pl))
-        }
-    }
-
-    /// Construct request from request.
-    ///
-    /// `HttpRequest` implements `Clone` trait via `Rc` type. `WebRequest`
-    /// can be re-constructed only if rc's strong pointers count eq 1 and
-    /// weak pointers count is 0.
-    pub fn from_request(req: HttpRequest) -> Result<Self, HttpRequest> {
-        if Rc::strong_count(&req.0) == 1 {
-            Ok(WebRequest::new(req))
-        } else {
-            Err(req)
-        }
-    }
+    // /// Construct request from request.
+    // ///
+    // /// `HttpRequest` implements `Clone` trait via `Rc` type. `WebRequest`
+    // /// can be re-constructed only if rc's strong pointers count eq 1 and
+    // /// weak pointers count is 0.
+    // pub fn from_request(req: HttpRequest) -> Result<Self, HttpRequest> {
+    //     if Rc::strong_count(&req.0) == 1 {
+    //         Ok(WebRequest::new(req))
+    //     } else {
+    //         Err(req)
+    //     }
+    // }
 
     /// Create web response
     #[inline]
@@ -245,7 +241,7 @@ impl<Err> WebRequest<Err> {
     }
 }
 
-impl<Err> Resource<Uri> for WebRequest<Err> {
+impl<'a, Err> Resource<Uri> for WebRequest<'a, Err> {
     fn path(&self) -> &str {
         self.match_info().path()
     }
@@ -255,7 +251,7 @@ impl<Err> Resource<Uri> for WebRequest<Err> {
     }
 }
 
-impl<Err> HttpMessage for WebRequest<Err> {
+impl<'a, Err> HttpMessage for WebRequest<'a, Err> {
     #[inline]
     /// Returns Request's headers.
     fn message_headers(&self) -> &HeaderMap {
@@ -275,7 +271,7 @@ impl<Err> HttpMessage for WebRequest<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> fmt::Debug for WebRequest<Err> {
+impl<'a, Err: ErrorRenderer> fmt::Debug for WebRequest<'a, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,

@@ -130,13 +130,14 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<S, E> Service<WebRequest<E>> for LoggerMiddleware<S>
+impl<'a, S, E> Service<WebRequest<E>> for LoggerMiddleware<S>
 where
     S: Service<WebRequest<E>, Response = WebResponse>,
+    E: 'static,
 {
     type Response = WebResponse;
     type Error = S::Error;
-    type Future = Either<LoggerResponse<S, E>, S::Future>;
+    type Future = Either<LoggerResponse<'a, S, E>, S::Future>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -171,7 +172,7 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct LoggerResponse<S: Service<WebRequest<E>>, E>
+    pub struct LoggerResponse<'a, S: Service<WebRequest<E>>, E>
     {
         #[pin]
         fut: S::Future,
@@ -181,7 +182,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<S, E> Future for LoggerResponse<S, E>
+impl<'a, S, E> Future for LoggerResponse<'a, S, E>
 where
     S: Service<WebRequest<E>, Response = WebResponse>,
 {

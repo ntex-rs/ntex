@@ -1,4 +1,4 @@
-use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc, rc::Weak};
+use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 
 use crate::http::{
     HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
@@ -16,8 +16,6 @@ use super::rmap::ResourceMap;
 #[derive(Clone)]
 /// An HTTP Request
 pub struct HttpRequest(pub(crate) Rc<HttpRequestInner>);
-
-pub(super) struct WeakHttpRequest(pub(super) Weak<HttpRequestInner>);
 
 pub(crate) struct HttpRequestInner {
     pub(crate) head: Message<RequestHead>,
@@ -49,10 +47,6 @@ impl HttpRequest {
             config,
             pool,
         }))
-    }
-
-    pub(super) fn downgrade(&self) -> WeakHttpRequest {
-        WeakHttpRequest(Rc::downgrade(&self.0))
     }
 }
 

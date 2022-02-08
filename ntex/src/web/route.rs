@@ -46,7 +46,7 @@ impl<'a, Err: ErrorRenderer> Route<Err> {
     }
 }
 
-impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<Err>> for Route<Err> {
+impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>> for Route<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
@@ -65,7 +65,7 @@ pub struct RouteService<Err: ErrorRenderer> {
 }
 
 impl<Err: ErrorRenderer> RouteService<Err> {
-    pub fn check(&self, req: &mut WebRequest<Err>) -> bool {
+    pub fn check(&self, req: &'_ mut WebRequest<'_, Err>) -> bool {
         if !self.methods.is_empty() && !self.methods.contains(&req.head().method) {
             return false;
         }
@@ -79,7 +79,7 @@ impl<Err: ErrorRenderer> RouteService<Err> {
     }
 }
 
-impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<Err>> for RouteService<Err> {
+impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for RouteService<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + 'a>>;
@@ -90,7 +90,7 @@ impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<Err>> for RouteService<E
     }
 
     #[inline]
-    fn call(&self, req: &'a mut WebRequest<Err>) -> Self::Future {
+    fn call(&self, req: &'a mut WebRequest<'a, Err>) -> Self::Future {
         self.handler.call(req)
     }
 }
@@ -181,7 +181,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     pub fn to<F, Args>(mut self, handler: F) -> Self
     where
         F: Handler<Args, Err>,
-        Args: FromRequest<Err> + 'static,
+        Args: FromRequest<'a, Err> + 'static,
         Args::Error: Into<Err::Container>,
     {
         self.handler = Box::new(HandlerWrapper::new(handler));

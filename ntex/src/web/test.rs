@@ -31,7 +31,7 @@ use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<Err: ErrorRenderer>(
-) -> impl Service<WebRequest<Err>, Response = WebResponse, Error = std::convert::Infallible>
+) -> impl Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = std::convert::Infallible>
 {
     default_service::<Err>(StatusCode::OK)
 }
@@ -39,9 +39,9 @@ pub fn ok_service<Err: ErrorRenderer>(
 /// Create service that responds with response with specified status code
 pub fn default_service<Err: ErrorRenderer>(
     status_code: StatusCode,
-) -> impl Service<WebRequest<Err>, Response = WebResponse, Error = std::convert::Infallible>
+) -> impl Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = std::convert::Infallible>
 {
-    (move |req: WebRequest<Err>| {
+    (move |req: &'a mut WebRequest<'a, Err>| {
         Ready::Ok(req.into_response(HttpResponse::build(status_code).finish()))
     })
     .into_service()
@@ -248,13 +248,13 @@ where
         .unwrap_or_else(|_| panic!("read_response_json failed during deserialization"))
 }
 
-// /// Helper method for extractors testing
-// pub async fn from_request<'a, T: FromRequest<'a, DefaultError>>(
-//     req: &'a HttpRequest,
-//     payload: &'a mut Payload,
-// ) -> Result<T, T::Error> {
-//     T::from_request(req, payload).await
-// }
+/// Helper method for extractors testing
+pub async fn from_request<T: FromRequest<DefaultError>>(
+    req: &HttpRequest,
+    payload: &mut Payload,
+) -> Result<T, T::Error> {
+    T::from_request(req, payload).await
+}
 
 /// Helper method for responders testing
 pub async fn respond_to<T: Responder<DefaultError>>(

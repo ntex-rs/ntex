@@ -59,14 +59,14 @@ pub struct CompressMiddleware<S> {
     encoding: ContentEncoding,
 }
 
-impl<S, E> Service<WebRequest<E>> for CompressMiddleware<S>
+impl<'a, S, E> Service<WebRequest<E>> for CompressMiddleware<S>
 where
     S: Service<WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,
 {
     type Response = WebResponse;
     type Error = S::Error;
-    type Future = CompressResponse<S, E>;
+    type Future = CompressResponse<'a, S, E>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -100,7 +100,7 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct CompressResponse<S: Service<WebRequest<E>>, E>
+    pub struct CompressResponse<'a, S: Service<WebRequest<E>>, E>
     {
         #[pin]
         fut: S::Future,
@@ -109,7 +109,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<S, E> Future for CompressResponse<S, E>
+impl<'a, S, E> Future for CompressResponse<'a, S, E>
 where
     S: Service<WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,

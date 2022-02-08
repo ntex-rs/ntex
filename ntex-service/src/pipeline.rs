@@ -105,7 +105,7 @@ impl<T: Service<R>, R> Pipeline<T, R> {
     ///
     /// Note that this function consumes the receiving service and returns a
     /// wrapped version of it.
-    pub fn map_err<F, E>(self, f: F) -> Pipeline<MapErr<T, R, F, E>, R>
+    pub fn map_err<F, E>(self, f: F) -> Pipeline<MapErr<T, F, E>, R>
     where
         Self: Sized,
         F: Fn(T::Error) -> E,
@@ -228,7 +228,7 @@ impl<T: ServiceFactory<R, C>, R, C> PipelineFactory<T, R, C> {
     pub fn map_err<F, E>(
         self,
         f: F,
-    ) -> PipelineFactory<MapErrServiceFactory<T, R, C, F, E>, R, C>
+    ) -> PipelineFactory<MapErrServiceFactory<T, C, F, E>, R, C>
     where
         Self: Sized,
         F: Fn(T::Error) -> E + Clone,
@@ -240,10 +240,7 @@ impl<T: ServiceFactory<R, C>, R, C> PipelineFactory<T, R, C> {
     }
 
     /// Map this factory's init error to a different error, returning a new service.
-    pub fn map_init_err<F, E>(
-        self,
-        f: F,
-    ) -> PipelineFactory<MapInitErr<T, R, C, F, E>, R, C>
+    pub fn map_init_err<F, E>(self, f: F) -> PipelineFactory<MapInitErr<T, F, E>, R, C>
     where
         Self: Sized,
         F: Fn(T::InitError) -> E + Clone,

@@ -8,8 +8,7 @@ use super::httprequest::HttpRequest;
 
 /// An service http response
 pub struct WebResponse {
-    // request: HttpRequest,
-    response: Response<Body>,
+    pub(super) response: Response<Body>,
 }
 
 impl WebResponse {
@@ -21,10 +20,10 @@ impl WebResponse {
     /// Create web response from the error
     pub fn from_err<Err: ErrorRenderer, E: Into<Err::Container>>(
         err: E,
-        request: HttpRequest,
+        request: &HttpRequest,
     ) -> Self {
         let err = err.into();
-        let res: Response = err.error_response(&request);
+        let res: Response = err.error_response(request);
 
         if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
             log::error!("Internal Server Error: {:?}", err);
@@ -37,27 +36,10 @@ impl WebResponse {
         }
     }
 
-    /// Create web response for error
-    #[inline]
-    pub fn error_response<Err: ErrorRenderer, E: Into<Err::Container>>(
-        self,
-        err: E,
-    ) -> Self {
-        // Self::from_err::<Err, E>(err) //, self.request)
-        todo!()
-    }
-
     /// Create web response
     #[inline]
     pub fn into_response(self, response: Response) -> WebResponse {
         WebResponse::new(response)
-    }
-
-    /// Get reference to original request
-    #[inline]
-    pub fn request(&self) -> &HttpRequest {
-        //&self.request
-        todo!()
     }
 
     /// Get reference to response
@@ -90,21 +72,6 @@ impl WebResponse {
         self.response.headers_mut()
     }
 
-    /// Execute closure and in case of error convert it to response.
-    pub fn checked_expr<Err, F, E>(mut self, f: F) -> Self
-    where
-        F: FnOnce(&mut Self) -> Result<(), E>,
-        E: Into<Err::Container>,
-        Err: ErrorRenderer,
-    {
-        if let Err(err) = f(&mut self) {
-            let res: Response = err.into().into();
-            WebResponse::new(res) //, self.request)
-        } else {
-            self
-        }
-    }
-
     /// Extract response body
     pub fn take_body(&mut self) -> ResponseBody<Body> {
         self.response.take_body()
@@ -115,21 +82,22 @@ impl WebResponse {
     where
         F: FnOnce(&mut ResponseHead, ResponseBody<Body>) -> ResponseBody<Body>,
     {
-        let response = self.response.map_body(f);
-
         WebResponse {
-            response,
-            // request: self.request,
+            response: self.response.map_body(f),
         }
     }
 }
 
+impl From<Response<Body>> for WebResponse {
+    #[inline]
+    fn from(response: Response<Body>) -> WebResponse {
+        WebResponse { response }
+    }
+}
+
 impl From<WebResponse> for Response<Body> {
-    fn from(mut res: WebResponse) -> Response<Body> {
-        let head = res.response.head_mut();
-        // if res.request.head().upgrade() {
-        // head.set_io(res.request.head());
-        // }
+    #[inline]
+    fn from(res: WebResponse) -> Response<Body> {
         res.response
     }
 }

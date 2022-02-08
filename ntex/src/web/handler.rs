@@ -38,7 +38,7 @@ where
 pub(super) trait HandlerFn<Err: ErrorRenderer> {
     fn call<'b>(
         &self,
-        _: &'b mut WebRequest<Err>,
+        _: &'b mut WebRequest<'b, Err>,
     ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>> + 'b>>;
 
     fn clone_handler(&self) -> Box<dyn HandlerFn<Err>>;
@@ -58,16 +58,16 @@ impl<F, T, Err> HandlerWrapper<F, T, Err> {
     }
 }
 
-impl<F, T, Err> HandlerFn<Err> for HandlerWrapper<F, T, Err>
+impl<'a, F, T, Err> HandlerFn<Err> for HandlerWrapper<F, T, Err>
 where
     F: Handler<T, Err>,
-    T: FromRequest<Err> + 'static,
+    T: FromRequest<'a, Err> + 'static,
     T::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     fn call<'b>(
         &self,
-        req: &'b mut WebRequest<Err>,
+        req: &'b mut WebRequest<'b, Err>,
     ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>> + 'b>> {
         let mut pl = Rc::get_mut(&mut (req.req).0).unwrap().payload.take();
         let hnd = self.hnd.clone();

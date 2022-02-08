@@ -4,7 +4,7 @@ use crate::router::ResourceDef;
 
 use super::resource::Resource;
 use super::route::Route;
-use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
+use super::service::{create_web_service, WebService, WebServiceWrapper};
 use super::types::state::{State, StateFactory};
 use super::{DefaultError, ErrorRenderer};
 
@@ -60,7 +60,7 @@ impl Default for AppConfig {
 /// to set of external methods. This could help with
 /// modularization of big application configuration.
 pub struct ServiceConfig<'a, Err = DefaultError> {
-    pub(super) services: Vec<Box<dyn AppServiceFactory<'a, Err>>>,
+    pub(super) services: Vec<Box<dyn WebServiceWrapper<'a, Err>>>,
     pub(super) state: Vec<Box<dyn StateFactory>>,
     pub(super) external: Vec<ResourceDef>,
 }
@@ -100,10 +100,9 @@ impl<'a, Err: ErrorRenderer> ServiceConfig<'a, Err> {
     /// This is same as `App::service()` method.
     pub fn service<F>(&mut self, factory: F) -> &mut Self
     where
-        F: WebServiceFactory<'a, Err> + 'static,
+        F: WebService<'a, Err> + 'static,
     {
-        self.services
-            .push(Box::new(ServiceFactoryWrapper::new(factory)));
+        self.services.push(create_web_service(factory));
         self
     }
 
@@ -136,7 +135,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_configure_state() {
-        let cfg = |cfg: &mut ServiceConfig<_>| {
+        let cfg = |cfg: &mut ServiceConfig<'_, _>| {
             cfg.state(10usize);
         };
 

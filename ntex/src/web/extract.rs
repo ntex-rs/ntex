@@ -8,20 +8,20 @@ use crate::{http::Payload, util::Ready};
 /// Trait implemented by types that can be extracted from request.
 ///
 /// Types that implement this trait can be used with `Route` handlers.
-pub trait FromRequest<Err>: Sized {
+pub trait FromRequest<'a, Err>: Sized {
     /// The associated error which can be returned.
     type Error;
 
     /// Future that resolves to a Self
-    type Future: Future<Output = Result<Self, Self::Error>>;
+    type Future: Future<Output = Result<Self, Self::Error>> + 'a;
 
     /// Convert request to a Self
-    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future;
+    fn from_request(req: &'a HttpRequest, payload: &'a mut Payload) -> Self::Future;
 
     /// Convert request to a Self
     ///
     /// This method uses `Payload::None` as payload stream.
-    fn extract(req: &HttpRequest) -> Self::Future {
+    fn extract(req: &'a HttpRequest) -> Self::Future {
         Self::from_request(req, &mut Payload::None)
     }
 }
@@ -71,18 +71,18 @@ pub trait FromRequest<Err>: Sized {
 ///     );
 /// }
 /// ```
-impl<T, Err> FromRequest<Err> for Option<T>
+impl<'a, T, Err> FromRequest<'a, Err> for Option<T>
 where
-    T: FromRequest<Err> + 'static,
+    T: FromRequest<'a, Err> + 'static,
     T::Future: 'static,
     Err: ErrorRenderer,
-    <T as FromRequest<Err>>::Error: Into<Err::Container>,
+    <T as FromRequest<'a, Err>>::Error: Into<Err::Container>,
 {
     type Error = Err::Container;
-    type Future = Pin<Box<dyn Future<Output = Result<Option<T>, Self::Error>>>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Option<T>, Self::Error>> + 'a>>;
 
     #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
+    fn from_request(req: &'a HttpRequest, payload: &'a mut Payload) -> Self::Future {
         let fut = T::from_request(req, payload);
         Box::pin(async move {
             match fut.await {
@@ -139,18 +139,17 @@ where
 ///     );
 /// }
 /// ```
-impl<T, E> FromRequest<E> for Result<T, T::Error>
+impl<'a, T, E> FromRequest<'a, E> for Result<T, T::Error>
 where
-    T: FromRequest<E> + 'static,
-    T::Error: 'static,
-    T::Future: 'static,
+    T: FromRequest<'a, E> + 'static,
     E: ErrorRenderer,
 {
     type Error = T::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Result<T, T::Error>, Self::Error>>>>;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Result<T, T::Error>, Self::Error>> + 'a>>;
 
     #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
+    fn from_request(req: &'a HttpRequest, payload: &'a mut Payload) -> Self::Future {
         let fut = T::from_request(req, payload);
         Box::pin(async move {
             match fut.await {
@@ -162,7 +161,7 @@ where
 }
 
 #[doc(hidden)]
-impl<E: ErrorRenderer> FromRequest<E> for () {
+impl<'a, E: ErrorRenderer> FromRequest<'a, E> for () {
     type Error = E::Container;
     type Future = Ready<(), E::Container>;
 
@@ -175,14 +174,14 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
 
     /// FromRequest implementation for a tuple
     #[allow(unused_parens)]
-    impl<Err: ErrorRenderer, $($T: FromRequest<Err> + 'static),+> FromRequest<Err> for ($($T,)+)
+    impl<'a, Err: ErrorRenderer, $($T: FromRequest<'a, Err> + 'static),+> FromRequest<'a, Err> for ($($T,)+)
     where
-        $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
+        $(<$T as $crate::web::FromRequest<'a, Err>>::Error: Into<Err::Container>),+
     {
         type Error = Err::Container;
-        type Future = $fut_type<Err, $($T),+>;
+        type Future = $fut_type<'a, Err, $($T),+>;
 
-        fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
+        fn from_request(req: &'a HttpRequest, payload: &'a mut Payload) -> Self::Future {
             $fut_type {
                 items: <($(Option<$T>,)+)>::default(),
                 $($T: $T::from_request(req, payload),)+
@@ -192,16 +191,16 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
 
     pin_project_lite::pin_project! {
         #[doc(hidden)]
-    pub struct $fut_type<Err: ErrorRenderer, $($T: FromRequest<Err>),+>
+    pub struct $fut_type<'a, Err: ErrorRenderer, $($T: FromRequest<'a, Err>),+>
     {
         items: ($(Option<$T>,)+),
         $(#[pin] $T: $T::Future),+
     }
     }
 
-    impl<Err: ErrorRenderer, $($T: FromRequest<Err>),+> Future for $fut_type<Err, $($T),+>
+    impl<'a, Err: ErrorRenderer, $($T: FromRequest<'a, Err>),+> Future for $fut_type<'a, Err, $($T),+>
     where
-        $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
+        $(<$T as $crate::web::FromRequest<'a, Err>>::Error: Into<Err::Container>),+
     {
         type Output = Result<($($T,)+), Err::Container>;
 

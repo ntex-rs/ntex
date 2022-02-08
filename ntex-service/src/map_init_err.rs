@@ -3,17 +3,13 @@ use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Po
 use super::ServiceFactory;
 
 /// `MapInitErr` service combinator
-pub struct MapInitErr<A, R, C, F, E> {
+pub struct MapInitErr<A, F, E> {
     a: A,
     f: F,
-    e: PhantomData<fn(R, C) -> E>,
+    e: PhantomData<E>,
 }
 
-impl<A, R, C, F, E> MapInitErr<A, R, C, F, E>
-where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::InitError) -> E,
-{
+impl<A, F, E> MapInitErr<A, F, E> {
     /// Create new `MapInitErr` combinator
     pub(crate) fn new(a: A, f: F) -> Self {
         Self {
@@ -24,7 +20,7 @@ where
     }
 }
 
-impl<A, R, C, F, E> Clone for MapInitErr<A, R, C, F, E>
+impl<A, F, E> Clone for MapInitErr<A, F, E>
 where
     A: Clone,
     F: Clone,
@@ -38,7 +34,7 @@ where
     }
 }
 
-impl<A, R, C, F, E> ServiceFactory<R, C> for MapInitErr<A, R, C, F, E>
+impl<A, R, C, F, E> ServiceFactory<R, C> for MapInitErr<A, F, E>
 where
     A: ServiceFactory<R, C>,
     F: Fn(A::InitError) -> E + Clone,
@@ -48,7 +44,7 @@ where
 
     type Service = A::Service;
     type InitError = E;
-    type Future = MapInitErrFuture<A, R, C, F, E>;
+    type Future = MapInitErrFuture<A::Future, A::Service, A::InitError, F, E>;
 
     fn new_service(&self, cfg: C) -> Self::Future {
         MapInitErrFuture {
@@ -59,23 +55,23 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapInitErrFuture<A, R, C, F, E>
+    pub struct MapInitErrFuture<Fut, Srv, Err, F, E>
     where
-        A: ServiceFactory<R, C>,
-        F: Fn(A::InitError) -> E,
+        F: Fn(Err) -> E,
+        Fut: Future<Output = Result<Srv, Err>>,
     {
         f: F,
         #[pin]
-        fut: A::Future,
+        fut: Fut,
     }
 }
 
-impl<A, R, C, F, E> Future for MapInitErrFuture<A, R, C, F, E>
+impl<Fut, Srv, Err, F, E> Future for MapInitErrFuture<Fut, Srv, Err, F, E>
 where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::InitError) -> E,
+    F: Fn(Err) -> E,
+    Fut: Future<Output = Result<Srv, Err>>,
 {
-    type Output = Result<A::Service, E>;
+    type Output = Result<Srv, E>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
