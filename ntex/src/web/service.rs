@@ -1,13 +1,15 @@
-use std::rc::Rc;
+use std::{convert::Infallible, marker::PhantomData, rc::Rc, task::Context, task::Poll};
 
 use crate::router::{IntoPattern, ResourceDef};
-use crate::service::{IntoServiceFactory, ServiceFactory};
-use crate::util::Extensions;
+use crate::service::{IntoServiceFactory, Service, ServiceFactory};
+use crate::util::{Extensions, Ready};
 
 use super::boxed::{self, BoxServiceFactory};
 use super::types::state::StateFactory;
 use super::{config::AppConfig, dev::insert_slash, rmap::ResourceMap};
-use super::{error::Error, guard::Guard, ErrorRenderer, WebRequest, WebResponse};
+use super::{
+    error::Error, guard::Guard, ErrorRenderer, HttpResponse, WebRequest, WebResponse,
+};
 
 pub trait WebService<'a, Err: ErrorRenderer>: 'static {
     fn register(self, config: &mut WebServiceConfig<'a, Err>);
@@ -43,16 +45,16 @@ type Guards = Vec<Box<dyn Guard>>;
 
 /// Application service configuration
 pub struct WebServiceConfig<'a, Err: ErrorRenderer> {
-    config: AppConfig,
+    pub(super) config: AppConfig,
     root: bool,
-    default: Rc<BoxServiceFactory<'a, Err>>,
+    pub(super) default: Rc<BoxServiceFactory<'a, Err>>,
     services: Vec<(
         ResourceDef,
         BoxServiceFactory<'a, Err>,
         Option<Guards>,
         Option<Rc<ResourceMap>>,
     )>,
-    service_state: Rc<Vec<Box<dyn StateFactory>>>,
+    pub(super) service_state: Rc<Vec<Box<dyn StateFactory>>>,
 }
 
 impl<'a, Err: ErrorRenderer> WebServiceConfig<'a, Err> {
@@ -90,7 +92,7 @@ impl<'a, Err: ErrorRenderer> WebServiceConfig<'a, Err> {
         (self.config, self.services)
     }
 
-    pub(crate) fn clone_config(&self) -> Self {
+    pub(super) fn clone_config(&'a self) -> WebServiceConfig<'a, Err> {
         WebServiceConfig {
             config: self.config.clone(),
             default: self.default.clone(),
@@ -266,6 +268,43 @@ where
 //         }
 //     }
 // }
+
+#[derive(Copy, Clone)]
+pub(super) struct DefaultService<Err>(PhantomData<Err>);
+
+impl<Err> Default for DefaultService<Err> {
+    fn default() -> Self {
+        DefaultService(PhantomData)
+    }
+}
+
+impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>>
+    for DefaultService<Err>
+{
+    type Response = WebResponse;
+    type Error = Infallible;
+    type InitError = ();
+    type Service = Self;
+    type Future = Ready<Self::Service, Self::InitError>;
+
+    fn new_service(&self, _: ()) -> Self::Future {
+        Ready::Ok(DefaultService(PhantomData))
+    }
+}
+
+impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for DefaultService<Err> {
+    type Response = WebResponse;
+    type Error = Infallible;
+    type Future = Ready<Self::Response, Self::Error>;
+
+    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&self, _: &'a mut WebRequest<'a, Err>) -> Self::Future {
+        Ready::Ok(HttpResponse::NotFound().finish().into())
+    }
+}
 
 macro_rules! tuple_web_service({$(($n:tt, $T:ident)),+} => {
     /// WebServiceFactory implementation for a tuple

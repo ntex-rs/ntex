@@ -1,29 +1,26 @@
-use std::task::{Context, Poll};
-use std::{cell::RefCell, fmt, future::Future, convert::Infallible, pin::Pin, rc::Rc};
+use std::{
+    cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
+use std::{convert::Infallible, marker::PhantomData};
 
-use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
-use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{pipeline_factory, PipelineFactory};
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
-use crate::util::{Either, Extensions, Ready};
+use crate::util::{ready, Extensions};
 
-use super::config::ServiceConfig;
-use super::dev::{WebServiceConfig, WebServiceFactory};
+use super::boxed::{self, BoxService, BoxServiceFactory};
+use super::config::{AppConfig, ServiceConfig};
+use super::error::Error;
 use super::guard::Guard;
 use super::rmap::ResourceMap;
-use super::service::{AppServiceFactory, ServiceFactoryWrapper};
-use super::stack::{Filter, Next, Stack, MiddlewareStack, Middleware};
+use super::service::{WebService, WebServiceConfig, DefaultService};
+use super::stack::{
+    Filter, Filters, FiltersFactory, Middleware, MiddlewareStack, Next, Services,
+    ServicesFactory, Stack,
+};
 use super::types::State;
 use super::{ErrorRenderer, Resource, Route, WebRequest, WebResponse};
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpService<Err: ErrorRenderer> =
-    BoxService<&'a mut WebRequest<'a, Err>, WebResponse, Err::Container>;
-type HttpNewService<Err: ErrorRenderer> =
-    BoxServiceFactory<(), &'a mut WebRequest<'a, Err>, WebResponse, Err::Container, ()>;
-type BoxResponse<Err: ErrorRenderer> =
-    Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
 
 /// Resources scope.
 ///
@@ -54,43 +51,39 @@ type BoxResponse<Err: ErrorRenderer> =
 ///  * /{project_id}/path2 - `GET` requests
 ///  * /{project_id}/path3 - `HEAD` requests
 ///
-pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
+pub struct Scope<Err: ErrorRenderer, S = Identity, M = Identity, F = Filter> {
+    service: S,
+    filter: F,
     middleware: M,
-    filter: PipelineFactory<T, &'a mut WebRequest<'a, Err>>,
     rdef: Vec<String>,
     state: Option<Extensions>,
-    services: Vec<Box<dyn AppServiceFactory<Err>>>,
+    // default: BoxServiceFactory<'a, Err>,
     guards: Vec<Box<dyn Guard>>,
-    default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
     external: Vec<ResourceDef>,
     case_insensitive: bool,
+    _marker: PhantomData<Err>,
 }
 
 impl<Err: ErrorRenderer> Scope<Err> {
     /// Create a new scope
     pub fn new<T: IntoPattern>(path: T) -> Scope<Err> {
         Scope {
+            service: Identity,
+            filter: Filter,
             middleware: Identity,
-            filter: pipeline_factory(Filter::new()),
             rdef: path.patterns(),
             state: None,
             guards: Vec::new(),
-            services: Vec::new(),
-            default: Rc::new(RefCell::new(None)),
+            // default: boxed::factory(DefaultService::default()),
             external: Vec::new(),
             case_insensitive: false,
+            _marker: PhantomData,
         }
     }
 }
 
-impl<Err, M, T> Scope<Err, M, T>
+impl<Err, S, M, F> Scope<Err, S, M, F>
 where
-    T: ServiceFactory<
-        &'a mut WebRequest<'a, Err>,
-        Response = &'a mut WebRequest<'a, Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
     Err: ErrorRenderer,
 {
     /// Add match guard to a scope.
@@ -195,24 +188,24 @@ where
     ///         .route("/index.html", web::get().to(|| async { HttpResponse::Ok() }));
     /// }
     /// ```
-    pub fn configure<F>(mut self, f: F) -> Self
+    pub fn configure<'a, U>(mut self, f: U) -> Self
     where
-        F: FnOnce(&mut ServiceConfig<Err>),
+        U: FnOnce(&mut ServiceConfig<'a, Err>),
     {
-        let mut cfg = ServiceConfig::new();
-        f(&mut cfg);
-        self.services.extend(cfg.services);
-        self.external.extend(cfg.external);
+        //let mut cfg = ServiceConfig::new();
+        //f(&mut cfg);
+        //self.services.extend(cfg.services);
+        //self.external.extend(cfg.external);
 
-        if !cfg.state.is_empty() {
-            let mut state = self.state.unwrap_or_else(Extensions::new);
+        // if !cfg.state.is_empty() {
+        //     let mut state = self.state.unwrap_or_else(Extensions::new);
 
-            for value in cfg.state.iter() {
-                value.create(&mut state);
-            }
+        //     for value in cfg.state.iter() {
+        //         value.create(&mut state);
+        //     }
 
-            self.state = Some(state);
-        }
+        //     self.state = Some(state);
+        // }
         self
     }
 
@@ -243,13 +236,19 @@ where
     ///     );
     /// }
     /// ```
-    pub fn service<F>(mut self, factory: F) -> Self
-    where
-        F: WebServiceFactory<Err> + 'static,
-    {
-        self.services
-            .push(Box::new(ServiceFactoryWrapper::new(factory)));
-        self
+    pub fn service<U>(self, factory: U) -> Scope<Err, Services<S, Next<U>>, M, F> {
+        Scope {
+            service: Services::new(self.service, Next::new(factory)),
+            filter: self.filter,
+            middleware: self.middleware,
+            rdef: self.rdef,
+            state: self.state,
+            guards: self.guards,
+            // default: self.default,
+            external: self.external,
+            case_insensitive: self.case_insensitive,
+            _marker: PhantomData,
+        }
     }
 
     /// Configure route for a specific path.
@@ -273,7 +272,11 @@ where
     ///     );
     /// }
     /// ```
-    pub fn route(self, path: &str, mut route: Route<Err>) -> Self {
+    pub fn route(
+        self,
+        path: &str,
+        mut route: Route<Err>,
+    ) -> Scope<Err, Services<S, Next<Resource<Err>>>, M, F> {
         self.service(
             Resource::new(path)
                 .add_guards(route.take_guards())
@@ -284,18 +287,20 @@ where
     /// Default service to be used if no matching route could be found.
     ///
     /// If default resource is not registered, app's default resource is being used.
-    pub fn default_service<F, S>(mut self, f: F) -> Self
+    pub fn default<'a, T, U>(mut self, f: T) -> Self
     where
-        F: IntoServiceFactory<S, &'a mut WebRequest<'a, Err>>,
-        S: ServiceFactory<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = Err::Container>
-            + 'static,
-        S::InitError: fmt::Debug,
+        T: IntoServiceFactory<U, &'a mut WebRequest<'a, Err>>,
+        U: ServiceFactory<&'a mut WebRequest<'a, Err>, Response = WebResponse> + 'static,
+        U::Service: 'static,
+        U::Future: 'static,
+        U::Error: Error<Err>,
+        U::InitError: fmt::Debug + 'static,
     {
         // create and configure default resource
-        self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            f.into_factory()
-                .map_init_err(|e| log::error!("Cannot construct default service: {:?}", e)),
-        )))));
+        //self.default =
+        //    boxed::factory(f.into_factory().map_init_err(|e| {
+        //        log::error!("Cannot construct default service: {:?}", e)
+        //    }));
 
         self
     }
@@ -307,38 +312,18 @@ where
     /// necessary, across all requests managed by the *Scope*.
     ///
     /// This is similar to `App's` filters, but filter get invoked on scope level.
-    pub fn filter<U, F>(
-        self,
-        filter: F,
-    ) -> Scope<
-        Err,
-        M,
-        impl ServiceFactory<
-            &'a mut WebRequest<'a, Err>,
-            Response = &'a mut WebRequest<'a, Err>,
-            Error = Err::Container,
-            InitError = (),
-        >,
-    >
-    where
-        U: ServiceFactory<
-            &'a mut WebRequest<'a, Err>,
-            Response = &'a mut WebRequest<'a, Err>,
-            Error = Err::Container,
-            InitError = (),
-        >,
-        F: IntoServiceFactory<U, &'a mut WebRequest<'a, Err>>,
-    {
+    pub fn filter<U>(self, filter: U) -> Scope<Err, S, M, Filters<F, Next<U>>> {
         Scope {
-            filter: self.filter.and_then(filter.into_factory()),
+            filter: Filters::new(self.filter, Next::new(filter)),
+            service: self.service,
             middleware: self.middleware,
             rdef: self.rdef,
             state: self.state,
             guards: self.guards,
-            services: self.services,
-            default: self.default,
+            // default: self.default,
             external: self.external,
             case_insensitive: self.case_insensitive,
+            _marker: PhantomData,
         }
     }
 
@@ -352,46 +337,53 @@ where
     /// WebResponse.
     ///
     /// Use middleware when you need to read or modify *every* request in some way.
-    pub fn wrap<U>(self, mw: U) -> Scope<Err, Stack<M, U, Err>, T> {
+    pub fn wrap<U>(self, mw: U) -> Scope<Err, S, Stack<M, U>, F> {
         Scope {
             middleware: Stack::new(self.middleware, mw),
             filter: self.filter,
+            service: self.service,
             rdef: self.rdef,
             state: self.state,
             guards: self.guards,
-            services: self.services,
-            default: self.default,
+            // default: self.default,
             external: self.external,
             case_insensitive: self.case_insensitive,
+            _marker: PhantomData,
         }
     }
 }
 
-impl<Err, M, T> WebServiceFactory<Err> for Scope<Err, M, T>
+impl<'a, Err, S, M, F> WebService<'a, Err> for Scope<Err, S, M, F>
 where
-    T: ServiceFactory<
-            &'a mut WebRequest<'a, Err>,
-            Response = &'a mut WebRequest<'a, Err>,
-            Error = Err::Container,
-            InitError = (),
-        > + 'static,
-    M: Transform<Next<ScopeService<T::Service, Err>, Err>> + 'static,
+    S: ServicesFactory<'a, Err> + 'static,
+    M: Transform<
+        ScopeService<
+                'a,
+            <F::Service as ServiceFactory<&'a mut WebRequest<'a, Err>>>::Service,
+            Err,
+            >,
+    > + 'static,
     M::Service: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = Infallible>,
+    <M::Service as Service<&'a mut WebRequest<'a, Err>>>::Future: 'a,
+
+    F: FiltersFactory<'a, Err> + 'static,
     Err: ErrorRenderer,
 {
-    fn register(mut self, config: &mut WebServiceConfig<Err>) {
+    fn register(mut self, config: &mut WebServiceConfig<'a, Err>) {
         // update default resource if needed
-        if self.default.borrow().is_none() {
-            *self.default.borrow_mut() = Some(config.default_service());
-        }
+        //if self.default.borrow().is_none() {
+        //    *self.default.borrow_mut() = Some(config.default_service());
+        //}
 
-        // register nested services
-        let mut cfg = config.clone_config();
-        self.services
-            .into_iter()
-            .for_each(|mut srv| srv.register(&mut cfg));
+        // // register nested services
+        // let mut cfg: WebServiceConfig<'a, Err> = WebServiceConfig::<'a, _>::new(
+        //     config.config.clone(),
+        //     Rc::new(boxed::factory(DefaultService::default())),
+        //     config.service_state.clone()
+        // );
+        // self.service.register(&mut cfg);
 
-        let slesh = self.rdef.iter().any(|s| s.ends_with('/'));
+        let slash = self.rdef.iter().any(|s| s.ends_with('/'));
         let mut rmap = ResourceMap::new(ResourceDef::root_prefix(self.rdef.clone()));
 
         // external resources
@@ -400,33 +392,33 @@ where
         }
 
         // custom app data storage
-        if let Some(ref mut ext) = self.state {
-            config.set_service_state(ext);
-        }
+        //if let Some(ref mut ext) = self.state {
+        //    config.set_service_state(ext);
+        //}
 
         // complete scope pipeline creation
-        let router_factory = ScopeRouterFactory {
-            state: self.state.take().map(Rc::new),
-            default: self.default.clone(),
-            case_insensitive: self.case_insensitive,
-            services: Rc::new(
-                cfg.into_services()
-                    .1
-                    .into_iter()
-                    .map(|(rdef, srv, guards, nested)| {
-                        // case for scope prefix ends with '/' and
-                        // resource is empty pattern
-                        let mut rdef = if slesh && rdef.pattern() == "" {
-                            ResourceDef::new("/")
-                        } else {
-                            rdef
-                        };
-                        rmap.add(&mut rdef, nested);
-                        (rdef, srv, RefCell::new(guards))
-                    })
-                    .collect(),
-            ),
-        };
+        // let router_factory: ScopeRouterFactory<'a, Err> = ScopeRouterFactory {
+        //     state: self.state.take().map(Rc::new),
+        //     // default: self.default.clone(),
+        //     case_insensitive: self.case_insensitive,
+        //     services: Rc::new(
+        //         cfg.into_services()
+        //             .1
+        //             .into_iter()
+        //             .map(|(rdef, srv, guards, nested)| {
+        //                 // case for scope prefix ends with '/' and
+        //                 // resource is empty pattern
+        //                 let mut rdef = if slesh && rdef.pattern() == "" {
+        //                     ResourceDef::new("/")
+        //                 } else {
+        //                     rdef
+        //                 };
+        //                 rmap.add(&mut rdef, nested);
+        //                 (rdef, srv, RefCell::new(guards))
+        //             })
+        //             .collect(),
+        //     ),
+        // };
 
         // get guards
         let guards = if self.guards.is_empty() {
@@ -440,9 +432,14 @@ where
             ResourceDef::root_prefix(self.rdef),
             guards,
             ScopeServiceFactory {
+                slash,
+                config: config.config.clone(),
                 middleware: Rc::new(MiddlewareStack::new(self.middleware)),
-                filter: self.filter,
-                routing: router_factory,
+                filter: self.filter.create(),
+                state: self.state.take().map(Rc::new),
+                // default: self.default.clone(),
+                case_insensitive: self.case_insensitive,
+                service: self.service,
             },
             Some(Rc::new(rmap)),
         )
@@ -450,33 +447,79 @@ where
 }
 
 /// Scope service
-struct ScopeServiceFactory<M, F, Err: ErrorRenderer> {
+struct ScopeServiceFactory<Err: ErrorRenderer, S, M, F> {
+    config: AppConfig,
     middleware: Rc<MiddlewareStack<M, Err>>,
     filter: F,
-    routing: ScopeRouterFactory<Err>,
+    service: S,
+    state: Option<Rc<Extensions>>,
+    slash: bool,
+    case_insensitive: bool,
+    // default: Rc<RefCell<Option<Rc<BoxServiceFactory<'a, Err>>>>>,
+    // routing: ScopeRouterFactory<'a, Err>,
 }
 
-impl<M, F, Err> ServiceFactory<&'a mut WebRequest<'a, Err>> for ScopeServiceFactory<M, F, Err>
+impl<'a, Err, S, M, F> ServiceFactory<&'a mut WebRequest<'a, Err>> for ScopeServiceFactory<Err, S, M, F>
 where
-    M: Transform<Next<ScopeService<F::Service, Err>, Err>> + 'static,
+    S: ServicesFactory<'a, Err> + 'static,
+    M: Transform<ScopeService<'a, F::Service, Err>> + 'static,
     M::Service: Service<&'a mut WebRequest<'a, Err>, Response = WebResponse, Error = Infallible>,
     F: ServiceFactory<
             &'a mut WebRequest<'a, Err>,
             Response = &'a mut WebRequest<'a, Err>,
-            Error = Err::Container,
+            Error = Infallible,
             InitError = (),
         > + 'static,
+    F::Service: 'static,
+    F::Future: 'static,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
-    type Error = Err::Container;
+    type Error = Infallible;
     type Service = Middleware<M::Service, Err>;
     type InitError = ();
     type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
+        // register nested services
+        let mut cfg: WebServiceConfig<'a, Err> = WebServiceConfig::<'a, _>::new(
+            self.config.clone(),
+            Rc::new(boxed::factory(DefaultService::default())),
+            Rc::new(Vec::new()),
+        );
+
+        // custom app data storage
+        if let Some(ref mut ext) = self.state {
+            cfg.set_service_state(ext);
+        }
+
+        // complete scope pipeline creation
+        self.service.register(&mut cfg);
+
+        let router_factory: ScopeRouterFactory<'a, Err> = ScopeRouterFactory {
+            state: self.state.take(),
+            // default: self.default.clone(),
+            case_insensitive: self.case_insensitive,
+            services: Rc::new(
+                cfg.into_services()
+                    .1
+                    .into_iter()
+                    .map(|(rdef, srv, guards, nested)| {
+                        // case for scope prefix ends with '/' and
+                        // resource is empty pattern
+                        let mut rdef = if self.slash && rdef.pattern() == "" {
+                            ResourceDef::new("/")
+                        } else {
+                            rdef
+                        };
+                        (rdef, srv, RefCell::new(guards))
+                    })
+                    .collect(),
+            ),
+        };
+
         let filter_fut = self.filter.new_service(());
-        let routing_fut = self.routing.new_service(());
+        let routing_fut = router_factory.new_service(());
         let middleware = self.middleware.clone();
         Box::pin(async move {
             Ok(middleware.new_transform(ScopeService {
@@ -487,24 +530,28 @@ where
     }
 }
 
-pub struct ScopeService<F, Err: ErrorRenderer> {
+pub struct ScopeService<'a, F, Err: ErrorRenderer> {
     filter: F,
-    routing: Rc<ScopeRouter<Err>>,
+    routing: Rc<ScopeRouter<'a, Err>>,
 }
 
-impl<F, Err> Service<&'a mut WebRequest<'a, Err>> for ScopeService<F, Err>
+impl<'a, F, Err> Service<&'a mut WebRequest<'a, Err>> for ScopeService<'a, F, Err>
 where
-    F: Service<&'a mut WebRequest<'a, Err>, Response = &'a mut WebRequest<'a, Err>, Error = Err::Container>,
+    F: Service<
+        &'a mut WebRequest<'a, Err>,
+        Response = &'a mut WebRequest<'a, Err>,
+        Error = Infallible,
+    >,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
-    type Error = Err::Container;
-    type Future = ScopeServiceResponse<F, Err>;
+    type Error = Infallible;
+    type Future = ScopeServiceResponse<'a, F, Err>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let ready1 = self.filter.poll_ready(cx)?.is_ready();
-        let ready2 = self.routing.poll_ready(cx)?.is_ready();
+        let ready1 = self.filter.poll_ready(cx).is_ready();
+        let ready2 = self.routing.poll_ready(cx).is_ready();
         if ready1 && ready2 {
             Poll::Ready(Ok(()))
         } else {
@@ -522,20 +569,24 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct ScopeServiceResponse<F: Service<&'a mut WebRequest<'a, Err>>, Err: ErrorRenderer> {
+    pub struct ScopeServiceResponse<'a, F: Service<&'a mut WebRequest<'a, Err>>, Err: ErrorRenderer> {
         #[pin]
         filter: F::Future,
-        routing: Rc<ScopeRouter<Err>>,
-        endpoint: Option<<ScopeRouter<Err> as Service<&'a mut WebRequest<'a, Err>>>::Future>,
+        routing: Rc<ScopeRouter<'a, Err>>,
+        endpoint: Option<<ScopeRouter<'a, Err> as Service<&'a mut WebRequest<'a, Err>>>::Future>,
     }
 }
 
-impl<F, Err> Future for ScopeServiceResponse<F, Err>
+impl<'a, F, Err> Future for ScopeServiceResponse<'a, F, Err>
 where
-    F: Service<&'a mut WebRequest<'a, Err>, Response = &'a mut WebRequest<'a, Err>, Error = Err::Container>,
+    F: Service<
+        &'a mut WebRequest<'a, Err>,
+        Response = &'a mut WebRequest<'a, Err>,
+        Error = Infallible,
+    >,
     Err: ErrorRenderer,
 {
-    type Output = Result<WebResponse, Err::Container>;
+    type Output = Result<WebResponse, Infallible>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
@@ -543,40 +594,44 @@ where
         if let Some(fut) = this.endpoint.as_mut() {
             Pin::new(fut).poll(cx)
         } else {
-            let res = if let Poll::Ready(res) = this.filter.poll(cx) {
-                res?
-            } else {
-                return Poll::Pending;
-            };
-            *this.endpoint = Some(this.routing.call(res));
+            let req = ready!(this.filter.poll(cx)).unwrap();
+            *this.endpoint = Some(this.routing.call(req));
             self.poll(cx)
         }
     }
 }
 
-struct ScopeRouterFactory<Err: ErrorRenderer> {
+struct ScopeRouterFactory<'a, Err: ErrorRenderer> {
     state: Option<Rc<Extensions>>,
-    services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
-    default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
+    services: Rc<
+        Vec<(
+            ResourceDef,
+            BoxServiceFactory<'a, Err>,
+            RefCell<Option<Guards>>,
+        )>,
+    >,
+    // default: Rc<RefCell<Option<Rc<BoxServiceFactory<'a, Err>>>>>,
     case_insensitive: bool,
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>> for ScopeRouterFactory<Err> {
+impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>>
+    for ScopeRouterFactory<'a, Err>
+{
     type Response = WebResponse;
-    type Error = Err::Container;
+    type Error = Infallible;
     type InitError = ();
-    type Service = ScopeRouter<Err>;
+    type Service = ScopeRouter<'a, Err>;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, _: ()) -> Self::Future {
         let services = self.services.clone();
         let case_insensitive = self.case_insensitive;
         let state = self.state.clone();
-        let default_fut = self
-            .default
-            .borrow()
-            .as_ref()
-            .map(|srv| srv.new_service(()));
+        // let default_fut = self
+        //     .default
+        //     .borrow()
+        //     .as_ref()
+        //     .map(|srv| srv.new_service(()));
 
         Box::pin(async move {
             // create http services
@@ -589,31 +644,31 @@ impl<Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>> for ScopeRo
                 router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
             }
 
-            let default = if let Some(fut) = default_fut {
-                Some(fut.await?)
-            } else {
-                None
-            };
+            // let default = if let Some(fut) = default_fut {
+            //     Some(fut.await?)
+            // } else {
+            //     None
+            // };
 
             Ok(ScopeRouter {
                 state,
-                default,
+                // default,
                 router: router.finish(),
             })
         })
     }
 }
 
-struct ScopeRouter<Err: ErrorRenderer> {
+struct ScopeRouter<'a, Err: ErrorRenderer> {
     state: Option<Rc<Extensions>>,
-    router: Router<HttpService<Err>, Vec<Box<dyn Guard>>>,
-    default: Option<HttpService<Err>>,
+    router: Router<BoxService<'a, Err>, Vec<Box<dyn Guard>>>,
+    // default: Option<BoxService<'a, Err>>,
 }
 
-impl<Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for ScopeRouter<Err> {
+impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for ScopeRouter<'a, Err> {
     type Response = WebResponse;
-    type Error = Err::Container;
-    type Future = Either<BoxResponse<Err>, Ready<Self::Response, Self::Error>>;
+    type Error = Infallible;
+    type Future = Pin<Box<dyn Future<Output = Result<WebResponse, Infallible>> + 'a>>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -621,7 +676,7 @@ impl<Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for ScopeRouter<Er
     }
 
     fn call(&self, mut req: &'a mut WebRequest<'a, Err>) -> Self::Future {
-        let res = self.router.recognize_checked(&mut req, |req, guards| {
+        let res = self.router.recognize_checked(req, |req, guards| {
             if let Some(guards) = guards {
                 for f in guards {
                     if !f.check(req.head()) {
@@ -636,15 +691,10 @@ impl<Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for ScopeRouter<Er
             if let Some(ref state) = self.state {
                 req.set_state_container(state.clone());
             }
-            Either::Left(srv.call(req))
-        } else if let Some(ref default) = self.default {
-            Either::Left(default.call(req))
+            srv.call(req)
         } else {
-            let req = req.into_parts().0;
-            Either::Right(Ready::Ok(WebResponse::new(
-                Response::NotFound().finish(),
-                // req,
-            )))
+            //self.default.call(req)
+            todo!()
         }
     }
 }

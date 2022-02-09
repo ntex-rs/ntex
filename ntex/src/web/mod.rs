@@ -64,6 +64,7 @@
 
 mod app;
 mod app_service;
+mod boxed;
 mod config;
 pub mod error;
 mod error_default;
@@ -80,7 +81,6 @@ mod response;
 mod rmap;
 mod route;
 // mod scope;
-mod boxed;
 mod server;
 mod service;
 mod stack;

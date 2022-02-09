@@ -1,11 +1,10 @@
-use std::convert::Infallible;
 use std::task::{Context, Poll};
-use std::{cell::RefCell, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
+use std::{cell::RefCell, convert::Infallible, future::Future, pin::Pin, rc::Rc};
 
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
 use crate::service::{Service, ServiceFactory, Transform};
-use crate::util::{ready, Either, Extensions, Ready};
+use crate::util::{ready, Either, Extensions};
 
 use super::boxed::{BoxService, BoxServiceFactory};
 use super::httprequest::{HttpRequest, HttpRequestPool};
@@ -133,43 +132,6 @@ where
     pub(super) default: Option<BoxServiceFactory<'a, Err>>,
     pub(super) external: RefCell<Vec<ResourceDef>>,
     pub(super) case_insensitive: bool,
-}
-
-#[derive(Copy, Clone)]
-pub(super) struct DefaultService<Err>(PhantomData<Err>);
-
-impl<Err> Default for DefaultService<Err> {
-    fn default() -> Self {
-        DefaultService(PhantomData)
-    }
-}
-
-impl<'a, Err: ErrorRenderer> ServiceFactory<&'a mut WebRequest<'a, Err>>
-    for DefaultService<Err>
-{
-    type Response = WebResponse;
-    type Error = Infallible;
-    type InitError = ();
-    type Service = Self;
-    type Future = Ready<Self::Service, Self::InitError>;
-
-    fn new_service(&self, _: ()) -> Self::Future {
-        Ready::Ok(DefaultService(PhantomData))
-    }
-}
-
-impl<'a, Err: ErrorRenderer> Service<&'a mut WebRequest<'a, Err>> for DefaultService<Err> {
-    type Response = WebResponse;
-    type Error = Infallible;
-    type Future = Ready<Self::Response, Self::Error>;
-
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&self, _: &'a mut WebRequest<'a, Err>) -> Self::Future {
-        Ready::Ok(Response::NotFound().finish().into())
-    }
 }
 
 impl<'a, T, F, Err> AppFactoryInner<'a, T, F, Err>

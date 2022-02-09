@@ -3,10 +3,10 @@ use std::{
     task::Poll,
 };
 
-use crate::service::{dev::AndThenFactory, Service, ServiceFactory, Transform};
+use crate::service::{dev::AndThenFactory, Identity, Service, ServiceFactory, Transform};
 use crate::util::{ready, Ready};
 
-use super::{Error, ErrorRenderer, WebRequest, WebResponse};
+use super::{Error, ErrorRenderer, WebRequest, WebResponse, WebService, WebServiceConfig};
 
 pub struct Stack<Inner, Outer> {
     inner: Inner,
@@ -233,6 +233,7 @@ where
         > + 'static,
     First::Service: 'static,
     First::Future: 'static,
+    <First::Service as Service<&'a mut WebRequest<'a, Err>>>::Future: 'a,
     Second: FiltersFactory<'a, Err>,
     Second::Service: ServiceFactory<
         &'a mut WebRequest<'a, Err>,
@@ -242,6 +243,7 @@ where
     >,
     <Second::Service as ServiceFactory<&'a mut WebRequest<'a, Err>>>::Service: 'static,
     <Second::Service as ServiceFactory<&'a mut WebRequest<'a, Err>>>::Future: 'static,
+   <<Second::Service as ServiceFactory<&'a mut WebRequest<'a, Err>>>::Service as Service<&'a mut WebRequest<'a, Err>>>::Future: 'a,
 {
     type Service = AndThenFactory<First, Second::Service>;
 
@@ -259,4 +261,35 @@ pub trait FiltersFactory<'a, Err: ErrorRenderer> {
         > + 'static;
 
     fn create(self) -> Self::Service;
+}
+
+impl<'a, Err: ErrorRenderer> ServicesFactory<'a, Err> for Identity {
+    fn register(self, _: &mut WebServiceConfig<'a, Err>) {}
+}
+
+pub struct Services<First, Second> {
+    first: First,
+    second: Second,
+}
+
+impl<First, Second> Services<First, Second> {
+    pub(super) fn new(first: First, second: Second) -> Self {
+        Services { first, second }
+    }
+}
+
+impl<'a, First, Second, Err> ServicesFactory<'a, Err> for Services<First, Second>
+where
+    Err: ErrorRenderer,
+    First: WebService<'a, Err>,
+    Second: ServicesFactory<'a, Err>,
+{
+    fn register(self, cfg: &mut WebServiceConfig<'a, Err>) {
+        self.second.register(cfg);
+        self.first.register(cfg);
+    }
+}
+
+pub trait ServicesFactory<'a, Err: ErrorRenderer> {
+    fn register(self, cfg: &mut WebServiceConfig<'a, Err>);
 }

@@ -6,11 +6,11 @@ use crate::service::map_config;
 use crate::service::{Identity, IntoServiceFactory, Service, ServiceFactory, Transform};
 use crate::util::Extensions;
 
-use super::app_service::{AppFactory, AppFactoryInner, AppRouting, DefaultService};
+use super::app_service::{AppFactory, AppFactoryInner, AppRouting};
 use super::boxed::{self, BoxServiceFactory};
 use super::config::{AppConfig, ServiceConfig};
 use super::error::Error;
-use super::service::{create_web_service, WebService, WebServiceWrapper};
+use super::service::{create_web_service, DefaultService, WebService, WebServiceWrapper};
 use super::stack::{Filter, Filters, FiltersFactory, Next, Stack};
 use super::types::state::{State, StateFactory};
 use super::{DefaultError, ErrorRenderer, Resource, Route, WebRequest, WebResponse};
