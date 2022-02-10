@@ -1,5 +1,11 @@
 # Changes
 
+## [0.3.2] - 2022-02-10
+
+* Make AndThenFactory::new() public
+
+* Cleanups
+
 ## [0.3.1] - 2022-01-03
 
 * Do not depend on ntex-util

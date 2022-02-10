@@ -1,6 +1,6 @@
 [package]
 name = "ntex-service"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex service"
 keywords = ["network", "framework", "async", "futures"]
@@ -20,4 +20,4 @@ pin-project-lite = "0.2.6"
 
 [dev-dependencies]
 ntex = { version = "0.5", features = ["tokio"] }
-ntex-util = "0.1.5"
+ntex-util = "0.1.13"

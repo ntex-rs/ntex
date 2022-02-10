@@ -135,7 +135,7 @@ pub trait Service<Req> {
     ///
     /// Note that this function consumes the receiving service and returns a
     /// wrapped version of it.
-    fn map_err<F, E>(self, f: F) -> crate::dev::MapErr<Self, Req, F, E>
+    fn map_err<F, E>(self, f: F) -> crate::dev::MapErr<Self, F, E>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E,
@@ -185,23 +185,17 @@ pub trait ServiceFactory<Req, Cfg = ()> {
 
     #[inline]
     /// Map this service's error to a different error, returning a new service.
-    fn map_err<F, E>(
-        self,
-        f: F,
-    ) -> crate::map_err::MapErrServiceFactory<Self, Req, Cfg, F, E>
+    fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrServiceFactory<Self, Cfg, F, E>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
     {
-        crate::map_err::MapErrServiceFactory::<_, _, Cfg, _, _>::new(self, f)
+        crate::map_err::MapErrServiceFactory::new(self, f)
     }
 
     #[inline]
     /// Map this factory's init error to a different error, returning a new service.
-    fn map_init_err<F, E>(
-        self,
-        f: F,
-    ) -> crate::map_init_err::MapInitErr<Self, Req, Cfg, F, E>
+    fn map_init_err<F, E>(self, f: F) -> crate::map_init_err::MapInitErr<Self, F, E>
     where
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
