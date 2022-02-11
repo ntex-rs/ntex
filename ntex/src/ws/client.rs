@@ -583,7 +583,7 @@ where
                         c.value().as_bytes(),
                         crate::http::helpers::USERINFO,
                     );
-                    let _ = write!(&mut cookie, "; {}={}", name, value);
+                    let _ = write!(cookie, "; {}={}", name, value);
                 }
                 inner.head.headers.insert(
                     header::COOKIE,

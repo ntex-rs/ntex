@@ -165,7 +165,7 @@ impl TestRequest {
             for c in inner.cookies.delta() {
                 let name = percent_encode(c.name().as_bytes(), super::helpers::USERINFO);
                 let value = percent_encode(c.value().as_bytes(), super::helpers::USERINFO);
-                let _ = write!(&mut cookie, "; {}={}", name, value);
+                let _ = write!(cookie, "; {}={}", name, value);
             }
             if !cookie.is_empty() {
                 head.headers.insert(

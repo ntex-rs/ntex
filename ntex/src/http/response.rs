@@ -605,7 +605,7 @@ impl ResponseBuilder {
 
                 self.body(Body::from(body))
             }
-            Err(e) => (&e).into(),
+            Err(e) => e.into(),
         }
     }
 
@@ -750,7 +750,7 @@ where
     fn from(res: Result<I, E>) -> Self {
         match res {
             Ok(val) => val.into(),
-            Err(err) => (&err).into(),
+            Err(err) => err.into(),
         }
     }
 }

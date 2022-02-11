@@ -175,7 +175,7 @@ impl Accept {
 
     fn update_status(&mut self, st: ServerStatus) {
         if let Some(ref mut hnd) = self.status_handler {
-            (&mut *hnd)(st)
+            (*hnd)(st)
         }
     }
 

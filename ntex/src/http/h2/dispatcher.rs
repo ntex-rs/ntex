@@ -246,7 +246,7 @@ where
                     }
                     Poll::Pending => Poll::Pending,
                     Poll::Ready(Err(e)) => {
-                        let res: Response = (&e).into();
+                        let res: Response = e.into();
                         let (res, body) = res.replace_body(());
 
                         let mut send = send.take().unwrap();
