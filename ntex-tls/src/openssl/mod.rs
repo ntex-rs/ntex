@@ -179,7 +179,7 @@ impl<F: Filter> Filter for SslFilter<F> {
         };
         let (hw, lw) = self.pool.read_params().unpack();
 
-        let mut new_bytes = 0;
+        let mut new_bytes = if self.handshake.get() { 1 } else { 0 };
         loop {
             // make sure we've got room
             let remaining = dst.remaining_mut();
@@ -199,12 +199,6 @@ impl<F: Filter> Filter for SslFilter<F> {
                     if e.code() == ssl::ErrorCode::WANT_READ
                         || e.code() == ssl::ErrorCode::WANT_WRITE =>
                 {
-                    if new_bytes == 0 && self.handshake.get() {
-                        new_bytes = 1;
-                        if self.inner.borrow().ssl().is_init_finished() {
-                            self.handshake.set(false);
-                        }
-                    }
                     Ok((dst.len(), new_bytes))
                 }
                 Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
@@ -310,6 +304,7 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
                 })
                 .await?;
 
+                st.filter().handshake.set(false);
                 Ok(st)
             })
             .await

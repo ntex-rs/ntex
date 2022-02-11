@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.4] - 2022-02-11
+
+* Do not use SslRef::is_init_finished() method for openssl
+
 ## [0.1.3] - 2022-01-30
 
 * Add PeerCert and PeerCertChain for rustls
