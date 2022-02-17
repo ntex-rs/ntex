@@ -1,5 +1,5 @@
 //! Utilities for tracking time.
-use std::{future::Future, pin::Pin, task, task::Poll};
+use std::{cmp, future::Future, pin::Pin, task, task::Poll};
 
 mod types;
 mod wheel;
@@ -11,7 +11,8 @@ pub use self::wheel::{now, query_system_time, system_time, TimerHandle};
 ///
 /// No work is performed while awaiting on the sleep future to complete. `Sleep`
 /// operates at 16 millisecond granularity and should not be used for tasks that
-/// require high-resolution timers.
+/// require high-resolution timers. `Sleep` sleeps at least one tick (16 millis)
+/// even if 0 millis duration is used.
 #[inline]
 pub fn sleep<T: Into<Millis>>(dur: T) -> Sleep {
     Sleep::new(dur.into())
@@ -81,7 +82,7 @@ impl Sleep {
     #[inline]
     pub fn new(duration: Millis) -> Sleep {
         Sleep {
-            hnd: TimerHandle::new(duration.0 as u64),
+            hnd: TimerHandle::new(cmp::max(duration.0, 1) as u64),
         }
     }
 
@@ -306,6 +307,19 @@ mod tests {
             .unwrap();
 
         assert!(second_time - first_time >= time::Duration::from_millis(wait_time as u64));
+    }
+
+    #[ntex_macros::rt_test2]
+    async fn test_sleep_0() {
+        let first_time = now();
+        sleep(Millis(0)).await;
+        let second_time = now();
+        assert!(second_time - first_time >= time::Duration::from_millis(1));
+
+        let first_time = now();
+        sleep(Millis(1)).await;
+        let second_time = now();
+        assert!(second_time - first_time >= time::Duration::from_millis(1));
     }
 
     #[ntex_macros::rt_test2]
