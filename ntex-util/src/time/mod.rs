@@ -324,7 +324,17 @@ mod tests {
 
         let first_time = now();
         let fut = sleep(Millis(10000));
+        assert!(!fut.is_elapsed());
         fut.reset(Millis::ZERO);
+        fut.await;
+        let second_time = now();
+        assert!(second_time - first_time < time::Duration::from_millis(1));
+
+        let first_time = now();
+        let fut = Sleep {
+            hnd: TimerHandle::new(0),
+        };
+        assert!(fut.is_elapsed());
         fut.await;
         let second_time = now();
         assert!(second_time - first_time < time::Duration::from_millis(1));
