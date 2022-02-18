@@ -286,6 +286,7 @@ mod tests {
     #[ntex_macros::rt_test2]
     async fn system_time_service_time_does_not_immediately_change() {
         assert_eq!(system_time(), system_time());
+        assert_eq!(system_time(), query_system_time());
     }
 
     /// State Under Test: `system_time()` updates returned value every 1ms period.
@@ -320,6 +321,13 @@ mod tests {
         sleep(Millis(1)).await;
         let second_time = now();
         assert!(second_time - first_time >= time::Duration::from_millis(1));
+
+        let first_time = now();
+        let fut = sleep(Millis(10000));
+        fut.reset(Millis::ZERO);
+        fut.await;
+        let second_time = now();
+        assert!(second_time - first_time < time::Duration::from_millis(1));
     }
 
     #[ntex_macros::rt_test2]

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.15] - 2022-02-18
+
+* Fix update timer handle with 0 millis, do not keep old bucket
+
 ## [0.1.14] - 2022-02-18
 
 * time::sleep() always sleeps one tick (16 millis) even for 0 millis

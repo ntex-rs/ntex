@@ -299,8 +299,8 @@ impl Timer {
     fn update_timer(inner: &Rc<RefCell<Self>>, hnd: usize, millis: u64) {
         let mut slf = inner.borrow_mut();
         if millis == 0 {
-            slf.timers[hnd].bucket = None;
             slf.remove_timer_bucket(hnd);
+            slf.timers[hnd].bucket = None;
             return;
         }
 
