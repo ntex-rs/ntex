@@ -3,12 +3,11 @@ use std::io::{self, Read as IoRead, Write as IoWrite};
 use std::{any, cell::Cell, cell::RefCell, sync::Arc, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesVec};
-use ntex_io::{Filter, Io, IoRef, ReadStatus, WriteStatus};
+use ntex_io::{types, Filter, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_rust::{ServerConfig, ServerConnection};
 
 use crate::rustls::{IoInner, TlsFilter, Wrapper};
-use crate::types;
 
 use super::{PeerCert, PeerCertChain};
 

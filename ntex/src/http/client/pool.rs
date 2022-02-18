@@ -4,9 +4,8 @@ use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc
 
 use h2::client::{Builder, Connection as H2Connection, SendRequest};
 use http::uri::Authority;
-use ntex_tls::types::HttpProtocol;
 
-use crate::io::{IoBoxed, TokioIoBoxed};
+use crate::io::{types::HttpProtocol, IoBoxed, TokioIoBoxed};
 use crate::time::{now, Millis};
 use crate::util::{ready, Bytes, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, service::Service, task::LocalWaker};

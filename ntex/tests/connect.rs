@@ -70,8 +70,8 @@ mod danger {
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_openssl_string() {
-    use ntex::server::openssl;
-    use ntex_tls::{openssl::PeerCert, openssl::PeerCertChain, types::HttpProtocol};
+    use ntex::{io::types::HttpProtocol, server::openssl};
+    use ntex_tls::{openssl::PeerCert, openssl::PeerCertChain};
     use tls_openssl::{
         ssl::{SslConnector, SslMethod, SslVerifyMode},
         x509::X509,
@@ -154,8 +154,8 @@ async fn test_openssl_read_before_error() {
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_string() {
-    use ntex::server::rustls;
-    use ntex_tls::{rustls::PeerCert, rustls::PeerCertChain, types::HttpProtocol};
+    use ntex::{io::types::HttpProtocol, server::rustls};
+    use ntex_tls::{rustls::PeerCert, rustls::PeerCertChain};
     use rustls_pemfile::certs;
     use std::fs::File;
     use std::io::BufReader;

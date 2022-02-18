@@ -2,7 +2,6 @@ use std::task::{Context, Poll};
 use std::{cell, error, fmt, future, marker, pin::Pin, rc::Rc};
 
 use h2::server::{self, Handshake};
-use ntex_tls::types::HttpProtocol;
 
 use crate::io::{types, Filter, Io, IoRef, TokioIoBoxed};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
@@ -376,7 +375,7 @@ where
             io.query::<types::PeerAddr>().get()
         );
 
-        if io.query::<HttpProtocol>().get() == Some(HttpProtocol::Http2) {
+        if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2) {
             io.set_disconnect_timeout(self.config.client_disconnect.into());
             HttpServiceHandlerResponse {
                 state: ResponseState::H2Handshake {

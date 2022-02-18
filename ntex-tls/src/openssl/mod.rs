@@ -6,15 +6,13 @@ use std::{
 };
 
 use ntex_bytes::{BufMut, BytesVec, PoolRef};
-use ntex_io::{Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
+use ntex_io::{types, Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_openssl::ssl::{self, SslStream};
 use tls_openssl::x509::X509;
 
 mod accept;
 pub use self::accept::{Acceptor, AcceptorService};
-
-use super::types;
 
 /// Connection's peer cert
 #[derive(Debug)]

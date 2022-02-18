@@ -33,8 +33,8 @@ pub use self::payload::{Payload, PayloadStream};
 pub use self::request::Request;
 pub use self::response::{Response, ResponseBuilder};
 pub use self::service::HttpService;
+pub use crate::io::types::HttpProtocol;
 
 // re-exports
 pub use http::uri::{self, Uri};
 pub use http::{Method, StatusCode, Version};
-pub use ntex_tls::types::HttpProtocol;

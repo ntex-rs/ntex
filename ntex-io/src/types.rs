@@ -22,6 +22,14 @@ impl fmt::Debug for PeerAddr {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+/// Http protocol definition
+pub enum HttpProtocol {
+    Http1,
+    Http2,
+    Unknown,
+}
+
 pub struct QueryItem<T> {
     item: Option<Box<dyn any::Any>>,
     _t: PhantomData<T>,

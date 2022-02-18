@@ -1,5 +1,7 @@
 # Changes
 
+* Move HttpProtocol to ntex-io
+
 ## [0.1.4] - 2022-02-11
 
 * Do not use SslRef::is_init_finished() method for openssl

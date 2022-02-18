@@ -1,12 +1,11 @@
 use std::{cell::RefCell, fmt, rc::Rc, time};
 
 use h2::client::SendRequest;
-use ntex_tls::types::HttpProtocol;
 
 use crate::http::body::MessageBody;
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
-use crate::io::IoBoxed;
+use crate::io::{types::HttpProtocol, IoBoxed};
 use crate::util::Bytes;
 
 use super::error::SendRequestError;

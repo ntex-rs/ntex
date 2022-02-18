@@ -1,6 +1,8 @@
 //! An implementations of SSL streams for ntex ecosystem
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[doc(hidden)]
+#[deprecated]
 pub mod types;
 
 #[cfg(feature = "openssl")]

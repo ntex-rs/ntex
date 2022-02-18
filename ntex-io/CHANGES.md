@@ -1,5 +1,7 @@
 # Changes
 
+* Add HttpProtocol type from ntex-tls
+
 ## [0.1.7] - 2022-01-30
 
 * Use BytesVec type for buffers and Filter trait
