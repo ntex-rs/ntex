@@ -18,6 +18,15 @@ pub fn sleep<T: Into<Millis>>(dur: T) -> Sleep {
     Sleep::new(dur.into())
 }
 
+/// Waits until `duration` has elapsed.
+///
+/// This is similar to `sleep` future, but in case of `0` duration deadline future
+/// never completes.
+#[inline]
+pub fn deadline<T: Into<Millis>>(dur: T) -> Deadline {
+    Deadline::new(dur.into())
+}
+
 /// Creates new [`Interval`] that yields with interval of `period`.
 ///
 /// An interval will tick indefinitely. At any time, the [`Interval`] value can
@@ -114,6 +123,63 @@ impl Future for Sleep {
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         self.hnd.poll_elapsed(cx)
+    }
+}
+
+/// Future returned by [`deadline`](deadline).
+///
+/// # Examples
+///
+/// Wait 100ms and print "100 ms have elapsed".
+///
+/// ```
+/// use ntex::time::{deadline, Millis};
+///
+/// #[ntex::main]
+/// async fn main() {
+///     deadline(Millis(100)).await;
+///     println!("100 ms have elapsed");
+/// }
+/// ```
+#[derive(Debug)]
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct Deadline {
+    hnd: Option<TimerHandle>,
+}
+
+impl Deadline {
+    /// Create new deadline future
+    #[inline]
+    pub fn new(duration: Millis) -> Deadline {
+        if duration.0 != 0 {
+            Deadline {
+                hnd: Some(TimerHandle::new(duration.0 as u64)),
+            }
+        } else {
+            Deadline { hnd: None }
+        }
+    }
+
+    /// Returns `true` if `Deadline` has elapsed.
+    #[inline]
+    pub fn is_elapsed(&self) -> bool {
+        self.hnd.as_ref().map(|t| t.is_elapsed()).unwrap_or(false)
+    }
+
+    #[inline]
+    pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
+        self.hnd
+            .as_ref()
+            .map(|t| t.poll_elapsed(cx))
+            .unwrap_or(Poll::Pending)
+    }
+}
+
+impl Future for Deadline {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        self.poll_elapsed(cx)
     }
 }
 
@@ -338,6 +404,15 @@ mod tests {
         fut.await;
         let second_time = now();
         assert!(second_time - first_time < time::Duration::from_millis(1));
+    }
+
+    #[ntex_macros::rt_test2]
+    async fn test_deadline() {
+        let first_time = now();
+        deadline(Millis(1)).await;
+        let second_time = now();
+        assert!(second_time - first_time >= time::Duration::from_millis(1));
+        assert!(timeout(Millis(100), deadline(Millis(0))).await.is_err());
     }
 
     #[ntex_macros::rt_test2]

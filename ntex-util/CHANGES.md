@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.16] - 2022-02-19
+
+* Add time::Deadline future
+
 ## [0.1.15] - 2022-02-18
 
 * Fix update timer handle with 0 millis, do not keep old bucket
