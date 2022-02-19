@@ -196,10 +196,14 @@ impl<F: Filter> TlsClientFilter<F> {
 
         let filter = io.filter();
         loop {
-            let (result, wants_read) = {
+            let (result, wants_read, handshaking) = {
                 let mut session = filter.client().session.borrow_mut();
                 let mut wrp = Wrapper(&filter.client().inner);
-                (session.complete_io(&mut wrp), session.wants_read())
+                (
+                    session.complete_io(&mut wrp),
+                    session.wants_read(),
+                    session.is_handshaking(),
+                )
             };
             match result {
                 Ok(_) => {
@@ -207,6 +211,10 @@ impl<F: Filter> TlsClientFilter<F> {
                     return Ok(io);
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    if !handshaking {
+                        filter.client().inner.handshake.set(false);
+                        return Ok(io);
+                    }
                     poll_fn(|cx| {
                         let read_ready = if wants_read {
                             match ready!(io.poll_read_ready(cx))? {

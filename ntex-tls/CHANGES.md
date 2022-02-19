@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.5] - 2022-02-19
+
+* Fix rustls hangs during handshake #103
+
 * Move HttpProtocol to ntex-io
 
 ## [0.1.4] - 2022-02-11
