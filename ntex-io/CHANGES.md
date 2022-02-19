@@ -1,5 +1,7 @@
 # Changes
 
+## [0.1.8] - 2022-02-19
+
 * Add HttpProtocol type from ntex-tls
 
 ## [0.1.7] - 2022-01-30

@@ -18,7 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 ntex-codec = "0.6.2"
 ntex-bytes = "0.1.14"
-ntex-util = "0.1.15"
+ntex-util = "0.1.16"
 ntex-service = "0.3.1"
 
 bitflags = "1.3"
