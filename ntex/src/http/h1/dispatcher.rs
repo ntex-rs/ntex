@@ -770,6 +770,7 @@ mod tests {
         decoder.decode(buf).unwrap().unwrap()
     }
 
+    #[cfg(feature = "tokio")]
     #[crate::rt_test]
     async fn test_on_request() {
         let (client, server) = Io::create();

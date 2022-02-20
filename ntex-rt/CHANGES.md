@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.4] - 2022-02-20
+
+* Upgrade to glommio 0.7
+
 ## [0.4.3] - 2022-01-17
 
 * Add glommio runtime support
