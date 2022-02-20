@@ -127,6 +127,7 @@ fn test_run() {
 }
 
 #[test]
+#[cfg(feature = "tokio")]
 fn test_on_worker_start() {
     let addr1 = TestServer::unused_addr();
     let addr2 = TestServer::unused_addr();
@@ -185,6 +186,7 @@ fn test_on_worker_start() {
 }
 
 #[test]
+#[cfg(feature = "tokio")]
 #[allow(unreachable_code)]
 fn test_panic_in_worker() {
     let counter = Arc::new(AtomicUsize::new(0));

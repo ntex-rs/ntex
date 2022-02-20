@@ -205,7 +205,7 @@ async fn test_rustls() {
 }
 
 #[ntex::test]
-#[cfg(all(feature = "tokio", unix))]
+#[cfg(unix)]
 async fn test_bind_uds() {
     let (tx, rx) = mpsc::channel();
 
@@ -254,7 +254,7 @@ async fn test_bind_uds() {
 }
 
 #[ntex::test]
-#[cfg(all(feature = "tokio", unix))]
+#[cfg(unix)]
 async fn test_listen_uds() {
     let (tx, rx) = mpsc::channel();
 

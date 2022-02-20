@@ -80,7 +80,7 @@ jobs:
         continue-on-error: true
         run: |
           cd ntex
-          sudo -E env PATH="$PATH" bash -c "ulimit -l 512 && ulimit -a && cargo tarpaulin --out Xml --no-default-features --features=\"glommio,cookie,url,compress,openssl,rustls\" --lib"
+          sudo -E env PATH="$PATH" bash -c "ulimit -l 512 && ulimit -a && cargo tarpaulin --out Xml --no-default-features --features=\"glommio,cookie,url,compress,openssl,rustls\""
 
       - name: Upload to Codecov
         if: matrix.version == '1.56.0' && (github.ref == 'refs/heads/master' || github.event_name == 'pull_request')
