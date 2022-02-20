@@ -23,6 +23,7 @@ fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
 
 #[cfg(feature = "rustls")]
 use tls_rustls::ServerConfig;
+
 #[cfg(feature = "rustls")]
 fn tls_acceptor() -> Arc<ServerConfig> {
     use rustls_pemfile::{certs, pkcs8_private_keys};

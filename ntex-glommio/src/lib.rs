@@ -14,8 +14,6 @@ mod net_impl {
     use ntex_bytes::PoolRef;
     use ntex_io::Io;
 
-    pub type JoinError = futures_channel::oneshot::Canceled;
-
     #[derive(Clone)]
     pub(crate) struct TcpStream(pub(crate) Rc<RefCell<glommio::net::TcpStream>>);
 
@@ -80,11 +78,11 @@ mod net_impl {
     /// Convert std UnixStream to glommio's UnixStream
     pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> Result<Io> {
         stream.set_nonblocking(true)?;
-        // Ok(Io::new(UnixStream::new(From::from(stream))))
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Cannot creat glommio UnixStream from std type",
-        ))
+        unsafe {
+            Ok(Io::new(UnixStream::new(
+                glommio::net::UnixStream::from_raw_fd(stream.into_raw_fd()),
+            )))
+        }
     }
 }
 

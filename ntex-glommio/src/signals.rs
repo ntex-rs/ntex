@@ -1,7 +1,6 @@
 use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use async_oneshot as oneshot;
-use glommio::Task;
 
 thread_local! {
     static SRUN: RefCell<bool> = RefCell::new(false);
@@ -27,7 +26,7 @@ pub enum Signal {
 /// after each signal.
 pub fn signal() -> Option<oneshot::Receiver<Signal>> {
     if !SRUN.with(|v| *v.borrow()) {
-        Task::local(Signals::new()).detach();
+        glommio::spawn_local(Signals::new()).detach();
     }
     SHANDLERS.with(|handlers| {
         let (tx, rx) = oneshot::oneshot();

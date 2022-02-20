@@ -12,11 +12,10 @@ pub use self::system::System;
 mod glommio {
     use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
-    use futures_channel::oneshot::{self, Canceled};
-    use glomm_io::{task, Task};
-    use once_cell::sync::Lazy;
-    use parking_lot::Mutex;
-    use threadpool::ThreadPool;
+    use futures_channel::oneshot::Canceled;
+    use glomm_io::task;
+
+    pub type JoinError = Canceled;
 
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
@@ -42,8 +41,8 @@ mod glommio {
     {
         JoinHandle {
             fut: Either::Left(
-                Task::local(async move {
-                    let _ = Task::<()>::later().await;
+                glomm_io::spawn_local(async move {
+                    glomm_io::executor().yield_now().await;
                     f.await
                 })
                 .detach(),
@@ -67,30 +66,15 @@ mod glommio {
         spawn(async move { f().await })
     }
 
-    /// Env variable for default cpu pool size.
-    const ENV_CPU_POOL_VAR: &str = "THREADPOOL";
-
-    static DEFAULT_POOL: Lazy<Mutex<ThreadPool>> = Lazy::new(|| {
-        let num = std::env::var(ENV_CPU_POOL_VAR)
-            .map_err(|_| ())
-            .and_then(|val| {
-                val.parse().map_err(|_| {
-                    log::warn!("Can not parse {} value, using default", ENV_CPU_POOL_VAR,)
-                })
-            })
-            .unwrap_or_else(|_| num_cpus::get() * 5);
-        Mutex::new(
-            threadpool::Builder::new()
-                .thread_name("ntex".to_owned())
-                .num_threads(num)
-                .build(),
-        )
-    });
-
-    thread_local! {
-        static POOL: ThreadPool = {
-            DEFAULT_POOL.lock().clone()
-        };
+    pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let fut = glomm_io::executor().spawn_blocking(f);
+        JoinHandle {
+            fut: Either::Right(Box::pin(async move { Ok(fut.await) })),
+        }
     }
 
     enum Either<T1, T2> {
@@ -101,7 +85,8 @@ mod glommio {
     /// Blocking operation completion future. It resolves with results
     /// of blocking function execution.
     pub struct JoinHandle<T> {
-        fut: Either<task::JoinHandle<T>, oneshot::Receiver<T>>,
+        fut:
+            Either<task::JoinHandle<T>, Pin<Box<dyn Future<Output = Result<T, Canceled>>>>>,
     }
 
     impl<T> Future for JoinHandle<T> {
@@ -115,25 +100,6 @@ mod glommio {
                 },
                 Either::Right(ref mut f) => Pin::new(f).poll(cx),
             }
-        }
-    }
-
-    pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
-    where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
-    {
-        let (tx, rx) = oneshot::channel();
-        POOL.with(|pool| {
-            pool.execute(move || {
-                if !tx.is_canceled() {
-                    let _ = tx.send(f());
-                }
-            })
-        });
-
-        JoinHandle {
-            fut: Either::Right(rx),
         }
     }
 }
