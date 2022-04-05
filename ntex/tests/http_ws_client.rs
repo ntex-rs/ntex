@@ -4,8 +4,8 @@ use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
 use ntex::io::{DispatchItem, Dispatcher, Io};
-use ntex::ws::handshake_response;
-use ntex::{util::ByteString, util::Bytes, util::Ready, ws};
+use ntex::ws::{self, handshake_response};
+use ntex::{time::Seconds, util::ByteString, util::Bytes, util::Ready};
 
 async fn ws_service(
     msg: DispatchItem<ws::Codec>,
@@ -102,4 +102,49 @@ async fn test_transport() {
         .unwrap();
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"text"));
+}
+
+#[ntex::test]
+async fn test_keepalive_timeout() {
+    let srv = test_server(|| {
+        HttpService::build()
+            .upgrade(|(req, io, codec): (Request, Io, h1::Codec)| {
+                async move {
+                    let res = handshake_response(req.head()).finish();
+
+                    // send handshake respone
+                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        .unwrap();
+
+                    // start websocket service
+                    Dispatcher::new(io.seal(), ws::Codec::default(), ws_service)
+                        .keepalive_timeout(Seconds::ZERO)
+                        .await
+                }
+            })
+            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
+    });
+
+    // client service
+    let con = ws::WsClient::build(srv.url("/"))
+        .address(srv.addr())
+        .timeout(Seconds(30))
+        .keepalive_timeout(Seconds(1))
+        .finish()
+        .unwrap()
+        .connect()
+        .await
+        .unwrap()
+        .seal();
+    let tx = con.sink();
+    let rx = con.receiver();
+
+    tx.send(ws::Message::Binary(Bytes::from_static(b"text")))
+        .await
+        .unwrap();
+    let item = rx.recv().await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Binary(Bytes::from_static(b"text")));
+
+    let item = rx.recv().await;
+    assert!(item.is_none());
 }

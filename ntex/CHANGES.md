@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.16] - 2022-04-05
+
+* Add keep-alive timeout support to websockets client
+
 ## [0.5.15] - 2022-02-18
 
 * web: Fix unsupported web ws handling

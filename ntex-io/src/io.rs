@@ -350,6 +350,7 @@ impl<F> Io<F> {
             timer::unregister(self.0 .0.keepalive.get(), &self.0);
         }
         if timeout != time::Duration::ZERO {
+            log::debug!("start keep-alive timeout {:?}", timeout);
             self.0 .0.insert_flags(Flags::KEEPALIVE);
             self.0 .0.keepalive.set(timer::register(timeout, &self.0));
         }
@@ -359,6 +360,7 @@ impl<F> Io<F> {
     /// Remove keep-alive timer
     pub fn remove_keepalive_timer(&self) {
         if self.flags().contains(Flags::KEEPALIVE) {
+            log::debug!("unregister keep-alive timeout");
             timer::unregister(self.0 .0.keepalive.get(), &self.0)
         }
     }

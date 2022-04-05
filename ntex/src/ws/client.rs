@@ -18,7 +18,7 @@ use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri}
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Sealed};
 use crate::service::{apply_fn, into_service, IntoService, Service};
 use crate::util::{Either, Ready};
-use crate::{channel::mpsc, rt, time::timeout, time::Millis, ws};
+use crate::{channel::mpsc, rt, time::timeout, time::Millis, time::Seconds, ws};
 
 use super::error::{WsClientBuilderError, WsClientError, WsError};
 use super::transport::{WsTransport, WsTransportFactory};
@@ -31,6 +31,7 @@ pub struct WsClient<F, T> {
     max_size: usize,
     server_mode: bool,
     timeout: Millis,
+    keepalive_timeout: Seconds,
     extra_headers: RefCell<Option<HeaderMap>>,
     _t: marker::PhantomData<F>,
 }
@@ -52,6 +53,7 @@ struct Inner<F, T> {
     max_size: usize,
     server_mode: bool,
     timeout: Millis,
+    keepalive_timeout: Seconds,
     _t: marker::PhantomData<F>,
 }
 
@@ -134,6 +136,7 @@ where
         let max_size = self.max_size;
         let server_mode = self.server_mode;
         let to = self.timeout;
+        let keepalive_timeout = self.keepalive_timeout;
         let mut headers = self
             .extra_headers
             .borrow_mut()
@@ -251,6 +254,7 @@ where
                 } else {
                     ws::Codec::new().max_size(max_size).client_mode()
                 },
+                keepalive_timeout,
             ))
         }
     }
@@ -296,6 +300,7 @@ impl WsClientBuilder<Base, ()> {
                 max_size: 65_536,
                 server_mode: false,
                 timeout: Millis(5_000),
+                keepalive_timeout: Seconds(600),
                 _t: marker::PhantomData,
             }),
             #[cfg(feature = "cookie")]
@@ -481,6 +486,18 @@ where
         self
     }
 
+    /// Set keep-alive timeout.
+    ///
+    /// To disable timeout set value to 0.
+    ///
+    /// By default keep-alive timeout is set to 600 seconds.
+    pub fn keepalive_timeout(&mut self, timeout: Seconds) -> &mut Self {
+        if let Some(parts) = parts(&mut self.inner, &self.err) {
+            parts.keepalive_timeout = timeout;
+        }
+        self
+    }
+
     /// Use custom connector
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
@@ -497,6 +514,7 @@ where
                 max_size: inner.max_size,
                 server_mode: inner.server_mode,
                 timeout: inner.timeout,
+                keepalive_timeout: inner.keepalive_timeout,
                 _t: marker::PhantomData,
             }),
             err: self.err.take(),
@@ -621,6 +639,7 @@ where
             max_size: inner.max_size,
             server_mode: inner.server_mode,
             timeout: inner.timeout,
+            keepalive_timeout: inner.keepalive_timeout,
             extra_headers: RefCell::new(None),
             _t: marker::PhantomData,
         })
@@ -661,11 +680,22 @@ pub struct WsConnection<F> {
     io: Io<F>,
     codec: ws::Codec,
     res: ClientResponse,
+    keepalive_timeout: Seconds,
 }
 
 impl<F> WsConnection<F> {
-    fn new(io: Io<F>, res: ClientResponse, codec: ws::Codec) -> Self {
-        Self { io, codec, res }
+    fn new(
+        io: Io<F>,
+        res: ClientResponse,
+        codec: ws::Codec,
+        keepalive_timeout: Seconds,
+    ) -> Self {
+        Self {
+            io,
+            codec,
+            res,
+            keepalive_timeout,
+        }
     }
 
     /// Get codec reference
@@ -744,7 +774,9 @@ impl WsConnection<Sealed> {
             },
         );
 
-        Dispatcher::new(self.io, self.codec, service).await
+        Dispatcher::new(self.io, self.codec, service)
+            .keepalive_timeout(self.keepalive_timeout)
+            .await
     }
 }
 
@@ -755,6 +787,7 @@ impl<F: Filter> WsConnection<F> {
             io: self.io.seal(),
             codec: self.codec,
             res: self.res,
+            keepalive_timeout: self.keepalive_timeout,
         }
     }
 
