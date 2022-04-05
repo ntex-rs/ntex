@@ -9,7 +9,7 @@ use crate::service::{
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{error::HandshakeError, error::WsError, handshake};
-use crate::{io::DispatchItem, rt, util::Either, util::Ready, ws};
+use crate::{io::DispatchItem, rt, time::Seconds, util::Either, util::Ready, ws};
 
 /// Do websocket handshake and start websockets service.
 pub async fn start<T, F, Err>(req: HttpRequest, factory: F) -> Result<HttpResponse, Err>
@@ -98,7 +98,9 @@ where
 
     // start websockets service dispatcher
     rt::spawn(async move {
-        let res = crate::io::Dispatcher::new(io, codec, srv).await;
+        let res = crate::io::Dispatcher::new(io, codec, srv)
+            .keepalive_timeout(Seconds::ZERO)
+            .await;
         log::trace!("Ws handler is terminated: {:?}", res);
     });
 

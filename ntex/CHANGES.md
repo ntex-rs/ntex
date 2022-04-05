@@ -2,7 +2,9 @@
 
 ## [0.5.16] - 2022-04-05
 
-* Add keep-alive timeout support to websockets client
+* ws: Add keep-alive timeout support to websockets client
+
+* web: Disable keep-alive timeout for websockets endpoint
 
 ## [0.5.15] - 2022-02-18
 
