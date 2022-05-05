@@ -107,5 +107,5 @@ time = "0.3"
 futures-util = "0.3"
 tls-openssl = { version="0.10", package = "openssl" }
 tls-rustls = { version = "0.20", package="rustls", features = ["dangerous_configuration"]  }
-rustls-pemfile = { version = "0.3" }
+rustls-pemfile = { version = "1.0.0" }
 webpki-roots = { version = "0.22" }
