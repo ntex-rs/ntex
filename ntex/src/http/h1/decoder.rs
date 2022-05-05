@@ -210,7 +210,6 @@ impl MessageType for Request {
         &mut self.head_mut().headers
     }
 
-    #[allow(clippy::uninit_assumed_init)]
     fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, ParseError> {
         let mut headers: [MaybeUninit<HeaderIndex>; MAX_HEADERS] = uninit_array();
 
@@ -294,7 +293,6 @@ impl MessageType for ResponseHead {
         &mut self.headers
     }
 
-    #[allow(clippy::uninit_assumed_init)]
     fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, ParseError> {
         let mut headers: [MaybeUninit<HeaderIndex>; MAX_HEADERS] = uninit_array();
 
