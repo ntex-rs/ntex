@@ -349,7 +349,7 @@ impl<F> Io<F> {
         if self.flags().contains(Flags::KEEPALIVE) {
             timer::unregister(self.0 .0.keepalive.get(), &self.0);
         }
-        if timeout != time::Duration::ZERO {
+        if !timeout.is_zero() {
             log::debug!("start keep-alive timeout {:?}", timeout);
             self.0 .0.insert_flags(Flags::KEEPALIVE);
             self.0 .0.keepalive.set(timer::register(timeout, &self.0));

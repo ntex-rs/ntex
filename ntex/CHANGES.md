@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.17] - 2022-05-xx
+
+* http: Fix handling for zero slow-request timeout
+
 ## [0.5.16] - 2022-04-05
 
 * ws: Add keep-alive timeout support to websockets client
