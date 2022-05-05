@@ -6,7 +6,7 @@
 [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Linux)") 
 [![crates.io](https://img.shields.io/crates/v/ntex.svg)](https://crates.io/crates/ntex) 
 [![Documentation](https://img.shields.io/docsrs/ntex/latest)](https://docs.rs/ntex) 
-[![Version](https://img.shields.io/badge/rustc-1.53+-lightgray.svg)](https://blog.rust-lang.org/2021/06/17/Rust-1.53.0.html) 
+[![Version](https://img.shields.io/badge/rustc-1.55+-lightgray.svg)](https://blog.rust-lang.org/2021/09/09/Rust-1.55.0.html) 
 ![License](https://img.shields.io/crates/l/ntex.svg) 
 [![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/master/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex) 
 [![Chat on Discord](https://img.shields.io/discord/919288597826387979?label=chat&logo=discord)](https://discord.gg/zBNyhVRz) 
@@ -35,7 +35,7 @@ ntex = { version = "0.5", features = ["glommio"] }
 ## Documentation & community resources
 
 * [Documentation](https://docs.rs/ntex)
-* Minimum supported Rust version: 1.53 or later
+* Minimum supported Rust version: 1.55 or later
 
 ## License
 
