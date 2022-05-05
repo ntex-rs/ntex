@@ -2961,10 +2961,12 @@ impl Inner {
 
     #[inline]
     unsafe fn from_ptr_inline(src: *const u8, len: usize) -> Inner {
-        // Using uninitialized memory is ~30% faster
-        #[allow(invalid_value, clippy::uninit_assumed_init)]
-        let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
-        inner.arc = NonNull::new_unchecked(KIND_INLINE as *mut Shared);
+        let mut inner = Inner {
+            arc: NonNull::new_unchecked(KIND_INLINE as *mut Shared),
+            ptr: ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
 
         let dst = inner.inline_ptr();
         ptr::copy(src, dst, len);
@@ -3094,10 +3096,12 @@ impl Inner {
     #[inline]
     fn to_inline(&self) -> Inner {
         unsafe {
-            // Using uninitialized memory is ~30% faster
-            #[allow(invalid_value, clippy::uninit_assumed_init)]
-            let mut inner: Inner = mem::MaybeUninit::uninit().assume_init();
-            inner.arc = NonNull::new_unchecked(KIND_INLINE as *mut Shared);
+            let mut inner = Inner {
+                arc: NonNull::new_unchecked(KIND_INLINE as *mut Shared),
+                ptr: ptr::null_mut(),
+                cap: 0,
+                len: 0,
+            };
             let len = self.len();
             inner.as_raw()[..len].copy_from_slice(self.as_ref());
             inner.set_inline_len(len);

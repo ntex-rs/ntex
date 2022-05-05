@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.15] (2022-05-05)
+
+* Remove .assume_init usage #106
+
 ## [0.1.14] (2022-02-06)
 
 * Restore Buf impl for Cursor
