@@ -4,6 +4,8 @@
 
 * http: Refactor client pool management
 
+* http: Add client response body load timeout
+
 ## [0.5.17] - 2022-05-05
 
 * http: Fix handling for zero slow-request timeout

@@ -9,8 +9,8 @@ use coo_kie::{Cookie, ParseError as CookieParseError};
 
 use crate::http::error::PayloadError;
 use crate::http::header::{AsName, HeaderValue, CONTENT_LENGTH};
-use crate::http::{HeaderMap, StatusCode, Version};
-use crate::http::{HttpMessage, Payload, ResponseHead};
+use crate::http::{HeaderMap, HttpMessage, Payload, ResponseHead, StatusCode, Version};
+use crate::time::{Deadline, Millis};
 use crate::util::{Bytes, BytesMut, Extensions, Stream};
 
 use super::error::JsonPayloadError;
@@ -193,6 +193,17 @@ impl MessageBody {
         self
     }
 
+    /// Set operation timeout.
+    ///
+    /// By default timeout is set to 10 seconds. Set 0 millis to disable
+    /// timeout.
+    pub fn timeout(mut self, to: Millis) -> Self {
+        if let Some(ref mut fut) = self.fut {
+            fut.timeout.reset(to)
+        }
+        self
+    }
+
     fn err(e: PayloadError) -> Self {
         MessageBody {
             fut: None,
@@ -280,6 +291,17 @@ where
         }
         self
     }
+
+    /// Set operation timeout.
+    ///
+    /// By default timeout is set to 10 seconds. Set 0 millis to disable
+    /// timeout.
+    pub fn timeout(mut self, to: Millis) -> Self {
+        if let Some(ref mut fut) = self.fut {
+            fut.timeout.reset(to)
+        }
+        self
+    }
 }
 
 impl<U> Unpin for JsonBody<U> where U: DeserializeOwned {}
@@ -313,14 +335,16 @@ struct ReadBody {
     stream: Payload,
     buf: BytesMut,
     limit: usize,
+    timeout: Deadline,
 }
 
 impl ReadBody {
     fn new(stream: Payload, limit: usize) -> Self {
         Self {
             stream,
-            buf: BytesMut::with_capacity(std::cmp::min(limit, 32768)),
             limit,
+            buf: BytesMut::with_capacity(std::cmp::min(limit, 32768)),
+            timeout: Deadline::new(Millis(10000)),
         }
     }
 }
@@ -342,7 +366,18 @@ impl Future for ReadBody {
                     }
                 }
                 Poll::Ready(None) => Poll::Ready(Ok(this.buf.split().freeze())),
-                Poll::Pending => Poll::Pending,
+                Poll::Pending => {
+                    if this.timeout.poll_elapsed(cx).is_ready() {
+                        Poll::Ready(Err(PayloadError::Incomplete(Some(
+                            std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "Operation timed our",
+                            ),
+                        ))))
+                    } else {
+                        Poll::Pending
+                    }
+                }
             };
         }
     }
