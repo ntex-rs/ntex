@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.17] - 2022-05-25
+
+* Allow to reset time::Deadline
+
 ## [0.1.16] - 2022-02-19
 
 * Add time::Deadline future

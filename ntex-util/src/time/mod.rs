@@ -160,6 +160,26 @@ impl Deadline {
         }
     }
 
+    /// Resets the `Deadline` instance to a new deadline.
+    ///
+    /// Calling this function allows changing the instant at which the `Deadline`
+    /// future completes without having to create new associated state.
+    ///
+    /// This function can be called both before and after the future has
+    /// completed.
+    pub fn reset<T: Into<Millis>>(&mut self, millis: T) {
+        let millis = millis.into();
+        if millis.0 != 0 {
+            if let Some(ref mut hnd) = self.hnd {
+                hnd.reset(millis.0 as u64);
+            } else {
+                self.hnd = Some(TimerHandle::new(millis.0 as u64));
+            }
+        } else {
+            let _ = self.hnd.take();
+        }
+    }
+
     /// Returns `true` if `Deadline` has elapsed.
     #[inline]
     pub fn is_elapsed(&self) -> bool {
@@ -323,6 +343,7 @@ mod tests {
     use std::time;
 
     use super::*;
+    use crate::future::lazy;
 
     /// State Under Test: Two calls of `now()` return the same value if they are done within resolution interval.
     ///
@@ -409,10 +430,15 @@ mod tests {
     #[ntex_macros::rt_test2]
     async fn test_deadline() {
         let first_time = now();
-        deadline(Millis(1)).await;
+        let mut dl = deadline(Millis(1));
+        dl.await;
         let second_time = now();
         assert!(second_time - first_time >= time::Duration::from_millis(1));
         assert!(timeout(Millis(100), deadline(Millis(0))).await.is_err());
+
+        let mut dl = deadline(Millis(1));
+        dl.reset(Millis::ZERO);
+        assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
     }
 
     #[ntex_macros::rt_test2]
