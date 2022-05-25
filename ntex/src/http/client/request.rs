@@ -13,9 +13,8 @@ use crate::http::{
 use crate::{time::Millis, util::Bytes, util::Stream};
 
 use super::error::{FreezeRequestError, InvalidUrl};
-use super::frozen::FrozenClientRequest;
 use super::sender::{PrepForSendingError, SendClientRequest};
-use super::ClientConfig;
+use super::{frozen::FrozenClientRequest, ClientConfig};
 
 #[cfg(feature = "compress")]
 const HTTPS_ENCODING: &str = "br, gzip, deflate";

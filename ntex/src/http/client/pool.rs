@@ -128,7 +128,7 @@ where
 
     #[inline]
     fn call(&self, req: Connect) -> Self::Future {
-        trace!("Request connection to {:?}", req.uri);
+        trace!("Get connection for {:?}", req.uri);
         let connector = self.connector.clone();
         let inner = self.inner.clone();
         let waiters = self.waiters.clone();
@@ -216,9 +216,10 @@ impl Waiters {
         // cleanup waiters
         for (key, waiters) in &mut self.waiters {
             while !waiters.is_empty() {
-                let (_, tx) = waiters.front().unwrap();
+                let (req, tx) = waiters.front().unwrap();
                 // check if waiter is still alive
                 if tx.is_canceled() {
+                    trace!("Waiter for {:?} is gone, remove waiter", req.uri);
                     waiters.pop_front();
                     continue;
                 };
@@ -261,7 +262,6 @@ impl Inner {
                 }
 
                 let io = conn.io;
-
                 match io {
                     ConnectionType::H1(ref s) => {
                         if s.is_closed() {
@@ -302,27 +302,6 @@ impl Inner {
         }
     }
 
-    fn release_conn(&mut self, key: &Key, io: ConnectionType, created: Instant) {
-        self.available
-            .entry(key.clone())
-            .or_insert_with(VecDeque::new)
-            .push_back(AvailableConnection {
-                io,
-                created,
-                used: now(),
-            });
-        self.check_availibility();
-    }
-
-    fn release_close(&mut self, io: ConnectionType) {
-        if let ConnectionType::H1(io) = io {
-            spawn(async move {
-                let _ = io.shutdown().await;
-            });
-        }
-        self.check_availibility();
-    }
-
     fn check_availibility(&mut self) {
         let mut waiters = self.waiters.borrow_mut();
         waiters.cleanup();
@@ -359,9 +338,11 @@ where
 
         // check waiters
         for (key, waiters) in &mut waiters.waiters {
-            while let Some((_, tx)) = waiters.front() {
+            while let Some((req, tx)) = waiters.front() {
                 // is waiter still alive
                 if tx.is_canceled() {
+                    trace!("Waiter for {:?} is gone, cleanup", req.uri);
+                    cleanup = true;
                     waiters.pop_front();
                     continue;
                 };
@@ -370,6 +351,11 @@ where
                 match result {
                     Acquire::NotAvailable => break,
                     Acquire::Acquired(io, created) => {
+                        trace!(
+                            "Use existing {:?} connection for {:?}, wake up waiter",
+                            io,
+                            req.uri
+                        );
                         cleanup = true;
                         let (_, tx) = waiters.pop_front().unwrap();
                         let _ = tx.send(Ok(Connection::new(
@@ -379,6 +365,8 @@ where
                         )));
                     }
                     Acquire::Available => {
+                        trace!("Connecting to {:?} and wake up waiter", req.uri);
+                        cleanup = true;
                         let (connect, tx) = waiters.pop_front().unwrap();
                         OpenConnection::spawn(
                             key.clone(),
@@ -420,7 +408,6 @@ where
     F: Future<Output = Result<IoBoxed, ConnectError>> + Unpin + 'static,
 {
     fn spawn(key: Key, tx: Waiter, inner: Rc<RefCell<Inner>>, fut: F) {
-        inner.borrow_mut().connecting.insert(key.clone());
         let disconnect_timeout = inner.borrow().disconnect_timeout;
 
         spawn(OpenConnection {
@@ -430,10 +417,7 @@ where
             tx: Some(tx),
             key: key.clone(),
             inner: inner.clone(),
-            guard: Some(OpenGuard {
-                key,
-                inner: Some(inner),
-            }),
+            guard: Some(OpenGuard::new(key, inner)),
         });
     }
 }
@@ -453,20 +437,23 @@ where
                 Ok((snd, connection)) => {
                     // h2 connection is ready
                     let h2 = H2Sender::new(snd);
+                    let guard = this.guard.take().unwrap().consume();
                     let conn = Connection::new(
                         ConnectionType::H2(h2.clone()),
                         now(),
-                        Some(this.guard.take().unwrap().consume()),
+                        Some(guard.clone()),
                     );
                     if this.tx.take().unwrap().send(Ok(conn)).is_err() {
                         // waiter is gone, return connection to pool
-                        log::trace!("Waiter if gone while connecting to host");
+                        log::trace!(
+                            "Waiter for {:?} is gone while connecting to host",
+                            &this.key.authority
+                        );
                     }
 
-                    let mut inner = this.inner.borrow_mut();
-                    inner.connecting.remove(&this.key);
-                    inner.release_conn(&this.key, ConnectionType::H2(h2.clone()), now());
-                    inner.waker.wake();
+                    // put h2 connection to list of available connections
+                    Connection::new(ConnectionType::H2(h2.clone()), now(), Some(guard))
+                        .release(false);
 
                     let key = this.key.clone();
                     spawn(async move {
@@ -481,6 +468,12 @@ where
                     Poll::Ready(())
                 }
                 Err(err) => {
+                    trace!(
+                        "Failed to negotiate h2 connection for {:?} with error {:?}",
+                        &this.key.authority,
+                        err
+                    );
+                    let _ = this.guard.take();
                     if let Some(rx) = this.tx.take() {
                         let _ = rx.send(Err(ConnectError::H2(err)));
                     }
@@ -492,7 +485,12 @@ where
         // open tcp connection
         match ready!(Pin::new(&mut this.fut).poll(cx)) {
             Err(err) => {
-                trace!("Failed to open client connection {:?}", err);
+                trace!(
+                    "Failed to open client connection for {:?} with error {:?}",
+                    &this.key.authority,
+                    err
+                );
+                let _ = this.guard.take();
                 if let Some(rx) = this.tx.take() {
                     let _ = rx.send(Err(err));
                 }
@@ -503,13 +501,19 @@ where
 
                 // handle http2 proto
                 if io.query::<HttpProtocol>().get() == Some(HttpProtocol::Http2) {
-                    log::trace!("Connection is established, start http2 handshake");
                     // init http2 handshake
+                    log::trace!(
+                        "Connection for {:?} is established, start http2 handshake",
+                        &this.key.authority
+                    );
                     this.h2 =
                         Some(Box::pin(Builder::new().handshake(TokioIoBoxed::from(io))));
                     self.poll(cx)
                 } else {
-                    log::trace!("Connection is established, init http1 connection");
+                    log::trace!(
+                        "Connection for {:?} is established, init http1 connection",
+                        &this.key.authority
+                    );
                     let conn = Connection::new(
                         ConnectionType::H1(io),
                         now(),
@@ -517,11 +521,9 @@ where
                     );
                     if let Err(Ok(conn)) = this.tx.take().unwrap().send(Ok(conn)) {
                         // waiter is gone, return connection to pool
-                        conn.release()
+                        conn.release(false)
                     }
-                    let mut inner = this.inner.borrow_mut();
-                    inner.connecting.remove(&this.key);
-                    inner.waker.wake();
+                    this.inner.borrow_mut().check_availibility();
                     Poll::Ready(())
                 }
             }
@@ -535,15 +537,27 @@ struct OpenGuard {
 }
 
 impl OpenGuard {
+    fn new(key: Key, inner: Rc<RefCell<Inner>>) -> Self {
+        inner.borrow_mut().connecting.insert(key.clone());
+        OpenGuard {
+            key,
+            inner: Some(inner),
+        }
+    }
+
     fn consume(mut self) -> Acquired {
-        Acquired::new(self.key.clone(), self.inner.take().unwrap())
+        let inner = self.inner.take().unwrap();
+        inner.borrow_mut().connecting.remove(&self.key);
+        Acquired::new(self.key.clone(), inner)
     }
 }
 
 impl Drop for OpenGuard {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.take() {
-            inner.borrow_mut().check_availibility();
+            let mut pool = inner.borrow_mut();
+            pool.connecting.remove(&self.key);
+            pool.check_availibility();
         }
     }
 }
@@ -556,21 +570,41 @@ impl Acquired {
         Acquired(key, Some(inner))
     }
 
-    pub(super) fn close(&mut self, conn: Connection) {
-        if let Some(inner) = self.1.take() {
-            let (io, _) = conn.into_inner();
-            let mut inner = inner.borrow_mut();
-            inner.acquired -= 1;
-            inner.release_close(io);
-        }
+    fn clone(&self) -> Self {
+        Acquired::new(self.0.clone(), self.1.as_ref().unwrap().clone())
     }
 
-    pub(super) fn release(&mut self, conn: Connection) {
+    pub(super) fn release(&mut self, conn: Connection, close: bool) {
         if let Some(inner) = self.1.take() {
-            let (io, created) = conn.into_inner();
+            let (io, created, _) = conn.into_inner();
             let mut inner = inner.borrow_mut();
             inner.acquired -= 1;
-            inner.release_conn(&self.0, io, created);
+            if close {
+                log::trace!(
+                    "Releasing and closing connection for {:?}",
+                    self.0.authority
+                );
+                match io {
+                    ConnectionType::H1(io) => {
+                        spawn(async move {
+                            let _ = io.shutdown().await;
+                        });
+                    }
+                    ConnectionType::H2(io) => io.close(),
+                }
+            } else {
+                log::trace!("Releasing connection for {:?}", self.0.authority);
+                inner
+                    .available
+                    .entry(self.0.clone())
+                    .or_insert_with(VecDeque::new)
+                    .push_back(AvailableConnection {
+                        io,
+                        created,
+                        used: now(),
+                    });
+            }
+            inner.check_availibility();
         }
     }
 }
@@ -596,6 +630,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_basics() {
+        env_logger::init();
         let store = Rc::new(RefCell::new(Vec::new()));
         let store2 = store.clone();
 
@@ -632,6 +667,7 @@ mod tests {
         assert!(format!("{:?}", conn).contains("H1Connection"));
         assert_eq!(conn.protocol(), HttpProtocol::Http1);
         assert_eq!(pool.inner.borrow().acquired, 1);
+        assert!(pool.inner.borrow().connecting.is_empty());
 
         // pool is full, waiting
         let mut fut = pool.call(req.clone());
@@ -639,10 +675,32 @@ mod tests {
         assert_eq!(pool.waiters.borrow().waiters.len(), 1);
 
         // release connection and push it to next waiter
-        conn.release();
+        conn.release(false);
+        assert_eq!(pool.inner.borrow().acquired, 0);
         let _conn = fut.await.unwrap();
         assert_eq!(store.borrow().len(), 1);
         assert!(pool.waiters.borrow().waiters.is_empty());
+        drop(_conn);
+
+        // close connnection
+        let conn = pool.call(req.clone()).await.unwrap();
+        assert_eq!(store.borrow().len(), 2);
+        assert_eq!(pool.inner.borrow().acquired, 1);
+        assert!(pool.inner.borrow().connecting.is_empty());
+        let mut fut = pool.call(req.clone());
+        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+        assert_eq!(pool.waiters.borrow().waiters.len(), 1);
+
+        // release and close
+        conn.release(true);
+        assert_eq!(pool.inner.borrow().acquired, 0);
+        assert!(pool.inner.borrow().connecting.is_empty());
+
+        let conn = fut.await.unwrap();
+        assert_eq!(store.borrow().len(), 3);
+        assert!(pool.waiters.borrow().waiters.is_empty());
+        assert!(pool.inner.borrow().connecting.is_empty());
+        assert_eq!(pool.inner.borrow().acquired, 1);
 
         // drop waiter, no interest in connection
         let mut fut = pool.call(req.clone());
@@ -651,6 +709,27 @@ mod tests {
         sleep(Millis(50)).await;
         pool.inner.borrow_mut().check_availibility();
         assert!(pool.waiters.borrow().waiters.is_empty());
+
+        // different uri
+        let req = Connect {
+            uri: Uri::try_from("http://localhost2/test").unwrap(),
+            addr: None,
+        };
+        let mut fut = pool.call(req.clone());
+        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+        assert_eq!(pool.waiters.borrow().waiters.len(), 1);
+        conn.release(false);
+        assert_eq!(pool.inner.borrow().acquired, 0);
+        assert_eq!(pool.inner.borrow().available.len(), 1);
+
+        let conn = fut.await.unwrap();
+        assert_eq!(store.borrow().len(), 4);
+        assert!(pool.waiters.borrow().waiters.is_empty());
+        assert!(pool.inner.borrow().connecting.is_empty());
+        assert_eq!(pool.inner.borrow().acquired, 1);
+        conn.release(false);
+        assert_eq!(pool.inner.borrow().acquired, 0);
+        assert_eq!(pool.inner.borrow().available.len(), 2);
 
         assert!(lazy(|cx| pool.poll_ready(cx)).await.is_ready());
         assert!(lazy(|cx| pool.poll_shutdown(cx, false)).await.is_ready());

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.18] - 2022-05-xx
+
+* http: Refactor client pool management
+
 ## [0.5.17] - 2022-05-05
 
 * http: Fix handling for zero slow-request timeout

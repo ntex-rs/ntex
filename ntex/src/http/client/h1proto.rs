@@ -86,8 +86,7 @@ where
 
     match codec.message_type() {
         h1::MessageType::None => {
-            let force_close = !codec.keepalive();
-            release_connection(io, force_close, created, pool);
+            release_connection(io, !codec.keepalive(), created, pool);
             Ok((head, Payload::None))
         }
         _ => {
@@ -161,11 +160,9 @@ impl Stream for PlStream {
                         if let Some(chunk) = chunk {
                             Ok(chunk)
                         } else {
-                            let io = this.io.take().unwrap();
-                            let force_close = !this.codec.keepalive();
                             release_connection(
-                                io,
-                                force_close,
+                                this.io.take().unwrap(),
+                                !this.codec.keepalive(),
                                 this.created,
                                 this.pool.take(),
                             );
@@ -200,9 +197,12 @@ fn release_connection(
 ) {
     if force_close || io.is_closed() || io.with_read_buf(|buf| !buf.is_empty()) {
         if let Some(mut pool) = pool.take() {
-            pool.close(Connection::new(ConnectionType::H1(io), created, None));
+            pool.release(Connection::new(ConnectionType::H1(io), created, None), true);
         }
     } else if let Some(mut pool) = pool.take() {
-        pool.release(Connection::new(ConnectionType::H1(io), created, None));
+        pool.release(
+            Connection::new(ConnectionType::H1(io), created, None),
+            false,
+        );
     }
 }

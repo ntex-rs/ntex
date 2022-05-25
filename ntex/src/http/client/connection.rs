@@ -83,18 +83,21 @@ impl Connection {
         }
     }
 
-    pub(super) fn release(self) {
+    pub(super) fn release(self, close: bool) {
         if let Some(mut pool) = self.pool {
-            pool.release(Self {
-                io: self.io,
-                created: self.created,
-                pool: None,
-            });
+            pool.release(
+                Self {
+                    io: self.io,
+                    created: self.created,
+                    pool: None,
+                },
+                close,
+            );
         }
     }
 
-    pub(super) fn into_inner(self) -> (ConnectionType, time::Instant) {
-        (self.io.unwrap(), self.created)
+    pub(super) fn into_inner(self) -> (ConnectionType, time::Instant, Option<Acquired>) {
+        (self.io.unwrap(), self.created, self.pool)
     }
 
     pub fn protocol(&self) -> HttpProtocol {
