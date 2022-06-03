@@ -1,6 +1,6 @@
 # Changes
 
-## [0.5.18] - 2022-05-xx
+## [0.5.18] - 2022-06-03
 
 * http: Refactor client pool management
 
