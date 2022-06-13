@@ -215,6 +215,7 @@ where
                                     DispatchItem::Item(el)
                                 }
                                 Err(RecvError::KeepAlive) => {
+                                    log::trace!("keep-alive error, stopping dispatcher");
                                     slf.st.set(DispatcherState::Stop);
                                     DispatchItem::KeepAliveTimeout
                                 }
@@ -229,10 +230,18 @@ where
                                     DispatchItem::WBackPressureEnabled
                                 }
                                 Err(RecvError::Decoder(err)) => {
+                                    log::trace!(
+                                        "decoder error, stopping dispatcher: {:?}",
+                                        err
+                                    );
                                     slf.st.set(DispatcherState::Stop);
                                     DispatchItem::DecoderError(err)
                                 }
                                 Err(RecvError::PeerGone(err)) => {
+                                    log::trace!(
+                                        "peer is gone, stopping dispatcher: {:?}",
+                                        err
+                                    );
                                     slf.st.set(DispatcherState::Stop);
                                     DispatchItem::Disconnect(err)
                                 }

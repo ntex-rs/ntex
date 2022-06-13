@@ -1,9 +1,19 @@
-use std::collections::hash_map::{self, Entry};
+use std::collections::{self, hash_map, hash_map::Entry};
 use std::convert::TryFrom;
 
 use http::header::{HeaderName, HeaderValue};
 
-use crate::util::{Either, HashMap};
+type HashMap<K, V> = collections::HashMap<K, V, fxhash::FxBuildHasher>;
+
+/// Combines two different futures, streams, or sinks having the same associated types into a single
+/// type.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Either<A, B> {
+    /// First branch of the type
+    Left(A),
+    /// Second branch of the type
+    Right(B),
+}
 
 /// A set of HTTP headers
 ///
@@ -16,7 +26,7 @@ pub struct HeaderMap {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Value {
+pub enum Value {
     One(HeaderValue),
     Multi(Vec<HeaderValue>),
 }
@@ -195,6 +205,11 @@ impl HeaderMap {
     /// value. So, if a key has 3 associated values, it will be yielded 3 times.
     pub fn iter(&self) -> Iter<'_> {
         Iter::new(self.inner.iter())
+    }
+
+    #[doc(hidden)]
+    pub fn iter_inner(&self) -> hash_map::Iter<'_, HeaderName, Value> {
+        self.inner.iter()
     }
 
     /// An iterator visiting all keys.

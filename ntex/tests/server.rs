@@ -187,6 +187,7 @@ fn test_on_worker_start() {
 
 #[test]
 #[cfg(feature = "tokio")]
+#[cfg(not(target_os = "macos"))]
 #[allow(unreachable_code)]
 fn test_panic_in_worker() {
     let counter = Arc::new(AtomicUsize::new(0));

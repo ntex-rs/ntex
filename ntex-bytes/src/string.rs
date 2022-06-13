@@ -14,6 +14,12 @@ impl ByteString {
         ByteString(Bytes::new())
     }
 
+    /// Get a str slice.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &*self
+    }
+
     /// Get a reference to the underlying bytes.
     #[inline]
     pub fn as_slice(&self) -> &[u8] {

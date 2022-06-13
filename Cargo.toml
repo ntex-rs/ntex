@@ -4,6 +4,7 @@ members = [
   "ntex-bytes",
   "ntex-codec",
   "ntex-io",
+  "ntex-http",
   "ntex-router",
   "ntex-rt",
   "ntex-service",
@@ -20,6 +21,7 @@ ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }
 ntex-codec = { path = "ntex-codec" }
 ntex-io = { path = "ntex-io" }
+ntex-http = { path = "ntex-http" }
 ntex-router = { path = "ntex-router" }
 ntex-rt = { path = "ntex-rt" }
 ntex-service = { path = "ntex-service" }

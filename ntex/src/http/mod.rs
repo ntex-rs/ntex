@@ -26,7 +26,6 @@ pub use self::builder::HttpServiceBuilder;
 pub use self::client::Client;
 pub use self::config::{DateService, KeepAlive, ServiceConfig};
 pub use self::error::ResponseError;
-pub use self::header::HeaderMap;
 pub use self::httpmessage::HttpMessage;
 pub use self::message::{ConnectionType, RequestHead, RequestHeadType, ResponseHead};
 pub use self::payload::{Payload, PayloadStream};
@@ -36,5 +35,5 @@ pub use self::service::HttpService;
 pub use crate::io::types::HttpProtocol;
 
 // re-exports
-pub use http::uri::{self, Uri};
-pub use http::{Method, StatusCode, Version};
+pub use ntex_http::uri::{self, Uri};
+pub use ntex_http::{HeaderMap, Method, StatusCode, Version};

@@ -259,6 +259,7 @@ mod test {
         opcode_from!(OpCode::Pong => 10);
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     #[should_panic]
     fn test_from_opcode_debug() {

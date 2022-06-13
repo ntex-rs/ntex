@@ -3,7 +3,7 @@ use std::{cell::Cell, cmp, io, io::Write, mem, ptr, ptr::copy_nonoverlapping, sl
 
 use crate::http::body::BodySize;
 use crate::http::config::DateService;
-use crate::http::header::{map, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
+use crate::http::header::{Value, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
 use crate::http::helpers;
 use crate::http::message::{ConnectionType, RequestHeadType};
 use crate::http::response::Response;
@@ -106,10 +106,9 @@ pub(super) trait MessageType: Sized {
         let extra_headers = self.extra_headers().unwrap_or(&empty_headers);
         let headers = self
             .headers()
-            .inner
-            .iter()
+            .iter_inner()
             .filter(|(name, _)| !extra_headers.contains_key(*name))
-            .chain(extra_headers.inner.iter());
+            .chain(extra_headers.iter_inner());
 
         // write headers
         let mut pos = 0;
@@ -127,7 +126,7 @@ pub(super) trait MessageType: Sized {
             }
             let k = key.as_str().as_bytes();
             match value {
-                map::Value::One(ref val) => {
+                Value::One(ref val) => {
                     let v = val.as_ref();
                     let v_len = v.len();
                     let k_len = k.len();
@@ -153,7 +152,7 @@ pub(super) trait MessageType: Sized {
                     pos += len;
                     remaining -= len;
                 }
-                map::Value::Multi(ref vec) => {
+                Value::Multi(ref vec) => {
                     for val in vec {
                         let v = val.as_ref();
                         let v_len = v.len();

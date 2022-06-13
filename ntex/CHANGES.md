@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.19] - 2022-xx-xx
+
+* http: move basic types to separeate crate
+
 ## [0.5.18] - 2022-06-03
 
 * http: Refactor client pool management

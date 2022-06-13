@@ -5,9 +5,9 @@ use std::{error, fmt, future::Future, pin::Pin, task::Context, task::Poll};
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Either<A, B> {
     /// First branch of the type
-    Left(/* #[pin] */ A),
+    Left(A),
     /// Second branch of the type
-    Right(/* #[pin] */ B),
+    Right(B),
 }
 
 impl<A, B> Either<A, B> {
