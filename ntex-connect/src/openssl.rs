@@ -3,11 +3,11 @@ use std::{future::Future, io, pin::Pin, task::Context, task::Poll};
 pub use ntex_tls::openssl::SslFilter;
 pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
 
+use ntex_bytes::PoolId;
+use ntex_io::{Base, Io};
+use ntex_service::{Service, ServiceFactory};
 use ntex_tls::openssl::SslConnector as IoSslConnector;
-
-use crate::io::{Base, Io};
-use crate::service::{Service, ServiceFactory};
-use crate::util::{PoolId, Ready};
+use ntex_util::future::Ready;
 
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 

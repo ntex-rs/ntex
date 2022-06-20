@@ -1,4 +1,4 @@
-use crate::http::Uri;
+use ntex_http::Uri;
 
 use super::Address;
 

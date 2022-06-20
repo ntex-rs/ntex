@@ -1,12 +1,12 @@
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, future::Future, io, net::SocketAddr, pin::Pin};
 
-use crate::io::{types, Io};
-use crate::rt::tcp_connect_in;
-use crate::service::{Service, ServiceFactory};
-use crate::util::{Either, PoolId, PoolRef, Ready};
+use ntex_bytes::{PoolId, PoolRef};
+use ntex_io::{types, Io};
+use ntex_service::{Service, ServiceFactory};
+use ntex_util::future::{Either, Ready};
 
-use super::{Address, Connect, ConnectError, Resolver};
+use crate::{net::tcp_connect_in, Address, Connect, ConnectError, Resolver};
 
 pub struct Connector<T> {
     resolver: Resolver<T>,

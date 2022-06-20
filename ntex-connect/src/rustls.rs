@@ -3,11 +3,11 @@ use std::{convert::TryFrom, future::Future, io, pin::Pin, task::Context, task::P
 pub use ntex_tls::rustls::TlsFilter;
 pub use tls_rustls::{ClientConfig, ServerName};
 
+use ntex_bytes::PoolId;
+use ntex_io::{Base, Io};
+use ntex_service::{Service, ServiceFactory};
 use ntex_tls::rustls::TlsConnector;
-
-use crate::io::{Base, Io};
-use crate::service::{Service, ServiceFactory};
-use crate::util::{PoolId, Ready};
+use ntex_util::future::Ready;
 
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 

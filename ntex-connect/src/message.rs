@@ -1,9 +1,7 @@
 use std::collections::{vec_deque, VecDeque};
-use std::fmt;
-use std::iter::{FromIterator, FusedIterator};
-use std::net::SocketAddr;
+use std::{fmt, iter::FromIterator, iter::FusedIterator, net::SocketAddr};
 
-use crate::util::Either;
+use ntex_util::future::Either;
 
 /// Connect request
 pub trait Address: Unpin + 'static {
