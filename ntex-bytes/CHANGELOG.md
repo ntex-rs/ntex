@@ -1,6 +1,8 @@
 # Changes
 
-## [0.1.15] (2022-xx-xx)
+## [0.1.15] (2022-06-20)
+
+* Add Buf/BufMut impls
 
 * Remove .assume_init usage #106
 
