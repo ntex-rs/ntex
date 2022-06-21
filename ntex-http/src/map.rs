@@ -1,3 +1,4 @@
+use core::iter::FromIterator;
 use std::collections::{self, hash_map, hash_map::Entry};
 use std::convert::TryFrom;
 
@@ -307,6 +308,29 @@ impl<'a> AsName for &'a String {
     }
 }
 
+use core::convert::TryInto;
+
+impl<N, V> FromIterator<(N, V)> for HeaderMap
+where
+    N: TryInto<HeaderName> + std::fmt::Display,
+    V: Into<Value>,
+{
+    fn from_iter<T: IntoIterator<Item = (N, V)>>(iter: T) -> Self {
+        let map = iter
+            .into_iter()
+            .filter_map(|(n, v)| {
+                let name = format!("{}", n);
+                if let Ok(n) = n.try_into() {
+                    return Some((n, v.into()));
+                }
+                log::warn!("invalid HTTP header name: {}", name);
+                None
+            })
+            .collect::<HashMap<HeaderName, Value>>();
+        HeaderMap { inner: map }
+    }
+}
+
 pub struct GetAll<'a> {
     idx: usize,
     item: Option<&'a Value>,
@@ -408,7 +432,7 @@ impl<'a> Iterator for Iter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::header::CONTENT_TYPE;
+    use crate::header::CONTENT_TYPE;
 
     #[test]
     fn test_basics() {
