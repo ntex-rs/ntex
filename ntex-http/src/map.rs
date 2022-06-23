@@ -313,21 +313,46 @@ use core::convert::TryInto;
 impl<N, V> FromIterator<(N, V)> for HeaderMap
 where
     N: TryInto<HeaderName> + std::fmt::Display,
-    V: Into<Value>,
+    V: IntoValue,
 {
     fn from_iter<T: IntoIterator<Item = (N, V)>>(iter: T) -> Self {
         let map = iter
             .into_iter()
             .filter_map(|(n, v)| {
                 let name = format!("{}", n);
-                if let Ok(n) = n.try_into() {
-                    return Some((n, v.into()));
+                match (n.try_into(), v.into_value()) {
+                    (Ok(n), Ok(v)) => Some((n, v)),
+                    (Ok(n), Err(_)) => {
+                        log::warn!("failed to parse `{}` header value", n);
+                        None
+                    }
+                    (Err(_), Ok(_)) => {
+                        log::warn!("invalid HTTP header name: {}", name);
+                        None
+                    }
+                    (Err(_), Err(_)) => {
+                        log::warn!("invalid HTTP header name `{}` and value", name);
+                        None
+                    }
                 }
-                log::warn!("invalid HTTP header name: {}", name);
-                None
             })
             .collect::<HashMap<HeaderName, Value>>();
         HeaderMap { inner: map }
+    }
+}
+
+pub trait IntoValue {
+    type Error;
+    fn into_value(self) -> Result<Value, Self::Error>;
+}
+
+impl<T> IntoValue for T
+where
+    HeaderValue: TryFrom<T>,
+{
+    type Error = <HeaderValue as TryFrom<T>>::Error;
+    fn into_value(self) -> Result<Value, Self::Error> {
+        Ok(Value::One(HeaderValue::try_from(self)?))
     }
 }
 
@@ -402,7 +427,6 @@ impl<'a> Iter<'a> {
 
 impl<'a> Iterator for Iter<'a> {
     type Item = (&'a HeaderName, &'a HeaderValue);
-
     #[inline]
     fn next(&mut self) -> Option<(&'a HeaderName, &'a HeaderValue)> {
         if let Some(ref mut item) = self.current {
@@ -433,6 +457,16 @@ impl<'a> Iterator for Iter<'a> {
 mod tests {
     use super::*;
     use crate::header::CONTENT_TYPE;
+
+    #[test]
+    fn test_from_iter() {
+        let vec = vec![("Connection", "keep-alive"), ("Accept", "text/html")];
+        let map = HeaderMap::from_iter(vec);
+        assert_eq!(
+            map.get("Connection"),
+            Some(&HeaderValue::from_static("keep-alive"))
+        );
+    }
 
     #[test]
     fn test_basics() {
