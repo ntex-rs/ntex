@@ -61,7 +61,56 @@ impl Value {
     }
 }
 
+pub struct ValueIntoIter {
+    value: Value,
+}
+
+impl Iterator for ValueIntoIter {
+    type Item = HeaderValue;
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.value {
+            Value::One(_) => {
+                let val = std::mem::replace(&mut self.value, Value::Multi(Vec::new()));
+                match val {
+                    Value::One(val) => Some(val),
+                    _ => unreachable!(),
+                }
+            }
+            Value::Multi(vec) => vec.pop(),
+        }
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self.value {
+            Value::One(_) => (1, None),
+            Value::Multi(ref v) => v.iter().size_hint(),
+        }
+    }
+}
+
+impl IntoIterator for Value {
+    type Item = HeaderValue;
+    type IntoIter = ValueIntoIter;
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        ValueIntoIter { value: self }
+    }
+}
+
+impl Extend<HeaderValue> for Value {
+    #[inline]
+    fn extend<T>(&mut self, iter: T)
+    where
+        T: IntoIterator<Item = HeaderValue>,
+    {
+        let mut iter = iter.into_iter();
+        while let Some(h) = iter.next() {
+            self.append(h);
+        }
+    }
+}
+
 impl Default for HeaderMap {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
@@ -337,7 +386,15 @@ where
                     }
                 }
             })
-            .collect::<HashMap<HeaderName, Value>>();
+            .fold(HashMap::default(), |mut map: HashMap<_, Value>, (n, v)| {
+                match map.entry(n) {
+                    Entry::Occupied(mut oc) => oc.get_mut().extend(v),
+                    Entry::Vacant(va) => {
+                        let _ = va.insert(v);
+                    }
+                }
+                map
+            });
         HeaderMap { inner: map }
     }
 }
@@ -463,12 +520,23 @@ mod tests {
 
     #[test]
     fn test_from_iter() {
-        let vec = vec![("Connection", "keep-alive"), ("Accept", "text/html")];
+        let vec = vec![
+            ("Connection", "keep-alive"),
+            ("Accept", "text/html"),
+            ("Accept", "*/*"),
+        ];
         let map = HeaderMap::from_iter(vec);
         assert_eq!(
             map.get("Connection"),
             Some(&HeaderValue::from_static("keep-alive"))
         );
+        assert_eq!(
+            map.get_all("Accept").collect::<Vec<&HeaderValue>>(),
+            vec![
+                &HeaderValue::from_static("*/*"),
+                &HeaderValue::from_static("text/html")
+            ]
+        )
     }
 
     #[test]

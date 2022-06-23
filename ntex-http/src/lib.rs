@@ -3,6 +3,7 @@
 mod map;
 
 pub use self::map::HeaderMap;
+pub use self::map::IntoValue;
 #[doc(hidden)]
 pub use self::map::Value;
 
