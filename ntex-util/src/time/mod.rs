@@ -430,7 +430,7 @@ mod tests {
     #[ntex_macros::rt_test2]
     async fn test_deadline() {
         let first_time = now();
-        let mut dl = deadline(Millis(1));
+        let dl = deadline(Millis(1));
         dl.await;
         let second_time = now();
         assert!(second_time - first_time >= time::Duration::from_millis(1));

@@ -809,6 +809,7 @@ mod tests {
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[ntex::test]
     async fn test_unhandled_data() {
         let handled = Arc::new(AtomicBool::new(false));

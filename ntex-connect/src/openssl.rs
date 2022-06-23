@@ -119,12 +119,12 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::{Service, ServiceFactory};
+    use ntex_service::{Service, ServiceFactory};
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_openssl_connect() {
-        let server = crate::server::test_server(|| {
-            crate::service::fn_service(|_| async { Ok::<_, ()>(()) })
+        let server = ntex::server::test_server(|| {
+            ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
         let ssl = SslConnector::builder(SslMethod::tls()).unwrap();

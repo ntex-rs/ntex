@@ -234,10 +234,10 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
 mod tests {
     use super::*;
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_connect() {
-        let server = crate::server::test_server(|| {
-            crate::service::fn_service(|_| async { Ok::<_, ()>(()) })
+        let server = ntex::server::test_server(|| {
+            ntex_service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
         let srv = Connector::default().memory_pool(PoolId::P5);
@@ -256,11 +256,11 @@ mod tests {
                 .unwrap(),
             server.addr(),
         ]);
-        let result = crate::connect::connect(msg).await;
+        let result = crate::connect(msg).await;
         assert!(result.is_ok());
 
         let msg = Connect::new(server.addr());
-        let result = crate::connect::connect(msg).await;
+        let result = crate::connect(msg).await;
         assert!(result.is_ok());
     }
 }

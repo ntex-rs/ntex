@@ -408,7 +408,7 @@ impl<'a> Iterator for Iter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::header::CONTENT_TYPE;
+    use crate::header::CONTENT_TYPE;
 
     #[test]
     fn test_basics() {

@@ -135,9 +135,9 @@ impl<T: Address> Service<Connect<T>> for Resolver<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::lazy;
+    use ntex_util::future::lazy;
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn resolver() {
         let resolver = Resolver::default().clone();
         assert!(format!("{:?}", resolver).contains("Resolver"));
