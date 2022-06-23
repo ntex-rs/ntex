@@ -315,6 +315,7 @@ where
     N: TryInto<HeaderName> + std::fmt::Display,
     V: IntoValue,
 {
+    #[inline]
     fn from_iter<T: IntoIterator<Item = (N, V)>>(iter: T) -> Self {
         let map = iter
             .into_iter()
@@ -351,6 +352,8 @@ where
     HeaderValue: TryFrom<T>,
 {
     type Error = <HeaderValue as TryFrom<T>>::Error;
+
+    #[inline]
     fn into_value(self) -> Result<Value, Self::Error> {
         Ok(Value::One(HeaderValue::try_from(self)?))
     }
