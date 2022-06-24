@@ -357,12 +357,10 @@ impl<'a> AsName for &'a String {
     }
 }
 
-use core::convert::TryInto;
-
-impl<N, V> FromIterator<(N, V)> for HeaderMap
+impl<N: std::fmt::Display, V> FromIterator<(N, V)> for HeaderMap
 where
-    N: TryInto<HeaderName> + std::fmt::Display,
-    V: IntoValue,
+    HeaderName: TryFrom<N>,
+    Value: TryFrom<V>,
 {
     #[inline]
     fn from_iter<T: IntoIterator<Item = (N, V)>>(iter: T) -> Self {
@@ -370,7 +368,7 @@ where
             .into_iter()
             .filter_map(|(n, v)| {
                 let name = format!("{}", n);
-                match (n.try_into(), v.into_value()) {
+                match (HeaderName::try_from(n), Value::try_from(v)) {
                     (Ok(n), Ok(v)) => Some((n, v)),
                     (Ok(n), Err(_)) => {
                         log::warn!("failed to parse `{}` header value", n);
@@ -399,20 +397,10 @@ where
     }
 }
 
-pub trait IntoValue {
-    type Error;
-    fn into_value(self) -> Result<Value, Self::Error>;
-}
-
-impl<T> IntoValue for T
-where
-    HeaderValue: TryFrom<T>,
-{
-    type Error = <HeaderValue as TryFrom<T>>::Error;
-
-    #[inline]
-    fn into_value(self) -> Result<Value, Self::Error> {
-        Ok(Value::One(HeaderValue::try_from(self)?))
+impl TryFrom<&str> for Value {
+    type Error = crate::header::InvalidHeaderValue;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Ok(Value::One(HeaderValue::from_str(value)?))
     }
 }
 
