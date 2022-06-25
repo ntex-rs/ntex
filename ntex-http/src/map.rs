@@ -397,10 +397,28 @@ where
     }
 }
 
+impl FromIterator<HeaderValue> for Value {
+    fn from_iter<T: IntoIterator<Item = HeaderValue>>(iter: T) -> Self {
+        let mut iter = iter.into_iter();
+        let value = iter.next().map(|h| Value::One(h));
+        let mut value = match value {
+            Some(v) => v,
+            _ => Value::One(HeaderValue::from_static("")),
+        };
+        value.extend(iter);
+        value
+    }
+}
+
 impl TryFrom<&str> for Value {
     type Error = crate::header::InvalidHeaderValue;
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Ok(Value::One(HeaderValue::from_str(value)?))
+        Ok(value
+            .split(',')
+            .filter(|v| !v.is_empty())
+            .map(|v| v.trim())
+            .filter_map(|v| HeaderValue::from_str(v).ok())
+            .collect::<Value>())
     }
 }
 
@@ -511,7 +529,10 @@ mod tests {
         let vec = vec![
             ("Connection", "keep-alive"),
             ("Accept", "text/html"),
-            ("Accept", "*/*"),
+            (
+                "Accept",
+                "*/*, application/xhtml+xml, application/xml;q=0.9, image/webp,",
+            ),
         ];
         let map = HeaderMap::from_iter(vec);
         assert_eq!(
@@ -521,8 +542,11 @@ mod tests {
         assert_eq!(
             map.get_all("Accept").collect::<Vec<&HeaderValue>>(),
             vec![
+                &HeaderValue::from_static("image/webp"),
+                &HeaderValue::from_static("text/html"),
+                &HeaderValue::from_static("application/xml;q=0.9"),
                 &HeaderValue::from_static("*/*"),
-                &HeaderValue::from_static("text/html")
+                &HeaderValue::from_static("application/xhtml+xml"),
             ]
         )
     }
