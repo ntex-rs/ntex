@@ -21,12 +21,12 @@ pub enum Either<A, B> {
 /// `HeaderMap` is an multimap of [`HeaderName`] to values.
 ///
 /// [`HeaderName`]: struct.HeaderName.html
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderMap {
     pub(crate) inner: HashMap<HeaderName, Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     One(HeaderValue),
     Multi(Vec<HeaderValue>),
