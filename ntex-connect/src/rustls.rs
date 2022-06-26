@@ -3,11 +3,11 @@ use std::{convert::TryFrom, future::Future, io, pin::Pin, task::Context, task::P
 pub use ntex_tls::rustls::TlsFilter;
 pub use tls_rustls::{ClientConfig, ServerName};
 
+use ntex_bytes::PoolId;
+use ntex_io::{Base, Io};
+use ntex_service::{Service, ServiceFactory};
 use ntex_tls::rustls::TlsConnector;
-
-use crate::io::{Base, Io};
-use crate::service::{Service, ServiceFactory};
-use crate::util::{PoolId, Ready};
+use ntex_util::future::Ready;
 
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
@@ -125,13 +125,13 @@ mod tests {
     use tls_rustls::{OwnedTrustAnchor, RootCertStore};
 
     use super::*;
-    use crate::service::{Service, ServiceFactory};
-    use crate::util::lazy;
+    use ntex_service::{Service, ServiceFactory};
+    use ntex_util::future::lazy;
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_rustls_connect() {
-        let server = crate::server::test_server(|| {
-            crate::service::fn_service(|_| async { Ok::<_, ()>(()) })
+        let server = ntex::server::test_server(|| {
+            ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
         let mut cert_store = RootCertStore::empty();

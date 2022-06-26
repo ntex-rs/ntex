@@ -275,3 +275,39 @@ where
 {
     unimplemented!()
 }
+
+#[cfg(all(
+    not(feature = "tokio"),
+    not(feature = "async-std"),
+    not(feature = "glommio")
+))]
+mod spawn_blocking_stub {
+    use std::fmt;
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct JoinError;
+
+    impl fmt::Display for JoinError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "JoinError")
+        }
+    }
+
+    impl std::error::Error for JoinError {}
+
+    pub fn spawn_blocking<F, T>(
+        _: F,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, JoinError>>>>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        unimplemented!()
+    }
+}
+#[cfg(all(
+    not(feature = "tokio"),
+    not(feature = "async-std"),
+    not(feature = "glommio")
+))]
+pub use self::spawn_blocking_stub::*;

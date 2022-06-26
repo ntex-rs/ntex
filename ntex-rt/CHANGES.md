@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.5] - 2022-06-20
+
+* Add spawn_blocking stub
+
 ## [0.4.4] - 2022-02-20
 
 * Upgrade to glommio 0.7

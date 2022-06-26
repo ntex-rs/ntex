@@ -30,7 +30,6 @@ pub use ntex_macros::{rt_main as main, rt_test as test};
 #[cfg(test)]
 pub(crate) use ntex_macros::rt_test2 as rt_test;
 
-pub mod connect;
 pub mod http;
 pub mod server;
 pub mod web;
@@ -47,6 +46,11 @@ pub use ntex_util::task;
 pub mod codec {
     //! Utilities for encoding and decoding frames.
     pub use ntex_codec::*;
+}
+
+pub mod connect {
+    //! Tcp connector service
+    pub use ntex_connect::*;
 }
 
 pub mod router {

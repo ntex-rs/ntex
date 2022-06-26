@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.5.18"
+version = "0.5.19"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -24,10 +24,10 @@ path = "src/lib.rs"
 default = []
 
 # openssl
-openssl = ["tls-openssl", "ntex-tls/openssl"]
+openssl = ["tls-openssl", "ntex-tls/openssl", "ntex-connect/openssl"]
 
 # rustls support
-rustls = ["tls-rustls", "webpki-roots", "ntex-tls/rustls"]
+rustls = ["tls-rustls", "webpki-roots", "ntex-tls/rustls", "ntex-connect/rustls"]
 
 # enable compressison support
 compress = ["flate2", "brotli2"]
@@ -39,16 +39,17 @@ cookie = ["coo-kie", "coo-kie/percent-encode"]
 url = ["url-pkg"]
 
 # tokio runtime
-tokio = ["ntex-rt/tokio"]
+tokio = ["ntex-rt/tokio", "ntex-connect/tokio"]
 
 # glommio runtime
-glommio = ["ntex-rt/glommio", "ntex-glommio"]
+glommio = ["ntex-rt/glommio", "ntex-glommio", "ntex-connect/glommio"]
 
 # async-std runtime
-async-std = ["ntex-rt/async-std", "ntex-async-std"]
+async-std = ["ntex-rt/async-std", "ntex-async-std", "ntex-connect/async-std"]
 
 [dependencies]
 ntex-codec = "0.6.2"
+ntex-connect = "0.1.0"
 ntex-http = "0.1.0"
 ntex-router = "0.5.1"
 ntex-service = "0.3.1"

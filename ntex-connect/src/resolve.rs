@@ -1,8 +1,10 @@
 use std::{fmt, future::Future, io, marker, net, pin::Pin, task::Context, task::Poll};
 
-use super::{Address, Connect, ConnectError};
-use crate::service::{Service, ServiceFactory};
-use crate::util::{Either, Ready};
+use ntex_rt::spawn_blocking;
+use ntex_service::{Service, ServiceFactory};
+use ntex_util::future::{Either, Ready};
+
+use crate::{Address, Connect, ConnectError};
 
 /// DNS Resolver Service
 pub struct Resolver<T>(marker::PhantomData<T>);
@@ -41,9 +43,8 @@ impl<T: Address> Resolver<T> {
                     format!("{}:{}", req.host(), req.port())
                 };
 
-                let fut = crate::rt::spawn_blocking(move || {
-                    net::ToSocketAddrs::to_socket_addrs(&host)
-                });
+                let fut =
+                    spawn_blocking(move || net::ToSocketAddrs::to_socket_addrs(&host));
 
                 match fut.await {
                     Ok(Ok(ips)) => {
@@ -134,9 +135,9 @@ impl<T: Address> Service<Connect<T>> for Resolver<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::lazy;
+    use ntex_util::future::lazy;
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn resolver() {
         let resolver = Resolver::default().clone();
         assert!(format!("{:?}", resolver).contains("Resolver"));

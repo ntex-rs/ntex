@@ -1,6 +1,8 @@
 # Changes
 
-## [0.5.19] - 2022-xx-xx
+## [0.5.19] - 2022-06-23
+
+* connect: move to separate crate
 
 * http: move basic types to separeate crate
 

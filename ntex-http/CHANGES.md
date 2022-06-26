@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.0] - 2022-xx-xx
+## [0.1.0] - 2022-06-20
 
 * impl TryFrom<&str> for Value
 

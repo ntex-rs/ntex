@@ -34,6 +34,7 @@ fn test_get_u16() {
     assert_eq!(0x5421, buf.get_u16_le());
 }
 
+#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn test_get_u16_buffer_underflow() {

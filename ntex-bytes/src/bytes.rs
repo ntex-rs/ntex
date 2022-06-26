@@ -1622,6 +1622,63 @@ impl BufMut for BytesMut {
     }
 }
 
+impl bytes::buf::Buf for BytesMut {
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    #[inline]
+    fn chunk(&self) -> &[u8] {
+        self.inner.as_ref()
+    }
+
+    #[inline]
+    fn advance(&mut self, cnt: usize) {
+        Buf::advance(self, cnt)
+    }
+}
+
+unsafe impl bytes::buf::BufMut for BytesMut {
+    #[inline]
+    fn remaining_mut(&self) -> usize {
+        BufMut::remaining_mut(self)
+    }
+
+    #[inline]
+    unsafe fn advance_mut(&mut self, cnt: usize) {
+        BufMut::advance_mut(self, cnt)
+    }
+
+    #[inline]
+    fn chunk_mut(&mut self) -> &mut bytes::buf::UninitSlice {
+        let len = self.len();
+        unsafe {
+            // This will never panic as `len` can never become invalid
+            let ptr = &mut self.inner.as_raw()[len..];
+            bytes::buf::UninitSlice::from_raw_parts_mut(
+                ptr.as_mut_ptr(),
+                self.capacity() - len,
+            )
+        }
+    }
+
+    #[inline]
+    fn put_slice(&mut self, src: &[u8]) {
+        BufMut::put_slice(self, src)
+    }
+
+    #[inline]
+    fn put_u8(&mut self, n: u8) {
+        BufMut::put_u8(self, n)
+    }
+
+    #[inline]
+    fn put_i8(&mut self, n: i8) {
+        BufMut::put_i8(self, n)
+    }
+}
+
 impl AsRef<[u8]> for BytesMut {
     #[inline]
     fn as_ref(&self) -> &[u8] {
