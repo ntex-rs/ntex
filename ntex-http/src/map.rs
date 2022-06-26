@@ -1,3 +1,4 @@
+use core::iter::FromIterator;
 use std::collections::{self, hash_map, hash_map::Entry};
 use std::convert::TryFrom;
 
@@ -60,7 +61,56 @@ impl Value {
     }
 }
 
+pub struct ValueIntoIter {
+    value: Value,
+}
+
+impl Iterator for ValueIntoIter {
+    type Item = HeaderValue;
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.value {
+            Value::One(_) => {
+                let val = std::mem::replace(&mut self.value, Value::Multi(Vec::new()));
+                match val {
+                    Value::One(val) => Some(val),
+                    _ => unreachable!(),
+                }
+            }
+            Value::Multi(vec) => vec.pop(),
+        }
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self.value {
+            Value::One(_) => (1, None),
+            Value::Multi(ref v) => v.iter().size_hint(),
+        }
+    }
+}
+
+impl IntoIterator for Value {
+    type Item = HeaderValue;
+    type IntoIter = ValueIntoIter;
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        ValueIntoIter { value: self }
+    }
+}
+
+impl Extend<HeaderValue> for Value {
+    #[inline]
+    fn extend<T>(&mut self, iter: T)
+    where
+        T: IntoIterator<Item = HeaderValue>,
+    {
+        let mut iter = iter.into_iter();
+        while let Some(h) = iter.next() {
+            self.append(h);
+        }
+    }
+}
+
 impl Default for HeaderMap {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
@@ -307,6 +357,71 @@ impl<'a> AsName for &'a String {
     }
 }
 
+impl<N: std::fmt::Display, V> FromIterator<(N, V)> for HeaderMap
+where
+    HeaderName: TryFrom<N>,
+    Value: TryFrom<V>,
+{
+    #[inline]
+    fn from_iter<T: IntoIterator<Item = (N, V)>>(iter: T) -> Self {
+        let map = iter
+            .into_iter()
+            .filter_map(|(n, v)| {
+                let name = format!("{}", n);
+                match (HeaderName::try_from(n), Value::try_from(v)) {
+                    (Ok(n), Ok(v)) => Some((n, v)),
+                    (Ok(n), Err(_)) => {
+                        log::warn!("failed to parse `{}` header value", n);
+                        None
+                    }
+                    (Err(_), Ok(_)) => {
+                        log::warn!("invalid HTTP header name: {}", name);
+                        None
+                    }
+                    (Err(_), Err(_)) => {
+                        log::warn!("invalid HTTP header name `{}` and value", name);
+                        None
+                    }
+                }
+            })
+            .fold(HashMap::default(), |mut map: HashMap<_, Value>, (n, v)| {
+                match map.entry(n) {
+                    Entry::Occupied(mut oc) => oc.get_mut().extend(v),
+                    Entry::Vacant(va) => {
+                        let _ = va.insert(v);
+                    }
+                }
+                map
+            });
+        HeaderMap { inner: map }
+    }
+}
+
+impl FromIterator<HeaderValue> for Value {
+    fn from_iter<T: IntoIterator<Item = HeaderValue>>(iter: T) -> Self {
+        let mut iter = iter.into_iter();
+        let value = iter.next().map(|h| Value::One(h));
+        let mut value = match value {
+            Some(v) => v,
+            _ => Value::One(HeaderValue::from_static("")),
+        };
+        value.extend(iter);
+        value
+    }
+}
+
+impl TryFrom<&str> for Value {
+    type Error = crate::header::InvalidHeaderValue;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Ok(value
+            .split(',')
+            .filter(|v| !v.is_empty())
+            .map(|v| v.trim())
+            .filter_map(|v| HeaderValue::from_str(v).ok())
+            .collect::<Value>())
+    }
+}
+
 pub struct GetAll<'a> {
     idx: usize,
     item: Option<&'a Value>,
@@ -378,7 +493,6 @@ impl<'a> Iter<'a> {
 
 impl<'a> Iterator for Iter<'a> {
     type Item = (&'a HeaderName, &'a HeaderValue);
-
     #[inline]
     fn next(&mut self) -> Option<(&'a HeaderName, &'a HeaderValue)> {
         if let Some(ref mut item) = self.current {
@@ -409,6 +523,33 @@ impl<'a> Iterator for Iter<'a> {
 mod tests {
     use super::*;
     use crate::header::CONTENT_TYPE;
+
+    #[test]
+    fn test_from_iter() {
+        let vec = vec![
+            ("Connection", "keep-alive"),
+            ("Accept", "text/html"),
+            (
+                "Accept",
+                "*/*, application/xhtml+xml, application/xml;q=0.9, image/webp,",
+            ),
+        ];
+        let map = HeaderMap::from_iter(vec);
+        assert_eq!(
+            map.get("Connection"),
+            Some(&HeaderValue::from_static("keep-alive"))
+        );
+        assert_eq!(
+            map.get_all("Accept").collect::<Vec<&HeaderValue>>(),
+            vec![
+                &HeaderValue::from_static("image/webp"),
+                &HeaderValue::from_static("text/html"),
+                &HeaderValue::from_static("application/xml;q=0.9"),
+                &HeaderValue::from_static("*/*"),
+                &HeaderValue::from_static("application/xhtml+xml"),
+            ]
+        )
+    }
 
     #[test]
     fn test_basics() {
