@@ -79,6 +79,7 @@ where
     /// By default client timeout is set to 3 seconds.
     pub fn client_timeout(mut self, timeout: Seconds) -> Self {
         self.client_timeout = timeout.into();
+        self.h2config.client_timeout(timeout);
         self
     }
 
@@ -105,6 +106,15 @@ where
     pub fn ssl_handshake_timeout(mut self, timeout: Seconds) -> Self {
         self.handshake_timeout = timeout.into();
         self.h2config.handshake_timeout(timeout);
+        self
+    }
+
+    /// Configure http2 connection settings
+    pub fn configure_http2<O, R>(self, f: O) -> Self
+    where
+        O: FnOnce(&h2::Config) -> R,
+    {
+        let _ = f(&self.h2config);
         self
     }
 

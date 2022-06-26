@@ -3,7 +3,7 @@ use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time, time::Duration};
 use ntex_h2::{self as h2};
 
 use crate::http::{Request, Response};
-use crate::time::{now, sleep, Millis, Seconds, Sleep};
+use crate::time::{sleep, Millis, Seconds};
 use crate::{io::IoRef, service::boxed::BoxService, util::BytesMut};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -137,24 +137,6 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
     pub(super) fn keep_alive_enabled(&self) -> bool {
         self.ka_enabled
     }
-
-    /// Return keep-alive timer Sleep is configured.
-    pub(super) fn keep_alive_timer(&self) -> Option<Sleep> {
-        if self.keep_alive != Duration::ZERO {
-            Some(sleep(self.keep_alive))
-        } else {
-            None
-        }
-    }
-
-    /// Keep-alive expire time
-    pub(super) fn keep_alive_expire(&self) -> Option<time::Instant> {
-        if self.keep_alive != Duration::ZERO {
-            Some(now() + self.keep_alive)
-        } else {
-            None
-        }
-    }
 }
 
 const DATE_VALUE_LENGTH_HDR: usize = 39;
@@ -215,11 +197,6 @@ impl DateService {
                 s.0.current.set(false);
             });
         }
-    }
-
-    pub(super) fn now(&self) -> time::Instant {
-        self.check_date();
-        self.0.current_time.get()
     }
 
     pub(super) fn set_date<F: FnMut(&[u8])>(&self, mut f: F) {

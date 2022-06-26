@@ -219,7 +219,7 @@ where
     let ioref = io.get_ref();
 
     let _ = server::handle_one(
-        io.into(),
+        io,
         h2config,
         ControlService::new(),
         PublishService::new(ioref, config),
@@ -392,9 +392,9 @@ where
                 }
             };
 
-            let mut head = res.head_mut();
+            let head = res.head_mut();
             let mut size = body.size();
-            prepare_response(&cfg.timer, &mut head, &mut size);
+            prepare_response(&cfg.timer, head, &mut size);
 
             log::debug!("Received service response: {:?} payload: {:?}", head, size);
 

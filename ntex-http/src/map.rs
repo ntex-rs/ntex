@@ -102,8 +102,7 @@ impl Extend<HeaderValue> for Value {
     where
         T: IntoIterator<Item = HeaderValue>,
     {
-        let mut iter = iter.into_iter();
-        while let Some(h) = iter.next() {
+        for h in iter.into_iter() {
             self.append(h);
         }
     }
@@ -363,6 +362,7 @@ where
     Value: TryFrom<V>,
 {
     #[inline]
+    #[allow(clippy::mutable_key_type)]
     fn from_iter<T: IntoIterator<Item = (N, V)>>(iter: T) -> Self {
         let map = iter
             .into_iter()
@@ -400,7 +400,7 @@ where
 impl FromIterator<HeaderValue> for Value {
     fn from_iter<T: IntoIterator<Item = HeaderValue>>(iter: T) -> Self {
         let mut iter = iter.into_iter();
-        let value = iter.next().map(|h| Value::One(h));
+        let value = iter.next().map(Value::One);
         let mut value = match value {
             Some(v) => v,
             _ => Value::One(HeaderValue::from_static("")),
