@@ -15,6 +15,8 @@ pub mod error {
     pub use http::header::{InvalidHeaderName, InvalidHeaderValue};
     pub use http::method::InvalidMethod;
     pub use http::status::InvalidStatusCode;
+    pub use http::uri::InvalidUri;
+    pub use http::Error;
 }
 
 /// Convert http::HeaderMap to a HeaderMap

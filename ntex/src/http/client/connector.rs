@@ -74,6 +74,9 @@ impl Connector {
             let _ = ssl
                 .set_alpn_protos(b"\x02h2\x08http/1.1")
                 .map_err(|e| error!("Cannot set ALPN protocol: {:?}", e));
+
+            ssl.set_verify(tls_openssl::ssl::SslVerifyMode::NONE);
+
             conn.openssl(ssl.build())
         }
         #[cfg(all(not(feature = "openssl"), feature = "rustls"))]

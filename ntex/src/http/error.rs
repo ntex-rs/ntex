@@ -1,7 +1,8 @@
 //! Http related errors
-use std::{fmt, io, io::Write, str::Utf8Error, string::FromUtf8Error};
+use std::{error, fmt, io, io::Write, str::Utf8Error, string::FromUtf8Error};
 
 use http::{header, uri::InvalidUri, StatusCode};
+use ntex_h2::{self as h2};
 
 // re-export for convinience
 pub use crate::channel::Canceled;
@@ -129,7 +130,7 @@ pub enum PayloadError {
     UnknownLength,
     /// Http2 payload error
     #[error("{0}")]
-    Http2Payload(#[from] h2::Error),
+    Http2Payload(#[from] h2::StreamError),
     /// Parse error
     #[error("Parse error: {0}")]
     Parse(#[from] ParseError),
@@ -172,7 +173,7 @@ pub enum DispatchError {
 
     /// Http/2 error
     #[error("{0}")]
-    H2(#[from] h2::Error),
+    H2(#[from] H2Error),
 
     /// The first request did not complete within the specified timeout.
     #[error("The first request did not complete within the specified timeout")]
@@ -207,6 +208,23 @@ impl From<io::Error> for DispatchError {
     fn from(err: io::Error) -> Self {
         DispatchError::PeerGone(Some(err))
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+/// A set of errors that can occur during dispatching http2 requests
+pub enum H2Error {
+    /// Operation error
+    #[error("Operation error: {0}")]
+    Operation(#[from] h2::OperationError),
+    /// Pseudo headers error
+    #[error("Missing pseudo header: {0}")]
+    MissingPseudo(&'static str),
+    /// Uri parsing error
+    #[error("Uri: {0}")]
+    Uri(#[from] InvalidUri),
+    /// Body stream error
+    #[error("{0}")]
+    Stream(#[from] Box<dyn error::Error>),
 }
 
 /// A set of error that can occure during parsing content type

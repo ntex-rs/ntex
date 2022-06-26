@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.20] - 2022-06-xx
+
+* http: replace h2 crate with ntex-h2
+
 ## [0.5.19] - 2022-06-23
 
 * connect: move to separate crate

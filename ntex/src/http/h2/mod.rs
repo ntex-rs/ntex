@@ -1,46 +1,8 @@
 //! HTTP/2 implementation
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use h2::RecvStream;
-
-mod dispatcher;
+mod payload;
 mod service;
 
-pub use self::dispatcher::Dispatcher;
+pub use self::payload::Payload;
 pub use self::service::H2Service;
-use crate::{http::error::PayloadError, util::Bytes, util::Stream};
 
-/// H2 receive stream
-#[derive(Debug)]
-pub struct Payload {
-    pl: RecvStream,
-}
-
-impl Payload {
-    pub(crate) fn new(pl: RecvStream) -> Self {
-        Self { pl }
-    }
-}
-
-impl Stream for Payload {
-    type Item = Result<Bytes, PayloadError>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        match Pin::new(&mut this.pl).poll_data(cx) {
-            Poll::Ready(Some(Ok(chunk))) => {
-                let len = chunk.len();
-                if let Err(err) = this.pl.flow_control().release_capacity(len) {
-                    Poll::Ready(Some(Err(err.into())))
-                } else {
-                    Poll::Ready(Some(Ok(Bytes::copy_from_slice(&chunk[..]))))
-                }
-            }
-            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err.into()))),
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => Poll::Ready(None),
-        }
-    }
-}
+pub(in crate::http) use self::service::handle;

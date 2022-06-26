@@ -1,5 +1,7 @@
 use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time, time::Duration};
 
+use ntex_h2::{self as h2};
+
 use crate::http::{Request, Response};
 use crate::time::{now, sleep, Millis, Seconds, Sleep};
 use crate::{io::IoRef, service::boxed::BoxService, util::BytesMut};
@@ -47,6 +49,7 @@ pub(super) struct Inner {
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
     pub(super) ssl_handshake_timeout: Millis,
+    pub(super) h2config: h2::Config,
 }
 
 impl Clone for ServiceConfig {
@@ -62,6 +65,7 @@ impl Default for ServiceConfig {
             Millis(1_000),
             Seconds::ONE,
             Millis(5_000),
+            h2::Config::server(),
         )
     }
 }
@@ -73,6 +77,7 @@ impl ServiceConfig {
         client_timeout: Millis,
         client_disconnect: Seconds,
         ssl_handshake_timeout: Millis,
+        h2config: h2::Config,
     ) -> ServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (Millis::from(val), true),
@@ -87,6 +92,7 @@ impl ServiceConfig {
             client_timeout,
             client_disconnect,
             ssl_handshake_timeout,
+            h2config,
             timer: DateService::new(),
         }))
     }

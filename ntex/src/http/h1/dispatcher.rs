@@ -713,6 +713,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::{cell::Cell, io, sync::Arc};
 
+    use ntex_h2::Config;
     use rand::Rng;
 
     use super::*;
@@ -743,6 +744,7 @@ mod tests {
             Millis(1_000),
             Seconds::ZERO,
             Millis(5_000),
+            Config::server(),
         );
         Dispatcher::new(
             nio::Io::new(stream),
@@ -796,6 +798,7 @@ mod tests {
             Millis(1_000),
             Seconds::ZERO,
             Millis(5_000),
+            Config::server(),
         );
         let mut h1 = Dispatcher::<_, _, _, _, UpgradeHandler<Base>>::new(
             nio::Io::new(server),

@@ -1,9 +1,7 @@
-use std::{fmt, mem, pin::Pin, task::Context, task::Poll};
+use std::{fmt, io, mem, pin::Pin, task::Context, task::Poll};
 
-use h2::RecvStream;
-
-use super::{error::PayloadError, h1, h2 as h2d};
-use crate::util::{poll_fn, Bytes, Stream};
+use super::{error::PayloadError, h1, h2};
+use crate::util::{poll_fn, ready, Bytes, Stream};
 
 /// Type represent boxed payload
 pub type PayloadStream = Pin<Box<dyn Stream<Item = Result<Bytes, PayloadError>>>>;
@@ -12,7 +10,8 @@ pub type PayloadStream = Pin<Box<dyn Stream<Item = Result<Bytes, PayloadError>>>
 pub enum Payload {
     None,
     H1(h1::Payload),
-    H2(h2d::Payload),
+    H2(h2::Payload),
+    H2T(::h2::RecvStream),
     Stream(PayloadStream),
 }
 
@@ -28,15 +27,15 @@ impl From<h1::Payload> for Payload {
     }
 }
 
-impl From<h2d::Payload> for Payload {
-    fn from(v: h2d::Payload) -> Self {
+impl From<h2::Payload> for Payload {
+    fn from(v: h2::Payload) -> Self {
         Payload::H2(v)
     }
 }
 
-impl From<RecvStream> for Payload {
-    fn from(v: RecvStream) -> Self {
-        Payload::H2(h2d::Payload::new(v))
+impl From<::h2::RecvStream> for Payload {
+    fn from(v: ::h2::RecvStream) -> Self {
+        Payload::H2T(v)
     }
 }
 
@@ -52,6 +51,7 @@ impl fmt::Debug for Payload {
             Payload::None => write!(f, "Payload::None"),
             Payload::H1(ref pl) => write!(f, "Payload::H1({:?})", pl),
             Payload::H2(ref pl) => write!(f, "Payload::H2({:?})", pl),
+            Payload::H2T(ref pl) => write!(f, "Payload::H2T({:?})", pl),
             Payload::Stream(_) => write!(f, "Payload::Stream(..)"),
         }
     }
@@ -88,7 +88,24 @@ impl Payload {
         match self {
             Payload::None => Poll::Ready(None),
             Payload::H1(ref mut pl) => pl.readany(cx),
-            Payload::H2(ref mut pl) => Pin::new(pl).poll_next(cx),
+            Payload::H2(ref mut pl) => pl.poll_read(cx),
+            Payload::H2T(ref mut pl) => match ready!(Pin::new(&mut *pl).poll_data(cx)) {
+                Some(Ok(chunk)) => {
+                    if let Err(e) = pl.flow_control().release_capacity(chunk.len()) {
+                        Poll::Ready(Some(Err(PayloadError::Io(io::Error::new(
+                            io::ErrorKind::Other,
+                            e,
+                        )))))
+                    } else {
+                        Poll::Ready(Some(Ok(Bytes::copy_from_slice(&chunk[..]))))
+                    }
+                }
+                Some(Err(e)) => Poll::Ready(Some(Err(PayloadError::Io(io::Error::new(
+                    io::ErrorKind::Other,
+                    e,
+                ))))),
+                None => Poll::Ready(None),
+            },
             Payload::Stream(ref mut pl) => Pin::new(pl).poll_next(cx),
         }
     }

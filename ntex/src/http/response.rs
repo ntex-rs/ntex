@@ -205,17 +205,6 @@ impl<B> Response<B> {
     }
 
     /// Set a body and return previous body value
-    pub(crate) fn replace_body<B2>(self, body: B2) -> (Response<B2>, ResponseBody<B>) {
-        (
-            Response {
-                head: self.head,
-                body: ResponseBody::Body(body),
-            },
-            self.body,
-        )
-    }
-
-    /// Set a body and return previous body value
     pub fn map_body<F, B2>(mut self, f: F) -> Response<B2>
     where
         F: FnOnce(&mut ResponseHead, ResponseBody<B>) -> ResponseBody<B2>,
