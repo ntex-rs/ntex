@@ -163,7 +163,8 @@ impl InternalServiceFactory for ConfiguredService {
 
             let mut services = mem::take(&mut rt.0.borrow_mut().services);
             // TODO: Proper error handling here
-            for f in mem::take(&mut rt.0.borrow_mut().onstart).into_iter() {
+            let onstart = mem::take(&mut rt.0.borrow_mut().onstart);
+            for f in onstart.into_iter() {
                 f.await;
             }
             let mut res = vec![];

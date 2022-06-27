@@ -49,10 +49,6 @@ pub enum ConnectError {
     #[error("No dns records found for the input")]
     NoRecords,
 
-    /// Http2 error
-    #[error("{0}")]
-    H2(#[from] h2::Error),
-
     /// Connecting took too long
     #[error("Timeout out while establishing connection")]
     Timeout,
@@ -117,7 +113,7 @@ pub enum SendRequestError {
     Http(#[from] HttpError),
     /// Http2 error
     #[error("Http2 error {0}")]
-    H2(#[from] h2::Error),
+    H2(#[from] ntex_h2::OperationError),
     /// Response took too long
     #[error("Timeout out while waiting for response")]
     Timeout,

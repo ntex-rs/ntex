@@ -1,5 +1,7 @@
 use std::{error::Error, fmt, marker::PhantomData};
 
+use ntex_h2::{self as h2};
+
 use crate::http::body::MessageBody;
 use crate::http::config::{KeepAlive, OnRequest, ServiceConfig};
 use crate::http::error::ResponseError;
@@ -24,6 +26,7 @@ pub struct HttpServiceBuilder<F, S, X = ExpectHandler, U = UpgradeHandler<F>> {
     expect: X,
     upgrade: Option<U>,
     on_request: Option<OnRequest>,
+    h2config: h2::Config,
     _t: PhantomData<(F, S)>,
 }
 
@@ -38,6 +41,7 @@ impl<F, S> HttpServiceBuilder<F, S, ExpectHandler, UpgradeHandler<F>> {
             expect: ExpectHandler,
             upgrade: None,
             on_request: None,
+            h2config: h2::Config::server(),
             _t: PhantomData,
         }
     }
@@ -75,6 +79,7 @@ where
     /// By default client timeout is set to 3 seconds.
     pub fn client_timeout(mut self, timeout: Seconds) -> Self {
         self.client_timeout = timeout.into();
+        self.h2config.client_timeout(timeout);
         self
     }
 
@@ -88,6 +93,7 @@ where
     /// By default disconnect timeout is set to 3 seconds.
     pub fn disconnect_timeout(mut self, timeout: Seconds) -> Self {
         self.client_disconnect = timeout;
+        self.h2config.disconnect_timeout(timeout);
         self
     }
 
@@ -99,6 +105,17 @@ where
     /// By default handshake timeout is set to 5 seconds.
     pub fn ssl_handshake_timeout(mut self, timeout: Seconds) -> Self {
         self.handshake_timeout = timeout.into();
+        self.h2config.handshake_timeout(timeout);
+        self
+    }
+
+    #[doc(hidden)]
+    /// Configure http2 connection settings
+    pub fn configure_http2<O, R>(self, f: O) -> Self
+    where
+        O: FnOnce(&h2::Config) -> R,
+    {
+        let _ = f(&self.h2config);
         self
     }
 
@@ -121,6 +138,7 @@ where
             expect: expect.into_factory(),
             upgrade: self.upgrade,
             on_request: self.on_request,
+            h2config: self.h2config,
             _t: PhantomData,
         }
     }
@@ -144,6 +162,7 @@ where
             expect: self.expect,
             upgrade: Some(upgrade.into_factory()),
             on_request: self.on_request,
+            h2config: self.h2config,
             _t: PhantomData,
         }
     }
@@ -174,6 +193,7 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
+            self.h2config,
         );
         H1Service::with_config(cfg, service.into_factory())
             .expect(self.expect)
@@ -196,6 +216,7 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
+            self.h2config,
         );
 
         H2Service::with_config(cfg, service.into_factory())
@@ -217,6 +238,7 @@ where
             self.client_timeout,
             self.client_disconnect,
             self.handshake_timeout,
+            self.h2config,
         );
         HttpService::with_config(cfg, service.into_factory())
             .expect(self.expect)

@@ -19,12 +19,12 @@ async fn handle_request(mut req: Request) -> Result<Response, io::Error> {
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
-    env::set_var("RUST_LOG", "echo=info");
+    env::set_var("RUST_LOG", "trace");
     env_logger::init();
 
     Server::build()
         .bind("echo", "127.0.0.1:8080", |_| {
-            HttpService::build().finish(handle_request)
+            HttpService::build().h2(handle_request)
         })?
         .run()
         .await

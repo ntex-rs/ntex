@@ -308,6 +308,7 @@ async fn test_h2_head_binary() {
     assert!(bytes.is_empty());
 }
 
+/// Server must send content-length, but no payload
 #[ntex::test]
 async fn test_h2_head_binary2() {
     let srv = test_server(move || {

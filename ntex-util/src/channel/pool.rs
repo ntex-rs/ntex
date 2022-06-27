@@ -1,6 +1,6 @@
 //! A one-shot pool, futures-aware channel.
 use slab::Slab;
-use std::{future::Future, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::{cell::Cell, Canceled};
 use crate::task::LocalWaker;
@@ -16,6 +16,14 @@ pub type OneshotsPool<T> = Pool<T>;
 
 /// Futures-aware, pool of one-shot's.
 pub struct Pool<T>(Cell<Slab<Inner<T>>>);
+
+impl<T> fmt::Debug for Pool<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Pool")
+            .field("size", &self.0.get_ref().len())
+            .finish()
+    }
+}
 
 bitflags::bitflags! {
     struct Flags: u8 {

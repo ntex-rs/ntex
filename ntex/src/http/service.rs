@@ -1,12 +1,9 @@
 use std::task::{Context, Poll};
-use std::{cell, error, fmt, future, marker, pin::Pin, rc::Rc};
+use std::{cell, error, fmt, future, future::Future, marker, pin::Pin, rc::Rc};
 
-use h2::server::{self, Handshake};
-
-use crate::io::{types, Filter, Io, IoRef, TokioIoBoxed};
+use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
-use crate::util::Bytes;
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
@@ -14,7 +11,7 @@ use super::config::{DispatcherConfig, KeepAlive, OnRequest, ServiceConfig};
 use super::error::{DispatchError, ResponseError};
 use super::request::Request;
 use super::response::Response;
-use super::{h1, h2::Dispatcher};
+use super::{h1, h2};
 
 /// `ServiceFactory` HTTP1.1/HTTP2 transport implementation
 pub struct HttpService<F, S, B, X = h1::ExpectHandler, U = h1::UpgradeHandler<F>> {
@@ -56,6 +53,7 @@ where
             Millis(5_000),
             Seconds::ONE,
             Millis(5_000),
+            ntex_h2::Config::server(),
         );
 
         HttpService {
@@ -280,9 +278,11 @@ where
                 None
             };
 
+            let h2config = cfg.0.h2config.clone();
             let config = DispatcherConfig::new(cfg, service, expect, upgrade, on_request);
 
             Ok(HttpServiceHandler {
+                h2config,
                 config: Rc::new(config),
                 _t: marker::PhantomData,
             })
@@ -293,6 +293,7 @@ where
 /// `Service` implementation for http transport
 pub struct HttpServiceHandler<F, S, B, X, U> {
     config: Rc<DispatcherConfig<S, X, U>>,
+    h2config: ntex_h2::Config,
     _t: marker::PhantomData<(F, B)>,
 }
 
@@ -376,13 +377,12 @@ where
         );
 
         if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2) {
-            io.set_disconnect_timeout(self.config.client_disconnect.into());
             HttpServiceHandlerResponse {
-                state: ResponseState::H2Handshake {
-                    data: Some((
-                        io.get_ref(),
-                        server::Builder::new().handshake(TokioIoBoxed::from(io)),
+                state: ResponseState::H2 {
+                    fut: Box::pin(h2::handle(
+                        io.into(),
                         self.config.clone(),
+                        self.h2config.clone(),
                     )),
                 },
             }
@@ -436,14 +436,7 @@ pin_project_lite::pin_project! {
         U: 'static,
     {
         H1 { #[pin] fut: h1::Dispatcher<F, S, B, X, U> },
-        H2 { fut: Dispatcher<S, B, X, U> },
-        H2Handshake { data:
-                      Option<(
-                          IoRef,
-                Handshake<TokioIoBoxed, Bytes>,
-                Rc<DispatcherConfig<S, X, U>>,
-            )>,
-        },
+        H2 { fut: Pin<Box<dyn Future<Output = Result<(), DispatchError>>>> },
     }
 }
 
@@ -467,25 +460,6 @@ where
         match this.state.project() {
             StateProject::H1 { fut } => fut.poll(cx),
             StateProject::H2 { ref mut fut } => Pin::new(fut).poll(cx),
-            StateProject::H2Handshake { data } => {
-                let conn = if let Some(ref mut item) = data {
-                    match Pin::new(&mut item.1).poll(cx) {
-                        Poll::Ready(Ok(conn)) => conn,
-                        Poll::Ready(Err(err)) => {
-                            trace!("H2 handshake error: {}", err);
-                            return Poll::Ready(Err(err.into()));
-                        }
-                        Poll::Pending => return Poll::Pending,
-                    }
-                } else {
-                    panic!()
-                };
-                let (io, _, cfg) = data.take().unwrap();
-                self.as_mut().project().state.set(ResponseState::H2 {
-                    fut: Dispatcher::new(io, cfg, conn, None),
-                });
-                self.poll(cx)
-            }
         }
     }
 }

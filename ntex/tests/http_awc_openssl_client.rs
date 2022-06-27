@@ -1,6 +1,5 @@
 #![cfg(feature = "openssl")]
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 
 use tls_openssl::ssl::{
     AlpnError, SslAcceptor, SslConnector, SslFiletype, SslMethod, SslVerifyMode,

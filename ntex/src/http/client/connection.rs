@@ -1,20 +1,15 @@
-use std::{cell::RefCell, fmt, rc::Rc, time};
-
-use h2::client::SendRequest;
+use std::{fmt, time};
 
 use crate::http::body::MessageBody;
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
 use crate::io::{types::HttpProtocol, IoBoxed};
-use crate::util::Bytes;
 
-use super::error::SendRequestError;
-use super::pool::Acquired;
-use super::{h1proto, h2proto};
+use super::{error::SendRequestError, h1proto, h2proto, pool::Acquired};
 
 pub(super) enum ConnectionType {
     H1(IoBoxed),
-    H2(H2Sender),
+    H2(h2proto::H2Client),
 }
 
 impl fmt::Debug for ConnectionType {
@@ -23,32 +18,6 @@ impl fmt::Debug for ConnectionType {
             ConnectionType::H1(_) => write!(f, "http/1"),
             ConnectionType::H2(_) => write!(f, "http/2"),
         }
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct H2Sender(Rc<RefCell<H2SenderInner>>);
-
-struct H2SenderInner {
-    io: SendRequest<Bytes>,
-    closed: bool,
-}
-
-impl H2Sender {
-    pub(super) fn new(io: SendRequest<Bytes>) -> Self {
-        Self(Rc::new(RefCell::new(H2SenderInner { io, closed: false })))
-    }
-
-    pub(super) fn is_closed(&self) -> bool {
-        self.0.borrow().closed
-    }
-
-    pub(super) fn close(&self) {
-        self.0.borrow_mut().closed = true;
-    }
-
-    pub(super) fn get_sender(&self) -> SendRequest<Bytes> {
-        self.0.borrow().io.clone()
     }
 }
 

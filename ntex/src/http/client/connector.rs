@@ -1,12 +1,12 @@
 use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
+use ntex_h2::{self as h2};
+
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
-use crate::http::Uri;
-use crate::io::IoBoxed;
 use crate::service::{apply_fn, boxed, Service};
 use crate::time::{Millis, Seconds};
-use crate::util::timeout::{TimeoutError, TimeoutService};
-use crate::util::{Either, Ready};
+use crate::util::{timeout::TimeoutError, timeout::TimeoutService, Either, Ready};
+use crate::{http::Uri, io::IoBoxed};
 
 use super::connection::Connection;
 use super::error::ConnectError;
@@ -40,6 +40,7 @@ pub struct Connector {
     conn_keep_alive: Duration,
     disconnect_timeout: Millis,
     limit: usize,
+    h2config: h2::Config,
     connector: BoxedConnector,
     ssl_connector: Option<BoxedConnector>,
 }
@@ -64,6 +65,7 @@ impl Connector {
             conn_keep_alive: Duration::from_secs(15),
             disconnect_timeout: Millis(3_000),
             limit: 100,
+            h2config: h2::Config::client(),
         };
 
         #[cfg(feature = "openssl")]
@@ -74,6 +76,9 @@ impl Connector {
             let _ = ssl
                 .set_alpn_protos(b"\x02h2\x08http/1.1")
                 .map_err(|e| error!("Cannot set ALPN protocol: {:?}", e));
+
+            ssl.set_verify(tls_openssl::ssl::SslVerifyMode::NONE);
+
             conn.openssl(ssl.build())
         }
         #[cfg(all(not(feature = "openssl"), feature = "rustls"))]
@@ -174,6 +179,16 @@ impl Connector {
         self
     }
 
+    #[doc(hidden)]
+    /// Configure http2 connection settings
+    pub fn configure_http2<O, R>(self, f: O) -> Self
+    where
+        O: FnOnce(&h2::Config) -> R,
+    {
+        let _ = f(&self.h2config);
+        self
+    }
+
     /// Use custom connector to open un-secured connections.
     pub fn connector<T>(mut self, connector: T) -> Self
     where
@@ -213,6 +228,7 @@ impl Connector {
                 self.conn_keep_alive,
                 self.disconnect_timeout,
                 self.limit,
+                self.h2config.clone(),
             ))
         } else {
             None
@@ -225,6 +241,7 @@ impl Connector {
                 self.conn_keep_alive,
                 self.disconnect_timeout,
                 self.limit,
+                self.h2config.clone(),
             ),
             ssl_pool,
         })
