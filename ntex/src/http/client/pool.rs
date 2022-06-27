@@ -622,6 +622,7 @@ mod tests {
             Duration::from_secs(10),
             Millis::ZERO,
             1,
+            h2::Config::client(),
         )
         .clone();
 
