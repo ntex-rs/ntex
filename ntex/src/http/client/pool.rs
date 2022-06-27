@@ -59,6 +59,7 @@ where
         conn_keep_alive: Duration,
         disconnect_timeout: Millis,
         limit: usize,
+        h2config: h2::Config,
     ) -> Self {
         let connector = Rc::new(connector);
         let waiters = Rc::new(RefCell::new(Waiters {
@@ -70,6 +71,7 @@ where
             conn_keep_alive,
             disconnect_timeout,
             limit,
+            h2config,
             acquired: 0,
             available: HashMap::default(),
             connecting: HashSet::default(),
@@ -186,6 +188,7 @@ pub(super) struct Inner {
     conn_keep_alive: Duration,
     disconnect_timeout: Millis,
     limit: usize,
+    h2config: h2::Config,
     acquired: usize,
     available: HashMap<Key, VecDeque<AvailableConnection>>,
     connecting: HashSet<Key>,
@@ -448,8 +451,10 @@ where
                         "Connection for {:?} is established, start http2 handshake",
                         &this.key.authority
                     );
-                    let connection =
-                        h2::client::ClientConnection::new(io, h2::Config::client());
+                    let connection = h2::client::ClientConnection::new(
+                        io,
+                        this.inner.borrow().h2config.clone(),
+                    );
                     let client = H2Client::new(connection.client());
 
                     let key = this.key.clone();

@@ -109,6 +109,7 @@ where
         self
     }
 
+    #[doc(hidden)]
     /// Configure http2 connection settings
     pub fn configure_http2<O, R>(self, f: O) -> Self
     where
