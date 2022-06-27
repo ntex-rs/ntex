@@ -1,5 +1,5 @@
 //! HTTP/2 implementation
-mod payload;
+pub(super) mod payload;
 mod service;
 
 pub use self::payload::Payload;

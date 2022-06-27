@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.18] - 2022-xx-xx
+
+* Add fmt::Debug impl to channel::Pool
+
 ## [0.1.17] - 2022-05-25
 
 * Allow to reset time::Deadline

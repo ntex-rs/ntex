@@ -95,6 +95,12 @@ impl PayloadSender {
             shared.borrow_mut().feed_data(data, cap)
         }
     }
+
+    pub fn set_stream(&self, stream: h2::Stream) {
+        if let Some(shared) = self.inner.upgrade() {
+            shared.borrow_mut().stream = Some(stream);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -105,6 +111,7 @@ struct Inner {
     items: VecDeque<Bytes>,
     task: LocalWaker,
     io_task: LocalWaker,
+    stream: Option<h2::Stream>,
 }
 
 impl Inner {
@@ -113,6 +120,7 @@ impl Inner {
             cap,
             eof: false,
             err: None,
+            stream: None,
             items: VecDeque::new(),
             task: LocalWaker::new(),
             io_task: LocalWaker::new(),

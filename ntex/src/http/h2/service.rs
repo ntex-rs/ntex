@@ -407,11 +407,16 @@ where
                 loop {
                     match poll_fn(|cx| body.poll_next_chunk(cx)).await {
                         None => {
+                            log::debug!("{:?} closing sending payload", msg.id());
                             msg.stream().send_payload(Bytes::new(), true).await?;
                             break;
                         }
                         Some(Ok(chunk)) => {
-                            println!("Processing chunk: {:?}", chunk.len());
+                            log::debug!(
+                                "{:?} sending data chunk {:?} bytes",
+                                msg.id(),
+                                chunk.len()
+                            );
                             if !chunk.is_empty() {
                                 msg.stream().send_payload(chunk, false).await?;
                             }

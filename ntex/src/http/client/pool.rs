@@ -2,15 +2,16 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
 
-use h2::client::{Builder, Connection as H2Connection, SendRequest};
-use http::uri::Authority;
+use ntex_h2::{self as h2};
 
-use crate::io::{types::HttpProtocol, IoBoxed, TokioIoBoxed};
+use crate::http::uri::Authority;
+use crate::io::{types::HttpProtocol, IoBoxed};
 use crate::time::{now, Millis};
-use crate::util::{ready, Bytes, HashMap, HashSet};
+use crate::util::{ready, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, service::Service, task::LocalWaker};
 
-use super::connection::{Connection, ConnectionType, H2Sender};
+use super::connection::{Connection, ConnectionType};
+use super::h2proto::{H2Client, H2PublishService};
 use super::{error::ConnectError, Connect};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -387,16 +388,9 @@ where
     }
 }
 
-type H2Future = Box<
-    dyn Future<
-        Output = Result<(SendRequest<Bytes>, H2Connection<TokioIoBoxed, Bytes>), h2::Error>,
-    >,
->;
-
 struct OpenConnection<F> {
     key: Key,
     fut: F,
-    h2: Option<Pin<H2Future>>,
     tx: Option<Waiter>,
     guard: Option<OpenGuard>,
     disconnect_timeout: Millis,
@@ -413,7 +407,6 @@ where
         spawn(OpenConnection {
             fut,
             disconnect_timeout,
-            h2: None,
             tx: Some(tx),
             key: key.clone(),
             inner: inner.clone(),
@@ -430,57 +423,6 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().get_mut();
-
-        // handle http2 connection
-        if let Some(ref mut h2) = this.h2 {
-            return match ready!(Pin::new(h2).poll(cx)) {
-                Ok((snd, connection)) => {
-                    // h2 connection is ready
-                    let h2 = H2Sender::new(snd);
-                    let guard = this.guard.take().unwrap().consume();
-                    let conn = Connection::new(
-                        ConnectionType::H2(h2.clone()),
-                        now(),
-                        Some(guard.clone()),
-                    );
-                    if this.tx.take().unwrap().send(Ok(conn)).is_err() {
-                        // waiter is gone, return connection to pool
-                        log::trace!(
-                            "Waiter for {:?} is gone while connecting to host",
-                            &this.key.authority
-                        );
-                    }
-
-                    // put h2 connection to list of available connections
-                    Connection::new(ConnectionType::H2(h2.clone()), now(), Some(guard))
-                        .release(false);
-
-                    let key = this.key.clone();
-                    spawn(async move {
-                        let res = connection.await;
-                        h2.close();
-                        log::trace!(
-                            "Http/2 connection is closed for {:?} with {:?}",
-                            key.authority,
-                            res
-                        );
-                    });
-                    Poll::Ready(())
-                }
-                Err(err) => {
-                    trace!(
-                        "Failed to negotiate h2 connection for {:?} with error {:?}",
-                        &this.key.authority,
-                        err
-                    );
-                    let _ = this.guard.take();
-                    if let Some(rx) = this.tx.take() {
-                        let _ = rx.send(Err(ConnectError::H2(err)));
-                    }
-                    Poll::Ready(())
-                }
-            };
-        }
 
         // open tcp connection
         match ready!(Pin::new(&mut this.fut).poll(cx)) {
@@ -506,9 +448,40 @@ where
                         "Connection for {:?} is established, start http2 handshake",
                         &this.key.authority
                     );
-                    this.h2 =
-                        Some(Box::pin(Builder::new().handshake(TokioIoBoxed::from(io))));
-                    self.poll(cx)
+                    let connection =
+                        h2::client::ClientConnection::new(io, h2::Config::client());
+                    let client = H2Client::new(connection.client());
+
+                    let key = this.key.clone();
+                    let publish = H2PublishService::new(client.clone());
+                    crate::rt::spawn(async move {
+                        let res = connection.start(publish).await;
+                        log::trace!(
+                            "Http/2 connection is closed for {:?} with {:?}",
+                            key.authority,
+                            res
+                        );
+                    });
+
+                    let guard = this.guard.take().unwrap().consume();
+                    let conn = Connection::new(
+                        ConnectionType::H2(client.clone()),
+                        now(),
+                        Some(guard.clone()),
+                    );
+                    if this.tx.take().unwrap().send(Ok(conn)).is_err() {
+                        // waiter is gone, return connection to pool
+                        log::trace!(
+                            "Waiter for {:?} is gone while connecting to host",
+                            &this.key.authority
+                        );
+                    }
+
+                    // put h2 connection to list of available connections
+                    Connection::new(ConnectionType::H2(client), now(), Some(guard))
+                        .release(false);
+
+                    Poll::Ready(())
                 } else {
                     log::trace!(
                         "Connection for {:?} is established, init http1 connection",

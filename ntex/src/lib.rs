@@ -92,8 +92,6 @@ pub mod time {
 pub mod io {
     //! IO streaming utilities.
     pub use ntex_io::*;
-
-    pub use ntex_tokio::TokioIoBoxed;
 }
 
 pub mod testing {
