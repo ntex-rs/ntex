@@ -96,9 +96,9 @@ impl PayloadSender {
         }
     }
 
-    pub fn set_stream(&self, stream: h2::Stream) {
+    pub fn set_stream(&self, stream: Option<h2::Stream>) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.borrow_mut().stream = Some(stream);
+            shared.borrow_mut().stream = stream;
         }
     }
 }

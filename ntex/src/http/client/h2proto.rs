@@ -69,6 +69,7 @@ where
         ),
     };
 
+    // send request
     let stream = client
         .0
         .client
@@ -83,7 +84,9 @@ where
     // send body
     let id = stream.id();
     if eof {
+        let result = client.wait_response(id).await;
         client.set_stream(stream);
+        result
     } else {
         let c = client.clone();
         crate::rt::spawn(async move {
@@ -93,9 +96,8 @@ where
                 c.set_stream(stream);
             }
         });
+        client.wait_response(id).await
     }
-
-    client.wait_response(id).await
 }
 
 async fn send_body<B: MessageBody>(
@@ -147,8 +149,11 @@ impl H2Client {
 
     fn set_stream(&self, stream: h2::Stream) {
         if let Some(info) = self.0.streams.borrow_mut().get_mut(&stream.id()) {
-            if let Some(ref mut sender) = info.payload {
-                sender.set_stream(stream);
+            // response is not received yet
+            if info.tx.is_some() {
+                info.stream = Some(stream);
+            } else if let Some(ref mut sender) = info.payload {
+                sender.set_stream(Some(stream));
             }
         }
     }
@@ -160,6 +165,7 @@ impl H2Client {
         let (tx, rx) = oneshot::channel();
         let info = StreamInfo {
             tx: Some(tx),
+            stream: None,
             payload: None,
         };
         self.0.streams.borrow_mut().insert(id, info);
@@ -181,6 +187,7 @@ struct H2ClientInner {
 
 struct StreamInfo {
     tx: Option<oneshot::Sender<Result<(ResponseHead, Payload), SendRequestError>>>,
+    stream: Option<h2::Stream>,
     payload: Option<payload::PayloadSender>,
 }
 
@@ -243,10 +250,12 @@ impl Service<h2::Message> for H2PublishService {
                 head.version = Version::HTTP_2;
 
                 if let Some(info) = self.0.streams.borrow_mut().get_mut(&msg.id()) {
+                    let stream = info.stream.take();
                     let payload = if !eof {
                         log::debug!("Creating local payload stream for {:?}", msg.id());
                         let (sender, payload) =
                             payload::Payload::create(msg.stream().empty_capacity());
+                        sender.set_stream(stream);
                         info.payload = Some(sender);
                         Payload::H2(payload)
                     } else {
