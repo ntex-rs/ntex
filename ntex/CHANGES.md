@@ -1,6 +1,6 @@
 # Changes
 
-## [0.5.20] - 2022-06-xx
+## [0.5.20] - 2022-06-27
 
 * http: replace h2 crate with ntex-h2
 
