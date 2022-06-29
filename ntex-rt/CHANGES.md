@@ -1,8 +1,10 @@
 # Changes
 
-## [0.4.5] - 2022-06-20
+## [0.4.6] - 2022-06-29
 
 * Fix async-std cannot find function block_on on windows
+
+## [0.4.5] - 2022-06-20
 
 * Add spawn_blocking stub
 
