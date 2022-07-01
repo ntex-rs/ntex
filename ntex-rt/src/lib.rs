@@ -242,7 +242,6 @@ pub use self::tokio::*;
     not(feature = "tokio"),
     not(feature = "glommio"),
     feature = "async-std",
-    target_os = "linux"
 ))]
 pub use self::asyncstd::*;
 
