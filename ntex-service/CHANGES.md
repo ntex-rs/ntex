@@ -1,10 +1,8 @@
 # Changes
 
-## [0.3.3] - 2022-07-07
+## [0.3.2] - 2022-07-07
 
 * Add ?Sized to Rc service #125
-
-## [0.3.2] - 2022-02-10
 
 * Make AndThenFactory::new() public
 
