@@ -138,7 +138,7 @@ where
     Cfg: Clone,
 {
     /// Create new `AndThenFactory` combinator
-    pub(crate) fn new(a: A, b: B) -> Self {
+    pub fn new(a: A, b: B) -> Self {
         Self {
             inner: Rc::new((a, b)),
             _t: PhantomData,
