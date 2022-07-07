@@ -70,15 +70,15 @@ where
     };
 
     // send request
+    let uri = &head.as_ref().uri;
+    let path = uri
+        .path_and_query()
+        .map(|p| ByteString::from(format!("{}", p)))
+        .unwrap_or_else(|| ByteString::from(uri.path()));
     let stream = client
         .0
         .client
-        .send_request(
-            head.as_ref().method.clone(),
-            ByteString::from(format!("{}", head.as_ref().uri)),
-            hdrs,
-            eof,
-        )
+        .send_request(head.as_ref().method.clone(), path, hdrs, eof)
         .await?;
 
     // send body

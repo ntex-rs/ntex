@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.21] - 2022-07-07
+
+* http: fix h2 client, send scheme and authority
+
 ## [0.5.20] - 2022-06-27
 
 * http: replace h2 crate with ntex-h2
