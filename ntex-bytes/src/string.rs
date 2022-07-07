@@ -140,6 +140,23 @@ impl ByteString {
         self.0.trimdown()
     }
 
+    /// Clears the buffer, removing all data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::ByteString;
+    ///
+    /// let mut a = ByteString::from("hello world");
+    /// a.clear();
+    ///
+    /// assert!(a.is_empty());
+    /// ```
+    #[inline]
+    pub fn clear(&mut self) {
+        self.0.clear()
+    }
+
     /// Creates a new `ByteString` from a Bytes.
     ///
     /// # Safety

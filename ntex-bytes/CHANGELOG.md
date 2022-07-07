@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.16] (2022-07-07)
+
+* Add ByteString::clear() method
+
 ## [0.1.15] (2022-06-20)
 
 * Add Buf/BufMut impls
