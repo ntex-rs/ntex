@@ -126,20 +126,27 @@ where
 }
 
 /// `.and_then()` service factory combinator
-pub struct AndThenFactory<A, B> {
+pub struct AndThenFactory<A, B, Req, Cfg> {
     inner: Rc<(A, B)>,
+    _t: PhantomData<fn(Req, Cfg)>,
 }
 
-impl<A, B> AndThenFactory<A, B> {
+impl<A, B, Req, Cfg> AndThenFactory<A, B, Req, Cfg>
+where
+    A: ServiceFactory<Req, Cfg>,
+    B: ServiceFactory<A::Response, Cfg, Error = A::Error, InitError = A::InitError>,
+    Cfg: Clone,
+{
     /// Create new `AndThenFactory` combinator
-    pub fn new(a: A, b: B) -> Self {
+    pub(crate) fn new(a: A, b: B) -> Self {
         Self {
             inner: Rc::new((a, b)),
+            _t: PhantomData,
         }
     }
 }
 
-impl<A, B, Req, Cfg> ServiceFactory<Req, Cfg> for AndThenFactory<A, B>
+impl<A, B, Req, Cfg> ServiceFactory<Req, Cfg> for AndThenFactory<A, B, Req, Cfg>
 where
     A: ServiceFactory<Req, Cfg>,
     B: ServiceFactory<A::Response, Cfg, Error = A::Error, InitError = A::InitError>,
@@ -150,27 +157,28 @@ where
 
     type Service = AndThen<A::Service, B::Service, Req>;
     type InitError = A::InitError;
-    type Future = AndThenFactoryResponse<A, B, Req, Cfg>;
+    type Future = AndThenServiceFactoryResponse<A, B, Req, Cfg>;
 
     fn new_service(&self, cfg: Cfg) -> Self::Future {
         let inner = &*self.inner;
-        AndThenFactoryResponse::new(
+        AndThenServiceFactoryResponse::new(
             inner.0.new_service(cfg.clone()),
             inner.1.new_service(cfg),
         )
     }
 }
 
-impl<A, B> Clone for AndThenFactory<A, B> {
+impl<A, B, Req, Cfg> Clone for AndThenFactory<A, B, Req, Cfg> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            _t: PhantomData,
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct AndThenFactoryResponse<A, B, Req, Cfg>
+    pub struct AndThenServiceFactoryResponse<A, B, Req, Cfg>
     where
         A: ServiceFactory<Req, Cfg>,
         B: ServiceFactory<A::Response, Cfg>,
@@ -185,13 +193,13 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<A, B, Req, Cfg> AndThenFactoryResponse<A, B, Req, Cfg>
+impl<A, B, Req, Cfg> AndThenServiceFactoryResponse<A, B, Req, Cfg>
 where
     A: ServiceFactory<Req, Cfg>,
     B: ServiceFactory<A::Response, Cfg>,
 {
     fn new(fut_a: A::Future, fut_b: B::Future) -> Self {
-        AndThenFactoryResponse {
+        AndThenServiceFactoryResponse {
             fut_a,
             fut_b,
             a: None,
@@ -200,7 +208,7 @@ where
     }
 }
 
-impl<A, B, Req, Cfg> Future for AndThenFactoryResponse<A, B, Req, Cfg>
+impl<A, B, Req, Cfg> Future for AndThenServiceFactoryResponse<A, B, Req, Cfg>
 where
     A: ServiceFactory<Req, Cfg>,
     B: ServiceFactory<A::Response, Cfg, Error = A::Error, InitError = A::InitError>,
