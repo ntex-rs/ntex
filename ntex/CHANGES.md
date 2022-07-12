@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.22] - 2022-07-12
+
+* http: Handle h2 connection disconnect
+
 ## [0.5.21] - 2022-07-07
 
 * http: fix h2 client, send scheme and authority

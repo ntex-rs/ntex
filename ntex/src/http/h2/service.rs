@@ -1,4 +1,4 @@
-use std::{cell::RefCell, task::Context, task::Poll};
+use std::{cell::RefCell, io, task::Context, task::Poll};
 use std::{convert::TryFrom, future::Future, marker::PhantomData, mem, pin::Pin, rc::Rc};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
@@ -349,7 +349,14 @@ where
                 }
                 return Either::Right(Ready::Ok(()));
             }
-            _ => return Either::Right(Ready::Ok(())),
+            h2::MessageKind::Disconnect(err) => {
+                log::debug!("Connection is disconnected {:?}", err);
+                if let Some(mut sender) = self.streams.borrow_mut().remove(&msg.id()) {
+                    sender.set_error(io::Error::new(io::ErrorKind::Other, err).into());
+                }
+                return Either::Right(Ready::Ok(()));
+            }
+            h2::MessageKind::Empty => return Either::Right(Ready::Ok(())),
         };
 
         let cfg = self.config.clone();

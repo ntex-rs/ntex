@@ -298,7 +298,16 @@ impl Service<h2::Message> for H2PublishService {
                     Ready::Err("Cannot find Stream info")
                 }
             }
-            _ => Ready::Ok(()),
+            h2::MessageKind::Disconnect(err) => {
+                log::debug!("Connection is disconnected {:?}", err);
+                if let Some(mut info) = self.0.streams.borrow_mut().remove(&msg.id()) {
+                    if let Some(ref mut pl) = info.payload {
+                        pl.set_error(io::Error::new(io::ErrorKind::Other, err).into());
+                    }
+                }
+                Ready::Ok(())
+            }
+            h2::MessageKind::Empty => Ready::Ok(()),
         }
     }
 }
