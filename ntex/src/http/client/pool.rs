@@ -7,7 +7,7 @@ use ntex_h2::{self as h2};
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
 use crate::time::{now, Millis};
-use crate::util::{ready, HashMap, HashSet};
+use crate::util::{ready, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, service::Service, task::LocalWaker};
 
 use super::connection::{Connection, ConnectionType};
@@ -456,20 +456,19 @@ where
                         "Connection for {:?} is established, start http2 handshake",
                         &this.key.authority
                     );
-                    let connection = h2::client::ClientConnection::new(
+                    let auth = if let Some(auth) = this.uri.authority() {
+                        format!("{}", auth).into()
+                    } else {
+                        ByteString::new()
+                    };
+
+                    let connection = h2::client::ClientConnection::with_params(
                         io,
                         this.inner.borrow().h2config.clone(),
+                        this.uri.scheme() == Some(&Scheme::HTTPS),
+                        auth,
                     );
-                    let mut client = connection.client();
-                    if this.uri.scheme() == Some(&Scheme::HTTPS) {
-                        client.set_scheme(Scheme::HTTPS);
-                    }
-                    if let Some(auth) = this.uri.authority() {
-                        let auth = format!("{}", auth);
-                        client.set_authority(auth.into());
-                    }
-                    let client = H2Client::new(client);
-
+                    let client = H2Client::new(connection.client());
                     let key = this.key.clone();
                     let publish = H2PublishService::new(client.clone());
                     crate::rt::spawn(async move {

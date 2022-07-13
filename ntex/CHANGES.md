@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.23] - 2022-07-13
+
+* http: Use new h2 client api
+
 ## [0.5.22] - 2022-07-12
 
 * http: Handle h2 connection disconnect
