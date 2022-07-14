@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.24] - 2022-07-14
+
+* ws: Do not encode pong into binary message (#130)
+
 ## [0.5.23] - 2022-07-13
 
 * http: Use new h2 client api
