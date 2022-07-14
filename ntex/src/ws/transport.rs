@@ -184,7 +184,7 @@ impl<F: Filter> Filter for WsTransport<F> {
                         .get_write_buf()
                         .unwrap_or_else(|| self.pool.get_write_buf());
                     let _ = self.codec.encode_vec(Message::Pong(msg), &mut b);
-                    self.release_write_buf(b)?;
+                    self.inner.release_write_buf(b)?;
                 }
                 Frame::Pong(_) => (),
                 Frame::Close(_) => {
