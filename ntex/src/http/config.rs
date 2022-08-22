@@ -6,7 +6,7 @@ use crate::http::{Request, Response};
 use crate::time::{sleep, Millis, Seconds};
 use crate::{io::IoRef, service::boxed::BoxService, util::BytesMut};
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting
 pub enum KeepAlive {
     /// Keep alive in seconds

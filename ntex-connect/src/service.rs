@@ -149,6 +149,7 @@ struct TcpConnectorResponse<T> {
     req: Option<T>,
     port: u16,
     addrs: Option<VecDeque<SocketAddr>>,
+    #[allow(clippy::type_complexity)]
     stream: Option<Pin<Box<dyn Future<Output = Result<Io, io::Error>>>>>,
     pool: PoolRef,
 }

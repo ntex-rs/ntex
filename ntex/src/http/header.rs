@@ -8,7 +8,7 @@ pub use ntex_http::header::{AsName, GetAll, Value};
 pub use ntex_http::HeaderMap;
 
 /// Represents supported types of content encodings
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ContentEncoding {
     /// Automatically select encoding based on encoding negotiation
     Auto,

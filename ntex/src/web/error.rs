@@ -78,14 +78,14 @@ where
 }
 
 /// Errors which can occur when attempting to work with `Data` extractor
-#[derive(Error, Debug, PartialEq)]
+#[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DataExtractorError {
     #[error("App data is not configured, to configure use App::data()")]
     NotConfigured,
 }
 
 /// Errors which can occur when attempting to generate resource uri.
-#[derive(Error, Debug, PartialEq)]
+#[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum UrlGenerationError {
     /// Resource not found
     #[error("Resource not found")]

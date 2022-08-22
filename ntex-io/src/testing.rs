@@ -416,7 +416,7 @@ impl Future for ReadTask {
                         Poll::Ready(Ok(n)) => {
                             if n == 0 {
                                 log::trace!("io stream is disconnected");
-                                let _ = this.state.release_read_buf(buf, new_bytes);
+                                this.state.release_read_buf(buf, new_bytes);
                                 this.state.close(None);
                                 return Poll::Ready(());
                             } else {
@@ -428,14 +428,14 @@ impl Future for ReadTask {
                         }
                         Poll::Ready(Err(err)) => {
                             log::trace!("read task failed on io {:?}", err);
-                            let _ = this.state.release_read_buf(buf, new_bytes);
+                            this.state.release_read_buf(buf, new_bytes);
                             this.state.close(Some(err));
                             return Poll::Ready(());
                         }
                     }
                 }
 
-                let _ = this.state.release_read_buf(buf, new_bytes);
+                this.state.release_read_buf(buf, new_bytes);
                 Poll::Pending
             }
             Poll::Pending => Poll::Pending,

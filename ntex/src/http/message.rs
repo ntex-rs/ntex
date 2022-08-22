@@ -8,7 +8,7 @@ use crate::io::{types, IoBoxed, IoRef};
 use crate::util::Extensions;
 
 /// Represents various types of connection
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ConnectionType {
     /// Close connection after response
     Close,

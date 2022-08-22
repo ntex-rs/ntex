@@ -1,6 +1,4 @@
-use std::{
-    cell::Cell, convert::TryFrom, marker::PhantomData, mem::MaybeUninit, task::Poll,
-};
+use std::{cell::Cell, convert::TryFrom, marker::PhantomData, mem, task::Poll};
 
 use http::header::{HeaderName, HeaderValue};
 use http::{header, Method, StatusCode, Uri, Version};
@@ -19,7 +17,7 @@ const MAX_HEADERS: usize = 96;
 /// Incoming messagd decoder
 pub(super) struct MessageDecoder<T: MessageType>(PhantomData<T>);
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 /// Incoming request type
 pub enum PayloadType {
     None,
@@ -48,10 +46,28 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum PayloadLength {
     Payload(PayloadType),
     Upgrade,
     None,
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+const ZERO: PayloadLength = PayloadLength::Payload(PayloadType::Payload(PayloadDecoder {
+    kind: Cell::new(Kind::Length(0)),
+}));
+
+impl PayloadLength {
+    /// Returns true if variant is `None`.
+    fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// Returns true if variant is represents zero-length (not none) payload.
+    fn is_zero(&self) -> bool {
+        self == &ZERO
+    }
 }
 
 pub(super) trait MessageType: Sized {
@@ -66,6 +82,7 @@ pub(super) trait MessageType: Sized {
     fn set_headers(
         &mut self,
         slice: &Bytes,
+        version: Version,
         raw_headers: &[HeaderIndex],
     ) -> Result<PayloadLength, ParseError> {
         let mut ka = None;
@@ -99,9 +116,9 @@ pub(super) trait MessageType: Sized {
                         }
                         Ok(s) => {
                             if let Ok(len) = s.parse::<u64>() {
-                                if len != 0 {
-                                    content_length = Some(len);
-                                }
+                                // accept 0 lengths here and remove them in `decode` after all
+                                // headers have been processed to prevent request smuggling issues
+                                content_length = Some(len);
                             } else {
                                 log::debug!("illegal Content-Length: {:?}", s);
                                 return Err(ParseError::Header);
@@ -117,7 +134,7 @@ pub(super) trait MessageType: Sized {
                         log::debug!("Transfer-Encoding header usage is not allowed");
                         return Err(ParseError::Header);
                     }
-                    header::TRANSFER_ENCODING => {
+                    header::TRANSFER_ENCODING if version == Version::HTTP_11 => {
                         seen_te = true;
                         if let Ok(s) = value.to_str().map(str::trim) {
                             if s.eq_ignore_ascii_case("chunked") && content_length.is_none()
@@ -211,10 +228,10 @@ impl MessageType for Request {
     }
 
     fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, ParseError> {
-        let mut headers: [MaybeUninit<HeaderIndex>; MAX_HEADERS] = uninit_array();
+        let mut headers: [mem::MaybeUninit<HeaderIndex>; MAX_HEADERS] = uninit_array();
 
         let (len, method, uri, ver, headers) = {
-            let mut parsed: [MaybeUninit<httparse::Header<'_>>; MAX_HEADERS] =
+            let mut parsed: [mem::MaybeUninit<httparse::Header<'_>>; MAX_HEADERS] =
                 uninit_array();
 
             let mut req = httparse::Request::new(&mut []);
@@ -251,7 +268,21 @@ impl MessageType for Request {
         let mut msg = Request::new();
 
         // convert headers
-        let length = msg.set_headers(&src.split_to(len).freeze(), headers)?;
+        let mut length = msg.set_headers(&src.split_to(len).freeze(), ver, headers)?;
+
+        // disallow HTTP/1.0 POST requests that do not contain a Content-Length headers
+        // see https://datatracker.ietf.org/doc/html/rfc1945#section-7.2.2
+        if ver == Version::HTTP_10 && method == Method::POST && length.is_none() {
+            debug!("no Content-Length specified for HTTP/1.0 POST request");
+            return Err(ParseError::Header);
+        }
+
+        // Remove CL value if 0 now that all headers and HTTP/1.0 special cases are processed.
+        // Protects against some request smuggling attacks.
+        // See https://github.com/actix/actix-web/issues/2767.
+        if length.is_zero() {
+            length = PayloadLength::None;
+        }
 
         // payload decoder
         let decoder = match length {
@@ -294,10 +325,10 @@ impl MessageType for ResponseHead {
     }
 
     fn decode(src: &mut BytesMut) -> Result<Option<(Self, PayloadType)>, ParseError> {
-        let mut headers: [MaybeUninit<HeaderIndex>; MAX_HEADERS] = uninit_array();
+        let mut headers: [mem::MaybeUninit<HeaderIndex>; MAX_HEADERS] = uninit_array();
 
         let (len, ver, status, headers) = {
-            let mut parsed: [MaybeUninit<httparse::Header<'_>>; MAX_HEADERS] =
+            let mut parsed: [mem::MaybeUninit<httparse::Header<'_>>; MAX_HEADERS] =
                 uninit_array();
 
             let mut res = httparse::Response::new(&mut []);
@@ -337,7 +368,14 @@ impl MessageType for ResponseHead {
         msg.version = ver;
 
         // convert headers
-        let length = msg.set_headers(&src.split_to(len).freeze(), headers)?;
+        let mut length = msg.set_headers(&src.split_to(len).freeze(), ver, headers)?;
+
+        // Remove CL value if 0 now that all headers and HTTP/1.0 special cases are processed.
+        // Protects against some request smuggling attacks.
+        // See https://github.com/actix/actix-web/issues/2767.
+        if length.is_zero() {
+            length = PayloadLength::None;
+        }
 
         // message payload
         let decoder = if let PayloadLength::Payload(pl) = length {
@@ -369,7 +407,7 @@ impl HeaderIndex {
     pub(super) fn record<'a>(
         bytes: &[u8],
         headers: &[httparse::Header<'_>],
-        indices: &'a mut [MaybeUninit<HeaderIndex>],
+        indices: &'a mut [mem::MaybeUninit<HeaderIndex>],
     ) -> &'a [HeaderIndex] {
         let bytes_ptr = bytes.as_ptr() as usize;
 
@@ -393,13 +431,13 @@ impl HeaderIndex {
         //
         // The total initialized items are counted by iterator.
         unsafe {
-            &*(&indices[..init_len] as *const [MaybeUninit<HeaderIndex>]
+            &*(&indices[..init_len] as *const [mem::MaybeUninit<HeaderIndex>]
                 as *const [HeaderIndex])
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Http payload item
 pub enum PayloadItem {
     Chunk(Bytes),
@@ -410,7 +448,7 @@ pub enum PayloadItem {
 ///
 /// If a message body does not include a Transfer-Encoding, it *should*
 /// include a Content-Length header.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadDecoder {
     kind: Cell<Kind>,
 }
@@ -435,7 +473,7 @@ impl PayloadDecoder {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Kind {
     /// A Reader used when a Content-Length header is passed with a positive
     /// integer.
@@ -459,7 +497,7 @@ enum Kind {
     Eof,
 }
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum ChunkedState {
     Size,
     SizeLws,
@@ -693,9 +731,9 @@ impl ChunkedState {
     }
 }
 
-fn uninit_array<T, const LEN: usize>() -> [MaybeUninit<T>; LEN] {
-    // SAFETY: An uninitialized `[MaybeUninit<_>; LEN]` is valid.
-    unsafe { MaybeUninit::uninit().assume_init() }
+fn uninit_array<T, const LEN: usize>() -> [mem::MaybeUninit<T>; LEN] {
+    // SAFETY: An uninitialized `[mem::MaybeUninit<_>; LEN]` is valid.
+    unsafe { mem::MaybeUninit::uninit().assume_init() }
 }
 
 #[cfg(test)]
@@ -785,14 +823,79 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_post() {
-        let mut buf = BytesMut::from("POST /test2 HTTP/1.0\r\n\r\n");
+    fn parse_h10_get() {
+        let mut buf = BytesMut::from(
+            "GET /test1 HTTP/1.0\r\n\
+            \r\n\
+            abc",
+        );
+
+        let reader = MessageDecoder::<Request>::default();
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.version(), Version::HTTP_10);
+        assert_eq!(*req.method(), Method::GET);
+        assert_eq!(req.path(), "/test1");
+
+        let mut buf = BytesMut::from(
+            "GET /test2 HTTP/1.0\r\n\
+            Content-Length: 0\r\n\
+            \r\n",
+        );
+
+        let reader = MessageDecoder::<Request>::default();
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.version(), Version::HTTP_10);
+        assert_eq!(*req.method(), Method::GET);
+        assert_eq!(req.path(), "/test2");
+
+        let mut buf = BytesMut::from(
+            "GET /test3 HTTP/1.0\r\n\
+            Content-Length: 3\r\n\
+            \r\n
+            abc",
+        );
+
+        let reader = MessageDecoder::<Request>::default();
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.version(), Version::HTTP_10);
+        assert_eq!(*req.method(), Method::GET);
+        assert_eq!(req.path(), "/test3");
+    }
+
+    #[test]
+    fn parse_h10_post() {
+        let mut buf = BytesMut::from(
+            "POST /test1 HTTP/1.0\r\n\
+            Content-Length: 3\r\n\
+            \r\n\
+            abc",
+        );
+
+        let reader = MessageDecoder::<Request>::default();
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(req.version(), Version::HTTP_10);
+        assert_eq!(*req.method(), Method::POST);
+        assert_eq!(req.path(), "/test1");
+
+        let mut buf = BytesMut::from(
+            "POST /test2 HTTP/1.0\r\n\
+            Content-Length: 0\r\n\
+            \r\n",
+        );
 
         let reader = MessageDecoder::<Request>::default();
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.version(), Version::HTTP_10);
         assert_eq!(*req.method(), Method::POST);
         assert_eq!(req.path(), "/test2");
+
+        let mut buf = BytesMut::from(
+            "POST /test3 HTTP/1.0\r\n\
+            \r\n",
+        );
+        let reader = MessageDecoder::<Request>::default();
+        let err = reader.decode(&mut buf).unwrap_err();
+        assert!(err.to_string().contains("Header"))
     }
 
     #[test]
@@ -1281,6 +1384,50 @@ mod tests {
              abcd",
         );
         expect_parse_err!(&mut buf);
+
+        let mut buf = BytesMut::from(
+            "GET / HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Content-Length: 0\r\n\
+             Content-Length: 2\r\n\
+             \r\n\
+             ab",
+        );
+        expect_parse_err!(&mut buf);
+    }
+
+    #[test]
+    fn test_transfer_encoding_http10() {
+        // in HTTP/1.0 transfer encoding is ignored and must therefore contain a CL header
+
+        let mut buf = BytesMut::from(
+            "POST / HTTP/1.0\r\n\
+            Host: example.com\r\n\
+            Transfer-Encoding: chunked\r\n\
+            \r\n\
+            3\r\n\
+            aaa\r\n\
+            0\r\n\
+            ",
+        );
+
+        expect_parse_err!(&mut buf);
+    }
+
+    #[test]
+    fn test_content_length_and_te_http10() {
+        // in HTTP/1.0 transfer encoding is simply ignored so it's fine to have both
+
+        let mut buf = BytesMut::from(
+            "GET / HTTP/1.0\r\n\
+            Host: example.com\r\n\
+            Content-Length: 3\r\n\
+            Transfer-Encoding: chunked\r\n\
+            \r\n\
+            000",
+        );
+
+        parse_ready!(&mut buf);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use super::frame::Parser;
 use super::proto::{CloseReason, OpCode};
 
 /// WebSocket message
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     /// Text message
     Text(ByteString),
@@ -25,7 +25,7 @@ pub enum Message {
 }
 
 /// WebSocket frame
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
     /// Text frame, codec does not verify utf8 encoding
     Text(Bytes),
@@ -42,7 +42,7 @@ pub enum Frame {
 }
 
 /// WebSocket continuation item
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     FirstText(Bytes),
     FirstBinary(Bytes),

@@ -228,7 +228,7 @@ pub enum H2Error {
 }
 
 /// A set of error that can occure during parsing content type
-#[derive(thiserror::Error, PartialEq, Debug)]
+#[derive(thiserror::Error, PartialEq, Eq, Debug)]
 pub enum ContentTypeError {
     /// Cannot parse content type
     #[error("Cannot parse content type")]
