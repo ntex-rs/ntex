@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.25] - 2022-08-xx
+
+* http: Fix parsing ambiguity in Transfer-Encoding and Content-Length headers for HTTP/1.0 requests
+
 ## [0.5.24] - 2022-07-14
 
 * ws: Do not encode pong into binary message (#130)
