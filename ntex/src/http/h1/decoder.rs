@@ -437,7 +437,7 @@ impl HeaderIndex {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Http payload item
 pub enum PayloadItem {
     Chunk(Bytes),

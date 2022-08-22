@@ -124,7 +124,7 @@ impl From<Either<io::Error, io::Error>> for WsClientError {
 }
 
 /// Websocket handshake errors
-#[derive(Error, PartialEq, Debug)]
+#[derive(Error, PartialEq, Eq, Debug)]
 pub enum HandshakeError {
     /// Only get method is allowed
     #[error("Method not allowed")]

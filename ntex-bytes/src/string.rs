@@ -17,7 +17,7 @@ impl ByteString {
     /// Get a str slice.
     #[inline]
     pub fn as_str(&self) -> &str {
-        &*self
+        self
     }
 
     /// Get a reference to the underlying bytes.
@@ -185,7 +185,7 @@ impl<T: AsRef<str>> PartialEq<T> for ByteString {
 impl AsRef<str> for ByteString {
     #[inline]
     fn as_ref(&self) -> &str {
-        &*self
+        self
     }
 }
 
@@ -210,7 +210,7 @@ impl ops::Deref for ByteString {
 impl borrow::Borrow<str> for ByteString {
     #[inline]
     fn borrow(&self) -> &str {
-        &*self
+        self
     }
 }
 

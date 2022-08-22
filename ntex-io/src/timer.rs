@@ -80,6 +80,6 @@ pub(crate) fn register(timeout: Duration, io: &IoRef) -> Instant {
 
 pub(crate) fn unregister(expire: Instant, io: &IoRef) {
     TIMER.with(|timer| {
-        let _ = timer.borrow_mut().unregister(expire, io);
+        timer.borrow_mut().unregister(expire, io);
     })
 }

@@ -58,7 +58,7 @@ where
     }
 
     // Content length
-    let _ = match length {
+    match length {
         BodySize::None | BodySize::Stream => (),
         BodySize::Empty => {
             hdrs.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"))

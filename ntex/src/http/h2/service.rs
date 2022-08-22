@@ -458,7 +458,7 @@ fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut Bod
         }
         _ => (),
     }
-    let _ = match size {
+    match size {
         BodySize::None | BodySize::Stream => head.headers.remove(header::CONTENT_LENGTH),
         BodySize::Empty => head
             .headers

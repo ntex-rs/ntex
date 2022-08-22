@@ -4,7 +4,7 @@ use std::{
 
 use crate::util::{Bytes, BytesMut, Stream};
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 /// Body size hint
 pub enum BodySize {
     None,
