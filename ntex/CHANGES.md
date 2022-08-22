@@ -1,6 +1,6 @@
 # Changes
 
-## [0.5.25] - 2022-08-xx
+## [0.5.25] - 2022-08-22
 
 * http: Fix http2 content-length handling
 
