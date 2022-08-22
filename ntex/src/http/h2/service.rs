@@ -6,7 +6,7 @@ use ntex_h2::{self as h2, frame::StreamId, server};
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::config::{DispatcherConfig, ServiceConfig};
 use crate::http::error::{DispatchError, H2Error, ResponseError};
-use crate::http::header::{self, HeaderMap, HeaderValue};
+use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{types, Filter, Io, IoBoxed, IoRef};
@@ -440,8 +440,15 @@ where
     }
 }
 
+#[allow(clippy::declare_interior_mutable_const)]
+const ZERO_CONTENT_LENGTH: HeaderValue = HeaderValue::from_static("0");
+#[allow(clippy::declare_interior_mutable_const)]
+const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
+#[allow(clippy::declare_interior_mutable_const)]
+const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
+
 fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut BodySize) {
-    let mut skip_len = size == &BodySize::Stream;
+    let mut skip_len = size != &BodySize::Stream;
 
     // Content length
     match head.status {
@@ -451,7 +458,6 @@ fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut Bod
         StatusCode::SWITCHING_PROTOCOLS => {
             skip_len = true;
             *size = BodySize::Stream;
-            head.headers.remove(header::CONTENT_LENGTH);
         }
         _ => (),
     }
@@ -459,20 +465,28 @@ fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut Bod
         BodySize::None | BodySize::Stream => (),
         BodySize::Empty => head
             .headers
-            .insert(header::CONTENT_LENGTH, HeaderValue::from_static("0")),
+            .insert(header::CONTENT_LENGTH, ZERO_CONTENT_LENGTH),
         BodySize::Sized(len) => {
-            if !skip_len {
-                head.headers.insert(
-                    header::CONTENT_LENGTH,
-                    HeaderValue::try_from(format!("{}", len)).unwrap(),
-                );
-            }
+            head.headers.insert(
+                header::CONTENT_LENGTH,
+                HeaderValue::try_from(format!("{}", len)).unwrap(),
+            );
         }
     };
 
     // http2 specific1
     head.headers.remove(header::CONNECTION);
     head.headers.remove(header::TRANSFER_ENCODING);
+    head.headers.remove(header::UPGRADE);
+
+    if skip_len {
+        head.headers.remove(header::CONTENT_LENGTH);
+    }
+
+    // omit HTTP/1.x only headers according to:
+    // https://datatracker.ietf.org/doc/html/rfc7540#section-8.1.2.2
+    head.headers.remove(KEEP_ALIVE);
+    head.headers.remove(PROXY_CONNECTION);
 
     // set date header
     if !head.headers.contains_key(header::DATE) {
