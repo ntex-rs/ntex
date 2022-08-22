@@ -448,21 +448,18 @@ const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
 
 fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut BodySize) {
-    let mut skip_len = size != &BodySize::Stream;
-
     // Content length
     match head.status {
         StatusCode::NO_CONTENT | StatusCode::CONTINUE | StatusCode::PROCESSING => {
             *size = BodySize::None
         }
         StatusCode::SWITCHING_PROTOCOLS => {
-            skip_len = true;
             *size = BodySize::Stream;
         }
         _ => (),
     }
     let _ = match size {
-        BodySize::None | BodySize::Stream => (),
+        BodySize::None | BodySize::Stream => head.headers.remove(header::CONTENT_LENGTH),
         BodySize::Empty => head
             .headers
             .insert(header::CONTENT_LENGTH, ZERO_CONTENT_LENGTH),
@@ -478,10 +475,6 @@ fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut Bod
     head.headers.remove(header::CONNECTION);
     head.headers.remove(header::TRANSFER_ENCODING);
     head.headers.remove(header::UPGRADE);
-
-    if skip_len {
-        head.headers.remove(header::CONTENT_LENGTH);
-    }
 
     // omit HTTP/1.x only headers according to:
     // https://datatracker.ietf.org/doc/html/rfc7540#section-8.1.2.2
