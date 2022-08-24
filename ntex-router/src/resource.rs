@@ -675,6 +675,24 @@ mod tests {
 
     #[cfg(feature = "http")]
     #[test]
+    fn test_remove_double_slashes() {
+        use http::Uri;
+        use std::convert::TryFrom;
+
+        let tree = Tree::new(&ResourceDef::new("/user/{id}/test"), 1);
+        let uri = Uri::try_from("/user//2345/test").unwrap();
+        let mut resource = Path::new(uri);
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(resource.get("id").unwrap(), "2345");
+
+        let uri = Uri::try_from("//user//qwe///test").unwrap();
+        let mut resource = Path::new(uri);
+        assert_eq!(tree.find(&mut resource), Some(1));
+        assert_eq!(resource.get("id").unwrap(), "qwe");
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
     fn test_extract_path_decode() {
         use http::Uri;
         use std::convert::TryFrom;

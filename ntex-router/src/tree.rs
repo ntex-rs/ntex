@@ -400,6 +400,10 @@ impl Tree {
             let segment = T::unquote(&path[..idx]);
             let quoted = matches!(segment, Cow::Owned(_));
 
+            if segment.as_ref().is_empty() {
+                continue;
+            }
+
             // check segment match
             let is_match = match key[0] {
                 Segment::Static(ref pattern) => {
