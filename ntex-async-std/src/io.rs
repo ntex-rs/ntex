@@ -85,7 +85,7 @@ impl Future for ReadTask {
                             }
                             Poll::Ready(Err(err)) => {
                                 log::trace!("read task failed on io {:?}", err);
-                                let _ = this.state.release_read_buf(buf, new_bytes);
+                                this.state.release_read_buf(buf, new_bytes);
                                 this.state.close(Some(err));
                                 return Poll::Ready(());
                             }
@@ -444,7 +444,7 @@ mod unixstream {
                                 }
                                 Poll::Ready(Err(err)) => {
                                     log::trace!("read task failed on io {:?}", err);
-                                    let _ = this.state.release_read_buf(buf, new_bytes);
+                                    this.state.release_read_buf(buf, new_bytes);
                                     this.state.close(Some(err));
                                     return Poll::Ready(());
                                 }

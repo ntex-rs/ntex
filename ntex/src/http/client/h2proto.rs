@@ -58,7 +58,7 @@ where
     }
 
     // Content length
-    let _ = match length {
+    match length {
         BodySize::None | BodySize::Stream => (),
         BodySize::Empty => {
             hdrs.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"))
@@ -70,15 +70,15 @@ where
     };
 
     // send request
+    let uri = &head.as_ref().uri;
+    let path = uri
+        .path_and_query()
+        .map(|p| ByteString::from(format!("{}", p)))
+        .unwrap_or_else(|| ByteString::from(uri.path()));
     let stream = client
         .0
         .client
-        .send_request(
-            head.as_ref().method.clone(),
-            ByteString::from(format!("{}", head.as_ref().uri)),
-            hdrs,
-            eof,
-        )
+        .send_request(head.as_ref().method.clone(), path, hdrs, eof)
         .await?;
 
     // send body
@@ -298,7 +298,16 @@ impl Service<h2::Message> for H2PublishService {
                     Ready::Err("Cannot find Stream info")
                 }
             }
-            _ => Ready::Ok(()),
+            h2::MessageKind::Disconnect(err) => {
+                log::debug!("Connection is disconnected {:?}", err);
+                if let Some(mut info) = self.0.streams.borrow_mut().remove(&msg.id()) {
+                    if let Some(ref mut pl) = info.payload {
+                        pl.set_error(io::Error::new(io::ErrorKind::Other, err).into());
+                    }
+                }
+                Ready::Ok(())
+            }
+            h2::MessageKind::Empty => Ready::Ok(()),
         }
     }
 }

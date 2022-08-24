@@ -4,10 +4,10 @@ use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc
 
 use ntex_h2::{self as h2};
 
-use crate::http::uri::Authority;
+use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
 use crate::time::{now, Millis};
-use crate::util::{ready, HashMap, HashSet};
+use crate::util::{ready, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, service::Service, task::LocalWaker};
 
 use super::connection::{Connection, ConnectionType};
@@ -158,8 +158,9 @@ where
                 // open new tcp connection
                 Acquire::Available => {
                     trace!("Connecting to {:?}", req.uri);
+                    let uri = req.uri.clone();
                     let (tx, rx) = waiters.borrow_mut().pool.channel();
-                    OpenConnection::spawn(key, tx, inner, connector.call(req));
+                    OpenConnection::spawn(key, tx, uri, inner, connector.call(req));
 
                     match rx.await {
                         Err(_) => Err(ConnectError::Disconnected(None)),
@@ -372,9 +373,11 @@ where
                         trace!("Connecting to {:?} and wake up waiter", req.uri);
                         cleanup = true;
                         let (connect, tx) = waiters.pop_front().unwrap();
+                        let uri = connect.uri.clone();
                         OpenConnection::spawn(
                             key.clone(),
                             tx,
+                            uri,
                             this.inner.clone(),
                             this.connector.call(connect),
                         );
@@ -394,6 +397,7 @@ where
 struct OpenConnection<F> {
     key: Key,
     fut: F,
+    uri: Uri,
     tx: Option<Waiter>,
     guard: Option<OpenGuard>,
     disconnect_timeout: Millis,
@@ -404,11 +408,12 @@ impl<F> OpenConnection<F>
 where
     F: Future<Output = Result<IoBoxed, ConnectError>> + Unpin + 'static,
 {
-    fn spawn(key: Key, tx: Waiter, inner: Rc<RefCell<Inner>>, fut: F) {
+    fn spawn(key: Key, tx: Waiter, uri: Uri, inner: Rc<RefCell<Inner>>, fut: F) {
         let disconnect_timeout = inner.borrow().disconnect_timeout;
 
         spawn(OpenConnection {
             fut,
+            uri,
             disconnect_timeout,
             tx: Some(tx),
             key: key.clone(),
@@ -451,12 +456,19 @@ where
                         "Connection for {:?} is established, start http2 handshake",
                         &this.key.authority
                     );
-                    let connection = h2::client::ClientConnection::new(
+                    let auth = if let Some(auth) = this.uri.authority() {
+                        format!("{}", auth).into()
+                    } else {
+                        ByteString::new()
+                    };
+
+                    let connection = h2::client::ClientConnection::with_params(
                         io,
                         this.inner.borrow().h2config.clone(),
+                        this.uri.scheme() == Some(&Scheme::HTTPS),
+                        auth,
                     );
                     let client = H2Client::new(connection.client());
-
                     let key = this.key.clone();
                     let publish = H2PublishService::new(client.clone());
                     crate::rt::spawn(async move {

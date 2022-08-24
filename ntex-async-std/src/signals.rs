@@ -8,7 +8,7 @@ thread_local! {
 }
 
 /// Different types of process signals
-#[derive(PartialEq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Signal {
     /// SIGHUP
     Hup,

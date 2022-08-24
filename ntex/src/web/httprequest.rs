@@ -207,7 +207,7 @@ impl HttpRequest {
     /// borrowed.
     #[inline]
     pub fn connection_info(&self) -> Ref<'_, ConnectionInfo> {
-        ConnectionInfo::get(self.head(), &*self.app_config())
+        ConnectionInfo::get(self.head(), self.app_config())
     }
 
     /// App config

@@ -169,7 +169,7 @@ impl<Err> WebRequest<Err> {
     /// Get *ConnectionInfo* for the current request.
     #[inline]
     pub fn connection_info(&self) -> Ref<'_, ConnectionInfo> {
-        ConnectionInfo::get(self.head(), &*self.app_config())
+        ConnectionInfo::get(self.head(), self.app_config())
     }
 
     /// Get a reference to the Path parameters.

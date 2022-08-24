@@ -6,15 +6,19 @@ use super::{Service, ServiceFactory};
 /// error.
 ///
 /// This is created by the `ServiceExt::map_err` method.
-pub struct MapErr<A, F, E> {
+pub struct MapErr<A, R, F, E> {
     service: A,
     f: F,
-    _t: PhantomData<E>,
+    _t: PhantomData<fn(R) -> E>,
 }
 
-impl<A, F, E> MapErr<A, F, E> {
+impl<A, R, F, E> MapErr<A, R, F, E> {
     /// Create new `MapErr` combinator
-    pub(crate) fn new(service: A, f: F) -> Self {
+    pub(crate) fn new(service: A, f: F) -> Self
+    where
+        A: Service<R>,
+        F: Fn(A::Error) -> E,
+    {
         Self {
             service,
             f,
@@ -23,7 +27,7 @@ impl<A, F, E> MapErr<A, F, E> {
     }
 }
 
-impl<A, F, E> Clone for MapErr<A, F, E>
+impl<A, R, F, E> Clone for MapErr<A, R, F, E>
 where
     A: Clone,
     F: Clone,
@@ -38,7 +42,7 @@ where
     }
 }
 
-impl<A, R, F, E> Service<R> for MapErr<A, F, E>
+impl<A, R, F, E> Service<R> for MapErr<A, R, F, E>
 where
     A: Service<R>,
     F: Fn(A::Error) -> E + Clone,
@@ -102,13 +106,21 @@ where
 /// service's error.
 ///
 /// This is created by the `NewServiceExt::map_err` method.
-pub struct MapErrServiceFactory<A, C, F, E> {
+pub struct MapErrServiceFactory<A, R, C, F, E>
+where
+    A: ServiceFactory<R, C>,
+    F: Fn(A::Error) -> E + Clone,
+{
     a: A,
     f: F,
-    e: PhantomData<(C, E)>,
+    e: PhantomData<fn(R, C) -> E>,
 }
 
-impl<A, C, F, E> MapErrServiceFactory<A, C, F, E> {
+impl<A, R, C, F, E> MapErrServiceFactory<A, R, C, F, E>
+where
+    A: ServiceFactory<R, C>,
+    F: Fn(A::Error) -> E + Clone,
+{
     /// Create new `MapErr` new service instance
     pub(crate) fn new(a: A, f: F) -> Self {
         Self {
@@ -119,10 +131,10 @@ impl<A, C, F, E> MapErrServiceFactory<A, C, F, E> {
     }
 }
 
-impl<A, C, F, E> Clone for MapErrServiceFactory<A, C, F, E>
+impl<A, R, C, F, E> Clone for MapErrServiceFactory<A, R, C, F, E>
 where
-    A: Clone,
-    F: Clone,
+    A: ServiceFactory<R, C> + Clone,
+    F: Fn(A::Error) -> E + Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -133,7 +145,7 @@ where
     }
 }
 
-impl<A, R, C, F, E> ServiceFactory<R, C> for MapErrServiceFactory<A, C, F, E>
+impl<A, R, C, F, E> ServiceFactory<R, C> for MapErrServiceFactory<A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
     F: Fn(A::Error) -> E + Clone,
@@ -141,7 +153,7 @@ where
     type Response = A::Response;
     type Error = E;
 
-    type Service = MapErr<A::Service, F, E>;
+    type Service = MapErr<A::Service, R, F, E>;
     type InitError = A::InitError;
     type Future = MapErrServiceFuture<A, R, C, F, E>;
 
@@ -178,7 +190,7 @@ where
     A: ServiceFactory<R, C>,
     F: Fn(A::Error) -> E + Clone,
 {
-    type Output = Result<MapErr<A::Service, F, E>, A::InitError>;
+    type Output = Result<MapErr<A::Service, R, F, E>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();

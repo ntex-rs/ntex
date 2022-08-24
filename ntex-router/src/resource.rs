@@ -302,7 +302,7 @@ impl ResourceDef {
                 ),
             };
 
-            re.push_str(&format!(r"(?P<{}>{})", &escape(name), pat));
+            re = format!(r"{}(?P<{}>{})", re, &escape(name), pat);
 
             elems.push(PathElement::Var(name.to_string()));
 

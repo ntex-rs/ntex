@@ -3,7 +3,7 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens, TokenStreamExt};
 use syn::{AttributeArgs, Ident, NestedMeta, Path};
 
-#[derive(PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MethodType {
     Get,
     Post,

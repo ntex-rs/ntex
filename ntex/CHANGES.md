@@ -1,5 +1,27 @@
 # Changes
 
+## [0.5.25] - 2022-08-22
+
+* http: Fix http2 content-length handling
+
+* http: Fix parsing ambiguity in Transfer-Encoding and Content-Length headers for HTTP/1.0 requests
+
+## [0.5.24] - 2022-07-14
+
+* ws: Do not encode pong into binary message (#130)
+
+## [0.5.23] - 2022-07-13
+
+* http: Use new h2 client api
+
+## [0.5.22] - 2022-07-12
+
+* http: Handle h2 connection disconnect
+
+## [0.5.21] - 2022-07-07
+
+* http: fix h2 client, send scheme and authority
+
 ## [0.5.20] - 2022-06-27
 
 * http: replace h2 crate with ntex-h2

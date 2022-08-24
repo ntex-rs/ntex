@@ -116,7 +116,7 @@ async fn test_chunked_payload() {
     let returned_size = {
         let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
         let _ =
-            stream.write_all(b"POST /test HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n");
+            stream.write_all(b"POST /test HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n");
 
         for chunk_size in chunk_sizes.iter() {
             let mut bytes = Vec::new();
