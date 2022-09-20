@@ -77,12 +77,16 @@ where
     }
 }
 
-/// Errors which can occur when attempting to work with `Data` extractor
+/// Errors which can occur when attempting to work with `State` extractor
 #[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]
-pub enum DataExtractorError {
-    #[error("App data is not configured, to configure use App::data()")]
+pub enum StateExtractorError {
+    #[error("App state is not configured, to configure use App::state()")]
     NotConfigured,
 }
+
+#[deprecated]
+#[doc(hidden)]
+pub type DataExtractorError = StateExtractorError;
 
 /// Errors which can occur when attempting to generate resource uri.
 #[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]

@@ -2,7 +2,7 @@ use std::{ops::Deref, sync::Arc};
 
 use crate::http::Payload;
 use crate::util::{Extensions, Ready};
-use crate::web::error::{DataExtractorError, ErrorRenderer};
+use crate::web::error::{ErrorRenderer, StateExtractorError};
 use crate::web::extract::FromRequest;
 use crate::web::httprequest::HttpRequest;
 
@@ -98,7 +98,7 @@ impl<T> Clone for State<T> {
 }
 
 impl<T: 'static, E: ErrorRenderer> FromRequest<E> for State<T> {
-    type Error = DataExtractorError;
+    type Error = StateExtractorError;
     type Future = Ready<Self, Self::Error>;
 
     #[inline]
@@ -107,11 +107,11 @@ impl<T: 'static, E: ErrorRenderer> FromRequest<E> for State<T> {
             Ready::Ok(st.clone())
         } else {
             log::debug!(
-                "Failed to construct App-level Data extractor. \
+                "Failed to construct App-level State extractor. \
                  Request path: {:?}",
                 req.path()
             );
-            Ready::Err(DataExtractorError::NotConfigured)
+            Ready::Err(StateExtractorError::NotConfigured)
         }
     }
 }

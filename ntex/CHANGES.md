@@ -4,6 +4,8 @@
 
 * server: Add ServerBuilder::configure_async() helper, async version of configure method
 
+* web: Fix incorrect wordin for State extractor #134
+
 ## [0.5.25] - 2022-08-22
 
 * http: Fix http2 content-length handling

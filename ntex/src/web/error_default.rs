@@ -91,8 +91,8 @@ impl<E: WebResponseError<DefaultError>> WebResponseError<DefaultError> for Timeo
     }
 }
 
-/// `InternalServerError` for `DataExtractorError`
-impl WebResponseError<DefaultError> for error::DataExtractorError {}
+/// `InternalServerError` for `StateExtractorError`
+impl WebResponseError<DefaultError> for error::StateExtractorError {}
 
 /// `InternalServerError` for `JsonError`
 impl WebResponseError<DefaultError> for JsonError {}
