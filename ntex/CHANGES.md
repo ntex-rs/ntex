@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.26] - 2022-09-20
+
+* server: Add ServerBuilder::configure_async() helper, async version of configure method
+
 ## [0.5.25] - 2022-08-22
 
 * http: Fix http2 content-length handling

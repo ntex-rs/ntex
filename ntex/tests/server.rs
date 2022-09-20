@@ -187,6 +187,66 @@ fn test_on_worker_start() {
 
 #[test]
 #[cfg(feature = "tokio")]
+fn test_configure_async() {
+    let addr1 = TestServer::unused_addr();
+    let addr2 = TestServer::unused_addr();
+    let addr3 = TestServer::unused_addr();
+    let (tx, rx) = mpsc::channel();
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let h = thread::spawn(move || {
+        let num = num2.clone();
+        let num2 = num2.clone();
+        let sys = ntex::rt::System::new("test");
+        sys.block_on(async move {
+            let srv = Server::build()
+                .disable_signals()
+                .configure_async(move |cfg| {
+                    let num = num.clone();
+                    let lst = net::TcpListener::bind(addr3).unwrap();
+                    cfg.bind("addr1", addr1)
+                        .unwrap()
+                        .bind("addr2", addr2)
+                        .unwrap()
+                        .listen("addr3", lst)
+                        .on_worker_start(move |rt| {
+                            let num = num.clone();
+                            async move {
+                                rt.service("addr1", fn_service(|_| Ready::Ok::<_, ()>(())));
+                                rt.service("addr3", fn_service(|_| Ready::Ok::<_, ()>(())));
+                                let _ = num.fetch_add(1, Relaxed);
+                                Ok::<_, io::Error>(())
+                            }
+                        })
+                        .unwrap();
+                    Ready::Ok::<_, io::Error>(())
+                })
+                .await
+                .unwrap()
+                .on_worker_start(move |_| {
+                    let _ = num2.fetch_add(1, Relaxed);
+                    Ready::Ok::<_, io::Error>(())
+                })
+                .workers(1)
+                .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok::<_, io::Error>(())
+        })
+    });
+    let (_, sys) = rx.recv().unwrap();
+    thread::sleep(time::Duration::from_millis(500));
+
+    assert!(net::TcpStream::connect(addr1).is_ok());
+    assert!(net::TcpStream::connect(addr2).is_ok());
+    assert!(net::TcpStream::connect(addr3).is_ok());
+    assert_eq!(num.load(Relaxed), 2);
+    sys.stop();
+    let _ = h.join();
+}
+
+#[test]
+#[cfg(feature = "tokio")]
 #[cfg(not(target_os = "macos"))]
 #[allow(unreachable_code)]
 fn test_panic_in_worker() {

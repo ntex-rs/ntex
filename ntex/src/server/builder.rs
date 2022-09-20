@@ -168,6 +168,33 @@ impl ServerBuilder {
         Ok(self)
     }
 
+    /// Execute external async configuration as part of the server building
+    /// process.
+    ///
+    /// This function is useful for moving parts of configuration to a
+    /// different module or even library.
+    pub async fn configure_async<F, R>(mut self, f: F) -> io::Result<ServerBuilder>
+    where
+        F: Fn(&mut ServiceConfig) -> R,
+        R: Future<Output = io::Result<()>>,
+    {
+        let mut cfg = ServiceConfig::new(self.threads, self.backlog);
+
+        f(&mut cfg).await?;
+
+        let apply = cfg.apply;
+        let mut srv = ConfiguredService::new(apply);
+        for (name, lst) in cfg.services {
+            let token = self.token.next();
+            srv.stream(token, name.clone(), lst.local_addr()?);
+            self.sockets.push((token, name, Listener::from_tcp(lst)));
+        }
+        self.services.push(Box::new(srv));
+        self.threads = cfg.threads;
+
+        Ok(self)
+    }
+
     /// Register async service configuration function.
     ///
     /// This function get called during worker runtime configuration stage.
