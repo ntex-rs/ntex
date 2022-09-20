@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.27] - 2022-09-20
+
+* server: Fix ServerBuilder::configure_async() helper method
+
 ## [0.5.26] - 2022-09-20
 
 * server: Add ServerBuilder::configure_async() helper, async version of configure method

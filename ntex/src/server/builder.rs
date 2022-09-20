@@ -155,9 +155,9 @@ impl ServerBuilder {
 
         f(&mut cfg)?;
 
-        let apply = cfg.apply;
-        let mut srv = ConfiguredService::new(apply);
-        for (name, lst) in cfg.services {
+        let mut cfg = cfg.0.borrow_mut();
+        let mut srv = ConfiguredService::new(cfg.apply.take().unwrap());
+        for (name, lst) in mem::take(&mut cfg.services) {
             let token = self.token.next();
             srv.stream(token, name.clone(), lst.local_addr()?);
             self.sockets.push((token, name, Listener::from_tcp(lst)));
@@ -175,16 +175,17 @@ impl ServerBuilder {
     /// different module or even library.
     pub async fn configure_async<F, R>(mut self, f: F) -> io::Result<ServerBuilder>
     where
-        F: Fn(&mut ServiceConfig) -> R,
+        F: Fn(ServiceConfig) -> R,
         R: Future<Output = io::Result<()>>,
     {
-        let mut cfg = ServiceConfig::new(self.threads, self.backlog);
+        let cfg = ServiceConfig::new(self.threads, self.backlog);
+        let inner = cfg.0.clone();
 
-        f(&mut cfg).await?;
+        f(cfg).await?;
 
-        let apply = cfg.apply;
-        let mut srv = ConfiguredService::new(apply);
-        for (name, lst) in cfg.services {
+        let mut cfg = inner.borrow_mut();
+        let mut srv = ConfiguredService::new(cfg.apply.take().unwrap());
+        for (name, lst) in mem::take(&mut cfg.services) {
             let token = self.token.next();
             srv.stream(token, name.clone(), lst.local_addr()?);
             self.sockets.push((token, name, Listener::from_tcp(lst)));

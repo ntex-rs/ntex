@@ -39,9 +39,11 @@ impl Config {
     }
 }
 
-pub struct ServiceConfig {
+pub struct ServiceConfig(pub(super) Rc<RefCell<ServiceConfigInner>>);
+
+pub(super) struct ServiceConfigInner {
     pub(super) services: Vec<(String, net::TcpListener)>,
-    pub(super) apply: Box<dyn ServiceRuntimeConfiguration + Send>,
+    pub(super) apply: Option<Box<dyn ServiceRuntimeConfiguration + Send>>,
     pub(super) threads: usize,
     pub(super) backlog: i32,
     applied: bool,
@@ -49,27 +51,27 @@ pub struct ServiceConfig {
 
 impl ServiceConfig {
     pub(super) fn new(threads: usize, backlog: i32) -> Self {
-        ServiceConfig {
+        ServiceConfig(Rc::new(RefCell::new(ServiceConfigInner {
             threads,
             backlog,
             services: Vec::new(),
             applied: false,
-            apply: Box::new(ConfigWrapper {
+            apply: Some(Box::new(ConfigWrapper {
                 f: |_| {
                     not_configured();
                     Ready::Ok::<_, &'static str>(())
                 },
                 _t: PhantomData,
-            }),
-        }
+            })),
+        })))
     }
 
     /// Add new service to the server.
-    pub fn bind<U, N: AsRef<str>>(&mut self, name: N, addr: U) -> io::Result<&mut Self>
+    pub fn bind<U, N: AsRef<str>>(&self, name: N, addr: U) -> io::Result<&Self>
     where
         U: net::ToSocketAddrs,
     {
-        let sockets = bind_addr(addr, self.backlog)?;
+        let sockets = bind_addr(addr, self.0.borrow().backlog)?;
 
         for lst in sockets {
             self.listen(name.as_ref(), lst);
@@ -79,17 +81,20 @@ impl ServiceConfig {
     }
 
     /// Add new service to the server.
-    pub fn listen<N: AsRef<str>>(&mut self, name: N, lst: net::TcpListener) -> &mut Self {
-        if !self.applied {
-            self.apply = Box::new(ConfigWrapper {
-                f: |_| {
-                    not_configured();
-                    Ready::Ok::<_, &'static str>(())
-                },
-                _t: PhantomData,
-            });
+    pub fn listen<N: AsRef<str>>(&self, name: N, lst: net::TcpListener) -> &Self {
+        {
+            let mut inner = self.0.borrow_mut();
+            if !inner.applied {
+                inner.apply = Some(Box::new(ConfigWrapper {
+                    f: |_| {
+                        not_configured();
+                        Ready::Ok::<_, &'static str>(())
+                    },
+                    _t: PhantomData,
+                }));
+            }
+            inner.services.push((name.as_ref().to_string(), lst));
         }
-        self.services.push((name.as_ref().to_string(), lst));
         self
     }
 
@@ -97,14 +102,14 @@ impl ServiceConfig {
     ///
     /// This function get called during worker runtime configuration stage.
     /// It get executed in the worker thread.
-    pub fn on_worker_start<F, R, E>(&mut self, f: F) -> io::Result<()>
+    pub fn on_worker_start<F, R, E>(&self, f: F) -> io::Result<()>
     where
         F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
         R: Future<Output = Result<(), E>> + 'static,
         E: fmt::Display + 'static,
     {
-        self.applied = true;
-        self.apply = Box::new(ConfigWrapper { f, _t: PhantomData });
+        self.0.borrow_mut().applied = true;
+        self.0.borrow_mut().apply = Some(Box::new(ConfigWrapper { f, _t: PhantomData }));
         Ok(())
     }
 }
