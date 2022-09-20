@@ -1,6 +1,8 @@
 # Changes
 
-## [0.4.6] - 2022-06-29
+## [0.4.6] - 2022-09-20
+
+* Add System::block_on() helper method
 
 * Fix async-std cannot find function block_on on windows
 

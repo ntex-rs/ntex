@@ -1,5 +1,7 @@
 use async_channel::Sender;
-use std::{cell::RefCell, io, sync::atomic::AtomicUsize, sync::atomic::Ordering};
+use std::{
+    cell::RefCell, future::Future, io, sync::atomic::AtomicUsize, sync::atomic::Ordering,
+};
 
 use super::arbiter::{Arbiter, SystemCommand};
 use super::builder::{Builder, SystemRunner};
@@ -106,5 +108,15 @@ impl System {
         F: FnOnce() -> io::Result<()> + 'static,
     {
         Builder::new().finish().run(f)
+    }
+
+    /// This function will start async runtime and will finish once the
+    /// provided future completes.
+    pub fn block_on<F, R>(f: F) -> R
+    where
+        F: Future<Output = R> + 'static,
+        R: 'static,
+    {
+        Builder::new().finish().block_on(f)
     }
 }
