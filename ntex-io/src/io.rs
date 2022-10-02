@@ -893,6 +893,7 @@ impl OnDisconnect {
             Poll::Ready(())
         } else if let Some(on_disconnect) = self.inner.on_disconnect.take() {
             on_disconnect[self.token].register(cx.waker());
+            self.inner.on_disconnect.set(Some(on_disconnect));
             Poll::Pending
         } else {
             Poll::Ready(())
