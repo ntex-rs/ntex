@@ -63,14 +63,14 @@ impl Request {
     #[inline]
     /// Http message part of the request
     pub fn head(&self) -> &RequestHead {
-        &*self.head
+        &self.head
     }
 
     #[inline]
     #[doc(hidden)]
     /// Mutable reference to a http message part of the request
     pub fn head_mut(&mut self) -> &mut RequestHead {
-        &mut *self.head
+        &mut self.head
     }
 
     /// Request's uri.

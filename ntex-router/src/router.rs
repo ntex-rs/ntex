@@ -2,7 +2,7 @@ use super::tree::Tree;
 use super::{IntoPattern, Resource, ResourceDef, ResourcePath};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ResourceId(pub(crate) u16);
+pub struct ResourceId(u16);
 
 /// Resource router.
 #[derive(Clone)]

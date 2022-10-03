@@ -164,7 +164,7 @@ where
             match fut.await {
                 Ok(inner) => {
                     let service: BoxedServerService =
-                        Box::new(StreamService::new(inner, cfg.0.pool.get()));
+                        Box::new(StreamService::new(inner, cfg.get_pool_id()));
                     Ok(vec![(token, service)])
                 }
                 Err(_) => Err(()),

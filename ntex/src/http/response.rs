@@ -67,13 +67,13 @@ impl<B> Response<B> {
     #[inline]
     /// Http message part of the response
     pub fn head(&self) -> &ResponseHead {
-        &*self.head
+        &self.head
     }
 
     #[inline]
     /// Mutable reference to a http message part of the response
     pub fn head_mut(&mut self) -> &mut ResponseHead {
-        &mut *self.head
+        &mut self.head
     }
 
     /// Get the response status code

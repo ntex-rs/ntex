@@ -148,7 +148,7 @@ where
         // when decoded, is 16 bytes in length (RFC 6455)
         let mut sec_key: [u8; 16] = [0; 16];
         WyRand::new().fill(&mut sec_key);
-        let key = base64::encode(&sec_key);
+        let key = base64::encode(sec_key);
 
         headers.insert(
             header::SEC_WEBSOCKET_KEY,

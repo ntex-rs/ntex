@@ -177,7 +177,7 @@ impl<F: Filter> Filter for SslFilter<F> {
         };
         let (hw, lw) = self.pool.read_params().unpack();
 
-        let mut new_bytes = if self.handshake.get() { 1 } else { 0 };
+        let mut new_bytes = usize::from(self.handshake.get());
         loop {
             // make sure we've got room
             let remaining = dst.remaining_mut();

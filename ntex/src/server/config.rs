@@ -15,7 +15,7 @@ use super::Token;
 use super::{builder::bind_addr, counter::CounterGuard};
 
 #[derive(Clone)]
-pub struct Config(pub(super) Rc<InnerServiceConfig>);
+pub struct Config(Rc<InnerServiceConfig>);
 
 pub(super) struct InnerServiceConfig {
     pub(super) pool: Cell<PoolId>,
@@ -36,6 +36,10 @@ impl Config {
     pub fn memory_pool(&self, id: PoolId) -> &Self {
         self.0.pool.set(id);
         self
+    }
+
+    pub(super) fn get_pool_id(&self) -> PoolId {
+        self.0.pool.get()
     }
 }
 

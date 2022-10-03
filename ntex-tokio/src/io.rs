@@ -438,11 +438,11 @@ impl AsyncWrite for TokioIoBoxed {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        (*self.as_ref()).0.poll_flush(cx, false)
+        self.as_ref().0.poll_flush(cx, false)
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        (*self.as_ref()).0.poll_shutdown(cx)
+        self.as_ref().0.poll_shutdown(cx)
     }
 }
 

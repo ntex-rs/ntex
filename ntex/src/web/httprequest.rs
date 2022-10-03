@@ -192,7 +192,7 @@ impl HttpRequest {
         name: &str,
     ) -> Result<url_pkg::Url, super::error::UrlGenerationError> {
         const NO_PARAMS: [&str; 0] = [];
-        self.url_for(name, &NO_PARAMS)
+        self.url_for(name, NO_PARAMS)
     }
 
     #[inline]

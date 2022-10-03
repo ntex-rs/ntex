@@ -403,9 +403,8 @@ impl Timer {
                 }
             }
 
-            let adj = if lvl_clk == 0 { 0 } else { 1 };
             clk >>= LVL_CLK_SHIFT;
-            clk += adj;
+            clk += u64::from(lvl_clk != 0);
         }
 
         if next < u64::MAX {

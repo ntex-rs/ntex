@@ -247,7 +247,7 @@ impl ResourceDef {
         let mut end = None;
         let mut tail = false;
         let mut rem = pattern;
-        let start = if pattern.starts_with('/') { 1 } else { 0 };
+        let start = usize::from(pattern.starts_with('/'));
         let mut pattern = &pattern[start..];
         elems.push(PathElement::Str('/'.to_string()));
 
@@ -345,7 +345,7 @@ impl ResourceDef {
         }
 
         loop {
-            let start = if pattern.starts_with('/') { 1 } else { 0 };
+            let start = usize::from(pattern.starts_with('/'));
             let idx = if let Some(idx) = pattern[start..].find(|c| c == '{' || c == '/') {
                 idx + start
             } else {
