@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.9] - 2022-10-03
+
+* Fix on-disconnect never resolving #135
+
 ## [0.1.8] - 2022-02-19
 
 * Add HttpProtocol type from ntex-tls
