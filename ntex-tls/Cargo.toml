@@ -32,7 +32,7 @@ ntex-service = "0.3.1"
 pin-project-lite = "0.2"
 
 # openssl
-tls_openssl = { version="0.10", package = "openssl", optional = true }
+tls_openssl = { version="0.10.42", package = "openssl", optional = true }
 
 # rustls
 tls_rust = { version = "0.20", package = "rustls", optional = true }

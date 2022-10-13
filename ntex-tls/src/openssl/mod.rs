@@ -8,8 +8,10 @@ use std::{
 use ntex_bytes::{BufMut, BytesVec, PoolRef};
 use ntex_io::{types, Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
-use tls_openssl::ssl::{self, SslStream};
+use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
+
+use crate::{PskIdentity, Servername};
 
 mod accept;
 pub use self::accept::{Acceptor, AcceptorService};
@@ -100,6 +102,18 @@ impl<F: Filter> Filter for SslFilter<F> {
                 Some(Box::new(PeerCertChain(
                     cert_chain.iter().map(|c| c.to_owned()).collect(),
                 )))
+            } else {
+                None
+            }
+        } else if id == any::TypeId::of::<Servername>() {
+            if let Some(name) = self.inner.borrow().ssl().servername(NameType::HOST_NAME) {
+                Some(Box::new(Servername(name.to_string())))
+            } else {
+                None
+            }
+        } else if id == any::TypeId::of::<PskIdentity>() {
+            if let Some(psk_id) = self.inner.borrow().ssl().psk_identity() {
+                Some(Box::new(psk_id.to_vec()))
             } else {
                 None
             }
