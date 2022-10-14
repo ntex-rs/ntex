@@ -8,6 +8,7 @@ use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_rust::{ServerConfig, ServerConnection};
 
 use crate::rustls::{IoInner, TlsFilter, Wrapper};
+use crate::Servername;
 
 use super::{PeerCert, PeerCertChain};
 
@@ -48,6 +49,12 @@ impl<F: Filter> Filter for TlsServerFilter<F> {
         } else if id == any::TypeId::of::<PeerCertChain>() {
             if let Some(cert_chain) = self.session.borrow().peer_certificates() {
                 Some(Box::new(PeerCertChain(cert_chain.to_vec())))
+            } else {
+                None
+            }
+        } else if id == any::TypeId::of::<Servername>() {
+            if let Some(name) = self.session.borrow().sni_hostname() {
+                Some(Box::new(Servername(name.to_string())))
             } else {
                 None
             }

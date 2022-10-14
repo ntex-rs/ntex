@@ -28,3 +28,15 @@ static MAX_SSL_ACCEPT: AtomicUsize = AtomicUsize::new(256);
 thread_local! {
     static MAX_SSL_ACCEPT_COUNTER: counter::Counter = counter::Counter::new(MAX_SSL_ACCEPT.load(Ordering::Relaxed));
 }
+
+/// A TLS PSK identity.
+///
+/// Used in conjunction with [`ntex_io::Filter::query`]:
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PskIdentity(pub Vec<u8>);
+
+/// The TLS SNI server name (DNS).
+///
+/// Used in conjunction with [`ntex_io::Filter::query`]:
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Servername(pub String);
