@@ -217,7 +217,10 @@ impl<F: Filter> Filter for SslFilter<F> {
                     io.want_shutdown(None);
                     Ok((dst.len(), new_bytes))
                 }
-                Err(e) => Err(map_to_ioerr(e)),
+                Err(e) => {
+                    log::trace!("SSL Error: {:?}", e);
+                    Err(map_to_ioerr(e))
+                }
             };
             self.release_read_buf(dst);
             return result;

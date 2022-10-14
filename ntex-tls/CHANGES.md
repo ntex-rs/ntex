@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.6] - 2022-10-14
+
+* Allow extracting TLS SNI server name and TLS PSK identity #136
+
 ## [0.1.5] - 2022-02-19
 
 * Fix rustls hangs during handshake #103
