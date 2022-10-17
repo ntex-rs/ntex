@@ -113,7 +113,7 @@ impl<F: Filter> Filter for SslFilter<F> {
             }
         } else if id == any::TypeId::of::<PskIdentity>() {
             if let Some(psk_id) = self.inner.borrow().ssl().psk_identity() {
-                Some(Box::new(psk_id.to_vec()))
+                Some(Box::new(PskIdentity(psk_id.to_vec())))
             } else {
                 None
             }
