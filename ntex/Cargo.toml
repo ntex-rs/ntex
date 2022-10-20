@@ -47,6 +47,9 @@ glommio = ["ntex-rt/glommio", "ntex-glommio", "ntex-connect/glommio"]
 # async-std runtime
 async-std = ["ntex-rt/async-std", "ntex-async-std", "ntex-connect/async-std"]
 
+# getrandom
+getrandom = ["nanorand/getrandom"]
+
 [dependencies]
 ntex-codec = "0.6.2"
 ntex-connect = "0.1.0"
