@@ -753,14 +753,14 @@ struct FilterItem<F> {
 impl<F> FilterItem<F> {
     fn null() -> Self {
         Self {
-            data: [0; 16],
+            data: [0; SEALED_SIZE],
             _t: marker::PhantomData,
         }
     }
 
     fn with_filter(f: Box<F>) -> Self {
         let mut slf = Self {
-            data: [0; 16],
+            data: [0; SEALED_SIZE],
             _t: marker::PhantomData,
         };
 
@@ -774,7 +774,7 @@ impl<F> FilterItem<F> {
 
     fn with_sealed(f: Sealed) -> Self {
         let mut slf = Self {
-            data: [0; 16],
+            data: [0; SEALED_SIZE],
             _t: marker::PhantomData,
         };
 
