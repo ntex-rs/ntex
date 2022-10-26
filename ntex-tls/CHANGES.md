@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.7] - 2022-10-26
+
+* Create the correct PskIdentity type on query #138
+
 ## [0.1.6] - 2022-10-14
 
 * Allow extracting TLS SNI server name and TLS PSK identity #136
