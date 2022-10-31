@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.10] - 2022-10-31
+
+* Fix compilation errors in the openwrt environment #140
+
 ## [0.1.9] - 2022-10-03
 
 * Fix on-disconnect never resolving #135
