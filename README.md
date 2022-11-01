@@ -32,6 +32,11 @@ Starting ntex v0.5 async runtime must be selected as a feature. Available option
 ntex = { version = "0.5", features = ["glommio"] }
 ```
 
+## Advice
+
+Don't use _glommio_, but _tokio_, because there are no examples and no tests using _glommio_ and the support is unfriendly and cocky.
+
+
 ## Documentation & community resources
 
 * [Documentation](https://docs.rs/ntex)
