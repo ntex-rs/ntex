@@ -1,6 +1,10 @@
 # Changes
 
-## [0.1.0] - 2022-06-26
+## [0.1.2] - 2022-11-01
+
+* Re-export http::Error
+
+## [0.1.1] - 2022-06-26
 
 * impl PartialEq for HeaderMap
 
