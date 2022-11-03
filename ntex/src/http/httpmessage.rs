@@ -2,8 +2,8 @@ use std::cell::{Ref, RefMut};
 use std::str;
 
 use encoding_rs::{Encoding, UTF_8};
-use http::header;
 use mime::Mime;
+use ntex_http::header;
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;

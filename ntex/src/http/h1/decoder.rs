@@ -1,7 +1,7 @@
 use std::{cell::Cell, convert::TryFrom, marker::PhantomData, mem, task::Poll};
 
-use http::header::{HeaderName, HeaderValue};
-use http::{header, Method, StatusCode, Uri, Version};
+use ntex_http::header::{HeaderName, HeaderValue};
+use ntex_http::{header, Method, StatusCode, Uri, Version};
 
 use crate::codec::Decoder;
 use crate::http::error::ParseError;
@@ -100,7 +100,7 @@ pub(super) trait MessageType: Sized {
 
                 // Unsafe: httparse check header value for valid utf-8
                 let value = unsafe {
-                    HeaderValue::from_maybe_shared_unchecked(
+                    HeaderValue::from_shared_unchecked(
                         slice.slice(idx.value.0..idx.value.1),
                     )
                 };

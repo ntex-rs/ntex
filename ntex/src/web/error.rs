@@ -3,7 +3,7 @@ use std::{cell::RefCell, fmt, io::Write, marker::PhantomData};
 
 use thiserror::Error;
 
-pub use http::Error as HttpError;
+pub use ntex_http::error::Error as HttpError;
 pub use serde_json::error::Error as JsonError;
 #[cfg(feature = "url")]
 pub use url_pkg::ParseError as UrlParseError;

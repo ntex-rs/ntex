@@ -1,12 +1,12 @@
 //! Http related errors
 use std::{error, fmt, io, io::Write, str::Utf8Error, string::FromUtf8Error};
 
-use http::{header, uri::InvalidUri, StatusCode};
 use ntex_h2::{self as h2};
+use ntex_http::{header, uri::InvalidUri, StatusCode};
 
 // re-export for convinience
 pub use crate::channel::Canceled;
-pub use http::Error as HttpError;
+pub use ntex_http::error::Error as HttpError;
 
 use crate::http::body::Body;
 use crate::http::response::Response;
@@ -277,7 +277,7 @@ impl From<BlockingError<io::Error>> for PayloadError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::{Error as HttpError, StatusCode};
+    use ntex_http::{Error as HttpError, StatusCode};
     use std::io;
 
     #[test]

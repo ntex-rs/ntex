@@ -1,6 +1,6 @@
 [package]
 name = "ntex-http"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Http types for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -19,3 +19,5 @@ path = "src/lib.rs"
 http = "0.2"
 log = "0.4"
 fxhash = "0.2.1"
+itoa = "1.0.4"
+ntex-bytes = "0.1.15"

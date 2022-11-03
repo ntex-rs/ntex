@@ -1,8 +1,8 @@
 //! Various http headers
 
-pub use http::header::{HeaderName, HeaderValue, InvalidHeaderValue};
+pub use ntex_http::header::{HeaderName, HeaderValue, InvalidHeaderValue};
 
-pub use http::header::*;
+pub use ntex_http::header::*;
 #[doc(hidden)]
 pub use ntex_http::header::{AsName, GetAll, Value};
 pub use ntex_http::HeaderMap;

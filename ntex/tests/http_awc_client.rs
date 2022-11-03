@@ -12,7 +12,7 @@ use rand::Rng;
 use ntex::http::client::error::{JsonPayloadError, SendRequestError};
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
-use ntex::http::{header, HttpMessage, HttpService};
+use ntex::http::{header, HttpMessage, HttpService, Method};
 use ntex::service::{map_config, pipeline_factory};
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
@@ -586,7 +586,7 @@ async fn test_client_brotli_encoding_large_random() {
 
     // frozen request
     let request = srv.post("/").timeout(Seconds(30)).freeze().unwrap();
-    assert_eq!(request.get_method(), http::Method::POST);
+    assert_eq!(request.get_method(), Method::POST);
     assert_eq!(request.get_uri(), srv.url("/").as_str());
     let mut response = request.send_body(data.clone()).await.unwrap();
     assert!(response.status().is_success());

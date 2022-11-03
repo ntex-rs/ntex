@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.28] - 2022-11-03
+
+* Drop direct http crate dependency
+
 ## [0.5.27] - 2022-09-20
 
 * server: Fix ServerBuilder::configure_async() helper method

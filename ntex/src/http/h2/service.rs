@@ -486,7 +486,7 @@ fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut Bod
         let mut bytes = BytesMut::with_capacity(29);
         timer.set_date(|date| bytes.extend_from_slice(date));
         head.headers.insert(header::DATE, unsafe {
-            HeaderValue::from_maybe_shared_unchecked(bytes.freeze())
+            HeaderValue::from_shared_unchecked(bytes.freeze())
         });
     }
 }

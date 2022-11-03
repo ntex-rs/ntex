@@ -1,8 +1,8 @@
-use core::iter::FromIterator;
 use std::collections::{self, hash_map, hash_map::Entry};
 use std::convert::TryFrom;
+use std::iter::FromIterator;
 
-use http::header::{HeaderName, HeaderValue};
+use crate::{HeaderName, HeaderValue};
 
 type HashMap<K, V> = collections::HashMap<K, V, fxhash::FxBuildHasher>;
 

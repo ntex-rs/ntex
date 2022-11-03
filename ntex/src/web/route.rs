@@ -108,7 +108,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// # fn main() {
     /// App::new().service(web::resource("/path").route(
     ///     web::route()
-    ///         .method(http::Method::CONNECT)
+    ///         .method(ntex::http::Method::CONNECT)
     ///         .guard(guard::Header("content-type", "text/plain"))
     ///         .to(|req: HttpRequest| async { HttpResponse::Ok() }))
     /// );

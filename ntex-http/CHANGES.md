@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.3] - 2022-11-03
+
+* Use custom `Error` and `HeaderValue` types
+
 ## [0.1.2] - 2022-11-01
 
 * Re-export http::Error

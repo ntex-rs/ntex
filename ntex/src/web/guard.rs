@@ -28,7 +28,7 @@
 #![allow(non_snake_case)]
 use std::convert::TryFrom;
 
-use crate::http::{header, RequestHead, Uri};
+use crate::http::{header, Method, RequestHead, Uri};
 
 /// Trait defines resource guards. Guards are used for route selection.
 ///
@@ -178,7 +178,7 @@ impl Guard for NotGuard {
 
 /// Http method guard
 #[doc(hidden)]
-pub struct MethodGuard(http::Method);
+pub struct MethodGuard(Method);
 
 impl Guard for MethodGuard {
     fn check(&self, request: &RequestHead) -> bool {
@@ -188,51 +188,51 @@ impl Guard for MethodGuard {
 
 /// Guard to match *GET* http method
 pub fn Get() -> MethodGuard {
-    MethodGuard(http::Method::GET)
+    MethodGuard(Method::GET)
 }
 
 /// Predicate to match *POST* http method
 pub fn Post() -> MethodGuard {
-    MethodGuard(http::Method::POST)
+    MethodGuard(Method::POST)
 }
 
 /// Predicate to match *PUT* http method
 pub fn Put() -> MethodGuard {
-    MethodGuard(http::Method::PUT)
+    MethodGuard(Method::PUT)
 }
 
 /// Predicate to match *DELETE* http method
 pub fn Delete() -> MethodGuard {
-    MethodGuard(http::Method::DELETE)
+    MethodGuard(Method::DELETE)
 }
 
 /// Predicate to match *HEAD* http method
 pub fn Head() -> MethodGuard {
-    MethodGuard(http::Method::HEAD)
+    MethodGuard(Method::HEAD)
 }
 
 /// Predicate to match *OPTIONS* http method
 pub fn Options() -> MethodGuard {
-    MethodGuard(http::Method::OPTIONS)
+    MethodGuard(Method::OPTIONS)
 }
 
 /// Predicate to match *CONNECT* http method
 pub fn Connect() -> MethodGuard {
-    MethodGuard(http::Method::CONNECT)
+    MethodGuard(Method::CONNECT)
 }
 
 /// Predicate to match *PATCH* http method
 pub fn Patch() -> MethodGuard {
-    MethodGuard(http::Method::PATCH)
+    MethodGuard(Method::PATCH)
 }
 
 /// Predicate to match *TRACE* http method
 pub fn Trace() -> MethodGuard {
-    MethodGuard(http::Method::TRACE)
+    MethodGuard(Method::TRACE)
 }
 
 /// Predicate to match specified http method
-pub fn Method(method: http::Method) -> MethodGuard {
+pub fn Method(method: Method) -> MethodGuard {
     MethodGuard(method)
 }
 

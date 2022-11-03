@@ -44,7 +44,7 @@ async fn test_h1_v2() {
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 
-    let mut response = srv.request(http::Method::POST, "/").send().await.unwrap();
+    let mut response = srv.request(Method::POST, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response

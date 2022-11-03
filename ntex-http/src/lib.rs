@@ -1,30 +1,26 @@
 //! Http protocol support.
-// pub mod body;
+pub mod error;
 mod map;
+mod value;
 
+pub use self::error::Error;
 pub use self::map::HeaderMap;
+pub use self::value::HeaderValue;
+
 #[doc(hidden)]
 pub use self::map::Value;
 
 // re-exports
-pub use http::header::{HeaderName, HeaderValue};
+pub use http::header::HeaderName;
 pub use http::uri::{self, Uri};
 pub use http::{Method, StatusCode, Version};
-
-pub mod error {
-    pub use http::header::{InvalidHeaderName, InvalidHeaderValue};
-    pub use http::method::InvalidMethod;
-    pub use http::status::InvalidStatusCode;
-    pub use http::uri::InvalidUri;
-    pub use http::Error;
-}
 
 /// Convert http::HeaderMap to a HeaderMap
 impl From<http::HeaderMap> for HeaderMap {
     fn from(map: http::HeaderMap) -> HeaderMap {
         let mut new_map = HeaderMap::with_capacity(map.capacity());
         for (h, v) in map.iter() {
-            new_map.append(h.clone(), v.clone());
+            new_map.append(h.clone(), HeaderValue::from(v));
         }
         new_map
     }
@@ -35,10 +31,9 @@ pub mod header {
 
     #[doc(hidden)]
     pub use crate::map::{AsName, Either, GetAll, Iter, Value};
+    pub use crate::value::{HeaderValue, InvalidHeaderValue, ToStrError};
 
-    pub use http::header::{
-        HeaderName, HeaderValue, InvalidHeaderName, InvalidHeaderValue,
-    };
+    pub use http::header::{HeaderName, InvalidHeaderName};
     pub use http::header::{
         ACCEPT, ACCEPT_CHARSET, ACCEPT_ENCODING, ACCEPT_LANGUAGE, ACCEPT_RANGES,
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,

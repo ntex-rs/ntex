@@ -4,10 +4,10 @@ use futures_util::future::{self, FutureExt};
 use futures_util::stream::{once, StreamExt};
 use regex::Regex;
 
-use ntex::http::header::{HeaderName, HeaderValue};
+use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
 use ntex::http::{
-    body, header, HttpService, KeepAlive, Method, Request, Response, StatusCode,
+    body, HttpService, KeepAlive, Method, Request, Response, StatusCode, Version,
 };
 use ntex::time::{sleep, Millis, Seconds};
 use ntex::{service::fn_service, util::Bytes, util::Ready, web::error};
@@ -38,7 +38,7 @@ async fn test_h1_2() {
             .disconnect_timeout(Seconds(1))
             .finish(|req: Request| {
                 assert!(req.peer_addr().is_some());
-                assert_eq!(req.version(), http::Version::HTTP_11);
+                assert_eq!(req.version(), Version::HTTP_11);
                 Ready::Ok::<_, io::Error>(Response::Ok().finish())
             })
     });
@@ -336,17 +336,17 @@ async fn test_content_length() {
 
     {
         for i in 0..4 {
-            let req = srv.request(http::Method::GET, &format!("/{}", i));
+            let req = srv.request(Method::GET, &format!("/{}", i));
             let response = req.send().await.unwrap();
             assert_eq!(response.headers().get(&header), None);
 
-            let req = srv.request(http::Method::HEAD, &format!("/{}", i));
+            let req = srv.request(Method::HEAD, &format!("/{}", i));
             let response = req.send().await.unwrap();
             assert_eq!(response.headers().get(&header), None);
         }
 
         for i in 4..6 {
-            let req = srv.request(http::Method::GET, &format!("/{}", i));
+            let req = srv.request(Method::GET, &format!("/{}", i));
             let response = req.send().await.unwrap();
             assert_eq!(response.headers().get(&header), Some(&value));
         }
@@ -434,14 +434,11 @@ async fn test_h1_head_empty() {
         HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
     });
 
-    let response = srv.request(http::Method::HEAD, "/").send().await.unwrap();
+    let response = srv.request(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
-        let len = response
-            .headers()
-            .get(http::header::CONTENT_LENGTH)
-            .unwrap();
+        let len = response.headers().get(header::CONTENT_LENGTH).unwrap();
         assert_eq!(format!("{}", STR.len()), len.to_str().unwrap());
     }
 
@@ -460,14 +457,11 @@ async fn test_h1_head_binary() {
         })
     });
 
-    let response = srv.request(http::Method::HEAD, "/").send().await.unwrap();
+    let response = srv.request(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
-        let len = response
-            .headers()
-            .get(http::header::CONTENT_LENGTH)
-            .unwrap();
+        let len = response.headers().get(header::CONTENT_LENGTH).unwrap();
         assert_eq!(format!("{}", STR.len()), len.to_str().unwrap());
     }
 
@@ -482,14 +476,11 @@ async fn test_h1_head_binary2() {
         HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
     });
 
-    let response = srv.request(http::Method::HEAD, "/").send().await.unwrap();
+    let response = srv.request(Method::HEAD, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
-        let len = response
-            .headers()
-            .get(http::header::CONTENT_LENGTH)
-            .unwrap();
+        let len = response.headers().get(header::CONTENT_LENGTH).unwrap();
         assert_eq!(format!("{}", STR.len()), len.to_str().unwrap());
     }
 }
@@ -578,14 +569,14 @@ async fn test_h1_response_http_error_handling() {
             let broken_header = Bytes::from_static(b"\0\0\0");
             Ready::Ok::<_, io::Error>(
                 Response::Ok()
-                    .header(http::header::CONTENT_TYPE, &broken_header[..])
+                    .header(header::CONTENT_TYPE, &broken_header[..])
                     .body(STR),
             )
         }))
     });
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
-    assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
     // read response
     let bytes = srv.load_body(response).await.unwrap();
@@ -604,7 +595,7 @@ async fn test_h1_service_error() {
     });
 
     let response = srv.request(Method::GET, "/").send().await.unwrap();
-    assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     // read response
     let bytes = srv.load_body(response).await.unwrap();

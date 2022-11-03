@@ -195,7 +195,7 @@ pub fn head<Err: ErrorRenderer>() -> Route<Err> {
 /// Create *route* and add method guard.
 ///
 /// ```rust
-/// use ntex::web;
+/// use ntex::{http, web};
 ///
 /// let app = web::App::new().service(
 ///     web::resource("/{project_id}")
