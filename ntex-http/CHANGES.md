@@ -1,5 +1,13 @@
 # Changes
 
+## [0.1.5] - 2022-11-04
+
+* Add ByteString to HeaderValue conversion support
+
+## [0.1.4] - 2022-11-03
+
+* Add http::Error to Error
+
 ## [0.1.3] - 2022-11-03
 
 * Use custom `Error` and `HeaderValue` types

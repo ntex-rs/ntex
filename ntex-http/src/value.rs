@@ -6,7 +6,7 @@
 )]
 use std::{cmp, convert::TryFrom, error::Error, fmt, str, str::FromStr};
 
-use ntex_bytes::Bytes;
+use ntex_bytes::{ByteString, Bytes};
 
 /// Represents an HTTP header field value.
 ///
@@ -430,6 +430,14 @@ impl<'a> TryFrom<&'a String> for HeaderValue {
     }
 }
 
+impl<'a> TryFrom<&'a ByteString> for HeaderValue {
+    type Error = InvalidHeaderValue;
+    #[inline]
+    fn try_from(s: &'a ByteString) -> Result<Self, Self::Error> {
+        Self::from_shared(s.as_bytes().clone())
+    }
+}
+
 impl<'a> TryFrom<&'a [u8]> for HeaderValue {
     type Error = InvalidHeaderValue;
 
@@ -445,6 +453,14 @@ impl TryFrom<String> for HeaderValue {
     #[inline]
     fn try_from(s: String) -> Result<Self, Self::Error> {
         HeaderValue::from_shared(s)
+    }
+}
+
+impl TryFrom<ByteString> for HeaderValue {
+    type Error = InvalidHeaderValue;
+    #[inline]
+    fn try_from(s: ByteString) -> Result<Self, Self::Error> {
+        Self::from_shared(s.into_bytes())
     }
 }
 
