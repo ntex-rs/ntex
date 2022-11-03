@@ -32,6 +32,7 @@ enum ErrorKind {
     UriParts(uri::InvalidUriParts),
     HeaderName(header::InvalidHeaderName),
     HeaderValue(InvalidHeaderValue),
+    Http(http::Error),
 }
 
 impl fmt::Debug for Error {
@@ -66,6 +67,7 @@ impl Error {
             UriParts(ref e) => e,
             HeaderName(ref e) => e,
             HeaderValue(ref e) => e,
+            Http(ref e) => e,
         }
     }
 }
@@ -122,6 +124,14 @@ impl From<InvalidHeaderValue> for Error {
     fn from(err: InvalidHeaderValue) -> Error {
         Error {
             inner: ErrorKind::HeaderValue(err),
+        }
+    }
+}
+
+impl From<http::Error> for Error {
+    fn from(err: http::Error) -> Error {
+        Error {
+            inner: ErrorKind::Http(err),
         }
     }
 }

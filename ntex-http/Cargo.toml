@@ -1,6 +1,6 @@
 [package]
 name = "ntex-http"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Http types for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
