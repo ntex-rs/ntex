@@ -113,7 +113,7 @@ impl<F, T> WsClient<F, T> {
             Some(password) => format!("{}:{}", username, password),
             None => format!("{}:", username),
         };
-        self.set_header(AUTHORIZATION, format!("Basic {}", base64::encode(&auth)))
+        self.set_header(AUTHORIZATION, format!("Basic {}", base64::encode(auth)))
     }
 
     /// Set HTTP bearer authentication header
@@ -464,7 +464,7 @@ where
             Some(password) => format!("{}:{}", username, password),
             None => format!("{}:", username),
         };
-        self.header(AUTHORIZATION, format!("Basic {}", base64::encode(&auth)))
+        self.header(AUTHORIZATION, format!("Basic {}", base64::encode(auth)))
     }
 
     /// Set HTTP bearer authentication header

@@ -391,7 +391,7 @@ impl Timer {
             };
 
             if pos >= 0 {
-                let tmp = (clk + pos as u64) << lvl_shift(lvl as u64);
+                let tmp = (clk + pos as u64) << lvl_shift(lvl);
                 if tmp < next {
                     next = tmp
                 }

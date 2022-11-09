@@ -403,7 +403,7 @@ impl TransferEncoding {
 
                     buf.extend_from_slice(&msg[..len as usize]);
 
-                    remaining -= len as u64;
+                    remaining -= len;
                     self.kind = TransferEncodingKind::Length(remaining);
                     Ok(remaining == 0)
                 } else {
