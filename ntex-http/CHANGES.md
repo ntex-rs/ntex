@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.6] - 2022-11-10
+
+* Add From<HeaderValue> impl for Value, allow to use HeaderMap::collect()
+
 ## [0.1.5] - 2022-11-04
 
 * Add ByteString to HeaderValue conversion support

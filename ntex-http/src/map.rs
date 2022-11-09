@@ -1,6 +1,5 @@
 use std::collections::{self, hash_map, hash_map::Entry};
-use std::convert::TryFrom;
-use std::iter::FromIterator;
+use std::{convert::TryFrom, iter::FromIterator};
 
 use crate::{HeaderName, HeaderValue};
 
@@ -105,6 +104,20 @@ impl Extend<HeaderValue> for Value {
         for h in iter.into_iter() {
             self.append(h);
         }
+    }
+}
+
+impl From<HeaderValue> for Value {
+    #[inline]
+    fn from(hdr: HeaderValue) -> Value {
+        Value::One(hdr)
+    }
+}
+
+impl<'a> From<&'a HeaderValue> for Value {
+    #[inline]
+    fn from(hdr: &'a HeaderValue) -> Value {
+        Value::One(hdr.clone())
     }
 }
 
