@@ -1,3 +1,4 @@
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::{io, io::Read, io::Write, net};
 
 use futures_util::future::{self, FutureExt};
@@ -9,7 +10,7 @@ use ntex::http::test::server as test_server;
 use ntex::http::{
     body, HttpService, KeepAlive, Method, Request, Response, StatusCode, Version,
 };
-use ntex::time::{sleep, Millis, Seconds};
+use ntex::time::{sleep, timeout, Millis, Seconds};
 use ntex::{service::fn_service, util::Bytes, util::Ready, web::error};
 
 #[ntex::test]
@@ -600,4 +601,38 @@ async fn test_h1_service_error() {
     // read response
     let bytes = srv.load_body(response).await.unwrap();
     assert_eq!(bytes, Bytes::from_static(b"error"));
+}
+
+struct SetOnDrop(Arc<AtomicUsize>);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[ntex::test]
+async fn test_h1_client_drop() -> io::Result<()> {
+    let count = Arc::new(AtomicUsize::new(0));
+    let count2 = count.clone();
+
+    let srv = test_server(move || {
+        let count = count2.clone();
+        HttpService::build().h1(move |req: Request| {
+            let count = count.clone();
+            async move {
+                let _st = SetOnDrop(count);
+                assert!(req.peer_addr().is_some());
+                assert_eq!(req.version(), Version::HTTP_11);
+                sleep(Seconds(100)).await;
+                Ok::<_, io::Error>(Response::Ok().finish())
+            }
+        })
+    });
+
+    let result = timeout(Millis(100), srv.request(Method::GET, "/").send()).await;
+    assert!(result.is_err());
+    sleep(Millis(150)).await;
+    assert_eq!(count.load(Ordering::Relaxed), 1);
+    Ok(())
 }

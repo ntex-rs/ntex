@@ -2,7 +2,7 @@
 use std::task::{Context, Poll};
 use std::{cell::RefCell, error::Error, future::Future, io, marker, pin::Pin, rc::Rc};
 
-use crate::io::{Filter, Io, IoBoxed, RecvError};
+use crate::io::{Filter, Io, IoBoxed, IoStatusUpdate, RecvError};
 use crate::{service::Service, util::ready, util::Bytes};
 
 use crate::http;
@@ -164,6 +164,9 @@ where
                                             *this.st = State::Stop;
                                             this.inner.error = Some(e);
                                         }
+                                    } else if this.inner.poll_io_closed(cx) {
+                                        // check if io is closed
+                                        *this.st = State::Stop;
                                     } else {
                                         return Poll::Pending;
                                     }
@@ -177,37 +180,48 @@ where
                         // so we have to send response and disconnect. request payload
                         // handling should be handled by service
                         CallStateProject::ServiceUpgrade { fut } => {
-                            let result = ready!(fut.poll(cx));
-                            match result {
-                                Ok(res) => {
-                                    let (msg, body) = res.into().into_parts();
-                                    let item = if let Some(item) = msg.head().take_io() {
-                                        item
-                                    } else {
-                                        log::trace!("Handler service consumed io, exit");
-                                        return Poll::Ready(Ok(()));
-                                    };
+                            if let Poll::Ready(result) = fut.poll(cx) {
+                                match result {
+                                    Ok(res) => {
+                                        let (msg, body) = res.into().into_parts();
+                                        let item = if let Some(item) = msg.head().take_io()
+                                        {
+                                            item
+                                        } else {
+                                            log::trace!(
+                                                "Handler service consumed io, exit"
+                                            );
+                                            return Poll::Ready(Ok(()));
+                                        };
 
-                                    let _ = item
-                                        .0
-                                        .encode(Message::Item((msg, body.size())), &item.1);
-                                    match body.size() {
-                                        BodySize::None | BodySize::Empty => {}
-                                        _ => {
-                                            log::error!("Stream responses are not supported for upgrade requests");
+                                        let _ = item.0.encode(
+                                            Message::Item((msg, body.size())),
+                                            &item.1,
+                                        );
+                                        match body.size() {
+                                            BodySize::None | BodySize::Empty => {}
+                                            _ => {
+                                                log::error!("Stream responses are not supported for upgrade requests");
+                                            }
                                         }
+                                        *this.st = State::StopIo(item);
                                     }
-                                    *this.st = State::StopIo(item);
+                                    Err(e) => {
+                                        log::error!(
+                                            "Cannot handle error for upgrade handler: {:?}",
+                                            e
+                                        );
+                                        return Poll::Ready(Ok(()));
+                                    }
                                 }
-                                Err(e) => {
-                                    log::error!(
-                                        "Cannot handle error for upgrade handler: {:?}",
-                                        e
-                                    );
-                                    return Poll::Ready(Ok(()));
-                                }
+                                None
+                            } else if this.inner.poll_io_closed(cx) {
+                                // check if io is closed
+                                *this.st = State::Stop;
+                                None
+                            } else {
+                                return Poll::Pending;
                             }
-                            None
                         }
                         // handle EXPECT call
                         // expect service call must resolve before
@@ -704,6 +718,19 @@ where
                 self.payload = None;
                 Poll::Ready(Err(DispatchError::PayloadIsNotConsumed))
             }
+        }
+    }
+
+    /// check for io changes, could close while waiting for service call
+    fn poll_io_closed(&self, cx: &mut Context<'_>) -> bool {
+        match self.io.poll_status_update(cx) {
+            Poll::Pending => false,
+            Poll::Ready(
+                IoStatusUpdate::KeepAlive
+                | IoStatusUpdate::Stop
+                | IoStatusUpdate::PeerGone(_),
+            ) => true,
+            Poll::Ready(IoStatusUpdate::WriteBackpressure) => false,
         }
     }
 }

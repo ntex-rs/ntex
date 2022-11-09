@@ -12,7 +12,7 @@ use crate::{channel::oneshot, service::Service};
 use super::error::SendRequestError;
 
 pub(super) async fn send_request<B>(
-    client: H2Client,
+    mut client: H2Client,
     head: RequestHeadType,
     body: B,
 ) -> Result<(ResponseHead, Payload), SendRequestError>
@@ -40,22 +40,16 @@ where
     };
 
     // merging headers from head and extra headers.
-    let headers = head
+    let mut hdrs: HeaderMap = head
         .as_ref()
         .headers
         .iter()
-        .filter(|(name, _)| !extra_headers.contains_key(*name))
-        .chain(extra_headers.iter());
-
-    // copy headers
-    let mut hdrs = HeaderMap::new();
-    for (key, value) in headers {
-        match *key {
-            header::CONNECTION | header::TRANSFER_ENCODING => continue, // http2 specific
-            _ => (),
-        }
-        hdrs.append(key.clone(), value.clone());
-    }
+        .filter(|(name, _)| {
+            !matches!(*name, &header::CONNECTION | &header::TRANSFER_ENCODING)
+                || !extra_headers.contains_key(*name)
+        })
+        .chain(extra_headers.iter())
+        .collect();
 
     // Content length
     match length {
@@ -76,7 +70,7 @@ where
         .map(|p| ByteString::from(format!("{}", p)))
         .unwrap_or_else(|| ByteString::from(uri.path()));
     let stream = client
-        .0
+        .inner
         .client
         .send_request(head.as_ref().method.clone(), path, hdrs, eof)
         .await?;
@@ -88,6 +82,8 @@ where
         client.set_stream(stream);
         result
     } else {
+        // sending body is async process, we can handle upload and download
+        // at the same time
         let c = client.clone();
         crate::rt::spawn(async move {
             if let Err(e) = send_body(body, &stream).await {
@@ -120,27 +116,41 @@ async fn send_body<B: MessageBody>(
     }
 }
 
-#[derive(Clone)]
-pub(super) struct H2Client(Rc<H2ClientInner>);
+pub(super) struct H2Client {
+    inner: Rc<H2ClientInner>,
+    wait_id: Option<frame::StreamId>,
+}
+
+impl Clone for H2Client {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            wait_id: None,
+        }
+    }
+}
 
 impl H2Client {
     pub(super) fn new(client: Client) -> Self {
-        Self(Rc::new(H2ClientInner {
-            client,
-            streams: RefCell::new(HashMap::default()),
-        }))
+        Self {
+            wait_id: None,
+            inner: Rc::new(H2ClientInner {
+                client,
+                streams: RefCell::new(HashMap::default()),
+            }),
+        }
     }
 
     pub(super) fn close(&self) {
-        self.0.client.close()
+        self.inner.client.close()
     }
 
     pub(super) fn is_closed(&self) -> bool {
-        self.0.client.is_closed()
+        self.inner.client.is_closed()
     }
 
     fn set_error(&self, id: frame::StreamId, err: SendRequestError) {
-        if let Some(mut info) = self.0.streams.borrow_mut().remove(&id) {
+        if let Some(mut info) = self.inner.streams.borrow_mut().remove(&id) {
             if let Some(tx) = info.tx.take() {
                 let _ = tx.send(Err(err));
             }
@@ -148,7 +158,7 @@ impl H2Client {
     }
 
     fn set_stream(&self, stream: h2::Stream) {
-        if let Some(info) = self.0.streams.borrow_mut().get_mut(&stream.id()) {
+        if let Some(info) = self.inner.streams.borrow_mut().get_mut(&stream.id()) {
             // response is not received yet
             if info.tx.is_some() {
                 info.stream = Some(stream);
@@ -159,7 +169,7 @@ impl H2Client {
     }
 
     async fn wait_response(
-        &self,
+        &mut self,
         id: frame::StreamId,
     ) -> Result<(ResponseHead, Payload), SendRequestError> {
         let (tx, rx) = oneshot::channel();
@@ -168,14 +178,25 @@ impl H2Client {
             stream: None,
             payload: None,
         };
-        self.0.streams.borrow_mut().insert(id, info);
+        self.wait_id = Some(id);
+        self.inner.streams.borrow_mut().insert(id, info);
 
-        match rx.await {
+        let result = match rx.await {
             Ok(item) => item,
             Err(_) => Err(SendRequestError::Error(Box::new(io::Error::new(
                 io::ErrorKind::Other,
                 "disconnected",
             )))),
+        };
+        self.wait_id = None;
+        result
+    }
+}
+
+impl Drop for H2Client {
+    fn drop(&mut self) {
+        if let Some(id) = self.wait_id.take() {
+            self.inner.streams.borrow_mut().remove(&id);
         }
     }
 }
@@ -195,7 +216,7 @@ pub(super) struct H2PublishService(Rc<H2ClientInner>);
 
 impl H2PublishService {
     pub(super) fn new(client: H2Client) -> Self {
-        Self(client.0)
+        Self(client.inner.clone())
     }
 }
 

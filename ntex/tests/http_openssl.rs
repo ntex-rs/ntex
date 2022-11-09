@@ -1,5 +1,5 @@
 #![cfg(feature = "openssl")]
-use std::io;
+use std::{io, sync::atomic::AtomicUsize, sync::atomic::Ordering, sync::Arc};
 
 use futures_util::stream::{once, Stream, StreamExt};
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
@@ -10,8 +10,9 @@ use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
 use ntex::http::{body, h1, HttpService, Method, Request, Response, StatusCode, Version};
 use ntex::service::{fn_service, ServiceFactory};
+use ntex::time::{sleep, timeout, Millis, Seconds};
 use ntex::util::{Bytes, BytesMut, Ready};
-use ntex::{io::Io, time::Seconds, web::error::InternalError, ws, ws::handshake_response};
+use ntex::{io::Io, web::error::InternalError, ws, ws::handshake_response};
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>
 where
@@ -421,6 +422,43 @@ async fn test_h2_service_error() {
     // read response
     let bytes = srv.load_body(response).await.unwrap();
     assert_eq!(bytes, Bytes::from_static(b"error"));
+}
+
+struct SetOnDrop(Arc<AtomicUsize>);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[ntex::test]
+async fn test_h2_client_drop() -> io::Result<()> {
+    let count = Arc::new(AtomicUsize::new(0));
+    let count2 = count.clone();
+
+    let srv = test_server(move || {
+        let count = count2.clone();
+        HttpService::build()
+            .h2(move |req: Request| {
+                let count = count.clone();
+                async move {
+                    let _st = SetOnDrop(count);
+                    assert!(req.peer_addr().is_some());
+                    assert_eq!(req.version(), Version::HTTP_2);
+                    sleep(Seconds(100)).await;
+                    Ok::<_, io::Error>(Response::Ok().finish())
+                }
+            })
+            .openssl(ssl_acceptor())
+            .map_err(|_| ())
+    });
+
+    let result = timeout(Millis(250), srv.srequest(Method::GET, "/").send()).await;
+    assert!(result.is_err());
+    sleep(Millis(150)).await;
+    assert_eq!(count.load(Ordering::Relaxed), 1);
+    Ok(())
 }
 
 #[ntex::test]

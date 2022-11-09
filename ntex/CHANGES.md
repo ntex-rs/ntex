@@ -1,5 +1,11 @@
 # Changes
 
+## [0.5.29] - 2022-11-03
+
+* Handle io disconnect during h1/h2 server handling
+
+* Cleanup internal h2 client data on request future drop, potential leak
+
 ## [0.5.28] - 2022-11-03
 
 * Drop direct http crate dependency
