@@ -48,8 +48,9 @@ impl Value {
 
     fn append(&mut self, val: HeaderValue) {
         match self {
-            Value::One(_) => {
-                let data = std::mem::replace(self, Value::Multi(vec![val]));
+            Value::One(prev_val) => {
+                let prev_val = std::mem::replace(prev_val, val);
+                let data = std::mem::replace(self, Value::Multi(vec![prev_val]));
                 match data {
                     Value::One(val) => self.append(val),
                     Value::Multi(_) => unreachable!(),
@@ -535,7 +536,7 @@ impl<'a> Iterator for Iter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::header::CONTENT_TYPE;
+    use crate::header::{ACCEPT_ENCODING, CONTENT_TYPE};
 
     #[test]
     fn test_from_iter() {
@@ -592,5 +593,23 @@ mod tests {
         assert!(keys.contains(&&CONTENT_TYPE));
         m.remove("content-type");
         assert!(m.is_empty());
+    }
+
+    #[test]
+    fn test_append() {
+        let mut map = HeaderMap::new();
+
+        map.append(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+        map.append(ACCEPT_ENCODING, HeaderValue::from_static("br"));
+        map.append(ACCEPT_ENCODING, HeaderValue::from_static("deflate"));
+
+        assert_eq!(
+            map.get_all(ACCEPT_ENCODING).collect::<Vec<_>>(),
+            vec![
+                &HeaderValue::from_static("gzip"),
+                &HeaderValue::from_static("br"),
+                &HeaderValue::from_static("deflate"),
+            ]
+        );
     }
 }
