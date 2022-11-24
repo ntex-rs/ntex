@@ -1,4 +1,4 @@
-use std::collections::{self, hash_map, hash_map::Entry};
+use std::collections::{self, hash_map, hash_map::Entry, VecDeque};
 use std::{convert::TryFrom, iter::FromIterator};
 
 use crate::{HeaderName, HeaderValue};
@@ -28,7 +28,7 @@ pub struct HeaderMap {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     One(HeaderValue),
-    Multi(Vec<HeaderValue>),
+    Multi(VecDeque<HeaderValue>),
 }
 
 impl Value {
@@ -50,13 +50,15 @@ impl Value {
         match self {
             Value::One(prev_val) => {
                 let prev_val = std::mem::replace(prev_val, val);
-                let data = std::mem::replace(self, Value::Multi(vec![prev_val]));
+                let mut val = VecDeque::new();
+                val.push_back(prev_val);
+                let data = std::mem::replace(self, Value::Multi(val));
                 match data {
                     Value::One(val) => self.append(val),
                     Value::Multi(_) => unreachable!(),
                 }
             }
-            Value::Multi(ref mut vec) => vec.push(val),
+            Value::Multi(ref mut vec) => vec.push_back(val),
         }
     }
 }
@@ -67,18 +69,23 @@ pub struct ValueIntoIter {
 
 impl Iterator for ValueIntoIter {
     type Item = HeaderValue;
+
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.value {
             Value::One(_) => {
-                let val = std::mem::replace(&mut self.value, Value::Multi(Vec::new()));
+                let val = std::mem::replace(
+                    &mut self.value,
+                    Value::Multi(VecDeque::with_capacity(0)),
+                );
                 match val {
                     Value::One(val) => Some(val),
                     _ => unreachable!(),
                 }
             }
-            Value::Multi(vec) => vec.pop(),
+            Value::Multi(vec) => vec.pop_front(),
         }
     }
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self.value {
             Value::One(_) => (1, None),
@@ -90,6 +97,7 @@ impl Iterator for ValueIntoIter {
 impl IntoIterator for Value {
     type Item = HeaderValue;
     type IntoIter = ValueIntoIter;
+
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
         ValueIntoIter { value: self }
@@ -374,6 +382,7 @@ impl<N: std::fmt::Display, V> FromIterator<(N, V)> for HeaderMap
 where
     HeaderName: TryFrom<N>,
     Value: TryFrom<V>,
+    V: std::fmt::Debug,
 {
     #[inline]
     #[allow(clippy::mutable_key_type)]
@@ -491,7 +500,7 @@ impl<'a> IntoIterator for &'a HeaderMap {
 
 pub struct Iter<'a> {
     idx: usize,
-    current: Option<(&'a HeaderName, &'a Vec<HeaderValue>)>,
+    current: Option<(&'a HeaderName, &'a VecDeque<HeaderValue>)>,
     iter: hash_map::Iter<'a, HeaderName, Value>,
 }
 
@@ -507,6 +516,7 @@ impl<'a> Iter<'a> {
 
 impl<'a> Iterator for Iter<'a> {
     type Item = (&'a HeaderName, &'a HeaderValue);
+
     #[inline]
     fn next(&mut self) -> Option<(&'a HeaderName, &'a HeaderValue)> {
         if let Some(ref mut item) = self.current {
@@ -556,11 +566,11 @@ mod tests {
         assert_eq!(
             map.get_all("Accept").collect::<Vec<&HeaderValue>>(),
             vec![
-                &HeaderValue::from_static("image/webp"),
                 &HeaderValue::from_static("text/html"),
-                &HeaderValue::from_static("application/xml;q=0.9"),
                 &HeaderValue::from_static("*/*"),
                 &HeaderValue::from_static("application/xhtml+xml"),
+                &HeaderValue::from_static("application/xml;q=0.9"),
+                &HeaderValue::from_static("image/webp"),
             ]
         )
     }

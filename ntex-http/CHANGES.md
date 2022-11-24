@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.7] - 2022-11-24
+
+* Keep multi header values order #145
+
 ## [0.1.6] - 2022-11-10
 
 * Add From<HeaderValue> impl for Value, allow to use HeaderMap::collect()
