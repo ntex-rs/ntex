@@ -14,8 +14,7 @@ use super::httprequest::{HttpRequest, HttpRequestPool};
 use super::request::WebRequest;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
-use super::service::{AppServiceFactory, WebServiceConfig};
-use super::types::state::StateFactory;
+use super::service::{AppServiceFactory, AppState, WebServiceConfig};
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
@@ -25,7 +24,7 @@ type HttpNewService<Err: ErrorRenderer> =
 type BoxResponse<Err: ErrorRenderer> =
     Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
 type FnStateFactory =
-    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Box<dyn StateFactory>, ()>>>>>;
+    Box<dyn Fn(Extensions) -> Pin<Box<dyn Future<Output = Result<Extensions, ()>>>>>;
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes state factories.
@@ -43,7 +42,6 @@ where
     pub(super) middleware: Rc<T>,
     pub(super) filter: PipelineFactory<F, WebRequest<Err>>,
     pub(super) extensions: RefCell<Option<Extensions>>,
-    pub(super) state: Rc<Vec<Box<dyn StateFactory>>>,
     pub(super) state_factories: Rc<Vec<FnStateFactory>>,
     pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,
     pub(super) default: Option<Rc<HttpNewService<Err>>>,
@@ -95,6 +93,8 @@ where
     type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
     fn new_service(&self, config: AppConfig) -> Self::Future {
+        let services = std::mem::take(&mut *self.services.borrow_mut());
+
         // update resource default service
         let default = self.default.clone().unwrap_or_else(|| {
             Rc::new(boxed::factory(fn_service(
@@ -104,42 +104,7 @@ where
             )))
         });
 
-        // App config
-        let mut config = WebServiceConfig::new(config, default.clone(), self.state.clone());
-
-        // register services
-        std::mem::take(&mut *self.services.borrow_mut())
-            .into_iter()
-            .for_each(|mut srv| srv.register(&mut config));
-        let (config, services) = config.into_services();
-
-        // resource map
-        let mut rmap = ResourceMap::new(ResourceDef::new(""));
-        for mut rdef in std::mem::take(&mut *self.external.borrow_mut()) {
-            rmap.add(&mut rdef, None);
-        }
-
-        // complete pipeline creation
-        let services: Vec<_> = services
-            .into_iter()
-            .map(|(mut rdef, srv, guards, nested)| {
-                rmap.add(&mut rdef, nested);
-                (rdef, srv, RefCell::new(guards))
-            })
-            .collect();
-        let default_fut = default.new_service(());
-
-        let mut router = Router::build();
-        if self.case_insensitive {
-            router.case_insensitive();
-        }
-
-        // complete ResourceMap tree creation
-        let rmap = Rc::new(rmap);
-        rmap.finish(rmap.clone());
-
         let filter_fut = self.filter.new_service(());
-        let state = self.state.clone();
         let state_factories = self.state_factories.clone();
         let mut extensions = self
             .extensions
@@ -147,8 +112,48 @@ where
             .take()
             .unwrap_or_else(Extensions::new);
         let middleware = self.middleware.clone();
+        let external = std::mem::take(&mut *self.external.borrow_mut());
+
+        let mut router = Router::build();
+        if self.case_insensitive {
+            router.case_insensitive();
+        }
 
         Box::pin(async move {
+            // app state factories
+            for fut in state_factories.iter() {
+                extensions = fut(extensions).await?;
+            }
+            let state = AppState::new(extensions, None, config);
+
+            // App config
+            let mut config = WebServiceConfig::new(state.clone(), default.clone());
+
+            // register services
+            services
+                .into_iter()
+                .for_each(|mut srv| srv.register(&mut config));
+            let services = config.into_services();
+
+            // resource map
+            let mut rmap = ResourceMap::new(ResourceDef::new(""));
+            for mut rdef in external {
+                rmap.add(&mut rdef, None);
+            }
+
+            // complete pipeline creation
+            let services: Vec<_> = services
+                .into_iter()
+                .map(|(mut rdef, srv, guards, nested)| {
+                    rmap.add(&mut rdef, nested);
+                    (rdef, srv, RefCell::new(guards))
+                })
+                .collect();
+
+            // complete ResourceMap tree creation
+            let rmap = Rc::new(rmap);
+            rmap.finish(rmap.clone());
+
             // create http services
             for (path, factory, guards) in &mut services.iter() {
                 let service = factory.new_service(()).await?;
@@ -157,7 +162,7 @@ where
 
             let routing = AppRouting {
                 router: router.finish(),
-                default: Some(default_fut.await?),
+                default: Some(default.new_service(()).await?),
             };
 
             // main service
@@ -166,23 +171,10 @@ where
                 routing: Rc::new(routing),
             };
 
-            // create app state container
-            for f in state.iter() {
-                f.create(&mut extensions);
-            }
-
-            // async state factories
-            for fut in state_factories.iter() {
-                if let Ok(f) = fut().await {
-                    f.create(&mut extensions);
-                }
-            }
-
             Ok(AppFactoryService {
                 rmap,
-                config,
+                state,
                 service: middleware.new_transform(service),
-                state: Rc::new(extensions),
                 pool: HttpRequestPool::create(),
                 _t: PhantomData,
             })
@@ -198,8 +190,7 @@ where
 {
     service: T,
     rmap: Rc<ResourceMap>,
-    config: AppConfig,
-    state: Rc<Extensions>,
+    state: AppState,
     pool: &'static HttpRequestPool,
     _t: PhantomData<Err>,
 }
@@ -239,7 +230,6 @@ where
                 head,
                 payload,
                 self.rmap.clone(),
-                self.config.clone(),
                 self.state.clone(),
                 self.pool,
             )

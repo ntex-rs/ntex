@@ -17,7 +17,7 @@ use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
 use super::route::{IntoRoutes, Route, RouteService};
-use super::{app::Filter, app::Stack, guard::Guard, types::State};
+use super::{app::Filter, app::Stack, guard::Guard, service::AppState};
 
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
@@ -63,10 +63,10 @@ impl<Err: ErrorRenderer> Resource<Err> {
             routes: Vec::new(),
             rdef: path.patterns(),
             name: None,
+            state: None,
             middleware: Identity,
             filter: pipeline_factory(Filter::new()),
             guards: Vec::new(),
-            state: None,
             default: Rc::new(RefCell::new(None)),
         }
     }
@@ -123,6 +123,38 @@ where
         self
     }
 
+    /// Provide resource specific state. This method allows to add extractor
+    /// configuration or specific state available via `State<T>` extractor.
+    /// Provided state is available for all routes registered for the current resource.
+    /// Resource state overrides state registered by `App::state()` method.
+    ///
+    /// ```rust
+    /// use ntex::web::{self, App, FromRequest};
+    ///
+    /// /// extract text data from request
+    /// async fn index(body: String) -> String {
+    ///     format!("Body {}!", body)
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::new().service(
+    ///         web::resource("/index.html")
+    ///           // limit size of the payload
+    ///           .state(web::types::PayloadConfig::new(4096))
+    ///           .route(
+    ///               // register handler
+    ///               web::get().to(index)
+    ///           ));
+    /// }
+    /// ```
+    pub fn state<D: 'static>(mut self, st: D) -> Self {
+        if self.state.is_none() {
+            self.state = Some(Extensions::new());
+        }
+        self.state.as_mut().unwrap().insert(st);
+        self
+    }
+
     /// Register a new route.
     ///
     /// ```rust
@@ -166,46 +198,6 @@ where
         for route in route.routes() {
             self.routes.push(route);
         }
-        self
-    }
-
-    /// Provide resource specific state. This method allows to add extractor
-    /// configuration or specific state available via `State<T>` extractor.
-    /// Provided state is available for all routes registered for the current resource.
-    /// Resource state overrides state registered by `App::state()` method.
-    ///
-    /// ```rust
-    /// use ntex::web::{self, App, FromRequest};
-    ///
-    /// /// extract text data from request
-    /// async fn index(body: String) -> String {
-    ///     format!("Body {}!", body)
-    /// }
-    ///
-    /// fn main() {
-    ///     let app = App::new().service(
-    ///         web::resource("/index.html")
-    ///           // limit size of the payload
-    ///           .app_state(web::types::PayloadConfig::new(4096))
-    ///           .route(
-    ///               web::get()
-    ///                  // register handler
-    ///                  .to(index)
-    ///           ));
-    /// }
-    /// ```
-    pub fn state<D: 'static>(self, st: D) -> Self {
-        self.app_state(State::new(st))
-    }
-
-    /// Set or override application state.
-    ///
-    /// This method overrides state stored with [`App::app_state()`](#method.app_state)
-    pub fn app_state<D: 'static>(mut self, st: D) -> Self {
-        if self.state.is_none() {
-            self.state = Some(Extensions::new());
-        }
-        self.state.as_mut().unwrap().insert(st);
         self
     }
 
@@ -269,10 +261,10 @@ where
             middleware: self.middleware,
             rdef: self.rdef,
             name: self.name,
+            state: self.state,
             guards: self.guards,
             routes: self.routes,
             default: self.default,
-            state: self.state,
         }
     }
 
@@ -289,10 +281,10 @@ where
             filter: self.filter,
             rdef: self.rdef,
             name: self.name,
+            state: self.state,
             guards: self.guards,
             routes: self.routes,
             default: self.default,
-            state: self.state,
         }
     }
 
@@ -342,14 +334,18 @@ where
         if let Some(ref name) = self.name {
             *rdef.name_mut() = name.clone();
         }
-        // custom app data storage
-        if let Some(ref mut ext) = self.state {
-            config.set_service_state(ext);
-        }
+
+        let state = self.state.take().map(|state| {
+            AppState::new(
+                state,
+                Some(config.state().clone()),
+                config.state().config().clone(),
+            )
+        });
 
         let router_factory = ResourceRouterFactory {
+            state,
             routes: self.routes,
-            state: self.state.map(Rc::new),
             default: self.default,
         };
 
@@ -386,8 +382,8 @@ where
         self,
     ) -> ResourceServiceFactory<Err, M, PipelineFactory<T, WebRequest<Err>>> {
         let router_factory = ResourceRouterFactory {
+            state: None,
             routes: self.routes,
-            state: self.state.map(Rc::new),
             default: self.default,
         };
 
@@ -506,8 +502,8 @@ where
 
 struct ResourceRouterFactory<Err: ErrorRenderer> {
     routes: Vec<Route<Err>>,
-    state: Option<Rc<Extensions>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
+    state: Option<AppState>,
 }
 
 impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFactory<Err> {
@@ -530,8 +526,8 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
             };
 
             Ok(ResourceRouter {
-                routes,
                 state,
+                routes,
                 default,
             })
         })
@@ -539,8 +535,8 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
 }
 
 struct ResourceRouter<Err: ErrorRenderer> {
+    state: Option<AppState>,
     routes: Vec<RouteService<Err>>,
-    state: Option<Rc<Extensions>>,
     default: Option<HttpService<Err>>,
 }
 
@@ -746,26 +742,22 @@ mod tests {
     #[crate::rt_test]
     async fn test_state() {
         let srv = init_service(
-            App::new()
-                .state(1i32)
-                .state(1usize)
-                .app_state(web::types::State::new('-'))
-                .service(
-                    web::resource("/test")
-                        .state(10usize)
-                        .app_state(web::types::State::new('*'))
-                        .guard(guard::Get())
-                        .to(
-                            |data1: web::types::State<usize>,
-                             data2: web::types::State<char>,
-                             data3: web::types::State<i32>| {
-                                assert_eq!(**data1, 10);
-                                assert_eq!(**data2, '*');
-                                assert_eq!(**data3, 1);
-                                async { HttpResponse::Ok() }
-                            },
-                        ),
-                ),
+            App::new().state(1i32).state(1usize).state('-').service(
+                web::resource("/test")
+                    .state(10usize)
+                    .state('*')
+                    .guard(guard::Get())
+                    .to(
+                        |data1: web::types::State<usize>,
+                         data2: web::types::State<char>,
+                         data3: web::types::State<i32>| {
+                            assert_eq!(*data1, 10);
+                            assert_eq!(*data2, '*');
+                            assert_eq!(*data3, 1);
+                            async { HttpResponse::Ok() }
+                        },
+                    ),
+            ),
         )
         .await;
 

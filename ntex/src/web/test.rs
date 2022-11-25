@@ -23,10 +23,10 @@ use crate::util::{stream_recv, Bytes, BytesMut, Extensions, Ready, Stream};
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
 use crate::{io::Sealed, rt::System, server::Server};
 
-use crate::web::config::AppConfig;
 use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::{HttpRequest, HttpRequestPool};
 use crate::web::rmap::ResourceMap;
+use crate::web::{config::AppConfig, service::AppState};
 use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 
 /// Create service that always responds with `HttpResponse::Ok()`
@@ -460,14 +460,14 @@ impl TestRequest {
     pub fn to_srv_request(mut self) -> WebRequest<DefaultError> {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
+        let app_state = AppState::new(self.app_state, None, self.config);
 
         WebRequest::new(HttpRequest::new(
             self.path,
             head,
             payload,
             Rc::new(self.rmap),
-            self.config.clone(),
-            Rc::new(self.app_state),
+            app_state,
             HttpRequestPool::create(),
         ))
     }
@@ -481,14 +481,14 @@ impl TestRequest {
     pub fn to_http_request(mut self) -> HttpRequest {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
+        let app_state = AppState::new(self.app_state, None, self.config);
 
         HttpRequest::new(
             self.path,
             head,
             payload,
             Rc::new(self.rmap),
-            self.config.clone(),
-            Rc::new(self.app_state),
+            app_state,
             HttpRequestPool::create(),
         )
     }
@@ -497,14 +497,14 @@ impl TestRequest {
     pub fn to_http_parts(mut self) -> (HttpRequest, Payload) {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
+        let app_state = AppState::new(self.app_state, None, self.config);
 
         let req = HttpRequest::new(
             self.path,
             head,
             Payload::None,
             Rc::new(self.rmap),
-            self.config.clone(),
-            Rc::new(self.app_state),
+            app_state,
             HttpRequestPool::create(),
         );
 
@@ -980,7 +980,7 @@ mod tests {
             .version(Version::HTTP_2)
             .header(header::DATE, "some date")
             .param("test", "123")
-            .state(web::types::State::new(20u64))
+            .state(20u64)
             .peer_addr("127.0.0.1:8081".parse().unwrap())
             .to_http_request();
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
@@ -988,8 +988,8 @@ mod tests {
         // assert_eq!(req.peer_addr(), Some("127.0.0.1:8081".parse().unwrap()));
         assert_eq!(&req.match_info()["test"], "123");
         assert_eq!(req.version(), Version::HTTP_2);
-        let data = req.app_state::<web::types::State<u64>>().unwrap();
-        assert_eq!(*data.get_ref(), 20);
+        let data = req.app_state::<u64>().unwrap();
+        assert_eq!(*data, 20);
 
         assert_eq!(format!("{:?}", StreamType::Tcp), "StreamType::Tcp");
     }
@@ -1154,7 +1154,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_server_state() {
         async fn handler(data: web::types::State<usize>) -> crate::http::ResponseBuilder {
-            assert_eq!(**data, 10);
+            assert_eq!(*data, 10);
             HttpResponse::Ok()
         }
 

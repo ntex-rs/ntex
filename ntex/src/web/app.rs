@@ -16,13 +16,12 @@ use super::resource::Resource;
 use super::response::WebResponse;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
-use super::types::state::{State, StateFactory};
 use super::{DefaultError, ErrorRenderer};
 
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type FnStateFactory =
-    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Box<dyn StateFactory>, ()>>>>>;
+    Box<dyn Fn(Extensions) -> Pin<Box<dyn Future<Output = Result<Extensions, ()>>>>>;
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
@@ -31,10 +30,9 @@ pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     filter: PipelineFactory<F, WebRequest<Err>>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
-    state: Vec<Box<dyn StateFactory>>,
-    state_factories: Vec<FnStateFactory>,
     external: Vec<ResourceDef>,
     extensions: Extensions,
+    state_factories: Vec<FnStateFactory>,
     error_renderer: Err,
     case_insensitive: bool,
 }
@@ -45,7 +43,6 @@ impl App<Identity, Filter<DefaultError>, DefaultError> {
         App {
             middleware: Identity,
             filter: pipeline_factory(Filter::new()),
-            state: Vec::new(),
             state_factories: Vec::new(),
             services: Vec::new(),
             default: None,
@@ -63,7 +60,6 @@ impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
         App {
             middleware: Identity,
             filter: pipeline_factory(Filter::new()),
-            state: Vec::new(),
             state_factories: Vec::new(),
             services: Vec::new(),
             default: None,
@@ -86,16 +82,19 @@ where
     T::Future: 'static,
     Err: ErrorRenderer,
 {
-    /// Set application state. Application state could be accessed
-    /// by using `State<T>` extractor where `T` is state type.
+    /// Set application level arbitrary state item.
+    ///
+    /// Application state stored with `App::app_state()` method is available
+    /// via `HttpRequest::app_state()` method at runtime.
+    ///
+    /// This method could be used for storing `State<T>` as well, in that case
+    /// state could be accessed by using `State<T>` extractor.
     ///
     /// **Note**: http server accepts an application factory rather than
     /// an application instance. Http server constructs an application
     /// instance for each thread, thus application state must be constructed
     /// multiple times. If you want to share state between different
-    /// threads, a shared object should be used, e.g. `Arc`. Internally `State` type
-    /// uses `Arc` so statw could be created outside of app factory and clones could
-    /// be stored via `App::app_state()` method.
+    /// threads, a shared object should be used, e.g. `Arc`.
     ///
     /// ```rust
     /// use std::cell::Cell;
@@ -117,7 +116,7 @@ where
     ///     );
     /// ```
     pub fn state<U: 'static>(mut self, state: U) -> Self {
-        self.state.push(Box::new(State::new(state)));
+        self.extensions.insert(state);
         self
     }
 
@@ -131,7 +130,7 @@ where
         D: 'static,
         E: fmt::Debug,
     {
-        self.state_factories.push(Box::new(move || {
+        self.state_factories.push(Box::new(move |mut ext| {
             let fut = state();
             Box::pin(async move {
                 match fut.await {
@@ -140,24 +139,12 @@ where
                         Err(())
                     }
                     Ok(st) => {
-                        let st: Box<dyn StateFactory> = Box::new(State::new(st));
-                        Ok(st)
+                        ext.insert(st);
+                        Ok(ext)
                     }
                 }
             })
         }));
-        self
-    }
-
-    /// Set application level arbitrary state item.
-    ///
-    /// Application state stored with `App::app_state()` method is available
-    /// via `HttpRequest::app_state()` method at runtime.
-    ///
-    /// This method could be used for storing `State<T>` as well, in that case
-    /// state could be accessed by using `State<T>` extractor.
-    pub fn app_state<U: 'static>(mut self, ext: U) -> Self {
-        self.extensions.insert(ext);
         self
     }
 
@@ -192,9 +179,9 @@ where
     {
         let mut cfg = ServiceConfig::new();
         f(&mut cfg);
-        self.state.extend(cfg.state);
         self.services.extend(cfg.services);
         self.external.extend(cfg.external);
+        self.extensions.extend(cfg.state);
         self
     }
 
@@ -375,7 +362,6 @@ where
         App {
             filter: self.filter.and_then(filter.into_factory()),
             middleware: self.middleware,
-            state: self.state,
             state_factories: self.state_factories,
             services: self.services,
             default: self.default,
@@ -416,7 +402,6 @@ where
         App {
             middleware: Stack::new(self.middleware, mw),
             filter: self.filter,
-            state: self.state,
             state_factories: self.state_factories,
             services: self.services,
             default: self.default,
@@ -508,7 +493,6 @@ where
         let app = AppFactory {
             filter: self.filter,
             middleware: Rc::new(self.middleware),
-            state: Rc::new(self.state),
             state_factories: Rc::new(self.state_factories),
             services: Rc::new(RefCell::new(self.services)),
             external: RefCell::new(self.external),
@@ -538,7 +522,6 @@ where
         AppFactory {
             filter: self.filter,
             middleware: Rc::new(self.middleware),
-            state: Rc::new(self.state),
             state_factories: Rc::new(self.state_factories),
             services: Rc::new(RefCell::new(self.services)),
             external: RefCell::new(self.external),
@@ -566,7 +549,6 @@ where
         AppFactory {
             filter: self.filter,
             middleware: Rc::new(self.middleware),
-            state: Rc::new(self.state),
             state_factories: Rc::new(self.state_factories),
             services: Rc::new(RefCell::new(self.services)),
             external: RefCell::new(self.external),
@@ -729,12 +711,12 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_extension() {
-        let srv = init_service(App::new().app_state(10usize).service(
-            web::resource("/").to(|req: HttpRequest| async move {
+        let srv = init_service(App::new().state(10usize).service(web::resource("/").to(
+            |req: HttpRequest| async move {
                 assert_eq!(*req.app_state::<usize>().unwrap(), 10);
                 HttpResponse::Ok()
-            }),
-        ))
+            },
+        )))
         .await;
         let req = TestRequest::default().to_request();
         let resp = srv.call(req).await.unwrap();

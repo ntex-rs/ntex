@@ -210,7 +210,7 @@ where
 /// fn main() {
 ///     let app = App::new().service(
 ///         web::resource("/index.html")
-///             .app_state(
+///             .state(
 ///                 // change json extractor configuration
 ///                 web::types::JsonConfig::default()
 ///                    .limit(4096)

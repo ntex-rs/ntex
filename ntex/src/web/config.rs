@@ -1,17 +1,17 @@
 use std::{net::SocketAddr, rc::Rc};
 
-use crate::router::ResourceDef;
+use crate::{router::ResourceDef, util::Extensions};
 
 use super::resource::Resource;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
-use super::types::state::{State, StateFactory};
 use super::{DefaultError, ErrorRenderer};
 
 /// Application configuration
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AppConfig(Rc<AppConfigInner>);
 
+#[derive(Debug)]
 struct AppConfigInner {
     secure: bool,
     host: String,
@@ -61,7 +61,7 @@ impl Default for AppConfig {
 /// modularization of big application configuration.
 pub struct ServiceConfig<Err = DefaultError> {
     pub(super) services: Vec<Box<dyn AppServiceFactory<Err>>>,
-    pub(super) state: Vec<Box<dyn StateFactory>>,
+    pub(super) state: Extensions,
     pub(super) external: Vec<ResourceDef>,
 }
 
@@ -69,17 +69,16 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     pub(crate) fn new() -> Self {
         Self {
             services: Vec::new(),
-            state: Vec::new(),
+            state: Extensions::new(),
             external: Vec::new(),
         }
     }
 
-    /// Set application state. Application state could be accessed
-    /// by using `State<T>` extractor where `T` is state type.
+    /// Set application state.
     ///
     /// This is same as `App::state()` method.
     pub fn state<S: 'static>(&mut self, st: S) -> &mut Self {
-        self.state.push(Box::new(State::new(st)));
+        self.state.insert(st);
         self
     }
 

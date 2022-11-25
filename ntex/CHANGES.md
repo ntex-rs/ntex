@@ -2,6 +2,9 @@
 
 ## [0.5.30] - 2022-11-25
 
+* Change `App::state()` behaviour
+
+* Remove `App::app_state()` method
 
 ## [0.5.29] - 2022-11-03
 

@@ -13,6 +13,7 @@ use super::httprequest::HttpRequest;
 use super::info::ConnectionInfo;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
+use super::service::AppState;
 
 /// An service http request
 ///
@@ -224,8 +225,8 @@ impl<Err> WebRequest<Err> {
 
     #[doc(hidden)]
     /// Set new app state container
-    pub fn set_state_container(&mut self, extensions: Rc<Extensions>) {
-        Rc::get_mut(&mut (self.req).0).unwrap().app_state = extensions;
+    pub(super) fn set_state_container(&mut self, state: AppState) {
+        Rc::get_mut(&mut (self.req).0).unwrap().app_state = state;
     }
 
     /// Request extensions

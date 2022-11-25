@@ -19,8 +19,7 @@ use super::resource::Resource;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
 use super::route::Route;
-use super::service::{AppServiceFactory, ServiceFactoryWrapper};
-use super::types::State;
+use super::service::{AppServiceFactory, AppState, ServiceFactoryWrapper};
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
@@ -149,14 +148,7 @@ where
     ///     );
     /// }
     /// ```
-    pub fn state<D: 'static>(self, st: D) -> Self {
-        self.app_state(State::new(st))
-    }
-
-    /// Set or override application state.
-    ///
-    /// This method overrides state stored with [`App::app_state()`](#method.app_state)
-    pub fn app_state<D: 'static>(mut self, st: D) -> Self {
+    pub fn state<D: 'static>(mut self, st: D) -> Self {
         if self.state.is_none() {
             self.state = Some(Extensions::new());
         }
@@ -211,11 +203,7 @@ where
 
         if !cfg.state.is_empty() {
             let mut state = self.state.unwrap_or_else(Extensions::new);
-
-            for value in cfg.state.iter() {
-                value.create(&mut state);
-            }
-
+            state.extend(cfg.state);
             self.state = Some(state);
         }
         self
@@ -390,8 +378,16 @@ where
             *self.default.borrow_mut() = Some(config.default_service());
         }
 
+        let state = self.state.take().map(|state| {
+            AppState::new(
+                state,
+                Some(config.state().clone()),
+                config.state().config().clone(),
+            )
+        });
+
         // register nested services
-        let mut cfg = config.clone_config();
+        let mut cfg = config.clone_config(state.clone());
         self.services
             .into_iter()
             .for_each(|mut srv| srv.register(&mut cfg));
@@ -404,19 +400,13 @@ where
             rmap.add(&mut rdef, None);
         }
 
-        // custom app data storage
-        if let Some(ref mut ext) = self.state {
-            config.set_service_state(ext);
-        }
-
         // complete scope pipeline creation
         let router_factory = ScopeRouterFactory {
-            state: self.state.take().map(Rc::new),
+            state,
             default: self.default.clone(),
             case_insensitive: self.case_insensitive,
             services: Rc::new(
                 cfg.into_services()
-                    .1
                     .into_iter()
                     .map(|(rdef, srv, guards, nested)| {
                         // case for scope prefix ends with '/' and
@@ -560,7 +550,7 @@ where
 }
 
 struct ScopeRouterFactory<Err: ErrorRenderer> {
-    state: Option<Rc<Extensions>>,
+    state: Option<AppState>,
     services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
     case_insensitive: bool,
@@ -575,8 +565,8 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
 
     fn new_service(&self, _: ()) -> Self::Future {
         let services = self.services.clone();
-        let case_insensitive = self.case_insensitive;
         let state = self.state.clone();
+        let case_insensitive = self.case_insensitive;
         let default_fut = self
             .default
             .borrow()
@@ -610,7 +600,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
 }
 
 struct ScopeRouter<Err: ErrorRenderer> {
-    state: Option<Rc<Extensions>>,
+    state: Option<AppState>,
     router: Router<HttpService<Err>, Vec<Box<dyn Guard>>>,
     default: Option<HttpService<Err>>,
 }
@@ -1206,48 +1196,6 @@ mod tests {
     }
 
     #[crate::rt_test]
-    async fn test_override_data() {
-        let srv = init_service(App::new().state(1usize).service(
-            web::scope("app").state(10usize).route(
-                "/t",
-                web::get().to(|data: web::types::State<usize>| {
-                    assert_eq!(**data, 10);
-                    async { HttpResponse::Ok() }
-                }),
-            ),
-        ))
-        .await;
-
-        let req = TestRequest::with_uri("/app/t").to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[crate::rt_test]
-    async fn test_override_app_data() {
-        let srv = init_service(
-            App::new()
-                .app_state(web::types::State::new(1usize))
-                .service(
-                    web::scope("app")
-                        .app_state(web::types::State::new(10usize))
-                        .route(
-                            "/t",
-                            web::get().to(|data: web::types::State<usize>| {
-                                assert_eq!(**data, 10);
-                                async { HttpResponse::Ok() }
-                            }),
-                        ),
-                ),
-        )
-        .await;
-
-        let req = TestRequest::with_uri("/app/t").to_request();
-        let resp = call_service(&srv, req).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[crate::rt_test]
     async fn test_scope_config() {
         let srv = init_service(App::new().service(web::scope("/app").configure(|s| {
             s.state("teat");
@@ -1257,6 +1205,24 @@ mod tests {
 
         let req = TestRequest::with_uri("/app/path1").to_request();
         let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[crate::rt_test]
+    async fn test_override_state() {
+        let srv = init_service(App::new().state(1usize).service(
+            web::scope("app").state(10usize).route(
+                "/t",
+                web::get().to(|data: web::types::State<usize>| {
+                    assert_eq!(*data, 10);
+                    async { HttpResponse::Ok() }
+                }),
+            ),
+        ))
+        .await;
+
+        let req = TestRequest::with_uri("/app/t").to_request();
+        let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
 

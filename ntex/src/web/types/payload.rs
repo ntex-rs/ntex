@@ -186,7 +186,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
 /// fn main() {
 ///     let app = App::new().service(
 ///         web::resource("/index.html")
-///             .app_state(
+///             .state(
 ///                 web::types::PayloadConfig::new(4096)  // <- limit size of the payload
 ///             )
 ///             .route(web::get().to(index))  // <- register handler with extractor params

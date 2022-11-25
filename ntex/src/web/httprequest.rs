@@ -12,6 +12,7 @@ use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::info::ConnectionInfo;
 use super::rmap::ResourceMap;
+use super::service::AppState;
 
 #[derive(Clone)]
 /// An HTTP Request
@@ -21,9 +22,8 @@ pub(crate) struct HttpRequestInner {
     pub(crate) head: Message<RequestHead>,
     pub(crate) path: Path<Uri>,
     pub(crate) payload: Payload,
-    pub(crate) app_state: Rc<Extensions>,
+    pub(crate) app_state: AppState,
     rmap: Rc<ResourceMap>,
-    config: AppConfig,
     pool: &'static HttpRequestPool,
 }
 
@@ -34,8 +34,7 @@ impl HttpRequest {
         head: Message<RequestHead>,
         payload: Payload,
         rmap: Rc<ResourceMap>,
-        config: AppConfig,
-        app_state: Rc<Extensions>,
+        app_state: AppState,
         pool: &'static HttpRequestPool,
     ) -> HttpRequest {
         HttpRequest(Rc::new(HttpRequestInner {
@@ -44,7 +43,6 @@ impl HttpRequest {
             payload,
             app_state,
             rmap,
-            config,
             pool,
         }))
     }
@@ -213,7 +211,7 @@ impl HttpRequest {
     /// App config
     #[inline]
     pub fn app_config(&self) -> &AppConfig {
-        &self.0.config
+        self.0.app_state.config()
     }
 
     /// Get an application state object stored with `App::state()` or `App::app_state()`
@@ -467,22 +465,22 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_state() {
-        let srv = init_service(App::new().app_state(10usize).service(
-            web::resource("/").to(|req: HttpRequest| async move {
+        let srv = init_service(App::new().state(10usize).service(web::resource("/").to(
+            |req: HttpRequest| async move {
                 if req.app_state::<usize>().is_some() {
                     HttpResponse::Ok()
                 } else {
                     HttpResponse::BadRequest()
                 }
-            }),
-        ))
+            },
+        )))
         .await;
 
         let req = TestRequest::default().to_request();
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let srv = init_service(App::new().app_state(10u32).service(web::resource("/").to(
+        let srv = init_service(App::new().state(10u32).service(web::resource("/").to(
             |req: HttpRequest| async move {
                 if req.app_state::<usize>().is_some() {
                     HttpResponse::Ok()

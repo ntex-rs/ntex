@@ -1,15 +1,10 @@
-use std::{ops::Deref, sync::Arc};
+use std::{marker::PhantomData, ops::Deref};
 
-use crate::http::Payload;
-use crate::util::{Extensions, Ready};
 use crate::web::error::{ErrorRenderer, StateExtractorError};
 use crate::web::extract::FromRequest;
 use crate::web::httprequest::HttpRequest;
-
-/// Application data factory
-pub(crate) trait StateFactory {
-    fn create(&self, extensions: &mut Extensions) -> bool;
-}
+use crate::web::service::AppState;
+use crate::{http::Payload, util::Ready};
 
 /// Application state.
 ///
@@ -26,15 +21,13 @@ pub(crate) trait StateFactory {
 /// instance for each thread, thus application data must be constructed
 /// multiple times. If you want to share state between different
 /// threads, a shareable object should be used, e.g. `Send + Sync`. Application
-/// state does not need to be `Send` or `Sync`. Internally `State` type
-/// uses `Arc`. if your state implements `Send` + `Sync` traits you can
-/// use `web::types::State::new()` and avoid double `Arc`.
+/// state does not need to be `Send` or `Sync`.
 ///
 /// If state is not set for a handler, using `State<T>` extractor would
 /// cause *Internal Server Error* response.
 ///
 /// ```rust
-/// use std::sync::Mutex;
+/// use std::sync::{Arc, Mutex};
 /// use ntex::web::{self, App, HttpResponse};
 ///
 /// struct MyState {
@@ -42,58 +35,44 @@ pub(crate) trait StateFactory {
 /// }
 ///
 /// /// Use `State<T>` extractor to access data in handler.
-/// async fn index(st: web::types::State<Mutex<MyState>>) -> HttpResponse {
+/// async fn index(st: web::types::State<Arc<Mutex<MyState>>>) -> HttpResponse {
 ///     let mut data = st.lock().unwrap();
 ///     data.counter += 1;
 ///     HttpResponse::Ok().into()
 /// }
 ///
 /// fn main() {
-///     let st = web::types::State::new(Mutex::new(MyState{ counter: 0 }));
+///     let st = Arc::new(Mutex::new(MyState{ counter: 0 }));
 ///
 ///     let app = App::new()
 ///         // Store `MyState` in application storage.
-///         .app_state(st.clone())
+///         .state(st.clone())
 ///         .service(
 ///             web::resource("/index.html").route(
 ///                 web::get().to(index)));
 /// }
 /// ```
 #[derive(Debug)]
-pub struct State<T>(Arc<T>);
+pub struct State<T>(AppState, PhantomData<T>);
 
-impl<T> State<T> {
-    /// Create new `State` instance.
-    ///
-    /// Internally `State` type uses `Arc`. if your state implements
-    /// `Send` + `Sync` traits you can use `web::types::State::new()` and
-    /// avoid double `Arc`.
-    pub fn new(state: T) -> State<T> {
-        State(Arc::new(state))
-    }
-
+impl<T: 'static> State<T> {
     /// Get reference to inner app data.
     pub fn get_ref(&self) -> &T {
-        self.0.as_ref()
-    }
-
-    /// Convert to the internal Arc<T>
-    pub fn into_inner(self) -> Arc<T> {
-        self.0
+        self.0.get::<T>().expect("Unexpected state")
     }
 }
 
-impl<T> Deref for State<T> {
-    type Target = Arc<T>;
+impl<T: 'static> Deref for State<T> {
+    type Target = T;
 
-    fn deref(&self) -> &Arc<T> {
-        &self.0
+    fn deref(&self) -> &T {
+        self.get_ref()
     }
 }
 
 impl<T> Clone for State<T> {
     fn clone(&self) -> State<T> {
-        State(self.0.clone())
+        State(self.0.clone(), PhantomData)
     }
 }
 
@@ -103,8 +82,8 @@ impl<T: 'static, E: ErrorRenderer> FromRequest<E> for State<T> {
 
     #[inline]
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        if let Some(st) = req.app_state::<State<T>>() {
-            Ready::Ok(st.clone())
+        if req.0.app_state.contains::<T>() {
+            Ready::Ok(Self(req.0.app_state.clone(), PhantomData))
         } else {
             log::debug!(
                 "Failed to construct App-level State extractor. \
@@ -116,20 +95,9 @@ impl<T: 'static, E: ErrorRenderer> FromRequest<E> for State<T> {
     }
 }
 
-impl<T: 'static> StateFactory for State<T> {
-    fn create(&self, extensions: &mut Extensions) -> bool {
-        if !extensions.contains::<State<T>>() {
-            extensions.insert(State(self.0.clone()));
-            true
-        } else {
-            false
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 
     use super::*;
     use crate::http::StatusCode;
@@ -138,13 +106,13 @@ mod tests {
     use crate::web::{self, App, HttpResponse};
 
     #[crate::rt_test]
-    async fn test_data_extractor() {
-        let srv = init_service(App::new().state("TEST".to_string()).service(
-            web::resource("/").to(|data: web::types::State<String>| async move {
-                assert_eq!(data.to_lowercase(), "test");
-                HttpResponse::Ok()
-            }),
-        ))
+    async fn test_state_extractor() {
+        let srv = init_service(
+            App::new().state(10usize).service(
+                web::resource("/")
+                    .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
+            ),
+        )
         .await;
 
         let req = TestRequest::default().to_request();
@@ -163,78 +131,9 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[crate::rt_test]
-    async fn test_app_data_extractor() {
-        let srv = init_service(
-            App::new().app_state(State::new(10usize)).service(
-                web::resource("/")
-                    .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
-            ),
-        )
-        .await;
-
-        let req = TestRequest::default().to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let srv = init_service(
-            App::new().app_state(State::new(10u32)).service(
-                web::resource("/")
-                    .to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
-            ),
-        )
-        .await;
-        let req = TestRequest::default().to_request();
-        let res = srv.call(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[crate::rt_test]
-    async fn test_route_data_extractor() {
-        let srv =
-            init_service(App::new().service(web::resource("/").state(10usize).route(
-                web::get().to(|data: web::types::State<usize>| async move {
-                    let _ = data.clone();
-                    HttpResponse::Ok()
-                }),
-            )))
-            .await;
-
-        let req = TestRequest::default().to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        // different type
-        let srv = init_service(App::new().service(web::resource("/").state(10u32).route(
-            web::get().to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
-        )))
-        .await;
-        let req = TestRequest::default().to_request();
-        let res = srv.call(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[crate::rt_test]
-    async fn test_override_data() {
-        let srv = init_service(App::new().state(1usize).service(
-            web::resource("/").state(10usize).route(web::get().to(
-                |data: web::types::State<usize>| async move {
-                    assert_eq!(**data, 10);
-                    let _ = data.clone();
-                    HttpResponse::Ok()
-                },
-            )),
-        ))
-        .await;
-
-        let req = TestRequest::default().to_request();
-        let resp = srv.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
     #[cfg(feature = "tokio")]
     #[crate::rt_test]
-    async fn test_data_drop() {
+    async fn test_state_drop() {
         struct TestData(Arc<AtomicUsize>);
 
         impl TestData {
@@ -274,5 +173,48 @@ mod tests {
         srv.stop().await;
 
         assert_eq!(num.load(Ordering::SeqCst), 0);
+    }
+
+    #[crate::rt_test]
+    async fn test_route_state_extractor() {
+        let srv =
+            init_service(App::new().service(web::resource("/").state(10usize).route(
+                web::get().to(|data: web::types::State<usize>| async move {
+                    let _ = data.clone();
+                    HttpResponse::Ok()
+                }),
+            )))
+            .await;
+
+        let req = TestRequest::default().to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // different type
+        let srv = init_service(App::new().service(web::resource("/").state(10u32).route(
+            web::get().to(|_: web::types::State<usize>| async { HttpResponse::Ok() }),
+        )))
+        .await;
+        let req = TestRequest::default().to_request();
+        let res = srv.call(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[crate::rt_test]
+    async fn test_override_state() {
+        let srv = init_service(App::new().state(1usize).service(
+            web::resource("/").state(10usize).route(web::get().to(
+                |data: web::types::State<usize>| async move {
+                    assert_eq!(*data, 10);
+                    let _ = data.clone();
+                    HttpResponse::Ok()
+                },
+            )),
+        ))
+        .await;
+
+        let req = TestRequest::default().to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }

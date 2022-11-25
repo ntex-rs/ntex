@@ -8,10 +8,7 @@ use super::config::AppConfig;
 use super::dev::insert_slesh;
 use super::error::ErrorRenderer;
 use super::guard::Guard;
-use super::request::WebRequest;
-use super::response::WebResponse;
-use super::rmap::ResourceMap;
-use super::types::state::StateFactory;
+use super::{request::WebRequest, response::WebResponse, rmap::ResourceMap};
 
 pub trait WebServiceFactory<Err: ErrorRenderer> {
     fn register(self, config: &mut WebServiceConfig<Err>);
@@ -49,9 +46,58 @@ type Guards = Vec<Box<dyn Guard>>;
 type HttpServiceFactory<Err: ErrorRenderer> =
     boxed::BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 
+#[derive(Debug, Clone)]
+pub(crate) struct AppState(Rc<AppStateInner>);
+
+#[derive(Debug)]
+struct AppStateInner {
+    ext: Extensions,
+    parent: Option<AppState>,
+    config: AppConfig,
+}
+
+impl AppState {
+    pub(crate) fn new(
+        ext: Extensions,
+        parent: Option<AppState>,
+        config: AppConfig,
+    ) -> Self {
+        AppState(Rc::new(AppStateInner {
+            ext,
+            parent,
+            config,
+        }))
+    }
+
+    pub(crate) fn config(&self) -> &AppConfig {
+        &self.0.config
+    }
+
+    pub(crate) fn get<T: 'static>(&self) -> Option<&T> {
+        let result = self.0.ext.get::<T>();
+        if result.is_some() {
+            result
+        } else if let Some(parent) = self.0.parent.as_ref() {
+            parent.get::<T>()
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn contains<T: 'static>(&self) -> bool {
+        if self.0.ext.contains::<T>() {
+            true
+        } else if let Some(parent) = self.0.parent.as_ref() {
+            parent.contains::<T>()
+        } else {
+            false
+        }
+    }
+}
+
 /// Application service configuration
 pub struct WebServiceConfig<Err: ErrorRenderer> {
-    config: AppConfig,
+    state: AppState,
     root: bool,
     default: Rc<HttpServiceFactory<Err>>,
     services: Vec<(
@@ -60,20 +106,14 @@ pub struct WebServiceConfig<Err: ErrorRenderer> {
         Option<Guards>,
         Option<Rc<ResourceMap>>,
     )>,
-    service_state: Rc<Vec<Box<dyn StateFactory>>>,
 }
 
 impl<Err: ErrorRenderer> WebServiceConfig<Err> {
     /// Crate server settings instance
-    pub(crate) fn new(
-        config: AppConfig,
-        default: Rc<HttpServiceFactory<Err>>,
-        service_state: Rc<Vec<Box<dyn StateFactory>>>,
-    ) -> Self {
+    pub(crate) fn new(state: AppState, default: Rc<HttpServiceFactory<Err>>) -> Self {
         WebServiceConfig {
-            config,
+            state,
             default,
-            service_state,
             root: true,
             services: Vec::new(),
         }
@@ -84,46 +124,38 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         self.root
     }
 
-    pub(crate) fn into_services(
-        self,
-    ) -> (
-        AppConfig,
-        Vec<(
-            ResourceDef,
-            HttpServiceFactory<Err>,
-            Option<Guards>,
-            Option<Rc<ResourceMap>>,
-        )>,
-    ) {
-        (self.config, self.services)
+    pub(super) fn state(&self) -> &AppState {
+        &self.state
     }
 
-    pub(crate) fn clone_config(&self) -> Self {
+    pub(crate) fn into_services(
+        self,
+    ) -> Vec<(
+        ResourceDef,
+        HttpServiceFactory<Err>,
+        Option<Guards>,
+        Option<Rc<ResourceMap>>,
+    )> {
+        self.services
+    }
+
+    pub(crate) fn clone_config(&self, state: Option<AppState>) -> Self {
         WebServiceConfig {
-            config: self.config.clone(),
+            state: state.unwrap_or_else(|| self.state.clone()),
             default: self.default.clone(),
             services: Vec::new(),
             root: false,
-            service_state: self.service_state.clone(),
         }
     }
 
     /// Service configuration
     pub fn config(&self) -> &AppConfig {
-        &self.config
+        self.state.config()
     }
 
     /// Default resource
     pub fn default_service(&self) -> Rc<HttpServiceFactory<Err>> {
         self.default.clone()
-    }
-
-    /// Set global route state
-    pub fn set_service_state(&self, extensions: &mut Extensions) -> bool {
-        for f in self.service_state.iter() {
-            f.create(extensions);
-        }
-        !self.service_state.is_empty()
     }
 
     /// Register http service
