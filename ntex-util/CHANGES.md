@@ -1,6 +1,8 @@
 # Changes
 
-## [0.1.18] - 2022-xx-xx
+## [0.1.18] - 2022-11-25
+
+* Add Extensions::extend() and Extensions::is_empty() methods
 
 * Add fmt::Debug impl to channel::Pool
 

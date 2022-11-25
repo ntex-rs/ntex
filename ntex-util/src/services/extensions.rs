@@ -1,4 +1,4 @@
-use std::{any::Any, any::TypeId, fmt};
+use std::{any::Any, any::TypeId, fmt, iter::Extend};
 
 #[derive(Default)]
 /// A type map of request extensions.
@@ -49,6 +49,16 @@ impl Extensions {
         self.map
             .remove(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast().ok().map(|boxed| *boxed))
+    }
+
+    /// Add all items from other `Extensions`
+    pub fn extend(&mut self, other: Extensions) {
+        self.map.extend(other.map.into_iter());
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 
     /// Clear the `Extensions` of all inserted extensions.
@@ -159,6 +169,30 @@ fn test_extensions() {
 
     extensions.insert(5i32);
     extensions.insert(MyType(10));
+
+    assert_eq!(extensions.get(), Some(&5i32));
+    assert_eq!(extensions.get_mut(), Some(&mut 5i32));
+
+    assert_eq!(extensions.remove::<i32>(), Some(5i32));
+    assert!(extensions.get::<i32>().is_none());
+
+    assert_eq!(extensions.get::<bool>(), None);
+    assert_eq!(extensions.get(), Some(&MyType(10)));
+}
+
+#[test]
+fn test_extend() {
+    #[derive(Debug, PartialEq)]
+    struct MyType(i32);
+
+    let mut extensions2 = Extensions::new();
+    assert!(extensions2.is_empty());
+    extensions2.insert(MyType(10));
+    assert!(!extensions2.is_empty());
+
+    let mut extensions = Extensions::new();
+    extensions.insert(5i32);
+    extensions.extend(extensions2);
 
     assert_eq!(extensions.get(), Some(&5i32));
     assert_eq!(extensions.get_mut(), Some(&mut 5i32));
