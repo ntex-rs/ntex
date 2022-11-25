@@ -6,7 +6,7 @@ use async_oneshot as oneshot;
 
 use crate::rt::{spawn, Arbiter};
 use crate::time::{sleep, Millis, Sleep};
-use crate::util::{join_all, ready, Stream as FutStream};
+use crate::util::{join_all, ready, select, stream_recv, Either, Stream as FutStream};
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
@@ -167,12 +167,12 @@ impl Worker {
         let avail = availability.clone();
 
         Arbiter::default().exec_fn(move || {
-            let _ = spawn(async move {
+            spawn(async move {
                 match Worker::create(rx1, rx2, factories, availability, shutdown_timeout)
                     .await
                 {
                     Ok(wrk) => {
-                        let _ = spawn(wrk);
+                        spawn(wrk);
                     }
                     Err(e) => {
                         error!("Cannot start worker: {:?}", e);
@@ -218,7 +218,17 @@ impl Worker {
             }));
         }
 
-        let res: Result<Vec<_>, _> = join_all(fut).await.into_iter().collect();
+        let res: Result<Vec<_>, _> =
+            match select(join_all(fut), stream_recv(&mut wrk.rx2)).await {
+                Either::Left(result) => result.into_iter().collect(),
+                Either::Right(Some(StopCommand { mut result, .. })) => {
+                    trace!("Shutdown uninitialized worker");
+                    wrk.shutdown(true);
+                    let _ = result.send(false);
+                    return Err(());
+                }
+                Either::Right(None) => Err(()),
+            };
         match res {
             Ok(services) => {
                 for item in services {

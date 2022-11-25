@@ -425,7 +425,6 @@ impl ServerBuilder {
                         .iter()
                         .map(move |worker| worker.1.stop(graceful))
                         .collect();
-
                     spawn(async move {
                         let _ = join_all(futs).await;
 
@@ -441,6 +440,10 @@ impl ServerBuilder {
                         }
                     });
                 } else {
+                    self.workers.iter().for_each(move |worker| {
+                        worker.1.stop(false);
+                    });
+
                     // we need to stop system if server was spawned
                     if self.exit {
                         spawn(async {

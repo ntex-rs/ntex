@@ -105,7 +105,7 @@ impl UninitSlice {
 
     /// Return a raw pointer to the slice's buffer.
     ///
-    /// # Safety
+    /// // Safety
     ///
     /// The caller **must not** read from the referenced memory and **must not**
     /// write **uninitialized** bytes to the slice either.

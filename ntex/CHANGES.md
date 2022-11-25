@@ -1,5 +1,8 @@
 # Changes
 
+## [0.5.30] - 2022-11-25
+
+
 ## [0.5.29] - 2022-11-03
 
 * Handle io disconnect during h1/h2 server handling

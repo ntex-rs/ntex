@@ -57,5 +57,5 @@ webpki-roots = { version = "0.22", optional = true }
 
 [dev-dependencies]
 rand = "0.8"
-env_logger = "0.9"
+env_logger = "0.10"
 ntex = { version = "0.5", features = ["tokio"] }

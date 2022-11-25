@@ -1,4 +1,4 @@
-use std::{rc::Rc, task::Context, task::Poll, time::Duration};
+use std::{future::Future, rc::Rc, task::Context, task::Poll, time::Duration};
 
 use ntex_h2::{self as h2};
 
@@ -252,8 +252,12 @@ fn connector(
     connector: BoxedConnector,
     timeout: Millis,
     disconnect_timeout: Millis,
-) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError, Future = impl Unpin> + Unpin
-{
+) -> impl Service<
+    Connect,
+    Response = IoBoxed,
+    Error = ConnectError,
+    Future = impl Unpin + Future,
+> + Unpin {
     TimeoutService::new(
         timeout,
         apply_fn(connector, |msg: Connect, srv| {

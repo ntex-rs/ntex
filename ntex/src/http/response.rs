@@ -479,7 +479,7 @@ impl ResponseBuilder {
     ///     builder.finish()
     /// }
     /// ```
-    pub fn del_cookie<'a>(&mut self, cookie: &Cookie<'a>) -> &mut Self {
+    pub fn del_cookie<'c>(&mut self, cookie: &Cookie<'c>) -> &mut Self {
         if self.cookies.is_none() {
             self.cookies = Some(CookieJar::new())
         }
@@ -841,7 +841,7 @@ mod tests {
                     .max_age(time::Duration::days(1))
                     .finish(),
             )
-            .del_cookie(&cookies[1])
+            .del_cookie(&cookies[0])
             .finish();
 
         let mut val: Vec<_> = resp
@@ -876,9 +876,9 @@ mod tests {
 
         let mut iter = r.cookies();
         let v = iter.next().unwrap();
-        assert_eq!((v.name(), v.value()), ("cookie3", "val300"));
-        let v = iter.next().unwrap();
         assert_eq!((v.name(), v.value()), ("original", "val100"));
+        let v = iter.next().unwrap();
+        assert_eq!((v.name(), v.value()), ("cookie3", "val300"));
     }
 
     #[test]
