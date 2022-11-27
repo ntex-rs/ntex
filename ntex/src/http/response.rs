@@ -167,7 +167,7 @@ impl<B> Response<B> {
 
     /// Mutable reference to a the response's extensions
     #[inline]
-    pub fn extensions_mut(&mut self) -> RefMut<'_, Extensions> {
+    pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.head.extensions.borrow_mut()
     }
 
@@ -523,7 +523,7 @@ impl ResponseBuilder {
 
     /// Mutable reference to a the response's extensions
     #[inline]
-    pub fn extensions_mut(&mut self) -> RefMut<'_, Extensions> {
+    pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         let head = self.head.as_ref().expect("cannot reuse response builder");
         head.extensions.borrow_mut()
     }

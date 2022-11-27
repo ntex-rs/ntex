@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.31] - 2022-xx-xx
+
+* http: Don't require mutable self reference in `Response::extensions_mut` method
+
 ## [0.5.30] - 2022-11-25
 
 * Change `App::state()` behaviour
