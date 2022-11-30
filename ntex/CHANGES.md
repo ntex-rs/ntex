@@ -2,7 +2,7 @@
 
 ## [0.5.31] - 2022-11-30
 
-* http: Don't require mutable self reference in `Response::extensions_mut` method
+* http: Don't require mutable self reference in `Response::extensions_mut()` method
 
 ## [0.5.30] - 2022-11-25
 
