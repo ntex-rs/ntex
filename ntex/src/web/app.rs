@@ -84,11 +84,10 @@ where
 {
     /// Set application level arbitrary state item.
     ///
-    /// Application state stored with `App::app_state()` method is available
+    /// Application state stored with `App::state()` method is available
     /// via `HttpRequest::app_state()` method at runtime.
     ///
-    /// This method could be used for storing `State<T>` as well, in that case
-    /// state could be accessed by using `State<T>` extractor.
+    /// `State<T>` extractor could be used to access stored state `T`.
     ///
     /// **Note**: http server accepts an application factory rather than
     /// an application instance. Http server constructs an application

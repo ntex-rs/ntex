@@ -1211,12 +1211,15 @@ mod tests {
     #[crate::rt_test]
     async fn test_override_state() {
         let srv = init_service(App::new().state(1usize).service(
-            web::scope("app").state(10usize).route(
+            web::scope("app").state(10usize).state(100u16).route(
                 "/t",
-                web::get().to(|data: web::types::State<usize>| {
-                    assert_eq!(*data, 10);
-                    async { HttpResponse::Ok() }
-                }),
+                web::get().to(
+                    |data: web::types::State<usize>, data2: web::types::State<u16>| {
+                        assert_eq!(*data, 10);
+                        assert_eq!(*data2, 100);
+                        async { HttpResponse::Ok() }
+                    },
+                ),
             ),
         ))
         .await;
