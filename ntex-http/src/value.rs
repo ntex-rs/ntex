@@ -196,12 +196,6 @@ impl HeaderValue {
         HeaderValue::from_shared(src)
     }
 
-    #[deprecated]
-    #[doc(hidden)]
-    pub unsafe fn from_maybe_shared_unchecked(inner: Bytes) -> HeaderValue {
-        HeaderValue::from_shared_unchecked(inner)
-    }
-
     fn try_from_generic<T: AsRef<[u8]>, F: FnOnce(T) -> Bytes>(
         src: T,
         into: F,
@@ -473,6 +467,24 @@ impl TryFrom<Vec<u8>> for HeaderValue {
     }
 }
 
+impl From<HeaderValue> for http::header::HeaderValue {
+    #[inline]
+    fn from(t: HeaderValue) -> Self {
+        let mut hdr = Self::from_bytes(t.as_bytes()).unwrap();
+        hdr.set_sensitive(t.is_sensitive());
+        hdr
+    }
+}
+
+impl<'a> From<&'a HeaderValue> for http::header::HeaderValue {
+    #[inline]
+    fn from(t: &'a HeaderValue) -> Self {
+        let mut hdr = Self::from_bytes(t.as_bytes()).unwrap();
+        hdr.set_sensitive(t.is_sensitive());
+        hdr
+    }
+}
+
 const fn is_visible_ascii(b: u8) -> bool {
     b >= 32 && b < 127 || b == b'\t'
 }
@@ -724,6 +736,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_basics() {
+        assert!(HeaderValue::from_str("").unwrap().is_empty());
+
+        let hdr = HeaderValue::from_bytes(b"upgrade").unwrap();
+        let hdr2 = HeaderValue::from(&hdr);
+        assert_eq!(hdr, hdr2);
+
+        let hdr = http::header::HeaderValue::from_bytes(b"upgrade").unwrap();
+        let hdr2 = HeaderValue::from(&hdr);
+        assert_eq!(hdr2.as_bytes(), b"upgrade");
+        let hdr2 = HeaderValue::from(hdr);
+        assert_eq!(hdr2.as_bytes(), b"upgrade");
+
+        let hdr = HeaderValue::try_from("upgrade".to_string()).unwrap();
+        assert_eq!(hdr.as_bytes(), b"upgrade");
+        let hdr = HeaderValue::try_from(ByteString::from("upgrade")).unwrap();
+        assert_eq!(hdr.as_bytes(), b"upgrade");
+        let hdr = HeaderValue::try_from(&ByteString::from("upgrade")).unwrap();
+        assert_eq!(hdr.as_bytes(), b"upgrade");
+    }
+
+    #[test]
     fn test_try_from() {
         HeaderValue::try_from(vec![127]).unwrap_err();
     }
@@ -734,7 +768,14 @@ mod tests {
     }
 
     #[test]
-    fn test_debug() {
+    fn into_http_value() {
+        let hdr = HeaderValue::from_bytes(b"upgrade").unwrap();
+        let _ = http::header::HeaderValue::from(&hdr);
+        let _ = http::header::HeaderValue::from(hdr);
+    }
+
+    #[test]
+    fn test_fmt() {
         let cases = &[
             ("hello", "\"hello\""),
             ("hello \"world\"", "\"hello \\\"world\\\"\""),
@@ -750,5 +791,11 @@ mod tests {
         let mut sensitive = HeaderValue::from_static("password");
         sensitive.set_sensitive(true);
         assert_eq!("Sensitive", format!("{:?}", sensitive));
+
+        let s = format!("{:?}", InvalidHeaderValue { _priv: {} });
+        assert_eq!(s, "InvalidHeaderValue");
+
+        let s = format!("{}", ToStrError { _priv: {} });
+        assert_eq!(s, "failed to convert header to a str");
     }
 }

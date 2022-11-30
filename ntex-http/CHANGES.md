@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.8] - 2022-11-30
+
+* Convert from HeaderValue into http::header::HeaderValue
+
 ## [0.1.7] - 2022-11-24
 
 * Keep multi header values order #145
