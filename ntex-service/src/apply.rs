@@ -2,7 +2,7 @@ use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Po
 
 use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
-/// Apply tranform function to a service.
+/// Apply transform function to a service.
 pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
     service: U,
     f: F,
@@ -16,7 +16,7 @@ where
     Apply::new(service.into_service(), f)
 }
 
-/// Service factory that prodices `apply_fn` service.
+/// Service factory that produces `apply_fn` service.
 pub fn apply_fn_factory<T, Req, Cfg, F, R, In, Out, Err, U>(
     service: U,
     f: F,

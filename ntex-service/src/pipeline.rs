@@ -8,7 +8,7 @@ use crate::then::{Then, ThenFactory};
 use crate::transform::{ApplyTransform, Transform};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
-/// Contruct new pipeline with one service in pipeline chain.
+/// Constructs new pipeline with one service in pipeline chain.
 pub fn pipeline<T, R, F>(service: F) -> Pipeline<T, R>
 where
     T: Service<R>,
@@ -20,7 +20,7 @@ where
     }
 }
 
-/// Contruct new pipeline factory with one service factory.
+/// Constructs new pipeline factory with one service factory.
 pub fn pipeline_factory<T, R, C, F>(factory: F) -> PipelineFactory<T, R, C>
 where
     T: ServiceFactory<R, C>,
