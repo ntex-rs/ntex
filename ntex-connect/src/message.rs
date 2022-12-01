@@ -1,4 +1,7 @@
+use ntex_http::Uri;
 use std::collections::{vec_deque, VecDeque};
+use std::convert::TryFrom;
+use std::str::FromStr;
 use std::{fmt, iter::FromIterator, iter::FusedIterator, net::SocketAddr};
 
 use ntex_util::future::Either;
@@ -112,6 +115,16 @@ impl<T: Address> Connect<T> {
     /// Host name
     pub fn host(&self) -> &str {
         self.req.host()
+    }
+    /// only for openssl hostname
+    pub fn host_name(&self) -> String {
+        if let Ok(_) = SocketAddr::from_str(self.req.host()) {
+            return "".to_string();
+        } else {
+            Uri::try_from(self.req.host())
+                .map(|x| x.host().unwrap_or("").to_string())
+                .unwrap_or("".to_string())
+        }
     }
 
     /// Port of the request

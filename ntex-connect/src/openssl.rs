@@ -47,7 +47,7 @@ impl<T: Address + 'static> Connector<T> {
         Connect<T>: From<U>,
     {
         let message = Connect::from(message);
-        let host = message.host().to_string();
+        let host = message.host_name();
         let conn = self.connector.call(message);
         let openssl = self.openssl.clone();
 
@@ -57,7 +57,11 @@ impl<T: Address + 'static> Connector<T> {
 
             match openssl.configure() {
                 Err(e) => Err(io::Error::new(io::ErrorKind::Other, e).into()),
-                Ok(config) => {
+                Ok(mut config) => {
+                    if host == "" {
+                        config.set_verify_hostname(false);
+                        config.set_use_server_name_indication(false);
+                    }
                     let ssl = config
                         .into_ssl(&host)
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
