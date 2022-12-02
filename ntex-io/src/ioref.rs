@@ -1,10 +1,10 @@
-use std::{any, fmt, hash, io};
+use std::{any, fmt, hash, io, time};
 
 use ntex_bytes::{BufMut, BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
 use super::io::{Flags, IoRef, OnDisconnect};
-use super::{types, Filter};
+use super::{timer, types, Filter};
 
 impl IoRef {
     #[inline]
@@ -183,6 +183,28 @@ impl IoRef {
             }
             f(buf.as_mut().unwrap())
         })
+    }
+
+    #[inline]
+    /// Start keep-alive timer
+    pub fn start_keepalive_timer(&self, timeout: time::Duration) {
+        if self.flags().contains(Flags::KEEPALIVE) {
+            timer::unregister(self.0.keepalive.get(), self);
+        }
+        if !timeout.is_zero() {
+            log::debug!("start keep-alive timeout {:?}", timeout);
+            self.0.insert_flags(Flags::KEEPALIVE);
+            self.0.keepalive.set(timer::register(timeout, self));
+        }
+    }
+
+    #[inline]
+    /// Stop keep-alive timer
+    pub fn stop_keepalive_timer(&self) {
+        if self.flags().contains(Flags::KEEPALIVE) {
+            log::debug!("unregister keep-alive timeout");
+            timer::unregister(self.0.keepalive.get(), self)
+        }
     }
 
     #[inline]

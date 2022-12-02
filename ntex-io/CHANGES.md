@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.11] - 2022-12-02
+
+* Expose IoRef::start_keepalive_timer() and IoRef::remove_keepalive_timer() methods
+
 ## [0.1.10] - 2022-10-31
 
 * Fix compilation errors in the openwrt environment #140

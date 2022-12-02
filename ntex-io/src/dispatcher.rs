@@ -444,7 +444,7 @@ where
 
     /// unregister keep-alive timer
     fn unregister_keepalive(&self) {
-        self.io.remove_keepalive_timer();
+        self.io.stop_keepalive_timer();
         self.ka_timeout.set(time::Duration::ZERO);
     }
 }

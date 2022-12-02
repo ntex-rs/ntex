@@ -13,7 +13,7 @@ use ntex_util::{
 use super::filter::{Base, NullFilter};
 use super::seal::Sealed;
 use super::tasks::{ReadContext, WriteContext};
-use super::{timer, Filter, FilterFactory, Handle, IoStatusUpdate, IoStream, RecvError};
+use super::{Filter, FilterFactory, Handle, IoStatusUpdate, IoStream, RecvError};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -68,7 +68,7 @@ pub(crate) struct IoState {
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     #[allow(clippy::box_collection)]
     pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
-    keepalive: Cell<time::Instant>,
+    pub(super) keepalive: Cell<time::Instant>,
 }
 
 impl IoState {
@@ -344,25 +344,9 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Start keep-alive timer
-    pub fn start_keepalive_timer(&self, timeout: time::Duration) {
-        if self.flags().contains(Flags::KEEPALIVE) {
-            timer::unregister(self.0 .0.keepalive.get(), &self.0);
-        }
-        if !timeout.is_zero() {
-            log::debug!("start keep-alive timeout {:?}", timeout);
-            self.0 .0.insert_flags(Flags::KEEPALIVE);
-            self.0 .0.keepalive.set(timer::register(timeout, &self.0));
-        }
-    }
-
-    #[inline]
-    /// Remove keep-alive timer
+    #[doc(hidden)]
     pub fn remove_keepalive_timer(&self) {
-        if self.flags().contains(Flags::KEEPALIVE) {
-            log::debug!("unregister keep-alive timeout");
-            timer::unregister(self.0 .0.keepalive.get(), &self.0)
-        }
+        self.stop_keepalive_timer()
     }
 
     /// Get current io error
@@ -717,7 +701,7 @@ impl<F> Deref for Io<F> {
 
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
-        self.remove_keepalive_timer();
+        self.stop_keepalive_timer();
         if self.1.is_set() {
             log::trace!(
                 "io is dropped, force stopping io streams {:?}",
