@@ -57,7 +57,11 @@ impl<T: Address + 'static> Connector<T> {
 
             match openssl.configure() {
                 Err(e) => Err(io::Error::new(io::ErrorKind::Other, e).into()),
-                Ok(config) => {
+                Ok(mut config) => {
+                    if host == "" {
+                        config.set_verify_hostname(false);
+                        config.set_use_server_name_indication(false);
+                    }
                     let ssl = config
                         .into_ssl(&host)
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
