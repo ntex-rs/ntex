@@ -47,7 +47,7 @@ impl<T: Address + 'static> Connector<T> {
         Connect<T>: From<U>,
     {
         let message = Connect::from(message);
-        let host = message.host().to_string();
+        let host = message.host().split(':').next().unwrap().to_string();
         let conn = self.connector.call(message);
         let openssl = self.openssl.clone();
 
