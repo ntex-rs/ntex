@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.9] - 2022-12-09
+
+* Add helper method HeaderValue::as_shared()
+
 ## [0.1.8] - 2022-11-30
 
 * Convert from HeaderValue into http::header::HeaderValue

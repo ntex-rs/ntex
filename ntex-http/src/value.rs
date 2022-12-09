@@ -283,6 +283,21 @@ impl HeaderValue {
         self.as_ref()
     }
 
+    /// Converts a `HeaderValue` to a bytes object.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ntex_http::header::HeaderValue;
+    /// # use ntex_bytes::Bytes;
+    /// let val = HeaderValue::from_static("hello");
+    /// assert_eq!(val.as_shared(), &Bytes::from_static(b"hello"));
+    /// ```
+    #[inline]
+    pub fn as_shared(&self) -> &Bytes {
+        &self.inner
+    }
+
     /// Mark that the header value represents sensitive information.
     ///
     /// # Examples
@@ -746,6 +761,7 @@ mod tests {
         let hdr = http::header::HeaderValue::from_bytes(b"upgrade").unwrap();
         let hdr2 = HeaderValue::from(&hdr);
         assert_eq!(hdr2.as_bytes(), b"upgrade");
+        assert_eq!(hdr2.as_shared(), &Bytes::from_static(b"upgrade"));
         let hdr2 = HeaderValue::from(hdr);
         assert_eq!(hdr2.as_bytes(), b"upgrade");
 
