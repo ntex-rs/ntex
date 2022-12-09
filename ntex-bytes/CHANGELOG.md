@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.17] (2022-12-09)
+
+* Add TryFrom<&Bytes> and TryFrom<&BytesMut> for ByteString
+
 ## [0.1.16] (2022-07-07)
 
 * Add ByteString::clear() method

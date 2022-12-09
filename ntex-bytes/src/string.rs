@@ -277,6 +277,19 @@ impl TryFrom<Bytes> for ByteString {
     }
 }
 
+impl TryFrom<&Bytes> for ByteString {
+    type Error = ();
+
+    #[inline]
+    fn try_from(value: &Bytes) -> Result<Self, Self::Error> {
+        if utf8::is_valid(value) {
+            Ok(ByteString(value.clone()))
+        } else {
+            Err(())
+        }
+    }
+}
+
 impl TryFrom<BytesMut> for ByteString {
     type Error = ();
 
@@ -284,6 +297,19 @@ impl TryFrom<BytesMut> for ByteString {
     fn try_from(value: BytesMut) -> Result<Self, Self::Error> {
         if utf8::is_valid(&value) {
             Ok(ByteString(value.freeze()))
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a BytesMut> for ByteString {
+    type Error = ();
+
+    #[inline]
+    fn try_from(value: &'a BytesMut) -> Result<Self, Self::Error> {
+        if utf8::is_valid(value) {
+            Ok(ByteString(value.clone().freeze()))
         } else {
             Err(())
         }
@@ -432,7 +458,9 @@ mod test {
         let _ = ByteString::try_from(&b"nice bytes"[..]).unwrap();
         let _ = ByteString::try_from(b"nice bytes".to_vec()).unwrap();
         let _ = ByteString::try_from(Bytes::from_static(b"nice bytes")).unwrap();
+        let _ = ByteString::try_from(&Bytes::from_static(b"nice bytes")).unwrap();
         let _ = ByteString::try_from(BytesMut::from(&b"nice bytes"[..])).unwrap();
+        let _ = ByteString::try_from(&BytesMut::from(&b"nice bytes"[..])).unwrap();
         let _ =
             ByteString::try_from(BytesVec::copy_from_slice(&b"nice bytes"[..])).unwrap();
     }
