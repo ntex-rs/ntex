@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.18] (2022-12-13)
+
+* Add Bytes<&Bytes> for Bytes impl
+
+* Remove ByteString::TryFrom<&BytesMut> impl
+
 ## [0.1.17] (2022-12-09)
 
 * Add TryFrom<&Bytes> and TryFrom<&BytesMut> for ByteString

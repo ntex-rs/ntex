@@ -303,19 +303,6 @@ impl TryFrom<BytesMut> for ByteString {
     }
 }
 
-impl<'a> TryFrom<&'a BytesMut> for ByteString {
-    type Error = ();
-
-    #[inline]
-    fn try_from(value: &'a BytesMut) -> Result<Self, Self::Error> {
-        if utf8::is_valid(value) {
-            Ok(ByteString(value.clone().freeze()))
-        } else {
-            Err(())
-        }
-    }
-}
-
 impl TryFrom<BytesVec> for ByteString {
     type Error = ();
 

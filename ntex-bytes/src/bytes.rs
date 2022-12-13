@@ -899,6 +899,12 @@ impl Deref for Bytes {
     }
 }
 
+impl From<&Bytes> for Bytes {
+    fn from(src: &Bytes) -> Bytes {
+        src.clone()
+    }
+}
+
 impl From<BytesMut> for Bytes {
     fn from(src: BytesMut) -> Bytes {
         src.freeze()
@@ -4045,8 +4051,7 @@ mod tests {
 
     use super::*;
 
-    const LONG: &[u8] =
-        b"mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
+    const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb";
 
