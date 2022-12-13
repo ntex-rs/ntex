@@ -19,7 +19,7 @@ pub trait Address: Unpin + 'static {
 
 impl Address for String {
     fn host(&self) -> &str {
-        &self
+        self
     }
 
     fn port(&self) -> Option<u16> {
