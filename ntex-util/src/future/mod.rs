@@ -16,6 +16,10 @@ pub use self::lazy::{lazy, Lazy};
 pub use self::ready::Ready;
 pub use self::select::select;
 
+/// An owned dynamically typed Future for use in cases where
+/// you can't statically type your result or need to add some indirection.
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
 /// Creates a new future wrapping around a function returning [`Poll`].
 ///
 /// Polling the returned future delegates to the wrapped function.

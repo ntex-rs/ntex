@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.19] - 2022-12-13
+
+* Add `BoxFuture` helper type alias
+
 ## [0.1.18] - 2022-11-25
 
 * Add Extensions::extend() and Extensions::is_empty() methods
