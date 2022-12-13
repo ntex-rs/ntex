@@ -195,10 +195,10 @@ mod tests {
     #[derive(Clone)]
     struct Tr<R>(marker::PhantomData<R>);
 
-    impl<S, R> Transform<S> for Tr<R> {
+    impl<S, R> Middleware<S> for Tr<R> {
         type Service = Srv<S, R>;
 
-        fn new_transform(&self, service: S) -> Self::Service {
+        fn create(&self, service: S) -> Self::Service {
             Srv(service, marker::PhantomData)
         }
     }

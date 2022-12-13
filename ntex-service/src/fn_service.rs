@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{cell::Cell, future::ready, future::Future, future::Ready, marker::PhantomData};
+use std::{future::ready, future::Future, future::Ready, marker::PhantomData};
 
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
@@ -103,16 +103,12 @@ where
     FnServiceConfig::new(f)
 }
 
-#[inline]
-pub fn fn_shutdown() {}
-
-pub struct FnService<F, Fut, Req, Res, Err, FShut = fn()>
+pub struct FnService<F, Fut, Req, Res, Err>
 where
     F: Fn(Req) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
 {
     f: F,
-    f_shutdown: Cell<Option<FShut>>,
     _t: PhantomData<Req>,
 }
 
@@ -122,49 +118,27 @@ where
     Fut: Future<Output = Result<Res, Err>>,
 {
     pub(crate) fn new(f: F) -> Self {
-        Self {
-            f,
-            f_shutdown: Cell::new(Some(fn_shutdown)),
-            _t: PhantomData,
-        }
-    }
-
-    /// Set function that get called oin poll_shutdown method of Service trait.
-    pub fn on_shutdown<FShut>(self, f: FShut) -> FnService<F, Fut, Req, Res, Err, FShut>
-    where
-        FShut: FnOnce(),
-    {
-        FnService {
-            f: self.f,
-            f_shutdown: Cell::new(Some(f)),
-            _t: PhantomData,
-        }
+        Self { f, _t: PhantomData }
     }
 }
 
-impl<F, Fut, Req, Res, Err, FShut> Clone for FnService<F, Fut, Req, Res, Err, FShut>
+impl<F, Fut, Req, Res, Err> Clone for FnService<F, Fut, Req, Res, Err>
 where
     F: Fn(Req) -> Fut + Clone,
-    FShut: FnOnce() + Clone,
     Fut: Future<Output = Result<Res, Err>>,
 {
     #[inline]
     fn clone(&self) -> Self {
-        let f = self.f_shutdown.take();
-        self.f_shutdown.set(f.clone());
-
         Self {
             f: self.f.clone(),
-            f_shutdown: Cell::new(f),
             _t: PhantomData,
         }
     }
 }
 
-impl<F, Fut, Req, Res, Err, FShut> Service<Req> for FnService<F, Fut, Req, Res, Err, FShut>
+impl<F, Fut, Req, Res, Err> Service<Req> for FnService<F, Fut, Req, Res, Err>
 where
     F: Fn(Req) -> Fut,
-    FShut: FnOnce(),
     Fut: Future<Output = Result<Res, Err>>,
 {
     type Response = Res;
@@ -178,9 +152,6 @@ where
 
     #[inline]
     fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
-        if let Some(f) = self.f_shutdown.take() {
-            (f)()
-        }
         Poll::Ready(())
     }
 
@@ -201,13 +172,12 @@ where
     }
 }
 
-pub struct FnServiceFactory<F, Fut, Req, Res, Err, Cfg, FShut = fn()>
+pub struct FnServiceFactory<F, Fut, Req, Res, Err, Cfg>
 where
     F: Fn(Req) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
 {
     f: F,
-    f_shutdown: Cell<Option<FShut>>,
     _t: PhantomData<(Req, Cfg)>,
 }
 
@@ -217,54 +187,27 @@ where
     Fut: Future<Output = Result<Res, Err>>,
 {
     fn new(f: F) -> Self {
-        FnServiceFactory {
-            f,
-            f_shutdown: Cell::new(Some(fn_shutdown)),
-            _t: PhantomData,
-        }
-    }
-
-    /// Set function that get called oin poll_shutdown method of Service trait.
-    pub fn on_shutdown<FShut>(
-        self,
-        f: FShut,
-    ) -> FnServiceFactory<F, Fut, Req, Res, Err, Cfg, FShut>
-    where
-        FShut: FnOnce(),
-    {
-        FnServiceFactory {
-            f: self.f,
-            f_shutdown: Cell::new(Some(f)),
-            _t: PhantomData,
-        }
+        FnServiceFactory { f, _t: PhantomData }
     }
 }
 
-impl<F, Fut, Req, Res, Err, Cfg, FShut> Clone
-    for FnServiceFactory<F, Fut, Req, Res, Err, Cfg, FShut>
+impl<F, Fut, Req, Res, Err, Cfg> Clone for FnServiceFactory<F, Fut, Req, Res, Err, Cfg>
 where
     F: Fn(Req) -> Fut + Clone,
-    FShut: FnOnce() + Clone,
     Fut: Future<Output = Result<Res, Err>>,
 {
     #[inline]
     fn clone(&self) -> Self {
-        let f = self.f_shutdown.take();
-        self.f_shutdown.set(f.clone());
-
         Self {
             f: self.f.clone(),
-            f_shutdown: Cell::new(f),
             _t: PhantomData,
         }
     }
 }
 
-impl<F, Fut, Req, Res, Err, FShut> Service<Req>
-    for FnServiceFactory<F, Fut, Req, Res, Err, (), FShut>
+impl<F, Fut, Req, Res, Err> Service<Req> for FnServiceFactory<F, Fut, Req, Res, Err, ()>
 where
     F: Fn(Req) -> Fut,
-    FShut: FnOnce(),
     Fut: Future<Output = Result<Res, Err>>,
 {
     type Response = Res;
@@ -278,9 +221,6 @@ where
 
     #[inline]
     fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
-        if let Some(f) = self.f_shutdown.take() {
-            (f)()
-        }
         Poll::Ready(())
     }
 
@@ -290,28 +230,23 @@ where
     }
 }
 
-impl<F, Fut, Req, Res, Err, Cfg, FShut> ServiceFactory<Req, Cfg>
-    for FnServiceFactory<F, Fut, Req, Res, Err, Cfg, FShut>
+impl<F, Fut, Req, Res, Err, Cfg> ServiceFactory<Req, Cfg>
+    for FnServiceFactory<F, Fut, Req, Res, Err, Cfg>
 where
     F: Fn(Req) -> Fut + Clone,
-    FShut: FnOnce() + Clone,
     Fut: Future<Output = Result<Res, Err>>,
 {
     type Response = Res;
     type Error = Err;
 
-    type Service = FnService<F, Fut, Req, Res, Err, FShut>;
+    type Service = FnService<F, Fut, Req, Res, Err>;
     type InitError = ();
     type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     #[inline]
     fn new_service(&self, _: Cfg) -> Self::Future {
-        let f = self.f_shutdown.take();
-        self.f_shutdown.set(f.clone());
-
         ready(Ok(FnService {
             f: self.f.clone(),
-            f_shutdown: Cell::new(f),
             _t: PhantomData,
         }))
     }
@@ -454,19 +389,13 @@ where
 #[cfg(test)]
 mod tests {
     use ntex_util::future::lazy;
-    use std::{cell::RefCell, rc::Rc, task::Poll};
 
     use super::*;
     use crate::{Service, ServiceFactory};
 
     #[ntex::test]
     async fn test_fn_service() {
-        let shutdown = Rc::new(RefCell::new(false));
-        let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") })
-            .on_shutdown(|| {
-                *shutdown.borrow_mut() = true;
-            })
-            .clone();
+        let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") }).clone();
 
         let srv = new_srv.new_service(()).await.unwrap();
         let res = srv.call(()).await;
@@ -483,16 +412,11 @@ mod tests {
             lazy(|cx| srv2.poll_shutdown(cx, false)).await,
             Poll::Ready(())
         );
-        assert!(*shutdown.borrow());
     }
 
     #[ntex::test]
     async fn test_fn_service_service() {
-        let shutdown = Rc::new(RefCell::new(false));
         let srv = fn_service(|()| async { Ok::<_, ()>("srv") })
-            .on_shutdown(|| {
-                *shutdown.borrow_mut() = true;
-            })
             .clone()
             .new_service(())
             .await
@@ -507,7 +431,6 @@ mod tests {
             lazy(|cx| srv.poll_shutdown(cx, false)).await,
             Poll::Ready(())
         );
-        assert!(*shutdown.borrow());
     }
 
     #[ntex::test]

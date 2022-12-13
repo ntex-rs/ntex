@@ -1,5 +1,11 @@
 # Changes
 
+## [0.4.0-alpha.0] - 2022-12-xx
+
+* Rename Transform to Middleware
+
+* Drop FnService's shutdown helper
+
 ## [0.3.3] - 2022-07-08
 
 * Revert cleanups
