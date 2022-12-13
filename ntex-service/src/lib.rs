@@ -1,3 +1,5 @@
+//! See [`Service`] docs for information on this crate's foundational trait.
+
 #![deny(rust_2018_idioms, warnings)]
 #![allow(clippy::type_complexity)]
 
@@ -23,48 +25,66 @@ pub use self::map_config::{map_config, map_config_service, unit_config};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 pub use self::transform::{apply, Identity, Transform};
 
-/// An asynchronous function from `Request` to a `Response`.
+/// An asynchronous function of `Request` to a `Response`.
 ///
-/// `Service` represents a service that represanting interation, taking requests and giving back
-/// replies. You can think about service as a function with one argument and result as a return
-/// type. In general form it looks like `async fn(Req) -> Result<Res, Err>`. `Service`
-/// trait just generalizing form of this function. Each parameter described as an assotiated type.
-///
-/// Services provides a symmetric and uniform API, same abstractions represents
-/// clients and servers. Services describe only `transforamtion` operation
-/// which encorouge to simplify api surface and phrases `value transformation`.
-/// That leads to simplier design of each service. That also allows better testability
-/// and better composition.
-///
-/// Services could be represented in several different forms. In general,
-/// Service is a type that implements `Service` trait.
+/// The `Service` trait represents a request/response interaction, receiving requests and returning
+/// replies. You can think about service as a function with one argument that returns some result
+/// asynchronously. Conceptually, the operation looks like this:
 ///
 /// ```rust,ignore
+/// async fn(Request) -> Result<Response, Error>
+/// ```
+///
+/// The `Service` trait just generalizes this form. Requests are defined as a generic type parameter
+/// and responses and other details are defined as associated types on the trait impl. Notice that
+/// this design means that services can receive many request types and converge them to a single
+/// response type.
+///
+/// Services can also have mutable state that influence computation by using a `Cell`, `RefCell`
+/// or `Mutex`. Services intentionally do not take `&mut self` to reduce overhead in the
+/// common cases.
+///
+/// `Service` provides a symmetric and uniform API; the same abstractions can be used to represent
+/// both clients and servers. Services describe only _transformation_ operations which encourage
+/// simple API surfaces. This leads to simpler design of each service, improves test-ability and
+/// makes composition easier.
+///
+/// ```rust
+/// # use std::convert::Infallible;
+/// # use std::future::Future;
+/// # use std::pin::Pin;
+/// # use std::task::{Context, Poll};
+/// #
+/// # use ntex_service::Service;
+///
 /// struct MyService;
 ///
-/// impl Service for MyService {
-///      type Request = u8;
-///      type Response = u64;
-///      type Error = MyError;
-///      type Future = Pin<Box<Future<Output=Result<Self::Response, Self::Error>>>;
+/// impl Service<u8> for MyService {
+///     type Response = u64;
+///     type Error = Infallible;
+///     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 ///
-///      fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> { ... }
+///     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+///         Poll::Ready(Ok(()))
+///     }
 ///
-///      fn call(&self, req: Self::Request) -> Self::Future { ... }
+///     fn call(&self, req: u8) -> Self::Future {
+///         Box::pin(std::future::ready(Ok(req as u64)))
+///     }
 /// }
 /// ```
 ///
-/// Service can have mutable state that influence computation.
-/// This service could be rewritten as a simple function:
+/// Sometimes it is not necessary to implement the Service trait. For example, the above service
+/// could be rewritten as a simple function and passed to [`fn_service`](fn_service()).
 ///
 /// ```rust,ignore
-/// async fn my_service(req: u8) -> Result<u64, MyError>;
+/// async fn my_service(req: u8) -> Result<u64, Infallible>;
 /// ```
 pub trait Service<Req> {
     /// Responses given by the service.
     type Response;
 
-    /// Errors produced by the service.
+    /// Errors produced by the service when polling readiness or executing call.
     type Error;
 
     /// The future response value.
@@ -72,26 +92,24 @@ pub trait Service<Req> {
 
     /// Returns `Ready` when the service is able to process requests.
     ///
-    /// If the service is at capacity, then `Pending` is returned and the task
-    /// is notified when the service becomes ready again. This function is
-    /// expected to be called while on a task.
+    /// If the service is at capacity, then `Pending` is returned and the task is notified when
+    /// the service becomes ready again. This function is expected to be called while on a task.
     ///
-    /// This is a **best effort** implementation. False positives are permitted.
-    /// It is permitted for the service to return `Ready` from a `poll_ready`
-    /// call and the next invocation of `call` results in an error.
+    /// This is a **best effort** implementation. False positives are permitted. It is permitted for
+    /// the service to return `Ready` from a `poll_ready` call and the next invocation of `call`
+    /// results in an error.
     ///
-    /// There are several notes to consider:
+    /// # Notes
     ///
     /// 1. `.poll_ready()` might be called on different task from actual service call.
-    ///
-    /// 2. In case of chained services, `.poll_ready()` get called for all services at once.
+    /// 1. In case of chained services, `.poll_ready()` is called for all services at once.
     fn poll_ready(&self, ctx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>>;
 
     #[inline]
     #[allow(unused_variables)]
     /// Shutdown service.
     ///
-    /// Returns `Ready` when the service is properly shutdowned. This method might be called
+    /// Returns `Ready` when the service is properly shutdowns. This method might be called
     /// after it returns `Ready`.
     fn poll_shutdown(&self, ctx: &mut task::Context<'_>, is_error: bool) -> Poll<()> {
         Poll::Ready(())
@@ -99,25 +117,22 @@ pub trait Service<Req> {
 
     /// Process the request and return the response asynchronously.
     ///
-    /// This function is expected to be callable off task. As such,
-    /// implementations should take care to not call `poll_ready`. If the
-    /// service is at capacity and the request is unable to be handled, the
-    /// returned `Future` should resolve to an error.
+    /// This function is expected to be callable off-task. As such, implementations of `call`
+    /// should take care to not call `poll_ready`. If the  service is at capacity and the request
+    /// is unable to be handled, the returned `Future` should resolve to an error.
     ///
-    /// Calling `call` without calling `poll_ready` is permitted. The
-    /// implementation must be resilient to this fact.
+    /// Invoking `call` without first invoking `poll_ready` is permitted. Implementations must be
+    /// resilient to this fact.
     fn call(&self, req: Req) -> Self::Future;
 
     #[inline]
-    /// Map this service's output to a different type, returning a new service
-    /// of the resulting type.
+    /// Map this service's output to a different type, returning a new service of the resulting type.
     ///
-    /// This function is similar to the `Option::map` or `Iterator::map` where
-    /// it will change the type of the underlying service.
+    /// This function is similar to the `Option::map` or `Iterator::map` where it will change
+    /// the type of the underlying service.
     ///
-    /// Note that this function consumes the receiving service and returns a
-    /// wrapped version of it, similar to the existing `map` methods in the
-    /// standard library.
+    /// Note that this function consumes the receiving service and returns a wrapped version of it,
+    /// similar to the existing `map` methods in the standard library.
     fn map<F, Res>(self, f: F) -> crate::dev::Map<Self, F, Req, Res>
     where
         Self: Sized,
@@ -129,12 +144,11 @@ pub trait Service<Req> {
     #[inline]
     /// Map this service's error to a different error, returning a new service.
     ///
-    /// This function is similar to the `Result::map_err` where it will change
-    /// the error type of the underlying service. This is useful for example to
-    /// ensure that services have the same error type.
+    /// This function is similar to the `Result::map_err` where it will change the error type of
+    /// the underlying service. This is useful for example to ensure that services have the same
+    /// error type.
     ///
-    /// Note that this function consumes the receiving service and returns a
-    /// wrapped version of it.
+    /// Note that this function consumes the receiving service and returns a wrapped version of it.
     fn map_err<F, E>(self, f: F) -> crate::dev::MapErr<Self, Req, F, E>
     where
         Self: Sized,
@@ -144,26 +158,28 @@ pub trait Service<Req> {
     }
 }
 
-/// Creates new `Service` values.
+/// Factory for creating `Service`s.
 ///
-/// Acts as a service factory. This is useful for cases where new `Service`
-/// values must be produced. One case is a TCP server listener. The listener
-/// accepts new TCP streams, obtains a new `Service` value using the
-/// `ServiceFactory` trait, and uses that new `Service` value to process inbound
-/// requests on that new TCP stream.
+/// This is useful for cases where new `Service`s must be produced. One case is a TCP server
+/// listener: a listener accepts new connections, constructs a new `Service` for each using
+/// the `ServiceFactory` trait, and uses the new `Service` to process inbound requests on that
+/// new connection.
 ///
 /// `Config` is a service factory configuration type.
+///
+/// Simple factories may be able to use [`fn_factory`] or [`fn_factory_with_config`] to
+/// reduce boilerplate.
 pub trait ServiceFactory<Req, Cfg = ()> {
-    /// Responses given by the service
+    /// Responses given by the created services.
     type Response;
 
-    /// Errors produced by the service
+    /// Errors produced by the created services.
     type Error;
 
-    /// The `Service` value created by this factory
+    /// The kind of `Service` created by this factory.
     type Service: Service<Req, Response = Self::Response, Error = Self::Error>;
 
-    /// Errors produced while building a service.
+    /// Errors potentially raised while building a service.
     type InitError;
 
     /// The future of the `ServiceFactory` instance.
