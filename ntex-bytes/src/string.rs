@@ -447,7 +447,6 @@ mod test {
         let _ = ByteString::try_from(Bytes::from_static(b"nice bytes")).unwrap();
         let _ = ByteString::try_from(&Bytes::from_static(b"nice bytes")).unwrap();
         let _ = ByteString::try_from(BytesMut::from(&b"nice bytes"[..])).unwrap();
-        let _ = ByteString::try_from(&BytesMut::from(&b"nice bytes"[..])).unwrap();
         let _ =
             ByteString::try_from(BytesVec::copy_from_slice(&b"nice bytes"[..])).unwrap();
     }
