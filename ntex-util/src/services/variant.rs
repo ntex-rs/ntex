@@ -104,7 +104,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
     {
         type Response = V1::Response;
         type Error = V1::Error;
-        type Future = $mod_name::ServiceResponse<V1::Future, $($T::Future),+>;
+        type Future<'f> = $mod_name::ServiceResponse<V1::Future<'f>, $($T::Future<'f>),+> where Self: 'f, V1: 'f;
 
         fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let mut ready = self.V1.poll_ready(cx)?.is_ready();
@@ -128,7 +128,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }
         }
 
-        fn call(&self, req: $enum_type<V1R, $($R,)+>) -> Self::Future {
+        fn call(&self, req: $enum_type<V1R, $($R,)+>) -> Self::Future<'_> {
             match req {
                 $enum_type::V1(req) => $mod_name::ServiceResponse::V1 { fut: self.V1.call(req) },
                 $($enum_type::$T(req) => $mod_name::ServiceResponse::$T { fut: self.$T.call(req) },)+
@@ -163,14 +163,14 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         type Error = V1::Error;
         type InitError = V1::InitError;
         type Service = $srv_type<V1::Service, $($T::Service,)+ V1R, $($R,)+>;
-        type Future = $mod_name::ServiceFactoryResponse<V1, V1C, $($T,)+ V1R, $($R,)+>;
+        type Future<'f> = $mod_name::ServiceFactoryResponse<'f, V1, V1C, $($T,)+ V1R, $($R,)+> where Self: 'f, V1C: 'f;
 
-        fn new_service(&self, cfg: V1C) -> Self::Future {
+        fn create<'a>(&'a self, cfg: &'a V1C) -> Self::Future<'a> {
             $mod_name::ServiceFactoryResponse {
                 V1: None,
                 items: Default::default(),
-                $($T: self.$T.new_service(cfg.clone()),)+
-                V1_fut: self.V1.new_service(cfg),
+                $($T: self.$T.create(cfg),)+
+                V1_fut: self.V1.create(cfg),
             }
         }
     }
@@ -182,7 +182,8 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 
         pin_project_lite::pin_project! {
             #[project = ServiceResponseProject]
-            pub enum ServiceResponse<V1: Future, $($T: Future),+> {
+            pub enum ServiceResponse<V1: Future, $($T: Future),+>
+            {
                 V1{ #[pin] fut: V1 },
                 $($T{ #[pin] fut: $T },)+
             }
@@ -206,15 +207,18 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 
         pin_project_lite::pin_project! {
             #[doc(hidden)]
-            pub struct ServiceFactoryResponse<V1: ServiceFactory<V1R, V1C>, V1C, $($T: ServiceFactory<$R, V1C>,)+ V1R, $($R,)+> {
+            pub struct ServiceFactoryResponse<'f, V1: ServiceFactory<V1R, V1C>, V1C, $($T: ServiceFactory<$R, V1C>,)+ V1R, $($R,)+>
+            where V1: 'f, V1C: 'f,
+                $($T: 'f),+
+            {
                 pub(super) V1: Option<V1::Service>,
                 pub(super) items: ($(Option<$T::Service>,)+),
-                #[pin] pub(super) V1_fut: V1::Future,
-                $(#[pin] pub(super) $T: $T::Future),+
+                #[pin] pub(super) V1_fut: V1::Future<'f>,
+                $(#[pin] pub(super) $T: $T::Future<'f>),+
             }
         }
 
-        impl<V1, V1C, $($T,)+ V1R, $($R,)+> Future for ServiceFactoryResponse<V1, V1C, $($T,)+ V1R, $($R,)+>
+        impl<'f, V1, V1C, $($T,)+ V1R, $($R,)+> Future for ServiceFactoryResponse<'f, V1, V1C, $($T,)+ V1R, $($R,)+>
         where
             V1: ServiceFactory<V1R, V1C>,
         $($T: ServiceFactory<$R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError,>),+
@@ -304,7 +308,7 @@ mod tests {
     impl Service<()> for Srv1 {
         type Response = usize;
         type Error = ();
-        type Future = Ready<usize, ()>;
+        type Future<'f> = Ready<usize, ()> where Self: 'f;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
@@ -314,7 +318,7 @@ mod tests {
             Poll::Ready(())
         }
 
-        fn call(&self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future<'_> {
             Ready::<_, ()>::Ok(1)
         }
     }
@@ -325,7 +329,7 @@ mod tests {
     impl Service<()> for Srv2 {
         type Response = usize;
         type Error = ();
-        type Future = Ready<usize, ()>;
+        type Future<'f> = Ready<usize, ()> where Self: 'f;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
@@ -335,7 +339,7 @@ mod tests {
             Poll::Ready(())
         }
 
-        fn call(&self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future<'_> {
             Ready::<_, ()>::Ok(2)
         }
     }
@@ -346,7 +350,7 @@ mod tests {
             .v2(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
-        let service = factory.new_service(&()).await.unwrap();
+        let service = factory.create(&()).await.unwrap();
 
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
         assert!(lazy(|cx| service.poll_shutdown(cx, true)).await.is_ready());

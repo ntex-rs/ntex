@@ -56,10 +56,10 @@ where
     type Error = E;
     type InitError = Infallible;
     type Service = KeepAliveService<R, E, F>;
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f, C: 'f;
 
     #[inline]
-    fn new_service(&self, _: C) -> Self::Future {
+    fn create<'a>(&'a self, _: &'a C) -> Self::Future<'a> {
         Ready::Ok(KeepAliveService::new(self.ka, self.f.clone()))
     }
 }
@@ -95,7 +95,7 @@ where
 {
     type Response = R;
     type Error = E;
-    type Future = Ready<R, E>;
+    type Future<'f> = Ready<R, E> where Self: 'f, R: 'f;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match self.sleep.poll_elapsed(cx) {
@@ -116,7 +116,7 @@ where
         }
     }
 
-    fn call(&self, req: R) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future<'_> {
         self.expire.set(now());
         Ready::Ok(req)
     }
@@ -137,7 +137,7 @@ mod tests {
         let factory = KeepAlive::new(Millis(100), || TestErr);
         let _ = factory.clone();
 
-        let service = factory.new_service(()).await.unwrap();
+        let service = factory.create(&()).await.unwrap();
 
         assert_eq!(service.call(1usize).await, Ok(1usize));
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());

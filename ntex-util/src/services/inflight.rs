@@ -1,7 +1,7 @@
 //! Service that limits number of in-flight async requests.
 use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
-use ntex_service::{IntoService, Service, Transform};
+use ntex_service::{IntoService, Middleware, Service};
 
 use super::counter::{Counter, CounterGuard};
 
@@ -25,10 +25,10 @@ impl Default for InFlight {
     }
 }
 
-impl<S> Transform<S> for InFlight {
+impl<S> Middleware<S> for InFlight {
     type Service = InFlightService<S>;
 
-    fn new_transform(&self, service: S) -> Self::Service {
+    fn create(&self, service: S) -> Self::Service {
         InFlightService {
             service,
             count: Counter::new(self.max_inflight),
@@ -60,7 +60,7 @@ where
 {
     type Response = T::Response;
     type Error = T::Error;
-    type Future = InFlightServiceResponse<T, R>;
+    type Future<'f> = InFlightServiceResponse<'f, T, R> where Self: 'f, R: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -80,7 +80,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: R) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future<'_> {
         InFlightServiceResponse {
             fut: self.service.call(req),
             _guard: self.count.get(),
@@ -91,15 +91,17 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct InFlightServiceResponse<T: Service<R>, R> {
+    pub struct InFlightServiceResponse<'f, T: Service<R>, R>
+    where T: 'f, R: 'f
+    {
         #[pin]
-        fut: T::Future,
+        fut: T::Future<'f>,
         _guard: CounterGuard,
         _t: PhantomData<R>
     }
 }
 
-impl<T: Service<R>, R> Future for InFlightServiceResponse<T, R> {
+impl<'f, T: Service<R>, R> Future for InFlightServiceResponse<'f, T, R> {
     type Output = Result<T::Response, T::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -120,13 +122,13 @@ mod tests {
     impl Service<()> for SleepService {
         type Response = ();
         type Error = ();
-        type Future = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
+        type Future<'f> = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future<'_> {
             let fut = crate::time::sleep(self.0);
             Box::pin(async move {
                 let _ = fut.await;
@@ -160,7 +162,7 @@ mod tests {
             fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
         );
 
-        let srv = srv.new_service(&()).await.unwrap();
+        let srv = srv.create(&()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let res = srv.call(());

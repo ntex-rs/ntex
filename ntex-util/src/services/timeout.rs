@@ -6,7 +6,7 @@ use std::{
     fmt, future::Future, marker, marker::PhantomData, pin::Pin, task::Context, task::Poll,
 };
 
-use ntex_service::{IntoService, Service, Transform};
+use ntex_service::{IntoService, Middleware, Service};
 
 use crate::future::Either;
 use crate::time::{sleep, Millis, Sleep};
@@ -87,10 +87,10 @@ impl Clone for Timeout {
     }
 }
 
-impl<S> Transform<S> for Timeout {
+impl<S> Middleware<S> for Timeout {
     type Service = TimeoutService<S>;
 
-    fn new_transform(&self, service: S) -> Self::Service {
+    fn create(&self, service: S) -> Self::Service {
         TimeoutService {
             service,
             timeout: self.timeout,
@@ -125,7 +125,7 @@ where
 {
     type Response = S::Response;
     type Error = TimeoutError<S::Error>;
-    type Future = Either<TimeoutServiceResponse<S, R>, TimeoutServiceResponse2<S, R>>;
+    type Future<'f> = Either<TimeoutServiceResponse<'f, S, R>, TimeoutServiceResponse2<'f, S, R>> where Self: 'f, R: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -137,7 +137,7 @@ where
         self.service.poll_shutdown(cx, is_error)
     }
 
-    fn call(&self, request: R) -> Self::Future {
+    fn call(&self, request: R) -> Self::Future<'_> {
         if self.timeout.is_zero() {
             Either::Right(TimeoutServiceResponse2 {
                 fut: self.service.call(request),
@@ -157,15 +157,17 @@ pin_project_lite::pin_project! {
     /// `TimeoutService` response future
     #[doc(hidden)]
     #[derive(Debug)]
-    pub struct TimeoutServiceResponse<T: Service<R>, R> {
+    pub struct TimeoutServiceResponse<'f, T: Service<R>, R>
+    where T: 'f, R: 'f,
+    {
         #[pin]
-        fut: T::Future,
+        fut: T::Future<'f>,
         sleep: Sleep,
         _t: PhantomData<R>
     }
 }
 
-impl<T, R> Future for TimeoutServiceResponse<T, R>
+impl<'f, T, R> Future for TimeoutServiceResponse<'f, T, R>
 where
     T: Service<R>,
 {
@@ -193,14 +195,16 @@ pin_project_lite::pin_project! {
     /// `TimeoutService` response future
     #[doc(hidden)]
     #[derive(Debug)]
-    pub struct TimeoutServiceResponse2<T: Service<R>, R> {
+    pub struct TimeoutServiceResponse2<'f, T: Service<R>, R>
+    where T: 'f, R: 'f,
+    {
         #[pin]
-        fut: T::Future,
+        fut: T::Future<'f>,
         _t: PhantomData<R>,
     }
 }
 
-impl<T, R> Future for TimeoutServiceResponse2<T, R>
+impl<'f, T, R> Future for TimeoutServiceResponse2<'f, T, R>
 where
     T: Service<R>,
 {
@@ -239,7 +243,7 @@ mod tests {
     impl Service<()> for SleepService {
         type Response = ();
         type Error = SrvError;
-        type Future = Pin<Box<dyn Future<Output = Result<(), SrvError>>>>;
+        type Future<'f> = Pin<Box<dyn Future<Output = Result<(), SrvError>>>>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
@@ -253,7 +257,7 @@ mod tests {
             }
         }
 
-        fn call(&self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future<'_> {
             let fut = crate::time::sleep(self.0);
             Box::pin(async move {
                 let _ = fut.await;
@@ -305,7 +309,7 @@ mod tests {
             Timeout::new(resolution).clone(),
             fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
         );
-        let srv = timeout.new_service(&()).await.unwrap();
+        let srv = timeout.create(&()).await.unwrap();
 
         let res = srv.call(()).await.unwrap_err();
         assert_eq!(res, TimeoutError::Timeout);
