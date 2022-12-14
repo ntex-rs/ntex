@@ -45,11 +45,11 @@ where
 impl<A, R, F, E> Service<R> for MapErr<A, R, F, E>
 where
     A: Service<R>,
-    F: Fn(A::Error) -> E + Clone,
+    F: Fn(A::Error) -> E,
 {
     type Response = A::Response;
     type Error = E;
-    type Future = MapErrFuture<A, R, F, E>;
+    type Future<'f> = MapErrFuture<'f, A, R, F, E> where A: 'f, R: 'f, F: 'f, E: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -62,43 +62,38 @@ where
     }
 
     #[inline]
-    fn call(&self, req: R) -> Self::Future {
-        MapErrFuture::new(self.service.call(req), self.f.clone())
+    fn call(&self, req: R) -> Self::Future<'_> {
+        MapErrFuture {
+            slf: self,
+            fut: self.service.call(req),
+        }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapErrFuture<A, R, F, E>
+    pub struct MapErrFuture<'f, A, R, F, E>
     where
         A: Service<R>,
+        A: 'f,
+        R: 'f,
         F: Fn(A::Error) -> E,
     {
-        f: F,
+        slf: &'f MapErr<A, R, F, E>,
         #[pin]
-        fut: A::Future,
+        fut: A::Future<'f>,
     }
 }
 
-impl<A, R, F, E> MapErrFuture<A, R, F, E>
+impl<'f, A, R, F, E> Future for MapErrFuture<'f, A, R, F, E>
 where
-    A: Service<R>,
-    F: Fn(A::Error) -> E,
-{
-    fn new(fut: A::Future, f: F) -> Self {
-        MapErrFuture { f, fut }
-    }
-}
-
-impl<A, R, F, E> Future for MapErrFuture<A, R, F, E>
-where
-    A: Service<R>,
+    A: Service<R> + 'f,
     F: Fn(A::Error) -> E,
 {
     type Output = Result<A::Response, E>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        this.fut.poll(cx).map_err(this.f)
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().project();
+        this.fut.poll(cx).map_err(|e| (self.project().slf.f)(e))
     }
 }
 
@@ -109,7 +104,7 @@ where
 pub struct MapErrServiceFactory<A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
-    F: Fn(A::Error) -> E + Clone,
+    F: Fn(A::Error) -> E,
 {
     a: A,
     f: F,
@@ -155,37 +150,30 @@ where
 
     type Service = MapErr<A::Service, R, F, E>;
     type InitError = A::InitError;
-    type Future = MapErrServiceFuture<A, R, C, F, E>;
+    type Future<'f> = MapErrServiceFuture<'f, A, R, C, F, E> where Self: 'f, C: 'f;
 
     #[inline]
-    fn new_service(&self, cfg: C) -> Self::Future {
-        MapErrServiceFuture::new(self.a.new_service(cfg), self.f.clone())
+    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
+        MapErrServiceFuture {
+            fut: self.a.create(cfg),
+            slf: self,
+        }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapErrServiceFuture<A, R, C, F, E>
+    pub struct MapErrServiceFuture<'f, A, R, C, F, E>
     where
         A: ServiceFactory<R, C>,
         F: Fn(A::Error) -> E,
     {
+        slf: &'f MapErrServiceFactory<A, R, C, F, E>,
         #[pin]
-        fut: A::Future,
-        f: F,
+        fut: A::Future<'f>,
     }
 }
 
-impl<A, R, C, F, E> MapErrServiceFuture<A, R, C, F, E>
-where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::Error) -> E,
-{
-    fn new(fut: A::Future, f: F) -> Self {
-        MapErrServiceFuture { fut, f }
-    }
-}
-
-impl<A, R, C, F, E> Future for MapErrServiceFuture<A, R, C, F, E>
+impl<'f, A, R, C, F, E> Future for MapErrServiceFuture<'f, A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
     F: Fn(A::Error) -> E + Clone,
@@ -195,7 +183,7 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         if let Poll::Ready(svc) = this.fut.poll(cx)? {
-            Poll::Ready(Ok(MapErr::new(svc, this.f.clone())))
+            Poll::Ready(Ok(MapErr::new(svc, this.slf.f.clone())))
         } else {
             Poll::Pending
         }
@@ -214,13 +202,13 @@ mod tests {
     impl Service<()> for Srv {
         type Response = ();
         type Error = ();
-        type Future = Ready<(), ()>;
+        type Future<'f> = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Err(()))
         }
 
-        fn call(&self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future<'_> {
             Ready::Err(())
         }
     }
@@ -257,7 +245,7 @@ mod tests {
             .into_factory()
             .map_err(|_| "error")
             .clone();
-        let srv = new_srv.new_service(&()).await.unwrap();
+        let srv = new_srv.create(&()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -269,7 +257,7 @@ mod tests {
             crate::pipeline_factory((|| async { Ok::<_, ()>(Srv) }).into_factory())
                 .map_err(|_| "error")
                 .clone();
-        let srv = new_srv.new_service(&()).await.unwrap();
+        let srv = new_srv.create(&()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");

@@ -41,7 +41,7 @@ where
 ///     });
 ///
 ///     // construct new service
-///     let srv = factory.new_service(()).await?;
+///     let srv = factory.create(&()).await?;
 ///
 ///     // now we can use `div` service
 ///     let result = srv.call((10, 20)).await?;
@@ -78,12 +78,13 @@ where
 /// async fn main() -> io::Result<()> {
 ///     // Create service factory. factory uses config argument for
 ///     // services it generates.
-///     let factory = fn_factory_with_config(|y: usize| {
+///     let factory = fn_factory_with_config(|y: &usize| {
+///         let y = *y;
 ///         async move { Ok::<_, io::Error>(fn_service(move |x: usize| async move { Ok::<_, io::Error>(x * y) })) }
 ///     });
 ///
 ///     // construct new service with config argument
-///     let srv = factory.new_service(10).await?;
+///     let srv = factory.create(&10).await?;
 ///
 ///     let result = srv.call(10).await?;
 ///     assert_eq!(result, 100);
@@ -96,11 +97,11 @@ pub fn fn_factory_with_config<F, Fut, Cfg, Srv, Req, Err>(
     f: F,
 ) -> FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
-    F: Fn(Cfg) -> Fut,
+    F: Fn(&Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service<Req>,
 {
-    FnServiceConfig::new(f)
+    FnServiceConfig { f, _t: PhantomData }
 }
 
 pub struct FnService<F, Fut, Req, Res, Err>
@@ -143,7 +144,7 @@ where
 {
     type Response = Res;
     type Error = Err;
-    type Future = Fut;
+    type Future<'f> = Fut where Self: 'f;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -156,7 +157,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: Req) -> Self::Future {
+    fn call(&self, req: Req) -> Self::Future<'_> {
         (self.f)(req)
     }
 }
@@ -212,7 +213,7 @@ where
 {
     type Response = Res;
     type Error = Err;
-    type Future = Fut;
+    type Future<'f> = Fut where Self: 'f;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -225,7 +226,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: Req) -> Self::Future {
+    fn call(&self, req: Req) -> Self::Future<'_> {
         (self.f)(req)
     }
 }
@@ -241,10 +242,10 @@ where
 
     type Service = FnService<F, Fut, Req, Res, Err>;
     type InitError = ();
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
+    type Future<'f> = Ready<Result<Self::Service, Self::InitError>> where Self: 'f;
 
     #[inline]
-    fn new_service(&self, _: Cfg) -> Self::Future {
+    fn create<'a>(&'a self, _: &'a Cfg) -> Self::Future<'a> {
         ready(Ok(FnService {
             f: self.f.clone(),
             _t: PhantomData,
@@ -267,7 +268,7 @@ where
 /// Convert `Fn(&Config) -> Future<Service>` fn to NewService
 pub struct FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
-    F: Fn(Cfg) -> Fut,
+    F: Fn(&Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service<Req>,
 {
@@ -275,20 +276,9 @@ where
     _t: PhantomData<(Fut, Cfg, Srv, Req, Err)>,
 }
 
-impl<F, Fut, Cfg, Srv, Req, Err> FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
-where
-    F: Fn(Cfg) -> Fut,
-    Fut: Future<Output = Result<Srv, Err>>,
-    Srv: Service<Req>,
-{
-    fn new(f: F) -> Self {
-        FnServiceConfig { f, _t: PhantomData }
-    }
-}
-
 impl<F, Fut, Cfg, Srv, Req, Err> Clone for FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
-    F: Fn(Cfg) -> Fut + Clone,
+    F: Fn(&Cfg) -> Fut + Clone,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service<Req>,
 {
@@ -304,7 +294,7 @@ where
 impl<F, Fut, Cfg, Srv, Req, Err> ServiceFactory<Req, Cfg>
     for FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
-    F: Fn(Cfg) -> Fut,
+    F: Fn(&Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service<Req>,
 {
@@ -313,10 +303,10 @@ where
 
     type Service = Srv;
     type InitError = Err;
-    type Future = Fut;
+    type Future<'f> = Fut where Self: 'f, Cfg: 'f;
 
     #[inline]
-    fn new_service(&self, cfg: Cfg) -> Self::Future {
+    fn create<'a>(&'a self, cfg: &'a Cfg) -> Self::Future<'a> {
         (self.f)(cfg)
     }
 }
@@ -353,10 +343,10 @@ where
     type Error = S::Error;
     type Service = S;
     type InitError = E;
-    type Future = R;
+    type Future<'f> = R where Self: 'f, R: 'f, C: 'f;
 
     #[inline]
-    fn new_service(&self, _: C) -> Self::Future {
+    fn create<'a>(&'a self, _: &'a C) -> Self::Future<'a> {
         (self.f)()
     }
 }
@@ -397,7 +387,7 @@ mod tests {
     async fn test_fn_service() {
         let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") }).clone();
 
-        let srv = new_srv.new_service(()).await.unwrap();
+        let srv = new_srv.create(&()).await.unwrap();
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
@@ -418,7 +408,7 @@ mod tests {
     async fn test_fn_service_service() {
         let srv = fn_service(|()| async { Ok::<_, ()>("srv") })
             .clone()
-            .new_service(())
+            .create(&())
             .await
             .unwrap()
             .clone();
@@ -435,14 +425,17 @@ mod tests {
 
     #[ntex::test]
     async fn test_fn_service_with_config() {
-        let new_srv = fn_factory_with_config(|cfg: usize| async move {
-            Ok::<_, ()>(fn_service(
-                move |()| async move { Ok::<_, ()>(("srv", cfg)) },
-            ))
+        let new_srv = fn_factory_with_config(|cfg: &usize| {
+            let cfg = *cfg;
+            async move {
+                Ok::<_, ()>(fn_service(
+                    move |()| async move { Ok::<_, ()>(("srv", cfg)) },
+                ))
+            }
         })
         .clone();
 
-        let srv = new_srv.new_service(1).await.unwrap();
+        let srv = new_srv.create(&1).await.unwrap();
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());

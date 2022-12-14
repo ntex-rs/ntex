@@ -98,7 +98,11 @@ where
 }
 
 /// `Apply` middleware to a service factory.
-pub struct ApplyMiddleware<T, S, R, C>(Rc<(T, S)>, marker::PhantomData<(R, C)>);
+pub struct ApplyMiddleware<T, S, R, C> {
+    mw: T,
+    svc: S,
+    _t: marker::PhantomData<(R, C)>,
+}
 
 impl<T, S, R, C> ApplyMiddleware<T, S, R, C>
 where
@@ -106,14 +110,26 @@ where
     T: Middleware<S::Service>,
 {
     /// Create new `ApplyMiddleware` service factory instance
-    pub(crate) fn new(t: T, service: S) -> Self {
-        Self(Rc::new((t, service)), marker::PhantomData)
+    pub(crate) fn new(mw: T, svc: S) -> Self {
+        Self {
+            mw,
+            svc,
+            _t: marker::PhantomData,
+        }
     }
 }
 
-impl<T, S, R, C> Clone for ApplyMiddleware<T, S, R, C> {
+impl<T, S, R, C> Clone for ApplyMiddleware<T, S, R, C>
+where
+    T: Clone,
+    S: Clone,
+{
     fn clone(&self) -> Self {
-        ApplyMiddleware(self.0.clone(), marker::PhantomData)
+        Self {
+            mw: self.mw.clone(),
+            svc: self.svc.clone(),
+            _t: marker::PhantomData,
+        }
     }
 }
 
@@ -128,31 +144,30 @@ where
 
     type Service = T::Service;
     type InitError = S::InitError;
-    type Future = ApplyMiddlewareFuture<T, S, R, C>;
+    type Future<'f> = ApplyMiddlewareFuture<'f, T, S, R, C> where Self: 'f;
 
-    fn new_service(&self, cfg: C) -> Self::Future {
+    #[inline]
+    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
         ApplyMiddlewareFuture {
-            store: self.0.clone(),
-            fut: self.0.as_ref().1.new_service(cfg),
-            _t: marker::PhantomData,
+            slf: self,
+            fut: self.svc.create(cfg),
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct ApplyMiddlewareFuture<T, S, R, C>
+    pub struct ApplyMiddlewareFuture<'f, T, S, R, C>
     where
         S: ServiceFactory<R, C>,
         T: Middleware<S::Service>,
     {
-        store: Rc<(T, S)>,
+        slf: &'f ApplyMiddleware<T, S, R, C>,
         #[pin]
-        fut: S::Future,
-        _t: marker::PhantomData<C>
+        fut: S::Future<'f>,
     }
 }
 
-impl<T, S, R, C> Future for ApplyMiddlewareFuture<T, S, R, C>
+impl<'f, T, S, R, C> Future for ApplyMiddlewareFuture<'f, T, S, R, C>
 where
     S: ServiceFactory<R, C>,
     T: Middleware<S::Service>,
@@ -163,7 +178,7 @@ where
         let this = self.as_mut().project();
 
         match this.fut.poll(cx)? {
-            Poll::Ready(srv) => Poll::Ready(Ok(this.store.0.create(srv))),
+            Poll::Ready(srv) => Poll::Ready(Ok(this.slf.mw.create(srv))),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -209,13 +224,13 @@ mod tests {
     impl<S: Service<R>, R> Service<R> for Srv<S, R> {
         type Response = S::Response;
         type Error = S::Error;
-        type Future = S::Future;
+        type Future<'f> = S::Future<'f> where Self: 'f, R: 'f;
 
         fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.poll_ready(cx)
         }
 
-        fn call(&self, req: R) -> Self::Future {
+        fn call(&self, req: R) -> Self::Future<'_> {
             self.0.call(req)
         }
     }
@@ -228,7 +243,7 @@ mod tests {
         )
         .clone();
 
-        let srv = factory.new_service(()).await.unwrap();
+        let srv = factory.create(&()).await.unwrap();
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);

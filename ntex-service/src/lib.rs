@@ -9,7 +9,7 @@ use std::task::{self, Context, Poll};
 
 mod and_then;
 mod apply;
-pub mod boxed;
+// pub mod boxed;
 mod fn_service;
 mod map;
 mod map_config;
@@ -21,7 +21,7 @@ mod transform;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
-pub use self::map_config::{map_config, map_config_service, unit_config};
+pub use self::map_config::{map_config, unit_config};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 pub use self::transform::{apply, Identity, Middleware};
 
@@ -62,13 +62,13 @@ pub use self::transform::{apply, Identity, Middleware};
 /// impl Service<u8> for MyService {
 ///     type Response = u64;
 ///     type Error = Infallible;
-///     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+///     type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 ///
 ///     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
 ///         Poll::Ready(Ok(()))
 ///     }
 ///
-///     fn call(&self, req: u8) -> Self::Future {
+///     fn call(&self, req: u8) -> Self::Future<'_> {
 ///         Box::pin(std::future::ready(Ok(req as u64)))
 ///     }
 /// }
@@ -88,7 +88,10 @@ pub trait Service<Req> {
     type Error;
 
     /// The future response value.
-    type Future: Future<Output = Result<Self::Response, Self::Error>>;
+    type Future<'f>: Future<Output = Result<Self::Response, Self::Error>>
+    where
+        Req: 'f,
+        Self: 'f;
 
     /// Returns `Ready` when the service is able to process requests.
     ///
@@ -123,7 +126,7 @@ pub trait Service<Req> {
     ///
     /// Invoking `call` without first invoking `poll_ready` is permitted. Implementations must be
     /// resilient to this fact.
-    fn call(&self, req: Req) -> Self::Future;
+    fn call(&self, req: Req) -> Self::Future<'_>;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service of the resulting type.
@@ -136,7 +139,7 @@ pub trait Service<Req> {
     fn map<F, Res>(self, f: F) -> crate::dev::Map<Self, F, Req, Res>
     where
         Self: Sized,
-        F: FnMut(Self::Response) -> Res,
+        F: Fn(Self::Response) -> Res,
     {
         crate::dev::Map::new(self, f)
     }
@@ -183,10 +186,13 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     type InitError;
 
     /// The future of the `ServiceFactory` instance.
-    type Future: Future<Output = Result<Self::Service, Self::InitError>>;
+    type Future<'f>: Future<Output = Result<Self::Service, Self::InitError>>
+    where
+        Self: 'f,
+        Cfg: 'f;
 
     /// Create and return a new service value asynchronously.
-    fn new_service(&self, cfg: Cfg) -> Self::Future;
+    fn create<'a>(&'a self, cfg: &'a Cfg) -> Self::Future<'a>;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service
@@ -194,7 +200,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     fn map<F, Res>(self, f: F) -> crate::map::MapServiceFactory<Self, F, Req, Res, Cfg>
     where
         Self: Sized,
-        F: FnMut(Self::Response) -> Res + Clone,
+        F: Fn(Self::Response) -> Res + Clone,
     {
         crate::map::MapServiceFactory::new(self, f)
     }
@@ -232,7 +238,7 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = S::Future;
+    type Future<'f> = S::Future<'f> where S: 'f, Req: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
@@ -245,7 +251,7 @@ where
     }
 
     #[inline]
-    fn call(&self, request: Req) -> S::Future {
+    fn call(&self, request: Req) -> S::Future<'_> {
         (**self).call(request)
     }
 }
@@ -256,7 +262,7 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = S::Future;
+    type Future<'f> = S::Future<'f> where S: 'f, Req: 'f;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         (**self).poll_ready(cx)
@@ -267,7 +273,7 @@ where
         (**self).poll_shutdown(cx, is_error)
     }
 
-    fn call(&self, request: Req) -> S::Future {
+    fn call(&self, request: Req) -> S::Future<'_> {
         (**self).call(request)
     }
 }
@@ -280,10 +286,10 @@ where
     type Error = S::Error;
     type Service = S::Service;
     type InitError = S::InitError;
-    type Future = S::Future;
+    type Future<'f> = S::Future<'f> where S: 'f, Cfg: 'f;
 
-    fn new_service(&self, cfg: Cfg) -> S::Future {
-        self.as_ref().new_service(cfg)
+    fn create<'a>(&'a self, cfg: &'a Cfg) -> S::Future<'a> {
+        self.as_ref().create(cfg)
     }
 }
 

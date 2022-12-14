@@ -1,6 +1,4 @@
-use std::{
-    future::Future, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
-};
+use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::{Service, ServiceFactory};
 
@@ -8,39 +6,44 @@ use super::{Service, ServiceFactory};
 /// another service.
 ///
 /// This is created by the `Pipeline::then` method.
-pub struct Then<A, B, R>(Rc<(A, B)>, PhantomData<R>);
+pub struct Then<A, B> {
+    svc1: A,
+    svc2: B,
+}
 
-impl<A, B, R> Then<A, B, R> {
+impl<A, B> Then<A, B> {
     /// Create new `.then()` combinator
-    pub(crate) fn new(a: A, b: B) -> Then<A, B, R>
-    where
-        A: Service<R>,
-        B: Service<Result<A::Response, A::Error>, Error = A::Error>,
-    {
-        Self(Rc::new((a, b)), PhantomData)
+    pub(crate) fn new(svc1: A, svc2: B) -> Then<A, B> {
+        Self { svc1, svc2 }
     }
 }
 
-impl<A, B, R> Clone for Then<A, B, R> {
+impl<A, B> Clone for Then<A, B>
+where
+    A: Clone,
+    B: Clone,
+{
     fn clone(&self) -> Self {
-        Then(self.0.clone(), PhantomData)
+        Then {
+            svc1: self.svc1.clone(),
+            svc2: self.svc2.clone(),
+        }
     }
 }
 
-impl<A, B, R> Service<R> for Then<A, B, R>
+impl<A, B, R> Service<R> for Then<A, B>
 where
     A: Service<R>,
     B: Service<Result<A::Response, A::Error>, Error = A::Error>,
 {
     type Response = B::Response;
     type Error = B::Error;
-    type Future = ThenServiceResponse<A, B, R>;
+    type Future<'f> = ThenServiceResponse<'f, A, B, R> where Self: 'f, R: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let srv = self.0.as_ref();
-        let not_ready = !srv.0.poll_ready(cx)?.is_ready();
-        if !srv.1.poll_ready(cx)?.is_ready() || not_ready {
+        let not_ready = !self.svc1.poll_ready(cx)?.is_ready();
+        if !self.svc2.poll_ready(cx)?.is_ready() || not_ready {
             Poll::Pending
         } else {
             Poll::Ready(Ok(()))
@@ -48,10 +51,8 @@ where
     }
 
     fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        let srv = self.0.as_ref();
-
-        if srv.0.poll_shutdown(cx, is_error).is_ready()
-            && srv.1.poll_shutdown(cx, is_error).is_ready()
+        if self.svc1.poll_shutdown(cx, is_error).is_ready()
+            && self.svc2.poll_shutdown(cx, is_error).is_ready()
         {
             Poll::Ready(())
         } else {
@@ -60,41 +61,46 @@ where
     }
 
     #[inline]
-    fn call(&self, req: R) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future<'_> {
         ThenServiceResponse {
+            slf: self,
             state: State::A {
-                fut: self.0.as_ref().0.call(req),
-                b: Some(self.0.clone()),
+                fut: self.svc1.call(req),
             },
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct ThenServiceResponse<A, B, R>
+    pub struct ThenServiceResponse<'f, A, B, R>
     where
         A: Service<R>,
         B: Service<Result<A::Response, A::Error>>,
     {
+        slf: &'f Then<A, B>,
         #[pin]
-        state: State<A, B, R>,
+        state: State<'f, A, B, R>,
     }
 }
 
 pin_project_lite::pin_project! {
     #[project = StateProject]
-    enum State<A, B, R>
+    enum State<'f, A, B, R>
     where
         A: Service<R>,
+        A: 'f,
+        A::Response: 'f,
         B: Service<Result<A::Response, A::Error>>,
+        B: 'f,
+        R: 'f,
     {
-        A { #[pin] fut: A::Future, b: Option<Rc<(A, B)>> },
-        B { #[pin] fut: B::Future },
+        A { #[pin] fut: A::Future<'f> },
+        B { #[pin] fut: B::Future<'f> },
         Empty,
     }
 }
 
-impl<A, B, R> Future for ThenServiceResponse<A, B, R>
+impl<'a, A, B, R> Future for ThenServiceResponse<'a, A, B, R>
 where
     A: Service<R>,
     B: Service<Result<A::Response, A::Error>>,
@@ -105,11 +111,9 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            StateProject::A { fut, b } => match fut.poll(cx) {
+            StateProject::A { fut } => match fut.poll(cx) {
                 Poll::Ready(res) => {
-                    let b = b.take().unwrap();
-                    this.state.set(State::Empty); // drop fut A
-                    let fut = b.as_ref().1.call(res);
+                    let fut = this.slf.svc2.call(res);
                     this.state.set(State::B { fut });
                     self.poll(cx)
                 }
@@ -127,19 +131,21 @@ where
 }
 
 /// `.then()` service factory combinator
-pub struct ThenFactory<A, B, R>(Rc<(A, B)>, PhantomData<R>);
+pub struct ThenFactory<A, B> {
+    svc1: A,
+    svc2: B,
+}
 
-impl<A, B, R> ThenFactory<A, B, R> {
-    /// Create new `AndThen` combinator
-    pub(crate) fn new(a: A, b: B) -> Self {
-        Self(Rc::new((a, b)), PhantomData)
+impl<A, B> ThenFactory<A, B> {
+    /// Create new factory for `Then` combinator
+    pub(crate) fn new(svc1: A, svc2: B) -> Self {
+        Self { svc1, svc2 }
     }
 }
 
-impl<A, B, R, C> ServiceFactory<R, C> for ThenFactory<A, B, R>
+impl<A, B, R, C> ServiceFactory<R, C> for ThenFactory<A, B>
 where
     A: ServiceFactory<R, C>,
-    C: Clone,
     B: ServiceFactory<
         Result<A::Response, A::Error>,
         C,
@@ -150,61 +156,55 @@ where
     type Response = B::Response;
     type Error = A::Error;
 
-    type Service = Then<A::Service, B::Service, R>;
+    type Service = Then<A::Service, B::Service>;
     type InitError = A::InitError;
-    type Future = ThenFactoryResponse<A, B, R, C>;
+    type Future<'f> = ThenFactoryResponse<'f, A, B, R, C> where Self: 'f, C: 'f;
 
-    fn new_service(&self, cfg: C) -> Self::Future {
-        let srv = &*self.0;
-        ThenFactoryResponse::new(srv.0.new_service(cfg.clone()), srv.1.new_service(cfg))
-    }
-}
-
-impl<A, B, R> Clone for ThenFactory<A, B, R> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-
-pin_project_lite::pin_project! {
-    pub struct ThenFactoryResponse<A, B, R, C>
-    where
-        A: ServiceFactory<R, C>,
-        B: ServiceFactory<Result<A::Response, A::Error>, C,
-           Error = A::Error,
-           InitError = A::InitError,
-        >,
-    {
-        #[pin]
-        fut_b: B::Future,
-        #[pin]
-        fut_a: A::Future,
-        a: Option<A::Service>,
-        b: Option<B::Service>,
-    }
-}
-
-impl<A, B, R, C> ThenFactoryResponse<A, B, R, C>
-where
-    A: ServiceFactory<R, C>,
-    B: ServiceFactory<
-        Result<A::Response, A::Error>,
-        C,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
-{
-    fn new(fut_a: A::Future, fut_b: B::Future) -> Self {
-        Self {
-            fut_a,
-            fut_b,
+    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
+        ThenFactoryResponse {
+            fut_a: self.svc1.create(cfg),
+            fut_b: self.svc2.create(cfg),
             a: None,
             b: None,
         }
     }
 }
 
-impl<A, B, R, C> Future for ThenFactoryResponse<A, B, R, C>
+impl<A, B> Clone for ThenFactory<A, B>
+where
+    A: Clone,
+    B: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            svc1: self.svc1.clone(),
+            svc2: self.svc2.clone(),
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    pub struct ThenFactoryResponse<'f, A, B, R, C>
+    where
+        A: ServiceFactory<R, C>,
+        A: 'f,
+        B: ServiceFactory<Result<A::Response, A::Error>, C,
+           Error = A::Error,
+           InitError = A::InitError,
+    >,
+        B: 'f,
+        C: 'f,
+    {
+        #[pin]
+        fut_b: B::Future<'f>,
+        #[pin]
+        fut_a: A::Future<'f>,
+        a: Option<A::Service>,
+        b: Option<B::Service>,
+    }
+}
+
+impl<'f, A, B, R, C> Future for ThenFactoryResponse<'f, A, B, R, C>
 where
     A: ServiceFactory<R, C>,
     B: ServiceFactory<
@@ -214,7 +214,7 @@ where
         InitError = A::InitError,
     >,
 {
-    type Output = Result<Then<A::Service, B::Service, R>, A::InitError>;
+    type Output = Result<Then<A::Service, B::Service>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -253,14 +253,14 @@ mod tests {
     impl Service<Result<&'static str, &'static str>> for Srv1 {
         type Response = &'static str;
         type Error = ();
-        type Future = Ready<Self::Response, Self::Error>;
+        type Future<'f> = Ready<Self::Response, Self::Error>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.set(self.0.get() + 1);
             Poll::Ready(Ok(()))
         }
 
-        fn call(&self, req: Result<&'static str, &'static str>) -> Self::Future {
+        fn call(&self, req: Result<&'static str, &'static str>) -> Self::Future<'_> {
             match req {
                 Ok(msg) => Ready::Ok(msg),
                 Err(_) => Ready::Err(()),
@@ -268,19 +268,20 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct Srv2(Rc<Cell<usize>>);
 
     impl Service<Result<&'static str, ()>> for Srv2 {
         type Response = (&'static str, &'static str);
         type Error = ();
-        type Future = Ready<Self::Response, ()>;
+        type Future<'f> = Ready<Self::Response, ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.set(self.0.get() + 1);
             Poll::Ready(Err(()))
         }
 
-        fn call(&self, req: Result<&'static str, ()>) -> Self::Future {
+        fn call(&self, req: Result<&'static str, ()>) -> Self::Future<'_> {
             match req {
                 Ok(msg) => Ready::Ok((msg, "ok")),
                 Err(()) => Ready::Ok(("srv2", "err")),
@@ -321,7 +322,7 @@ mod tests {
         let factory = pipeline_factory(blank)
             .then(move || Ready::Ok(Srv2(cnt.clone())))
             .clone();
-        let srv = factory.new_service(&()).await.unwrap();
+        let srv = factory.create(&()).await.unwrap();
         let res = srv.call(Ok("srv1")).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));

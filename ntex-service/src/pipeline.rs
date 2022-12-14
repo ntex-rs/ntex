@@ -48,7 +48,7 @@ impl<T: Service<R>, R> Pipeline<T, R> {
     ///
     /// Note that this function consumes the receiving service and returns a
     /// wrapped version of it.
-    pub fn and_then<F, U>(self, service: F) -> Pipeline<AndThen<T, U, R>, R>
+    pub fn and_then<F, U>(self, service: F) -> Pipeline<AndThen<T, U>, R>
     where
         Self: Sized,
         F: IntoService<U, T::Response>,
@@ -65,7 +65,7 @@ impl<T: Service<R>, R> Pipeline<T, R> {
     ///
     /// Note that this function consumes the receiving pipeline and returns a
     /// wrapped version of it.
-    pub fn then<F, U>(self, service: F) -> Pipeline<Then<T, U, R>, R>
+    pub fn then<F, U>(self, service: F) -> Pipeline<Then<T, U>, R>
     where
         Self: Sized,
         F: IntoService<U, Result<T::Response, T::Error>>,
@@ -89,7 +89,7 @@ impl<T: Service<R>, R> Pipeline<T, R> {
     pub fn map<F, Res>(self, f: F) -> Pipeline<Map<T, F, R, Res>, R>
     where
         Self: Sized,
-        F: FnMut(T::Response) -> Res,
+        F: Fn(T::Response) -> Res,
     {
         Pipeline {
             service: Map::new(self.service, f),
@@ -132,7 +132,7 @@ where
 impl<T: Service<R>, R> Service<R> for Pipeline<T, R> {
     type Response = T::Response;
     type Error = T::Error;
-    type Future = T::Future;
+    type Future<'f> = T::Future<'f> where Self: 'f, R: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), T::Error>> {
@@ -145,7 +145,7 @@ impl<T: Service<R>, R> Service<R> for Pipeline<T, R> {
     }
 
     #[inline]
-    fn call(&self, req: R) -> Self::Future {
+    fn call(&self, req: R) -> Self::Future<'_> {
         self.service.call(req)
     }
 }
@@ -158,13 +158,9 @@ pub struct PipelineFactory<T, R, C = ()> {
 
 impl<T: ServiceFactory<R, C>, R, C> PipelineFactory<T, R, C> {
     /// Call another service after call to this one has resolved successfully.
-    pub fn and_then<F, U>(
-        self,
-        factory: F,
-    ) -> PipelineFactory<AndThenFactory<T, U, R, C>, R, C>
+    pub fn and_then<F, U>(self, factory: F) -> PipelineFactory<AndThenFactory<T, U>, R, C>
     where
         Self: Sized,
-        C: Clone,
         F: IntoServiceFactory<U, T::Response, C>,
         U: ServiceFactory<T::Response, C, Error = T::Error, InitError = T::InitError>,
     {
@@ -193,10 +189,9 @@ impl<T: ServiceFactory<R, C>, R, C> PipelineFactory<T, R, C> {
     ///
     /// Note that this function consumes the receiving pipeline and returns a
     /// wrapped version of it.
-    pub fn then<F, U>(self, factory: F) -> PipelineFactory<ThenFactory<T, U, R>, R, C>
+    pub fn then<F, U>(self, factory: F) -> PipelineFactory<ThenFactory<T, U>, R, C>
     where
         Self: Sized,
-        C: Clone,
         F: IntoServiceFactory<U, Result<T::Response, T::Error>, C>,
         U: ServiceFactory<
             Result<T::Response, T::Error>,
@@ -219,7 +214,7 @@ impl<T: ServiceFactory<R, C>, R, C> PipelineFactory<T, R, C> {
     ) -> PipelineFactory<MapServiceFactory<T, F, R, Res, C>, R, C>
     where
         Self: Sized,
-        F: FnMut(T::Response) -> Res + Clone,
+        F: Fn(T::Response) -> Res + Clone,
     {
         PipelineFactory {
             factory: MapServiceFactory::new(self.factory, f),
@@ -275,10 +270,10 @@ impl<T: ServiceFactory<R, C>, R, C> ServiceFactory<R, C> for PipelineFactory<T, 
     type Error = T::Error;
     type Service = T::Service;
     type InitError = T::InitError;
-    type Future = T::Future;
+    type Future<'f> = T::Future<'f> where Self: 'f, C: 'f;
 
     #[inline]
-    fn new_service(&self, cfg: C) -> Self::Future {
-        self.factory.new_service(cfg)
+    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
+        self.factory.create(cfg)
     }
 }
