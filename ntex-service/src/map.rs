@@ -103,17 +103,17 @@ where
 }
 
 /// `MapNewService` new service combinator
-pub struct MapServiceFactory<A, F, Req, Res, Cfg> {
+pub struct MapServiceFactory<A, F, Res, Cfg> {
     a: A,
     f: F,
-    r: PhantomData<fn(Req, Cfg) -> Res>,
+    r: PhantomData<fn(Cfg) -> Res>,
 }
 
-impl<A, F, Req, Res, Cfg> MapServiceFactory<A, F, Req, Res, Cfg> {
+impl<A, F, Res, Cfg> MapServiceFactory<A, F, Res, Cfg> {
     /// Create new `Map` new service instance
     pub(crate) fn new(a: A, f: F) -> Self
     where
-        A: ServiceFactory<Req, Cfg>,
+        A: ServiceFactory<Cfg>,
         F: Fn(A::Response) -> Res,
     {
         Self {
@@ -124,7 +124,7 @@ impl<A, F, Req, Res, Cfg> MapServiceFactory<A, F, Req, Res, Cfg> {
     }
 }
 
-impl<A, F, Req, Res, Cfg> Clone for MapServiceFactory<A, F, Req, Res, Cfg>
+impl<A, F, Res, Cfg> Clone for MapServiceFactory<A, F, Res, Cfg>
 where
     A: Clone,
     F: Clone,
@@ -139,18 +139,18 @@ where
     }
 }
 
-impl<A, F, Req, Res, Cfg> ServiceFactory<Req, Cfg>
-    for MapServiceFactory<A, F, Req, Res, Cfg>
+impl<A, F, Res, Cfg> ServiceFactory<Cfg> for MapServiceFactory<A, F, Res, Cfg>
 where
-    A: ServiceFactory<Req, Cfg>,
+    A: ServiceFactory<Cfg>,
     F: Fn(A::Response) -> Res + Clone,
 {
+    type Request = A::Request;
     type Response = Res;
     type Error = A::Error;
 
-    type Service = Map<A::Service, F, Req, Res>;
+    type Service = Map<A::Service, F, A::Request, Res>;
     type InitError = A::InitError;
-    type Future<'f> = MapServiceFuture<'f, A, F, Req, Res, Cfg> where Self: 'f, Cfg: 'f;
+    type Future<'f> = MapServiceFuture<'f, A, F, Res, Cfg> where Self: 'f, Cfg: 'f;
 
     #[inline]
     fn create<'a>(&'a self, cfg: &'a Cfg) -> Self::Future<'a> {
@@ -162,9 +162,9 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapServiceFuture<'f, A, F, Req, Res, Cfg>
+    pub struct MapServiceFuture<'f, A, F, Res, Cfg>
     where
-        A: ServiceFactory<Req, Cfg>,
+        A: ServiceFactory<Cfg>,
         A: 'f,
         F: Fn(A::Response) -> Res,
         Cfg: 'f,
@@ -175,12 +175,12 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<'f, A, F, Req, Res, Cfg> Future for MapServiceFuture<'f, A, F, Req, Res, Cfg>
+impl<'f, A, F, Res, Cfg> Future for MapServiceFuture<'f, A, F, Res, Cfg>
 where
-    A: ServiceFactory<Req, Cfg>,
+    A: ServiceFactory<Cfg>,
     F: Fn(A::Response) -> Res,
 {
-    type Output = Result<Map<A::Service, F, Req, Res>, A::InitError>;
+    type Output = Result<Map<A::Service, F, A::Request, Res>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -198,7 +198,7 @@ mod tests {
     use ntex_util::future::{lazy, Ready};
 
     use super::*;
-    use crate::{IntoServiceFactory, Service, ServiceFactory};
+    use crate::{fn_factory, Service, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv;
@@ -247,8 +247,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_factory() {
-        let new_srv = (|| async { Ok::<_, ()>(Srv) })
-            .into_factory()
+        let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv) })
             .map(|_| "ok")
             .clone();
         let srv = new_srv.create(&()).await.unwrap();
@@ -259,10 +258,9 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline_factory() {
-        let new_srv =
-            crate::pipeline_factory((|| async { Ok::<_, ()>(Srv) }).into_factory())
-                .map(|_| "ok")
-                .clone();
+        let new_srv = crate::pipeline_factory(fn_factory(|| async { Ok::<_, ()>(Srv) }))
+            .map(|_| "ok")
+            .clone();
         let srv = new_srv.create(&()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_ok());

@@ -3,11 +3,11 @@ use std::{future::Future, marker, pin::Pin, rc::Rc, task::Context, task::Poll};
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply middleware to a service.
-pub fn apply<T, S, R, C, U>(t: T, factory: U) -> ApplyMiddleware<T, S, R, C>
+pub fn apply<T, S, C, U>(t: T, factory: U) -> ApplyMiddleware<T, S, C>
 where
-    S: ServiceFactory<R, C>,
+    S: ServiceFactory<C>,
     T: Middleware<S::Service>,
-    U: IntoServiceFactory<S, R, C>,
+    U: IntoServiceFactory<S, C>,
 {
     ApplyMiddleware::new(t, factory.into_factory())
 }
@@ -98,15 +98,15 @@ where
 }
 
 /// `Apply` middleware to a service factory.
-pub struct ApplyMiddleware<T, S, R, C> {
+pub struct ApplyMiddleware<T, S, C> {
     mw: T,
     svc: S,
-    _t: marker::PhantomData<(R, C)>,
+    _t: marker::PhantomData<C>,
 }
 
-impl<T, S, R, C> ApplyMiddleware<T, S, R, C>
+impl<T, S, C> ApplyMiddleware<T, S, C>
 where
-    S: ServiceFactory<R, C>,
+    S: ServiceFactory<C>,
     T: Middleware<S::Service>,
 {
     /// Create new `ApplyMiddleware` service factory instance
@@ -119,7 +119,7 @@ where
     }
 }
 
-impl<T, S, R, C> Clone for ApplyMiddleware<T, S, R, C>
+impl<T, S, C> Clone for ApplyMiddleware<T, S, C>
 where
     T: Clone,
     S: Clone,
@@ -133,18 +133,19 @@ where
     }
 }
 
-impl<T, S, R, C> ServiceFactory<R, C> for ApplyMiddleware<T, S, R, C>
+impl<T, S, C> ServiceFactory<C> for ApplyMiddleware<T, S, C>
 where
-    S: ServiceFactory<R, C>,
+    S: ServiceFactory<C>,
     T: Middleware<S::Service>,
-    T::Service: Service<R>,
+    T::Service: Service<S::Request>,
 {
-    type Response = <T::Service as Service<R>>::Response;
-    type Error = <T::Service as Service<R>>::Error;
+    type Request = S::Request;
+    type Response = <T::Service as Service<S::Request>>::Response;
+    type Error = <T::Service as Service<S::Request>>::Error;
 
     type Service = T::Service;
     type InitError = S::InitError;
-    type Future<'f> = ApplyMiddlewareFuture<'f, T, S, R, C> where Self: 'f;
+    type Future<'f> = ApplyMiddlewareFuture<'f, T, S, C> where Self: 'f, C: 'f;
 
     #[inline]
     fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
@@ -156,20 +157,20 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct ApplyMiddlewareFuture<'f, T, S, R, C>
+    pub struct ApplyMiddlewareFuture<'f, T, S, C>
     where
-        S: ServiceFactory<R, C>,
+        S: ServiceFactory<C>,
         T: Middleware<S::Service>,
     {
-        slf: &'f ApplyMiddleware<T, S, R, C>,
+        slf: &'f ApplyMiddleware<T, S, C>,
         #[pin]
         fut: S::Future<'f>,
     }
 }
 
-impl<'f, T, S, R, C> Future for ApplyMiddlewareFuture<'f, T, S, R, C>
+impl<'f, T, S, C> Future for ApplyMiddlewareFuture<'f, T, S, C>
 where
-    S: ServiceFactory<R, C>,
+    S: ServiceFactory<C>,
     T: Middleware<S::Service>,
 {
     type Output = Result<T::Service, S::InitError>;

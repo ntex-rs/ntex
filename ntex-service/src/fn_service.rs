@@ -51,12 +51,10 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub fn fn_factory<F, Cfg, Srv, Fut, Req, Err>(
-    f: F,
-) -> FnServiceNoConfig<F, Cfg, Srv, Fut, Req, Err>
+pub fn fn_factory<F, Srv, Fut, Req, Err>(f: F) -> FnServiceNoConfig<F, Srv, Fut, Req, Err>
 where
-    Srv: Service<Req>,
     F: Fn() -> Fut,
+    Srv: Service<Req>,
     Fut: Future<Output = Result<Srv, Err>>,
 {
     FnServiceNoConfig::new(f)
@@ -104,31 +102,15 @@ where
     FnServiceConfig { f, _t: PhantomData }
 }
 
-pub struct FnService<F, Fut, Req, Res, Err>
-where
-    F: Fn(Req) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>,
-{
+pub struct FnService<F, Req> {
     f: F,
     _t: PhantomData<Req>,
 }
 
-impl<F, Fut, Req, Res, Err> FnService<F, Fut, Req, Res, Err>
+impl<F, Req> Clone for FnService<F, Req>
 where
-    F: Fn(Req) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>,
+    F: Clone,
 {
-    pub(crate) fn new(f: F) -> Self {
-        Self { f, _t: PhantomData }
-    }
-}
-
-impl<F, Fut, Req, Res, Err> Clone for FnService<F, Fut, Req, Res, Err>
-where
-    F: Fn(Req) -> Fut + Clone,
-    Fut: Future<Output = Result<Res, Err>>,
-{
-    #[inline]
     fn clone(&self) -> Self {
         Self {
             f: self.f.clone(),
@@ -137,14 +119,14 @@ where
     }
 }
 
-impl<F, Fut, Req, Res, Err> Service<Req> for FnService<F, Fut, Req, Res, Err>
+impl<F, Fut, Req, Res, Err> Service<Req> for FnService<F, Req>
 where
-    F: Fn(Req) -> Fut,
+    F: Fn(Req) -> Fut + 'static,
     Fut: Future<Output = Result<Res, Err>>,
 {
     type Response = Res;
     type Error = Err;
-    type Future<'f> = Fut where Self: 'f;
+    type Future<'f> = Fut where Self: 'f, Req: 'f;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -162,14 +144,17 @@ where
     }
 }
 
-impl<F, Fut, Req, Res, Err> IntoService<FnService<F, Fut, Req, Res, Err>, Req> for F
+impl<F, Fut, Req, Res, Err> IntoService<FnService<F, Req>, Req> for F
 where
-    F: Fn(Req) -> Fut,
+    F: Fn(Req) -> Fut + 'static,
     Fut: Future<Output = Result<Res, Err>>,
 {
     #[inline]
-    fn into_service(self) -> FnService<F, Fut, Req, Res, Err> {
-        FnService::new(self)
+    fn into_service(self) -> FnService<F, Req> {
+        FnService {
+            f: self,
+            _t: PhantomData,
+        }
     }
 }
 
@@ -231,21 +216,22 @@ where
     }
 }
 
-impl<F, Fut, Req, Res, Err, Cfg> ServiceFactory<Req, Cfg>
+impl<F, Fut, Req, Res, Err, Cfg> ServiceFactory<Cfg>
     for FnServiceFactory<F, Fut, Req, Res, Err, Cfg>
 where
-    F: Fn(Req) -> Fut + Clone,
+    F: Fn(Req) -> Fut + Clone + 'static,
     Fut: Future<Output = Result<Res, Err>>,
 {
+    type Request = Req;
     type Response = Res;
     type Error = Err;
 
-    type Service = FnService<F, Fut, Req, Res, Err>;
+    type Service = FnService<F, Req>;
     type InitError = ();
     type Future<'f> = Ready<Result<Self::Service, Self::InitError>> where Self: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, _: &'a Cfg) -> Self::Future<'a> {
+    fn create(&self, _: &Cfg) -> Self::Future<'_> {
         ready(Ok(FnService {
             f: self.f.clone(),
             _t: PhantomData,
@@ -254,9 +240,9 @@ where
 }
 
 impl<F, Fut, Req, Res, Err, Cfg>
-    IntoServiceFactory<FnServiceFactory<F, Fut, Req, Res, Err, Cfg>, Req, Cfg> for F
+    IntoServiceFactory<FnServiceFactory<F, Fut, Req, Res, Err, Cfg>, Cfg> for F
 where
-    F: Fn(Req) -> Fut + Clone,
+    F: Fn(Req) -> Fut + Clone + 'static,
     Fut: Future<Output = Result<Res, Err>>,
 {
     #[inline]
@@ -291,13 +277,14 @@ where
     }
 }
 
-impl<F, Fut, Cfg, Srv, Req, Err> ServiceFactory<Req, Cfg>
+impl<F, Fut, Cfg, Srv, Req, Err> ServiceFactory<Cfg>
     for FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
     F: Fn(&Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service<Req>,
 {
+    type Request = Req;
     type Response = Srv::Response;
     type Error = Srv::Error;
 
@@ -306,23 +293,23 @@ where
     type Future<'f> = Fut where Self: 'f, Cfg: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: &'a Cfg) -> Self::Future<'a> {
+    fn create(&self, cfg: &Cfg) -> Self::Future<'_> {
         (self.f)(cfg)
     }
 }
 
 /// Converter for `Fn() -> Future<Service>` fn
-pub struct FnServiceNoConfig<F, C, S, R, Req, E>
+pub struct FnServiceNoConfig<F, S, R, Req, E>
 where
     F: Fn() -> R,
     S: Service<Req>,
     R: Future<Output = Result<S, E>>,
 {
     f: F,
-    _t: PhantomData<(Req, C)>,
+    _t: PhantomData<Req>,
 }
 
-impl<F, C, S, R, Req, E> FnServiceNoConfig<F, C, S, R, Req, E>
+impl<F, S, R, Req, E> FnServiceNoConfig<F, S, R, Req, E>
 where
     F: Fn() -> R,
     R: Future<Output = Result<S, E>>,
@@ -333,25 +320,27 @@ where
     }
 }
 
-impl<F, C, S, R, Req, E> ServiceFactory<Req, C> for FnServiceNoConfig<F, C, S, R, Req, E>
+impl<F, S, R, Req, E, C> ServiceFactory<C> for FnServiceNoConfig<F, S, R, Req, E>
 where
     F: Fn() -> R,
     R: Future<Output = Result<S, E>>,
     S: Service<Req>,
+    C: 'static,
 {
+    type Request = Req;
     type Response = S::Response;
     type Error = S::Error;
     type Service = S;
     type InitError = E;
-    type Future<'f> = R where Self: 'f, R: 'f, C: 'f;
+    type Future<'f> = R where Self: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, _: &'a C) -> Self::Future<'a> {
+    fn create(&self, _: &C) -> Self::Future<'_> {
         (self.f)()
     }
 }
 
-impl<F, C, S, R, Req, E> Clone for FnServiceNoConfig<F, C, S, R, Req, E>
+impl<F, S, R, Req, E> Clone for FnServiceNoConfig<F, S, R, Req, E>
 where
     F: Fn() -> R + Clone,
     R: Future<Output = Result<S, E>>,
@@ -363,15 +352,15 @@ where
     }
 }
 
-impl<F, C, S, R, Req, E> IntoServiceFactory<FnServiceNoConfig<F, C, S, R, Req, E>, Req, C>
-    for F
+impl<F, S, R, Req, E, C> IntoServiceFactory<FnServiceNoConfig<F, S, R, Req, E>, C> for F
 where
     F: Fn() -> R,
     R: Future<Output = Result<S, E>>,
     S: Service<Req>,
+    C: 'static,
 {
     #[inline]
-    fn into_factory(self) -> FnServiceNoConfig<F, C, S, R, Req, E> {
+    fn into_factory(self) -> FnServiceNoConfig<F, S, R, Req, E> {
         FnServiceNoConfig::new(self)
     }
 }

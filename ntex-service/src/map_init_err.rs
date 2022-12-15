@@ -3,15 +3,15 @@ use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Po
 use super::ServiceFactory;
 
 /// `MapInitErr` service combinator
-pub struct MapInitErr<A, R, C, F, E> {
+pub struct MapInitErr<A, C, F, E> {
     a: A,
     f: F,
-    e: PhantomData<fn(R, C) -> E>,
+    e: PhantomData<fn(C) -> E>,
 }
 
-impl<A, R, C, F, E> MapInitErr<A, R, C, F, E>
+impl<A, C, F, E> MapInitErr<A, C, F, E>
 where
-    A: ServiceFactory<R, C>,
+    A: ServiceFactory<C>,
     F: Fn(A::InitError) -> E,
 {
     /// Create new `MapInitErr` combinator
@@ -24,7 +24,7 @@ where
     }
 }
 
-impl<A, R, C, F, E> Clone for MapInitErr<A, R, C, F, E>
+impl<A, C, F, E> Clone for MapInitErr<A, C, F, E>
 where
     A: Clone,
     F: Clone,
@@ -38,17 +38,18 @@ where
     }
 }
 
-impl<A, R, C, F, E> ServiceFactory<R, C> for MapInitErr<A, R, C, F, E>
+impl<A, C, F, E> ServiceFactory<C> for MapInitErr<A, C, F, E>
 where
-    A: ServiceFactory<R, C>,
+    A: ServiceFactory<C>,
     F: Fn(A::InitError) -> E,
 {
+    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
 
     type Service = A::Service;
     type InitError = E;
-    type Future<'f> = MapInitErrFuture<'f, A, R, C, F, E> where Self: 'f, C: 'f;
+    type Future<'f> = MapInitErrFuture<'f, A, C, F, E> where Self: 'f, C: 'f;
 
     #[inline]
     fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
@@ -60,20 +61,20 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapInitErrFuture<'f, A, R, C, F, E>
+    pub struct MapInitErrFuture<'f, A, C, F, E>
     where
-        A: ServiceFactory<R, C>,
+        A: ServiceFactory<C>,
         F: Fn(A::InitError) -> E,
     {
-        slf: &'f MapInitErr<A, R, C, F, E>,
+        slf: &'f MapInitErr<A, C, F, E>,
         #[pin]
         fut: A::Future<'f>,
     }
 }
 
-impl<'f, A, R, C, F, E> Future for MapInitErrFuture<'f, A, R, C, F, E>
+impl<'f, A, C, F, E> Future for MapInitErrFuture<'f, A, C, F, E>
 where
-    A: ServiceFactory<R, C>,
+    A: ServiceFactory<C>,
     F: Fn(A::InitError) -> E,
 {
     type Output = Result<A::Service, E>;

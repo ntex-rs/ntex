@@ -93,6 +93,16 @@ pub trait Service<Req> {
         Req: 'f,
         Self: 'f;
 
+    /// Process the request and return the response asynchronously.
+    ///
+    /// This function is expected to be callable off-task. As such, implementations of `call`
+    /// should take care to not call `poll_ready`. If the  service is at capacity and the request
+    /// is unable to be handled, the returned `Future` should resolve to an error.
+    ///
+    /// Invoking `call` without first invoking `poll_ready` is permitted. Implementations must be
+    /// resilient to this fact.
+    fn call<'a>(&'a self, req: Req) -> Self::Future<'a>;
+
     /// Returns `Ready` when the service is able to process requests.
     ///
     /// If the service is at capacity, then `Pending` is returned and the task is notified when
@@ -117,16 +127,6 @@ pub trait Service<Req> {
     fn poll_shutdown(&self, ctx: &mut task::Context<'_>, is_error: bool) -> Poll<()> {
         Poll::Ready(())
     }
-
-    /// Process the request and return the response asynchronously.
-    ///
-    /// This function is expected to be callable off-task. As such, implementations of `call`
-    /// should take care to not call `poll_ready`. If the  service is at capacity and the request
-    /// is unable to be handled, the returned `Future` should resolve to an error.
-    ///
-    /// Invoking `call` without first invoking `poll_ready` is permitted. Implementations must be
-    /// resilient to this fact.
-    fn call(&self, req: Req) -> Self::Future<'_>;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service of the resulting type.
@@ -172,7 +172,10 @@ pub trait Service<Req> {
 ///
 /// Simple factories may be able to use [`fn_factory`] or [`fn_factory_with_config`] to
 /// reduce boilerplate.
-pub trait ServiceFactory<Req, Cfg = ()> {
+pub trait ServiceFactory<Cfg = ()> {
+    /// Requests handled by the created services.
+    type Request;
+
     /// Responses given by the created services.
     type Response;
 
@@ -180,7 +183,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     type Error;
 
     /// The kind of `Service` created by this factory.
-    type Service: Service<Req, Response = Self::Response, Error = Self::Error>;
+    type Service: Service<Self::Request, Response = Self::Response, Error = Self::Error>;
 
     /// Errors potentially raised while building a service.
     type InitError;
@@ -197,7 +200,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     #[inline]
     /// Map this service's output to a different type, returning a new service
     /// of the resulting type.
-    fn map<F, Res>(self, f: F) -> crate::map::MapServiceFactory<Self, F, Req, Res, Cfg>
+    fn map<F, Res>(self, f: F) -> crate::map::MapServiceFactory<Self, F, Res, Cfg>
     where
         Self: Sized,
         F: Fn(Self::Response) -> Res + Clone,
@@ -207,23 +210,17 @@ pub trait ServiceFactory<Req, Cfg = ()> {
 
     #[inline]
     /// Map this service's error to a different error, returning a new service.
-    fn map_err<F, E>(
-        self,
-        f: F,
-    ) -> crate::map_err::MapErrServiceFactory<Self, Req, Cfg, F, E>
+    fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrServiceFactory<Self, Cfg, F, E>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
     {
-        crate::map_err::MapErrServiceFactory::<_, _, Cfg, _, _>::new(self, f)
+        crate::map_err::MapErrServiceFactory::<_, Cfg, _, _>::new(self, f)
     }
 
     #[inline]
     /// Map this factory's init error to a different error, returning a new service.
-    fn map_init_err<F, E>(
-        self,
-        f: F,
-    ) -> crate::map_init_err::MapInitErr<Self, Req, Cfg, F, E>
+    fn map_init_err<F, E>(self, f: F) -> crate::map_init_err::MapInitErr<Self, Cfg, F, E>
     where
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
@@ -278,10 +275,11 @@ where
     }
 }
 
-impl<S, Req, Cfg> ServiceFactory<Req, Cfg> for Rc<S>
+impl<S, Cfg> ServiceFactory<Cfg> for Rc<S>
 where
-    S: ServiceFactory<Req, Cfg>,
+    S: ServiceFactory<Cfg>,
 {
+    type Request = S::Request;
     type Response = S::Response;
     type Error = S::Error;
     type Service = S::Service;
@@ -303,9 +301,9 @@ where
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
-pub trait IntoServiceFactory<T, Req, Cfg = ()>
+pub trait IntoServiceFactory<T, Cfg = ()>
 where
-    T: ServiceFactory<Req, Cfg>,
+    T: ServiceFactory<Cfg>,
 {
     /// Convert `Self` to a `ServiceFactory`
     fn into_factory(self) -> T;
@@ -320,9 +318,9 @@ where
     }
 }
 
-impl<T, Req, Cfg> IntoServiceFactory<T, Req, Cfg> for T
+impl<T, Cfg> IntoServiceFactory<T, Cfg> for T
 where
-    T: ServiceFactory<Req, Cfg>,
+    T: ServiceFactory<Cfg>,
 {
     fn into_factory(self) -> T {
         self

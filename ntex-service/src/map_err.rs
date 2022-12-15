@@ -101,19 +101,19 @@ where
 /// service's error.
 ///
 /// This is created by the `NewServiceExt::map_err` method.
-pub struct MapErrServiceFactory<A, R, C, F, E>
+pub struct MapErrServiceFactory<A, C, F, E>
 where
-    A: ServiceFactory<R, C>,
+    A: ServiceFactory<C>,
     F: Fn(A::Error) -> E,
 {
     a: A,
     f: F,
-    e: PhantomData<fn(R, C) -> E>,
+    e: PhantomData<fn(C) -> E>,
 }
 
-impl<A, R, C, F, E> MapErrServiceFactory<A, R, C, F, E>
+impl<A, C, F, E> MapErrServiceFactory<A, C, F, E>
 where
-    A: ServiceFactory<R, C>,
+    A: ServiceFactory<C>,
     F: Fn(A::Error) -> E + Clone,
 {
     /// Create new `MapErr` new service instance
@@ -126,9 +126,9 @@ where
     }
 }
 
-impl<A, R, C, F, E> Clone for MapErrServiceFactory<A, R, C, F, E>
+impl<A, C, F, E> Clone for MapErrServiceFactory<A, C, F, E>
 where
-    A: ServiceFactory<R, C> + Clone,
+    A: ServiceFactory<C> + Clone,
     F: Fn(A::Error) -> E + Clone,
 {
     fn clone(&self) -> Self {
@@ -140,17 +140,18 @@ where
     }
 }
 
-impl<A, R, C, F, E> ServiceFactory<R, C> for MapErrServiceFactory<A, R, C, F, E>
+impl<A, C, F, E> ServiceFactory<C> for MapErrServiceFactory<A, C, F, E>
 where
-    A: ServiceFactory<R, C>,
+    A: ServiceFactory<C>,
     F: Fn(A::Error) -> E + Clone,
 {
+    type Request = A::Request;
     type Response = A::Response;
     type Error = E;
 
-    type Service = MapErr<A::Service, R, F, E>;
+    type Service = MapErr<A::Service, A::Request, F, E>;
     type InitError = A::InitError;
-    type Future<'f> = MapErrServiceFuture<'f, A, R, C, F, E> where Self: 'f, C: 'f;
+    type Future<'f> = MapErrServiceFuture<'f, A, C, F, E> where Self: 'f, C: 'f;
 
     #[inline]
     fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
@@ -162,23 +163,23 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapErrServiceFuture<'f, A, R, C, F, E>
+    pub struct MapErrServiceFuture<'f, A, C, F, E>
     where
-        A: ServiceFactory<R, C>,
+        A: ServiceFactory<C>,
         F: Fn(A::Error) -> E,
     {
-        slf: &'f MapErrServiceFactory<A, R, C, F, E>,
+        slf: &'f MapErrServiceFactory<A, C, F, E>,
         #[pin]
         fut: A::Future<'f>,
     }
 }
 
-impl<'f, A, R, C, F, E> Future for MapErrServiceFuture<'f, A, R, C, F, E>
+impl<'f, A, C, F, E> Future for MapErrServiceFuture<'f, A, C, F, E>
 where
-    A: ServiceFactory<R, C>,
+    A: ServiceFactory<C>,
     F: Fn(A::Error) -> E + Clone,
 {
-    type Output = Result<MapErr<A::Service, R, F, E>, A::InitError>;
+    type Output = Result<MapErr<A::Service, A::Request, F, E>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -193,7 +194,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IntoServiceFactory, Service, ServiceFactory};
+    use crate::{fn_factory, Service, ServiceFactory};
     use ntex_util::future::{lazy, Ready};
 
     #[derive(Clone)]
@@ -241,8 +242,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_factory() {
-        let new_srv = (|| Ready::<_, ()>::Ok(Srv))
-            .into_factory()
+        let new_srv = fn_factory(|| Ready::<_, ()>::Ok(Srv))
             .map_err(|_| "error")
             .clone();
         let srv = new_srv.create(&()).await.unwrap();
@@ -253,10 +253,9 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline_factory() {
-        let new_srv =
-            crate::pipeline_factory((|| async { Ok::<_, ()>(Srv) }).into_factory())
-                .map_err(|_| "error")
-                .clone();
+        let new_srv = crate::pipeline_factory(fn_factory(|| async { Ok::<Srv, ()>(Srv) }))
+            .map_err(|_| "error")
+            .clone();
         let srv = new_srv.create(&()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_err());

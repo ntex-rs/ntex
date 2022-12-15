@@ -6,36 +6,36 @@ use super::{IntoServiceFactory, ServiceFactory};
 ///
 /// Note that this function consumes the receiving service factory and returns
 /// a wrapped version of it.
-pub fn map_config<T, R, U, F, C, C2>(factory: U, f: F) -> MapConfig<T, R, F, C, C2>
+pub fn map_config<T, U, F, C, C2>(factory: U, f: F) -> MapConfig<T, F, C, C2>
 where
-    T: ServiceFactory<R, C2>,
-    U: IntoServiceFactory<T, R, C2>,
+    T: ServiceFactory<C2>,
+    U: IntoServiceFactory<T, C2>,
     F: Fn(&C) -> C2,
 {
     MapConfig::new(factory.into_factory(), f)
 }
 
 /// Replace config with unit
-pub fn unit_config<T, R, U, C>(factory: U) -> UnitConfig<T, R, C>
+pub fn unit_config<T, U, C>(factory: U) -> UnitConfig<T, C>
 where
-    T: ServiceFactory<R, ()>,
-    U: IntoServiceFactory<T, R, ()>,
+    T: ServiceFactory<()>,
+    U: IntoServiceFactory<T, ()>,
 {
     UnitConfig::new(factory.into_factory())
 }
 
 /// `map_config()` adapter service factory
-pub struct MapConfig<A, R, F, C, C2> {
+pub struct MapConfig<A, F, C, C2> {
     a: A,
     f: F,
-    e: PhantomData<(R, C, C2)>,
+    e: PhantomData<(C, C2)>,
 }
 
-impl<A, R, F, C, C2> MapConfig<A, R, F, C, C2> {
+impl<A, F, C, C2> MapConfig<A, F, C, C2> {
     /// Create new `MapConfig` combinator
     pub(crate) fn new(a: A, f: F) -> Self
     where
-        A: ServiceFactory<R, C2>,
+        A: ServiceFactory<C2>,
         F: Fn(&C) -> C2,
     {
         Self {
@@ -46,7 +46,7 @@ impl<A, R, F, C, C2> MapConfig<A, R, F, C, C2> {
     }
 }
 
-impl<A, R, F, C, C2> Clone for MapConfig<A, R, F, C, C2>
+impl<A, F, C, C2> Clone for MapConfig<A, F, C, C2>
 where
     A: Clone,
     F: Clone,
@@ -62,11 +62,12 @@ where
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-impl<A, R, F, C, C2> ServiceFactory<R, C> for MapConfig<A, R, F, C, C2>
+impl<A, F, C, C2> ServiceFactory<C> for MapConfig<A, F, C, C2>
 where
-    A: ServiceFactory<R, C2>,
+    A: ServiceFactory<C2>,
     F: Fn(&C) -> C2,
 {
+    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
 
@@ -74,54 +75,54 @@ where
     type InitError = A::InitError;
     type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>> where Self: 'f, C2: 'f;
 
-    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
-        Box::pin(async move {
-            let cfg = (self.f)(cfg);
-            self.a.create(&cfg).await
-        })
+    fn create(&self, cfg: &C) -> Self::Future<'_> {
+        let cfg = (self.f)(cfg);
+        Box::pin(async move { self.a.create(&cfg).await })
     }
 }
 
 /// `unit_config()` config combinator
-pub struct UnitConfig<A, R, C> {
+pub struct UnitConfig<A, C> {
     a: A,
-    e: PhantomData<(C, R)>,
+    _t: PhantomData<C>,
 }
 
-impl<A, R, C> UnitConfig<A, R, C>
+impl<A, C> UnitConfig<A, C>
 where
-    A: ServiceFactory<R, ()>,
+    A: ServiceFactory<()>,
 {
     /// Create new `UnitConfig` combinator
     pub(crate) fn new(a: A) -> Self {
-        Self { a, e: PhantomData }
+        Self { a, _t: PhantomData }
     }
 }
 
-impl<A, R, C> Clone for UnitConfig<A, R, C>
+impl<A, C> Clone for UnitConfig<A, C>
 where
     A: Clone,
 {
     fn clone(&self) -> Self {
         Self {
             a: self.a.clone(),
-            e: PhantomData,
+            _t: PhantomData,
         }
     }
 }
 
-impl<A, R, C> ServiceFactory<R, C> for UnitConfig<A, R, C>
+impl<A, C> ServiceFactory<C> for UnitConfig<A, C>
 where
-    A: ServiceFactory<R, ()>,
+    A: ServiceFactory<()>,
+    //C: 'static,
 {
+    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
 
     type Service = A::Service;
     type InitError = A::InitError;
-    type Future<'f> = A::Future<'f> where A: 'f, R: 'f, C: 'f;
+    type Future<'f> = A::Future<'f> where Self: 'f, C: 'f;
 
-    fn create<'a>(&'a self, _: &'a C) -> Self::Future<'a> {
+    fn create(&self, _: &C) -> Self::Future<'_> {
         self.a.create(&())
     }
 }
@@ -142,7 +143,7 @@ mod tests {
         let factory = map_config(
             fn_service(|item: usize| Ready::<_, ()>::Ok(item)),
             |t: &usize| {
-                item.set(item.get() + t);
+                item.set(item.get() + *t);
             },
         )
         .clone();

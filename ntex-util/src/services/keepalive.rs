@@ -48,18 +48,19 @@ where
     }
 }
 
-impl<R, E, F, C> ServiceFactory<R, C> for KeepAlive<R, E, F>
+impl<R, E, F, C: 'static> ServiceFactory<C> for KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
+    type Request = R;
     type Response = R;
     type Error = E;
     type InitError = Infallible;
     type Service = KeepAliveService<R, E, F>;
-    type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f, C: 'f;
+    type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, _: &'a C) -> Self::Future<'a> {
+    fn create(&self, _: &C) -> Self::Future<'_> {
         Ready::Ok(KeepAliveService::new(self.ka, self.f.clone()))
     }
 }
