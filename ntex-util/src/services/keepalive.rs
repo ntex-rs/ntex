@@ -48,11 +48,10 @@ where
     }
 }
 
-impl<R, E, F, C: 'static> ServiceFactory<C> for KeepAlive<R, E, F>
+impl<R, E, F, C: 'static> ServiceFactory<R, C> for KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
-    type Request = R;
     type Response = R;
     type Error = E;
     type InitError = Infallible;

@@ -4,7 +4,7 @@ use std::{cmp, future::Future, marker, pin::Pin, str::FromStr};
 
 use crate::http::encoding::Encoder;
 use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
-use crate::service::{Service, Transform};
+use crate::service::{Middleware, Service};
 use crate::web::{BodyEncoding, ErrorRenderer, WebRequest, WebResponse};
 
 #[derive(Debug, Clone)]
@@ -43,10 +43,10 @@ impl Default for Compress {
     }
 }
 
-impl<S> Transform<S> for Compress {
+impl<S> Middleware<S> for Compress {
     type Service = CompressMiddleware<S>;
 
-    fn new_transform(&self, service: S) -> Self::Service {
+    fn create(&self, service: S) -> Self::Service {
         CompressMiddleware {
             service,
             encoding: self.enc,
@@ -66,7 +66,7 @@ where
 {
     type Response = WebResponse;
     type Error = S::Error;
-    type Future = CompressResponse<S, E>;
+    type Future<'f> = CompressResponse<'f, S, E> where S: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -78,7 +78,7 @@ where
         self.service.poll_shutdown(cx, is_error)
     }
 
-    fn call(&self, req: WebRequest<E>) -> Self::Future {
+    fn call(&self, req: WebRequest<E>) -> Self::Future<'_> {
         // negotiate content-encoding
         let encoding = if let Some(val) = req.headers().get(&ACCEPT_ENCODING) {
             if let Ok(enc) = val.to_str() {
@@ -100,16 +100,17 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct CompressResponse<S: Service<WebRequest<E>>, E>
+    pub struct CompressResponse<'f, S: Service<WebRequest<E>>, E>
+    where S: 'f, E: 'f
     {
         #[pin]
-        fut: S::Future,
+        fut: S::Future<'f>,
         encoding: ContentEncoding,
         _t: marker::PhantomData<E>,
     }
 }
 
-impl<S, E> Future for CompressResponse<S, E>
+impl<'f, S, E> Future for CompressResponse<'f, S, E>
 where
     S: Service<WebRequest<E>, Response = WebResponse>,
     E: ErrorRenderer,

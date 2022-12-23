@@ -25,6 +25,7 @@ pub use self::map_config::{map_config, unit_config};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 pub use self::transform::{apply, Identity, Middleware};
 
+#[allow(unused_variables)]
 /// An asynchronous function of `Request` to a `Response`.
 ///
 /// The `Service` trait represents a request/response interaction, receiving requests and returning
@@ -103,6 +104,7 @@ pub trait Service<Req> {
     /// resilient to this fact.
     fn call<'a>(&'a self, req: Req) -> Self::Future<'a>;
 
+    #[inline]
     /// Returns `Ready` when the service is able to process requests.
     ///
     /// If the service is at capacity, then `Pending` is returned and the task is notified when
@@ -116,15 +118,16 @@ pub trait Service<Req> {
     ///
     /// 1. `.poll_ready()` might be called on different task from actual service call.
     /// 1. In case of chained services, `.poll_ready()` is called for all services at once.
-    fn poll_ready(&self, ctx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>>;
+    fn poll_ready(&self, cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
 
     #[inline]
-    #[allow(unused_variables)]
     /// Shutdown service.
     ///
     /// Returns `Ready` when the service is properly shutdowns. This method might be called
     /// after it returns `Ready`.
-    fn poll_shutdown(&self, ctx: &mut task::Context<'_>, is_error: bool) -> Poll<()> {
+    fn poll_shutdown(&self, cx: &mut task::Context<'_>, is_error: bool) -> Poll<()> {
         Poll::Ready(())
     }
 
@@ -172,10 +175,7 @@ pub trait Service<Req> {
 ///
 /// Simple factories may be able to use [`fn_factory`] or [`fn_factory_with_config`] to
 /// reduce boilerplate.
-pub trait ServiceFactory<Cfg = ()> {
-    /// Requests handled by the created services.
-    type Request;
-
+pub trait ServiceFactory<Req, Cfg = ()> {
     /// Responses given by the created services.
     type Response;
 
@@ -183,7 +183,7 @@ pub trait ServiceFactory<Cfg = ()> {
     type Error;
 
     /// The kind of `Service` created by this factory.
-    type Service: Service<Self::Request, Response = Self::Response, Error = Self::Error>;
+    type Service: Service<Req, Response = Self::Response, Error = Self::Error>;
 
     /// Errors potentially raised while building a service.
     type InitError;
@@ -200,27 +200,30 @@ pub trait ServiceFactory<Cfg = ()> {
     #[inline]
     /// Map this service's output to a different type, returning a new service
     /// of the resulting type.
-    fn map<F, Res>(self, f: F) -> crate::map::MapServiceFactory<Self, F, Res, Cfg>
+    fn map<F, Res>(self, f: F) -> crate::map::MapFactory<Self, F, Req, Res, Cfg>
     where
         Self: Sized,
         F: Fn(Self::Response) -> Res + Clone,
     {
-        crate::map::MapServiceFactory::new(self, f)
+        crate::map::MapFactory::new(self, f)
     }
 
     #[inline]
     /// Map this service's error to a different error, returning a new service.
-    fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrServiceFactory<Self, Cfg, F, E>
+    fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrFactory<Self, Req, Cfg, F, E>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
     {
-        crate::map_err::MapErrServiceFactory::<_, Cfg, _, _>::new(self, f)
+        crate::map_err::MapErrFactory::new(self, f)
     }
 
     #[inline]
     /// Map this factory's init error to a different error, returning a new service.
-    fn map_init_err<F, E>(self, f: F) -> crate::map_init_err::MapInitErr<Self, Cfg, F, E>
+    fn map_init_err<F, E>(
+        self,
+        f: F,
+    ) -> crate::map_init_err::MapInitErr<Self, Req, Cfg, F, E>
     where
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
@@ -275,11 +278,10 @@ where
     }
 }
 
-impl<S, Cfg> ServiceFactory<Cfg> for Rc<S>
+impl<S, Req, Cfg> ServiceFactory<Req, Cfg> for Rc<S>
 where
-    S: ServiceFactory<Cfg>,
+    S: ServiceFactory<Req, Cfg>,
 {
-    type Request = S::Request;
     type Response = S::Response;
     type Error = S::Error;
     type Service = S::Service;
@@ -301,9 +303,9 @@ where
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
-pub trait IntoServiceFactory<T, Cfg = ()>
+pub trait IntoServiceFactory<T, Req, Cfg = ()>
 where
-    T: ServiceFactory<Cfg>,
+    T: ServiceFactory<Req, Cfg>,
 {
     /// Convert `Self` to a `ServiceFactory`
     fn into_factory(self) -> T;
@@ -318,9 +320,9 @@ where
     }
 }
 
-impl<T, Cfg> IntoServiceFactory<T, Cfg> for T
+impl<T, Req, Cfg> IntoServiceFactory<T, Req, Cfg> for T
 where
-    T: ServiceFactory<Cfg>,
+    T: ServiceFactory<Req, Cfg>,
 {
     fn into_factory(self) -> T {
         self
@@ -342,9 +344,9 @@ pub mod dev {
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
-    pub use crate::map::{Map, MapServiceFactory};
+    pub use crate::map::{Map, MapFactory};
     pub use crate::map_config::{MapConfig, UnitConfig};
-    pub use crate::map_err::{MapErr, MapErrServiceFactory};
+    pub use crate::map_err::{MapErr, MapErrFactory};
     pub use crate::map_init_err::MapInitErr;
     pub use crate::then::{Then, ThenFactory};
     pub use crate::transform::ApplyMiddleware;

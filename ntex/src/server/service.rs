@@ -4,7 +4,7 @@ use std::{future::Future, net::SocketAddr, pin::Pin, task::Context, task::Poll};
 use log::error;
 
 use crate::io::Io;
-use crate::service::{Service, ServiceFactory};
+use crate::service::{boxed, Service, ServiceFactory};
 use crate::util::{Pool, PoolId, Ready};
 use crate::{rt::spawn, time::Millis};
 
@@ -21,7 +21,7 @@ pub(super) enum ServerMessage {
 }
 
 pub(super) trait StreamServiceFactory: Send + Clone + 'static {
-    type Factory: ServiceFactory<Io>;
+    type Factory: ServiceFactory<Request = Io>;
 
     fn create(&self, _: Config) -> Self::Factory;
 }
@@ -36,14 +36,8 @@ pub(super) trait InternalServiceFactory: Send {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>;
 }
 
-pub(super) type BoxedServerService = Box<
-    dyn Service<
-        (Option<CounterGuard>, ServerMessage),
-        Response = (),
-        Error = (),
-        Future = Ready<(), ()>,
-    >,
->;
+pub(super) type BoxedServerService =
+    boxed::BoxService<(Option<CounterGuard>, ServerMessage), (), ()>;
 
 pub(super) struct StreamService<T> {
     service: T,
@@ -62,12 +56,11 @@ impl<T> StreamService<T> {
 impl<T> Service<(Option<CounterGuard>, ServerMessage)> for StreamService<T>
 where
     T: Service<Io>,
-    T::Future: 'static,
     T::Error: 'static,
 {
     type Response = ();
     type Error = ();
-    type Future = Ready<(), ()>;
+    type Future<'f> = Ready<(), ()> where T: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -85,7 +78,10 @@ where
         self.service.poll_shutdown(cx, is_error)
     }
 
-    fn call(&self, (guard, req): (Option<CounterGuard>, ServerMessage)) -> Self::Future {
+    fn call(
+        &self,
+        (guard, req): (Option<CounterGuard>, ServerMessage),
+    ) -> Self::Future<'_> {
         match req {
             ServerMessage::Connect(stream) => {
                 let stream = stream.try_into().map_err(|e| {
@@ -158,13 +154,13 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>> {
         let token = self.token;
         let cfg = Config::default();
-        let fut = self.inner.create(cfg.clone()).new_service(());
+        let fut = self.inner.create(cfg.clone()).create(&());
 
         Box::pin(async move {
             match fut.await {
                 Ok(inner) => {
                     let service: BoxedServerService =
-                        Box::new(StreamService::new(inner, cfg.get_pool_id()));
+                        boxed::service(StreamService::new(inner, cfg.get_pool_id()));
                     Ok(vec![(token, service)])
                 }
                 Err(_) => Err(()),
@@ -192,7 +188,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 impl<F, T> StreamServiceFactory for F
 where
     F: Fn(Config) -> T + Send + Clone + 'static,
-    T: ServiceFactory<Io>,
+    T: ServiceFactory<Request = Io>,
 {
     type Factory = T;
 

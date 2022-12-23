@@ -103,19 +103,19 @@ where
 }
 
 /// `MapNewService` new service combinator
-pub struct MapServiceFactory<A, F, Res, Cfg> {
+pub struct MapFactory<A, F, Req, Res, Cfg> {
     a: A,
     f: F,
-    r: PhantomData<fn(Cfg) -> Res>,
+    r: PhantomData<fn(Req, Cfg) -> Res>,
 }
 
-impl<A, F, Res, Cfg> MapServiceFactory<A, F, Res, Cfg> {
+impl<A, F, Req, Res, Cfg> MapFactory<A, F, Req, Res, Cfg>
+where
+    A: ServiceFactory<Req, Cfg>,
+    F: Fn(A::Response) -> Res,
+{
     /// Create new `Map` new service instance
-    pub(crate) fn new(a: A, f: F) -> Self
-    where
-        A: ServiceFactory<Cfg>,
-        F: Fn(A::Response) -> Res,
-    {
+    pub(crate) fn new(a: A, f: F) -> Self {
         Self {
             a,
             f,
@@ -124,7 +124,7 @@ impl<A, F, Res, Cfg> MapServiceFactory<A, F, Res, Cfg> {
     }
 }
 
-impl<A, F, Res, Cfg> Clone for MapServiceFactory<A, F, Res, Cfg>
+impl<A, F, Req, Res, Cfg> Clone for MapFactory<A, F, Req, Res, Cfg>
 where
     A: Clone,
     F: Clone,
@@ -139,22 +139,21 @@ where
     }
 }
 
-impl<A, F, Res, Cfg> ServiceFactory<Cfg> for MapServiceFactory<A, F, Res, Cfg>
+impl<A, F, Req, Res, Cfg> ServiceFactory<Req, Cfg> for MapFactory<A, F, Req, Res, Cfg>
 where
-    A: ServiceFactory<Cfg>,
+    A: ServiceFactory<Req, Cfg>,
     F: Fn(A::Response) -> Res + Clone,
 {
-    type Request = A::Request;
     type Response = Res;
     type Error = A::Error;
 
-    type Service = Map<A::Service, F, A::Request, Res>;
+    type Service = Map<A::Service, F, Req, Res>;
     type InitError = A::InitError;
-    type Future<'f> = MapServiceFuture<'f, A, F, Res, Cfg> where Self: 'f, Cfg: 'f;
+    type Future<'f> = MapFactoryFuture<'f, A, F, Req, Res, Cfg> where Self: 'f, Cfg: 'f;
 
     #[inline]
     fn create<'a>(&'a self, cfg: &'a Cfg) -> Self::Future<'a> {
-        MapServiceFuture {
+        MapFactoryFuture {
             fut: self.a.create(cfg),
             f: Some(self.f.clone()),
         }
@@ -162,9 +161,9 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapServiceFuture<'f, A, F, Res, Cfg>
+    pub struct MapFactoryFuture<'f, A, F, Req, Res, Cfg>
     where
-        A: ServiceFactory<Cfg>,
+        A: ServiceFactory<Req, Cfg>,
         A: 'f,
         F: Fn(A::Response) -> Res,
         Cfg: 'f,
@@ -175,12 +174,12 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<'f, A, F, Res, Cfg> Future for MapServiceFuture<'f, A, F, Res, Cfg>
+impl<'f, A, F, Req, Res, Cfg> Future for MapFactoryFuture<'f, A, F, Req, Res, Cfg>
 where
-    A: ServiceFactory<Cfg>,
+    A: ServiceFactory<Req, Cfg>,
     F: Fn(A::Response) -> Res,
 {
-    type Output = Result<Map<A::Service, F, A::Request, Res>, A::InitError>;
+    type Output = Result<Map<A::Service, F, Req, Res>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();

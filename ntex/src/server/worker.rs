@@ -5,6 +5,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
 
 use crate::rt::{spawn, Arbiter};
+use crate::service::Service;
 use crate::time::{sleep, Millis, Sleep};
 use crate::util::{join_all, ready, select, stream_recv, Either, Stream as FutStream};
 
@@ -522,14 +523,15 @@ mod tests {
         counter: Arc<Mutex<usize>>,
     }
 
-    impl ServiceFactory<Io> for SrvFactory {
+    impl ServiceFactory for SrvFactory {
+        type Request = Io;
         type Response = ();
         type Error = ();
         type Service = Srv;
         type InitError = ();
         type Future = Ready<Srv, ()>;
 
-        fn new_service(&self, _: ()) -> Self::Future {
+        fn create(&self, _: ()) -> Self::Future {
             let mut cnt = self.counter.lock().unwrap();
             *cnt += 1;
             Ready::Ok(Srv {

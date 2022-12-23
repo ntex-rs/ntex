@@ -1,4 +1,4 @@
-use std::{future::Future, marker::PhantomData, pin::Pin};
+use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use super::{IntoServiceFactory, ServiceFactory};
 
@@ -6,20 +6,20 @@ use super::{IntoServiceFactory, ServiceFactory};
 ///
 /// Note that this function consumes the receiving service factory and returns
 /// a wrapped version of it.
-pub fn map_config<T, U, F, C, C2>(factory: U, f: F) -> MapConfig<T, F, C, C2>
+pub fn map_config<T, R, U, F, C, C2>(factory: U, f: F) -> MapConfig<T, F, C, C2>
 where
-    T: ServiceFactory<C2>,
-    U: IntoServiceFactory<T, C2>,
+    T: ServiceFactory<R, C2>,
+    U: IntoServiceFactory<T, R, C2>,
     F: Fn(&C) -> C2,
 {
     MapConfig::new(factory.into_factory(), f)
 }
 
 /// Replace config with unit
-pub fn unit_config<T, U, C>(factory: U) -> UnitConfig<T, C>
+pub fn unit_config<T, R, U>(factory: U) -> UnitConfig<T>
 where
-    T: ServiceFactory<()>,
-    U: IntoServiceFactory<T, ()>,
+    T: ServiceFactory<R>,
+    U: IntoServiceFactory<T, R>,
 {
     UnitConfig::new(factory.into_factory())
 }
@@ -33,11 +33,7 @@ pub struct MapConfig<A, F, C, C2> {
 
 impl<A, F, C, C2> MapConfig<A, F, C, C2> {
     /// Create new `MapConfig` combinator
-    pub(crate) fn new(a: A, f: F) -> Self
-    where
-        A: ServiceFactory<C2>,
-        F: Fn(&C) -> C2,
-    {
+    pub(crate) fn new(a: A, f: F) -> Self {
         Self {
             a,
             f,
@@ -62,12 +58,11 @@ where
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-impl<A, F, C, C2> ServiceFactory<C> for MapConfig<A, F, C, C2>
+impl<A, F, R, C, C2> ServiceFactory<R, C> for MapConfig<A, F, C, C2>
 where
-    A: ServiceFactory<C2>,
+    A: ServiceFactory<R, C2>,
     F: Fn(&C) -> C2,
 {
-    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
 
@@ -82,47 +77,66 @@ where
 }
 
 /// `unit_config()` config combinator
-pub struct UnitConfig<A, C> {
+pub struct UnitConfig<A> {
     a: A,
-    _t: PhantomData<C>,
 }
 
-impl<A, C> UnitConfig<A, C>
-where
-    A: ServiceFactory<()>,
-{
+impl<A> UnitConfig<A> {
     /// Create new `UnitConfig` combinator
     pub(crate) fn new(a: A) -> Self {
-        Self { a, _t: PhantomData }
+        Self { a }
     }
 }
 
-impl<A, C> Clone for UnitConfig<A, C>
+impl<A> Clone for UnitConfig<A>
 where
     A: Clone,
 {
     fn clone(&self) -> Self {
-        Self {
-            a: self.a.clone(),
-            _t: PhantomData,
-        }
+        Self { a: self.a.clone() }
     }
 }
 
-impl<A, C> ServiceFactory<C> for UnitConfig<A, C>
+impl<A, R, C> ServiceFactory<R, C> for UnitConfig<A>
 where
-    A: ServiceFactory<()>,
+    A: ServiceFactory<R>,
 {
-    type Request = A::Request;
     type Response = A::Response;
     type Error = A::Error;
 
     type Service = A::Service;
     type InitError = A::InitError;
-    type Future<'f> = A::Future<'f> where Self: 'f, C: 'f;
+    type Future<'f> = UnitConfigFuture<'f, A, R, C> where Self: 'f, A: 'f, C: 'f;
 
     fn create(&self, _: &C) -> Self::Future<'_> {
-        self.a.create(&())
+        UnitConfigFuture {
+            fut: self.a.create(&()),
+            _t: PhantomData,
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    pub struct UnitConfigFuture<'f, A, R, C>
+    where A: ServiceFactory<R>,
+          A: 'f,
+          C: 'f,
+    {
+        #[pin]
+        fut: A::Future<'f>,
+        _t: PhantomData<C>,
+    }
+}
+
+impl<'f, A, R, C> Future for UnitConfigFuture<'f, A, R, C>
+where
+    A: ServiceFactory<R>,
+    C: 'f,
+{
+    type Output = Result<A::Service, A::InitError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.project().fut.poll(cx)
     }
 }
 

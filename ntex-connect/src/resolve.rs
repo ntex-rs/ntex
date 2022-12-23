@@ -108,10 +108,10 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Resolver<T> {
     type Error = ConnectError;
     type Service = Resolver<T>;
     type InitError = ();
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError> where C: 'f;
 
     #[inline]
-    fn new_service(&self, _: C) -> Self::Future {
+    fn create<'a>(&'a self, _: &'a C) -> Self::Future<'a> {
         Ready::Ok(self.clone())
     }
 }
@@ -119,7 +119,7 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Resolver<T> {
 impl<T: Address> Service<Connect<T>> for Resolver<T> {
     type Response = Connect<T>;
     type Error = ConnectError;
-    type Future = Pin<Box<dyn Future<Output = Result<Connect<T>, Self::Error>>>>;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<Connect<T>, Self::Error>>>>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -127,7 +127,7 @@ impl<T: Address> Service<Connect<T>> for Resolver<T> {
     }
 
     #[inline]
-    fn call(&self, req: Connect<T>) -> Self::Future {
+    fn call(&self, req: Connect<T>) -> Self::Future<'_> {
         Box::pin(self.lookup(req))
     }
 }

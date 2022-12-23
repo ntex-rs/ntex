@@ -5,16 +5,17 @@ use crate::{io::Io, service::Service, service::ServiceFactory, util::Ready};
 
 pub struct UpgradeHandler<F>(PhantomData<F>);
 
-impl<F> ServiceFactory<(Request, Io<F>, Codec)> for UpgradeHandler<F> {
+impl<F> ServiceFactory for UpgradeHandler<F> {
+    type Request = (Request, Io<F>, Codec);
     type Response = ();
     type Error = io::Error;
 
     type Service = UpgradeHandler<F>;
     type InitError = io::Error;
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError> where F: 'f;
 
     #[inline]
-    fn new_service(&self, _: ()) -> Self::Future {
+    fn create(&self, _: &()) -> Self::Future<'_> {
         unimplemented!()
     }
 }
@@ -22,15 +23,10 @@ impl<F> ServiceFactory<(Request, Io<F>, Codec)> for UpgradeHandler<F> {
 impl<F> Service<(Request, Io<F>, Codec)> for UpgradeHandler<F> {
     type Response = ();
     type Error = io::Error;
-    type Future = Ready<Self::Response, Self::Error>;
+    type Future<'f> = Ready<Self::Response, Self::Error> where F: 'f;
 
     #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn call(&self, _: (Request, Io<F>, Codec)) -> Self::Future {
+    fn call(&self, _: (Request, Io<F>, Codec)) -> Self::Future<'_> {
         unimplemented!()
     }
 }

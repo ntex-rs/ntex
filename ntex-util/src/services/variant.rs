@@ -6,7 +6,7 @@ use ntex_service::{IntoServiceFactory, Service, ServiceFactory};
 /// Construct `Variant` service factory.
 ///
 /// Variant service allow to combine multiple different services into a single service.
-pub fn variant<V1: ServiceFactory<V1C, Request = V1R>, V1R, V1C>(
+pub fn variant<V1: ServiceFactory<V1R, V1C>, V1R, V1C>(
     factory: V1,
 ) -> Variant<V1, V1R, V1C> {
     Variant {
@@ -23,20 +23,20 @@ pub struct Variant<A, AR, AC> {
 
 impl<A, AR, AC> Variant<A, AR, AC>
 where
-    A: ServiceFactory<AC, Request = AR>,
+    A: ServiceFactory<AR, AC>,
     AC: Clone,
 {
     /// Convert to a Variant with two request types
     pub fn v2<B, BR, F>(self, factory: F) -> VariantFactory2<A, AC, B, AR, BR>
     where
         B: ServiceFactory<
+            BR,
             AC,
-            Request = BR,
             Response = A::Response,
             Error = A::Error,
             InitError = A::InitError,
         >,
-        F: IntoServiceFactory<B, AC>,
+        F: IntoServiceFactory<B, BR, AC>,
     {
         VariantFactory2 {
             V1: self.factory,
@@ -51,16 +51,15 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
     #[allow(non_snake_case)]
     impl<V1, V1C, $($T,)+ V1R, $($R,)+> $fac1_type<V1, V1C, $($T,)+ V1R, $($R,)+>
         where
-            V1: ServiceFactory<V1C, Request = V1R>,
+            V1: ServiceFactory<V1R, V1C>,
         {
             /// Convert to a Variant with more request types
             pub fn $m_name<$name, $r_name, F>(self, factory: F) -> $fac2_type<V1, V1C, $($T,)+ $name, V1R, $($R,)+ $r_name>
-            where $name: ServiceFactory<V1C,
-                    Request = $r_name,
+            where $name: ServiceFactory<$r_name, V1C,
                     Response = V1::Response,
                     Error = V1::Error,
                     InitError = V1::InitError>,
-                F: IntoServiceFactory<$name, V1C>,
+                F: IntoServiceFactory<$name, $r_name, V1C>,
             {
                 $fac2_type {
                     V1: self.V1,
@@ -153,12 +152,11 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<V1, V1C, $($T,)+ V1R, $($R,)+> ServiceFactory<V1C> for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+>
+    impl<V1, V1C, $($T,)+ V1R, $($R,)+> ServiceFactory<$enum_type<V1R, $($R),+>, V1C> for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+>
     where
-        V1: ServiceFactory<V1C, Request = V1R>,
-        $($T: ServiceFactory<V1C, Request = $R, Response = V1::Response, Error = V1::Error, InitError = V1::InitError>),+
+        V1: ServiceFactory<V1R, V1C>,
+        $($T: ServiceFactory< $R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError>),+
     {
-        type Request = $enum_type<V1R, $($R),+>;
         type Response = V1::Response;
         type Error = V1::Error;
         type InitError = V1::InitError;
@@ -207,7 +205,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 
         pin_project_lite::pin_project! {
             #[doc(hidden)]
-            pub struct ServiceFactoryResponse<'f, V1: ServiceFactory<V1C, Request = V1R>, V1C, $($T: ServiceFactory<V1C, Request = $R>,)+ V1R, $($R,)+>
+            pub struct ServiceFactoryResponse<'f, V1: ServiceFactory<V1R, V1C>, V1C, $($T: ServiceFactory<$R, V1C>,)+ V1R, $($R,)+>
             where V1: 'f, V1C: 'f,
                 $($T: 'f),+
             {
@@ -220,8 +218,8 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 
         impl<'f, V1, V1C, $($T,)+ V1R, $($R,)+> Future for ServiceFactoryResponse<'f, V1, V1C, $($T,)+ V1R, $($R,)+>
         where
-            V1: ServiceFactory<V1C, Request = V1R>,
-        $($T: ServiceFactory<V1C, Request = $R, Response = V1::Response, Error = V1::Error, InitError = V1::InitError,>),+
+            V1: ServiceFactory<V1R, V1C>,
+        $($T: ServiceFactory<$R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError,>),+
         {
             type Output = Result<$srv_type<V1::Service, $($T::Service,)+ V1R, $($R),+>, V1::InitError>;
 

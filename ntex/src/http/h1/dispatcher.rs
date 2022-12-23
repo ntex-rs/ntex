@@ -36,7 +36,9 @@ bitflags::bitflags! {
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
-    pub struct Dispatcher<F, S: Service<Request>, B, X: Service<Request>, U: Service<(Request, Io<F>, Codec)>> {
+    pub struct Dispatcher<F, S: Service<Request>, B, X: Service<Request>, U: Service<(Request, Io<F>, Codec)>>
+    where S: 'static, X: 'static, U: 'static
+    {
         #[pin]
         call: CallState<S, X>,
         st: State<B>,
@@ -66,11 +68,13 @@ enum State<B> {
 
 pin_project_lite::pin_project! {
     #[project = CallStateProject]
-    enum CallState<S: Service<Request>, X: Service<Request>> {
+    enum CallState<S: Service<Request>, X: Service<Request>>
+    where S: 'static, X: 'static
+    {
         None,
-        Service { #[pin] fut: S::Future },
-        ServiceUpgrade { #[pin] fut: S::Future },
-        Expect { #[pin] fut: X::Future },
+        Service { #[pin] fut: S::Future<'static> },
+        ServiceUpgrade { #[pin] fut: S::Future<'static> },
+        Expect { #[pin] fut: X::Future<'static> },
         Filter { fut: Pin<Box<dyn Future<Output = Result<Request, Response>>>> }
     }
 }

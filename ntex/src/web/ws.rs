@@ -8,26 +8,26 @@ use crate::service::{
     apply_fn, fn_factory_with_config, IntoServiceFactory, Service, ServiceFactory,
 };
 use crate::web::{HttpRequest, HttpResponse};
-use crate::ws::{error::HandshakeError, error::WsError, handshake};
-use crate::{io::DispatchItem, rt, time::Seconds, util::Either, util::Ready, ws};
+use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
+use crate::{io::DispatchItem, rt, time::Seconds, util::Either, util::Ready};
 
 /// Do websocket handshake and start websockets service.
 pub async fn start<T, F, Err>(req: HttpRequest, factory: F) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<Frame, WsSink, Response = Option<Message>> + 'static,
+    T: ServiceFactory<WsSink, Request = Frame, Response = Option<Message>> + 'static,
     T::Error: fmt::Debug,
-    F: IntoServiceFactory<T, Frame, WsSink>,
+    F: IntoServiceFactory<T, WsSink>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
     let inner_factory = factory.into_factory().map_err(WsError::Service);
 
-    let factory = fn_factory_with_config(move |sink: WsSink| {
-        let fut = inner_factory.new_service(sink.clone());
+    let factory = fn_factory_with_config(move |sink: &WsSink| {
+        let fut = inner_factory.create(sink);
 
         async move {
             let srv = fut.await?;
             Ok::<_, T::InitError>(apply_fn(srv, move |req, srv| match req {
-                DispatchItem::Item(item) => {
+                DispatchItem::<ws::Codec>::Item(item) => {
                     let s = if matches!(item, Frame::Close(_)) {
                         Some(sink.clone())
                     } else {
@@ -66,10 +66,10 @@ pub async fn start_with<T, F, Err>(
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>>
+    T: ServiceFactory<WsSink, Response = Option<Message>> // DispatchItem<ws::Codec>,
         + 'static,
     T::Error: fmt::Debug,
-    F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
+    F: IntoServiceFactory<T, WsSink>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
     log::trace!("Start ws handshake verification for {:?}", req.path());
@@ -94,7 +94,7 @@ where
     let sink = WsSink::new(io.get_ref(), codec.clone());
 
     // create ws service
-    let srv = factory.into_factory().new_service(sink).await?;
+    let srv = factory.into_factory().create(sink).await?;
 
     // start websockets service dispatcher
     rt::spawn(async move {

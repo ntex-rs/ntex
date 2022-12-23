@@ -48,10 +48,7 @@ impl<T> Connector<T> {
 
 impl<T: Address + 'static> Connector<T> {
     /// Resolve and connect to remote host
-    pub fn connect<U>(
-        &self,
-        message: U,
-    ) -> impl Future<Output = Result<Io<TlsFilter<Base>>, ConnectError>>
+    pub async fn connect<U>(&self, message: U) -> Result<Io<TlsFilter<Base>>, ConnectError>
     where
         Connect<T>: From<U>,
     {
@@ -60,23 +57,21 @@ impl<T: Address + 'static> Connector<T> {
         let conn = self.connector.call(req);
         let connector = self.inner.clone();
 
-        async move {
-            let io = conn.await?;
-            trace!("SSL Handshake start for: {:?}", host);
+        let io = conn.await?;
+        trace!("SSL Handshake start for: {:?}", host);
 
-            let host = ServerName::try_from(host.as_str())
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
-            let connector = connector.server_name(host.clone());
+        let host = ServerName::try_from(host.as_str())
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+        let connector = connector.server_name(host.clone());
 
-            match io.add_filter(connector).await {
-                Ok(io) => {
-                    trace!("TLS Handshake success: {:?}", &host);
-                    Ok(io)
-                }
-                Err(e) => {
-                    trace!("TLS Handshake error: {:?}", e);
-                    Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)).into())
-                }
+        match io.add_filter(connector).await {
+            Ok(io) => {
+                trace!("TLS Handshake success: {:?}", &host);
+                Ok(io)
+            }
+            Err(e) => {
+                trace!("TLS Handshake error: {:?}", e);
+                Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)).into())
             }
         }
     }
@@ -96,10 +91,10 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Error = ConnectError;
     type Service = Connector<T>;
     type InitError = ();
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError> where C: 'f;
 
     #[inline]
-    fn new_service(&self, _: C) -> Self::Future {
+    fn create<'a>(&'a self, _: &'a C) -> Self::Future<'a> {
         Ready::Ok(self.clone())
     }
 }
@@ -107,14 +102,15 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
 impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Response = Io<TlsFilter<Base>>;
     type Error = ConnectError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future<'f> =
+        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + 'f>>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&self, req: Connect<T>) -> Self::Future {
+    fn call(&self, req: Connect<T>) -> Self::Future<'_> {
         Box::pin(self.connect(req))
     }
 }
@@ -151,7 +147,7 @@ mod tests {
         let _ = Connector::<&'static str>::new(config.clone()).clone();
         let factory = Connector::from(Arc::new(config)).memory_pool(PoolId::P5);
 
-        let srv = factory.new_service(()).await.unwrap();
+        let srv = factory.create(&()).await.unwrap();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv

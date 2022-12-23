@@ -143,23 +143,22 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, C> ServiceFactory<C> for ThenFactory<A, B>
+impl<A, B, R, C> ServiceFactory<R, C> for ThenFactory<A, B>
 where
-    A: ServiceFactory<C>,
+    A: ServiceFactory<R, C>,
     B: ServiceFactory<
+        Result<A::Response, A::Error>,
         C,
-        Request = Result<A::Response, A::Error>,
         Error = A::Error,
         InitError = A::InitError,
     >,
 {
-    type Request = A::Request;
     type Response = B::Response;
     type Error = A::Error;
 
     type Service = Then<A::Service, B::Service>;
     type InitError = A::InitError;
-    type Future<'f> = ThenFactoryResponse<'f, A, B, C> where Self: 'f, C: 'f;
+    type Future<'f> = ThenFactoryResponse<'f, A, B, R, C> where Self: 'f, C: 'f;
 
     fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
         ThenFactoryResponse {
@@ -185,12 +184,11 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct ThenFactoryResponse<'f, A, B, C>
+    pub struct ThenFactoryResponse<'f, A, B, R, C>
     where
-        A: ServiceFactory<C>,
+        A: ServiceFactory<R, C>,
         A: 'f,
-        B: ServiceFactory<C,
-           Request = Result<A::Response, A::Error>,
+        B: ServiceFactory<Result<A::Response, A::Error>, C,
            Error = A::Error,
            InitError = A::InitError,
     >,
@@ -206,12 +204,12 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<'f, A, B, C> Future for ThenFactoryResponse<'f, A, B, C>
+impl<'f, A, B, R, C> Future for ThenFactoryResponse<'f, A, B, R, C>
 where
-    A: ServiceFactory<C>,
+    A: ServiceFactory<R, C>,
     B: ServiceFactory<
+        Result<A::Response, A::Error>,
         C,
-        Request = Result<A::Response, A::Error>,
         Error = A::Error,
         InitError = A::InitError,
     >,

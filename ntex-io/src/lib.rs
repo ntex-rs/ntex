@@ -27,8 +27,7 @@ pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
 pub use self::tasks::{ReadContext, WriteContext};
-//pub use self::utils::{filter, seal};
-pub use self::utils::filter;
+pub use self::utils::{filter, seal};
 
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

@@ -216,13 +216,12 @@ where
     }
 }
 
-impl<F, Fut, Req, Res, Err, Cfg> ServiceFactory<Cfg>
+impl<F, Fut, Req, Res, Err, Cfg> ServiceFactory<Req, Cfg>
     for FnServiceFactory<F, Fut, Req, Res, Err, Cfg>
 where
     F: Fn(Req) -> Fut + Clone + 'static,
     Fut: Future<Output = Result<Res, Err>>,
 {
-    type Request = Req;
     type Response = Res;
     type Error = Err;
 
@@ -240,7 +239,7 @@ where
 }
 
 impl<F, Fut, Req, Res, Err, Cfg>
-    IntoServiceFactory<FnServiceFactory<F, Fut, Req, Res, Err, Cfg>, Cfg> for F
+    IntoServiceFactory<FnServiceFactory<F, Fut, Req, Res, Err, Cfg>, Req, Cfg> for F
 where
     F: Fn(Req) -> Fut + Clone + 'static,
     Fut: Future<Output = Result<Res, Err>>,
@@ -277,14 +276,13 @@ where
     }
 }
 
-impl<F, Fut, Cfg, Srv, Req, Err> ServiceFactory<Cfg>
+impl<F, Fut, Cfg, Srv, Req, Err> ServiceFactory<Req, Cfg>
     for FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
     F: Fn(&Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service<Req>,
 {
-    type Request = Req;
     type Response = Srv::Response;
     type Error = Srv::Error;
 
@@ -320,14 +318,13 @@ where
     }
 }
 
-impl<F, S, R, Req, E, C> ServiceFactory<C> for FnServiceNoConfig<F, S, R, Req, E>
+impl<F, S, R, Req, E, C> ServiceFactory<Req, C> for FnServiceNoConfig<F, S, R, Req, E>
 where
     F: Fn() -> R,
     R: Future<Output = Result<S, E>>,
     S: Service<Req>,
     C: 'static,
 {
-    type Request = Req;
     type Response = S::Response;
     type Error = S::Error;
     type Service = S;
@@ -352,7 +349,8 @@ where
     }
 }
 
-impl<F, S, R, Req, E, C> IntoServiceFactory<FnServiceNoConfig<F, S, R, Req, E>, C> for F
+impl<F, S, R, Req, E, C> IntoServiceFactory<FnServiceNoConfig<F, S, R, Req, E>, Req, C>
+    for F
 where
     F: Fn() -> R,
     R: Future<Output = Result<S, E>>,

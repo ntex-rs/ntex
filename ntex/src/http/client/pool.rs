@@ -51,7 +51,7 @@ pub(super) struct ConnectionPool<T> {
 impl<T> ConnectionPool<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin + 'static,
-    T::Future: Unpin,
+    // T::Future: Unpin,
 {
     pub(super) fn new(
         connector: T,
@@ -113,11 +113,11 @@ impl<T> Clone for ConnectionPool<T> {
 impl<T> Service<Connect> for ConnectionPool<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
-    T::Future: Unpin,
+    // T::Future: Unpin,
 {
     type Response = Connection;
     type Error = ConnectError;
-    type Future = Pin<Box<dyn Future<Output = Result<Connection, ConnectError>>>>;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<Connection, ConnectError>>>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -130,7 +130,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: Connect) -> Self::Future {
+    fn call(&self, req: Connect) -> Self::Future<'_> {
         trace!("Get connection for {:?}", req.uri);
         let connector = self.connector.clone();
         let inner = self.inner.clone();
@@ -325,7 +325,7 @@ struct ConnectionPoolSupport<T> {
 impl<T> Future for ConnectionPoolSupport<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin,
-    T::Future: Unpin + 'static,
+    // T::Future: Unpin + 'static,
 {
     type Output = ();
 

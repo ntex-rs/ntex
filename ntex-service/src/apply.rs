@@ -17,15 +17,15 @@ where
 }
 
 /// Service factory that produces `apply_fn` service.
-pub fn apply_fn_factory<T, Cfg, F, R, In, Out, Err, U>(
+pub fn apply_fn_factory<T, Req, Cfg, F, R, In, Out, Err, U>(
     service: U,
     f: F,
-) -> ApplyServiceFactory<T, Cfg, F, R, In, Out, Err>
+) -> ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Cfg, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
-    U: IntoServiceFactory<T, Cfg>,
+    U: IntoServiceFactory<T, Req, Cfg>,
 {
     ApplyServiceFactory::new(service.into_factory(), f)
 }
@@ -98,20 +98,20 @@ where
 }
 
 /// `apply()` service factory
-pub struct ApplyServiceFactory<T, Cfg, F, R, In, Out, Err>
+pub struct ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Cfg, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     service: T,
     f: F,
-    r: PhantomData<fn(Cfg) -> (R, In, Out)>,
+    r: PhantomData<fn(Req, Cfg) -> (R, In, Out)>,
 }
 
-impl<T, Cfg, F, R, In, Out, Err> ApplyServiceFactory<T, Cfg, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, R, In, Out, Err> ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Cfg, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
@@ -125,9 +125,10 @@ where
     }
 }
 
-impl<T, Cfg, F, R, In, Out, Err> Clone for ApplyServiceFactory<T, Cfg, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, R, In, Out, Err> Clone
+    for ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Cfg, Error = Err> + Clone,
+    T: ServiceFactory<Req, Cfg, Error = Err> + Clone,
     F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
@@ -140,20 +141,19 @@ where
     }
 }
 
-impl<T, Cfg, F, R, In, Out, Err> ServiceFactory<Cfg>
-    for ApplyServiceFactory<T, Cfg, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, R, In, Out, Err> ServiceFactory<In, Cfg>
+    for ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Cfg, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
-    type Request = In;
     type Response = Out;
     type Error = Err;
 
-    type Service = Apply<T::Service, T::Request, F, R, In, Out, Err>;
+    type Service = Apply<T::Service, Req, F, R, In, Out, Err>;
     type InitError = T::InitError;
-    type Future<'f> = ApplyServiceFactoryResponse<'f, T, Cfg, F, R, In, Out, Err> where Self: 'f, Cfg: 'f;
+    type Future<'f> = ApplyServiceFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err> where Self: 'f, Cfg: 'f;
 
     #[inline]
     fn create<'a>(&'a self, cfg: &'a Cfg) -> Self::Future<'a> {
@@ -166,9 +166,9 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct ApplyServiceFactoryResponse<'f, T, Cfg, F, R, In, Out, Err>
+    pub struct ApplyServiceFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
     where
-        T: ServiceFactory<Cfg, Error = Err>,
+        T: ServiceFactory<Req, Cfg, Error = Err>,
         T: 'f,
         F: Fn(In, &T::Service) -> R,
         R: Future<Output = Result<Out, Err>>,
@@ -181,14 +181,14 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<'f, T, Cfg, F, R, In, Out, Err> Future
-    for ApplyServiceFactoryResponse<'f, T, Cfg, F, R, In, Out, Err>
+impl<'f, T, Req, Cfg, F, R, In, Out, Err> Future
+    for ApplyServiceFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Cfg, Error = Err>,
+    T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, &T::Service) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
-    type Output = Result<Apply<T::Service, T::Request, F, R, In, Out, Err>, T::InitError>;
+    type Output = Result<Apply<T::Service, Req, F, R, In, Out, Err>, T::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();

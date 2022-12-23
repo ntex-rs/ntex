@@ -1,8 +1,8 @@
 use std::{marker::PhantomData, task::Context, task::Poll};
 
 use crate::and_then::{AndThen, AndThenFactory};
-use crate::map::{Map, MapServiceFactory};
-use crate::map_err::{MapErr, MapErrServiceFactory};
+use crate::map::{Map, MapFactory};
+use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
 use crate::then::{Then, ThenFactory};
 use crate::transform::{ApplyMiddleware, Middleware};
@@ -21,10 +21,10 @@ where
 }
 
 /// Constructs new pipeline factory with one service factory.
-pub fn pipeline_factory<T, C, F>(factory: F) -> PipelineFactory<T, C>
+pub fn pipeline_factory<T, R, C, F>(factory: F) -> PipelineFactory<T, R, C>
 where
-    T: ServiceFactory<C>,
-    F: IntoServiceFactory<T, C>,
+    T: ServiceFactory<R, C>,
+    F: IntoServiceFactory<T, R, C>,
 {
     PipelineFactory {
         factory: factory.into_factory(),
@@ -151,23 +151,18 @@ impl<T: Service<R>, R> Service<R> for Pipeline<T, R> {
 }
 
 /// Pipeline factory
-pub struct PipelineFactory<T, C = ()> {
+pub struct PipelineFactory<T, R, C = ()> {
     factory: T,
-    _t: PhantomData<C>,
+    _t: PhantomData<(R, C)>,
 }
 
-impl<T: ServiceFactory<C>, C> PipelineFactory<T, C> {
+impl<T: ServiceFactory<R, C>, R, C> PipelineFactory<T, R, C> {
     /// Call another service after call to this one has resolved successfully.
-    pub fn and_then<F, U>(self, factory: F) -> PipelineFactory<AndThenFactory<T, U>, C>
+    pub fn and_then<F, U>(self, factory: F) -> PipelineFactory<AndThenFactory<T, U>, R, C>
     where
         Self: Sized,
-        F: IntoServiceFactory<U, C>,
-        U: ServiceFactory<
-            C,
-            Request = T::Response,
-            Error = T::Error,
-            InitError = T::InitError,
-        >,
+        F: IntoServiceFactory<U, T::Response, C>,
+        U: ServiceFactory<T::Response, C, Error = T::Error, InitError = T::InitError>,
     {
         PipelineFactory {
             factory: AndThenFactory::new(self.factory, factory.into_factory()),
@@ -178,7 +173,7 @@ impl<T: ServiceFactory<C>, C> PipelineFactory<T, C> {
     /// Apply middleware to current service factory.
     ///
     /// Short version of `apply(middleware, pipeline_factory(...))`
-    pub fn apply<U>(self, tr: U) -> PipelineFactory<ApplyMiddleware<U, T, C>, C>
+    pub fn apply<U>(self, tr: U) -> PipelineFactory<ApplyMiddleware<U, T, C>, R, C>
     where
         U: Middleware<T::Service>,
     {
@@ -194,13 +189,13 @@ impl<T: ServiceFactory<C>, C> PipelineFactory<T, C> {
     ///
     /// Note that this function consumes the receiving pipeline and returns a
     /// wrapped version of it.
-    pub fn then<F, U>(self, factory: F) -> PipelineFactory<ThenFactory<T, U>, C>
+    pub fn then<F, U>(self, factory: F) -> PipelineFactory<ThenFactory<T, U>, R, C>
     where
         Self: Sized,
-        F: IntoServiceFactory<U, C>,
+        F: IntoServiceFactory<U, Result<T::Response, T::Error>, C>,
         U: ServiceFactory<
+            Result<T::Response, T::Error>,
             C,
-            Request = Result<T::Response, T::Error>,
             Error = T::Error,
             InitError = T::InitError,
         >,
@@ -213,31 +208,34 @@ impl<T: ServiceFactory<C>, C> PipelineFactory<T, C> {
 
     /// Map this service's output to a different type, returning a new service
     /// of the resulting type.
-    pub fn map<F, Res>(self, f: F) -> PipelineFactory<MapServiceFactory<T, F, Res, C>, C>
+    pub fn map<F, Res>(self, f: F) -> PipelineFactory<MapFactory<T, F, R, Res, C>, R, C>
     where
         Self: Sized,
         F: Fn(T::Response) -> Res + Clone,
     {
         PipelineFactory {
-            factory: MapServiceFactory::new(self.factory, f),
+            factory: MapFactory::new(self.factory, f),
             _t: PhantomData,
         }
     }
 
     /// Map this service's error to a different error, returning a new service.
-    pub fn map_err<F, E>(self, f: F) -> PipelineFactory<MapErrServiceFactory<T, C, F, E>, C>
+    pub fn map_err<F, E>(self, f: F) -> PipelineFactory<MapErrFactory<T, R, C, F, E>, R, C>
     where
         Self: Sized,
         F: Fn(T::Error) -> E + Clone,
     {
         PipelineFactory {
-            factory: MapErrServiceFactory::new(self.factory, f),
+            factory: MapErrFactory::new(self.factory, f),
             _t: PhantomData,
         }
     }
 
     /// Map this factory's init error to a different error, returning a new service.
-    pub fn map_init_err<F, E>(self, f: F) -> PipelineFactory<MapInitErr<T, C, F, E>, C>
+    pub fn map_init_err<F, E>(
+        self,
+        f: F,
+    ) -> PipelineFactory<MapInitErr<T, R, C, F, E>, R, C>
     where
         Self: Sized,
         F: Fn(T::InitError) -> E + Clone,
@@ -249,7 +247,7 @@ impl<T: ServiceFactory<C>, C> PipelineFactory<T, C> {
     }
 }
 
-impl<T, C> Clone for PipelineFactory<T, C>
+impl<T, R, C> Clone for PipelineFactory<T, R, C>
 where
     T: Clone,
 {
@@ -261,8 +259,7 @@ where
     }
 }
 
-impl<T: ServiceFactory<C>, C> ServiceFactory<C> for PipelineFactory<T, C> {
-    type Request = T::Request;
+impl<T: ServiceFactory<R, C>, R, C> ServiceFactory<R, C> for PipelineFactory<T, R, C> {
     type Response = T::Response;
     type Error = T::Error;
     type Service = T::Service;

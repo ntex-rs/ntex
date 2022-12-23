@@ -141,27 +141,21 @@ impl<A, B> AndThenFactory<A, B> {
     }
 }
 
-impl<A, B, Cfg> ServiceFactory<Cfg> for AndThenFactory<A, B>
+impl<A, B, Req, Cfg> ServiceFactory<Req, Cfg> for AndThenFactory<A, B>
 where
-    A: ServiceFactory<Cfg>,
-    B: ServiceFactory<
-        Cfg,
-        Request = A::Response,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
+    A: ServiceFactory<Req, Cfg>,
+    B: ServiceFactory<A::Response, Cfg, Error = A::Error, InitError = A::InitError>,
 {
-    type Request = A::Request;
     type Response = B::Response;
     type Error = A::Error;
 
     type Service = AndThen<A::Service, B::Service>;
     type InitError = A::InitError;
-    type Future<'f> = AndThenServiceFactoryResponse<'f, A, B, Cfg> where Self: 'f, Cfg: 'f;
+    type Future<'f> = AndThenFactoryResponse<'f, A, B, Req, Cfg> where Self: 'f, Cfg: 'f;
 
     #[inline]
     fn create<'a>(&'a self, cfg: &'a Cfg) -> Self::Future<'a> {
-        AndThenServiceFactoryResponse {
+        AndThenFactoryResponse {
             fut1: self.svc1.create(cfg),
             fut2: self.svc2.create(cfg),
             svc1: None,
@@ -184,11 +178,11 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct AndThenServiceFactoryResponse<'f, A, B, Cfg>
+    pub struct AndThenFactoryResponse<'f, A, B, Req, Cfg>
     where
-        A: ServiceFactory<Cfg>,
+        A: ServiceFactory<Req, Cfg>,
         A: 'f,
-        B: ServiceFactory<Cfg, Request = A::Response>,
+        B: ServiceFactory<A::Response, Cfg>,
         B: 'f,
         Cfg: 'f,
     {
@@ -202,15 +196,10 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<'f, A, B, Cfg> Future for AndThenServiceFactoryResponse<'f, A, B, Cfg>
+impl<'f, A, B, Req, Cfg> Future for AndThenFactoryResponse<'f, A, B, Req, Cfg>
 where
-    A: ServiceFactory<Cfg>,
-    B: ServiceFactory<
-        Cfg,
-        Request = A::Response,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
+    A: ServiceFactory<Req, Cfg>,
+    B: ServiceFactory<A::Response, Cfg, Error = A::Error, InitError = A::InitError>,
 {
     type Output = Result<AndThen<A::Service, B::Service>, A::InitError>;
 

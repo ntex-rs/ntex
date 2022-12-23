@@ -3,12 +3,12 @@ use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 pub type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 
 /// Create boxed service factory
-pub fn factory<F, C>(
+pub fn factory<F, R, C>(
     factory: F,
-) -> BoxServiceFactory<C, F::Request, F::Response, F::Error, F::InitError>
+) -> BoxServiceFactory<C, R, F::Response, F::Error, F::InitError>
 where
-    F: crate::ServiceFactory<C> + 'static,
-    F::Request: 'static,
+    F: crate::ServiceFactory<R, C> + 'static,
+    R: 'static,
     F::Service: 'static,
 {
     BoxServiceFactory(Box::new(factory))
@@ -82,14 +82,8 @@ trait ServiceFactoryObj<Cfg, Req, Res, Err, InitErr> {
 impl<F, Cfg, Req, Res, Err, InitErr> ServiceFactoryObj<Cfg, Req, Res, Err, InitErr> for F
 where
     Req: 'static,
-    F: crate::ServiceFactory<
-        Cfg,
-        Request = Req,
-        Response = Res,
-        Error = Err,
-        InitError = InitErr,
-    >,
-    F::Request: 'static,
+    F: crate::ServiceFactory<Req, Cfg, Response = Res, Error = Err, InitError = InitErr>,
+    Req: 'static,
     F::Service: 'static,
 {
     #[inline]
@@ -163,18 +157,17 @@ pub struct BoxServiceFactory<Cfg, Req, Res, Err, InitErr>(
     Box<dyn ServiceFactoryObj<Cfg, Req, Res, Err, InitErr>>,
 );
 
-impl<C, Req, Res, Err, InitErr> crate::ServiceFactory<C>
+impl<C, Req, Res, Err, InitErr> crate::ServiceFactory<Req, C>
     for BoxServiceFactory<C, Req, Res, Err, InitErr>
 where
     Req: 'static,
 {
-    type Request = Req;
     type Response = Res;
     type Error = Err;
 
     type Service = BoxService<Req, Res, Err>;
     type InitError = InitErr;
-    type Future<'f> = BoxFuture<'f, Self::Service, InitErr> where Self: 'f, Self::Request: 'f, C: 'f;
+    type Future<'f> = BoxFuture<'f, Self::Service, InitErr> where Self: 'f, Req: 'f, C: 'f;
 
     #[inline]
     fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {

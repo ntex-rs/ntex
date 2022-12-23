@@ -51,14 +51,15 @@ impl<Err: ErrorRenderer> Route<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
+impl<Err: ErrorRenderer> ServiceFactory for Route<Err> {
+    type Request = WebRequest<Err>;
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
     type Service = RouteService<Err>;
-    type Future = Ready<RouteService<Err>, ()>;
+    type Future<'f> = Ready<RouteService<Err>, ()>;
 
-    fn new_service(&self, _: ()) -> Self::Future {
+    fn create(&self, _: &()) -> Self::Future<'_> {
         Ok(self.service()).into()
     }
 }
@@ -87,15 +88,10 @@ impl<Err: ErrorRenderer> RouteService<Err> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
     #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn call(&self, req: WebRequest<Err>) -> Self::Future {
+    fn call(&self, req: WebRequest<Err>) -> Self::Future<'_> {
         self.handler.call(req)
     }
 }

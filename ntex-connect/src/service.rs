@@ -65,10 +65,10 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Error = ConnectError;
     type Service = Connector<T>;
     type InitError = ();
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError> where C: 'f;
 
     #[inline]
-    fn new_service(&self, _: C) -> Self::Future {
+    fn create<'a>(&'a self, _: &'a C) -> Self::Future<'a> {
         Ready::Ok(self.clone())
     }
 }
@@ -76,7 +76,7 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
 impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Response = Io;
     type Error = ConnectError;
-    type Future = ConnectServiceResponse<T>;
+    type Future<'f> = ConnectServiceResponse<'f, T>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -84,24 +84,24 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
     }
 
     #[inline]
-    fn call(&self, req: Connect<T>) -> Self::Future {
+    fn call(&self, req: Connect<T>) -> Self::Future<'_> {
         ConnectServiceResponse::new(self.resolver.call(req))
     }
 }
 
-enum ConnectState<T: Address> {
-    Resolve(<Resolver<T> as Service<Connect<T>>>::Future),
+enum ConnectState<'f, T: Address> {
+    Resolve(<Resolver<T> as Service<Connect<T>>>::Future<'f>),
     Connect(TcpConnectorResponse<T>),
 }
 
 #[doc(hidden)]
-pub struct ConnectServiceResponse<T: Address> {
-    state: ConnectState<T>,
+pub struct ConnectServiceResponse<'f, T: Address> {
+    state: ConnectState<'f, T>,
     pool: PoolRef,
 }
 
-impl<T: Address> ConnectServiceResponse<T> {
-    pub(super) fn new(fut: <Resolver<T> as Service<Connect<T>>>::Future) -> Self {
+impl<'f, T: Address> ConnectServiceResponse<'f, T> {
+    pub(super) fn new(fut: <Resolver<T> as Service<Connect<T>>>::Future<'f>) -> Self {
         Self {
             state: ConnectState::Resolve(fut),
             pool: PoolId::P0.pool_ref(),
@@ -109,7 +109,7 @@ impl<T: Address> ConnectServiceResponse<T> {
     }
 }
 
-impl<T: Address> Future for ConnectServiceResponse<T> {
+impl<'f, T: Address> Future for ConnectServiceResponse<'f, T> {
     type Output = Result<Io, ConnectError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

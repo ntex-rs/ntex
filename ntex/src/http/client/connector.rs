@@ -283,12 +283,12 @@ struct InnerConnector<T> {
 impl<T> Service<Connect> for InnerConnector<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin + 'static,
-    T::Future: Unpin,
+    // T::Future: Unpin,
 {
     type Response = <ConnectionPool<T> as Service<Connect>>::Response;
     type Error = ConnectError;
-    type Future = Either<
-        <ConnectionPool<T> as Service<Connect>>::Future,
+    type Future<'f> = Either<
+        <ConnectionPool<T> as Service<Connect>>::Future<'f>,
         Ready<Self::Response, Self::Error>,
     >;
 
@@ -322,7 +322,7 @@ where
         }
     }
 
-    fn call(&self, req: Connect) -> Self::Future {
+    fn call(&self, req: Connect) -> Self::Future<'_> {
         match req.uri.scheme_str() {
             Some("https") | Some("wss") => {
                 if let Some(ref conn) = self.ssl_pool {

@@ -5,8 +5,9 @@ use std::{
 
 use log::error;
 
+use crate::service::{self, boxed, ServiceFactory as NServiceFactory};
 use crate::util::{HashMap, Ready};
-use crate::{io::Io, service, util::PoolId};
+use crate::{io::Io, util::PoolId};
 
 use super::service::{
     BoxedServerService, InternalServiceFactory, ServerMessage, StreamService,
@@ -179,7 +180,7 @@ impl InternalServiceFactory for ConfiguredService {
             let mut res = vec![];
             for token in tokens {
                 if let Some(srv) = services.remove(&token) {
-                    let newserv = srv.new_service(());
+                    let newserv = srv.create(&());
                     match newserv.await {
                         Ok(serv) => {
                             res.push((token, serv));
@@ -193,7 +194,7 @@ impl InternalServiceFactory for ConfiguredService {
                     let name = names.remove(&token).unwrap().0;
                     res.push((
                         token,
-                        Box::new(StreamService::new(
+                        boxed::service(StreamService::new(
                             service::fn_service(move |_: Io| {
                                 error!("Service {:?} is not configured", name);
                                 Ready::<_, ()>::Ok(())
@@ -259,7 +260,7 @@ pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 
 struct ServiceRuntimeInner {
     names: HashMap<String, Token>,
-    services: HashMap<Token, BoxedNewService>,
+    services: HashMap<Token, BoxServiceFactory>,
     onstart: Vec<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
@@ -287,9 +288,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service<T, F>(&self, name: &str, service: F)
     where
-        F: service::IntoServiceFactory<T, Io>,
-        T: service::ServiceFactory<Io> + 'static,
-        T::Future: 'static,
+        F: service::IntoServiceFactory<T>,
+        T: service::ServiceFactory<Request = Io> + 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
     {
@@ -302,9 +302,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service_in<T, F>(&self, name: &str, pool: PoolId, service: F)
     where
-        F: service::IntoServiceFactory<T, Io>,
-        T: service::ServiceFactory<Io> + 'static,
-        T::Future: 'static,
+        F: service::IntoServiceFactory<T>,
+        T: service::ServiceFactory<Request = Io> + 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
     {
@@ -313,7 +312,7 @@ impl ServiceRuntime {
             let token = *token;
             inner.services.insert(
                 token,
-                Box::new(ServiceFactory {
+                boxed::factory(ServiceFactory {
                     pool,
                     inner: service.into_factory(),
                 }),
@@ -332,15 +331,12 @@ impl ServiceRuntime {
     }
 }
 
-type BoxedNewService = Box<
-    dyn service::ServiceFactory<
-        (Option<CounterGuard>, ServerMessage),
-        Response = (),
-        Error = (),
-        InitError = (),
-        Service = BoxedServerService,
-        Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>,
-    >,
+type BoxServiceFactory = service::boxed::BoxServiceFactory<
+    (),
+    (Option<CounterGuard>, ServerMessage),
+    (),
+    (),
+    (),
 >;
 
 struct ServiceFactory<T> {
@@ -348,26 +344,26 @@ struct ServiceFactory<T> {
     pool: PoolId,
 }
 
-impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage)> for ServiceFactory<T>
+impl<T> service::ServiceFactory for ServiceFactory<T>
 where
-    T: service::ServiceFactory<Io>,
-    T::Future: 'static,
+    T: service::ServiceFactory<Request = Io>,
     T::Service: 'static,
     T::Error: 'static,
     T::InitError: fmt::Debug + 'static,
 {
+    type Request = (Option<CounterGuard>, ServerMessage);
     type Response = ();
     type Error = ();
     type InitError = ();
     type Service = BoxedServerService;
-    type Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>> + 'f>> where T: 'f;
 
-    fn new_service(&self, _: ()) -> Self::Future {
+    fn create(&self, _: &()) -> Self::Future<'_> {
         let pool = self.pool;
-        let fut = self.inner.new_service(());
+        let fut = self.inner.create(&());
         Box::pin(async move {
             match fut.await {
-                Ok(s) => Ok(Box::new(StreamService::new(s, pool)) as BoxedServerService),
+                Ok(s) => Ok(boxed::service(StreamService::new(s, pool))),
                 Err(e) => {
                     error!("Cannot construct service: {:?}", e);
                     Err(())

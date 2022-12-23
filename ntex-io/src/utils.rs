@@ -9,15 +9,15 @@ use crate::{Filter, FilterFactory, Io, IoBoxed};
 pub fn seal<F, S, C>(
     srv: S,
 ) -> impl ServiceFactory<
+    Io<F>,
     C,
-    Request = Io<F>,
     Response = S::Response,
     Error = S::Error,
     InitError = S::InitError,
 >
 where
     F: Filter,
-    S: ServiceFactory<C, Request = IoBoxed>,
+    S: ServiceFactory<IoBoxed, C>,
     C: Clone,
 {
     pipeline_factory(
@@ -43,12 +43,11 @@ pub struct FilterServiceFactory<T, F> {
     _t: PhantomData<F>,
 }
 
-impl<T, F> ServiceFactory<()> for FilterServiceFactory<T, F>
+impl<T, F> ServiceFactory<Io<F>> for FilterServiceFactory<T, F>
 where
     T: FilterFactory<F> + Clone,
     F: Filter,
 {
-    type Request = Io<F>;
     type Response = Io<T::Filter>;
     type Error = T::Error;
     type Service = FilterService<T, F>;

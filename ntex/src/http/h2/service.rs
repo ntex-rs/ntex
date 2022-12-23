@@ -25,13 +25,13 @@ pub struct H2Service<F, S, B> {
 
 impl<F, S, B> H2Service<F, S, B>
 where
-    S: ServiceFactory<Request>,
+    S: ServiceFactory<Request = Request>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S, Request>>(
+    pub(crate) fn with_config<U: IntoServiceFactory<S>>(
         cfg: ServiceConfig,
         service: U,
     ) -> Self {
@@ -58,7 +58,7 @@ mod openssl {
     impl<F, S, B> H2Service<SslFilter<F>, S, B>
     where
         F: Filter,
-        S: ServiceFactory<Request> + 'static,
+        S: ServiceFactory<Request = Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
         B: MessageBody,
@@ -68,7 +68,7 @@ mod openssl {
             self,
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
-            Io<F>,
+            Request = Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
@@ -95,7 +95,7 @@ mod rustls {
     impl<F, S, B> H2Service<TlsFilter<F>, S, B>
     where
         F: Filter,
-        S: ServiceFactory<Request> + 'static,
+        S: ServiceFactory<Request = Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
         B: MessageBody,
@@ -105,7 +105,7 @@ mod rustls {
             self,
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
-            Io<F>,
+            Request = Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
@@ -124,22 +124,23 @@ mod rustls {
     }
 }
 
-impl<F, S, B> ServiceFactory<Io<F>> for H2Service<F, S, B>
+impl<F, S, B> ServiceFactory for H2Service<F, S, B>
 where
     F: Filter,
-    S: ServiceFactory<Request> + 'static,
+    S: ServiceFactory<Request = Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
+    type Request = Io<F>;
     type Response = ();
     type Error = DispatchError;
     type InitError = S::InitError;
     type Service = H2ServiceHandler<F, S::Service, B>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
-    fn new_service(&self, _: ()) -> Self::Future {
-        let fut = self.srv.new_service(());
+    fn create(&self, _: &()) -> Self::Future<'_> {
+        let fut = self.srv.create(&());
         let cfg = self.cfg.clone();
         let h2config = self.h2config.clone();
 
@@ -173,7 +174,7 @@ where
 {
     type Response = ();
     type Error = DispatchError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -188,7 +189,7 @@ where
         self.config.service.poll_shutdown(cx, is_error)
     }
 
-    fn call(&self, io: Io<F>) -> Self::Future {
+    fn call(&self, io: Io<F>) -> Self::Future<'_> {
         log::trace!(
             "New http2 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
@@ -240,7 +241,7 @@ impl ControlService {
 impl Service<h2::ControlMessage<H2Error>> for ControlService {
     type Response = h2::ControlResult;
     type Error = ();
-    type Future = Ready<Self::Response, Self::Error>;
+    type Future<'f> = Ready<Self::Response, Self::Error>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -252,7 +253,7 @@ impl Service<h2::ControlMessage<H2Error>> for ControlService {
         Poll::Ready(())
     }
 
-    fn call(&self, msg: h2::ControlMessage<H2Error>) -> Self::Future {
+    fn call(&self, msg: h2::ControlMessage<H2Error>) -> Self::Future<'_> {
         log::trace!("Control message: {:?}", msg);
         Ready::Ok::<_, ()>(msg.ack())
     }
@@ -293,7 +294,7 @@ where
 {
     type Response = ();
     type Error = H2Error;
-    type Future = Either<
+    type Future<'f> = Either<
         Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>,
         Ready<Self::Response, Self::Error>,
     >;
@@ -308,7 +309,7 @@ where
         Poll::Ready(())
     }
 
-    fn call(&self, mut msg: h2::Message) -> Self::Future {
+    fn call(&self, mut msg: h2::Message) -> Self::Future<'_> {
         let (io, pseudo, headers, eof, payload) = match msg.kind().take() {
             h2::MessageKind::Headers {
                 pseudo,

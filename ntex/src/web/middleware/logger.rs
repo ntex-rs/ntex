@@ -7,7 +7,7 @@ use regex::Regex;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
-use crate::service::{Service, Transform};
+use crate::service::{Middleware, Service};
 use crate::util::{Bytes, Either, HashSet};
 use crate::web::{HttpResponse, WebRequest, WebResponse};
 
@@ -113,10 +113,10 @@ impl Default for Logger {
     }
 }
 
-impl<S> Transform<S> for Logger {
+impl<S> Middleware<S> for Logger {
     type Service = LoggerMiddleware<S>;
 
-    fn new_transform(&self, service: S) -> Self::Service {
+    fn create(&self, service: S) -> Self::Service {
         LoggerMiddleware {
             service,
             inner: self.inner.clone(),
@@ -136,7 +136,7 @@ where
 {
     type Response = WebResponse;
     type Error = S::Error;
-    type Future = Either<LoggerResponse<S, E>, S::Future>;
+    type Future<'f> = Either<LoggerResponse<'f, S, E>, S::Future<'f>> where S: 'f, E: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -149,7 +149,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: WebRequest<E>) -> Self::Future {
+    fn call(&self, req: WebRequest<E>) -> Self::Future<'_> {
         if self.inner.exclude.contains(req.path()) {
             Either::Right(self.service.call(req))
         } else {
@@ -171,17 +171,18 @@ where
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct LoggerResponse<S: Service<WebRequest<E>>, E>
+    pub struct LoggerResponse<'f, S: Service<WebRequest<E>>, E>
+    where S: 'f, E: 'f
     {
         #[pin]
-        fut: S::Future,
+        fut: S::Future<'f>,
         time: time::SystemTime,
         format: Option<Format>,
         _t: PhantomData<E>
     }
 }
 
-impl<S, E> Future for LoggerResponse<S, E>
+impl<'f, S, E> Future for LoggerResponse<'f, S, E>
 where
     S: Service<WebRequest<E>, Response = WebResponse>,
 {
@@ -458,7 +459,7 @@ impl<'a> fmt::Display for FormatDisplay<'a> {
 mod tests {
     use super::*;
     use crate::http::{header, StatusCode};
-    use crate::service::{IntoService, Transform};
+    use crate::service::{IntoService, Middleware};
     use crate::util::lazy;
     use crate::web::test::{self, TestRequest};
     use crate::web::{DefaultError, Error};
@@ -478,7 +479,7 @@ mod tests {
         let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test")
             .exclude("/test");
 
-        let srv = Transform::new_transform(&logger, srv.into_service());
+        let srv = Middleware::create(&logger, srv.into_service());
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx, true).is_ready()).await);
 
