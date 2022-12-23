@@ -1,141 +1,115 @@
-use std::{
-    future::Future, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
-};
+use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use crate::{Service, ServiceFactory};
-
-pub type BoxFuture<I, E> = Pin<Box<dyn Future<Output = Result<I, E>>>>;
-
-pub type BoxService<Req, Res, Err> =
-    Box<dyn Service<Req, Response = Res, Error = Err, Future = BoxFuture<Res, Err>>>;
-
-pub type RcService<Req, Res, Err> =
-    Rc<dyn Service<Req, Response = Res, Error = Err, Future = BoxFuture<Res, Err>>>;
-
-pub struct BoxServiceFactory<C, Req, Res, Err, InitErr>(Inner<C, Req, Res, Err, InitErr>);
+pub type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 
 /// Create boxed service factory
-pub fn factory<T, R, C>(
-    factory: T,
-) -> BoxServiceFactory<C, R, T::Response, T::Error, T::InitError>
+pub fn factory<F, C>(
+    factory: F,
+) -> BoxServiceFactory<C, F::Request, F::Response, F::Error, F::InitError>
 where
-    C: 'static,
-    R: 'static,
-    T: ServiceFactory<R, C> + 'static,
-    T::Response: 'static,
-    T::Error: 'static,
-    T::InitError: 'static,
+    F: crate::ServiceFactory<C> + 'static,
+    F::Request: 'static,
+    F::Service: 'static,
 {
-    BoxServiceFactory(Box::new(FactoryWrapper {
-        factory,
-        _t: std::marker::PhantomData,
-    }))
+    BoxServiceFactory(Box::new(factory))
 }
 
 /// Create boxed service
-pub fn service<T, R>(service: T) -> BoxService<R, T::Response, T::Error>
+pub fn service<S, R>(service: S) -> BoxService<R, S::Response, S::Error>
 where
     R: 'static,
-    T: Service<R> + 'static,
-    T::Future: 'static,
+    S: crate::Service<R> + 'static,
 {
-    Box::new(ServiceWrapper(service, PhantomData))
+    BoxService(Box::new(service))
 }
 
 /// Create rc service
-pub fn rcservice<T, R>(service: T) -> RcService<R, T::Response, T::Error>
+pub fn rcservice<S, R>(service: S) -> RcService<R, S::Response, S::Error>
 where
     R: 'static,
-    T: Service<R> + 'static,
-    T::Future: 'static,
+    S: crate::Service<R> + 'static,
 {
-    Rc::new(ServiceWrapper(service, PhantomData))
+    RcService(Rc::new(service))
 }
 
-type Inner<C, Req, Res, Err, InitErr> = Box<
-    dyn ServiceFactory<
-        Req,
-        C,
+trait ServiceObj<Req> {
+    type Response;
+    type Error;
+
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>>;
+
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()>;
+
+    fn call<'a>(&'a self, req: Req) -> BoxFuture<'a, Self::Response, Self::Error>
+    where
+        Req: 'a;
+}
+
+impl<S, Req> ServiceObj<Req> for S
+where
+    Req: 'static,
+    S: crate::Service<Req>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        crate::Service::poll_ready(self, cx)
+    }
+
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        crate::Service::poll_shutdown(self, cx, is_error)
+    }
+
+    #[inline]
+    fn call<'a>(&'a self, req: Req) -> BoxFuture<'a, Self::Response, Self::Error>
+    where
+        Req: 'a,
+    {
+        Box::pin(crate::Service::call(self, req))
+    }
+}
+
+trait ServiceFactoryObj<Cfg, Req, Res, Err, InitErr> {
+    fn create<'a>(
+        &'a self,
+        cfg: &'a Cfg,
+    ) -> BoxFuture<'a, BoxService<Req, Res, Err>, InitErr>;
+}
+
+impl<F, Cfg, Req, Res, Err, InitErr> ServiceFactoryObj<Cfg, Req, Res, Err, InitErr> for F
+where
+    Req: 'static,
+    F: crate::ServiceFactory<
+        Cfg,
+        Request = Req,
         Response = Res,
         Error = Err,
         InitError = InitErr,
-        Service = BoxService<Req, Res, Err>,
-        Future = BoxFuture<BoxService<Req, Res, Err>, InitErr>,
     >,
->;
+    F::Request: 'static,
+    F::Service: 'static,
+{
+    #[inline]
+    fn create<'a>(
+        &'a self,
+        cfg: &'a Cfg,
+    ) -> BoxFuture<'a, BoxService<Req, Res, Err>, InitErr> {
+        Box::pin(async move { crate::ServiceFactory::create(self, cfg).await.map(service) })
+    }
+}
 
-impl<C, Req, Res, Err, InitErr> ServiceFactory<Req, C>
-    for BoxServiceFactory<C, Req, Res, Err, InitErr>
+pub struct BoxService<Req, Res, Err>(Box<dyn ServiceObj<Req, Response = Res, Error = Err>>);
+
+impl<Req, Res, Err> crate::Service<Req> for BoxService<Req, Res, Err>
 where
     Req: 'static,
-    Res: 'static,
-    Err: 'static,
-    InitErr: 'static,
 {
     type Response = Res;
     type Error = Err;
-    type InitError = InitErr;
-    type Service = BoxService<Req, Res, Err>;
-
-    type Future = BoxFuture<Self::Service, InitErr>;
-
-    fn new_service(&self, cfg: C) -> Self::Future {
-        self.0.new_service(cfg)
-    }
-}
-
-struct FactoryWrapper<C, R, T: ServiceFactory<R, C>> {
-    factory: T,
-    _t: std::marker::PhantomData<(C, R)>,
-}
-
-impl<C, R, T, Res, Err, InitErr> ServiceFactory<R, C> for FactoryWrapper<C, R, T>
-where
-    R: 'static,
-    Res: 'static,
-    Err: 'static,
-    InitErr: 'static,
-    T: ServiceFactory<R, C, Response = Res, Error = Err, InitError = InitErr> + 'static,
-    T::Service: 'static,
-    T::Future: 'static,
-    <T::Service as Service<R>>::Future: 'static,
-{
-    type Response = Res;
-    type Error = Err;
-    type InitError = InitErr;
-    type Service = BoxService<R, Res, Err>;
-    type Future = BoxFuture<Self::Service, Self::InitError>;
-
-    fn new_service(&self, cfg: C) -> Self::Future {
-        let fut = self.factory.new_service(cfg);
-        Box::pin(async move {
-            let srv = fut.await?;
-            Ok(ServiceWrapper::boxed(srv))
-        })
-    }
-}
-
-struct ServiceWrapper<T: Service<R>, R>(T, PhantomData<R>);
-
-impl<T, R> ServiceWrapper<T, R>
-where
-    R: 'static,
-    T: Service<R> + 'static,
-    T::Future: 'static,
-{
-    fn boxed(service: T) -> BoxService<R, T::Response, T::Error> {
-        Box::new(ServiceWrapper(service, PhantomData))
-    }
-}
-
-impl<T, R, Res, Err> Service<R> for ServiceWrapper<T, R>
-where
-    T: Service<R, Response = Res, Error = Err>,
-    T::Future: 'static,
-{
-    type Response = Res;
-    type Error = Err;
-    type Future = BoxFuture<Res, Err>;
+    type Future<'f> = BoxFuture<'f, Res, Err> where Self: 'f, Req: 'f;
 
     #[inline]
     fn poll_ready(&self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -148,7 +122,62 @@ where
     }
 
     #[inline]
-    fn call(&self, req: R) -> Self::Future {
-        Box::pin(self.0.call(req))
+    fn call<'a>(&'a self, req: Req) -> Self::Future<'a> {
+        self.0.call(req)
+    }
+}
+
+pub struct RcService<Req, Res, Err>(Rc<dyn ServiceObj<Req, Response = Res, Error = Err>>);
+
+impl<Req, Res, Err> Clone for RcService<Req, Res, Err> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<Req, Res, Err> crate::Service<Req> for RcService<Req, Res, Err>
+where
+    Req: 'static,
+{
+    type Response = Res;
+    type Error = Err;
+    type Future<'f> = BoxFuture<'f, Res, Err> where Self: 'f, Req: 'f;
+
+    #[inline]
+    fn poll_ready(&self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.0.poll_ready(ctx)
+    }
+
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        self.0.poll_shutdown(cx, is_error)
+    }
+
+    #[inline]
+    fn call<'a>(&'a self, req: Req) -> Self::Future<'a> {
+        self.0.call(req)
+    }
+}
+
+pub struct BoxServiceFactory<Cfg, Req, Res, Err, InitErr>(
+    Box<dyn ServiceFactoryObj<Cfg, Req, Res, Err, InitErr>>,
+);
+
+impl<C, Req, Res, Err, InitErr> crate::ServiceFactory<C>
+    for BoxServiceFactory<C, Req, Res, Err, InitErr>
+where
+    Req: 'static,
+{
+    type Request = Req;
+    type Response = Res;
+    type Error = Err;
+
+    type Service = BoxService<Req, Res, Err>;
+    type InitError = InitErr;
+    type Future<'f> = BoxFuture<'f, Self::Service, InitErr> where Self: 'f, Self::Request: 'f, C: 'f;
+
+    #[inline]
+    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
+        self.0.create(cfg)
     }
 }

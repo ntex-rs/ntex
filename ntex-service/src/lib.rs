@@ -9,7 +9,7 @@ use std::task::{self, Context, Poll};
 
 mod and_then;
 mod apply;
-// pub mod boxed;
+pub mod boxed;
 mod fn_service;
 mod map;
 mod map_config;

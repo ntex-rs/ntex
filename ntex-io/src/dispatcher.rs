@@ -7,7 +7,7 @@ use ntex_service::{IntoService, Service};
 use ntex_util::time::Seconds;
 use ntex_util::{future::Either, ready, spawn};
 
-use crate::{DispatchItem, IoBoxed, IoRef, IoStatusUpdate, RecvError};
+use crate::{DispatchItem, IoBoxed, IoStatusUpdate, RecvError};
 
 type Response<U> = <U as Encoder>::Item;
 
@@ -17,14 +17,10 @@ pin_project_lite::pin_project! {
     pub struct Dispatcher<S, U>
     where
         S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
-        S: 'static,
         U: Encoder,
         U: Decoder,
     {
-        service: S,
         inner: DispatcherInner<S, U>,
-        #[pin]
-        fut: Option<S::Future>,
     }
 }
 
@@ -40,7 +36,6 @@ where
     S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
-    io: IoBoxed,
     st: Cell<DispatcherState>,
     ka_timeout: Cell<time::Duration>,
     error: Cell<Option<S::Error>>,
@@ -49,12 +44,14 @@ where
     pool: Pool,
 }
 
-struct DispatcherShared<S, U>
+pub struct DispatcherShared<S, U>
 where
     S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
+    io: IoBoxed,
     codec: U,
+    service: S,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<usize>,
 }
@@ -89,11 +86,11 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
 
 impl<S, U> Dispatcher<S, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
-    U: Decoder + Encoder + 'static,
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+    U: Decoder + Encoder,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io, F>(io: Io, codec: U, service: F) -> Self
+    pub fn new<Io, F>(io: Io, codec: U, service: F) -> Dispatcher<S, U>
     where
         IoBoxed: From<Io>,
         F: IntoService<S, DispatchItem<U>>,
@@ -104,25 +101,33 @@ where
         // register keepalive timer
         io.start_keepalive_timer(ka_timeout.get());
 
-        Dispatcher {
+        let pool = io.memory_pool().pool();
+        let shared = Rc::new(DispatcherShared {
+            io,
+            codec,
+            error: Cell::new(None),
+            inflight: Cell::new(0),
             service: service.into_service(),
-            fut: None,
+        });
+
+        Dispatcher {
             inner: DispatcherInner {
-                pool: io.memory_pool().pool(),
+                pool,
+                shared,
+                ka_timeout,
                 error: Cell::new(None),
                 flags: Cell::new(Flags::empty()),
                 st: Cell::new(DispatcherState::Processing),
-                shared: Rc::new(DispatcherShared {
-                    codec,
-                    error: Cell::new(None),
-                    inflight: Cell::new(0),
-                }),
-                io,
-                ka_timeout,
             },
         }
     }
+}
 
+impl<S, U> Dispatcher<S, U>
+where
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+    U: Decoder + Encoder,
+{
     /// Set keep-alive timeout.
     ///
     /// To disable timeout set value to 0.
@@ -132,7 +137,7 @@ where
         let ka_timeout = time::Duration::from(timeout);
 
         // register keepalive timer
-        self.inner.io.start_keepalive_timer(ka_timeout);
+        self.inner.shared.io.start_keepalive_timer(ka_timeout);
         self.inner.ka_timeout.set(ka_timeout);
 
         self
@@ -147,17 +152,17 @@ where
     ///
     /// By default disconnect timeout is set to 1 seconds.
     pub fn disconnect_timeout(self, val: Seconds) -> Self {
-        self.inner.io.set_disconnect_timeout(val.into());
+        self.inner.shared.io.set_disconnect_timeout(val.into());
         self
     }
 }
 
 impl<S, U> DispatcherShared<S, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
-    U: Encoder + Decoder + 'static,
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+    U: Encoder + Decoder,
 {
-    fn handle_result(&self, item: Result<S::Response, S::Error>, io: &IoRef) {
+    fn handle_result(&self, item: Result<S::Response, S::Error>, io: &IoBoxed) {
         self.inflight.set(self.inflight.get() - 1);
         match item {
             Ok(Some(val)) => {
@@ -166,7 +171,7 @@ where
                 }
             }
             Err(err) => self.error.set(Some(DispatcherError::Service(err))),
-            Ok(None) => return,
+            Ok(None) => (),
         }
         io.wake();
     }
@@ -179,23 +184,10 @@ where
 {
     type Output = Result<(), S::Error>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().project();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
         let slf = &this.inner;
-        let io = &slf.io;
-        let ioref = io.as_ref();
-
-        // handle service response future
-        if let Some(fut) = this.fut.as_mut().as_pin_mut() {
-            match fut.poll(cx) {
-                Poll::Pending => (),
-                Poll::Ready(item) => {
-                    this.fut.set(None);
-                    slf.shared.inflight.set(slf.shared.inflight.get() - 1);
-                    slf.handle_result(item, ioref);
-                }
-            }
-        }
+        let io = &slf.shared.io;
 
         // handle memory pool pressure
         if slf.pool.poll_ready(cx).is_pending() {
@@ -206,7 +198,11 @@ where
         loop {
             match slf.st.get() {
                 DispatcherState::Processing => {
-                    let item = match ready!(slf.poll_service(this.service, cx, io)) {
+                    let item = match ready!(slf.poll_service(
+                        &this.inner.shared.service,
+                        cx,
+                        io
+                    )) {
                         PollService::Ready => {
                             // decode incoming bytes if buffer is ready
                             match ready!(io.poll_recv(&slf.shared.codec, cx)) {
@@ -252,28 +248,20 @@ where
                     };
 
                     // call service
-                    if this.fut.is_none() {
-                        // optimize first service call
-                        this.fut.set(Some(this.service.call(item)));
-                        match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
-                            Poll::Ready(res) => {
-                                this.fut.set(None);
-                                slf.handle_result(res, ioref);
-                            }
-                            Poll::Pending => {
-                                slf.shared.inflight.set(slf.shared.inflight.get() + 1)
-                            }
-                        }
-                    } else {
-                        slf.spawn_service_call(this.service.call(item));
-                    }
+                    let shared = slf.shared.clone();
+                    shared.inflight.set(shared.inflight.get() + 1);
+                    spawn(async move {
+                        let result = shared.service.call(item).await;
+                        shared.handle_result(result, &shared.io);
+                    });
                 }
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
-                    let result = ready!(slf.poll_service(this.service, cx, io));
+                    let result =
+                        ready!(slf.poll_service(&this.inner.shared.service, cx, io));
                     let item = match result {
                         PollService::Ready => {
-                            if slf.io.poll_flush(cx, false).is_ready() {
+                            if slf.shared.io.poll_flush(cx, false).is_ready() {
                                 slf.st.set(DispatcherState::Processing);
                                 DispatchItem::WBackPressureDisabled
                             } else {
@@ -285,21 +273,12 @@ where
                     };
 
                     // call service
-                    if this.fut.is_none() {
-                        // optimize first service call
-                        this.fut.set(Some(this.service.call(item)));
-                        match this.fut.as_mut().as_pin_mut().unwrap().poll(cx) {
-                            Poll::Ready(res) => {
-                                this.fut.set(None);
-                                slf.handle_result(res, ioref);
-                            }
-                            Poll::Pending => {
-                                slf.shared.inflight.set(slf.shared.inflight.get() + 1)
-                            }
-                        }
-                    } else {
-                        slf.spawn_service_call(this.service.call(item));
-                    }
+                    let shared = slf.shared.clone();
+                    shared.inflight.set(shared.inflight.get() + 1);
+                    spawn(async move {
+                        let result = shared.service.call(item).await;
+                        shared.handle_result(result, &shared.io);
+                    });
                 }
                 // drain service responses and shutdown io
                 DispatcherState::Stop => {
@@ -307,7 +286,7 @@ where
 
                     // service may relay on poll_ready for response results
                     if !slf.flags.get().contains(Flags::READY_ERR) {
-                        let _ = this.service.poll_ready(cx);
+                        let _ = this.inner.shared.service.poll_ready(cx);
                     }
 
                     if slf.shared.inflight.get() == 0 {
@@ -316,7 +295,7 @@ where
                             continue;
                         }
                     } else if !slf.flags.get().contains(Flags::IO_ERR) {
-                        match ready!(slf.io.poll_status_update(cx)) {
+                        match ready!(slf.shared.io.poll_status_update(cx)) {
                             IoStatusUpdate::PeerGone(_)
                             | IoStatusUpdate::Stop
                             | IoStatusUpdate::KeepAlive => {
@@ -324,7 +303,7 @@ where
                                 continue;
                             }
                             IoStatusUpdate::WriteBackpressure => {
-                                if ready!(slf.io.poll_flush(cx, true)).is_err() {
+                                if ready!(slf.shared.io.poll_flush(cx, true)).is_err() {
                                     slf.insert_flags(Flags::IO_ERR);
                                 }
                                 continue;
@@ -337,7 +316,13 @@ where
                 DispatcherState::Shutdown => {
                     let err = slf.error.take();
 
-                    return if this.service.poll_shutdown(cx, err.is_some()).is_ready() {
+                    return if this
+                        .inner
+                        .shared
+                        .service
+                        .poll_shutdown(cx, err.is_some())
+                        .is_ready()
+                    {
                         log::trace!("service shutdown is completed, stop");
 
                         Poll::Ready(if let Some(err) = err {
@@ -360,34 +345,6 @@ where
     S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
-    /// spawn service call
-    fn spawn_service_call(&self, fut: S::Future) {
-        self.shared.inflight.set(self.shared.inflight.get() + 1);
-
-        let st = self.io.get_ref();
-        let shared = self.shared.clone();
-        spawn(async move {
-            let item = fut.await;
-            shared.handle_result(item, &st);
-        });
-    }
-
-    fn handle_result(
-        &self,
-        item: Result<Option<<U as Encoder>::Item>, S::Error>,
-        io: &IoRef,
-    ) {
-        match item {
-            Ok(Some(item)) => {
-                if let Err(err) = io.encode(item, &self.shared.codec) {
-                    self.shared.error.set(Some(DispatcherError::Encoder(err)))
-                }
-            }
-            Err(err) => self.shared.error.set(Some(DispatcherError::Service(err))),
-            Ok(None) => (),
-        }
-    }
-
     fn poll_service(
         &self,
         srv: &S,
@@ -439,12 +396,12 @@ where
 
     /// update keep-alive timer
     fn update_keepalive(&self) {
-        self.io.start_keepalive_timer(self.ka_timeout.get());
+        self.shared.io.start_keepalive_timer(self.ka_timeout.get());
     }
 
     /// unregister keep-alive timer
     fn unregister_keepalive(&self) {
-        self.io.stop_keepalive_timer();
+        self.shared.io.stop_keepalive_timer();
         self.ka_timeout.set(time::Duration::ZERO);
     }
 }
@@ -498,25 +455,27 @@ mod tests {
             service: F,
         ) -> (Self, State) {
             let state = Io::new(io);
+            let pool = state.memory_pool().pool();
             let ka_timeout = Cell::new(Seconds(1).into());
-            let shared = Rc::new(DispatcherShared {
-                codec,
-                error: Cell::new(None),
-                inflight: Cell::new(0),
-            });
+
             let inner = State(state.get_ref());
             state.start_keepalive_timer(Duration::from_millis(500));
 
+            let shared = Rc::new(DispatcherShared {
+                codec,
+                io: state.into(),
+                error: Cell::new(None),
+                inflight: Cell::new(0),
+                service: service.into_service(),
+            });
+
             (
                 Dispatcher {
-                    service: service.into_service(),
-                    fut: None,
                     inner: DispatcherInner {
                         error: Cell::new(None),
                         flags: Cell::new(super::Flags::empty()),
                         st: Cell::new(DispatcherState::Processing),
-                        pool: state.memory_pool().pool(),
-                        io: state.into(),
+                        pool,
                         shared,
                         ka_timeout,
                     },
@@ -649,14 +608,14 @@ mod tests {
         impl Service<DispatchItem<BytesCodec>> for Srv {
             type Response = Option<Response<BytesCodec>>;
             type Error = ();
-            type Future = Ready<Option<Response<BytesCodec>>, ()>;
+            type Future<'f> = Ready<Option<Response<BytesCodec>>, ()>;
 
             fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), ()>> {
                 self.0.set(self.0.get() + 1);
                 Poll::Ready(Err(()))
             }
 
-            fn call(&self, _: DispatchItem<BytesCodec>) -> Self::Future {
+            fn call(&self, _: DispatchItem<BytesCodec>) -> Self::Future<'_> {
                 Ready::Ok(None)
             }
         }
@@ -800,7 +759,7 @@ mod tests {
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
-        sleep(Millis(3500)).await;
+        sleep(Millis(1500)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();

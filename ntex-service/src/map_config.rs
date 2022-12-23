@@ -112,7 +112,6 @@ where
 impl<A, C> ServiceFactory<C> for UnitConfig<A, C>
 where
     A: ServiceFactory<()>,
-    //C: 'static,
 {
     type Request = A::Request;
     type Response = A::Response;
