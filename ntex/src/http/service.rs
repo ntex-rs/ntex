@@ -25,7 +25,7 @@ pub struct HttpService<F, S, B, X = h1::ExpectHandler, U = h1::UpgradeHandler<F>
 
 impl<F, S, B> HttpService<F, S, B>
 where
-    S: ServiceFactory<Request = Request> + 'static,
+    S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
@@ -40,14 +40,14 @@ where
 impl<F, S, B> HttpService<F, S, B>
 where
     F: Filter,
-    S: ServiceFactory<Request = Request> + 'static,
+    S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     /// Create new `HttpService` instance.
-    pub fn new<U: IntoServiceFactory<S>>(service: U) -> Self {
+    pub fn new<U: IntoServiceFactory<S, Request>>(service: U) -> Self {
         let cfg = ServiceConfig::new(
             KeepAlive::Timeout(Seconds(5)),
             Millis(5_000),
@@ -67,7 +67,7 @@ where
     }
 
     /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S>>(
+    pub(crate) fn with_config<U: IntoServiceFactory<S, Request>>(
         cfg: ServiceConfig,
         service: U,
     ) -> Self {
@@ -85,7 +85,7 @@ where
 impl<F, S, B, X, U> HttpService<F, S, B, X, U>
 where
     F: Filter,
-    S: ServiceFactory<Request = Request> + 'static,
+    S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
@@ -98,7 +98,7 @@ where
     /// request will be forwarded to main service.
     pub fn expect<X1>(self, expect: X1) -> HttpService<F, S, B, X1, U>
     where
-        X1: ServiceFactory<Request = Request, Response = Request>,
+        X1: ServiceFactory<Request, Response = Request>,
         X1::Error: ResponseError,
         X1::InitError: fmt::Debug,
     {
@@ -118,7 +118,7 @@ where
     /// and this service get called with original request and framed object.
     pub fn upgrade<U1>(self, upgrade: Option<U1>) -> HttpService<F, S, B, X, U1>
     where
-        U1: ServiceFactory<Request = (Request, Io<F>, h1::Codec), Response = ()>,
+        U1: ServiceFactory<(Request, Io<F>, h1::Codec), Response = ()>,
         U1::Error: fmt::Display + error::Error,
         U1::InitError: fmt::Debug,
     {
@@ -151,15 +151,15 @@ mod openssl {
     impl<F, S, B, X, U> HttpService<SslFilter<F>, S, B, X, U>
     where
         F: Filter,
-        S: ServiceFactory<Request = Request> + 'static,
+        S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        X: ServiceFactory<Request = Request, Response = Request> + 'static,
+        X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        U: ServiceFactory<Request = (Request, Io<SslFilter<F>>, h1::Codec), Response = ()>
+        U: ServiceFactory<(Request, Io<SslFilter<F>>, h1::Codec), Response = ()>
             + 'static,
         U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
@@ -169,7 +169,7 @@ mod openssl {
             self,
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
-            Request = Io<F>,
+            Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -196,15 +196,15 @@ mod rustls {
     impl<F, S, B, X, U> HttpService<TlsFilter<F>, S, B, X, U>
     where
         F: Filter,
-        S: ServiceFactory<Request = Request> + 'static,
+        S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        X: ServiceFactory<Request = Request, Response = Request> + 'static,
+        X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        U: ServiceFactory<Request = (Request, Io<TlsFilter<F>>, h1::Codec), Response = ()>
+        U: ServiceFactory<(Request, Io<TlsFilter<F>>, h1::Codec), Response = ()>
             + 'static,
         U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
@@ -214,7 +214,7 @@ mod rustls {
             self,
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
-            Request = Io<F>,
+            Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -233,22 +233,21 @@ mod rustls {
     }
 }
 
-impl<F, S, B, X, U> ServiceFactory for HttpService<F, S, B, X, U>
+impl<F, S, B, X, U> ServiceFactory<Io<F>> for HttpService<F, S, B, X, U>
 where
     F: Filter,
-    S: ServiceFactory<Request = Request> + 'static,
+    S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: ServiceFactory<Request = Request, Response = Request> + 'static,
+    X: ServiceFactory<Request, Response = Request> + 'static,
     X::Error: ResponseError,
     X::InitError: fmt::Debug,
-    U: ServiceFactory<Request = (Request, Io<F>, h1::Codec), Response = ()> + 'static,
+    U: ServiceFactory<(Request, Io<F>, h1::Codec), Response = ()> + 'static,
     U::Error: fmt::Display + error::Error,
     U::InitError: fmt::Debug,
 {
-    type Request = Io<F>;
     type Response = ();
     type Error = DispatchError;
     type InitError = ();

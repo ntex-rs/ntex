@@ -25,13 +25,13 @@ pub struct H2Service<F, S, B> {
 
 impl<F, S, B> H2Service<F, S, B>
 where
-    S: ServiceFactory<Request = Request>,
+    S: ServiceFactory<Request>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S>>(
+    pub(crate) fn with_config<U: IntoServiceFactory<S, Request>>(
         cfg: ServiceConfig,
         service: U,
     ) -> Self {
@@ -58,7 +58,7 @@ mod openssl {
     impl<F, S, B> H2Service<SslFilter<F>, S, B>
     where
         F: Filter,
-        S: ServiceFactory<Request = Request> + 'static,
+        S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
         B: MessageBody,
@@ -68,7 +68,7 @@ mod openssl {
             self,
             acceptor: SslAcceptor,
         ) -> impl ServiceFactory<
-            Request = Io<F>,
+            Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
@@ -95,7 +95,7 @@ mod rustls {
     impl<F, S, B> H2Service<TlsFilter<F>, S, B>
     where
         F: Filter,
-        S: ServiceFactory<Request = Request> + 'static,
+        S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
         B: MessageBody,
@@ -105,7 +105,7 @@ mod rustls {
             self,
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
-            Request = Io<F>,
+            Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
@@ -124,15 +124,14 @@ mod rustls {
     }
 }
 
-impl<F, S, B> ServiceFactory for H2Service<F, S, B>
+impl<F, S, B> ServiceFactory<Io<F>> for H2Service<F, S, B>
 where
     F: Filter,
-    S: ServiceFactory<Request = Request> + 'static,
+    S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
-    type Request = Io<F>;
     type Response = ();
     type Error = DispatchError;
     type InitError = S::InitError;

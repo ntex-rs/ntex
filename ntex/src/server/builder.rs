@@ -224,7 +224,7 @@ impl ServerBuilder {
     where
         U: net::ToSocketAddrs,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Request = Io>,
+        R: ServiceFactory<Io>,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
@@ -249,7 +249,7 @@ impl ServerBuilder {
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Request = Io>,
+        R: ServiceFactory<Io>,
     {
         use std::os::unix::net::UnixListener;
 
@@ -278,7 +278,7 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Request = Io>,
+        R: ServiceFactory<Io>,
     {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();
@@ -303,7 +303,7 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Request = Io>,
+        R: ServiceFactory<Io>,
     {
         let token = self.token.next();
         self.services.push(Factory::create(

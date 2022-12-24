@@ -27,7 +27,7 @@ type FnStateFactory =
 /// for building application instances.
 pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     middleware: M,
-    filter: PipelineFactory<F>,
+    filter: PipelineFactory<F, WebRequest<Err>>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
     external: Vec<ResourceDef>,
@@ -74,7 +74,7 @@ impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
 impl<M, T, Err> App<M, T, Err>
 where
     T: ServiceFactory<
-        Request = WebRequest<Err>,
+        WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -264,9 +264,9 @@ where
     /// ```
     pub fn default_service<F, U>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<U>,
+        F: IntoServiceFactory<U, WebRequest<Err>>,
         U: ServiceFactory<
-                Request = WebRequest<Err>,
+                WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
             > + 'static,
@@ -344,7 +344,7 @@ where
     ) -> App<
         M,
         impl ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -353,12 +353,12 @@ where
     >
     where
         S: ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         >,
-        U: IntoServiceFactory<S>,
+        U: IntoServiceFactory<S, WebRequest<Err>>,
     {
         App {
             filter: self.filter.and_then(filter.into_factory()),
@@ -427,7 +427,7 @@ where
     M: Middleware<AppService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-        Request = WebRequest<Err>,
+        WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -455,12 +455,12 @@ where
     pub fn finish(
         self,
     ) -> impl ServiceFactory<
-        Request = Request,
+        Request,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     > {
-        IntoServiceFactory::<AppFactory<M, F, Err>>::into_factory(self)
+        IntoServiceFactory::<AppFactory<M, F, Err>, Request>::into_factory(self)
     }
 
     /// Construct service factory suitable for `http::HttpService`.
@@ -485,7 +485,7 @@ where
         self,
         cfg: AppConfig,
     ) -> impl ServiceFactory<
-        Request = Request,
+        Request,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
@@ -504,12 +504,12 @@ where
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, AppConfig> for App<M, F, Err>
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, AppConfig> for App<M, F, Err>
 where
     M: Middleware<AppService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-        Request = WebRequest<Err>,
+        WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -530,12 +530,12 @@ where
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>> for App<M, F, Err>
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request> for App<M, F, Err>
 where
     M: Middleware<AppService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-        Request = WebRequest<Err>,
+        WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -587,8 +587,7 @@ impl<Err: ErrorRenderer> Filter<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> ServiceFactory for Filter<Err> {
-    type Request = WebRequest<Err>;
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Filter<Err> {
     type Response = WebRequest<Err>;
     type Error = Err::Container;
     type InitError = ();

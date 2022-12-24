@@ -191,11 +191,11 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     /// The future of the `ServiceFactory` instance.
     type Future<'f>: Future<Output = Result<Self::Service, Self::InitError>>
     where
-        Self: 'f,
-        Cfg: 'f;
+        Cfg: 'f,
+        Self: 'f;
 
     /// Create and return a new service value asynchronously.
-    fn create<'a>(&'a self, cfg: &'a Cfg) -> Self::Future<'a>;
+    fn create<'a>(&'a self, cfg: Cfg) -> Self::Future<'a>;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service
@@ -229,6 +229,30 @@ pub trait ServiceFactory<Req, Cfg = ()> {
         F: Fn(Self::InitError) -> E + Clone,
     {
         crate::map_init_err::MapInitErr::new(self, f)
+    }
+}
+
+impl<'a, S, Req> Service<Req> for &'a S
+where
+    S: Service<Req> + ?Sized,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future<'f> = S::Future<'f> where 'a: 'f, Req: 'f;
+
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+        (**self).poll_ready(cx)
+    }
+
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
+        (**self).poll_shutdown(cx, is_error)
+    }
+
+    #[inline]
+    fn call(&self, request: Req) -> S::Future<'_> {
+        (**self).call(request)
     }
 }
 
@@ -288,7 +312,7 @@ where
     type InitError = S::InitError;
     type Future<'f> = S::Future<'f> where S: 'f, Cfg: 'f;
 
-    fn create<'a>(&'a self, cfg: &'a Cfg) -> S::Future<'a> {
+    fn create<'a>(&'a self, cfg: Cfg) -> S::Future<'a> {
         self.as_ref().create(cfg)
     }
 }

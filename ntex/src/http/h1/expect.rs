@@ -1,13 +1,11 @@
 use std::io;
-use std::task::{Context, Poll};
 
 use crate::http::request::Request;
 use crate::{service::Service, service::ServiceFactory, util::Ready};
 
 pub struct ExpectHandler;
 
-impl ServiceFactory for ExpectHandler {
-    type Request = Request;
+impl ServiceFactory<Request> for ExpectHandler {
     type Response = Request;
     type Error = io::Error;
     type Service = ExpectHandler;

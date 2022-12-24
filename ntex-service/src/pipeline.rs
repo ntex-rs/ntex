@@ -192,6 +192,7 @@ impl<T: ServiceFactory<R, C>, R, C> PipelineFactory<T, R, C> {
     pub fn then<F, U>(self, factory: F) -> PipelineFactory<ThenFactory<T, U>, R, C>
     where
         Self: Sized,
+        C: Clone,
         F: IntoServiceFactory<U, Result<T::Response, T::Error>, C>,
         U: ServiceFactory<
             Result<T::Response, T::Error>,
@@ -267,7 +268,7 @@ impl<T: ServiceFactory<R, C>, R, C> ServiceFactory<R, C> for PipelineFactory<T, 
     type Future<'f> = T::Future<'f> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
+    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
         self.factory.create(cfg)
     }
 }

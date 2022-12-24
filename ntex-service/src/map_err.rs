@@ -153,7 +153,7 @@ where
     type Future<'f> = MapErrFactoryFuture<'f, A, R, C, F, E> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
+    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
         MapErrFactoryFuture {
             fut: self.a.create(cfg),
             slf: self,

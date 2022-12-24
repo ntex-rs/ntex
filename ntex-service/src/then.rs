@@ -152,6 +152,7 @@ where
         Error = A::Error,
         InitError = A::InitError,
     >,
+    C: Clone,
 {
     type Response = B::Response;
     type Error = A::Error;
@@ -160,9 +161,9 @@ where
     type InitError = A::InitError;
     type Future<'f> = ThenFactoryResponse<'f, A, B, R, C> where Self: 'f, C: 'f;
 
-    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
+    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
         ThenFactoryResponse {
-            fut_a: self.svc1.create(cfg),
+            fut_a: self.svc1.create(cfg.clone()),
             fut_b: self.svc2.create(cfg),
             a: None,
             b: None,

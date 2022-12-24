@@ -143,7 +143,7 @@ where
     type Future<'f> = ApplyMiddlewareFuture<'f, T, S, R, C> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
+    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
         ApplyMiddlewareFuture {
             slf: self,
             fut: self.svc.create(cfg),

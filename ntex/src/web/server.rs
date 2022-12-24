@@ -43,8 +43,8 @@ struct Config {
 pub struct HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, AppConfig>,
-    S: ServiceFactory<AppConfig, Request = Request>,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
@@ -60,8 +60,8 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, AppConfig>,
-    S: ServiceFactory<AppConfig, Request = Request> + 'static,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
@@ -491,8 +491,8 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, AppConfig>,
-    S: ServiceFactory<AppConfig, Request = Request>,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,

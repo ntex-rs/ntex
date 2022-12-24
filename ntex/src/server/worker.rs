@@ -523,8 +523,7 @@ mod tests {
         counter: Arc<Mutex<usize>>,
     }
 
-    impl ServiceFactory for SrvFactory {
-        type Request = Io;
+    impl ServiceFactory<Io> for SrvFactory {
         type Response = ();
         type Error = ();
         type Service = Srv;

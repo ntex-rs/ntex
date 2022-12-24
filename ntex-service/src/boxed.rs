@@ -73,10 +73,7 @@ where
 }
 
 trait ServiceFactoryObj<Cfg, Req, Res, Err, InitErr> {
-    fn create<'a>(
-        &'a self,
-        cfg: &'a Cfg,
-    ) -> BoxFuture<'a, BoxService<Req, Res, Err>, InitErr>;
+    fn create<'a>(&'a self, cfg: Cfg) -> BoxFuture<'a, BoxService<Req, Res, Err>, InitErr>;
 }
 
 impl<F, Cfg, Req, Res, Err, InitErr> ServiceFactoryObj<Cfg, Req, Res, Err, InitErr> for F
@@ -87,10 +84,7 @@ where
     F::Service: 'static,
 {
     #[inline]
-    fn create<'a>(
-        &'a self,
-        cfg: &'a Cfg,
-    ) -> BoxFuture<'a, BoxService<Req, Res, Err>, InitErr> {
+    fn create<'a>(&'a self, cfg: Cfg) -> BoxFuture<'a, BoxService<Req, Res, Err>, InitErr> {
         Box::pin(async move { crate::ServiceFactory::create(self, cfg).await.map(service) })
     }
 }
@@ -170,7 +164,7 @@ where
     type Future<'f> = BoxFuture<'f, Self::Service, InitErr> where Self: 'f, Req: 'f, C: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: &'a C) -> Self::Future<'a> {
+    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
         self.0.create(cfg)
     }
 }

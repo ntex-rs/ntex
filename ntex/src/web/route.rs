@@ -1,4 +1,4 @@
-use std::{future::Future, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{future::Future, mem, pin::Pin, rc::Rc};
 
 use crate::{http::Method, service::Service, service::ServiceFactory, util::Ready};
 
@@ -51,8 +51,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> ServiceFactory for Route<Err> {
-    type Request = WebRequest<Err>;
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();

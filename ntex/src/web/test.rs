@@ -74,8 +74,8 @@ pub async fn init_service<R, S, E>(
     app: R,
 ) -> impl Service<Request, Response = WebResponse, Error = E>
 where
-    R: IntoServiceFactory<S, AppConfig>,
-    S: ServiceFactory<AppConfig, Request = Request, Response = WebResponse, Error = E>,
+    R: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig, Response = WebResponse, Error = E>,
     S::InitError: std::fmt::Debug,
 {
     let srv = app.into_factory();
@@ -541,8 +541,8 @@ impl TestRequest {
 pub fn server<F, I, S, B>(factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, AppConfig>,
-    S: ServiceFactory<AppConfig, Request = Request> + 'static,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>>,
@@ -579,8 +579,8 @@ where
 pub fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, AppConfig>,
-    S: ServiceFactory<AppConfig, Request = Request> + 'static,
+    I: IntoServiceFactory<S, Request, AppConfig>,
+    S: ServiceFactory<Request, AppConfig> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>>,

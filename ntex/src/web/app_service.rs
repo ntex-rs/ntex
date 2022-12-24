@@ -31,7 +31,7 @@ type FnStateFactory =
 pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
-        Request = WebRequest<Err>,
+        WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -39,7 +39,7 @@ where
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
-    pub(super) filter: PipelineFactory<F>,
+    pub(super) filter: PipelineFactory<F, WebRequest<Err>>,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) state_factories: Rc<Vec<FnStateFactory>>,
     pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,
@@ -48,19 +48,18 @@ where
     pub(super) case_insensitive: bool,
 }
 
-impl<T, F, Err> ServiceFactory for AppFactory<T, F, Err>
+impl<T, F, Err> ServiceFactory<Request> for AppFactory<T, F, Err>
 where
     T: Middleware<AppService<F::Service, Err>> + 'static,
     T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-        Request = WebRequest<Err>,
+        WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
     >,
     Err: ErrorRenderer,
 {
-    type Request = Request;
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
@@ -72,19 +71,18 @@ where
     }
 }
 
-impl<T, F, Err> ServiceFactory<AppConfig> for AppFactory<T, F, Err>
+impl<T, F, Err> ServiceFactory<Request, AppConfig> for AppFactory<T, F, Err>
 where
     T: Middleware<AppService<F::Service, Err>> + 'static,
     T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-        Request = WebRequest<Err>,
+        WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
     >,
     Err: ErrorRenderer,
 {
-    type Request = Request;
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();

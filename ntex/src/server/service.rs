@@ -21,7 +21,7 @@ pub(super) enum ServerMessage {
 }
 
 pub(super) trait StreamServiceFactory: Send + Clone + 'static {
-    type Factory: ServiceFactory<Request = Io>;
+    type Factory: ServiceFactory<Io>;
 
     fn create(&self, _: Config) -> Self::Factory;
 }
@@ -188,7 +188,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
 impl<F, T> StreamServiceFactory for F
 where
     F: Fn(Config) -> T + Send + Clone + 'static,
-    T: ServiceFactory<Request = Io>,
+    T: ServiceFactory<Io>,
 {
     type Factory = T;
 

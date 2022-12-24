@@ -152,7 +152,7 @@ where
     type Future<'f> = MapFactoryFuture<'f, A, F, Req, Res, Cfg> where Self: 'f, Cfg: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: &'a Cfg) -> Self::Future<'a> {
+    fn create<'a>(&'a self, cfg: Cfg) -> Self::Future<'a> {
         MapFactoryFuture {
             fut: self.a.create(cfg),
             f: Some(self.f.clone()),

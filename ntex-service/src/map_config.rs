@@ -10,7 +10,7 @@ pub fn map_config<T, R, U, F, C, C2>(factory: U, f: F) -> MapConfig<T, F, C, C2>
 where
     T: ServiceFactory<R, C2>,
     U: IntoServiceFactory<T, R, C2>,
-    F: Fn(&C) -> C2,
+    F: Fn(C) -> C2,
 {
     MapConfig::new(factory.into_factory(), f)
 }
@@ -61,7 +61,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 impl<A, F, R, C, C2> ServiceFactory<R, C> for MapConfig<A, F, C, C2>
 where
     A: ServiceFactory<R, C2>,
-    F: Fn(&C) -> C2,
+    F: Fn(C) -> C2,
 {
     type Response = A::Response;
     type Error = A::Error;
@@ -70,9 +70,9 @@ where
     type InitError = A::InitError;
     type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>> where Self: 'f, C2: 'f;
 
-    fn create(&self, cfg: &C) -> Self::Future<'_> {
+    fn create(&self, cfg: C) -> Self::Future<'_> {
         let cfg = (self.f)(cfg);
-        Box::pin(async move { self.a.create(&cfg).await })
+        Box::pin(async move { self.a.create(cfg).await })
     }
 }
 
@@ -108,9 +108,9 @@ where
     type InitError = A::InitError;
     type Future<'f> = UnitConfigFuture<'f, A, R, C> where Self: 'f, A: 'f, C: 'f;
 
-    fn create(&self, _: &C) -> Self::Future<'_> {
+    fn create(&self, _: C) -> Self::Future<'_> {
         UnitConfigFuture {
-            fut: self.a.create(&()),
+            fut: self.a.create(()),
             _t: PhantomData,
         }
     }

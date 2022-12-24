@@ -50,13 +50,13 @@ impl<F, S> HttpServiceBuilder<F, S, ExpectHandler, UpgradeHandler<F>> {
 impl<F, S, X, U> HttpServiceBuilder<F, S, X, U>
 where
     F: Filter,
-    S: ServiceFactory<Request = Request> + 'static,
+    S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    X: ServiceFactory<Request = Request, Response = Request> + 'static,
+    X: ServiceFactory<Request, Response = Request> + 'static,
     X::Error: ResponseError,
     X::InitError: fmt::Debug,
-    U: ServiceFactory<Request = (Request, Io<F>, Codec), Response = ()> + 'static,
+    U: ServiceFactory<(Request, Io<F>, Codec), Response = ()> + 'static,
     U::Error: fmt::Display + Error,
     U::InitError: fmt::Debug,
 {
@@ -126,8 +126,8 @@ where
     /// request will be forwarded to main service.
     pub fn expect<XF, X1>(self, expect: XF) -> HttpServiceBuilder<F, S, X1, U>
     where
-        XF: IntoServiceFactory<X1>,
-        X1: ServiceFactory<Request = Request, Response = Request>,
+        XF: IntoServiceFactory<X1, Request>,
+        X1: ServiceFactory<Request, Response = Request>,
         X1::InitError: fmt::Debug,
     {
         HttpServiceBuilder {
@@ -149,8 +149,8 @@ where
     /// and this service get called with original request and framed object.
     pub fn upgrade<UF, U1>(self, upgrade: UF) -> HttpServiceBuilder<F, S, X, U1>
     where
-        UF: IntoServiceFactory<U1>,
-        U1: ServiceFactory<Request = (Request, Io<F>, Codec), Response = ()>,
+        UF: IntoServiceFactory<U1, (Request, Io<F>, Codec)>,
+        U1: ServiceFactory<(Request, Io<F>, Codec), Response = ()>,
         U1::Error: fmt::Display + Error,
         U1::InitError: fmt::Debug,
     {
@@ -183,7 +183,7 @@ where
     pub fn h1<B, SF>(self, service: SF) -> H1Service<F, S, B, X, U>
     where
         B: MessageBody,
-        SF: IntoServiceFactory<S>,
+        SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
@@ -205,7 +205,7 @@ where
     pub fn h2<B, SF>(self, service: SF) -> H2Service<F, S, B>
     where
         B: MessageBody + 'static,
-        SF: IntoServiceFactory<S>,
+        SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
@@ -225,7 +225,7 @@ where
     pub fn finish<B, SF>(self, service: SF) -> HttpService<F, S, B, X, U>
     where
         B: MessageBody + 'static,
-        SF: IntoServiceFactory<S>,
+        SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,

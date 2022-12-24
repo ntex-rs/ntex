@@ -60,7 +60,7 @@ type BoxResponse<Err: ErrorRenderer> =
 ///
 pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
-    filter: PipelineFactory<T>,
+    filter: PipelineFactory<T, WebRequest<Err>>,
     rdef: Vec<String>,
     state: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
@@ -90,7 +90,7 @@ impl<Err: ErrorRenderer> Scope<Err> {
 impl<Err, M, T> Scope<Err, M, T>
 where
     T: ServiceFactory<
-        Request = WebRequest<Err>,
+        WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -279,9 +279,9 @@ where
     /// If default resource is not registered, app's default resource is being used.
     pub fn default_service<F, S>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<S>,
+        F: IntoServiceFactory<S, WebRequest<Err>>,
         S: ServiceFactory<
-                Request = WebRequest<Err>,
+                WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
             > + 'static,
@@ -310,7 +310,7 @@ where
         Err,
         M,
         impl ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -318,12 +318,12 @@ where
     >
     where
         U: ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         >,
-        F: IntoServiceFactory<U>,
+        F: IntoServiceFactory<U, WebRequest<Err>>,
     {
         Scope {
             filter: self.filter.and_then(filter.into_factory()),
@@ -366,7 +366,7 @@ where
 impl<Err, M, T> WebServiceFactory<Err> for Scope<Err, M, T>
 where
     T: ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -454,19 +454,18 @@ struct ScopeServiceFactory<M, F, Err: ErrorRenderer> {
     routing: ScopeRouterFactory<Err>,
 }
 
-impl<M, F, Err> ServiceFactory for ScopeServiceFactory<M, F, Err>
+impl<M, F, Err> ServiceFactory<WebRequest<Err>> for ScopeServiceFactory<M, F, Err>
 where
     M: Middleware<ScopeService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,
 {
-    type Request = WebRequest<Err>;
     type Response = WebResponse;
     type Error = Err::Container;
     type Service = M::Service;
@@ -562,8 +561,7 @@ struct ScopeRouterFactory<Err: ErrorRenderer> {
     case_insensitive: bool,
 }
 
-impl<Err: ErrorRenderer> ServiceFactory for ScopeRouterFactory<Err> {
-    type Request = WebRequest<Err>;
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();

@@ -1,12 +1,11 @@
-use std::{io, marker::PhantomData, task::Context, task::Poll};
+use std::{io, marker::PhantomData};
 
 use crate::http::{h1::Codec, request::Request};
 use crate::{io::Io, service::Service, service::ServiceFactory, util::Ready};
 
 pub struct UpgradeHandler<F>(PhantomData<F>);
 
-impl<F> ServiceFactory for UpgradeHandler<F> {
-    type Request = (Request, Io<F>, Codec);
+impl<F> ServiceFactory<(Request, Io<F>, Codec)> for UpgradeHandler<F> {
     type Response = ();
     type Error = io::Error;
 

@@ -48,7 +48,7 @@ type HttpNewService<Err: ErrorRenderer> =
 /// Default behavior could be overriden with `default_resource()` method.
 pub struct Resource<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
-    filter: PipelineFactory<T>,
+    filter: PipelineFactory<T, WebRequest<Err>>,
     rdef: Vec<String>,
     name: Option<String>,
     routes: Vec<Route<Err>>,
@@ -75,7 +75,7 @@ impl<Err: ErrorRenderer> Resource<Err> {
 impl<Err, M, T> Resource<Err, M, T>
 where
     T: ServiceFactory<
-        Request = WebRequest<Err>,
+        WebRequest<Err>,
         Response = WebRequest<Err>,
         Error = Err::Container,
         InitError = (),
@@ -241,7 +241,7 @@ where
         Err,
         M,
         impl ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -249,12 +249,12 @@ where
     >
     where
         U: ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         >,
-        F: IntoServiceFactory<U>,
+        F: IntoServiceFactory<U, WebRequest<Err>>,
     {
         Resource {
             filter: self.filter.and_then(filter.into_factory()),
@@ -293,9 +293,9 @@ where
     /// default handler from `App` or `Scope`.
     pub fn default_service<F, S>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<S>,
+        F: IntoServiceFactory<S, WebRequest<Err>>,
         S: ServiceFactory<
-                Request = WebRequest<Err>,
+                WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
             > + 'static,
@@ -314,7 +314,7 @@ where
 impl<Err, M, T> WebServiceFactory<Err> for Resource<Err, M, T>
 where
     T: ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -365,11 +365,11 @@ where
     }
 }
 
-impl<Err, M, T> IntoServiceFactory<ResourceServiceFactory<Err, M, PipelineFactory<T>>>
+impl<Err, M, T> IntoServiceFactory<ResourceServiceFactory<Err, M, PipelineFactory<T, WebRequest<Err>>>, WebRequest<Err>>
     for Resource<Err, M, T>
 where
     T: ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -378,7 +378,7 @@ where
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
-    fn into_factory(self) -> ResourceServiceFactory<Err, M, PipelineFactory<T>> {
+    fn into_factory(self) -> ResourceServiceFactory<Err, M, PipelineFactory<T, WebRequest<Err>>> {
         let router_factory = ResourceRouterFactory {
             state: None,
             routes: self.routes,
@@ -400,19 +400,18 @@ pub struct ResourceServiceFactory<Err: ErrorRenderer, M, T> {
     routing: ResourceRouterFactory<Err>,
 }
 
-impl<Err, M, F> ServiceFactory for ResourceServiceFactory<Err, M, F>
+impl<Err, M, F> ServiceFactory<WebRequest<Err>> for ResourceServiceFactory<Err, M, F>
 where
     M: Middleware<ResourceService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-            Request = WebRequest<Err>,
+            WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,
 {
-    type Request = WebRequest<Err>;
     type Response = WebResponse;
     type Error = Err::Container;
     type Service = M::Service;
@@ -507,8 +506,7 @@ struct ResourceRouterFactory<Err: ErrorRenderer> {
     state: Option<AppState>,
 }
 
-impl<Err: ErrorRenderer> ServiceFactory for ResourceRouterFactory<Err> {
-    type Request = WebRequest<Err>;
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFactory<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
