@@ -345,6 +345,7 @@ where
 #[cfg(test)]
 mod tests {
     use ntex_util::future::lazy;
+    use std::task::Poll;
 
     use super::*;
     use crate::{Service, ServiceFactory};

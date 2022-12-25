@@ -102,7 +102,7 @@ pub trait Service<Req> {
     ///
     /// Invoking `call` without first invoking `poll_ready` is permitted. Implementations must be
     /// resilient to this fact.
-    fn call<'a>(&'a self, req: Req) -> Self::Future<'a>;
+    fn call(&self, req: Req) -> Self::Future<'_>;
 
     #[inline]
     /// Returns `Ready` when the service is able to process requests.
@@ -195,7 +195,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
         Self: 'f;
 
     /// Create and return a new service value asynchronously.
-    fn create<'a>(&'a self, cfg: Cfg) -> Self::Future<'a>;
+    fn create(&self, cfg: Cfg) -> Self::Future<'_>;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service

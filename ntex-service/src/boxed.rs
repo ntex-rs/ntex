@@ -181,7 +181,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req) -> Self::Future<'a> {
+    fn call(&self, req: Req) -> Self::Future<'_> {
         self.0.call(req)
     }
 }
@@ -213,7 +213,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req) -> Self::Future<'a> {
+    fn call(&self, req: Req) -> Self::Future<'_> {
         self.0.call(req)
     }
 }
@@ -235,7 +235,7 @@ where
     type Future<'f> = BoxFuture<'f, Self::Service, InitErr> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
+    fn create(&self, cfg: C) -> Self::Future<'_> {
         self.0.create(cfg)
     }
 }
@@ -263,7 +263,7 @@ where
     type Future<'f> = BoxFuture<'f, Self::Service, InitErr> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
+    fn create(&self, cfg: C) -> Self::Future<'_> {
         self.0.create(cfg)
     }
 }

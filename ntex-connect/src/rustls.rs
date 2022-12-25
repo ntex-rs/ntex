@@ -94,7 +94,7 @@ impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Future<'f> = Ready<Self::Service, Self::InitError> where C: 'f;
 
     #[inline]
-    fn create<'a>(&'a self, _: C) -> Self::Future<'a> {
+    fn create(&self, _: C) -> Self::Future<'_> {
         Ready::Ok(self.clone())
     }
 }
