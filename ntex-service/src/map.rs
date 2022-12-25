@@ -149,10 +149,10 @@ where
 
     type Service = Map<A::Service, F, Req, Res>;
     type InitError = A::InitError;
-    type Future<'f> = MapFactoryFuture<'f, A, F, Req, Res, Cfg> where Self: 'f, Cfg: 'f;
+    type Future = MapFactoryFuture<A, F, Req, Res, Cfg>;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: Cfg) -> Self::Future<'a> {
+    fn create(&self, cfg: Cfg) -> Self::Future {
         MapFactoryFuture {
             fut: self.a.create(cfg),
             f: Some(self.f.clone()),
@@ -161,20 +161,18 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapFactoryFuture<'f, A, F, Req, Res, Cfg>
+    pub struct MapFactoryFuture<A, F, Req, Res, Cfg>
     where
         A: ServiceFactory<Req, Cfg>,
-        A: 'f,
         F: Fn(A::Response) -> Res,
-        Cfg: 'f,
     {
         #[pin]
-        fut: A::Future<'f>,
+        fut: A::Future,
         f: Option<F>,
     }
 }
 
-impl<'f, A, F, Req, Res, Cfg> Future for MapFactoryFuture<'f, A, F, Req, Res, Cfg>
+impl<A, F, Req, Res, Cfg> Future for MapFactoryFuture<A, F, Req, Res, Cfg>
 where
     A: ServiceFactory<Req, Cfg>,
     F: Fn(A::Response) -> Res,

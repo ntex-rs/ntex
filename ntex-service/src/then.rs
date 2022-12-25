@@ -159,9 +159,9 @@ where
 
     type Service = Then<A::Service, B::Service>;
     type InitError = A::InitError;
-    type Future<'f> = ThenFactoryResponse<'f, A, B, R, C> where Self: 'f, C: 'f;
+    type Future = ThenFactoryResponse<A, B, R, C>;
 
-    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
+    fn create(&self, cfg: C) -> Self::Future {
         ThenFactoryResponse {
             fut_a: self.svc1.create(cfg.clone()),
             fut_b: self.svc2.create(cfg),
@@ -185,27 +185,24 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct ThenFactoryResponse<'f, A, B, R, C>
+    pub struct ThenFactoryResponse<A, B, R, C>
     where
         A: ServiceFactory<R, C>,
-        A: 'f,
         B: ServiceFactory<Result<A::Response, A::Error>, C,
            Error = A::Error,
            InitError = A::InitError,
     >,
-        B: 'f,
-        C: 'f,
     {
         #[pin]
-        fut_b: B::Future<'f>,
+        fut_b: B::Future,
         #[pin]
-        fut_a: A::Future<'f>,
+        fut_a: A::Future,
         a: Option<A::Service>,
         b: Option<B::Service>,
     }
 }
 
-impl<'f, A, B, R, C> Future for ThenFactoryResponse<'f, A, B, R, C>
+impl<A, B, R, C> Future for ThenFactoryResponse<A, B, R, C>
 where
     A: ServiceFactory<R, C>,
     B: ServiceFactory<

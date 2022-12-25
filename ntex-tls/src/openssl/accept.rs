@@ -57,10 +57,10 @@ impl<F: Filter, C> ServiceFactory<Io<F>, C> for Acceptor<F> {
     type Error = Box<dyn Error>;
     type Service = AcceptorService<F>;
     type InitError = ();
-    type Future<'f> = Ready<Self::Service, Self::InitError> where C: 'f;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     #[inline]
-    fn create<'a>(&'a self, _: &'a C) -> Self::Future<'a> {
+    fn create(&self, _: C) -> Self::Future {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ready::Ok(AcceptorService {
                 acceptor: self.acceptor.clone(),

@@ -1,4 +1,4 @@
-use std::{future::Future, rc::Rc, task::Context, task::Poll, time::Duration};
+use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
 use ntex_h2::{self as h2};
 
@@ -8,10 +8,7 @@ use crate::time::{Millis, Seconds};
 use crate::util::{timeout::TimeoutError, timeout::TimeoutService, Either, Ready};
 use crate::{http::Uri, io::IoBoxed};
 
-use super::connection::Connection;
-use super::error::ConnectError;
-use super::pool::ConnectionPool;
-use super::Connect;
+use super::{connection::Connection, error::ConnectError, pool::ConnectionPool, Connect};
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl::SslConnector;
@@ -252,16 +249,13 @@ fn connector(
     connector: BoxedConnector,
     timeout: Millis,
     disconnect_timeout: Millis,
-) -> impl Service<
-    Connect,
-    Response = IoBoxed,
-    Error = ConnectError,
-    Future = impl Unpin + Future,
-> + Unpin {
+) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError> {
     TimeoutService::new(
         timeout,
         apply_fn(connector, |msg: Connect, srv| {
-            srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr))
+            Box::pin(
+                async move { srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await },
+            )
         })
         .map(move |io: IoBoxed| {
             io.set_disconnect_timeout(disconnect_timeout);
@@ -282,8 +276,7 @@ struct InnerConnector<T> {
 
 impl<T> Service<Connect> for InnerConnector<T>
 where
-    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin + 'static,
-    // T::Future: Unpin,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
 {
     type Response = <ConnectionPool<T> as Service<Connect>>::Response;
     type Error = ConnectError;

@@ -79,7 +79,7 @@ where
     S::InitError: std::fmt::Debug,
 {
     let srv = app.into_factory();
-    srv.create(&AppConfig::default()).await.unwrap()
+    srv.create(AppConfig::default()).await.unwrap()
 }
 
 /// Calls service and waits for response future completion.

@@ -52,9 +52,9 @@ where
     type Error = T::Error;
     type Service = FilterService<T, F>;
     type InitError = ();
-    type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f;
+    type Future = Ready<Self::Service, Self::InitError>;
 
-    fn create(&self, _: &()) -> Self::Future<'_> {
+    fn create(&self, _: ()) -> Self::Future {
         Ready::Ok(FilterService {
             filter: self.filter.clone(),
             _t: PhantomData,

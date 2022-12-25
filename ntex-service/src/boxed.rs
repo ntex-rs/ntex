@@ -7,8 +7,9 @@ pub fn factory<F, R, C>(
     factory: F,
 ) -> BoxServiceFactory<C, R, F::Response, F::Error, F::InitError>
 where
-    F: crate::ServiceFactory<R, C> + 'static,
     R: 'static,
+    C: 'static,
+    F: crate::ServiceFactory<R, C> + 'static,
     F::Service: 'static,
 {
     BoxServiceFactory(Box::new(factory))
@@ -32,7 +33,7 @@ where
     RcService(Rc::new(service))
 }
 
-trait ServiceObj<Req> {
+pub trait ServiceObj<Req> {
     type Response;
     type Error;
 
@@ -73,19 +74,21 @@ where
 }
 
 trait ServiceFactoryObj<Cfg, Req, Res, Err, InitErr> {
-    fn create<'a>(&'a self, cfg: Cfg) -> BoxFuture<'a, BoxService<Req, Res, Err>, InitErr>;
+    fn create(&self, cfg: Cfg) -> BoxFuture<'static, BoxService<Req, Res, Err>, InitErr>;
 }
 
 impl<F, Cfg, Req, Res, Err, InitErr> ServiceFactoryObj<Cfg, Req, Res, Err, InitErr> for F
 where
+    Cfg: 'static,
     Req: 'static,
     F: crate::ServiceFactory<Req, Cfg, Response = Res, Error = Err, InitError = InitErr>,
-    Req: 'static,
     F::Service: 'static,
+    F::Future: 'static,
 {
     #[inline]
-    fn create<'a>(&'a self, cfg: Cfg) -> BoxFuture<'a, BoxService<Req, Res, Err>, InitErr> {
-        Box::pin(async move { crate::ServiceFactory::create(self, cfg).await.map(service) })
+    fn create(&self, cfg: Cfg) -> BoxFuture<'static, BoxService<Req, Res, Err>, InitErr> {
+        let fut = crate::ServiceFactory::create(self, cfg);
+        Box::pin(async move { fut.await.map(service) })
     }
 }
 
@@ -161,10 +164,10 @@ where
 
     type Service = BoxService<Req, Res, Err>;
     type InitError = InitErr;
-    type Future<'f> = BoxFuture<'f, Self::Service, InitErr> where Self: 'f, Req: 'f, C: 'f;
+    type Future = BoxFuture<'static, Self::Service, InitErr>;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
+    fn create(&self, cfg: C) -> Self::Future {
         self.0.create(cfg)
     }
 }

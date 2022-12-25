@@ -95,7 +95,7 @@ pub fn fn_factory_with_config<F, Fut, Cfg, Srv, Req, Err>(
     f: F,
 ) -> FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
-    F: Fn(&Cfg) -> Fut,
+    F: Fn(Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service<Req>,
 {
@@ -121,7 +121,7 @@ where
 
 impl<F, Fut, Req, Res, Err> Service<Req> for FnService<F, Req>
 where
-    F: Fn(Req) -> Fut + 'static,
+    F: Fn(Req) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
 {
     type Response = Res;
@@ -227,10 +227,10 @@ where
 
     type Service = FnService<F, Req>;
     type InitError = ();
-    type Future<'f> = Ready<Result<Self::Service, Self::InitError>> where Self: 'f;
+    type Future = Ready<Result<Self::Service, Self::InitError>>;
 
     #[inline]
-    fn create(&self, _: &Cfg) -> Self::Future<'_> {
+    fn create(&self, _: Cfg) -> Self::Future {
         ready(Ok(FnService {
             f: self.f.clone(),
             _t: PhantomData,
@@ -250,10 +250,10 @@ where
     }
 }
 
-/// Convert `Fn(&Config) -> Future<Service>` fn to NewService
+/// Convert `Fn(Config) -> Future<Service>` fn to NewService
 pub struct FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
-    F: Fn(&Cfg) -> Fut,
+    F: Fn(Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service<Req>,
 {
@@ -263,7 +263,7 @@ where
 
 impl<F, Fut, Cfg, Srv, Req, Err> Clone for FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
-    F: Fn(&Cfg) -> Fut + Clone,
+    F: Fn(Cfg) -> Fut + Clone,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service<Req>,
 {
@@ -279,7 +279,7 @@ where
 impl<F, Fut, Cfg, Srv, Req, Err> ServiceFactory<Req, Cfg>
     for FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
-    F: Fn(&Cfg) -> Fut,
+    F: Fn(Cfg) -> Fut,
     Fut: Future<Output = Result<Srv, Err>>,
     Srv: Service<Req>,
 {
@@ -288,10 +288,10 @@ where
 
     type Service = Srv;
     type InitError = Err;
-    type Future<'f> = Fut where Self: 'f, Cfg: 'f;
+    type Future = Fut;
 
     #[inline]
-    fn create(&self, cfg: &Cfg) -> Self::Future<'_> {
+    fn create(&self, cfg: Cfg) -> Self::Future {
         (self.f)(cfg)
     }
 }
@@ -329,10 +329,10 @@ where
     type Error = S::Error;
     type Service = S;
     type InitError = E;
-    type Future<'f> = R where Self: 'f;
+    type Future = R;
 
     #[inline]
-    fn create(&self, _: &C) -> Self::Future<'_> {
+    fn create(&self, _: C) -> Self::Future {
         (self.f)()
     }
 }
@@ -374,7 +374,7 @@ mod tests {
     async fn test_fn_service() {
         let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") }).clone();
 
-        let srv = new_srv.create(&()).await.unwrap();
+        let srv = new_srv.create(()).await.unwrap();
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());

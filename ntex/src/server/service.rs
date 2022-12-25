@@ -154,7 +154,7 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>> {
         let token = self.token;
         let cfg = Config::default();
-        let fut = self.inner.create(cfg.clone()).create(&());
+        let fut = self.inner.create(cfg.clone()).create(());
 
         Box::pin(async move {
             match fut.await {

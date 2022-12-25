@@ -180,7 +180,7 @@ impl InternalServiceFactory for ConfiguredService {
             let mut res = vec![];
             for token in tokens {
                 if let Some(srv) = services.remove(&token) {
-                    let newserv = srv.create(&());
+                    let newserv = srv.create(());
                     match newserv.await {
                         Ok(serv) => {
                             res.push((token, serv));
@@ -355,11 +355,11 @@ where
     type Error = ();
     type InitError = ();
     type Service = BoxedServerService;
-    type Future<'f> = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>> + 'f>> where T: 'f;
+    type Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>;
 
-    fn create(&self, _: &()) -> Self::Future<'_> {
+    fn create(&self, _: ()) -> Self::Future {
         let pool = self.pool;
-        let fut = self.inner.create(&());
+        let fut = self.inner.create(());
         Box::pin(async move {
             match fut.await {
                 Ok(s) => Ok(boxed::service(StreamService::new(s, pool))),

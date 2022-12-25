@@ -11,10 +11,10 @@ impl<F> ServiceFactory<(Request, Io<F>, Codec)> for UpgradeHandler<F> {
 
     type Service = UpgradeHandler<F>;
     type InitError = io::Error;
-    type Future<'f> = Ready<Self::Service, Self::InitError> where F: 'f;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     #[inline]
-    fn create(&self, _: &()) -> Self::Future<'_> {
+    fn create(&self, _: ()) -> Self::Future {
         unimplemented!()
     }
 }

@@ -21,8 +21,8 @@ type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
-type BoxResponse<Err: ErrorRenderer> =
-    Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
+type BoxResponse<'f, Err: ErrorRenderer> =
+    Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>> + 'f>>;
 type FnStateFactory =
     Box<dyn Fn(Extensions) -> Pin<Box<dyn Future<Output = Result<Extensions, ()>>>>>;
 
@@ -39,7 +39,7 @@ where
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
-    pub(super) filter: PipelineFactory<F, WebRequest<Err>>,
+    pub(super) filter: PipelineFactory<WebRequest<Err>, F>,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) state_factories: Rc<Vec<FnStateFactory>>,
     pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,
@@ -64,10 +64,10 @@ where
     type Error = Err::Container;
     type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
-    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>> where F: 'f;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
-    fn create(&self, _: &()) -> Self::Future<'_> {
-        ServiceFactory::create(self, &AppConfig::default())
+    fn create(&self, _: ()) -> Self::Future {
+        ServiceFactory::create(self, AppConfig::default())
     }
 }
 
@@ -87,9 +87,9 @@ where
     type Error = Err::Container;
     type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
-    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>> where F: 'f;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
 
-    fn create<'a>(&'a self, config: &'a AppConfig) -> Self::Future<'_> {
+    fn create(&self, config: AppConfig) -> Self::Future {
         let services = std::mem::take(&mut *self.services.borrow_mut());
 
         // update resource default service
@@ -101,7 +101,7 @@ where
             )))
         });
 
-        let filter_fut = self.filter.create(&());
+        let filter_fut = self.filter.create(());
         let state_factories = self.state_factories.clone();
         let mut extensions = self
             .extensions
@@ -153,19 +153,19 @@ where
 
             // create http services
             for (path, factory, guards) in &mut services.iter() {
-                let service = factory.create(&()).await?;
+                let service = factory.create(()).await?;
                 router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
             }
 
             let routing = AppRouting {
                 router: router.finish(),
-                default: Some(default.create(&()).await?),
+                default: Some(default.create(()).await?),
             };
 
             // main service
             let service = AppService {
+                routing,
                 filter: filter_fut.await?,
-                routing: Rc::new(routing),
             };
 
             Ok(AppFactoryService {
@@ -253,7 +253,7 @@ struct AppRouting<Err: ErrorRenderer> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future<'f> = BoxResponse<Err>;
+    type Future<'f> = BoxResponse<'f, Err>;
 
     #[inline]
     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -286,7 +286,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
 /// Web app service
 pub struct AppService<F, Err: ErrorRenderer> {
     filter: F,
-    routing: Rc<AppRouting<Err>>,
+    routing: AppRouting<Err>,
 }
 
 impl<F, Err> Service<WebRequest<Err>> for AppService<F, Err>
@@ -312,7 +312,7 @@ where
     fn call(&self, req: WebRequest<Err>) -> Self::Future<'_> {
         AppServiceResponse {
             filter: self.filter.call(req),
-            routing: self.routing.clone(),
+            routing: &self.routing,
             endpoint: None,
         }
     }
@@ -324,8 +324,8 @@ pin_project_lite::pin_project! {
     {
         #[pin]
         filter: F::Future<'f>,
-        routing: Rc<AppRouting<Err>>,
-        endpoint: Option<BoxResponse<Err>>,
+        routing: &'f AppRouting<Err>,
+        endpoint: Option<BoxResponse<'f, Err>>,
     }
 }
 
@@ -337,18 +337,20 @@ where
     type Output = Result<WebResponse, Err::Container>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().project();
+        let mut this = self.as_mut().project();
 
-        if let Some(fut) = this.endpoint.as_mut() {
-            Pin::new(fut).poll(cx)
-        } else {
-            let res = if let Poll::Ready(res) = this.filter.poll(cx) {
-                res?
+        loop {
+            if let Some(fut) = this.endpoint.as_mut() {
+                return Pin::new(fut).poll(cx);
             } else {
-                return Poll::Pending;
-            };
-            *this.endpoint = Some(this.routing.call(res));
-            self.poll(cx)
+                let res = if let Poll::Ready(res) = this.filter.poll(cx) {
+                    res?
+                } else {
+                    return Poll::Pending;
+                };
+                *this.endpoint = Some(this.routing.call(res));
+                this = self.as_mut().project();
+            }
         }
     }
 }

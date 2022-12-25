@@ -150,32 +150,30 @@ where
 
     type Service = MapErr<A::Service, R, F, E>;
     type InitError = A::InitError;
-    type Future<'f> = MapErrFactoryFuture<'f, A, R, C, F, E> where Self: 'f, C: 'f;
+    type Future = MapErrFactoryFuture<A, R, C, F, E>;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
+    fn create(&self, cfg: C) -> Self::Future {
         MapErrFactoryFuture {
+            f: self.f.clone(),
             fut: self.a.create(cfg),
-            slf: self,
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapErrFactoryFuture<'f, A, R, C, F, E>
+    pub struct MapErrFactoryFuture<A, R, C, F, E>
     where
         A: ServiceFactory<R, C>,
         F: Fn(A::Error) -> E,
-        F: Clone,
-        C: 'f,
     {
-        slf: &'f MapErrFactory<A, R, C, F, E>,
+        f: F,
         #[pin]
-        fut: A::Future<'f>,
+        fut: A::Future,
     }
 }
 
-impl<'f, A, R, C, F, E> Future for MapErrFactoryFuture<'f, A, R, C, F, E>
+impl<A, R, C, F, E> Future for MapErrFactoryFuture<A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
     F: Fn(A::Error) -> E + Clone,
@@ -185,7 +183,7 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         if let Poll::Ready(svc) = this.fut.poll(cx)? {
-            Poll::Ready(Ok(MapErr::new(svc, this.slf.f.clone())))
+            Poll::Ready(Ok(MapErr::new(svc, this.f.clone())))
         } else {
             Poll::Pending
         }

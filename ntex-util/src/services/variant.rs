@@ -155,19 +155,20 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
     impl<V1, V1C, $($T,)+ V1R, $($R,)+> ServiceFactory<$enum_type<V1R, $($R),+>, V1C> for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+>
     where
         V1: ServiceFactory<V1R, V1C>,
+        V1C: Clone,
         $($T: ServiceFactory< $R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError>),+
     {
         type Response = V1::Response;
         type Error = V1::Error;
         type InitError = V1::InitError;
         type Service = $srv_type<V1::Service, $($T::Service,)+ V1R, $($R,)+>;
-        type Future<'f> = $mod_name::ServiceFactoryResponse<'f, V1, V1C, $($T,)+ V1R, $($R,)+> where Self: 'f, V1C: 'f;
+        type Future = $mod_name::ServiceFactoryResponse<V1, V1C, $($T,)+ V1R, $($R,)+>;
 
-        fn create<'a>(&'a self, cfg: &'a V1C) -> Self::Future<'a> {
+        fn create(&self, cfg: V1C) -> Self::Future {
             $mod_name::ServiceFactoryResponse {
                 V1: None,
                 items: Default::default(),
-                $($T: self.$T.create(cfg),)+
+                $($T: self.$T.create(cfg.clone()),)+
                 V1_fut: self.V1.create(cfg),
             }
         }
@@ -205,18 +206,16 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 
         pin_project_lite::pin_project! {
             #[doc(hidden)]
-            pub struct ServiceFactoryResponse<'f, V1: ServiceFactory<V1R, V1C>, V1C, $($T: ServiceFactory<$R, V1C>,)+ V1R, $($R,)+>
-            where V1: 'f, V1C: 'f,
-                $($T: 'f),+
+            pub struct ServiceFactoryResponse<V1: ServiceFactory<V1R, V1C>, V1C, $($T: ServiceFactory<$R, V1C>,)+ V1R, $($R,)+>
             {
                 pub(super) V1: Option<V1::Service>,
                 pub(super) items: ($(Option<$T::Service>,)+),
-                #[pin] pub(super) V1_fut: V1::Future<'f>,
-                $(#[pin] pub(super) $T: $T::Future<'f>),+
+                #[pin] pub(super) V1_fut: V1::Future,
+                $(#[pin] pub(super) $T: $T::Future),+
             }
         }
 
-        impl<'f, V1, V1C, $($T,)+ V1R, $($R,)+> Future for ServiceFactoryResponse<'f, V1, V1C, $($T,)+ V1R, $($R,)+>
+        impl<V1, V1C, $($T,)+ V1R, $($R,)+> Future for ServiceFactoryResponse<V1, V1C, $($T,)+ V1R, $($R,)+>
         where
             V1: ServiceFactory<V1R, V1C>,
         $($T: ServiceFactory<$R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError,>),+

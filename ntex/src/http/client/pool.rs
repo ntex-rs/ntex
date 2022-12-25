@@ -50,8 +50,7 @@ pub(super) struct ConnectionPool<T> {
 
 impl<T> ConnectionPool<T>
 where
-    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin + 'static,
-    // T::Future: Unpin,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
 {
     pub(super) fn new(
         connector: T,
@@ -113,7 +112,6 @@ impl<T> Clone for ConnectionPool<T> {
 impl<T> Service<Connect> for ConnectionPool<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
-    // T::Future: Unpin,
 {
     type Response = Connection;
     type Error = ConnectError;
@@ -325,7 +323,6 @@ struct ConnectionPoolSupport<T> {
 impl<T> Future for ConnectionPoolSupport<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin,
-    // T::Future: Unpin + 'static,
 {
     type Output = ();
 
@@ -396,7 +393,7 @@ where
 
 struct OpenConnection<F> {
     key: Key,
-    fut: F,
+    fut: Pin<Box<F>>,
     uri: Uri,
     tx: Option<Waiter>,
     guard: Option<OpenGuard>,
@@ -406,13 +403,13 @@ struct OpenConnection<F> {
 
 impl<F> OpenConnection<F>
 where
-    F: Future<Output = Result<IoBoxed, ConnectError>> + Unpin + 'static,
+    F: Future<Output = Result<IoBoxed, ConnectError>>,
 {
     fn spawn(key: Key, tx: Waiter, uri: Uri, inner: Rc<RefCell<Inner>>, fut: F) {
         let disconnect_timeout = inner.borrow().disconnect_timeout;
 
         spawn(OpenConnection {
-            fut,
+            fut: Box::pin(fut),
             uri,
             disconnect_timeout,
             tx: Some(tx),
@@ -425,7 +422,7 @@ where
 
 impl<F> Future for OpenConnection<F>
 where
-    F: Future<Output = Result<IoBoxed, ConnectError>> + Unpin,
+    F: Future<Output = Result<IoBoxed, ConnectError>>, // + Unpin,
 {
     type Output = ();
 

@@ -65,10 +65,10 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Error = ConnectError;
     type Service = Connector<T>;
     type InitError = ();
-    type Future<'f> = Ready<Self::Service, Self::InitError> where C: 'f;
+    type Future = Ready<Self::Service, Self::InitError>;
 
     #[inline]
-    fn create<'a>(&'a self, _: &'a C) -> Self::Future<'a> {
+    fn create(&self, _: C) -> Self::Future {
         Ready::Ok(self.clone())
     }
 }

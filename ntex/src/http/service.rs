@@ -159,8 +159,7 @@ mod openssl {
         X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        U: ServiceFactory<(Request, Io<SslFilter<F>>, h1::Codec), Response = ()>
-            + 'static,
+        U: ServiceFactory<(Request, Io<SslFilter<F>>, h1::Codec), Response = ()> + 'static,
         U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
     {
@@ -204,8 +203,7 @@ mod rustls {
         X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        U: ServiceFactory<(Request, Io<TlsFilter<F>>, h1::Codec), Response = ()>
-            + 'static,
+        U: ServiceFactory<(Request, Io<TlsFilter<F>>, h1::Codec), Response = ()> + 'static,
         U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
     {
@@ -252,13 +250,13 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = HttpServiceHandler<F, S::Service, B, X::Service, U::Service>;
-    type Future<'f> =
+    type Future =
         Pin<Box<dyn future::Future<Output = Result<Self::Service, Self::InitError>>>>;
 
-    fn create(&self, _: &()) -> Self::Future<'_> {
-        let fut = self.srv.create(&());
-        let fut_ex = self.expect.create(&());
-        let fut_upg = self.upgrade.as_ref().map(|f| f.create(&()));
+    fn create(&self, _: ()) -> Self::Future {
+        let fut = self.srv.create(());
+        let fut_ex = self.expect.create(());
+        let fut_upg = self.upgrade.as_ref().map(|f| f.create(()));
         let on_request = self.on_request.borrow_mut().take();
         let cfg = self.cfg.clone();
 

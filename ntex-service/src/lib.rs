@@ -189,13 +189,10 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     type InitError;
 
     /// The future of the `ServiceFactory` instance.
-    type Future<'f>: Future<Output = Result<Self::Service, Self::InitError>>
-    where
-        Cfg: 'f,
-        Self: 'f;
+    type Future: Future<Output = Result<Self::Service, Self::InitError>>;
 
     /// Create and return a new service value asynchronously.
-    fn create<'a>(&'a self, cfg: Cfg) -> Self::Future<'a>;
+    fn create(&self, cfg: Cfg) -> Self::Future;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service
@@ -310,20 +307,20 @@ where
     type Error = S::Error;
     type Service = S::Service;
     type InitError = S::InitError;
-    type Future<'f> = S::Future<'f> where S: 'f, Cfg: 'f;
+    type Future = S::Future;
 
-    fn create<'a>(&'a self, cfg: Cfg) -> S::Future<'a> {
+    fn create(&self, cfg: Cfg) -> S::Future {
         self.as_ref().create(cfg)
     }
 }
 
 /// Trait for types that can be converted to a `Service`
-pub trait IntoService<T, Req>
+pub trait IntoService<Svc, Req>
 where
-    T: Service<Req>,
+    Svc: Service<Req>,
 {
     /// Convert to a `Service`
-    fn into_service(self) -> T;
+    fn into_service(self) -> Svc;
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
@@ -335,11 +332,11 @@ where
     fn into_factory(self) -> T;
 }
 
-impl<T, Req> IntoService<T, Req> for T
+impl<Svc, Req> IntoService<Svc, Req> for Svc
 where
-    T: Service<Req>,
+    Svc: Service<Req>,
 {
-    fn into_service(self) -> T {
+    fn into_service(self) -> Svc {
         self
     }
 }
@@ -354,17 +351,17 @@ where
 }
 
 /// Convert object of type `T` to a service `S`
-pub fn into_service<T, S, Req>(tp: T) -> S
+pub fn into_service<Svc, Req, F>(tp: F) -> Svc
 where
-    S: Service<Req>,
-    T: IntoService<S, Req>,
+    Svc: Service<Req>,
+    F: IntoService<Svc, Req>,
 {
     tp.into_service()
 }
 
 pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
-    pub use crate::apply::{Apply, ApplyServiceFactory};
+    pub use crate::apply::{Apply, ApplyFactory};
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };

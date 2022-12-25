@@ -98,34 +98,18 @@ where
 }
 
 /// `Apply` middleware to a service factory.
-pub struct ApplyMiddleware<T, S, C> {
-    mw: T,
-    svc: S,
-    _t: marker::PhantomData<C>,
-}
+pub struct ApplyMiddleware<T, S, C>(Rc<(T, S)>, marker::PhantomData<C>);
 
 impl<T, S, C> ApplyMiddleware<T, S, C> {
     /// Create new `ApplyMiddleware` service factory instance
     pub(crate) fn new(mw: T, svc: S) -> Self {
-        Self {
-            mw,
-            svc,
-            _t: marker::PhantomData,
-        }
+        Self(Rc::new((mw, svc)), marker::PhantomData)
     }
 }
 
-impl<T, S, C> Clone for ApplyMiddleware<T, S, C>
-where
-    T: Clone,
-    S: Clone,
-{
+impl<T, S, C> Clone for ApplyMiddleware<T, S, C> {
     fn clone(&self) -> Self {
-        Self {
-            mw: self.mw.clone(),
-            svc: self.svc.clone(),
-            _t: marker::PhantomData,
-        }
+        Self(self.0.clone(), marker::PhantomData)
     }
 }
 
@@ -140,30 +124,30 @@ where
 
     type Service = T::Service;
     type InitError = S::InitError;
-    type Future<'f> = ApplyMiddlewareFuture<'f, T, S, R, C> where Self: 'f, C: 'f;
+    type Future = ApplyMiddlewareFuture<T, S, R, C>;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
+    fn create(&self, cfg: C) -> Self::Future {
         ApplyMiddlewareFuture {
-            slf: self,
-            fut: self.svc.create(cfg),
+            slf: self.0.clone(),
+            fut: self.0 .1.create(cfg),
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct ApplyMiddlewareFuture<'f, T, S, R, C>
+    pub struct ApplyMiddlewareFuture<T, S, R, C>
     where
         S: ServiceFactory<R, C>,
         T: Middleware<S::Service>,
     {
-        slf: &'f ApplyMiddleware<T, S, C>,
+        slf: Rc<(T, S)>,
         #[pin]
-        fut: S::Future<'f>,
+        fut: S::Future,
     }
 }
 
-impl<'f, T, S, R, C> Future for ApplyMiddlewareFuture<'f, T, S, R, C>
+impl<T, S, R, C> Future for ApplyMiddlewareFuture<T, S, R, C>
 where
     S: ServiceFactory<R, C>,
     T: Middleware<S::Service>,
@@ -174,7 +158,7 @@ where
         let this = self.as_mut().project();
 
         match this.fut.poll(cx)? {
-            Poll::Ready(srv) => Poll::Ready(Ok(this.slf.mw.create(srv))),
+            Poll::Ready(srv) => Poll::Ready(Ok(this.slf.0.create(srv))),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -199,6 +183,7 @@ impl<S> Middleware<S> for Identity {
 #[allow(clippy::redundant_clone)]
 mod tests {
     use ntex_util::future::{lazy, Ready};
+    use std::marker;
 
     use super::*;
     use crate::{fn_service, Service, ServiceFactory};

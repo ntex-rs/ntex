@@ -27,7 +27,7 @@ type FnStateFactory =
 /// for building application instances.
 pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     middleware: M,
-    filter: PipelineFactory<F, WebRequest<Err>>,
+    filter: PipelineFactory<WebRequest<Err>, F>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
     external: Vec<ResourceDef>,
@@ -265,11 +265,8 @@ where
     pub fn default_service<F, U>(mut self, f: F) -> Self
     where
         F: IntoServiceFactory<U, WebRequest<Err>>,
-        U: ServiceFactory<
-                WebRequest<Err>,
-                Response = WebResponse,
-                Error = Err::Container,
-            > + 'static,
+        U: ServiceFactory<WebRequest<Err>, Response = WebResponse, Error = Err::Container>
+            + 'static,
         U::InitError: fmt::Debug,
     {
         // create and configure default resource
@@ -489,7 +486,10 @@ where
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
-    > {
+    >
+    where
+        M::Service: 'static,
+    {
         let app = AppFactory {
             filter: self.filter,
             middleware: Rc::new(self.middleware),
@@ -504,7 +504,8 @@ where
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, AppConfig> for App<M, F, Err>
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, AppConfig>
+    for App<M, F, Err>
 where
     M: Middleware<AppService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
@@ -592,10 +593,10 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Filter<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = Filter<Err>;
-    type Future<'f> = Ready<Filter<Err>, ()>;
+    type Future = Ready<Filter<Err>, ()>;
 
     #[inline]
-    fn create(&self, _: &()) -> Self::Future<'_> {
+    fn create(&self, _: ()) -> Self::Future {
         Ready::Ok(Filter(PhantomData))
     }
 }
@@ -634,7 +635,7 @@ mod tests {
         let srv = App::new()
             .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
             .finish()
-            .create(&())
+            .create(())
             .await
             .unwrap();
         let req = TestRequest::with_uri("/test").to_request();
@@ -658,7 +659,7 @@ mod tests {
                 Ok(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .with_config(Default::default())
-            .create(&())
+            .create(())
             .await
             .unwrap();
 

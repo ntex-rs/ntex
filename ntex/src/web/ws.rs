@@ -21,8 +21,8 @@ where
 {
     let inner_factory = factory.into_factory().map_err(WsError::Service);
 
-    let factory = fn_factory_with_config(move |sink: &WsSink| {
-        let fut = inner_factory.create(sink);
+    let factory = fn_factory_with_config(move |sink: WsSink| {
+        let fut = inner_factory.create(sink.clone());
 
         async move {
             let srv = fut.await?;
@@ -34,9 +34,8 @@ where
                     } else {
                         None
                     };
-                    let fut = srv.call(item);
                     Either::Left(async move {
-                        let result = fut.await;
+                        let result = srv.call(item).await;
                         if let Some(s) = s {
                             rt::spawn(async move { s.io().close() });
                         }
@@ -67,7 +66,8 @@ pub async fn start_with<T, F, Err>(
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>> // DispatchItem<ws::Codec>,
+    T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>>
+        // DispatchItem<ws::Codec>,
         + 'static,
     T::Error: fmt::Debug,
     F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
@@ -95,7 +95,7 @@ where
     let sink = WsSink::new(io.get_ref(), codec.clone());
 
     // create ws service
-    let srv = factory.into_factory().create(&sink).await?;
+    let srv = factory.into_factory().create(sink.clone()).await?;
 
     // start websockets service dispatcher
     rt::spawn(async move {

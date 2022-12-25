@@ -41,38 +41,37 @@ where
 impl<A, R, C, F, E> ServiceFactory<R, C> for MapInitErr<A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
-    F: Fn(A::InitError) -> E,
+    F: Fn(A::InitError) -> E + Clone,
 {
     type Response = A::Response;
     type Error = A::Error;
 
     type Service = A::Service;
     type InitError = E;
-    type Future<'f> = MapInitErrFuture<'f, A, R, C, F, E> where Self: 'f, C: 'f;
+    type Future = MapInitErrFuture<A, R, C, F, E>;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
+    fn create(&self, cfg: C) -> Self::Future {
         MapInitErrFuture {
-            slf: self,
+            f: self.f.clone(),
             fut: self.a.create(cfg),
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapInitErrFuture<'f, A, R, C, F, E>
+    pub struct MapInitErrFuture<A, R, C, F, E>
     where
         A: ServiceFactory<R, C>,
         F: Fn(A::InitError) -> E,
-        C: 'f,
     {
-        slf: &'f MapInitErr<A, R, C, F, E>,
+        f: F,
         #[pin]
-        fut: A::Future<'f>,
+        fut: A::Future,
     }
 }
 
-impl<'f, A, R, C, F, E> Future for MapInitErrFuture<'f, A, R, C, F, E>
+impl<A, R, C, F, E> Future for MapInitErrFuture<A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
     F: Fn(A::InitError) -> E,
@@ -81,7 +80,7 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
-        this.fut.poll(cx).map_err(|e| (self.project().slf.f)(e))
+        this.fut.poll(cx).map_err(|e| (self.project().f)(e))
     }
 }
 

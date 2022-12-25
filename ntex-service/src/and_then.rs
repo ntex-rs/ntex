@@ -145,18 +145,19 @@ impl<A, B, Req, Cfg> ServiceFactory<Req, Cfg> for AndThenFactory<A, B>
 where
     A: ServiceFactory<Req, Cfg>,
     B: ServiceFactory<A::Response, Cfg, Error = A::Error, InitError = A::InitError>,
+    Cfg: Clone,
 {
     type Response = B::Response;
     type Error = A::Error;
 
     type Service = AndThen<A::Service, B::Service>;
     type InitError = A::InitError;
-    type Future<'f> = AndThenFactoryResponse<'f, A, B, Req, Cfg> where Self: 'f, Cfg: 'f;
+    type Future = AndThenFactoryResponse<A, B, Req, Cfg>;
 
     #[inline]
-    fn create<'a>(&'a self, cfg: &'a Cfg) -> Self::Future<'a> {
+    fn create(&self, cfg: Cfg) -> Self::Future {
         AndThenFactoryResponse {
-            fut1: self.svc1.create(cfg),
+            fut1: self.svc1.create(cfg.clone()),
             fut2: self.svc2.create(cfg),
             svc1: None,
             svc2: None,
@@ -178,25 +179,22 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct AndThenFactoryResponse<'f, A, B, Req, Cfg>
+    pub struct AndThenFactoryResponse<A, B, Req, Cfg>
     where
         A: ServiceFactory<Req, Cfg>,
-        A: 'f,
         B: ServiceFactory<A::Response, Cfg>,
-        B: 'f,
-        Cfg: 'f,
     {
         #[pin]
-        fut1: A::Future<'f>,
+        fut1: A::Future,
         #[pin]
-        fut2: B::Future<'f>,
+        fut2: B::Future,
 
         svc1: Option<A::Service>,
         svc2: Option<B::Service>,
     }
 }
 
-impl<'f, A, B, Req, Cfg> Future for AndThenFactoryResponse<'f, A, B, Req, Cfg>
+impl<A, B, Req, Cfg> Future for AndThenFactoryResponse<A, B, Req, Cfg>
 where
     A: ServiceFactory<Req, Cfg>,
     B: ServiceFactory<A::Response, Cfg, Error = A::Error, InitError = A::InitError>,
