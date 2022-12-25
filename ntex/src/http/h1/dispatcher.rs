@@ -1,6 +1,6 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{cell::RefCell, error::Error, future::Future, io, marker, pin::Pin, rc::Rc};
+use std::{cell::RefCell, error::Error, future::Future, io, mem, marker, pin::Pin, rc::Rc};
 
 use crate::io::{Filter, Io, IoBoxed, IoStatusUpdate, RecvError};
 use crate::{service::Service, util::ready, util::Bytes};
@@ -501,9 +501,12 @@ where
                             }
                         } else if req.head().expect() {
                             // Handle normal requests with EXPECT: 100-Continue` header
-                            CallState::Expect {
-                                fut: self.config.expect.call(req),
-                            }
+                            let fut = self.config.expect.call(req);
+                            let st = CallState::Expect {
+                                fut: unsafe { mem::transmute_copy(fut) },
+                            };
+                            mem::forget(fut);
+                            st
                         } else if self.flags.contains(Flags::UPGRADE_HND) {
                             // Handle upgrade requests
                             CallState::ServiceUpgrade {
