@@ -11,31 +11,31 @@ use super::{Connect as ClientConnect, Connection};
 pub(super) struct ConnectorWrapper<T>(pub(crate) T);
 
 pub(super) trait Connect {
-    fn send_request(
-        &self,
+    fn send_request<'a>(
+        &'a self,
         head: RequestHeadType,
         body: Body,
         addr: Option<net::SocketAddr>,
-    ) -> Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>>>>;
+    ) -> Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>> + 'a>>;
 }
 
 impl<T> Connect for ConnectorWrapper<T>
 where
     T: Service<ClientConnect, Response = Connection, Error = ConnectError>,
 {
-    fn send_request(
-        &self,
+    fn send_request<'a>(
+        &'a self,
         head: RequestHeadType,
         body: Body,
         addr: Option<net::SocketAddr>,
-    ) -> Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>>>> {
-        // connect to the host
-        let fut = self.0.call(ClientConnect {
-            uri: head.as_ref().uri.clone(),
-            addr,
-        });
-
+    ) -> Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>> + 'a>> {
         Box::pin(async move {
+            // connect to the host
+            let fut = self.0.call(ClientConnect {
+                uri: head.as_ref().uri.clone(),
+                addr,
+            });
+
             let connection = fut.await?;
 
             // send request

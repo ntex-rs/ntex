@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{convert::TryFrom, error::Error, future::Future, net, pin::Pin};
+use std::{convert::TryFrom, error::Error, future::Future, net, pin::Pin, rc::Rc};
 
 use serde::Serialize;
 
@@ -132,7 +132,7 @@ impl RequestHeadType {
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
         mut timeout: Millis,
-        config: &ClientConfig,
+        config: Rc<ClientConfig>,
         body: B,
     ) -> SendClientRequest
     where
@@ -141,12 +141,12 @@ impl RequestHeadType {
         if timeout.is_zero() {
             timeout = config.timeout;
         }
+        let body = body.into();
 
-        SendClientRequest::new(
-            config.connector.send_request(self, body.into(), addr),
-            response_decompress,
-            timeout,
-        )
+        let fut =
+            Box::pin(async move { config.connector.send_request(self, body, addr).await });
+
+        SendClientRequest::new(fut, response_decompress, timeout)
     }
 
     pub(super) fn send_json<T: Serialize>(
@@ -154,7 +154,7 @@ impl RequestHeadType {
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
         timeout: Millis,
-        config: &ClientConfig,
+        config: Rc<ClientConfig>,
         value: &T,
     ) -> SendClientRequest {
         let body = match serde_json::to_string(value) {
@@ -180,7 +180,7 @@ impl RequestHeadType {
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
         timeout: Millis,
-        config: &ClientConfig,
+        config: Rc<ClientConfig>,
         value: &T,
     ) -> SendClientRequest {
         let body = match serde_urlencoded::to_string(value) {
@@ -209,7 +209,7 @@ impl RequestHeadType {
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
         timeout: Millis,
-        config: &ClientConfig,
+        config: Rc<ClientConfig>,
         stream: S,
     ) -> SendClientRequest
     where
@@ -230,7 +230,7 @@ impl RequestHeadType {
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
         timeout: Millis,
-        config: &ClientConfig,
+        config: Rc<ClientConfig>,
     ) -> SendClientRequest {
         self.send_body(addr, response_decompress, timeout, config, Body::None)
     }

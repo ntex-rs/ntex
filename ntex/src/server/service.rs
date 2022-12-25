@@ -1,4 +1,4 @@
-use std::convert::TryInto;
+use std::{convert::TryInto, rc::Rc};
 use std::{future::Future, net::SocketAddr, pin::Pin, task::Context, task::Poll};
 
 use log::error;
@@ -37,25 +37,26 @@ pub(super) trait InternalServiceFactory: Send {
 }
 
 pub(super) type BoxedServerService =
-    boxed::BoxService<(Option<CounterGuard>, ServerMessage), (), ()>;
+    boxed::RcService<(Option<CounterGuard>, ServerMessage), (), ()>;
 
+#[derive(Clone)]
 pub(super) struct StreamService<T> {
-    service: T,
+    service: Rc<T>,
     pool: Pool,
 }
 
 impl<T> StreamService<T> {
     pub(crate) fn new(service: T, pid: PoolId) -> Self {
         StreamService {
-            service,
             pool: pid.pool(),
+            service: Rc::new(service),
         }
     }
 }
 
 impl<T> Service<(Option<CounterGuard>, ServerMessage)> for StreamService<T>
 where
-    T: Service<Io>,
+    T: Service<Io> + 'static,
     T::Error: 'static,
 {
     type Response = ();
@@ -91,9 +92,9 @@ where
                 if let Ok(stream) = stream {
                     let stream: Io<_> = stream;
                     stream.set_memory_pool(self.pool.pool_ref());
-                    let f = self.service.call(stream);
+                    let svc = self.service.clone();
                     spawn(async move {
-                        let _ = f.await;
+                        let _ = svc.call(stream).await;
                         drop(guard);
                     });
                     Ready::Ok(())
@@ -154,13 +155,14 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>> {
         let token = self.token;
         let cfg = Config::default();
-        let fut = self.inner.create(cfg.clone()).create(());
+        let pool = cfg.get_pool_id();
+        let factory = self.inner.create(cfg);
 
         Box::pin(async move {
-            match fut.await {
+            match factory.create(()).await {
                 Ok(inner) => {
                     let service: BoxedServerService =
-                        boxed::service(StreamService::new(inner, cfg.get_pool_id()));
+                        boxed::rcservice(StreamService::new(inner, pool));
                     Ok(vec![(token, service)])
                 }
                 Err(_) => Err(()),

@@ -158,7 +158,7 @@ where
                     trace!("Connecting to {:?}", req.uri);
                     let uri = req.uri.clone();
                     let (tx, rx) = waiters.borrow_mut().pool.channel();
-                    OpenConnection::spawn(key, tx, uri, inner, connector.call(req));
+                    OpenConnection::spawn(key, tx, uri, inner, connector, req);
 
                     match rx.await {
                         Err(_) => Err(ConnectError::Disconnected(None)),
@@ -315,14 +315,14 @@ impl Inner {
 }
 
 struct ConnectionPoolSupport<T> {
-    connector: T,
+    connector: Rc<T>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
 }
 
 impl<T> Future for ConnectionPoolSupport<T>
 where
-    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
 {
     type Output = ();
 
@@ -376,7 +376,8 @@ where
                             tx,
                             uri,
                             this.inner.clone(),
-                            this.connector.call(connect),
+                            this.connector.clone(),
+                            connect,
                         );
                     }
                 }
@@ -391,46 +392,61 @@ where
     }
 }
 
-struct OpenConnection<F> {
-    key: Key,
-    fut: Pin<Box<F>>,
-    uri: Uri,
-    tx: Option<Waiter>,
-    guard: Option<OpenGuard>,
-    disconnect_timeout: Millis,
-    inner: Rc<RefCell<Inner>>,
+pin_project_lite::pin_project! {
+    struct OpenConnection<'f, T: Service<Connect>>
+    where T: 'f
+    {
+        key: Key,
+        #[pin]
+        fut: T::Future<'f>,
+        uri: Uri,
+        tx: Option<Waiter>,
+        guard: Option<OpenGuard>,
+        disconnect_timeout: Millis,
+        inner: Rc<RefCell<Inner>>,
+    }
 }
 
-impl<F> OpenConnection<F>
+impl<'f, T> OpenConnection<'f, T>
 where
-    F: Future<Output = Result<IoBoxed, ConnectError>>,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
 {
-    fn spawn(key: Key, tx: Waiter, uri: Uri, inner: Rc<RefCell<Inner>>, fut: F) {
+    fn spawn(
+        key: Key,
+        tx: Waiter,
+        uri: Uri,
+        inner: Rc<RefCell<Inner>>,
+        connector: Rc<T>,
+        msg: Connect,
+    ) {
         let disconnect_timeout = inner.borrow().disconnect_timeout;
 
-        spawn(OpenConnection {
-            fut: Box::pin(fut),
-            uri,
-            disconnect_timeout,
-            tx: Some(tx),
-            key: key.clone(),
-            inner: inner.clone(),
-            guard: Some(OpenGuard::new(key, inner)),
+        spawn(async move {
+            OpenConnection::<T> {
+                fut: connector.call(msg),
+                tx: Some(tx),
+                key: key.clone(),
+                inner: inner.clone(),
+                guard: Some(OpenGuard::new(key, inner)),
+                uri,
+                disconnect_timeout,
+            }
+            .await
         });
     }
 }
 
-impl<F> Future for OpenConnection<F>
+impl<'f, T> Future for OpenConnection<'f, T>
 where
-    F: Future<Output = Result<IoBoxed, ConnectError>>, // + Unpin,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError>,
 {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().get_mut();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
 
         // open tcp connection
-        match ready!(Pin::new(&mut this.fut).poll(cx)) {
+        match ready!(this.fut.poll(cx)) {
             Err(err) => {
                 trace!(
                     "Failed to open client connection for {:?} with error {:?}",
@@ -444,7 +460,7 @@ where
                 Poll::Ready(())
             }
             Ok(io) => {
-                io.set_disconnect_timeout(this.disconnect_timeout);
+                io.set_disconnect_timeout(*this.disconnect_timeout);
 
                 // handle http2 proto
                 if io.query::<HttpProtocol>().get() == Some(HttpProtocol::Http2) {

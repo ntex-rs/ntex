@@ -194,7 +194,7 @@ impl InternalServiceFactory for ConfiguredService {
                     let name = names.remove(&token).unwrap().0;
                     res.push((
                         token,
-                        boxed::service(StreamService::new(
+                        boxed::rcservice(StreamService::new(
                             service::fn_service(move |_: Io| {
                                 error!("Service {:?} is not configured", name);
                                 Ready::<_, ()>::Ok(())
@@ -312,7 +312,7 @@ impl ServiceRuntime {
             let token = *token;
             inner.services.insert(
                 token,
-                boxed::factory(ServiceFactory {
+                boxed::rcfactory(ServiceFactory {
                     pool,
                     inner: service.into_factory(),
                 }),
@@ -331,13 +331,8 @@ impl ServiceRuntime {
     }
 }
 
-type BoxServiceFactory = service::boxed::BoxServiceFactory<
-    (),
-    (Option<CounterGuard>, ServerMessage),
-    (),
-    (),
-    (),
->;
+type BoxServiceFactory =
+    service::boxed::RcServiceFactory<(), (Option<CounterGuard>, ServerMessage), (), (), ()>;
 
 struct ServiceFactory<T> {
     inner: T,
@@ -362,7 +357,7 @@ where
         let fut = self.inner.create(());
         Box::pin(async move {
             match fut.await {
-                Ok(s) => Ok(boxed::service(StreamService::new(s, pool))),
+                Ok(s) => Ok(boxed::rcservice(StreamService::new(s, pool))),
                 Err(e) => {
                     error!("Cannot construct service: {:?}", e);
                     Err(())

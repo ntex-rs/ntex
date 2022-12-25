@@ -253,9 +253,9 @@ impl Worker {
             self.services.iter_mut().for_each(|srv| {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopped;
-                    let fut = srv.service.call((None, ServerMessage::ForceShutdown));
+                    let svc = srv.service.clone();
                     spawn(async move {
-                        let _ = fut.await;
+                        let _ = svc.call((None, ServerMessage::ForceShutdown)).await;
                     });
                 }
             });
@@ -265,9 +265,9 @@ impl Worker {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopping;
 
-                    let fut = srv.service.call((None, ServerMessage::Shutdown(timeout)));
+                    let svc = srv.service.clone();
                     spawn(async move {
-                        let _ = fut.await;
+                        let _ = svc.call((None, ServerMessage::Shutdown(timeout))).await;
                     });
                 }
             });
