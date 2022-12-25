@@ -56,10 +56,10 @@ where
     type Error = E;
     type InitError = Infallible;
     type Service = KeepAliveService<R, E, F>;
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create(&self, _: C) -> Self::Future {
+    fn create(&self, _: C) -> Self::Future<'_> {
         Ready::Ok(KeepAliveService::new(self.ka, self.f.clone()))
     }
 }

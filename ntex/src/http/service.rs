@@ -250,10 +250,10 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = HttpServiceHandler<F, S::Service, B, X::Service, U::Service>;
-    type Future =
-        Pin<Box<dyn future::Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> =
+        Pin<Box<dyn future::Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
 
-    fn create(&self, _: ()) -> Self::Future {
+    fn create(&self, _: ()) -> Self::Future<'_> {
         let fut = self.srv.create(());
         let fut_ex = self.expect.create(());
         let fut_upg = self.upgrade.as_ref().map(|f| f.create(()));

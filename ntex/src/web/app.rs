@@ -593,10 +593,10 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Filter<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = Filter<Err>;
-    type Future = Ready<Filter<Err>, ()>;
+    type Future<'f> = Ready<Filter<Err>, ()>;
 
     #[inline]
-    fn create(&self, _: ()) -> Self::Future {
+    fn create(&self, _: ()) -> Self::Future<'_> {
         Ready::Ok(Filter(PhantomData))
     }
 }

@@ -59,7 +59,6 @@ where
 impl<A, F, R, C, C2> ServiceFactory<R, C> for MapConfig<A, F, C, C2>
 where
     A: ServiceFactory<R, C2>,
-    A::Future: 'static,
     F: Fn(C) -> C2,
 {
     type Response = A::Response;
@@ -67,12 +66,11 @@ where
 
     type Service = A::Service;
     type InitError = A::InitError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> = A::Future<'f> where Self: 'f;
 
-    fn create(&self, cfg: C) -> Self::Future {
+    fn create(&self, cfg: C) -> Self::Future<'_> {
         let cfg = (self.f)(cfg);
-        let fut = self.a.create(cfg);
-        Box::pin(async move { fut.await })
+        self.a.create(cfg)
     }
 }
 
@@ -106,9 +104,9 @@ where
 
     type Service = A::Service;
     type InitError = A::InitError;
-    type Future = UnitConfigFuture<A, R, C>;
+    type Future<'f> = UnitConfigFuture<'f, A, R, C> where Self: 'f, C: 'f;
 
-    fn create(&self, _: C) -> Self::Future {
+    fn create(&self, _: C) -> Self::Future<'_> {
         UnitConfigFuture {
             fut: self.a.create(()),
             _t: PhantomData,
@@ -117,16 +115,18 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct UnitConfigFuture<A, R, C>
+    pub struct UnitConfigFuture<'f, A, R, C>
     where A: ServiceFactory<R>,
+          A: 'f,
+          C: 'f,
     {
         #[pin]
-        fut: A::Future,
+        fut: A::Future<'f>,
         _t: PhantomData<C>,
     }
 }
 
-impl<A, R, C> Future for UnitConfigFuture<A, R, C>
+impl<'f, A, R, C> Future for UnitConfigFuture<'f, A, R, C>
 where
     A: ServiceFactory<R>,
 {

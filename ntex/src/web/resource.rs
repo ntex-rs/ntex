@@ -345,14 +345,14 @@ where
         let router_factory = ResourceRouterFactory {
             state,
             routes: self.routes,
-            default: self.default,
+            default: self.default.borrow_mut().take(),
         };
 
         config.register_service(
             rdef,
             guards,
             ResourceServiceFactory {
-                middleware: Rc::new(self.middleware),
+                middleware: self.middleware,
                 filter: self.filter,
                 routing: router_factory,
             },
@@ -383,11 +383,11 @@ where
         let router_factory = ResourceRouterFactory {
             state: None,
             routes: self.routes,
-            default: self.default,
+            default: self.default.borrow_mut().take(),
         };
 
         ResourceServiceFactory {
-            middleware: Rc::new(self.middleware),
+            middleware: self.middleware,
             filter: self.filter,
             routing: router_factory,
         }
@@ -396,7 +396,7 @@ where
 
 /// Resource service
 pub struct ResourceServiceFactory<Err: ErrorRenderer, M, F> {
-    middleware: Rc<M>,
+    middleware: M,
     filter: F,
     routing: ResourceRouterFactory<Err>,
 }
@@ -417,23 +417,21 @@ where
     type Error = Err::Container;
     type Service = M::Service;
     type InitError = ();
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> =
+        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
 
-    fn create(&self, _: ()) -> Self::Future {
-        let filter_fut = self.filter.create(());
-        let routing_fut = self.routing.create(());
-        let middleware = self.middleware.clone();
+    fn create(&self, _: ()) -> Self::Future<'_> {
         Box::pin(async move {
-            let filter = filter_fut.await?;
-            let routing = routing_fut.await?;
-            Ok(middleware.create(pipeline(filter).and_then(routing)))
+            let filter = self.filter.create(()).await?;
+            let routing = self.routing.create(()).await?;
+            Ok(self.middleware.create(pipeline(filter).and_then(routing)))
         })
     }
 }
 
 struct ResourceRouterFactory<Err: ErrorRenderer> {
     routes: Vec<Route<Err>>,
-    default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
+    default: Option<Rc<HttpNewService<Err>>>,
     state: Option<AppState>,
 }
 
@@ -442,24 +440,20 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
     type Error = Err::Container;
     type InitError = ();
     type Service = ResourceRouter<Err>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> =
+        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
 
-    fn create(&self, _: ()) -> Self::Future {
-        let state = self.state.clone();
-        let routes = self.routes.iter().map(|route| route.service()).collect();
-        let default_fut = self.default.borrow().as_ref().map(|f| f.create(()));
-
+    fn create(&self, _: ()) -> Self::Future<'_> {
         Box::pin(async move {
-            let default = if let Some(fut) = default_fut {
-                Some(fut.await?)
+            let default = if let Some(ref default) = self.default {
+                Some(default.create(()).await?)
             } else {
                 None
             };
-
             Ok(ResourceRouter {
-                state,
-                routes,
                 default,
+                state: self.state.clone(),
+                routes: self.routes.iter().map(|route| route.service()).collect(),
             })
         })
     }

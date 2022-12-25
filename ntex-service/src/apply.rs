@@ -155,10 +155,10 @@ where
 
     type Service = Apply<T::Service, Req, F, R, In, Out, Err>;
     type InitError = T::InitError;
-    type Future = ApplyFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>;
+    type Future<'f> = ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err> where Self: 'f, Cfg: 'f;
 
     #[inline]
-    fn create(&self, cfg: Cfg) -> Self::Future {
+    fn create(&self, cfg: Cfg) -> Self::Future<'_> {
         ApplyFactoryResponse {
             fut: self.service.create(cfg),
             f: Some(self.f.clone()),
@@ -168,21 +168,23 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct ApplyFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>
+    pub struct ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
     where
         T: ServiceFactory<Req, Cfg, Error = Err>,
+        T: 'f,
         F: Fn(In, Rc<T::Service>) -> R,
         R: Future<Output = Result<Out, Err>>,
+        Cfg: 'f,
     {
         #[pin]
-        fut: T::Future,
+        fut: T::Future<'f>,
         f: Option<F>,
         _t: PhantomData<(In, Out)>,
     }
 }
 
-impl<T, Req, Cfg, F, R, In, Out, Err> Future
-    for ApplyFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>
+impl<'f, T, Req, Cfg, F, R, In, Out, Err> Future
+    for ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, Rc<T::Service>) -> R,

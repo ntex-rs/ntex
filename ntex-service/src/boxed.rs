@@ -73,20 +73,38 @@ where
     }
 }
 
-trait ServiceFactoryObj<Cfg, Req, Res, Err, InitErr> {
-    fn create(&self, cfg: Cfg) -> BoxFuture<'static, BoxService<Req, Res, Err>, InitErr>;
+trait ServiceFactoryObj<Req, Cfg> {
+    type Response;
+    type Error;
+    type InitError;
+
+    fn create<'a>(
+        &'a self,
+        cfg: Cfg,
+    ) -> BoxFuture<'a, BoxService<Req, Self::Response, Self::Error>, Self::InitError>
+    where
+        Cfg: 'a;
 }
 
-impl<F, Cfg, Req, Res, Err, InitErr> ServiceFactoryObj<Cfg, Req, Res, Err, InitErr> for F
+impl<F, Req, Cfg> ServiceFactoryObj<Req, Cfg> for F
 where
     Cfg: 'static,
     Req: 'static,
-    F: crate::ServiceFactory<Req, Cfg, Response = Res, Error = Err, InitError = InitErr>,
+    F: crate::ServiceFactory<Req, Cfg>,
     F::Service: 'static,
-    F::Future: 'static,
 {
+    type Response = F::Response;
+    type Error = F::Error;
+    type InitError = F::InitError;
+
     #[inline]
-    fn create(&self, cfg: Cfg) -> BoxFuture<'static, BoxService<Req, Res, Err>, InitErr> {
+    fn create<'a>(
+        &'a self,
+        cfg: Cfg,
+    ) -> BoxFuture<'a, BoxService<Req, Self::Response, Self::Error>, Self::InitError>
+    where
+        Cfg: 'a,
+    {
         let fut = crate::ServiceFactory::create(self, cfg);
         Box::pin(async move { fut.await.map(service) })
     }
@@ -151,7 +169,7 @@ where
 }
 
 pub struct BoxServiceFactory<Cfg, Req, Res, Err, InitErr>(
-    Box<dyn ServiceFactoryObj<Cfg, Req, Res, Err, InitErr>>,
+    Box<dyn ServiceFactoryObj<Req, Cfg, Response = Res, Error = Err, InitError = InitErr>>,
 );
 
 impl<C, Req, Res, Err, InitErr> crate::ServiceFactory<Req, C>
@@ -164,10 +182,10 @@ where
 
     type Service = BoxService<Req, Res, Err>;
     type InitError = InitErr;
-    type Future = BoxFuture<'static, Self::Service, InitErr>;
+    type Future<'f> = BoxFuture<'f, Self::Service, InitErr> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create(&self, cfg: C) -> Self::Future {
+    fn create<'a>(&'a self, cfg: C) -> Self::Future<'a> {
         self.0.create(cfg)
     }
 }

@@ -189,10 +189,13 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     type InitError;
 
     /// The future of the `ServiceFactory` instance.
-    type Future: Future<Output = Result<Self::Service, Self::InitError>>;
+    type Future<'f>: Future<Output = Result<Self::Service, Self::InitError>>
+    where
+        Cfg: 'f,
+        Self: 'f;
 
     /// Create and return a new service value asynchronously.
-    fn create(&self, cfg: Cfg) -> Self::Future;
+    fn create<'a>(&'a self, cfg: Cfg) -> Self::Future<'a>;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service
@@ -307,9 +310,9 @@ where
     type Error = S::Error;
     type Service = S::Service;
     type InitError = S::InitError;
-    type Future = S::Future;
+    type Future<'f> = S::Future<'f> where S: 'f, Cfg: 'f;
 
-    fn create(&self, cfg: Cfg) -> S::Future {
+    fn create(&self, cfg: Cfg) -> S::Future<'_> {
         self.as_ref().create(cfg)
     }
 }

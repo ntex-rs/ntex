@@ -52,15 +52,15 @@ impl<F> Clone for Acceptor<F> {
     }
 }
 
-impl<F: Filter, C> ServiceFactory<Io<F>, C> for Acceptor<F> {
+impl<F: Filter, C: 'static> ServiceFactory<Io<F>, C> for Acceptor<F> {
     type Response = Io<SslFilter<F>>;
     type Error = Box<dyn Error>;
     type Service = AcceptorService<F>;
     type InitError = ();
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError>;
 
     #[inline]
-    fn create(&self, _: C) -> Self::Future {
+    fn create(&self, _: C) -> Self::Future<'_> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ready::Ok(AcceptorService {
                 acceptor: self.acceptor.clone(),

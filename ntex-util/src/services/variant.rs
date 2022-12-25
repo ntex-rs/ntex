@@ -162,9 +162,9 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         type Error = V1::Error;
         type InitError = V1::InitError;
         type Service = $srv_type<V1::Service, $($T::Service,)+ V1R, $($R,)+>;
-        type Future = $mod_name::ServiceFactoryResponse<V1, V1C, $($T,)+ V1R, $($R,)+>;
+        type Future<'f> = $mod_name::ServiceFactoryResponse<'f, V1, V1C, $($T,)+ V1R, $($R,)+> where Self: 'f, V1C: 'f;
 
-        fn create(&self, cfg: V1C) -> Self::Future {
+        fn create(&self, cfg: V1C) -> Self::Future<'_> {
             $mod_name::ServiceFactoryResponse {
                 V1: None,
                 items: Default::default(),
@@ -206,19 +206,23 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 
         pin_project_lite::pin_project! {
             #[doc(hidden)]
-            pub struct ServiceFactoryResponse<V1: ServiceFactory<V1R, V1C>, V1C, $($T: ServiceFactory<$R, V1C>,)+ V1R, $($R,)+>
+            pub struct ServiceFactoryResponse<'f, V1: ServiceFactory<V1R, V1C>, V1C, $($T: ServiceFactory<$R, V1C>,)+ V1R, $($R,)+>
+            where
+                V1C: 'f,
+                V1: 'f,
+              $($T: 'f,)+
             {
                 pub(super) V1: Option<V1::Service>,
                 pub(super) items: ($(Option<$T::Service>,)+),
-                #[pin] pub(super) V1_fut: V1::Future,
-                $(#[pin] pub(super) $T: $T::Future),+
+                #[pin] pub(super) V1_fut: V1::Future<'f>,
+                $(#[pin] pub(super) $T: $T::Future<'f>),+
             }
         }
 
-        impl<V1, V1C, $($T,)+ V1R, $($R,)+> Future for ServiceFactoryResponse<V1, V1C, $($T,)+ V1R, $($R,)+>
+        impl<'f, V1, V1C, $($T,)+ V1R, $($R,)+> Future for ServiceFactoryResponse<'f, V1, V1C, $($T,)+ V1R, $($R,)+>
         where
-            V1: ServiceFactory<V1R, V1C>,
-        $($T: ServiceFactory<$R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError,>),+
+            V1: ServiceFactory<V1R, V1C> + 'f,
+        $($T: ServiceFactory<$R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError,> + 'f),+
         {
             type Output = Result<$srv_type<V1::Service, $($T::Service,)+ V1R, $($R),+>, V1::InitError>;
 

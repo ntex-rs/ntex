@@ -403,24 +403,23 @@ where
         // complete scope pipeline creation
         let router_factory = ScopeRouterFactory {
             state,
-            default: self.default.clone(),
+            default: self.default.borrow_mut().take(),
             case_insensitive: self.case_insensitive,
-            services: Rc::new(
-                cfg.into_services()
-                    .into_iter()
-                    .map(|(rdef, srv, guards, nested)| {
-                        // case for scope prefix ends with '/' and
-                        // resource is empty pattern
-                        let mut rdef = if slesh && rdef.pattern() == "" {
-                            ResourceDef::new("/")
-                        } else {
-                            rdef
-                        };
-                        rmap.add(&mut rdef, nested);
-                        (rdef, srv, RefCell::new(guards))
-                    })
-                    .collect(),
-            ),
+            services: cfg
+                .into_services()
+                .into_iter()
+                .map(|(rdef, srv, guards, nested)| {
+                    // case for scope prefix ends with '/' and
+                    // resource is empty pattern
+                    let mut rdef = if slesh && rdef.pattern() == "" {
+                        ResourceDef::new("/")
+                    } else {
+                        rdef
+                    };
+                    rmap.add(&mut rdef, nested);
+                    (rdef, srv, RefCell::new(guards))
+                })
+                .collect(),
         };
 
         // get guards
@@ -435,7 +434,7 @@ where
             ResourceDef::root_prefix(self.rdef),
             guards,
             ScopeServiceFactory {
-                middleware: Rc::new(self.middleware),
+                middleware: self.middleware,
                 filter: self.filter,
                 routing: router_factory,
             },
@@ -446,7 +445,7 @@ where
 
 /// Scope service
 struct ScopeServiceFactory<M, F, Err: ErrorRenderer> {
-    middleware: Rc<M>,
+    middleware: M,
     filter: F,
     routing: ScopeRouterFactory<Err>,
 }
@@ -467,16 +466,14 @@ where
     type Error = Err::Container;
     type Service = M::Service;
     type InitError = ();
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> =
+        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
 
-    fn create(&self, _: ()) -> Self::Future {
-        let filter_fut = self.filter.create(());
-        let routing_fut = self.routing.create(());
-        let middleware = self.middleware.clone();
+    fn create(&self, _: ()) -> Self::Future<'_> {
         Box::pin(async move {
-            Ok(middleware.create(ScopeService {
-                filter: filter_fut.await?,
-                routing: routing_fut.await?,
+            Ok(self.middleware.create(ScopeService {
+                filter: self.filter.create(()).await?,
+                routing: self.routing.create(()).await?,
             }))
         })
     }
@@ -555,8 +552,8 @@ where
 
 struct ScopeRouterFactory<Err: ErrorRenderer> {
     state: Option<AppState>,
-    services: Rc<Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>>,
-    default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
+    services: Vec<(ResourceDef, HttpNewService<Err>, RefCell<Option<Guards>>)>,
+    default: Option<Rc<HttpNewService<Err>>>,
     case_insensitive: bool,
 }
 
@@ -565,35 +562,31 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
     type Error = Err::Container;
     type InitError = ();
     type Service = ScopeRouter<Err>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> =
+        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
 
-    fn create(&self, _: ()) -> Self::Future {
-        let services = self.services.clone();
-        let state = self.state.clone();
-        let case_insensitive = self.case_insensitive;
-        let default_fut = self.default.borrow().as_ref().map(|srv| srv.create(()));
-
+    fn create(&self, _: ()) -> Self::Future<'_> {
         Box::pin(async move {
             // create http services
             let mut router = Router::build();
-            if case_insensitive {
+            if self.case_insensitive {
                 router.case_insensitive();
             }
-            for (path, factory, guards) in &mut services.iter() {
+            for (path, factory, guards) in &mut self.services.iter() {
                 let service = factory.create(()).await?;
                 router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
             }
 
-            let default = if let Some(fut) = default_fut {
-                Some(fut.await?)
+            let default = if let Some(ref default) = self.default {
+                Some(default.create(()).await?)
             } else {
                 None
             };
 
             Ok(ScopeRouter {
-                state,
                 default,
                 router: router.finish(),
+                state: self.state.clone(),
             })
         })
     }

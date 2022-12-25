@@ -136,9 +136,10 @@ where
     type Error = DispatchError;
     type InitError = S::InitError;
     type Service = H2ServiceHandler<F, S::Service, B>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> =
+        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
 
-    fn create(&self, _: ()) -> Self::Future {
+    fn create(&self, _: ()) -> Self::Future<'_> {
         let fut = self.srv.create(());
         let cfg = self.cfg.clone();
         let h2config = self.h2config.clone();

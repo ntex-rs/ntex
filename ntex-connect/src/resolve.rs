@@ -103,15 +103,15 @@ impl<T> Clone for Resolver<T> {
     }
 }
 
-impl<T: Address, C> ServiceFactory<Connect<T>, C> for Resolver<T> {
+impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Resolver<T> {
     type Response = Connect<T>;
     type Error = ConnectError;
     type Service = Resolver<T>;
     type InitError = ();
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError>;
 
     #[inline]
-    fn create(&self, _: C) -> Self::Future {
+    fn create(&self, _: C) -> Self::Future<'_> {
         Ready::Ok(self.clone())
     }
 }

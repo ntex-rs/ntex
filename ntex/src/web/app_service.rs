@@ -64,9 +64,9 @@ where
     type Error = Err::Container;
     type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>> where Self: 'f;
 
-    fn create(&self, _: ()) -> Self::Future {
+    fn create(&self, _: ()) -> Self::Future<'_> {
         ServiceFactory::create(self, AppConfig::default())
     }
 }
@@ -87,9 +87,9 @@ where
     type Error = Err::Container;
     type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>> where Self: 'f;
 
-    fn create(&self, config: AppConfig) -> Self::Future {
+    fn create(&self, config: AppConfig) -> Self::Future<'_> {
         let services = std::mem::take(&mut *self.services.borrow_mut());
 
         // update resource default service

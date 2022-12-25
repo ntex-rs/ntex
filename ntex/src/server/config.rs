@@ -355,9 +355,9 @@ where
     type Error = ();
     type InitError = ();
     type Service = BoxedServerService;
-    type Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>> + 'f>> where Self: 'f;
 
-    fn create(&self, _: ()) -> Self::Future {
+    fn create(&self, _: ()) -> Self::Future<'_> {
         let pool = self.pool;
         let fut = self.inner.create(());
         Box::pin(async move {

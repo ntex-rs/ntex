@@ -1,5 +1,5 @@
 //! WebSockets protocol support
-use std::fmt;
+use std::{fmt, rc::Rc};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
@@ -19,14 +19,15 @@ where
     F: IntoServiceFactory<T, Frame, WsSink>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
-    let inner_factory = factory.into_factory().map_err(WsError::Service);
+    let inner_factory = Rc::new(factory.into_factory().map_err(WsError::Service));
 
     let factory = fn_factory_with_config(move |sink: WsSink| {
-        let fut = inner_factory.create(sink.clone());
+        let factory = inner_factory.clone();
 
         async move {
-            let srv = fut.await?;
+            let srv = factory.create(sink.clone()).await?;
             let sink = sink.clone();
+
             Ok::<_, T::InitError>(apply_fn(srv, move |req, srv| match req {
                 DispatchItem::<ws::Codec>::Item(item) => {
                     let s = if matches!(item, Frame::Close(_)) {

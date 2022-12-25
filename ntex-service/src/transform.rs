@@ -124,10 +124,10 @@ where
 
     type Service = T::Service;
     type InitError = S::InitError;
-    type Future = ApplyMiddlewareFuture<T, S, R, C>;
+    type Future<'f> = ApplyMiddlewareFuture<'f, T, S, R, C> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create(&self, cfg: C) -> Self::Future {
+    fn create(&self, cfg: C) -> Self::Future<'_> {
         ApplyMiddlewareFuture {
             slf: self.0.clone(),
             fut: self.0 .1.create(cfg),
@@ -136,18 +136,20 @@ where
 }
 
 pin_project_lite::pin_project! {
-    pub struct ApplyMiddlewareFuture<T, S, R, C>
+    pub struct ApplyMiddlewareFuture<'f, T, S, R, C>
     where
         S: ServiceFactory<R, C>,
+        S: 'f,
         T: Middleware<S::Service>,
+        C: 'f,
     {
         slf: Rc<(T, S)>,
         #[pin]
-        fut: S::Future,
+        fut: S::Future<'f>,
     }
 }
 
-impl<T, S, R, C> Future for ApplyMiddlewareFuture<T, S, R, C>
+impl<'f, T, S, R, C> Future for ApplyMiddlewareFuture<'f, T, S, R, C>
 where
     S: ServiceFactory<R, C>,
     T: Middleware<S::Service>,

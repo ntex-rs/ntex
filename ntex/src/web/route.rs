@@ -56,9 +56,9 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = RouteService<Err>;
-    type Future = Ready<RouteService<Err>, ()>;
+    type Future<'f> = Ready<RouteService<Err>, ()>;
 
-    fn create(&self, _: ()) -> Self::Future {
+    fn create(&self, _: ()) -> Self::Future<'_> {
         Ok(self.service()).into()
     }
 }

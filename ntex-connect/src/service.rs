@@ -60,15 +60,15 @@ impl<T> Clone for Connector<T> {
     }
 }
 
-impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
+impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Response = Io;
     type Error = ConnectError;
     type Service = Connector<T>;
     type InitError = ();
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f;
 
     #[inline]
-    fn create(&self, _: C) -> Self::Future {
+    fn create(&self, _: C) -> Self::Future<'_> {
         Ready::Ok(self.clone())
     }
 }

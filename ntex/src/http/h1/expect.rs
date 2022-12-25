@@ -10,10 +10,10 @@ impl ServiceFactory<Request> for ExpectHandler {
     type Error = io::Error;
     type Service = ExpectHandler;
     type InitError = io::Error;
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError>;
 
     #[inline]
-    fn create(&self, _: ()) -> Self::Future {
+    fn create(&self, _: ()) -> Self::Future<'_> {
         Ready::Ok(ExpectHandler)
     }
 }

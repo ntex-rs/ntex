@@ -270,10 +270,10 @@ impl<Req, T: ServiceFactory<Req, C>, C> ServiceFactory<Req, C>
     type Error = T::Error;
     type Service = T::Service;
     type InitError = T::InitError;
-    type Future = T::Future;
+    type Future<'f> = T::Future<'f> where Self: 'f;
 
     #[inline]
-    fn create(&self, cfg: C) -> Self::Future {
+    fn create(&self, cfg: C) -> Self::Future<'_> {
         self.factory.create(cfg)
     }
 }

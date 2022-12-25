@@ -227,10 +227,10 @@ where
 
     type Service = FnService<F, Req>;
     type InitError = ();
-    type Future = Ready<Result<Self::Service, Self::InitError>>;
+    type Future<'f> = Ready<Result<Self::Service, Self::InitError>> where Self: 'f;
 
     #[inline]
-    fn create(&self, _: Cfg) -> Self::Future {
+    fn create(&self, _: Cfg) -> Self::Future<'_> {
         ready(Ok(FnService {
             f: self.f.clone(),
             _t: PhantomData,
@@ -288,10 +288,10 @@ where
 
     type Service = Srv;
     type InitError = Err;
-    type Future = Fut;
+    type Future<'f> = Fut where Self: 'f, Fut: 'f;
 
     #[inline]
-    fn create(&self, cfg: Cfg) -> Self::Future {
+    fn create(&self, cfg: Cfg) -> Self::Future<'_> {
         (self.f)(cfg)
     }
 }
@@ -329,10 +329,10 @@ where
     type Error = S::Error;
     type Service = S;
     type InitError = E;
-    type Future = R;
+    type Future<'f> = R where Self: 'f, R: 'f;
 
     #[inline]
-    fn create(&self, _: C) -> Self::Future {
+    fn create(&self, _: C) -> Self::Future<'_> {
         (self.f)()
     }
 }
