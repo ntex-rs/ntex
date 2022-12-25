@@ -1,4 +1,3 @@
-use std::task::{Context, Poll};
 use std::{future::ready, future::Future, future::Ready, marker::PhantomData};
 
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
@@ -129,16 +128,6 @@ where
     type Future<'f> = Fut where Self: 'f, Req: 'f;
 
     #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
-        Poll::Ready(())
-    }
-
-    #[inline]
     fn call(&self, req: Req) -> Self::Future<'_> {
         (self.f)(req)
     }
@@ -199,16 +188,6 @@ where
     type Response = Res;
     type Error = Err;
     type Future<'f> = Fut where Self: 'f;
-
-    #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
-        Poll::Ready(())
-    }
 
     #[inline]
     fn call(&self, req: Req) -> Self::Future<'_> {

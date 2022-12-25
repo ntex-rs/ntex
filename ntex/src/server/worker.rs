@@ -528,9 +528,9 @@ mod tests {
         type Error = ();
         type Service = Srv;
         type InitError = ();
-        type Future = Ready<Srv, ()>;
+        type Future<'f> = Ready<Srv, ()>;
 
-        fn create(&self, _: ()) -> Self::Future {
+        fn create(&self, _: ()) -> Self::Future<'_> {
             let mut cnt = self.counter.lock().unwrap();
             *cnt += 1;
             Ready::Ok(Srv {
@@ -546,7 +546,7 @@ mod tests {
     impl Service<Io> for Srv {
         type Response = ();
         type Error = ();
-        type Future = Ready<(), ()>;
+        type Future<'f> = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let st: St = { *self.st.lock().unwrap() };
@@ -567,7 +567,7 @@ mod tests {
             }
         }
 
-        fn call(&self, _: Io) -> Self::Future {
+        fn call(&self, _: Io) -> Self::Future<'_> {
             Ready::Ok(())
         }
     }

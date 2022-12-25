@@ -206,10 +206,6 @@ mod tests {
         type Error = ();
         type Future<'f> = Ready<(), ()>;
 
-        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Err(()))
-        }
-
         fn call(&self, _: ()) -> Self::Future<'_> {
             Ready::Err(())
         }

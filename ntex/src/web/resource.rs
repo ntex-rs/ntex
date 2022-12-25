@@ -459,7 +459,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
     }
 }
 
-struct ResourceRouter<Err: ErrorRenderer> {
+pub struct ResourceRouter<Err: ErrorRenderer> {
     state: Option<AppState>,
     routes: Vec<RouteService<Err>>,
     default: Option<HttpService<Err>>,

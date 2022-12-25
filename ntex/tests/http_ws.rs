@@ -33,14 +33,14 @@ impl Clone for WsService {
 impl Service<(Request, Io, h1::Codec)> for WsService {
     type Response = ();
     type Error = io::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<(), io::Error>>>>;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<(), io::Error>> + 'f>>;
 
     fn poll_ready(&self, _ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.set_polled();
         Poll::Ready(Ok(()))
     }
 
-    fn call(&self, (req, io, codec): (Request, Io, h1::Codec)) -> Self::Future {
+    fn call(&self, (req, io, codec): (Request, Io, h1::Codec)) -> Self::Future<'_> {
         let fut = async move {
             let res = handshake(req.head()).unwrap().message_body(());
 

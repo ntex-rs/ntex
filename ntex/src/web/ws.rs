@@ -68,7 +68,6 @@ pub async fn start_with<T, F, Err>(
 ) -> Result<HttpResponse, Err>
 where
     T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>>
-        // DispatchItem<ws::Codec>,
         + 'static,
     T::Error: fmt::Debug,
     F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
