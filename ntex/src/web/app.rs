@@ -5,8 +5,8 @@ use std::{
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
-use crate::service::{map_config, pipeline_factory, PipelineFactory};
-use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
+use crate::service::{map_config, pipeline_factory, IntoServiceFactory, PipelineFactory};
+use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack};
 use crate::util::{Extensions, Ready};
 
 use super::app_service::{AppFactory, AppService};
@@ -554,29 +554,6 @@ where
             extensions: RefCell::new(Some(self.extensions)),
             case_insensitive: self.case_insensitive,
         }
-    }
-}
-
-pub struct Stack<Inner, Outer> {
-    inner: Inner,
-    outer: Outer,
-}
-
-impl<Inner, Outer> Stack<Inner, Outer> {
-    pub(super) fn new(inner: Inner, outer: Outer) -> Self {
-        Stack { inner, outer }
-    }
-}
-
-impl<S, Inner, Outer> Middleware<S> for Stack<Inner, Outer>
-where
-    Inner: Middleware<S>,
-    Outer: Middleware<Inner::Service>,
-{
-    type Service = Outer::Service;
-
-    fn create(&self, service: S) -> Self::Service {
-        self.outer.create(self.inner.create(service))
     }
 }
 

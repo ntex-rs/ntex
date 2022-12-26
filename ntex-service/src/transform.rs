@@ -166,7 +166,7 @@ where
     }
 }
 
-/// Identity is a transform.
+/// Identity is a middleware.
 ///
 /// It returns service without modifications.
 #[derive(Debug, Clone, Copy)]
@@ -178,6 +178,31 @@ impl<S> Middleware<S> for Identity {
     #[inline]
     fn create(&self, service: S) -> Self::Service {
         service
+    }
+}
+
+/// Stack of middlewares.
+#[derive(Debug, Clone)]
+pub struct Stack<Inner, Outer> {
+    inner: Inner,
+    outer: Outer,
+}
+
+impl<Inner, Outer> Stack<Inner, Outer> {
+    pub fn new(inner: Inner, outer: Outer) -> Self {
+        Stack { inner, outer }
+    }
+}
+
+impl<S, Inner, Outer> Middleware<S> for Stack<Inner, Outer>
+where
+    Inner: Middleware<S>,
+    Outer: Middleware<Inner::Service>,
+{
+    type Service = Outer::Service;
+
+    fn create(&self, service: S) -> Self::Service {
+        self.outer.create(self.inner.create(service))
     }
 }
 

@@ -5,11 +5,11 @@ use std::{
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{pipeline_factory, PipelineFactory};
-use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
+use crate::service::{pipeline_factory, IntoServiceFactory, PipelineFactory};
+use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack};
 use crate::util::{Either, Extensions, Ready};
 
-use super::app::{Filter, Stack};
+use super::app::Filter;
 use super::config::ServiceConfig;
 use super::dev::{WebServiceConfig, WebServiceFactory};
 use super::error::ErrorRenderer;

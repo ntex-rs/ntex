@@ -4,7 +4,9 @@ use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{dev::AndThen, pipeline, pipeline_factory, Pipeline, PipelineFactory};
-use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
+use crate::service::{
+    Identity, IntoServiceFactory, Middleware, Service, ServiceFactory, Stack,
+};
 use crate::util::{Either, Extensions, Ready};
 
 use super::dev::{insert_slesh, WebServiceConfig, WebServiceFactory};
@@ -15,7 +17,7 @@ use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
 use super::route::{IntoRoutes, Route, RouteService};
-use super::{app::Filter, app::Stack, guard::Guard, service::AppState};
+use super::{app::Filter, guard::Guard, service::AppState};
 
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
