@@ -117,15 +117,8 @@ where
     type Error = ConnectError;
     type Future<'f> = BoxFuture<'f, Result<Connection, ConnectError>>;
 
-    #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.connector.poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.connector.poll_shutdown(cx, is_error)
-    }
+    crate::forward_poll_ready!(connector);
+    crate::forward_poll_shutdown!(connector);
 
     #[inline]
     fn call(&self, req: Connect) -> Self::Future<'_> {

@@ -318,13 +318,7 @@ where
                 DispatcherState::Shutdown => {
                     let err = slf.error.take();
 
-                    return if this
-                        .inner
-                        .shared
-                        .service
-                        .poll_shutdown(cx, err.is_some())
-                        .is_ready()
-                    {
+                    return if this.inner.shared.service.poll_shutdown(cx).is_ready() {
                         log::trace!("service shutdown is completed, stop");
 
                         Poll::Ready(if let Some(err) = err {

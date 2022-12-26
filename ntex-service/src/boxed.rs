@@ -52,7 +52,7 @@ pub trait ServiceObj<Req> {
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>>;
 
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()>;
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()>;
 
     fn call<'a>(&'a self, req: Req) -> BoxFuture<'a, Self::Response, Self::Error>
     where
@@ -73,8 +73,8 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        crate::Service::poll_shutdown(self, cx, is_error)
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        crate::Service::poll_shutdown(self, cx)
     }
 
     #[inline]
@@ -176,8 +176,8 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.0.poll_shutdown(cx, is_error)
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.0.poll_shutdown(cx)
     }
 
     #[inline]
@@ -208,8 +208,8 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.0.poll_shutdown(cx, is_error)
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.0.poll_shutdown(cx)
     }
 
     #[inline]

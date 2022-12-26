@@ -143,11 +143,6 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
-
-    #[inline]
     fn call(&self, req: R) -> Self::Future<'_> {
         if self.ready.get() {
             self.ready.set(false);
@@ -162,6 +157,8 @@ where
             })
         }
     }
+
+    ntex_service::forward_poll_shutdown!(service);
 }
 
 pin_project_lite::pin_project! {

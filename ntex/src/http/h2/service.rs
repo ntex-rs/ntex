@@ -184,8 +184,8 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.config.service.poll_shutdown(cx, is_error)
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.config.service.poll_shutdown(cx)
     }
 
     fn call(&self, io: Io<F>) -> Self::Future<'_> {

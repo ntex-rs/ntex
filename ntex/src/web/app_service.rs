@@ -200,15 +200,8 @@ where
     type Error = T::Error;
     type Future<'f> = T::Future<'f> where T: 'f;
 
-    #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
+    crate::forward_poll_ready!(service);
+    crate::forward_poll_shutdown!(service);
 
     fn call(&self, req: Request) -> Self::Future<'_> {
         let (head, payload) = req.into_parts();

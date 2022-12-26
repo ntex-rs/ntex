@@ -314,11 +314,11 @@ where
         }
     }
 
-    fn poll_shutdown(&self, cx: &mut task::Context<'_>, is_error: bool) -> task::Poll<()> {
-        let ready = self.config.expect.poll_shutdown(cx, is_error).is_ready();
-        let ready = self.config.service.poll_shutdown(cx, is_error).is_ready() && ready;
+    fn poll_shutdown(&self, cx: &mut task::Context<'_>) -> task::Poll<()> {
+        let ready = self.config.expect.poll_shutdown(cx).is_ready();
+        let ready = self.config.service.poll_shutdown(cx).is_ready() && ready;
         let ready = if let Some(ref upg) = self.config.upgrade {
-            upg.poll_shutdown(cx, is_error).is_ready() && ready
+            upg.poll_shutdown(cx).is_ready() && ready
         } else {
             ready
         };

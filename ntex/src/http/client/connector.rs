@@ -301,12 +301,12 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        let tcp_ready = self.tcp_pool.poll_shutdown(cx, is_error).is_ready();
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let tcp_ready = self.tcp_pool.poll_shutdown(cx).is_ready();
         let ssl_ready = self
             .ssl_pool
             .as_ref()
-            .map(|pool| pool.poll_shutdown(cx, is_error).is_ready())
+            .map(|pool| pool.poll_shutdown(cx).is_ready())
             .unwrap_or(true);
         if tcp_ready && ssl_ready {
             Poll::Ready(())
@@ -338,6 +338,6 @@ mod tests {
     async fn test_readiness() {
         let conn = Connector::default().finish();
         assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
-        assert!(lazy(|cx| conn.poll_shutdown(cx, true).is_ready()).await);
+        assert!(lazy(|cx| conn.poll_shutdown(cx).is_ready()).await);
     }
 }

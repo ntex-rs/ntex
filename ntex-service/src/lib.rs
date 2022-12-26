@@ -11,6 +11,7 @@ mod and_then;
 mod apply;
 pub mod boxed;
 mod fn_service;
+mod macros;
 mod map;
 mod map_config;
 mod map_err;
@@ -64,10 +65,6 @@ pub use self::transform::{apply, Identity, Middleware, Stack};
 ///     type Response = u64;
 ///     type Error = Infallible;
 ///     type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
-///
-///     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-///         Poll::Ready(Ok(()))
-///     }
 ///
 ///     fn call(&self, req: u8) -> Self::Future<'_> {
 ///         Box::pin(std::future::ready(Ok(req as u64)))
@@ -127,7 +124,7 @@ pub trait Service<Req> {
     ///
     /// Returns `Ready` when the service is properly shutdowns. This method might be called
     /// after it returns `Ready`.
-    fn poll_shutdown(&self, cx: &mut task::Context<'_>, is_error: bool) -> Poll<()> {
+    fn poll_shutdown(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         Poll::Ready(())
     }
 
@@ -246,8 +243,8 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        (**self).poll_shutdown(cx, is_error)
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        (**self).poll_shutdown(cx)
     }
 
     #[inline]
@@ -270,8 +267,8 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        (**self).poll_shutdown(cx, is_error)
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        (**self).poll_shutdown(cx)
     }
 
     #[inline]
@@ -293,8 +290,8 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        (**self).poll_shutdown(cx, is_error)
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        (**self).poll_shutdown(cx)
     }
 
     fn call(&self, request: Req) -> S::Future<'_> {

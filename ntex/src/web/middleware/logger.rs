@@ -138,15 +138,8 @@ where
     type Error = S::Error;
     type Future<'f> = Either<LoggerResponse<'f, S, E>, S::Future<'f>> where S: 'f, E: 'f;
 
-    #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
+    crate::forward_poll_ready!(service);
+    crate::forward_poll_shutdown!(service);
 
     #[inline]
     fn call(&self, req: WebRequest<E>) -> Self::Future<'_> {

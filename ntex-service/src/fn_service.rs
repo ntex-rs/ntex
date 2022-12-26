@@ -365,10 +365,7 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
 
-        assert_eq!(
-            lazy(|cx| srv2.poll_shutdown(cx, false)).await,
-            Poll::Ready(())
-        );
+        assert_eq!(lazy(|cx| srv2.poll_shutdown(cx)).await, Poll::Ready(()));
     }
 
     #[ntex::test]
@@ -384,10 +381,7 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
-        assert_eq!(
-            lazy(|cx| srv.poll_shutdown(cx, false)).await,
-            Poll::Ready(())
-        );
+        assert_eq!(lazy(|cx| srv.poll_shutdown(cx)).await, Poll::Ready(()));
     }
 
     #[ntex::test]

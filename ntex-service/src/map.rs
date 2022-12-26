@@ -50,15 +50,8 @@ where
     type Error = A::Error;
     type Future<'f> = MapFuture<'f, A, F, Req, Res> where Self: 'f, Req: 'f;
 
-    #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
+    crate::forward_poll_ready!(service);
+    crate::forward_poll_shutdown!(service);
 
     #[inline]
     fn call(&self, req: Req) -> Self::Future<'_> {
@@ -226,7 +219,7 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
-        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
         assert_eq!(res, Poll::Ready(()));
     }
 
@@ -240,7 +233,7 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
-        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
         assert_eq!(res, Poll::Ready(()));
     }
 

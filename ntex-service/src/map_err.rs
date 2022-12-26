@@ -57,17 +57,14 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
-
-    #[inline]
     fn call(&self, req: R) -> Self::Future<'_> {
         MapErrFuture {
             slf: self,
             fut: self.service.call(req),
         }
     }
+
+    crate::forward_poll_shutdown!(service);
 }
 
 pin_project_lite::pin_project! {
@@ -206,10 +203,6 @@ mod tests {
         type Error = ();
         type Future<'f> = Ready<(), ()>;
 
-        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Err(()))
-        }
-
         fn call(&self, _: ()) -> Self::Future<'_> {
             Ready::Err(())
         }
@@ -221,7 +214,7 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Err("error")));
 
-        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
         assert_eq!(res, Poll::Ready(()));
     }
 

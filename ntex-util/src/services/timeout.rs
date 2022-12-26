@@ -127,16 +127,6 @@ where
     type Error = TimeoutError<S::Error>;
     type Future<'f> = Either<TimeoutServiceResponse<'f, S, R>, TimeoutServiceResponse2<'f, S, R>> where Self: 'f, R: 'f;
 
-    #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx).map_err(TimeoutError::Service)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
-
     fn call(&self, request: R) -> Self::Future<'_> {
         if self.timeout.is_zero() {
             Either::Right(TimeoutServiceResponse2 {
@@ -151,6 +141,9 @@ where
             })
         }
     }
+
+    ntex_service::forward_poll_ready!(service, TimeoutError::Service);
+    ntex_service::forward_poll_shutdown!(service);
 }
 
 pin_project_lite::pin_project! {

@@ -1,5 +1,5 @@
 //! Middleware for setting default response headers
-use std::{convert::TryFrom, rc::Rc, task::Context, task::Poll};
+use std::{convert::TryFrom, rc::Rc};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
@@ -112,15 +112,8 @@ where
     type Future<'f> =
         BoxFuture<'f, Result<Self::Response, Self::Error>> where S: 'f, E: 'f;
 
-    #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
+    crate::forward_poll_ready!(service);
+    crate::forward_poll_shutdown!(service);
 
     fn call(&self, req: WebRequest<E>) -> Self::Future<'_> {
         Box::pin(async move {

@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, task::Context, task::Poll};
+use std::marker::PhantomData;
 
 use crate::and_then::{AndThen, AndThenFactory};
 use crate::map::{Map, MapFactory};
@@ -134,15 +134,8 @@ impl<Req, Svc: Service<Req>> Service<Req> for Pipeline<Req, Svc> {
     type Error = Svc::Error;
     type Future<'f> = Svc::Future<'f> where Self: 'f, Req: 'f;
 
-    #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Svc::Error>> {
-        self.service.poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
+    crate::forward_poll_ready!(service);
+    crate::forward_poll_shutdown!(service);
 
     #[inline]
     fn call(&self, req: Req) -> Self::Future<'_> {

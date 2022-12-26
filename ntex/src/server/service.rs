@@ -60,6 +60,8 @@ where
     type Error = ();
     type Future<'f> = Ready<(), ()> where T: 'f;
 
+    crate::forward_poll_shutdown!(service);
+
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let ready = self.service.poll_ready(cx).map_err(|_| ())?.is_ready();
@@ -69,11 +71,6 @@ where
         } else {
             Poll::Pending
         }
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
     }
 
     fn call(

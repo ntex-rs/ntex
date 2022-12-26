@@ -75,11 +75,6 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
-
-    #[inline]
     fn call(&self, req: R) -> Self::Future<'_> {
         InFlightServiceResponse {
             fut: self.service.call(req),
@@ -87,6 +82,8 @@ where
             _t: PhantomData,
         }
     }
+
+    ntex_service::forward_poll_shutdown!(service);
 }
 
 pin_project_lite::pin_project! {

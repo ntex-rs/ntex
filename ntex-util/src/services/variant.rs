@@ -116,9 +116,9 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }
         }
 
-        fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-            let mut ready = self.V1.poll_shutdown(cx, is_error).is_ready();
-            $(ready = self.$T.poll_shutdown(cx, is_error).is_ready() && ready;)+
+        fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+            let mut ready = self.V1.poll_shutdown(cx).is_ready();
+            $(ready = self.$T.poll_shutdown(cx).is_ready() && ready;)+
 
             if ready {
                 Poll::Ready(())

@@ -49,9 +49,8 @@ where
         }
     }
 
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        if self.svc1.poll_shutdown(cx, is_error).is_ready()
-            && self.svc2.poll_shutdown(cx, is_error).is_ready()
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        if self.svc1.poll_shutdown(cx).is_ready() && self.svc2.poll_shutdown(cx).is_ready()
         {
             Poll::Ready(())
         } else {
@@ -280,7 +279,7 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 2);
-        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
         assert_eq!(res, Poll::Ready(()));
     }
 

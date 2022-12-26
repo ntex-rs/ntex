@@ -562,7 +562,7 @@ mod tests {
             }
         }
 
-        fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
+        fn poll_shutdown(&self, _: &mut Context<'_>) -> Poll<()> {
             match *self.st.lock().unwrap() {
                 St::Ready => Poll::Ready(()),
                 St::Fail | St::Pending => Poll::Pending,
