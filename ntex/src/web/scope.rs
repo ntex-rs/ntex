@@ -7,7 +7,7 @@ use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{pipeline_factory, IntoServiceFactory, PipelineFactory};
 use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack};
-use crate::util::{Either, Extensions, Ready};
+use crate::util::{BoxFuture, Either, Extensions, Ready};
 
 use super::app::Filter;
 use super::config::ServiceConfig;
@@ -27,7 +27,7 @@ type HttpService<Err: ErrorRenderer> =
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type BoxResponse<'a, Err: ErrorRenderer> =
-    Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>> + 'a>>;
+    BoxFuture<'a, Result<WebResponse, Err::Container>>;
 
 /// Resources scope.
 ///
@@ -466,8 +466,7 @@ where
     type Error = Err::Container;
     type Service = M::Service;
     type InitError = ();
-    type Future<'f> =
-        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
     fn create(&self, _: ()) -> Self::Future<'_> {
         Box::pin(async move {
@@ -562,8 +561,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
     type Error = Err::Container;
     type InitError = ();
     type Service = ScopeRouter<Err>;
-    type Future<'f> =
-        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
     fn create(&self, _: ()) -> Self::Future<'_> {
         Box::pin(async move {

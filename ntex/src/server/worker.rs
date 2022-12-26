@@ -7,7 +7,9 @@ use async_oneshot as oneshot;
 use crate::rt::{spawn, Arbiter};
 use crate::service::Service;
 use crate::time::{sleep, Millis, Sleep};
-use crate::util::{join_all, ready, select, stream_recv, Either, Stream as FutStream};
+use crate::util::{
+    join_all, ready, select, stream_recv, BoxFuture, Either, Stream as FutStream,
+};
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
@@ -205,7 +207,7 @@ impl Worker {
             state: WorkerState::Unavailable,
         });
 
-        let mut fut: Vec<Pin<Box<dyn Future<Output = _>>>> = Vec::new();
+        let mut fut: Vec<BoxFuture<'static, _>> = Vec::new();
         for (idx, factory) in wrk.factories.iter().enumerate() {
             let f = factory.create();
             fut.push(Box::pin(async move {
@@ -327,7 +329,7 @@ enum WorkerState {
     Restarting(
         usize,
         Token,
-        Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>,
+        BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>,
     ),
     Shutdown(Sleep, Sleep, Option<oneshot::Sender<bool>>),
 }

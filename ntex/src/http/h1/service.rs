@@ -1,6 +1,4 @@
-use std::{
-    cell::RefCell, error::Error, fmt, future::Future, marker, pin::Pin, rc::Rc, task,
-};
+use std::{cell::RefCell, error::Error, fmt, marker, rc::Rc, task};
 
 use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, OnRequest, ServiceConfig};
@@ -9,7 +7,7 @@ use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
-use crate::time::Millis;
+use crate::{time::Millis, util::BoxFuture};
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;
@@ -213,8 +211,7 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = H1ServiceHandler<F, S::Service, B, X::Service, U::Service>;
-    type Future<'f> =
-        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
     fn create(&self, _: ()) -> Self::Future<'_> {
         let fut = self.srv.create(());

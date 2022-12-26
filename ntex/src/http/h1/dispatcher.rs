@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use std::{cell::RefCell, error::Error, future::Future, io, marker, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Filter, Io, IoBoxed, IoStatusUpdate, RecvError};
-use crate::{service::Service, util::ready, util::Bytes};
+use crate::{service::Service, util::ready, util::BoxFuture, util::Bytes};
 
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -75,7 +75,7 @@ pin_project_lite::pin_project! {
         Service { #[pin] fut: S::Future<'static> },
         ServiceUpgrade { #[pin] fut: S::Future<'static> },
         Expect { #[pin] fut: X::Future<'static> },
-        Filter { fut: Pin<Box<dyn Future<Output = Result<Request, Response>>>> }
+        Filter { fut: BoxFuture<'static, Result<Request, Response>> }
     }
 }
 

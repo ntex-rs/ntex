@@ -1,10 +1,10 @@
 //! Middleware for setting default response headers
-use std::task::{Context, Poll};
-use std::{convert::TryFrom, future::Future, pin::Pin, rc::Rc};
+use std::{convert::TryFrom, rc::Rc, task::Context, task::Poll};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::service::{Middleware, Service};
+use crate::util::BoxFuture;
 use crate::web::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
@@ -110,7 +110,7 @@ where
     type Response = WebResponse;
     type Error = S::Error;
     type Future<'f> =
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + 'f>> where S: 'f, E: 'f;
+        BoxFuture<'f, Result<Self::Response, Self::Error>> where S: 'f, E: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

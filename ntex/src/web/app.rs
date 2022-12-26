@@ -1,13 +1,11 @@
-use std::{
-    cell::RefCell, fmt, future::Future, marker::PhantomData, pin::Pin, rc::Rc, task,
-};
+use std::{cell::RefCell, fmt, future::Future, marker::PhantomData, rc::Rc, task};
 
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{map_config, pipeline_factory, IntoServiceFactory, PipelineFactory};
 use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack};
-use crate::util::{Extensions, Ready};
+use crate::util::{BoxFuture, Extensions, Ready};
 
 use super::app_service::{AppFactory, AppService};
 use super::config::{AppConfig, ServiceConfig};
@@ -20,8 +18,7 @@ use super::{DefaultError, ErrorRenderer};
 
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
-type FnStateFactory =
-    Box<dyn Fn(Extensions) -> Pin<Box<dyn Future<Output = Result<Extensions, ()>>>>>;
+type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extensions, ()>>>;
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.

@@ -1,5 +1,5 @@
 use std::{cell::RefCell, io, task::Context, task::Poll};
-use std::{convert::TryFrom, future::Future, marker::PhantomData, mem, pin::Pin, rc::Rc};
+use std::{convert::TryFrom, marker::PhantomData, mem, rc::Rc};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
@@ -11,7 +11,7 @@ use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{types, Filter, Io, IoBoxed, IoRef};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
-use crate::util::{poll_fn, Bytes, BytesMut, Either, HashMap, Ready};
+use crate::util::{poll_fn, BoxFuture, Bytes, BytesMut, Either, HashMap, Ready};
 
 use super::payload::{Payload, PayloadSender};
 
@@ -136,8 +136,7 @@ where
     type Error = DispatchError;
     type InitError = S::InitError;
     type Service = H2ServiceHandler<F, S::Service, B>;
-    type Future<'f> =
-        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
     fn create(&self, _: ()) -> Self::Future<'_> {
         let fut = self.srv.create(());
@@ -174,7 +173,7 @@ where
 {
     type Response = ();
     type Error = DispatchError;
-    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -243,16 +242,6 @@ impl Service<h2::ControlMessage<H2Error>> for ControlService {
     type Error = ();
     type Future<'f> = Ready<Self::Response, Self::Error>;
 
-    #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
-        Poll::Ready(())
-    }
-
     fn call(&self, msg: h2::ControlMessage<H2Error>) -> Self::Future<'_> {
         log::trace!("Control message: {:?}", msg);
         Ready::Ok::<_, ()>(msg.ack())
@@ -295,19 +284,9 @@ where
     type Response = ();
     type Error = H2Error;
     type Future<'f> = Either<
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>,
+        BoxFuture<'f, Result<Self::Response, Self::Error>>,
         Ready<Self::Response, Self::Error>,
     >;
-
-    #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
-        Poll::Ready(())
-    }
 
     fn call(&self, mut msg: h2::Message) -> Self::Future<'_> {
         let (io, pseudo, headers, eof, payload) = match msg.kind().take() {

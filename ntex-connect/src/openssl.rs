@@ -1,4 +1,4 @@
-use std::{future::Future, io, pin::Pin, task::Context, task::Poll};
+use std::io;
 
 pub use ntex_tls::openssl::SslFilter;
 pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
@@ -7,7 +7,7 @@ use ntex_bytes::PoolId;
 use ntex_io::{Base, Io};
 use ntex_service::{Service, ServiceFactory};
 use ntex_tls::openssl::SslConnector as IoSslConnector;
-use ntex_util::future::Ready;
+use ntex_util::future::{BoxFuture, Ready};
 
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
@@ -97,13 +97,7 @@ impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
 impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Response = Io<SslFilter<Base>>;
     type Error = ConnectError;
-    type Future<'f> =
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + 'f>>;
-
-    #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
+    type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
     #[inline]
     fn call(&self, req: Connect<T>) -> Self::Future<'_> {

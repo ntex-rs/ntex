@@ -112,21 +112,17 @@ impl<'f, T: Service<R>, R> Future for InFlightServiceResponse<'f, T, R> {
 #[cfg(test)]
 mod tests {
     use ntex_service::{apply, fn_factory, Service, ServiceFactory};
-    use std::{task::Context, task::Poll, time::Duration};
+    use std::{task::Poll, time::Duration};
 
     use super::*;
-    use crate::future::lazy;
+    use crate::future::{lazy, BoxFuture};
 
     struct SleepService(Duration);
 
     impl Service<()> for SleepService {
         type Response = ();
         type Error = ();
-        type Future<'f> = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
-
-        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
+        type Future<'f> = BoxFuture<'f, Result<(), ()>>;
 
         fn call(&self, _: ()) -> Self::Future<'_> {
             let fut = crate::time::sleep(self.0);

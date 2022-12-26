@@ -1,9 +1,10 @@
 use std::task::{Context, Poll};
-use std::{cell, error, fmt, future, future::Future, marker, pin::Pin, rc::Rc};
+use std::{cell, error, fmt, future, marker, pin::Pin, rc::Rc};
 
 use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
+use crate::util::BoxFuture;
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
@@ -250,8 +251,7 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = HttpServiceHandler<F, S::Service, B, X::Service, U::Service>;
-    type Future<'f> =
-        Pin<Box<dyn future::Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
     fn create(&self, _: ()) -> Self::Future<'_> {
         let fut = self.srv.create(());
@@ -440,7 +440,7 @@ pin_project_lite::pin_project! {
         U: 'static,
     {
         H1 { #[pin] fut: h1::Dispatcher<F, S, B, X, U> },
-        H2 { fut: Pin<Box<dyn Future<Output = Result<(), DispatchError>>>> },
+        H2 { fut: BoxFuture<'static, Result<(), DispatchError>> },
     }
 }
 

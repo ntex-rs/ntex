@@ -1,12 +1,12 @@
 use std::{
     cell::Cell, cell::RefCell, fmt, future::Future, io, marker::PhantomData, mem, net,
-    pin::Pin, rc::Rc,
+    rc::Rc,
 };
 
 use log::error;
 
 use crate::service::{self, boxed, ServiceFactory as NServiceFactory};
-use crate::util::{HashMap, Ready};
+use crate::util::{BoxFuture, HashMap, Ready};
 use crate::{io::Io, util::PoolId};
 
 use super::service::{
@@ -157,9 +157,7 @@ impl InternalServiceFactory for ConfiguredService {
         })
     }
 
-    fn create(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>> {
+    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         // configure services
         let rt = ServiceRuntime::new(self.topics.clone());
         let cfg_fut = self.rt.configure(ServiceRuntime(rt.0.clone()));
@@ -212,10 +210,7 @@ impl InternalServiceFactory for ConfiguredService {
 pub(super) trait ServiceRuntimeConfiguration {
     fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration + Send>;
 
-    fn configure(
-        &self,
-        rt: ServiceRuntime,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>>;
+    fn configure(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), ()>>;
 }
 
 pub(super) struct ConfigWrapper<F, R, E> {
@@ -239,10 +234,7 @@ where
         })
     }
 
-    fn configure(
-        &self,
-        rt: ServiceRuntime,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
+    fn configure(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), ()>> {
         let f = self.f.clone();
         Box::pin(async move {
             (f)(rt).await.map_err(|e| {
@@ -261,7 +253,7 @@ pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 struct ServiceRuntimeInner {
     names: HashMap<String, Token>,
     services: HashMap<Token, BoxServiceFactory>,
-    onstart: Vec<Pin<Box<dyn Future<Output = ()>>>>,
+    onstart: Vec<BoxFuture<'static, ()>>,
 }
 
 impl ServiceRuntime {
@@ -350,7 +342,7 @@ where
     type Error = ();
     type InitError = ();
     type Service = BoxedServerService;
-    type Future<'f> = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>> + 'f>> where Self: 'f;
+    type Future<'f> = BoxFuture<'f, Result<BoxedServerService, ()>> where Self: 'f;
 
     fn create(&self, _: ()) -> Self::Future<'_> {
         let pool = self.pool;

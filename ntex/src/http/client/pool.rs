@@ -7,7 +7,7 @@ use ntex_h2::{self as h2};
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
 use crate::time::{now, Millis};
-use crate::util::{ready, ByteString, HashMap, HashSet};
+use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, service::Service, task::LocalWaker};
 
 use super::connection::{Connection, ConnectionType};
@@ -115,7 +115,7 @@ where
 {
     type Response = Connection;
     type Error = ConnectError;
-    type Future<'f> = Pin<Box<dyn Future<Output = Result<Connection, ConnectError>>>>;
+    type Future<'f> = BoxFuture<'f, Result<Connection, ConnectError>>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

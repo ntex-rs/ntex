@@ -7,7 +7,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use crate::http::encoding::Decoder;
 use crate::http::header::CONTENT_LENGTH;
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::util::{stream_recv, BytesMut};
+use crate::util::{stream_recv, BoxFuture, BytesMut};
 use crate::web::error::{ErrorRenderer, JsonError, JsonPayloadError, WebResponseError};
 use crate::web::responder::{Ready, Responder};
 use crate::web::{FromRequest, HttpRequest};
@@ -164,7 +164,7 @@ where
     T: DeserializeOwned + 'static,
 {
     type Error = JsonPayloadError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
+    type Future = BoxFuture<'static, Result<Self, Self::Error>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
@@ -269,7 +269,7 @@ struct JsonBody<U> {
     #[cfg(not(feature = "compress"))]
     stream: Option<Payload>,
     err: Option<JsonPayloadError>,
-    fut: Option<Pin<Box<dyn Future<Output = Result<U, JsonPayloadError>>>>>,
+    fut: Option<BoxFuture<'static, Result<U, JsonPayloadError>>>,
 }
 
 impl<U> JsonBody<U>

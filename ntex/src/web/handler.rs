@@ -1,5 +1,7 @@
 use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
+use crate::util::BoxFuture;
+
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::httprequest::HttpRequest;
@@ -37,7 +39,7 @@ pub(super) trait HandlerFn<Err: ErrorRenderer> {
     fn call(
         &self,
         _: WebRequest<Err>,
-    ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
+    ) -> BoxFuture<'static, Result<WebResponse, Err::Container>>;
 
     fn clone_handler(&self) -> Box<dyn HandlerFn<Err>>;
 }
@@ -81,7 +83,7 @@ where
     fn call(
         &self,
         req: WebRequest<Err>,
-    ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>> {
+    ) -> BoxFuture<'static, Result<WebResponse, Err::Container>> {
         let (req, mut payload) = req.into_parts();
 
         Box::pin(HandlerWrapperResponse {

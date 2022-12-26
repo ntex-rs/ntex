@@ -8,7 +8,7 @@ use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::RequestHeadType;
 use crate::time::{sleep, Millis, Sleep};
-use crate::util::{Bytes, Stream};
+use crate::util::{BoxFuture, Bytes, Stream};
 
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
@@ -49,7 +49,7 @@ impl From<PrepForSendingError> for SendRequestError {
 #[must_use = "futures do nothing unless polled"]
 pub enum SendClientRequest {
     Fut(
-        Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>>>>,
+        BoxFuture<'static, Result<ClientResponse, SendRequestError>>,
         Option<Sleep>,
         bool,
     ),
@@ -58,7 +58,7 @@ pub enum SendClientRequest {
 
 impl SendClientRequest {
     pub(crate) fn new(
-        send: Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>>>>,
+        send: BoxFuture<'static, Result<ClientResponse, SendRequestError>>,
         response_decompress: bool,
         timeout: Millis,
     ) -> SendClientRequest {

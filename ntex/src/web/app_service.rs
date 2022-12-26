@@ -5,7 +5,7 @@ use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{fn_service, Middleware, PipelineFactory, Service, ServiceFactory};
-use crate::util::Extensions;
+use crate::util::{BoxFuture, Extensions};
 
 use super::config::AppConfig;
 use super::error::ErrorRenderer;
@@ -22,9 +22,8 @@ type HttpService<Err: ErrorRenderer> =
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type BoxResponse<'f, Err: ErrorRenderer> =
-    Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>> + 'f>>;
-type FnStateFactory =
-    Box<dyn Fn(Extensions) -> Pin<Box<dyn Future<Output = Result<Extensions, ()>>>>>;
+    BoxFuture<'f, Result<WebResponse, Err::Container>>;
+type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extensions, ()>>>;
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes state factories.
@@ -64,7 +63,7 @@ where
     type Error = Err::Container;
     type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
-    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>> where Self: 'f;
+    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>> where Self: 'f;
 
     fn create(&self, _: ()) -> Self::Future<'_> {
         ServiceFactory::create(self, AppConfig::default())
@@ -87,7 +86,7 @@ where
     type Error = Err::Container;
     type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
-    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>> where Self: 'f;
+    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>> where Self: 'f;
 
     fn create(&self, config: AppConfig) -> Self::Future<'_> {
         let services = std::mem::take(&mut *self.services.borrow_mut());

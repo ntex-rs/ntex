@@ -226,7 +226,7 @@ mod tests {
     use ntex_service::{apply, fn_factory, Service, ServiceFactory};
 
     use super::*;
-    use crate::future::lazy;
+    use crate::future::{lazy, BoxFuture};
 
     #[derive(Clone, Debug, PartialEq)]
     struct SleepService(Duration);
@@ -243,11 +243,7 @@ mod tests {
     impl Service<()> for SleepService {
         type Response = ();
         type Error = SrvError;
-        type Future<'f> = Pin<Box<dyn Future<Output = Result<(), SrvError>>>>;
-
-        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
+        type Future<'f> = BoxFuture<'f, Result<(), SrvError>>;
 
         fn poll_shutdown(&self, _: &mut Context<'_>, is_error: bool) -> Poll<()> {
             if is_error {

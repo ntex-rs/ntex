@@ -1,11 +1,10 @@
-use std::{convert::TryInto, rc::Rc};
-use std::{future::Future, net::SocketAddr, pin::Pin, task::Context, task::Poll};
+use std::{convert::TryInto, net::SocketAddr, rc::Rc, task::Context, task::Poll};
 
 use log::error;
 
 use crate::io::Io;
 use crate::service::{boxed, Service, ServiceFactory};
-use crate::util::{Pool, PoolId, Ready};
+use crate::util::{BoxFuture, Pool, PoolId, Ready};
 use crate::{rt::spawn, time::Millis};
 
 use super::{counter::CounterGuard, socket::Stream, Config, Token};
@@ -31,9 +30,7 @@ pub(super) trait InternalServiceFactory: Send {
 
     fn clone_factory(&self) -> Box<dyn InternalServiceFactory>;
 
-    fn create(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>;
+    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>;
 }
 
 pub(super) type BoxedServerService =
@@ -150,9 +147,7 @@ where
         })
     }
 
-    fn create(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>> {
+    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         let token = self.token;
         let cfg = Config::default();
         let pool = cfg.get_pool_id();
@@ -180,9 +175,7 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
         self.as_ref().clone_factory()
     }
 
-    fn create(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>> {
+    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         self.as_ref().create()
     }
 }

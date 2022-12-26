@@ -4,7 +4,7 @@ use std::{collections::VecDeque, future::Future, io, net::SocketAddr, pin::Pin};
 use ntex_bytes::{PoolId, PoolRef};
 use ntex_io::{types, Io};
 use ntex_service::{Service, ServiceFactory};
-use ntex_util::future::{Either, Ready};
+use ntex_util::future::{BoxFuture, Either, Ready};
 
 use crate::{net::tcp_connect_in, Address, Connect, ConnectError, Resolver};
 
@@ -34,7 +34,7 @@ impl<T> Connector<T> {
 
 impl<T: Address> Connector<T> {
     /// Resolve and connect to remote host
-    pub fn connect<U>(&self, message: U) -> impl Future<Output = Result<Io, ConnectError>>
+    pub async fn connect<U>(&self, message: U) -> Result<Io, ConnectError>
     where
         Connect<T>: From<U>,
     {
@@ -42,6 +42,7 @@ impl<T: Address> Connector<T> {
             state: ConnectState::Resolve(self.resolver.call(message.into())),
             pool: self.pool,
         }
+        .await
     }
 }
 
@@ -150,7 +151,7 @@ struct TcpConnectorResponse<T> {
     port: u16,
     addrs: Option<VecDeque<SocketAddr>>,
     #[allow(clippy::type_complexity)]
-    stream: Option<Pin<Box<dyn Future<Output = Result<Io, io::Error>>>>>,
+    stream: Option<BoxFuture<'static, Result<Io, io::Error>>>,
     pool: PoolRef,
 }
 

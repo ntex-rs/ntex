@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
+use std::{cell::RefCell, fmt, rc::Rc};
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
@@ -7,7 +7,7 @@ use crate::service::{dev::AndThen, pipeline, pipeline_factory, Pipeline, Pipelin
 use crate::service::{
     Identity, IntoServiceFactory, Middleware, Service, ServiceFactory, Stack,
 };
-use crate::util::{Either, Extensions, Ready};
+use crate::util::{BoxFuture, Either, Extensions, Ready};
 
 use super::dev::{insert_slesh, WebServiceConfig, WebServiceFactory};
 use super::error::ErrorRenderer;
@@ -419,8 +419,7 @@ where
     type Error = Err::Container;
     type Service = M::Service;
     type InitError = ();
-    type Future<'f> =
-        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
     fn create(&self, _: ()) -> Self::Future<'_> {
         Box::pin(async move {
@@ -442,8 +441,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
     type Error = Err::Container;
     type InitError = ();
     type Service = ResourceRouter<Err>;
-    type Future<'f> =
-        Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>> + 'f>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
     fn create(&self, _: ()) -> Self::Future<'_> {
         Box::pin(async move {
@@ -470,9 +468,9 @@ pub struct ResourceRouter<Err: ErrorRenderer> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ResourceRouter<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future<'a> = Either<
+    type Future<'f> = Either<
         Ready<WebResponse, Err::Container>,
-        Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>> + 'a>>,
+        BoxFuture<'f, Result<WebResponse, Err::Container>>,
     >;
 
     fn call(&self, mut req: WebRequest<Err>) -> Self::Future<'_> {

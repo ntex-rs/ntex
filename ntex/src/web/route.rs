@@ -1,6 +1,7 @@
-use std::{future::Future, mem, pin::Pin, rc::Rc};
+use std::{mem, rc::Rc};
 
-use crate::{http::Method, service::Service, service::ServiceFactory, util::Ready};
+use crate::util::{BoxFuture, Ready};
+use crate::{http::Method, service::Service, service::ServiceFactory};
 
 use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
@@ -87,7 +88,7 @@ impl<Err: ErrorRenderer> RouteService<Err> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
     #[inline]
     fn call(&self, req: WebRequest<Err>) -> Self::Future<'_> {
