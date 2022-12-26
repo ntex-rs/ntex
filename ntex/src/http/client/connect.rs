@@ -10,24 +10,24 @@ use super::{Connect as ClientConnect, Connection};
 pub(super) struct ConnectorWrapper<T>(pub(crate) T);
 
 pub(super) trait Connect {
-    fn send_request<'a>(
-        &'a self,
+    fn send_request(
+        &self,
         head: RequestHeadType,
         body: Body,
         addr: Option<net::SocketAddr>,
-    ) -> BoxFuture<'a, Result<ClientResponse, SendRequestError>>;
+    ) -> BoxFuture<'_, Result<ClientResponse, SendRequestError>>;
 }
 
 impl<T> Connect for ConnectorWrapper<T>
 where
     T: Service<ClientConnect, Response = Connection, Error = ConnectError>,
 {
-    fn send_request<'a>(
-        &'a self,
+    fn send_request(
+        &self,
         head: RequestHeadType,
         body: Body,
         addr: Option<net::SocketAddr>,
-    ) -> BoxFuture<'a, Result<ClientResponse, SendRequestError>> {
+    ) -> BoxFuture<'_, Result<ClientResponse, SendRequestError>> {
         Box::pin(async move {
             // connect to the host
             let fut = self.0.call(ClientConnect {

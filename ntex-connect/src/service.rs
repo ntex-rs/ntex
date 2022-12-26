@@ -80,11 +80,6 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Future<'f> = ConnectServiceResponse<'f, T>;
 
     #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
     fn call(&self, req: Connect<T>) -> Self::Future<'_> {
         ConnectServiceResponse::new(self.resolver.call(req))
     }

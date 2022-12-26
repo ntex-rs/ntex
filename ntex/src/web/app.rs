@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, future::Future, marker::PhantomData, rc::Rc, task};
+use std::{cell::RefCell, fmt, future::Future, marker::PhantomData, rc::Rc};
 
 use crate::http::Request;
 use crate::router::ResourceDef;
@@ -579,11 +579,6 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for Filter<Err> {
     type Response = WebRequest<Err>;
     type Error = Err::Container;
     type Future<'f> = Ready<WebRequest<Err>, Err::Container>;
-
-    #[inline]
-    fn poll_ready(&self, _: &mut task::Context<'_>) -> task::Poll<Result<(), Self::Error>> {
-        task::Poll::Ready(Ok(()))
-    }
 
     #[inline]
     fn call(&self, req: WebRequest<Err>) -> Self::Future<'_> {
