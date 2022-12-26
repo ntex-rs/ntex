@@ -199,7 +199,7 @@ where
 #[cfg(test)]
 mod tests {
     use ntex_util::future::{lazy, Ready};
-    use std::task::{Context, Poll};
+    use std::task::Poll;
 
     use super::*;
     use crate::{pipeline, pipeline_factory, Service, ServiceFactory};

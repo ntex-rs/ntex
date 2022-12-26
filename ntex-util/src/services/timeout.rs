@@ -214,7 +214,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{fmt, task::Context, task::Poll, time::Duration};
+    use std::{fmt, time::Duration};
 
     use ntex_service::{apply, fn_factory, Service, ServiceFactory};
 
@@ -238,14 +238,6 @@ mod tests {
         type Error = SrvError;
         type Future<'f> = BoxFuture<'f, Result<(), SrvError>>;
 
-        fn poll_shutdown(&self, _: &mut Context<'_>, is_error: bool) -> Poll<()> {
-            if is_error {
-                Poll::Ready(())
-            } else {
-                Poll::Pending
-            }
-        }
-
         fn call(&self, _: ()) -> Self::Future<'_> {
             let fut = crate::time::sleep(self.0);
             Box::pin(async move {
@@ -263,10 +255,7 @@ mod tests {
         let timeout = TimeoutService::new(resolution, SleepService(wait_time)).clone();
         assert_eq!(timeout.call(()).await, Ok(()));
         assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
-        assert!(lazy(|cx| timeout.poll_shutdown(cx, true)).await.is_ready());
-        assert!(lazy(|cx| timeout.poll_shutdown(cx, false))
-            .await
-            .is_pending());
+        assert!(lazy(|cx| timeout.poll_shutdown(cx)).await.is_ready());
     }
 
     #[ntex_macros::rt_test2]

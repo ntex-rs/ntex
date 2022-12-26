@@ -298,8 +298,7 @@ mod tests {
         let _ = srv.call(()).await;
         assert_eq!(inner.count.get(), 1);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-
-        assert!(lazy(|cx| srv.poll_shutdown(cx, false)).await.is_ready());
+        assert!(lazy(|cx| srv.poll_shutdown(cx)).await.is_ready());
     }
 
     #[ntex_macros::rt_test2]

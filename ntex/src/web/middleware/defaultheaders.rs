@@ -154,7 +154,7 @@ mod tests {
             .create(ok_service());
 
         assert!(lazy(|cx| mw.poll_ready(cx).is_ready()).await);
-        assert!(lazy(|cx| mw.poll_shutdown(cx, true).is_ready()).await);
+        assert!(lazy(|cx| mw.poll_shutdown(cx).is_ready()).await);
 
         let req = TestRequest::default().to_srv_request();
         let resp = mw.call(req).await.unwrap();

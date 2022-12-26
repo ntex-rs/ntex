@@ -474,7 +474,7 @@ mod tests {
 
         let srv = Middleware::create(&logger, srv.into_service());
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
-        assert!(lazy(|cx| srv.poll_shutdown(cx, true).is_ready()).await);
+        assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 
         let req = TestRequest::with_header(
             header::USER_AGENT,

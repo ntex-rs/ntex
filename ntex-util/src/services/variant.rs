@@ -315,7 +315,7 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
+        fn poll_shutdown(&self, _: &mut Context<'_>) -> Poll<()> {
             Poll::Ready(())
         }
 
@@ -336,7 +336,7 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
+        fn poll_shutdown(&self, _: &mut Context<'_>) -> Poll<()> {
             Poll::Ready(())
         }
 
@@ -354,7 +354,7 @@ mod tests {
         let service = factory.create(&()).await.unwrap();
 
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
-        assert!(lazy(|cx| service.poll_shutdown(cx, true)).await.is_ready());
+        assert!(lazy(|cx| service.poll_shutdown(cx)).await.is_ready());
 
         assert_eq!(service.call(Variant3::V1(())).await, Ok(1));
         assert_eq!(service.call(Variant3::V2(())).await, Ok(2));

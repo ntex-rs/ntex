@@ -729,6 +729,6 @@ mod tests {
         assert_eq!(pool.inner.borrow().available.len(), 2);
 
         assert!(lazy(|cx| pool.poll_ready(cx)).await.is_ready());
-        assert!(lazy(|cx| pool.poll_shutdown(cx, false)).await.is_ready());
+        assert!(lazy(|cx| pool.poll_shutdown(cx)).await.is_ready());
     }
 }
