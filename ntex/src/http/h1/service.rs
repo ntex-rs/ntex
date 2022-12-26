@@ -1,6 +1,4 @@
-use std::{
-    cell::RefCell, error::Error, fmt, future::Future, marker, pin::Pin, rc::Rc, task,
-};
+use std::{cell::RefCell, error::Error, fmt, marker, rc::Rc, task};
 
 use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, OnRequest, ServiceConfig};
@@ -9,7 +7,7 @@ use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
-use crate::time::Millis;
+use crate::{time::Millis, util::BoxFuture};
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;
@@ -213,12 +211,12 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = H1ServiceHandler<F, S::Service, B, X::Service, U::Service>;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Service, Self::InitError>>>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
-    fn new_service(&self, _: ()) -> Self::Future {
-        let fut = self.srv.new_service(());
-        let fut_ex = self.expect.new_service(());
-        let fut_upg = self.upgrade.as_ref().map(|f| f.new_service(()));
+    fn create(&self, _: ()) -> Self::Future<'_> {
+        let fut = self.srv.create(());
+        let fut_ex = self.expect.create(());
+        let fut_upg = self.upgrade.as_ref().map(|f| f.create(()));
         let on_request = self.on_request.borrow_mut().take();
         let cfg = self.cfg.clone();
 
@@ -270,7 +268,7 @@ where
 {
     type Response = ();
     type Error = DispatchError;
-    type Future = Dispatcher<F, S, B, X, U>;
+    type Future<'f> = Dispatcher<F, S, B, X, U>;
 
     fn poll_ready(
         &self,
@@ -316,11 +314,11 @@ where
         }
     }
 
-    fn poll_shutdown(&self, cx: &mut task::Context<'_>, is_error: bool) -> task::Poll<()> {
-        let ready = self.config.expect.poll_shutdown(cx, is_error).is_ready();
-        let ready = self.config.service.poll_shutdown(cx, is_error).is_ready() && ready;
+    fn poll_shutdown(&self, cx: &mut task::Context<'_>) -> task::Poll<()> {
+        let ready = self.config.expect.poll_shutdown(cx).is_ready();
+        let ready = self.config.service.poll_shutdown(cx).is_ready() && ready;
         let ready = if let Some(ref upg) = self.config.upgrade {
-            upg.poll_shutdown(cx, is_error).is_ready() && ready
+            upg.poll_shutdown(cx).is_ready() && ready
         } else {
             ready
         };
@@ -332,7 +330,7 @@ where
         }
     }
 
-    fn call(&self, io: Io<F>) -> Self::Future {
+    fn call(&self, io: Io<F>) -> Self::Future<'_> {
         log::trace!(
             "New http1 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()

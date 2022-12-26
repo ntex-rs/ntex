@@ -1,12 +1,12 @@
-use std::task::{Context, Poll};
-use std::{cell::Cell, future::Future, io, pin::Pin, sync::Arc, sync::Mutex};
+use std::{cell::Cell, io, sync::Arc, sync::Mutex, task::Context, task::Poll};
 
+use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
 use ntex::io::{DispatchItem, Dispatcher, Io};
 use ntex::service::{fn_factory, Service};
+use ntex::util::{BoxFuture, ByteString, Bytes, Ready};
 use ntex::ws::{self, handshake, handshake_response};
-use ntex::{codec::BytesCodec, util::ByteString, util::Bytes, util::Ready};
 
 struct WsService(Arc<Mutex<Cell<bool>>>);
 
@@ -33,14 +33,14 @@ impl Clone for WsService {
 impl Service<(Request, Io, h1::Codec)> for WsService {
     type Response = ();
     type Error = io::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<(), io::Error>>>>;
+    type Future<'f> = BoxFuture<'f, Result<(), io::Error>>;
 
     fn poll_ready(&self, _ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.set_polled();
         Poll::Ready(Ok(()))
     }
 
-    fn call(&self, (req, io, codec): (Request, Io, h1::Codec)) -> Self::Future {
+    fn call(&self, (req, io, codec): (Request, Io, h1::Codec)) -> Self::Future<'_> {
         let fut = async move {
             let res = handshake(req.head()).unwrap().message_body(());
 

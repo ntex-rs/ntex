@@ -2,8 +2,6 @@
 #[macro_use]
 extern crate log;
 
-use std::future::Future;
-
 mod error;
 mod message;
 mod resolve;
@@ -22,14 +20,15 @@ pub use self::resolve::Resolver;
 pub use self::service::Connector;
 
 use ntex_io::Io;
+use ntex_service::Service;
 
 /// Resolve and connect to remote host
-pub fn connect<T, U>(message: U) -> impl Future<Output = Result<Io, ConnectError>>
+pub async fn connect<T, U>(message: U) -> Result<Io, ConnectError>
 where
-    T: Address + 'static,
+    T: Address,
     Connect<T>: From<U>,
 {
-    service::ConnectServiceResponse::new(Box::pin(Resolver::new().lookup(message.into())))
+    service::ConnectServiceResponse::new(Resolver::new().call(message.into())).await
 }
 
 #[allow(unused_imports)]

@@ -1,9 +1,9 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{cell::RefCell, error::Error, future::Future, io, marker, pin::Pin, rc::Rc};
+use std::{cell::RefCell, error::Error, future::Future, io, marker, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Filter, Io, IoBoxed, IoStatusUpdate, RecvError};
-use crate::{service::Service, util::ready, util::Bytes};
+use crate::{service::Service, util::ready, util::BoxFuture, util::Bytes};
 
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -36,7 +36,9 @@ bitflags::bitflags! {
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
-    pub struct Dispatcher<F, S: Service<Request>, B, X: Service<Request>, U: Service<(Request, Io<F>, Codec)>> {
+    pub struct Dispatcher<F, S: Service<Request>, B, X: Service<Request>, U: Service<(Request, Io<F>, Codec)>>
+    where S: 'static, X: 'static, U: 'static
+    {
         #[pin]
         call: CallState<S, X>,
         st: State<B>,
@@ -66,12 +68,14 @@ enum State<B> {
 
 pin_project_lite::pin_project! {
     #[project = CallStateProject]
-    enum CallState<S: Service<Request>, X: Service<Request>> {
+    enum CallState<S: Service<Request>, X: Service<Request>>
+    where S: 'static, X: 'static
+    {
         None,
-        Service { #[pin] fut: S::Future },
-        ServiceUpgrade { #[pin] fut: S::Future },
-        Expect { #[pin] fut: X::Future },
-        Filter { fut: Pin<Box<dyn Future<Output = Result<Request, Response>>>> }
+        Service { #[pin] fut: S::Future<'static> },
+        ServiceUpgrade { #[pin] fut: S::Future<'static> },
+        Expect { #[pin] fut: X::Future<'static> },
+        Filter { fut: BoxFuture<'static, Result<Request, Response>> }
     }
 }
 
@@ -247,13 +251,19 @@ where
                                     continue;
                                 } else if this.inner.flags.contains(Flags::UPGRADE_HND) {
                                     // Handle upgrade requests
-                                    Some(CallState::ServiceUpgrade {
-                                        fut: this.inner.config.service.call(req),
-                                    })
+                                    let fut = this.inner.config.service.call(req);
+                                    let st = Some(CallState::ServiceUpgrade {
+                                        fut: unsafe { mem::transmute_copy(&fut) },
+                                    });
+                                    mem::forget(fut);
+                                    st
                                 } else {
-                                    Some(CallState::Service {
-                                        fut: this.inner.config.service.call(req),
-                                    })
+                                    let fut = this.inner.config.service.call(req);
+                                    let st = Some(CallState::Service {
+                                        fut: unsafe { mem::transmute_copy(&fut) },
+                                    });
+                                    mem::forget(fut);
+                                    st
                                 }
                             }
                             Err(e) => {
@@ -270,20 +280,29 @@ where
                                         .set_ctype(req.head().connection_type());
                                     if req.head().expect() {
                                         // Handle normal requests with EXPECT: 100-Continue` header
-                                        Some(CallState::Expect {
-                                            fut: this.inner.config.expect.call(req),
-                                        })
+                                        let fut = this.inner.config.expect.call(req);
+                                        let st = Some(CallState::Expect {
+                                            fut: unsafe { mem::transmute_copy(&fut) },
+                                        });
+                                        mem::forget(fut);
+                                        st
                                     } else if this.inner.flags.contains(Flags::UPGRADE_HND)
                                     {
                                         // Handle upgrade requests
-                                        Some(CallState::ServiceUpgrade {
-                                            fut: this.inner.config.service.call(req),
-                                        })
+                                        let fut = this.inner.config.service.call(req);
+                                        let st = Some(CallState::ServiceUpgrade {
+                                            fut: unsafe { mem::transmute_copy(&fut) },
+                                        });
+                                        mem::forget(fut);
+                                        st
                                     } else {
                                         // Handle normal requests
-                                        Some(CallState::Service {
-                                            fut: this.inner.config.service.call(req),
-                                        })
+                                        let fut = this.inner.config.service.call(req);
+                                        let st = Some(CallState::Service {
+                                            fut: unsafe { mem::transmute_copy(&fut) },
+                                        });
+                                        mem::forget(fut);
+                                        st
                                     }
                                 }
                                 Err(res) => {
@@ -347,11 +366,16 @@ where
                     log::trace!("switching to upgrade service for {:?}", req);
 
                     // Handle UPGRADE request
-                    crate::rt::spawn(this.inner.config.upgrade.as_ref().unwrap().call((
-                        req,
-                        io,
-                        this.inner.codec.clone(),
-                    )));
+                    let config = this.inner.config.clone();
+                    let codec = this.inner.codec.clone();
+                    crate::rt::spawn(async move {
+                        let _ = config
+                            .upgrade
+                            .as_ref()
+                            .unwrap()
+                            .call((req, io, codec))
+                            .await;
+                    });
                     return Poll::Ready(Ok(()));
                 }
                 // prepare to shutdown
@@ -492,24 +516,36 @@ where
                         }
                         call_state.set(if let Some(ref f) = self.config.on_request {
                             // Handle filter fut
-                            CallState::Filter {
-                                fut: f.call((req, self.io.get_ref())),
-                            }
+                            let fut = f.call((req, self.io.get_ref()));
+                            let st = CallState::Filter {
+                                fut: unsafe { mem::transmute_copy(&fut) },
+                            };
+                            mem::forget(fut);
+                            st
                         } else if req.head().expect() {
                             // Handle normal requests with EXPECT: 100-Continue` header
-                            CallState::Expect {
-                                fut: self.config.expect.call(req),
-                            }
+                            let fut = self.config.expect.call(req);
+                            let st = CallState::Expect {
+                                fut: unsafe { mem::transmute_copy(&fut) },
+                            };
+                            mem::forget(fut);
+                            st
                         } else if self.flags.contains(Flags::UPGRADE_HND) {
                             // Handle upgrade requests
-                            CallState::ServiceUpgrade {
-                                fut: self.config.service.call(req),
-                            }
+                            let fut = self.config.service.call(req);
+                            let st = CallState::ServiceUpgrade {
+                                fut: unsafe { mem::transmute_copy(&fut) },
+                            };
+                            mem::forget(fut);
+                            st
                         } else {
                             // Handle normal requests
-                            CallState::Service {
-                                fut: self.config.service.call(req),
-                            }
+                            let fut = self.config.service.call(req);
+                            let st = CallState::Service {
+                                fut: unsafe { mem::transmute_copy(&fut) },
+                            };
+                            mem::forget(fut);
+                            st
                         });
                         Poll::Ready(State::Call)
                     }

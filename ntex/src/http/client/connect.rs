@@ -1,8 +1,7 @@
-use std::{future::Future, net, pin::Pin};
+use std::net;
 
-use crate::http::body::Body;
-use crate::http::RequestHeadType;
-use crate::service::Service;
+use crate::http::{body::Body, RequestHeadType};
+use crate::{service::Service, util::BoxFuture};
 
 use super::error::{ConnectError, SendRequestError};
 use super::response::ClientResponse;
@@ -16,27 +15,26 @@ pub(super) trait Connect {
         head: RequestHeadType,
         body: Body,
         addr: Option<net::SocketAddr>,
-    ) -> Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>>>>;
+    ) -> BoxFuture<'_, Result<ClientResponse, SendRequestError>>;
 }
 
 impl<T> Connect for ConnectorWrapper<T>
 where
     T: Service<ClientConnect, Response = Connection, Error = ConnectError>,
-    T::Future: 'static,
 {
     fn send_request(
         &self,
         head: RequestHeadType,
         body: Body,
         addr: Option<net::SocketAddr>,
-    ) -> Pin<Box<dyn Future<Output = Result<ClientResponse, SendRequestError>>>> {
-        // connect to the host
-        let fut = self.0.call(ClientConnect {
-            uri: head.as_ref().uri.clone(),
-            addr,
-        });
-
+    ) -> BoxFuture<'_, Result<ClientResponse, SendRequestError>> {
         Box::pin(async move {
+            // connect to the host
+            let fut = self.0.call(ClientConnect {
+                uri: head.as_ref().uri.clone(),
+                addr,
+            });
+
             let connection = fut.await?;
 
             // send request

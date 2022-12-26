@@ -1,5 +1,15 @@
 # Changes
 
+## [0.4.0-alpha.0] - 2022-12-xx
+
+* Rename Transform to Middleware
+
+* Drop FnService's shutdown helper
+
+* Simplify Service::poll_shutdown() method
+
+* Add forward_poll_ready and forward_poll_shutdown macros
+
 ## [0.3.3] - 2022-07-08
 
 * Revert cleanups

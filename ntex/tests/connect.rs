@@ -237,7 +237,7 @@ async fn test_static_str() {
 }
 
 #[ntex::test]
-async fn test_new_service() {
+async fn test_create() {
     let srv = test_server(|| {
         fn_service(|io: Io| async move {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
@@ -248,7 +248,7 @@ async fn test_new_service() {
     });
 
     let factory = ntex::connect::Connector::new();
-    let conn = factory.new_service(()).await.unwrap();
+    let conn = factory.create(()).await.unwrap();
     let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }

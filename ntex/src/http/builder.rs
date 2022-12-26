@@ -209,7 +209,6 @@ where
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
-        <S::Service as Service<Request>>::Future: 'static,
     {
         let cfg = ServiceConfig::new(
             self.keep_alive,
@@ -230,8 +229,6 @@ where
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
-        S::Future: 'static,
-        <S::Service as Service<Request>>::Future: 'static,
     {
         let cfg = ServiceConfig::new(
             self.keep_alive,

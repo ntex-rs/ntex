@@ -7,7 +7,7 @@ use ntex_h2::{self as h2};
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
 use crate::time::{now, Millis};
-use crate::util::{ready, ByteString, HashMap, HashSet};
+use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, service::Service, task::LocalWaker};
 
 use super::connection::{Connection, ConnectionType};
@@ -50,8 +50,7 @@ pub(super) struct ConnectionPool<T> {
 
 impl<T> ConnectionPool<T>
 where
-    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin + 'static,
-    T::Future: Unpin,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
 {
     pub(super) fn new(
         connector: T,
@@ -113,24 +112,16 @@ impl<T> Clone for ConnectionPool<T> {
 impl<T> Service<Connect> for ConnectionPool<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
-    T::Future: Unpin,
 {
     type Response = Connection;
     type Error = ConnectError;
-    type Future = Pin<Box<dyn Future<Output = Result<Connection, ConnectError>>>>;
+    type Future<'f> = BoxFuture<'f, Result<Connection, ConnectError>>;
+
+    crate::forward_poll_ready!(connector);
+    crate::forward_poll_shutdown!(connector);
 
     #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.connector.poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.connector.poll_shutdown(cx, is_error)
-    }
-
-    #[inline]
-    fn call(&self, req: Connect) -> Self::Future {
+    fn call(&self, req: Connect) -> Self::Future<'_> {
         trace!("Get connection for {:?}", req.uri);
         let connector = self.connector.clone();
         let inner = self.inner.clone();
@@ -160,7 +151,7 @@ where
                     trace!("Connecting to {:?}", req.uri);
                     let uri = req.uri.clone();
                     let (tx, rx) = waiters.borrow_mut().pool.channel();
-                    OpenConnection::spawn(key, tx, uri, inner, connector.call(req));
+                    OpenConnection::spawn(key, tx, uri, inner, connector, req);
 
                     match rx.await {
                         Err(_) => Err(ConnectError::Disconnected(None)),
@@ -317,15 +308,14 @@ impl Inner {
 }
 
 struct ConnectionPoolSupport<T> {
-    connector: T,
+    connector: Rc<T>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
 }
 
 impl<T> Future for ConnectionPoolSupport<T>
 where
-    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin,
-    T::Future: Unpin + 'static,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
 {
     type Output = ();
 
@@ -379,7 +369,8 @@ where
                             tx,
                             uri,
                             this.inner.clone(),
-                            this.connector.call(connect),
+                            this.connector.clone(),
+                            connect,
                         );
                     }
                 }
@@ -394,46 +385,61 @@ where
     }
 }
 
-struct OpenConnection<F> {
-    key: Key,
-    fut: F,
-    uri: Uri,
-    tx: Option<Waiter>,
-    guard: Option<OpenGuard>,
-    disconnect_timeout: Millis,
-    inner: Rc<RefCell<Inner>>,
+pin_project_lite::pin_project! {
+    struct OpenConnection<'f, T: Service<Connect>>
+    where T: 'f
+    {
+        key: Key,
+        #[pin]
+        fut: T::Future<'f>,
+        uri: Uri,
+        tx: Option<Waiter>,
+        guard: Option<OpenGuard>,
+        disconnect_timeout: Millis,
+        inner: Rc<RefCell<Inner>>,
+    }
 }
 
-impl<F> OpenConnection<F>
+impl<'f, T> OpenConnection<'f, T>
 where
-    F: Future<Output = Result<IoBoxed, ConnectError>> + Unpin + 'static,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
 {
-    fn spawn(key: Key, tx: Waiter, uri: Uri, inner: Rc<RefCell<Inner>>, fut: F) {
+    fn spawn(
+        key: Key,
+        tx: Waiter,
+        uri: Uri,
+        inner: Rc<RefCell<Inner>>,
+        connector: Rc<T>,
+        msg: Connect,
+    ) {
         let disconnect_timeout = inner.borrow().disconnect_timeout;
 
-        spawn(OpenConnection {
-            fut,
-            uri,
-            disconnect_timeout,
-            tx: Some(tx),
-            key: key.clone(),
-            inner: inner.clone(),
-            guard: Some(OpenGuard::new(key, inner)),
+        spawn(async move {
+            OpenConnection::<T> {
+                fut: connector.call(msg),
+                tx: Some(tx),
+                key: key.clone(),
+                inner: inner.clone(),
+                guard: Some(OpenGuard::new(key, inner)),
+                uri,
+                disconnect_timeout,
+            }
+            .await
         });
     }
 }
 
-impl<F> Future for OpenConnection<F>
+impl<'f, T> Future for OpenConnection<'f, T>
 where
-    F: Future<Output = Result<IoBoxed, ConnectError>> + Unpin,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError>,
 {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().get_mut();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
 
         // open tcp connection
-        match ready!(Pin::new(&mut this.fut).poll(cx)) {
+        match ready!(this.fut.poll(cx)) {
             Err(err) => {
                 trace!(
                     "Failed to open client connection for {:?} with error {:?}",
@@ -447,7 +453,7 @@ where
                 Poll::Ready(())
             }
             Ok(io) => {
-                io.set_disconnect_timeout(this.disconnect_timeout);
+                io.set_disconnect_timeout(*this.disconnect_timeout);
 
                 // handle http2 proto
                 if io.query::<HttpProtocol>().get() == Some(HttpProtocol::Http2) {
@@ -723,6 +729,6 @@ mod tests {
         assert_eq!(pool.inner.borrow().available.len(), 2);
 
         assert!(lazy(|cx| pool.poll_ready(cx)).await.is_ready());
-        assert!(lazy(|cx| pool.poll_shutdown(cx, false)).await.is_ready());
+        assert!(lazy(|cx| pool.poll_shutdown(cx)).await.is_ready());
     }
 }

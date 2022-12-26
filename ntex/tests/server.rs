@@ -247,9 +247,9 @@ fn test_configure_async() {
 
 #[test]
 #[cfg(feature = "tokio")]
-#[cfg(not(target_os = "macos"))]
 #[allow(unreachable_code)]
 fn test_panic_in_worker() {
+    env_logger::init();
     let counter = Arc::new(AtomicUsize::new(0));
     let counter2 = counter.clone();
 
@@ -293,7 +293,7 @@ fn test_panic_in_worker() {
     thread::sleep(time::Duration::from_millis(300));
     assert!(net::TcpStream::connect(addr).is_ok());
     thread::sleep(time::Duration::from_millis(500));
-    assert_eq!(counter.load(Relaxed), 2);
+    assert_eq!(counter.load(Relaxed), 3);
 
     sys.stop();
     let _ = h.join();

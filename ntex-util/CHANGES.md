@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-alpha.0] - 2022-12-xx
+
+* Migrate to ntex-service 0.4
+
 ## [0.1.19] - 2022-12-13
 
 * Add `BoxFuture` helper type alias

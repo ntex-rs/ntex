@@ -1,12 +1,13 @@
 use std::{
     cell::Cell, cell::RefCell, fmt, future::Future, io, marker::PhantomData, mem, net,
-    pin::Pin, rc::Rc,
+    rc::Rc,
 };
 
 use log::error;
 
-use crate::util::{HashMap, Ready};
-use crate::{io::Io, service, util::PoolId};
+use crate::service::{self, boxed, ServiceFactory as NServiceFactory};
+use crate::util::{BoxFuture, HashMap, Ready};
+use crate::{io::Io, util::PoolId};
 
 use super::service::{
     BoxedServerService, InternalServiceFactory, ServerMessage, StreamService,
@@ -156,9 +157,7 @@ impl InternalServiceFactory for ConfiguredService {
         })
     }
 
-    fn create(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>> {
+    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         // configure services
         let rt = ServiceRuntime::new(self.topics.clone());
         let cfg_fut = self.rt.configure(ServiceRuntime(rt.0.clone()));
@@ -179,7 +178,7 @@ impl InternalServiceFactory for ConfiguredService {
             let mut res = vec![];
             for token in tokens {
                 if let Some(srv) = services.remove(&token) {
-                    let newserv = srv.new_service(());
+                    let newserv = srv.create(());
                     match newserv.await {
                         Ok(serv) => {
                             res.push((token, serv));
@@ -193,7 +192,7 @@ impl InternalServiceFactory for ConfiguredService {
                     let name = names.remove(&token).unwrap().0;
                     res.push((
                         token,
-                        Box::new(StreamService::new(
+                        boxed::rcservice(StreamService::new(
                             service::fn_service(move |_: Io| {
                                 error!("Service {:?} is not configured", name);
                                 Ready::<_, ()>::Ok(())
@@ -211,10 +210,7 @@ impl InternalServiceFactory for ConfiguredService {
 pub(super) trait ServiceRuntimeConfiguration {
     fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration + Send>;
 
-    fn configure(
-        &self,
-        rt: ServiceRuntime,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>>;
+    fn configure(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), ()>>;
 }
 
 pub(super) struct ConfigWrapper<F, R, E> {
@@ -238,10 +234,7 @@ where
         })
     }
 
-    fn configure(
-        &self,
-        rt: ServiceRuntime,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ()>>>> {
+    fn configure(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), ()>> {
         let f = self.f.clone();
         Box::pin(async move {
             (f)(rt).await.map_err(|e| {
@@ -259,8 +252,8 @@ pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 
 struct ServiceRuntimeInner {
     names: HashMap<String, Token>,
-    services: HashMap<Token, BoxedNewService>,
-    onstart: Vec<Pin<Box<dyn Future<Output = ()>>>>,
+    services: HashMap<Token, BoxServiceFactory>,
+    onstart: Vec<BoxFuture<'static, ()>>,
 }
 
 impl ServiceRuntime {
@@ -289,7 +282,6 @@ impl ServiceRuntime {
     where
         F: service::IntoServiceFactory<T, Io>,
         T: service::ServiceFactory<Io> + 'static,
-        T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
     {
@@ -304,7 +296,6 @@ impl ServiceRuntime {
     where
         F: service::IntoServiceFactory<T, Io>,
         T: service::ServiceFactory<Io> + 'static,
-        T::Future: 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
     {
@@ -313,7 +304,7 @@ impl ServiceRuntime {
             let token = *token;
             inner.services.insert(
                 token,
-                Box::new(ServiceFactory {
+                boxed::rcfactory(ServiceFactory {
                     pool,
                     inner: service.into_factory(),
                 }),
@@ -332,16 +323,8 @@ impl ServiceRuntime {
     }
 }
 
-type BoxedNewService = Box<
-    dyn service::ServiceFactory<
-        (Option<CounterGuard>, ServerMessage),
-        Response = (),
-        Error = (),
-        InitError = (),
-        Service = BoxedServerService,
-        Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>,
-    >,
->;
+type BoxServiceFactory =
+    service::boxed::RcServiceFactory<(), (Option<CounterGuard>, ServerMessage), (), (), ()>;
 
 struct ServiceFactory<T> {
     inner: T,
@@ -351,7 +334,6 @@ struct ServiceFactory<T> {
 impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage)> for ServiceFactory<T>
 where
     T: service::ServiceFactory<Io>,
-    T::Future: 'static,
     T::Service: 'static,
     T::Error: 'static,
     T::InitError: fmt::Debug + 'static,
@@ -360,14 +342,14 @@ where
     type Error = ();
     type InitError = ();
     type Service = BoxedServerService;
-    type Future = Pin<Box<dyn Future<Output = Result<BoxedServerService, ()>>>>;
+    type Future<'f> = BoxFuture<'f, Result<BoxedServerService, ()>> where Self: 'f;
 
-    fn new_service(&self, _: ()) -> Self::Future {
+    fn create(&self, _: ()) -> Self::Future<'_> {
         let pool = self.pool;
-        let fut = self.inner.new_service(());
+        let fut = self.inner.create(());
         Box::pin(async move {
             match fut.await {
-                Ok(s) => Ok(Box::new(StreamService::new(s, pool)) as BoxedServerService),
+                Ok(s) => Ok(boxed::rcservice(StreamService::new(s, pool))),
                 Err(e) => {
                     error!("Cannot construct service: {:?}", e);
                     Err(())

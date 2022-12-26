@@ -658,6 +658,12 @@ impl<F> Io<F> {
             Poll::Pending
         }
     }
+
+    #[inline]
+    /// Register dispatch task
+    pub fn poll_dispatch(&self, cx: &mut Context<'_>) {
+        self.0 .0.dispatch_task.register(cx.waker());
+    }
 }
 
 impl<F> AsRef<IoRef> for Io<F> {

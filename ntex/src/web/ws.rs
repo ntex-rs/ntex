@@ -1,5 +1,5 @@
 //! WebSockets protocol support
-use std::fmt;
+use std::{fmt, rc::Rc};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
@@ -8,8 +8,8 @@ use crate::service::{
     apply_fn, fn_factory_with_config, IntoServiceFactory, Service, ServiceFactory,
 };
 use crate::web::{HttpRequest, HttpResponse};
-use crate::ws::{error::HandshakeError, error::WsError, handshake};
-use crate::{io::DispatchItem, rt, time::Seconds, util::Either, util::Ready, ws};
+use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
+use crate::{io::DispatchItem, rt, time::Seconds, util::Either, util::Ready};
 
 /// Do websocket handshake and start websockets service.
 pub async fn start<T, F, Err>(req: HttpRequest, factory: F) -> Result<HttpResponse, Err>
@@ -19,23 +19,24 @@ where
     F: IntoServiceFactory<T, Frame, WsSink>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
-    let inner_factory = factory.into_factory().map_err(WsError::Service);
+    let inner_factory = Rc::new(factory.into_factory().map_err(WsError::Service));
 
     let factory = fn_factory_with_config(move |sink: WsSink| {
-        let fut = inner_factory.new_service(sink.clone());
+        let factory = inner_factory.clone();
 
         async move {
-            let srv = fut.await?;
+            let srv = factory.create(sink.clone()).await?;
+            let sink = sink.clone();
+
             Ok::<_, T::InitError>(apply_fn(srv, move |req, srv| match req {
-                DispatchItem::Item(item) => {
+                DispatchItem::<ws::Codec>::Item(item) => {
                     let s = if matches!(item, Frame::Close(_)) {
                         Some(sink.clone())
                     } else {
                         None
                     };
-                    let fut = srv.call(item);
                     Either::Left(async move {
-                        let result = fut.await;
+                        let result = srv.call(item).await;
                         if let Some(s) = s {
                             rt::spawn(async move { s.io().close() });
                         }
@@ -94,7 +95,7 @@ where
     let sink = WsSink::new(io.get_ref(), codec.clone());
 
     // create ws service
-    let srv = factory.into_factory().new_service(sink).await?;
+    let srv = factory.into_factory().create(sink.clone()).await?;
 
     // start websockets service dispatcher
     rt::spawn(async move {

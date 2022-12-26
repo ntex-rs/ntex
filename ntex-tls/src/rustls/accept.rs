@@ -51,15 +51,16 @@ impl<F> Clone for Acceptor<F> {
     }
 }
 
-impl<F: Filter, C> ServiceFactory<Io<F>, C> for Acceptor<F> {
+impl<F: Filter, C: 'static> ServiceFactory<Io<F>, C> for Acceptor<F> {
     type Response = Io<TlsFilter<F>>;
     type Error = io::Error;
     type Service = AcceptorService<F>;
 
     type InitError = ();
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f, C: 'f;
 
-    fn new_service(&self, _: C) -> Self::Future {
+    #[inline]
+    fn create(&self, _: C) -> Self::Future<'_> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ready::Ok(AcceptorService {
                 acceptor: self.inner.clone(),
@@ -80,7 +81,7 @@ pub struct AcceptorService<F> {
 impl<F: Filter> Service<Io<F>> for AcceptorService<F> {
     type Response = Io<TlsFilter<F>>;
     type Error = io::Error;
-    type Future = AcceptorServiceFut<F>;
+    type Future<'f> = AcceptorServiceFut<F>;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -92,7 +93,7 @@ impl<F: Filter> Service<Io<F>> for AcceptorService<F> {
     }
 
     #[inline]
-    fn call(&self, req: Io<F>) -> Self::Future {
+    fn call(&self, req: Io<F>) -> Self::Future<'_> {
         AcceptorServiceFut {
             _guard: self.conns.get(),
             fut: self.acceptor.clone().create(req),

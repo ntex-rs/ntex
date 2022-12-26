@@ -1,27 +1,25 @@
-use std::{
-    future::Future, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
-};
+use std::{future::Future, marker, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
-/// Apply transform to a service.
-pub fn apply<T, S, R, C, U>(t: T, factory: U) -> ApplyTransform<T, S, R, C>
+/// Apply middleware to a service.
+pub fn apply<T, S, R, C, U>(t: T, factory: U) -> ApplyMiddleware<T, S, C>
 where
     S: ServiceFactory<R, C>,
-    T: Transform<S::Service>,
+    T: Middleware<S::Service>,
     U: IntoServiceFactory<S, R, C>,
 {
-    ApplyTransform::new(t, factory.into_factory())
+    ApplyMiddleware::new(t, factory.into_factory())
 }
 
-/// The `Transform` trait defines the interface of a service factory that wraps inner service
+/// The `Middleware` trait defines the interface of a service factory that wraps inner service
 /// during construction.
 ///
-/// Transform(middleware) wraps inner service and runs during
+/// Middleware wraps inner service and runs during
 /// inbound and/or outbound processing in the request/response lifecycle.
 /// It may modify request and/or response.
 ///
-/// For example, timeout transform:
+/// For example, timeout middleware:
 ///
 /// ```rust,ignore
 /// pub struct Timeout<S> {
@@ -36,13 +34,13 @@ where
 ///     type Request = S::Request;
 ///     type Response = S::Response;
 ///     type Error = TimeoutError<S::Error>;
-///     type Future = TimeoutServiceResponse<S>;
+///     type Future = TimeoutResponse<S>;
 ///
-///     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+///     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
 ///         ready!(self.service.poll_ready(cx)).map_err(TimeoutError::Service)
 ///     }
 ///
-///     fn call(&mut self, req: S::Request) -> Self::Future {
+///     fn call(&self, req: S::Request) -> Self::Future {
 ///         TimeoutServiceResponse {
 ///             fut: self.service.call(req),
 ///             sleep: Delay::new(clock::now() + self.timeout),
@@ -54,76 +52,71 @@ where
 /// Timeout service in above example is decoupled from underlying service implementation
 /// and could be applied to any service.
 ///
-/// The `Transform` trait defines the interface of a Service factory. `Transform`
-/// is often implemented for middleware, defining how to construct a
-/// middleware Service. A Service that is constructed by the factory takes
+/// The `Middleware` trait defines the interface of a middleware factory, defining how to
+/// construct a middleware Service. A Service that is constructed by the factory takes
 /// the Service that follows it during execution as a parameter, assuming
 /// ownership of the next Service.
 ///
 /// Factory for `Timeout` middleware from the above example could look like this:
 ///
 /// ```rust,ignore
-/// pub struct TimeoutTransform {
+/// pub struct TimeoutMiddleware {
 ///     timeout: Duration,
 /// }
 ///
-/// impl<S> Transform<S> for TimeoutTransform<E>
+/// impl<S> Middleware<S> for TimeoutMiddleware<E>
 /// where
 ///     S: Service,
 /// {
-///     type Transform = Timeout<S>;
+///     type Service = Timeout<S>;
 ///
-///     fn new_transform(&self, service: S) -> Self::Transform {
-///         ok(TimeoutService {
+///     fn create(&self, service: S) -> Self::Service {
+///         ok(Timeout {
 ///             service,
 ///             timeout: self.timeout,
 ///         })
 ///     }
 /// }
 /// ```
-pub trait Transform<S> {
-    /// The `TransformService` value created by this factory
+pub trait Middleware<S> {
+    /// The middleware `Service` value created by this factory
     type Service;
 
-    /// Creates and returns a new Transform component, asynchronously
-    fn new_transform(&self, service: S) -> Self::Service;
+    /// Creates and returns a new middleware Service
+    fn create(&self, service: S) -> Self::Service;
 }
 
-impl<T, S> Transform<S> for Rc<T>
+impl<T, S> Middleware<S> for Rc<T>
 where
-    T: Transform<S>,
+    T: Middleware<S>,
 {
     type Service = T::Service;
 
-    fn new_transform(&self, service: S) -> T::Service {
-        self.as_ref().new_transform(service)
+    fn create(&self, service: S) -> T::Service {
+        self.as_ref().create(service)
     }
 }
 
-/// `Apply` transform to new service
-pub struct ApplyTransform<T, S, R, C>(Rc<(T, S)>, PhantomData<(R, C)>);
+/// `Apply` middleware to a service factory.
+pub struct ApplyMiddleware<T, S, C>(Rc<(T, S)>, marker::PhantomData<C>);
 
-impl<T, S, R, C> ApplyTransform<T, S, R, C>
-where
-    S: ServiceFactory<R, C>,
-    T: Transform<S::Service>,
-{
-    /// Create new `ApplyTransform` new service instance
-    pub(crate) fn new(t: T, service: S) -> Self {
-        Self(Rc::new((t, service)), PhantomData)
+impl<T, S, C> ApplyMiddleware<T, S, C> {
+    /// Create new `ApplyMiddleware` service factory instance
+    pub(crate) fn new(mw: T, svc: S) -> Self {
+        Self(Rc::new((mw, svc)), marker::PhantomData)
     }
 }
 
-impl<T, S, R, C> Clone for ApplyTransform<T, S, R, C> {
+impl<T, S, C> Clone for ApplyMiddleware<T, S, C> {
     fn clone(&self) -> Self {
-        ApplyTransform(self.0.clone(), PhantomData)
+        Self(self.0.clone(), marker::PhantomData)
     }
 }
 
-impl<T, S, R, C> ServiceFactory<R, C> for ApplyTransform<T, S, R, C>
+impl<T, S, R, C> ServiceFactory<R, C> for ApplyMiddleware<T, S, C>
 where
     S: ServiceFactory<R, C>,
-    T: Transform<S::Service>,
+    T: Middleware<S::Service>,
     T::Service: Service<R>,
 {
     type Response = <T::Service as Service<R>>::Response;
@@ -131,34 +124,35 @@ where
 
     type Service = T::Service;
     type InitError = S::InitError;
-    type Future = ApplyTransformFuture<T, S, R, C>;
+    type Future<'f> = ApplyMiddlewareFuture<'f, T, S, R, C> where Self: 'f, C: 'f;
 
-    fn new_service(&self, cfg: C) -> Self::Future {
-        ApplyTransformFuture {
-            store: self.0.clone(),
-            fut: self.0.as_ref().1.new_service(cfg),
-            _t: PhantomData,
+    #[inline]
+    fn create(&self, cfg: C) -> Self::Future<'_> {
+        ApplyMiddlewareFuture {
+            slf: self.0.clone(),
+            fut: self.0 .1.create(cfg),
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct ApplyTransformFuture<T, S, R, C>
+    pub struct ApplyMiddlewareFuture<'f, T, S, R, C>
     where
         S: ServiceFactory<R, C>,
-        T: Transform<S::Service>,
+        S: 'f,
+        T: Middleware<S::Service>,
+        C: 'f,
     {
-        store: Rc<(T, S)>,
+        slf: Rc<(T, S)>,
         #[pin]
-        fut: S::Future,
-        _t: PhantomData<C>
+        fut: S::Future<'f>,
     }
 }
 
-impl<T, S, R, C> Future for ApplyTransformFuture<T, S, R, C>
+impl<'f, T, S, R, C> Future for ApplyMiddlewareFuture<'f, T, S, R, C>
 where
     S: ServiceFactory<R, C>,
-    T: Transform<S::Service>,
+    T: Middleware<S::Service>,
 {
     type Output = Result<T::Service, S::InitError>;
 
@@ -166,24 +160,49 @@ where
         let this = self.as_mut().project();
 
         match this.fut.poll(cx)? {
-            Poll::Ready(srv) => Poll::Ready(Ok(this.store.0.new_transform(srv))),
+            Poll::Ready(srv) => Poll::Ready(Ok(this.slf.0.create(srv))),
             Poll::Pending => Poll::Pending,
         }
     }
 }
 
-/// Identity is a transform.
+/// Identity is a middleware.
 ///
 /// It returns service without modifications.
 #[derive(Debug, Clone, Copy)]
 pub struct Identity;
 
-impl<S> Transform<S> for Identity {
+impl<S> Middleware<S> for Identity {
     type Service = S;
 
     #[inline]
-    fn new_transform(&self, service: S) -> Self::Service {
+    fn create(&self, service: S) -> Self::Service {
         service
+    }
+}
+
+/// Stack of middlewares.
+#[derive(Debug, Clone)]
+pub struct Stack<Inner, Outer> {
+    inner: Inner,
+    outer: Outer,
+}
+
+impl<Inner, Outer> Stack<Inner, Outer> {
+    pub fn new(inner: Inner, outer: Outer) -> Self {
+        Stack { inner, outer }
+    }
+}
+
+impl<S, Inner, Outer> Middleware<S> for Stack<Inner, Outer>
+where
+    Inner: Middleware<S>,
+    Outer: Middleware<Inner::Service>,
+{
+    type Service = Outer::Service;
+
+    fn create(&self, service: S) -> Self::Service {
+        self.outer.create(self.inner.create(service))
     }
 }
 
@@ -191,34 +210,35 @@ impl<S> Transform<S> for Identity {
 #[allow(clippy::redundant_clone)]
 mod tests {
     use ntex_util::future::{lazy, Ready};
+    use std::marker;
 
     use super::*;
     use crate::{fn_service, Service, ServiceFactory};
 
     #[derive(Clone)]
-    struct Tr<R>(PhantomData<R>);
+    struct Tr<R>(marker::PhantomData<R>);
 
-    impl<S, R> Transform<S> for Tr<R> {
+    impl<S, R> Middleware<S> for Tr<R> {
         type Service = Srv<S, R>;
 
-        fn new_transform(&self, service: S) -> Self::Service {
-            Srv(service, PhantomData)
+        fn create(&self, service: S) -> Self::Service {
+            Srv(service, marker::PhantomData)
         }
     }
 
     #[derive(Clone)]
-    struct Srv<S, R>(S, PhantomData<R>);
+    struct Srv<S, R>(S, marker::PhantomData<R>);
 
     impl<S: Service<R>, R> Service<R> for Srv<S, R> {
         type Response = S::Response;
         type Error = S::Error;
-        type Future = S::Future;
+        type Future<'f> = S::Future<'f> where Self: 'f, R: 'f;
 
         fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.poll_ready(cx)
         }
 
-        fn call(&self, req: R) -> Self::Future {
+        fn call(&self, req: R) -> Self::Future<'_> {
             self.0.call(req)
         }
     }
@@ -226,12 +246,12 @@ mod tests {
     #[ntex::test]
     async fn transform() {
         let factory = apply(
-            Rc::new(Tr(PhantomData).clone()),
+            Rc::new(Tr(marker::PhantomData).clone()),
             fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)),
         )
         .clone();
 
-        let srv = factory.new_service(()).await.unwrap();
+        let srv = factory.create(&()).await.unwrap();
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -239,7 +259,7 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
-        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
         assert_eq!(res, Poll::Ready(()));
     }
 }

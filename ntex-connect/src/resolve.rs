@@ -1,8 +1,8 @@
-use std::{fmt, future::Future, io, marker, net, pin::Pin, task::Context, task::Poll};
+use std::{fmt, io, marker, net};
 
 use ntex_rt::spawn_blocking;
 use ntex_service::{Service, ServiceFactory};
-use ntex_util::future::{Either, Ready};
+use ntex_util::future::{BoxFuture, Either, Ready};
 
 use crate::{Address, Connect, ConnectError};
 
@@ -24,69 +24,62 @@ impl<T> Resolver<T> {
 
 impl<T: Address> Resolver<T> {
     /// Lookup ip addresses for provided host
-    pub fn lookup(
-        &self,
-        mut req: Connect<T>,
-    ) -> impl Future<Output = Result<Connect<T>, ConnectError>> {
+    pub async fn lookup(&self, mut req: Connect<T>) -> Result<Connect<T>, ConnectError> {
         if req.addr.is_some() || req.req.addr().is_some() {
-            Either::Right(Ready::Ok(req))
+            Ok(req)
         } else if let Ok(ip) = req.host().parse() {
             req.addr = Some(Either::Left(net::SocketAddr::new(ip, req.port())));
-            Either::Right(Ready::Ok(req))
+            Ok(req)
         } else {
             trace!("DNS resolver: resolving host {:?}", req.host());
 
-            Either::Left(async move {
-                let host = if req.host().contains(':') {
-                    req.host().to_string()
-                } else {
-                    format!("{}:{}", req.host(), req.port())
-                };
+            let host = if req.host().contains(':') {
+                req.host().to_string()
+            } else {
+                format!("{}:{}", req.host(), req.port())
+            };
 
-                let fut =
-                    spawn_blocking(move || net::ToSocketAddrs::to_socket_addrs(&host));
+            let fut = spawn_blocking(move || net::ToSocketAddrs::to_socket_addrs(&host));
+            match fut.await {
+                Ok(Ok(ips)) => {
+                    let port = req.port();
+                    let req = req.set_addrs(ips.map(|mut ip| {
+                        ip.set_port(port);
+                        ip
+                    }));
 
-                match fut.await {
-                    Ok(Ok(ips)) => {
-                        let port = req.port();
-                        let req = req.set_addrs(ips.map(|mut ip| {
-                            ip.set_port(port);
-                            ip
-                        }));
+                    trace!(
+                        "DNS resolver: host {:?} resolved to {:?}",
+                        req.host(),
+                        req.addrs()
+                    );
 
-                        trace!(
-                            "DNS resolver: host {:?} resolved to {:?}",
-                            req.host(),
-                            req.addrs()
-                        );
-
-                        if req.addr.is_none() {
-                            Err(ConnectError::NoRecords)
-                        } else {
-                            Ok(req)
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        trace!(
-                            "DNS resolver: failed to resolve host {:?} err: {}",
-                            req.host(),
-                            e
-                        );
-                        Err(ConnectError::Resolver(e))
-                    }
-                    Err(e) => {
-                        trace!(
-                            "DNS resolver: failed to resolve host {:?} err: {}",
-                            req.host(),
-                            e
-                        );
-                        Err(ConnectError::Resolver(io::Error::new(
-                            io::ErrorKind::Other,
-                            e,
-                        )))
+                    if req.addr.is_none() {
+                        Err(ConnectError::NoRecords)
+                    } else {
+                        Ok(req)
                     }
                 }
-            })
+                Ok(Err(e)) => {
+                    trace!(
+                        "DNS resolver: failed to resolve host {:?} err: {}",
+                        req.host(),
+                        e
+                    );
+                    Err(ConnectError::Resolver(e))
+                }
+                Err(e) => {
+                    trace!(
+                        "DNS resolver: failed to resolve host {:?} err: {}",
+                        req.host(),
+                        e
+                    );
+                    Err(ConnectError::Resolver(io::Error::new(
+                        io::ErrorKind::Other,
+                        e,
+                    )))
+                }
+            }
         }
     }
 }
@@ -103,15 +96,15 @@ impl<T> Clone for Resolver<T> {
     }
 }
 
-impl<T: Address, C> ServiceFactory<Connect<T>, C> for Resolver<T> {
+impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Resolver<T> {
     type Response = Connect<T>;
     type Error = ConnectError;
     type Service = Resolver<T>;
     type InitError = ();
-    type Future = Ready<Self::Service, Self::InitError>;
+    type Future<'f> = Ready<Self::Service, Self::InitError>;
 
     #[inline]
-    fn new_service(&self, _: C) -> Self::Future {
+    fn create(&self, _: C) -> Self::Future<'_> {
         Ready::Ok(self.clone())
     }
 }
@@ -119,15 +112,10 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Resolver<T> {
 impl<T: Address> Service<Connect<T>> for Resolver<T> {
     type Response = Connect<T>;
     type Error = ConnectError;
-    type Future = Pin<Box<dyn Future<Output = Result<Connect<T>, Self::Error>>>>;
+    type Future<'f> = BoxFuture<'f, Result<Connect<T>, Self::Error>>;
 
     #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn call(&self, req: Connect<T>) -> Self::Future {
+    fn call(&self, req: Connect<T>) -> Self::Future<'_> {
         Box::pin(self.lookup(req))
     }
 }
@@ -141,7 +129,7 @@ mod tests {
     async fn resolver() {
         let resolver = Resolver::default().clone();
         assert!(format!("{:?}", resolver).contains("Resolver"));
-        let srv = resolver.new_service(()).await.unwrap();
+        let srv = resolver.create(()).await.unwrap();
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
 
         let res = srv.call(Connect::new("www.rust-lang.org")).await;

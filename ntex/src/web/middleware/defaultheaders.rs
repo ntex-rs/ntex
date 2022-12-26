@@ -1,10 +1,10 @@
 //! Middleware for setting default response headers
-use std::task::{Context, Poll};
-use std::{convert::TryFrom, future::Future, pin::Pin, rc::Rc};
+use std::{convert::TryFrom, rc::Rc};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
-use crate::service::{Service, Transform};
+use crate::service::{Middleware, Service};
+use crate::util::BoxFuture;
 use crate::web::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
@@ -86,10 +86,10 @@ impl DefaultHeaders {
     }
 }
 
-impl<S> Transform<S> for DefaultHeaders {
+impl<S> Middleware<S> for DefaultHeaders {
     type Service = DefaultHeadersMiddleware<S>;
 
-    fn new_transform(&self, service: S) -> Self::Service {
+    fn create(&self, service: S) -> Self::Service {
         DefaultHeadersMiddleware {
             service,
             inner: self.inner.clone(),
@@ -105,37 +105,28 @@ pub struct DefaultHeadersMiddleware<S> {
 impl<S, E> Service<WebRequest<E>> for DefaultHeadersMiddleware<S>
 where
     S: Service<WebRequest<E>, Response = WebResponse>,
-    S::Future: 'static,
+    E: 'static,
 {
     type Response = WebResponse;
     type Error = S::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future<'f> =
+        BoxFuture<'f, Result<Self::Response, Self::Error>> where S: 'f, E: 'f;
 
-    #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx)
-    }
+    crate::forward_poll_ready!(service);
+    crate::forward_poll_shutdown!(service);
 
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
-
-    fn call(&self, req: WebRequest<E>) -> Self::Future {
-        let inner = self.inner.clone();
-        let fut = self.service.call(req);
-
+    fn call(&self, req: WebRequest<E>) -> Self::Future<'_> {
         Box::pin(async move {
-            let mut res = fut.await?;
+            let mut res = self.service.call(req).await?;
 
             // set response headers
-            for (key, value) in inner.headers.iter() {
+            for (key, value) in self.inner.headers.iter() {
                 if !res.headers().contains_key(key) {
                     res.headers_mut().insert(key.clone(), value.clone());
                 }
             }
             // default content-type
-            if inner.ct && !res.headers().contains_key(&CONTENT_TYPE) {
+            if self.inner.ct && !res.headers().contains_key(&CONTENT_TYPE) {
                 res.headers_mut().insert(
                     CONTENT_TYPE,
                     HeaderValue::from_static("application/octet-stream"),
@@ -160,10 +151,10 @@ mod tests {
     async fn test_default_headers() {
         let mw = DefaultHeaders::new()
             .header(CONTENT_TYPE, "0001")
-            .new_transform(ok_service());
+            .create(ok_service());
 
         assert!(lazy(|cx| mw.poll_ready(cx).is_ready()).await);
-        assert!(lazy(|cx| mw.poll_shutdown(cx, true).is_ready()).await);
+        assert!(lazy(|cx| mw.poll_shutdown(cx).is_ready()).await);
 
         let req = TestRequest::default().to_srv_request();
         let resp = mw.call(req).await.unwrap();
@@ -177,7 +168,7 @@ mod tests {
         };
         let mw = DefaultHeaders::new()
             .header(CONTENT_TYPE, "0001")
-            .new_transform(srv.into_service());
+            .create(srv.into_service());
         let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
     }
@@ -189,7 +180,7 @@ mod tests {
         };
         let mw = DefaultHeaders::new()
             .content_type()
-            .new_transform(srv.into_service());
+            .create(srv.into_service());
 
         let req = TestRequest::default().to_srv_request();
         let resp = mw.call(req).await.unwrap();

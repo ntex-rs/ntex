@@ -5,7 +5,7 @@ use encoding_rs::UTF_8;
 use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
-use crate::util::{stream_recv, Bytes, BytesMut, Either, Ready, Stream};
+use crate::util::{stream_recv, BoxFuture, Bytes, BytesMut, Either, Ready, Stream};
 use crate::web::error::{ErrorRenderer, PayloadError};
 use crate::web::{FromRequest, HttpRequest};
 
@@ -141,10 +141,8 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
 /// ```
 impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
     type Error = PayloadError;
-    type Future = Either<
-        Pin<Box<dyn Future<Output = Result<Bytes, Self::Error>>>>,
-        Ready<Bytes, Self::Error>,
-    >;
+    type Future =
+        Either<BoxFuture<'static, Result<Bytes, Self::Error>>, Ready<Bytes, Self::Error>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
@@ -195,10 +193,8 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
 /// ```
 impl<Err: ErrorRenderer> FromRequest<Err> for String {
     type Error = PayloadError;
-    type Future = Either<
-        Pin<Box<dyn Future<Output = Result<String, Self::Error>>>>,
-        Ready<String, Self::Error>,
-    >;
+    type Future =
+        Either<BoxFuture<'static, Result<String, Self::Error>>, Ready<String, Self::Error>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
@@ -315,7 +311,7 @@ struct HttpMessageBody {
     #[cfg(not(feature = "compress"))]
     stream: Option<crate::http::Payload>,
     err: Option<PayloadError>,
-    fut: Option<Pin<Box<dyn Future<Output = Result<Bytes, PayloadError>>>>>,
+    fut: Option<BoxFuture<'static, Result<Bytes, PayloadError>>>,
 }
 
 impl HttpMessageBody {

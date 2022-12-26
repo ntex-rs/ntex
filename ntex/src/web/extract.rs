@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::error::ErrorRenderer;
 use super::httprequest::HttpRequest;
-use crate::{http::Payload, util::Ready};
+use crate::{http::Payload, util::BoxFuture, util::Ready};
 
 /// Trait implemented by types that can be extracted from request.
 ///
@@ -79,7 +79,7 @@ where
     <T as FromRequest<Err>>::Error: Into<Err::Container>,
 {
     type Error = Err::Container;
-    type Future = Pin<Box<dyn Future<Output = Result<Option<T>, Self::Error>>>>;
+    type Future = BoxFuture<'static, Result<Option<T>, Self::Error>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
@@ -147,7 +147,7 @@ where
     E: ErrorRenderer,
 {
     type Error = T::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Result<T, T::Error>, Self::Error>>>>;
+    type Future = BoxFuture<'static, Result<Result<T, T::Error>, Self::Error>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {

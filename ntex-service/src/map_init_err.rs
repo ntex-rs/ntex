@@ -48,58 +48,64 @@ where
 
     type Service = A::Service;
     type InitError = E;
-    type Future = MapInitErrFuture<A, R, C, F, E>;
+    type Future<'f> = MapInitErrFuture<'f, A, R, C, F, E> where Self: 'f, C: 'f;
 
-    fn new_service(&self, cfg: C) -> Self::Future {
+    #[inline]
+    fn create(&self, cfg: C) -> Self::Future<'_> {
         MapInitErrFuture {
-            fut: self.a.new_service(cfg),
             f: self.f.clone(),
+            fut: self.a.create(cfg),
         }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapInitErrFuture<A, R, C, F, E>
+    pub struct MapInitErrFuture<'f, A, R, C, F, E>
     where
         A: ServiceFactory<R, C>,
+        A: 'f,
         F: Fn(A::InitError) -> E,
+        C: 'f,
     {
         f: F,
         #[pin]
-        fut: A::Future,
+        fut: A::Future<'f>,
     }
 }
 
-impl<A, R, C, F, E> Future for MapInitErrFuture<A, R, C, F, E>
+impl<'f, A, R, C, F, E> Future for MapInitErrFuture<'f, A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
     F: Fn(A::InitError) -> E,
 {
     type Output = Result<A::Service, E>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        this.fut.poll(cx).map_err(this.f)
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().project();
+        this.fut.poll(cx).map_err(|e| (self.project().f)(e))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{fn_factory_with_config, fn_service, pipeline_factory, ServiceFactory};
+    use crate::{fn_factory_with_config, into_service, pipeline_factory, ServiceFactory};
 
     #[ntex::test]
     async fn map_init_err() {
-        let factory = pipeline_factory(fn_factory_with_config(|err: bool| async move {
-            if err {
-                Err(())
-            } else {
-                Ok(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
+        let factory = pipeline_factory(fn_factory_with_config(|err: &bool| {
+            let err = *err;
+            async move {
+                if err {
+                    Err(())
+                } else {
+                    Ok(into_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
+                }
             }
         }))
         .map_init_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "err"))
         .clone();
 
-        assert!(factory.new_service(true).await.is_err());
-        assert!(factory.new_service(false).await.is_ok());
+        assert!(factory.create(&true).await.is_err());
+        assert!(factory.create(&false).await.is_ok());
     }
 }

@@ -8,7 +8,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::util::{stream_recv, BytesMut};
+use crate::util::{stream_recv, BoxFuture, BytesMut};
 use crate::web::error::{ErrorRenderer, UrlencodedError, WebResponseError};
 use crate::web::responder::{Ready, Responder};
 use crate::web::{FromRequest, HttpRequest};
@@ -101,7 +101,7 @@ where
     Err: ErrorRenderer,
 {
     type Error = UrlencodedError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
+    type Future = BoxFuture<'static, Result<Self, Self::Error>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
@@ -218,7 +218,7 @@ struct UrlEncoded<U> {
     length: Option<usize>,
     encoding: &'static Encoding,
     err: Option<UrlencodedError>,
-    fut: Option<Pin<Box<dyn Future<Output = Result<U, UrlencodedError>>>>>,
+    fut: Option<BoxFuture<'static, Result<U, UrlencodedError>>>,
 }
 
 impl<U> UrlEncoded<U> {

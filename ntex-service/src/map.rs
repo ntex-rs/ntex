@@ -16,7 +16,7 @@ impl<A, F, Req, Res> Map<A, F, Req, Res> {
     pub(crate) fn new(service: A, f: F) -> Self
     where
         A: Service<Req>,
-        F: FnMut(A::Response) -> Res,
+        F: Fn(A::Response) -> Res,
     {
         Self {
             service,
@@ -44,62 +44,51 @@ where
 impl<A, F, Req, Res> Service<Req> for Map<A, F, Req, Res>
 where
     A: Service<Req>,
-    F: FnMut(A::Response) -> Res + Clone,
+    F: Fn(A::Response) -> Res,
 {
     type Response = Res;
     type Error = A::Error;
-    type Future = MapFuture<A, F, Req, Res>;
+    type Future<'f> = MapFuture<'f, A, F, Req, Res> where Self: 'f, Req: 'f;
+
+    crate::forward_poll_ready!(service);
+    crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
-
-    #[inline]
-    fn call(&self, req: Req) -> Self::Future {
-        MapFuture::new(self.service.call(req), self.f.clone())
+    fn call(&self, req: Req) -> Self::Future<'_> {
+        MapFuture {
+            fut: self.service.call(req),
+            slf: self,
+        }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapFuture<A, F, Req, Res>
+    pub struct MapFuture<'f, A, F, Req, Res>
     where
         A: Service<Req>,
-        F: FnMut(A::Response) -> Res,
+        A: 'f,
+        Req: 'f,
+        F: Fn(A::Response) -> Res,
     {
-        f: F,
+        slf: &'f Map<A, F, Req, Res>,
         #[pin]
-        fut: A::Future,
+        fut: A::Future<'f>,
     }
 }
 
-impl<A, F, Req, Res> MapFuture<A, F, Req, Res>
+impl<'f, A, F, Req, Res> Future for MapFuture<'f, A, F, Req, Res>
 where
-    A: Service<Req>,
-    F: FnMut(A::Response) -> Res,
-{
-    fn new(fut: A::Future, f: F) -> Self {
-        MapFuture { f, fut }
-    }
-}
-
-impl<A, F, Req, Res> Future for MapFuture<A, F, Req, Res>
-where
-    A: Service<Req>,
-    F: FnMut(A::Response) -> Res,
+    A: Service<Req> + 'f,
+    Req: 'f,
+    F: Fn(A::Response) -> Res,
 {
     type Output = Result<Res, A::Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().project();
 
         match this.fut.poll(cx) {
-            Poll::Ready(Ok(resp)) => Poll::Ready(Ok((this.f)(resp))),
+            Poll::Ready(Ok(resp)) => Poll::Ready(Ok((self.project().slf.f)(resp))),
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
             Poll::Pending => Poll::Pending,
         }
@@ -107,19 +96,19 @@ where
 }
 
 /// `MapNewService` new service combinator
-pub struct MapServiceFactory<A, F, Req, Res, Cfg> {
+pub struct MapFactory<A, F, Req, Res, Cfg> {
     a: A,
     f: F,
     r: PhantomData<fn(Req, Cfg) -> Res>,
 }
 
-impl<A, F, Req, Res, Cfg> MapServiceFactory<A, F, Req, Res, Cfg> {
+impl<A, F, Req, Res, Cfg> MapFactory<A, F, Req, Res, Cfg>
+where
+    A: ServiceFactory<Req, Cfg>,
+    F: Fn(A::Response) -> Res,
+{
     /// Create new `Map` new service instance
-    pub(crate) fn new(a: A, f: F) -> Self
-    where
-        A: ServiceFactory<Req, Cfg>,
-        F: FnMut(A::Response) -> Res,
-    {
+    pub(crate) fn new(a: A, f: F) -> Self {
         Self {
             a,
             f,
@@ -128,7 +117,7 @@ impl<A, F, Req, Res, Cfg> MapServiceFactory<A, F, Req, Res, Cfg> {
     }
 }
 
-impl<A, F, Req, Res, Cfg> Clone for MapServiceFactory<A, F, Req, Res, Cfg>
+impl<A, F, Req, Res, Cfg> Clone for MapFactory<A, F, Req, Res, Cfg>
 where
     A: Clone,
     F: Clone,
@@ -143,51 +132,45 @@ where
     }
 }
 
-impl<A, F, Req, Res, Cfg> ServiceFactory<Req, Cfg>
-    for MapServiceFactory<A, F, Req, Res, Cfg>
+impl<A, F, Req, Res, Cfg> ServiceFactory<Req, Cfg> for MapFactory<A, F, Req, Res, Cfg>
 where
     A: ServiceFactory<Req, Cfg>,
-    F: FnMut(A::Response) -> Res + Clone,
+    F: Fn(A::Response) -> Res + Clone,
 {
     type Response = Res;
     type Error = A::Error;
 
     type Service = Map<A::Service, F, Req, Res>;
     type InitError = A::InitError;
-    type Future = MapServiceFuture<A, F, Req, Res, Cfg>;
+    type Future<'f> = MapFactoryFuture<'f, A, F, Req, Res, Cfg> where Self: 'f, Cfg: 'f;
 
     #[inline]
-    fn new_service(&self, cfg: Cfg) -> Self::Future {
-        MapServiceFuture::new(self.a.new_service(cfg), self.f.clone())
+    fn create(&self, cfg: Cfg) -> Self::Future<'_> {
+        MapFactoryFuture {
+            fut: self.a.create(cfg),
+            f: Some(self.f.clone()),
+        }
     }
 }
 
 pin_project_lite::pin_project! {
-    pub struct MapServiceFuture<A, F, Req, Res, Cfg>
+    pub struct MapFactoryFuture<'f, A, F, Req, Res, Cfg>
     where
         A: ServiceFactory<Req, Cfg>,
-        F: FnMut(A::Response) -> Res,
+        A: 'f,
+        F: Fn(A::Response) -> Res,
+        Cfg: 'f,
     {
         #[pin]
-        fut: A::Future,
+        fut: A::Future<'f>,
         f: Option<F>,
     }
 }
 
-impl<A, F, Req, Res, Cfg> MapServiceFuture<A, F, Req, Res, Cfg>
+impl<'f, A, F, Req, Res, Cfg> Future for MapFactoryFuture<'f, A, F, Req, Res, Cfg>
 where
     A: ServiceFactory<Req, Cfg>,
-    F: FnMut(A::Response) -> Res,
-{
-    fn new(fut: A::Future, f: F) -> Self {
-        MapServiceFuture { f: Some(f), fut }
-    }
-}
-
-impl<A, F, Req, Res, Cfg> Future for MapServiceFuture<A, F, Req, Res, Cfg>
-where
-    A: ServiceFactory<Req, Cfg>,
-    F: FnMut(A::Response) -> Res,
+    F: Fn(A::Response) -> Res,
 {
     type Output = Result<Map<A::Service, F, Req, Res>, A::InitError>;
 
@@ -207,7 +190,7 @@ mod tests {
     use ntex_util::future::{lazy, Ready};
 
     use super::*;
-    use crate::{IntoServiceFactory, Service, ServiceFactory};
+    use crate::{fn_factory, Service, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv;
@@ -215,13 +198,13 @@ mod tests {
     impl Service<()> for Srv {
         type Response = ();
         type Error = ();
-        type Future = Ready<(), ()>;
+        type Future<'f> = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future<'_> {
             Ready::Ok(())
         }
     }
@@ -236,7 +219,7 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
-        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
         assert_eq!(res, Poll::Ready(()));
     }
 
@@ -250,17 +233,16 @@ mod tests {
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
 
-        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
         assert_eq!(res, Poll::Ready(()));
     }
 
     #[ntex::test]
     async fn test_factory() {
-        let new_srv = (|| async { Ok::<_, ()>(Srv) })
-            .into_factory()
+        let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv) })
             .map(|_| "ok")
             .clone();
-        let srv = new_srv.new_service(&()).await.unwrap();
+        let srv = new_srv.create(&()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
@@ -268,11 +250,10 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline_factory() {
-        let new_srv =
-            crate::pipeline_factory((|| async { Ok::<_, ()>(Srv) }).into_factory())
-                .map(|_| "ok")
-                .clone();
-        let srv = new_srv.new_service(&()).await.unwrap();
+        let new_srv = crate::pipeline_factory(fn_factory(|| async { Ok::<_, ()>(Srv) }))
+            .map(|_| "ok")
+            .clone();
+        let srv = new_srv.create(&()).await.unwrap();
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
