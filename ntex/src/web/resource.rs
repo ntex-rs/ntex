@@ -13,7 +13,6 @@ use super::dev::{insert_slash, WebServiceConfig, WebServiceFactory};
 use super::extract::FromRequest;
 use super::handler::Handler;
 use super::request::WebRequest;
-use super::responder::Responder;
 use super::response::WebResponse;
 use super::route::{IntoRoutes, Route, RouteService};
 use super::{app::Filter, error::ErrorRenderer, guard::Guard, service::AppState};
@@ -225,7 +224,6 @@ where
         F: Handler<Args, Err> + 'static,
         Args: FromRequest<Err> + 'static,
         Args::Error: Into<Err::Container>,
-        <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     {
         self.routes.push(Route::new().to(handler));
         self

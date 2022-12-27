@@ -37,10 +37,10 @@ where
 }
 
 pub(super) trait HandlerFn<Err: ErrorRenderer> {
-    fn call<'a>(
-        &'a self,
+    fn call(
+        &self,
         _: WebRequest<Err>,
-    ) -> BoxFuture<'a, Result<WebResponse, Err::Container>>;
+    ) -> BoxFuture<'_, Result<WebResponse, Err::Container>>;
 }
 
 pub(super) struct HandlerWrapper<F, T, Err> {
@@ -62,7 +62,6 @@ where
     F: Handler<T, Err> + 'static,
     T: FromRequest<Err> + 'static,
     T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     fn call(

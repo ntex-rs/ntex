@@ -9,7 +9,6 @@ use super::extract::FromRequest;
 use super::guard::{self, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
 use super::request::WebRequest;
-use super::responder::Responder;
 use super::response::WebResponse;
 use super::HttpResponse;
 
@@ -184,7 +183,6 @@ impl<Err: ErrorRenderer> Route<Err> {
         F: Handler<Args, Err> + 'static,
         Args: FromRequest<Err> + 'static,
         Args::Error: Into<Err::Container>,
-        <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     {
         self.handler = Rc::new(HandlerWrapper::new(handler));
         self

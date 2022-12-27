@@ -300,7 +300,7 @@ where
 
 /// WebServiceFactory implementation for a Vec<T>
 #[allow(unused_parens)]
-impl<Err, T> WebServiceFactory<Err> for Vec<T>
+impl<T, Err> WebServiceFactory<Err> for Vec<T>
 where
     Err: ErrorRenderer,
     T: WebServiceFactory<Err> + 'static,

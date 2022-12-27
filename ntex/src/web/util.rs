@@ -14,7 +14,6 @@ use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::handler::Handler;
 use super::resource::Resource;
-use super::responder::Responder;
 use super::route::Route;
 use super::scope::Scope;
 use super::server::HttpServer;
@@ -229,7 +228,6 @@ where
     Args: FromRequest<Err> + 'static,
     Err: ErrorRenderer,
     Err::Container: From<Args::Error>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
 {
     Route::new().to(handler)
 }

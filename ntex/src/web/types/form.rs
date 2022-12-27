@@ -136,7 +136,6 @@ impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Form<T>
 where
     Err::Container: From<serde_urlencoded::ser::Error>,
 {
-    type Error = serde_urlencoded::ser::Error;
     type Future = Ready<Response>;
 
     fn respond_to(self, req: &HttpRequest) -> Self::Future {

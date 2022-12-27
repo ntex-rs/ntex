@@ -1,5 +1,13 @@
 # Changes
 
+## [0.6.0-alpha.0] - 2022-12-xx
+
+* Upgrade to ntex-service 0.4
+
+* web: Refactor FromRequest trait, allow to borrow from request
+
+* web: Remove useless Responder::Error
+
 ## [0.5.31] - 2022-11-30
 
 * http: Don't require mutable self reference in `Response::extensions_mut()` method
