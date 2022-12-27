@@ -17,13 +17,6 @@ pub trait FromRequest<Err>: Sized {
 
     /// Convert request to a Self
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future;
-
-    /// Convert request to a Self
-    ///
-    /// This method uses `Payload::None` as payload stream.
-    fn extract(req: &HttpRequest) -> Self::Future {
-        Self::from_request(req, &mut Payload::None)
-    }
 }
 
 /// Optionally extract a field from the request
@@ -74,7 +67,6 @@ pub trait FromRequest<Err>: Sized {
 impl<T, Err> FromRequest<Err> for Option<T>
 where
     T: FromRequest<Err> + 'static,
-    T::Future: 'static,
     Err: ErrorRenderer,
     <T as FromRequest<Err>>::Error: Into<Err::Container>,
 {
@@ -143,7 +135,6 @@ impl<T, E> FromRequest<E> for Result<T, T::Error>
 where
     T: FromRequest<E> + 'static,
     T::Error: 'static,
-    T::Future: 'static,
     E: ErrorRenderer,
 {
     type Error = T::Error;
@@ -166,6 +157,7 @@ impl<E: ErrorRenderer> FromRequest<E> for () {
     type Error = E::Container;
     type Future = Ready<(), E::Container>;
 
+    #[inline]
     fn from_request(_: &HttpRequest, _: &mut Payload) -> Self::Future {
         Ok(()).into()
     }

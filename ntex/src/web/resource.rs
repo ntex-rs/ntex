@@ -9,15 +9,14 @@ use crate::service::{
 };
 use crate::util::{BoxFuture, Either, Extensions, Ready};
 
-use super::dev::{insert_slesh, WebServiceConfig, WebServiceFactory};
-use super::error::ErrorRenderer;
+use super::dev::{insert_slash, WebServiceConfig, WebServiceFactory};
 use super::extract::FromRequest;
 use super::handler::Handler;
 use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
 use super::route::{IntoRoutes, Route, RouteService};
-use super::{app::Filter, guard::Guard, service::AppState};
+use super::{app::Filter, error::ErrorRenderer, guard::Guard, service::AppState};
 
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
@@ -223,7 +222,7 @@ where
     /// ```
     pub fn to<F, Args>(mut self, handler: F) -> Self
     where
-        F: Handler<Args, Err>,
+        F: Handler<Args, Err> + 'static,
         Args: FromRequest<Err> + 'static,
         Args::Error: Into<Err::Container>,
         <F::Output as Responder<Err>>::Error: Into<Err::Container>,
@@ -328,7 +327,7 @@ where
             Some(std::mem::take(&mut self.guards))
         };
         let mut rdef = if config.is_root() || !self.rdef.is_empty() {
-            ResourceDef::new(insert_slesh(self.rdef.clone()))
+            ResourceDef::new(insert_slash(self.rdef.clone()))
         } else {
             ResourceDef::new(self.rdef.clone())
         };

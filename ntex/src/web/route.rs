@@ -18,7 +18,7 @@ use super::HttpResponse;
 /// Route uses builder-like pattern for configuration.
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
 pub struct Route<Err: ErrorRenderer = DefaultError> {
-    handler: Box<dyn HandlerFn<Err>>,
+    handler: Rc<dyn HandlerFn<Err>>,
     methods: Vec<Method>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
@@ -27,7 +27,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// Create new route which matches any request.
     pub fn new() -> Route<Err> {
         Route {
-            handler: Box::new(HandlerWrapper::new(|| async { HttpResponse::NotFound() })),
+            handler: Rc::new(HandlerWrapper::new(|| async { HttpResponse::NotFound() })),
             methods: Vec::new(),
             guards: Rc::new(Vec::new()),
         }
@@ -45,7 +45,7 @@ impl<Err: ErrorRenderer> Route<Err> {
 
     pub(super) fn service(&self) -> RouteService<Err> {
         RouteService {
-            handler: self.handler.clone_handler(),
+            handler: self.handler.clone(),
             guards: self.guards.clone(),
             methods: self.methods.clone(),
         }
@@ -65,7 +65,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
 }
 
 pub struct RouteService<Err: ErrorRenderer> {
-    handler: Box<dyn HandlerFn<Err>>,
+    handler: Rc<dyn HandlerFn<Err>>,
     methods: Vec<Method>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
@@ -181,12 +181,12 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// ```
     pub fn to<F, Args>(mut self, handler: F) -> Self
     where
-        F: Handler<Args, Err>,
+        F: Handler<Args, Err> + 'static,
         Args: FromRequest<Err> + 'static,
         Args::Error: Into<Err::Container>,
         <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     {
-        self.handler = Box::new(HandlerWrapper::new(handler));
+        self.handler = Rc::new(HandlerWrapper::new(handler));
         self
     }
 }

@@ -225,7 +225,7 @@ pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
 /// ```
 pub fn to<F, Args, Err>(handler: F) -> Route<Err>
 where
-    F: Handler<Args, Err>,
+    F: Handler<Args, Err> + 'static,
     Args: FromRequest<Err> + 'static,
     Err: ErrorRenderer,
     Err::Container: From<Args::Error>,
