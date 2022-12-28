@@ -25,10 +25,10 @@ jobs:
         uses: Swatinem/rust-cache@v1.0.1
 
       - name: Code coverage (glommio)
-        run: cargo llvm-cov --no-report --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls" --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
+        run: cargo llvm-cov --no-report --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls"
 
       - name: Code coverage
-        run: cargo llvm-cov --no-report --all --all-features --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
+        run: cargo llvm-cov --no-report --all --all-features
 
       - name: Generate coverage report
         run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
