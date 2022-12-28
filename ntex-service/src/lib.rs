@@ -1,7 +1,7 @@
 //! See [`Service`] docs for information on this crate's foundational trait.
 
 #![deny(rust_2018_idioms, warnings)]
-#![allow(clippy::type_complexity)]
+// #![allow(clippy::type_complexity)]
 
 use std::future::Future;
 use std::rc::Rc;
@@ -16,15 +16,15 @@ mod map;
 mod map_config;
 mod map_err;
 mod map_init_err;
+mod middleware;
 mod pipeline;
 mod then;
-mod transform;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::map_config::{map_config, unit_config};
+pub use self::middleware::{apply, Identity, Middleware, Stack};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
-pub use self::transform::{apply, Identity, Middleware, Stack};
 
 #[allow(unused_variables)]
 /// An asynchronous function of `Request` to a `Response`.
@@ -369,6 +369,6 @@ pub mod dev {
     pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrFactory};
     pub use crate::map_init_err::MapInitErr;
+    pub use crate::middleware::ApplyMiddleware;
     pub use crate::then::{Then, ThenFactory};
-    pub use crate::transform::ApplyMiddleware;
 }

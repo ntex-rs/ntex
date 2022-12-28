@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn transform() {
+    async fn middleware() {
         let factory = apply(
             Rc::new(Tr(marker::PhantomData).clone()),
             fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)),

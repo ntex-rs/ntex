@@ -4,8 +4,8 @@ use crate::and_then::{AndThen, AndThenFactory};
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
+use crate::middleware::{ApplyMiddleware, Middleware};
 use crate::then::{Then, ThenFactory};
-use crate::transform::{ApplyMiddleware, Middleware};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Constructs new pipeline with one service in pipeline chain.
