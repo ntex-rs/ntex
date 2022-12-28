@@ -46,6 +46,7 @@ pub(crate) fn register(timeout: Duration, io: &IoRef) -> Instant {
             let inner = timer.clone();
 
             spawn(async move {
+                let guard = TimerGuard(inner.clone());
                 loop {
                     sleep(Millis::ONE_SEC).await;
                     {
@@ -71,11 +72,20 @@ pub(crate) fn register(timeout: Duration, io: &IoRef) -> Instant {
                         }
                     }
                 }
+                drop(guard);
             });
         }
     });
 
     expire
+}
+
+struct TimerGuard(Rc<RefCell<Inner>>);
+
+impl Drop for TimerGuard {
+    fn drop(&mut self) {
+        self.0.borrow_mut().running = false;
+    }
 }
 
 pub(crate) fn unregister(expire: Instant, io: &IoRef) {

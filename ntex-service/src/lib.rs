@@ -1,7 +1,7 @@
 //! See [`Service`] docs for information on this crate's foundational trait.
 
 #![deny(rust_2018_idioms, warnings)]
-// #![allow(clippy::type_complexity)]
+#![allow(clippy::type_complexity)]
 
 use std::future::Future;
 use std::rc::Rc;
