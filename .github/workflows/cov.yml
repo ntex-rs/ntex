@@ -25,10 +25,13 @@ jobs:
         uses: Swatinem/rust-cache@v1.0.1
 
       - name: Code coverage
-        run: cargo llvm-cov --all --all-features --lcov --output-path lcov.info
+        run: cargo llvm-cov --no-report --all --all-features --lcov --output-path lcov.info
 
       - name: Code coverage (glommio)
-        run: cargo llvm-cov --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls" --lcov --output-path lcov.info
+        run: cargo llvm-cov --no-report --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls" --lcov --output-path lcov.info
+
+      - name: Generate coverage report
+        run: cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
