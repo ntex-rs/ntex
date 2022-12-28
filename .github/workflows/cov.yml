@@ -24,11 +24,11 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v1.0.1
 
-      - name: Code coverage
-        run: cargo llvm-cov --no-report --all --all-features --lcov --output-path lcov.info
-
       - name: Code coverage (glommio)
-        run: cargo llvm-cov --no-report --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls" --lcov --output-path lcov.info
+        run: cargo llvm-cov --no-report --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls"
+
+      - name: Code coverage
+        run: cargo llvm-cov --no-report --all --all-features
 
       - name: Generate coverage report
         run: cargo llvm-cov report --lcov --output-path lcov.info
