@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0-beta.0] - 2022-12-28
+
+* Migrate to ntex-service 1.0
+
 ## [0.1.3] - 2022-01-30
 
 * Update to ntex-io 0.1.7

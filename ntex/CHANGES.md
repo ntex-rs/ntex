@@ -1,6 +1,6 @@
 # Changes
 
-## [0.6.0-alpha.0] - 2022-12-xx
+## [0.6.0-beta.0] - 2022-12-28
 
 * Upgrade to ntex-service 0.4
 

@@ -1,6 +1,6 @@
 # Changes
 
-## [0.4.0-alpha.0] - 2022-12-xx
+## [1.0.0-beta.0] - 2022-12-28
 
 * Rename Transform to Middleware
 
