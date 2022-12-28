@@ -1,0 +1,37 @@
+name: Coverage
+
+on: [pull_request, push]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        run: rustup toolchain install stable --component llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate Cargo.lock
+        uses: actions-rs/cargo@v1
+        with:
+          command: generate-lockfile
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v1.0.1
+
+      - name: Code coverage
+        run: cargo llvm-cov --all --all-features --lcov --output-path lcov.info
+
+      - name: Code coverage (glommio)
+        run: cargo llvm-cov --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls" --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: lcov.info
+          fail_ci_if_error: true
