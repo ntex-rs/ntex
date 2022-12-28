@@ -28,7 +28,7 @@ jobs:
         run: cargo llvm-cov --all --all-features --lcov --output-path lcov.info
 
       - name: Code coverage (glommio)
-        run: cargo llvm-cov --all --no-default-features --features=\"glommio,cookie,url,compress,openssl,rustls\" --lcov --output-path lcov.info
+        run: cargo llvm-cov --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls" --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
