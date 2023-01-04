@@ -135,7 +135,7 @@ where
 
 impl<F, Fut, Req, Res, Err> IntoService<FnService<F, Req>, Req> for F
 where
-    F: Fn(Req) -> Fut + 'static,
+    F: Fn(Req) -> Fut,
     Fut: Future<Output = Result<Res, Err>>,
 {
     #[inline]
@@ -198,7 +198,7 @@ where
 impl<F, Fut, Req, Res, Err, Cfg> ServiceFactory<Req, Cfg>
     for FnServiceFactory<F, Fut, Req, Res, Err, Cfg>
 where
-    F: Fn(Req) -> Fut + Clone + 'static,
+    F: Fn(Req) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,
 {
     type Response = Res;
@@ -220,7 +220,7 @@ where
 impl<F, Fut, Req, Res, Err, Cfg>
     IntoServiceFactory<FnServiceFactory<F, Fut, Req, Res, Err, Cfg>, Req, Cfg> for F
 where
-    F: Fn(Req) -> Fut + Clone + 'static,
+    F: Fn(Req) -> Fut + Clone,
     Fut: Future<Output = Result<Res, Err>>,
 {
     #[inline]

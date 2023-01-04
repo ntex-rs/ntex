@@ -37,7 +37,7 @@ impl<T> Connector<T> {
     }
 }
 
-impl<T: Address + 'static> Connector<T> {
+impl<T: Address> Connector<T> {
     /// Resolve and connect to remote host
     pub async fn connect<U>(&self, message: U) -> Result<Io<SslFilter<Base>>, ConnectError>
     where
