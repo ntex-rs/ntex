@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, task::Context, task::Poll};
+use std::marker::PhantomData;
 
 use ntex_service::{fn_service, pipeline_factory, Service, ServiceFactory};
 use ntex_util::future::Ready;
@@ -54,6 +54,7 @@ where
     type InitError = ();
     type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f;
 
+    #[inline]
     fn create(&self, _: ()) -> Self::Future<'_> {
         Ready::Ok(FilterService {
             filter: self.filter.clone(),
@@ -76,10 +77,7 @@ where
     type Error = T::Error;
     type Future<'f> = T::Future where T: 'f;
 
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
+    #[inline]
     fn call(&self, req: Io<F>) -> Self::Future<'_> {
         req.add_filter(self.filter.clone())
     }

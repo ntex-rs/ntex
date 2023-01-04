@@ -601,11 +601,6 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
     type Error = Err::Container;
     type Future<'f> = Either<BoxResponse<'f, Err>, Ready<Self::Response, Self::Error>>;
 
-    #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
     fn call(&self, mut req: WebRequest<Err>) -> Self::Future<'_> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
