@@ -205,8 +205,8 @@ static WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 // TODO: hash is always same size, we dont need String
 pub fn hash_key(key: &[u8]) -> String {
-    use sha1::Digest;
-    let mut hasher = sha1::Sha1::new();
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
 
     hasher.update(key);
     hasher.update(WS_GUID.as_bytes());
@@ -280,7 +280,7 @@ mod test {
     #[test]
     fn test_hash_key() {
         let hash = hash_key(b"hello actix-web");
-        assert_eq!(&hash, "cR1dlyUUJKp0s/Bel25u5TgvC3E=");
+        assert_eq!(&hash, "Nhu7Loo1RnhBCRpUHHe8g1/pXQpaTRO/MaP3z4/eEfw=");
     }
 
     #[test]
