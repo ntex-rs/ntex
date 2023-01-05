@@ -5,8 +5,11 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
 
 use crate::rt::{spawn, Arbiter};
+use crate::service::Service;
 use crate::time::{sleep, Millis, Sleep};
-use crate::util::{join_all, ready, select, stream_recv, Either, Stream as FutStream};
+use crate::util::{
+    join_all, ready, select, stream_recv, BoxFuture, Either, Stream as FutStream,
+};
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
@@ -204,7 +207,7 @@ impl Worker {
             state: WorkerState::Unavailable,
         });
 
-        let mut fut: Vec<Pin<Box<dyn Future<Output = _>>>> = Vec::new();
+        let mut fut: Vec<BoxFuture<'static, _>> = Vec::new();
         for (idx, factory) in wrk.factories.iter().enumerate() {
             let f = factory.create();
             fut.push(Box::pin(async move {
@@ -252,9 +255,9 @@ impl Worker {
             self.services.iter_mut().for_each(|srv| {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopped;
-                    let fut = srv.service.call((None, ServerMessage::ForceShutdown));
+                    let svc = srv.service.clone();
                     spawn(async move {
-                        let _ = fut.await;
+                        let _ = svc.call((None, ServerMessage::ForceShutdown)).await;
                     });
                 }
             });
@@ -264,9 +267,9 @@ impl Worker {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopping;
 
-                    let fut = srv.service.call((None, ServerMessage::Shutdown(timeout)));
+                    let svc = srv.service.clone();
                     spawn(async move {
-                        let _ = fut.await;
+                        let _ = svc.call((None, ServerMessage::Shutdown(timeout))).await;
                     });
                 }
             });
@@ -326,7 +329,7 @@ enum WorkerState {
     Restarting(
         usize,
         Token,
-        Pin<Box<dyn Future<Output = Result<Vec<(Token, BoxedServerService)>, ()>>>>,
+        BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>,
     ),
     Shutdown(Sleep, Sleep, Option<oneshot::Sender<bool>>),
 }
@@ -527,9 +530,9 @@ mod tests {
         type Error = ();
         type Service = Srv;
         type InitError = ();
-        type Future = Ready<Srv, ()>;
+        type Future<'f> = Ready<Srv, ()>;
 
-        fn new_service(&self, _: ()) -> Self::Future {
+        fn create(&self, _: ()) -> Self::Future<'_> {
             let mut cnt = self.counter.lock().unwrap();
             *cnt += 1;
             Ready::Ok(Srv {
@@ -545,7 +548,7 @@ mod tests {
     impl Service<Io> for Srv {
         type Response = ();
         type Error = ();
-        type Future = Ready<(), ()>;
+        type Future<'f> = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let st: St = { *self.st.lock().unwrap() };
@@ -559,14 +562,14 @@ mod tests {
             }
         }
 
-        fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
+        fn poll_shutdown(&self, _: &mut Context<'_>) -> Poll<()> {
             match *self.st.lock().unwrap() {
                 St::Ready => Poll::Ready(()),
                 St::Fail | St::Pending => Poll::Pending,
             }
         }
 
-        fn call(&self, _: Io) -> Self::Future {
+        fn call(&self, _: Io) -> Self::Future<'_> {
             Ready::Ok(())
         }
     }

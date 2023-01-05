@@ -397,7 +397,7 @@ impl ClientRequest {
             slf.addr,
             slf.response_decompress,
             slf.timeout,
-            slf.config.as_ref(),
+            slf.config,
             body,
         )
     }
@@ -413,7 +413,7 @@ impl ClientRequest {
             slf.addr,
             slf.response_decompress,
             slf.timeout,
-            slf.config.as_ref(),
+            slf.config,
             value,
         )
     }
@@ -431,7 +431,7 @@ impl ClientRequest {
             slf.addr,
             slf.response_decompress,
             slf.timeout,
-            slf.config.as_ref(),
+            slf.config,
             value,
         )
     }
@@ -451,7 +451,7 @@ impl ClientRequest {
             slf.addr,
             slf.response_decompress,
             slf.timeout,
-            slf.config.as_ref(),
+            slf.config,
             stream,
         )
     }
@@ -467,7 +467,7 @@ impl ClientRequest {
             slf.addr,
             slf.response_decompress,
             slf.timeout,
-            slf.config.as_ref(),
+            slf.config,
         )
     }
 

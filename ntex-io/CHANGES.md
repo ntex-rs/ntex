@@ -1,5 +1,15 @@
 # Changes
 
+## [0.2.0] - 2023-01-04
+
+* Release
+
+## [0.2.0-beta.0] - 2022-12-28
+
+* Upgrade to ntex-service 1.0
+
+* Restart timer after runtime stop
+
 ## [0.1.11] - 2022-12-02
 
 * Expose IoRef::start_keepalive_timer() and IoRef::remove_keepalive_timer() methods

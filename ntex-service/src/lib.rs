@@ -11,20 +11,22 @@ mod and_then;
 mod apply;
 pub mod boxed;
 mod fn_service;
+mod macros;
 mod map;
 mod map_config;
 mod map_err;
 mod map_init_err;
+mod middleware;
 mod pipeline;
 mod then;
-mod transform;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
-pub use self::map_config::{map_config, map_config_service, unit_config};
+pub use self::map_config::{map_config, unit_config};
+pub use self::middleware::{apply, Identity, Middleware, Stack};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
-pub use self::transform::{apply, Identity, Transform};
 
+#[allow(unused_variables)]
 /// An asynchronous function of `Request` to a `Response`.
 ///
 /// The `Service` trait represents a request/response interaction, receiving requests and returning
@@ -62,13 +64,9 @@ pub use self::transform::{apply, Identity, Transform};
 /// impl Service<u8> for MyService {
 ///     type Response = u64;
 ///     type Error = Infallible;
-///     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+///     type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 ///
-///     fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-///         Poll::Ready(Ok(()))
-///     }
-///
-///     fn call(&self, req: u8) -> Self::Future {
+///     fn call(&self, req: u8) -> Self::Future<'_> {
 ///         Box::pin(std::future::ready(Ok(req as u64)))
 ///     }
 /// }
@@ -88,8 +86,22 @@ pub trait Service<Req> {
     type Error;
 
     /// The future response value.
-    type Future: Future<Output = Result<Self::Response, Self::Error>>;
+    type Future<'f>: Future<Output = Result<Self::Response, Self::Error>>
+    where
+        Req: 'f,
+        Self: 'f;
 
+    /// Process the request and return the response asynchronously.
+    ///
+    /// This function is expected to be callable off-task. As such, implementations of `call`
+    /// should take care to not call `poll_ready`. If the  service is at capacity and the request
+    /// is unable to be handled, the returned `Future` should resolve to an error.
+    ///
+    /// Invoking `call` without first invoking `poll_ready` is permitted. Implementations must be
+    /// resilient to this fact.
+    fn call(&self, req: Req) -> Self::Future<'_>;
+
+    #[inline]
     /// Returns `Ready` when the service is able to process requests.
     ///
     /// If the service is at capacity, then `Pending` is returned and the task is notified when
@@ -103,27 +115,18 @@ pub trait Service<Req> {
     ///
     /// 1. `.poll_ready()` might be called on different task from actual service call.
     /// 1. In case of chained services, `.poll_ready()` is called for all services at once.
-    fn poll_ready(&self, ctx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>>;
+    fn poll_ready(&self, cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
 
     #[inline]
-    #[allow(unused_variables)]
     /// Shutdown service.
     ///
     /// Returns `Ready` when the service is properly shutdowns. This method might be called
     /// after it returns `Ready`.
-    fn poll_shutdown(&self, ctx: &mut task::Context<'_>, is_error: bool) -> Poll<()> {
+    fn poll_shutdown(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         Poll::Ready(())
     }
-
-    /// Process the request and return the response asynchronously.
-    ///
-    /// This function is expected to be callable off-task. As such, implementations of `call`
-    /// should take care to not call `poll_ready`. If the  service is at capacity and the request
-    /// is unable to be handled, the returned `Future` should resolve to an error.
-    ///
-    /// Invoking `call` without first invoking `poll_ready` is permitted. Implementations must be
-    /// resilient to this fact.
-    fn call(&self, req: Req) -> Self::Future;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service of the resulting type.
@@ -136,7 +139,7 @@ pub trait Service<Req> {
     fn map<F, Res>(self, f: F) -> crate::dev::Map<Self, F, Req, Res>
     where
         Self: Sized,
-        F: FnMut(Self::Response) -> Res,
+        F: Fn(Self::Response) -> Res,
     {
         crate::dev::Map::new(self, f)
     }
@@ -183,33 +186,33 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     type InitError;
 
     /// The future of the `ServiceFactory` instance.
-    type Future: Future<Output = Result<Self::Service, Self::InitError>>;
+    type Future<'f>: Future<Output = Result<Self::Service, Self::InitError>>
+    where
+        Cfg: 'f,
+        Self: 'f;
 
     /// Create and return a new service value asynchronously.
-    fn new_service(&self, cfg: Cfg) -> Self::Future;
+    fn create(&self, cfg: Cfg) -> Self::Future<'_>;
 
     #[inline]
     /// Map this service's output to a different type, returning a new service
     /// of the resulting type.
-    fn map<F, Res>(self, f: F) -> crate::map::MapServiceFactory<Self, F, Req, Res, Cfg>
+    fn map<F, Res>(self, f: F) -> crate::map::MapFactory<Self, F, Req, Res, Cfg>
     where
         Self: Sized,
-        F: FnMut(Self::Response) -> Res + Clone,
+        F: Fn(Self::Response) -> Res + Clone,
     {
-        crate::map::MapServiceFactory::new(self, f)
+        crate::map::MapFactory::new(self, f)
     }
 
     #[inline]
     /// Map this service's error to a different error, returning a new service.
-    fn map_err<F, E>(
-        self,
-        f: F,
-    ) -> crate::map_err::MapErrServiceFactory<Self, Req, Cfg, F, E>
+    fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrFactory<Self, Req, Cfg, F, E>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
     {
-        crate::map_err::MapErrServiceFactory::<_, _, Cfg, _, _>::new(self, f)
+        crate::map_err::MapErrFactory::new(self, f)
     }
 
     #[inline]
@@ -226,13 +229,13 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     }
 }
 
-impl<S, Req> Service<Req> for Box<S>
+impl<'a, S, Req> Service<Req> for &'a S
 where
     S: Service<Req> + ?Sized,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = S::Future;
+    type Future<'f> = S::Future<'f> where 'a: 'f, Req: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
@@ -240,12 +243,36 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        (**self).poll_shutdown(cx, is_error)
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        (**self).poll_shutdown(cx)
     }
 
     #[inline]
-    fn call(&self, request: Req) -> S::Future {
+    fn call(&self, request: Req) -> S::Future<'_> {
+        (**self).call(request)
+    }
+}
+
+impl<S, Req> Service<Req> for Box<S>
+where
+    S: Service<Req> + ?Sized,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future<'f> = S::Future<'f> where S: 'f, Req: 'f;
+
+    #[inline]
+    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+        (**self).poll_ready(cx)
+    }
+
+    #[inline]
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        (**self).poll_shutdown(cx)
+    }
+
+    #[inline]
+    fn call(&self, request: Req) -> S::Future<'_> {
         (**self).call(request)
     }
 }
@@ -256,18 +283,18 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = S::Future;
+    type Future<'f> = S::Future<'f> where S: 'f, Req: 'f;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         (**self).poll_ready(cx)
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        (**self).poll_shutdown(cx, is_error)
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        (**self).poll_shutdown(cx)
     }
 
-    fn call(&self, request: Req) -> S::Future {
+    fn call(&self, request: Req) -> S::Future<'_> {
         (**self).call(request)
     }
 }
@@ -280,20 +307,20 @@ where
     type Error = S::Error;
     type Service = S::Service;
     type InitError = S::InitError;
-    type Future = S::Future;
+    type Future<'f> = S::Future<'f> where S: 'f, Cfg: 'f;
 
-    fn new_service(&self, cfg: Cfg) -> S::Future {
-        self.as_ref().new_service(cfg)
+    fn create(&self, cfg: Cfg) -> S::Future<'_> {
+        self.as_ref().create(cfg)
     }
 }
 
 /// Trait for types that can be converted to a `Service`
-pub trait IntoService<T, Req>
+pub trait IntoService<Svc, Req>
 where
-    T: Service<Req>,
+    Svc: Service<Req>,
 {
     /// Convert to a `Service`
-    fn into_service(self) -> T;
+    fn into_service(self) -> Svc;
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
@@ -305,11 +332,11 @@ where
     fn into_factory(self) -> T;
 }
 
-impl<T, Req> IntoService<T, Req> for T
+impl<Svc, Req> IntoService<Svc, Req> for Svc
 where
-    T: Service<Req>,
+    Svc: Service<Req>,
 {
-    fn into_service(self) -> T {
+    fn into_service(self) -> Svc {
         self
     }
 }
@@ -324,24 +351,24 @@ where
 }
 
 /// Convert object of type `T` to a service `S`
-pub fn into_service<T, S, Req>(tp: T) -> S
+pub fn into_service<Svc, Req, F>(tp: F) -> Svc
 where
-    S: Service<Req>,
-    T: IntoService<S, Req>,
+    Svc: Service<Req>,
+    F: IntoService<Svc, Req>,
 {
     tp.into_service()
 }
 
 pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
-    pub use crate::apply::{Apply, ApplyServiceFactory};
+    pub use crate::apply::{Apply, ApplyFactory};
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
-    pub use crate::map::{Map, MapServiceFactory};
+    pub use crate::map::{Map, MapFactory};
     pub use crate::map_config::{MapConfig, UnitConfig};
-    pub use crate::map_err::{MapErr, MapErrServiceFactory};
+    pub use crate::map_err::{MapErr, MapErrFactory};
     pub use crate::map_init_err::MapInitErr;
+    pub use crate::middleware::ApplyMiddleware;
     pub use crate::then::{Then, ThenFactory};
-    pub use crate::transform::ApplyTransform;
 }

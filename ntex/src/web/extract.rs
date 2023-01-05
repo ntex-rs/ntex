@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::error::ErrorRenderer;
 use super::httprequest::HttpRequest;
-use crate::{http::Payload, util::Ready};
+use crate::{http::Payload, util::BoxFuture, util::Ready};
 
 /// Trait implemented by types that can be extracted from request.
 ///
@@ -17,13 +17,6 @@ pub trait FromRequest<Err>: Sized {
 
     /// Convert request to a Self
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future;
-
-    /// Convert request to a Self
-    ///
-    /// This method uses `Payload::None` as payload stream.
-    fn extract(req: &HttpRequest) -> Self::Future {
-        Self::from_request(req, &mut Payload::None)
-    }
 }
 
 /// Optionally extract a field from the request
@@ -74,12 +67,11 @@ pub trait FromRequest<Err>: Sized {
 impl<T, Err> FromRequest<Err> for Option<T>
 where
     T: FromRequest<Err> + 'static,
-    T::Future: 'static,
     Err: ErrorRenderer,
     <T as FromRequest<Err>>::Error: Into<Err::Container>,
 {
     type Error = Err::Container;
-    type Future = Pin<Box<dyn Future<Output = Result<Option<T>, Self::Error>>>>;
+    type Future = BoxFuture<'static, Result<Option<T>, Self::Error>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
@@ -143,11 +135,10 @@ impl<T, E> FromRequest<E> for Result<T, T::Error>
 where
     T: FromRequest<E> + 'static,
     T::Error: 'static,
-    T::Future: 'static,
     E: ErrorRenderer,
 {
     type Error = T::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Result<T, T::Error>, Self::Error>>>>;
+    type Future = BoxFuture<'static, Result<Result<T, T::Error>, Self::Error>>;
 
     #[inline]
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
@@ -166,6 +157,7 @@ impl<E: ErrorRenderer> FromRequest<E> for () {
     type Error = E::Container;
     type Future = Ready<(), E::Container>;
 
+    #[inline]
     fn from_request(_: &HttpRequest, _: &mut Payload) -> Self::Future {
         Ok(()).into()
     }

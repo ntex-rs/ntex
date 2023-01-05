@@ -1,6 +1,7 @@
-use std::{future::Future, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{mem, rc::Rc};
 
-use crate::{http::Method, service::Service, service::ServiceFactory, util::Ready};
+use crate::util::{BoxFuture, Ready};
+use crate::{http::Method, service::Service, service::ServiceFactory};
 
 use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
@@ -8,7 +9,6 @@ use super::extract::FromRequest;
 use super::guard::{self, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
 use super::request::WebRequest;
-use super::responder::Responder;
 use super::response::WebResponse;
 use super::HttpResponse;
 
@@ -17,7 +17,7 @@ use super::HttpResponse;
 /// Route uses builder-like pattern for configuration.
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
 pub struct Route<Err: ErrorRenderer = DefaultError> {
-    handler: Box<dyn HandlerFn<Err>>,
+    handler: Rc<dyn HandlerFn<Err>>,
     methods: Vec<Method>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
@@ -26,7 +26,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// Create new route which matches any request.
     pub fn new() -> Route<Err> {
         Route {
-            handler: Box::new(HandlerWrapper::new(|| async { HttpResponse::NotFound() })),
+            handler: Rc::new(HandlerWrapper::new(|| async { HttpResponse::NotFound() })),
             methods: Vec::new(),
             guards: Rc::new(Vec::new()),
         }
@@ -44,7 +44,7 @@ impl<Err: ErrorRenderer> Route<Err> {
 
     pub(super) fn service(&self) -> RouteService<Err> {
         RouteService {
-            handler: self.handler.clone_handler(),
+            handler: self.handler.clone(),
             guards: self.guards.clone(),
             methods: self.methods.clone(),
         }
@@ -56,15 +56,15 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = RouteService<Err>;
-    type Future = Ready<RouteService<Err>, ()>;
+    type Future<'f> = Ready<RouteService<Err>, ()>;
 
-    fn new_service(&self, _: ()) -> Self::Future {
+    fn create(&self, _: ()) -> Self::Future<'_> {
         Ok(self.service()).into()
     }
 }
 
 pub struct RouteService<Err: ErrorRenderer> {
-    handler: Box<dyn HandlerFn<Err>>,
+    handler: Rc<dyn HandlerFn<Err>>,
     methods: Vec<Method>,
     guards: Rc<Vec<Box<dyn Guard>>>,
 }
@@ -87,15 +87,10 @@ impl<Err: ErrorRenderer> RouteService<Err> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
     #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn call(&self, req: WebRequest<Err>) -> Self::Future {
+    fn call(&self, req: WebRequest<Err>) -> Self::Future<'_> {
         self.handler.call(req)
     }
 }
@@ -185,12 +180,11 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// ```
     pub fn to<F, Args>(mut self, handler: F) -> Self
     where
-        F: Handler<Args, Err>,
+        F: Handler<Args, Err> + 'static,
         Args: FromRequest<Err> + 'static,
         Args::Error: Into<Err::Container>,
-        <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     {
-        self.handler = Box::new(HandlerWrapper::new(handler));
+        self.handler = Rc::new(HandlerWrapper::new(handler));
         self
     }
 }

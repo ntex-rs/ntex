@@ -1,31 +1,34 @@
-use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::{future::Future, marker::PhantomData};
+
+use crate::util::BoxFuture;
 
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
-use super::httprequest::HttpRequest;
 use super::request::WebRequest;
 use super::responder::Responder;
 use super::response::WebResponse;
 
 /// Async fn handler
-pub trait Handler<T, Err>: Clone + 'static
+pub trait Handler<T, Err>
 where
     Err: ErrorRenderer,
 {
     type Output: Responder<Err>;
-    type Future: Future<Output = Self::Output> + 'static;
+    type Future<'f>: Future<Output = Self::Output>
+    where
+        Self: 'f;
 
-    fn call(&self, param: T) -> Self::Future;
+    fn call(&self, param: T) -> Self::Future<'_>;
 }
 
 impl<F, R, Err> Handler<(), Err> for F
 where
-    F: Fn() -> R + Clone + 'static,
-    R: Future + 'static,
+    F: Fn() -> R,
+    R: Future,
     R::Output: Responder<Err>,
     Err: ErrorRenderer,
 {
-    type Future = R;
+    type Future<'f> = R where Self: 'f;
     type Output = R::Output;
 
     fn call(&self, _: ()) -> R {
@@ -37,31 +40,15 @@ pub(super) trait HandlerFn<Err: ErrorRenderer> {
     fn call(
         &self,
         _: WebRequest<Err>,
-    ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>>;
-
-    fn clone_handler(&self) -> Box<dyn HandlerFn<Err>>;
+    ) -> BoxFuture<'_, Result<WebResponse, Err::Container>>;
 }
 
-pub(super) struct HandlerWrapper<F, T, Err>
-where
-    F: Handler<T, Err>,
-    T: FromRequest<Err>,
-    T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
-    Err: ErrorRenderer,
-{
+pub(super) struct HandlerWrapper<F, T, Err> {
     hnd: F,
     _t: PhantomData<(T, Err)>,
 }
 
-impl<F, T, Err> HandlerWrapper<F, T, Err>
-where
-    F: Handler<T, Err>,
-    T: FromRequest<Err>,
-    T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
-    Err: ErrorRenderer,
-{
+impl<F, T, Err> HandlerWrapper<F, T, Err> {
     pub(super) fn new(hnd: F) -> Self {
         HandlerWrapper {
             hnd,
@@ -72,120 +59,38 @@ where
 
 impl<F, T, Err> HandlerFn<Err> for HandlerWrapper<F, T, Err>
 where
-    F: Handler<T, Err>,
+    F: Handler<T, Err> + 'static,
     T: FromRequest<Err> + 'static,
     T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
     Err: ErrorRenderer,
 {
     fn call(
         &self,
         req: WebRequest<Err>,
-    ) -> Pin<Box<dyn Future<Output = Result<WebResponse, Err::Container>>>> {
-        let (req, mut payload) = req.into_parts();
+    ) -> BoxFuture<'_, Result<WebResponse, Err::Container>> {
+        Box::pin(async move {
+            let (req, mut payload) = req.into_parts();
+            let param = match T::from_request(&req, &mut payload).await {
+                Ok(param) => param,
+                Err(e) => return Ok(WebResponse::from_err::<Err, _>(e, req)),
+            };
 
-        Box::pin(HandlerWrapperResponse {
-            hnd: self.hnd.clone(),
-            from_request: Some(T::from_request(&req, &mut payload)),
-            handler: None,
-            responder: None,
-            req: Some(req),
+            let result = self.hnd.call(param).await;
+            let response = result.respond_to(&req).await;
+            Ok(WebResponse::new(response, req))
         })
-    }
-
-    fn clone_handler(&self) -> Box<dyn HandlerFn<Err>> {
-        Box::new(HandlerWrapper {
-            hnd: self.hnd.clone(),
-            _t: PhantomData,
-        })
-    }
-}
-
-pin_project_lite::pin_project! {
-    pub(super) struct HandlerWrapperResponse<F, T, Err>
-    where
-        F: Handler<T, Err>,
-        T: FromRequest<Err>,
-        T::Error: Into<Err::Container>,
-       <F::Output as Responder<Err>>::Error: Into<Err::Container>,
-        Err: ErrorRenderer,
-    {
-        hnd: F,
-        #[pin]
-        from_request: Option<T::Future>,
-        #[pin]
-        handler: Option<F::Future>,
-        #[pin]
-        responder: Option<<F::Output as Responder<Err>>::Future>,
-        req: Option<HttpRequest>,
-    }
-}
-
-impl<F, T, Err> Future for HandlerWrapperResponse<F, T, Err>
-where
-    F: Handler<T, Err>,
-    T: FromRequest<Err>,
-    T::Error: Into<Err::Container>,
-    <F::Output as Responder<Err>>::Error: Into<Err::Container>,
-    Err: ErrorRenderer,
-{
-    type Output = Result<WebResponse, Err::Container>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().project();
-
-        if let Some(fut) = this.from_request.as_pin_mut() {
-            return match fut.poll(cx) {
-                Poll::Ready(Ok(param)) => {
-                    let fut = this.hnd.call(param);
-                    this = self.as_mut().project();
-                    this.from_request.set(None);
-                    this.handler.set(Some(fut));
-                    self.poll(cx)
-                }
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(Err(e)) => Poll::Ready(Ok(WebResponse::from_err::<Err, _>(
-                    e,
-                    this.req.take().unwrap(),
-                ))),
-            };
-        }
-
-        if let Some(fut) = this.handler.as_pin_mut() {
-            return match fut.poll(cx) {
-                Poll::Ready(res) => {
-                    let fut = res.respond_to(this.req.as_ref().unwrap());
-                    this = self.as_mut().project();
-                    this.handler.set(None);
-                    this.responder.set(Some(fut));
-                    self.poll(cx)
-                }
-                Poll::Pending => Poll::Pending,
-            };
-        }
-
-        if let Some(fut) = this.responder.as_pin_mut() {
-            return match fut.poll(cx) {
-                Poll::Ready(res) => {
-                    Poll::Ready(Ok(WebResponse::new(res, this.req.take().unwrap())))
-                }
-                Poll::Pending => Poll::Pending,
-            };
-        }
-
-        unreachable!();
     }
 }
 
 /// FromRequest trait impl for tuples
 macro_rules! factory_tuple ({ $(($n:tt, $T:ident)),+} => {
     impl<Func, $($T,)+ Res, Err> Handler<($($T,)+), Err> for Func
-    where Func: Fn($($T,)+) -> Res + Clone + 'static,
+    where Func: Fn($($T,)+) -> Res + 'static,
           Res: Future + 'static,
           Res::Output: Responder<Err>,
           Err: ErrorRenderer,
     {
-        type Future = Res;
+        type Future<'f> = Res where Self: 'f;
         type Output = Res::Output;
 
         fn call(&self, param: ($($T,)+)) -> Res {

@@ -3,8 +3,7 @@ use std::{any, fmt, hash, io, time};
 use ntex_bytes::{BufMut, BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
-use super::io::{Flags, IoRef, OnDisconnect};
-use super::{timer, types, Filter};
+use super::{io::Flags, timer, types, Filter, IoRef, OnDisconnect};
 
 impl IoRef {
     #[inline]

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, convert::TryFrom, io, rc::Rc, task::Context, task::Poll};
+use std::{cell::RefCell, convert::TryFrom, io, rc::Rc};
 
 use ntex_h2::{self as h2, client::Client, frame};
 
@@ -223,19 +223,9 @@ impl H2PublishService {
 impl Service<h2::Message> for H2PublishService {
     type Response = ();
     type Error = &'static str;
-    type Future = Ready<Self::Response, Self::Error>;
+    type Future<'f> = Ready<Self::Response, Self::Error>;
 
-    #[inline]
-    fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, _: &mut Context<'_>, _: bool) -> Poll<()> {
-        Poll::Ready(())
-    }
-
-    fn call(&self, mut msg: h2::Message) -> Self::Future {
+    fn call(&self, mut msg: h2::Message) -> Self::Future<'_> {
         match msg.kind().take() {
             h2::MessageKind::Headers {
                 pseudo,

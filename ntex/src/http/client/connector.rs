@@ -1,4 +1,4 @@
-use std::{future::Future, rc::Rc, task::Context, task::Poll, time::Duration};
+use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
 use ntex_h2::{self as h2};
 
@@ -8,10 +8,7 @@ use crate::time::{Millis, Seconds};
 use crate::util::{timeout::TimeoutError, timeout::TimeoutService, Either, Ready};
 use crate::{http::Uri, io::IoBoxed};
 
-use super::connection::Connection;
-use super::error::ConnectError;
-use super::pool::ConnectionPool;
-use super::Connect;
+use super::{connection::Connection, error::ConnectError, pool::ConnectionPool, Connect};
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl::SslConnector;
@@ -252,16 +249,13 @@ fn connector(
     connector: BoxedConnector,
     timeout: Millis,
     disconnect_timeout: Millis,
-) -> impl Service<
-    Connect,
-    Response = IoBoxed,
-    Error = ConnectError,
-    Future = impl Unpin + Future,
-> + Unpin {
+) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError> {
     TimeoutService::new(
         timeout,
         apply_fn(connector, |msg: Connect, srv| {
-            srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr))
+            Box::pin(
+                async move { srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await },
+            )
         })
         .map(move |io: IoBoxed| {
             io.set_disconnect_timeout(disconnect_timeout);
@@ -282,13 +276,12 @@ struct InnerConnector<T> {
 
 impl<T> Service<Connect> for InnerConnector<T>
 where
-    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + Unpin + 'static,
-    T::Future: Unpin,
+    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
 {
     type Response = <ConnectionPool<T> as Service<Connect>>::Response;
     type Error = ConnectError;
-    type Future = Either<
-        <ConnectionPool<T> as Service<Connect>>::Future,
+    type Future<'f> = Either<
+        <ConnectionPool<T> as Service<Connect>>::Future<'f>,
         Ready<Self::Response, Self::Error>,
     >;
 
@@ -308,12 +301,12 @@ where
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        let tcp_ready = self.tcp_pool.poll_shutdown(cx, is_error).is_ready();
+    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let tcp_ready = self.tcp_pool.poll_shutdown(cx).is_ready();
         let ssl_ready = self
             .ssl_pool
             .as_ref()
-            .map(|pool| pool.poll_shutdown(cx, is_error).is_ready())
+            .map(|pool| pool.poll_shutdown(cx).is_ready())
             .unwrap_or(true);
         if tcp_ready && ssl_ready {
             Poll::Ready(())
@@ -322,7 +315,7 @@ where
         }
     }
 
-    fn call(&self, req: Connect) -> Self::Future {
+    fn call(&self, req: Connect) -> Self::Future<'_> {
         match req.uri.scheme_str() {
             Some("https") | Some("wss") => {
                 if let Some(ref conn) = self.ssl_pool {
@@ -345,6 +338,6 @@ mod tests {
     async fn test_readiness() {
         let conn = Connector::default().finish();
         assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
-        assert!(lazy(|cx| conn.poll_shutdown(cx, true).is_ready()).await);
+        assert!(lazy(|cx| conn.poll_shutdown(cx).is_ready()).await);
     }
 }

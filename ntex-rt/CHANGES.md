@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.7] - 2023-01-03
+
+* Add callback for task spawning
+
 ## [0.4.6] - 2022-09-20
 
 * Add System::block_on() helper method

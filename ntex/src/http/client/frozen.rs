@@ -45,7 +45,7 @@ impl FrozenClientRequest {
             self.addr,
             self.response_decompress,
             self.timeout,
-            self.config.as_ref(),
+            self.config.clone(),
             body,
         )
     }
@@ -56,7 +56,7 @@ impl FrozenClientRequest {
             self.addr,
             self.response_decompress,
             self.timeout,
-            self.config.as_ref(),
+            self.config.clone(),
             value,
         )
     }
@@ -67,7 +67,7 @@ impl FrozenClientRequest {
             self.addr,
             self.response_decompress,
             self.timeout,
-            self.config.as_ref(),
+            self.config.clone(),
             value,
         )
     }
@@ -82,7 +82,7 @@ impl FrozenClientRequest {
             self.addr,
             self.response_decompress,
             self.timeout,
-            self.config.as_ref(),
+            self.config.clone(),
             stream,
         )
     }
@@ -93,7 +93,7 @@ impl FrozenClientRequest {
             self.addr,
             self.response_decompress,
             self.timeout,
-            self.config.as_ref(),
+            self.config.clone(),
         )
     }
 
@@ -181,7 +181,7 @@ impl FrozenSendBuilder {
             self.req.addr,
             self.req.response_decompress,
             self.req.timeout,
-            self.req.config.as_ref(),
+            self.req.config,
             body,
         )
     }
@@ -196,7 +196,7 @@ impl FrozenSendBuilder {
             self.req.addr,
             self.req.response_decompress,
             self.req.timeout,
-            self.req.config.as_ref(),
+            self.req.config,
             value,
         )
     }
@@ -211,7 +211,7 @@ impl FrozenSendBuilder {
             self.req.addr,
             self.req.response_decompress,
             self.req.timeout,
-            self.req.config.as_ref(),
+            self.req.config,
             value,
         )
     }
@@ -230,7 +230,7 @@ impl FrozenSendBuilder {
             self.req.addr,
             self.req.response_decompress,
             self.req.timeout,
-            self.req.config.as_ref(),
+            self.req.config,
             stream,
         )
     }
@@ -245,7 +245,7 @@ impl FrozenSendBuilder {
             self.req.addr,
             self.req.response_decompress,
             self.req.timeout,
-            self.req.config.as_ref(),
+            self.req.config,
         )
     }
 }

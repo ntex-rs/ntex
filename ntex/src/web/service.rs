@@ -5,7 +5,7 @@ use crate::service::{boxed, IntoServiceFactory, ServiceFactory};
 use crate::util::Extensions;
 
 use super::config::AppConfig;
-use super::dev::insert_slesh;
+use super::dev::insert_slash;
 use super::error::ErrorRenderer;
 use super::guard::Guard;
 use super::{request::WebRequest, response::WebResponse, rmap::ResourceMap};
@@ -287,7 +287,7 @@ where
         };
 
         let mut rdef = if config.is_root() || !self.rdef.is_empty() {
-            ResourceDef::new(insert_slesh(self.rdef))
+            ResourceDef::new(insert_slash(self.rdef))
         } else {
             ResourceDef::new(self.rdef)
         };
@@ -300,7 +300,7 @@ where
 
 /// WebServiceFactory implementation for a Vec<T>
 #[allow(unused_parens)]
-impl<Err, T> WebServiceFactory<Err> for Vec<T>
+impl<T, Err> WebServiceFactory<Err> for Vec<T>
 where
     Err: ErrorRenderer,
     T: WebServiceFactory<Err> + 'static,

@@ -1,5 +1,4 @@
 //! Websockets client
-use std::future::Future;
 use std::{cell::RefCell, convert::TryFrom, fmt, marker, net, rc::Rc, str};
 
 #[cfg(feature = "openssl")]
@@ -17,8 +16,8 @@ use crate::http::{body::BodySize, client::ClientResponse, error::HttpError, h1};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Sealed};
 use crate::service::{apply_fn, into_service, IntoService, Service};
-use crate::util::{Either, Ready};
-use crate::{channel::mpsc, rt, time::timeout, time::Millis, time::Seconds, ws};
+use crate::time::{timeout, Millis, Seconds};
+use crate::{channel::mpsc, rt, util::Ready, ws};
 
 use super::error::{WsClientBuilderError, WsClientError, WsError};
 use super::transport::{WsTransport, WsTransportFactory};
@@ -131,7 +130,7 @@ where
     T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
 {
     /// Complete request construction and connect to a websockets server.
-    pub fn connect(&self) -> impl Future<Output = Result<WsConnection<F>, WsClientError>> {
+    pub async fn connect(&self) -> Result<WsConnection<F>, WsClientError> {
         let head = self.head.clone();
         let max_size = self.max_size;
         let server_mode = self.server_mode;
@@ -156,107 +155,104 @@ where
         );
 
         let msg = Connect::new(head.uri.clone()).set_addr(self.addr);
-        let fut = self.connector.call(msg);
         log::trace!("Open ws connection to {:?} addr: {:?}", head.uri, self.addr);
 
-        async move {
-            let io = fut.await?;
+        let io = self.connector.call(msg).await?;
 
-            // create Framed and send request
-            let codec = h1::ClientCodec::default();
+        // create Framed and send request
+        let codec = h1::ClientCodec::default();
 
-            // send request and read response
-            let fut = async {
-                log::trace!("Sending ws handshake http message");
-                io.send(
-                    (RequestHeadType::Rc(head, Some(headers)), BodySize::None).into(),
-                    &codec,
-                )
-                .await?;
-                log::trace!("Waiting for ws handshake response");
-                io.recv(&codec)
-                    .await?
-                    .ok_or(WsClientError::Disconnected(None))
-            };
+        // send request and read response
+        let fut = async {
+            log::trace!("Sending ws handshake http message");
+            io.send(
+                (RequestHeadType::Rc(head, Some(headers)), BodySize::None).into(),
+                &codec,
+            )
+            .await?;
+            log::trace!("Waiting for ws handshake response");
+            io.recv(&codec)
+                .await?
+                .ok_or(WsClientError::Disconnected(None))
+        };
 
-            // set request timeout
-            let response = if to.non_zero() {
-                timeout(to, fut)
-                    .await
-                    .map_err(|_| WsClientError::Timeout)
-                    .and_then(|res| res)?
-            } else {
-                fut.await?
-            };
-            log::trace!("Ws handshake response is received {:?}", response);
+        // set request timeout
+        let response = if to.non_zero() {
+            timeout(to, fut)
+                .await
+                .map_err(|_| WsClientError::Timeout)
+                .and_then(|res| res)?
+        } else {
+            fut.await?
+        };
+        log::trace!("Ws handshake response is received {:?}", response);
 
-            // verify response
-            if response.status != StatusCode::SWITCHING_PROTOCOLS {
-                return Err(WsClientError::InvalidResponseStatus(response.status));
-            }
+        // verify response
+        if response.status != StatusCode::SWITCHING_PROTOCOLS {
+            return Err(WsClientError::InvalidResponseStatus(response.status));
+        }
 
-            // Check for "UPGRADE" to websocket header
-            let has_hdr = if let Some(hdr) = response.headers.get(&header::UPGRADE) {
-                if let Ok(s) = hdr.to_str() {
-                    s.to_ascii_lowercase().contains("websocket")
-                } else {
-                    false
-                }
+        // Check for "UPGRADE" to websocket header
+        let has_hdr = if let Some(hdr) = response.headers.get(&header::UPGRADE) {
+            if let Ok(s) = hdr.to_str() {
+                s.to_ascii_lowercase().contains("websocket")
             } else {
                 false
-            };
-            if !has_hdr {
-                log::trace!("Invalid upgrade header");
-                return Err(WsClientError::InvalidUpgradeHeader);
             }
+        } else {
+            false
+        };
+        if !has_hdr {
+            log::trace!("Invalid upgrade header");
+            return Err(WsClientError::InvalidUpgradeHeader);
+        }
 
-            // Check for "CONNECTION" header
-            if let Some(conn) = response.headers.get(&header::CONNECTION) {
-                if let Ok(s) = conn.to_str() {
-                    if !s.to_ascii_lowercase().contains("upgrade") {
-                        log::trace!("Invalid connection header: {}", s);
-                        return Err(WsClientError::InvalidConnectionHeader(conn.clone()));
-                    }
-                } else {
-                    log::trace!("Invalid connection header: {:?}", conn);
+        // Check for "CONNECTION" header
+        if let Some(conn) = response.headers.get(&header::CONNECTION) {
+            if let Ok(s) = conn.to_str() {
+                if !s.to_ascii_lowercase().contains("upgrade") {
+                    log::trace!("Invalid connection header: {}", s);
                     return Err(WsClientError::InvalidConnectionHeader(conn.clone()));
                 }
             } else {
-                log::trace!("Missing connection header");
-                return Err(WsClientError::MissingConnectionHeader);
+                log::trace!("Invalid connection header: {:?}", conn);
+                return Err(WsClientError::InvalidConnectionHeader(conn.clone()));
             }
-
-            if let Some(hdr_key) = response.headers.get(&header::SEC_WEBSOCKET_ACCEPT) {
-                let encoded = ws::hash_key(key.as_ref());
-                if hdr_key.as_bytes() != encoded.as_bytes() {
-                    log::trace!(
-                        "Invalid challenge response: expected: {} received: {:?}",
-                        encoded,
-                        key
-                    );
-                    return Err(WsClientError::InvalidChallengeResponse(
-                        encoded,
-                        hdr_key.clone(),
-                    ));
-                }
-            } else {
-                log::trace!("Missing SEC-WEBSOCKET-ACCEPT header");
-                return Err(WsClientError::MissingWebSocketAcceptHeader);
-            };
-            log::trace!("Ws handshake response verification is completed");
-
-            // response and ws io
-            Ok(WsConnection::new(
-                io,
-                ClientResponse::with_empty_payload(response),
-                if server_mode {
-                    ws::Codec::new().max_size(max_size)
-                } else {
-                    ws::Codec::new().max_size(max_size).client_mode()
-                },
-                keepalive_timeout,
-            ))
+        } else {
+            log::trace!("Missing connection header");
+            return Err(WsClientError::MissingConnectionHeader);
         }
+
+        if let Some(hdr_key) = response.headers.get(&header::SEC_WEBSOCKET_ACCEPT) {
+            let encoded = ws::hash_key(key.as_ref());
+            if hdr_key.as_bytes() != encoded.as_bytes() {
+                log::trace!(
+                    "Invalid challenge response: expected: {} received: {:?}",
+                    encoded,
+                    key
+                );
+                return Err(WsClientError::InvalidChallengeResponse(
+                    encoded,
+                    hdr_key.clone(),
+                ));
+            }
+        } else {
+            log::trace!("Missing SEC-WEBSOCKET-ACCEPT header");
+            return Err(WsClientError::MissingWebSocketAcceptHeader);
+        };
+        log::trace!("Ws handshake response verification is completed");
+
+        // response and ws io
+        Ok(WsConnection::new(
+            io,
+            ClientResponse::with_empty_payload(response),
+            if server_mode {
+                ws::Codec::new().max_size(max_size)
+            } else {
+                ws::Codec::new().max_size(max_size).client_mode()
+            },
+            keepalive_timeout,
+        ))
     }
 }
 
@@ -758,18 +754,16 @@ impl WsConnection<Sealed> {
     {
         let service = apply_fn(
             service.into_service().map_err(WsError::Service),
-            |req, srv| match req {
-                DispatchItem::Item(item) => Either::Left(srv.call(item)),
-                DispatchItem::WBackPressureEnabled
-                | DispatchItem::WBackPressureDisabled => Either::Right(Ready::Ok(None)),
-                DispatchItem::KeepAliveTimeout => {
-                    Either::Right(Ready::Err(WsError::KeepAlive))
-                }
-                DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
-                    Either::Right(Ready::Err(WsError::Protocol(e)))
-                }
-                DispatchItem::Disconnect(e) => {
-                    Either::Right(Ready::Err(WsError::Disconnected(e)))
+            |req, svc| async move {
+                match req {
+                    DispatchItem::<ws::Codec>::Item(item) => svc.call(item).await,
+                    DispatchItem::WBackPressureEnabled
+                    | DispatchItem::WBackPressureDisabled => Ok(None),
+                    DispatchItem::KeepAliveTimeout => Err(WsError::KeepAlive),
+                    DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
+                        Err(WsError::Protocol(e))
+                    }
+                    DispatchItem::Disconnect(e) => Err(WsError::Disconnected(e)),
                 }
             },
         );

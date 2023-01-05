@@ -1,4 +1,6 @@
-use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::{
+    future::Future, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
 use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
@@ -9,7 +11,7 @@ pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
 ) -> Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, &T) -> R,
+    F: Fn(In, Rc<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
     U: IntoService<T, Req>,
 {
@@ -20,14 +22,14 @@ where
 pub fn apply_fn_factory<T, Req, Cfg, F, R, In, Out, Err, U>(
     service: U,
     f: F,
-) -> ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
+) -> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, &T::Service) -> R + Clone,
+    F: Fn(In, Rc<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
     U: IntoServiceFactory<T, Req, Cfg>,
 {
-    ApplyServiceFactory::new(service.into_factory(), f)
+    ApplyFactory::new(service.into_factory(), f)
 }
 
 /// `Apply` service combinator
@@ -35,7 +37,7 @@ pub struct Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
 {
-    service: T,
+    service: Rc<T>,
     f: F,
     r: PhantomData<fn(Req) -> (In, Out, R)>,
 }
@@ -43,14 +45,14 @@ where
 impl<T, Req, F, R, In, Out, Err> Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, &T) -> R,
+    F: Fn(In, Rc<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     /// Create new `Apply` combinator
     fn new(service: T, f: F) -> Self {
         Self {
-            service,
             f,
+            service: Rc::new(service),
             r: PhantomData,
         }
     }
@@ -59,7 +61,7 @@ where
 impl<T, Req, F, R, In, Out, Err> Clone for Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err> + Clone,
-    F: Fn(In, &T) -> R + Clone,
+    F: Fn(In, Rc<T>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     fn clone(&self) -> Self {
@@ -74,34 +76,27 @@ where
 impl<T, Req, F, R, In, Out, Err> Service<In> for Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, &T) -> R,
+    F: Fn(In, Rc<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Response = Out;
     type Error = Err;
-    type Future = R;
+    type Future<'f> = R where Self: 'f, In: 'f, R: 'f;
+
+    crate::forward_poll_ready!(service);
+    crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.service.poll_shutdown(cx, is_error)
-    }
-
-    #[inline]
-    fn call(&self, req: In) -> Self::Future {
-        (self.f)(req, &self.service)
+    fn call(&self, req: In) -> Self::Future<'_> {
+        (self.f)(req, self.service.clone())
     }
 }
 
 /// `apply()` service factory
-pub struct ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
+pub struct ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, &T::Service) -> R + Clone,
+    F: Fn(In, Rc<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     service: T,
@@ -109,10 +104,10 @@ where
     r: PhantomData<fn(Req, Cfg) -> (R, In, Out)>,
 }
 
-impl<T, Req, Cfg, F, R, In, Out, Err> ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, R, In, Out, Err> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, &T::Service) -> R + Clone,
+    F: Fn(In, Rc<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     /// Create new `ApplyNewService` new service instance
@@ -126,10 +121,10 @@ where
 }
 
 impl<T, Req, Cfg, F, R, In, Out, Err> Clone
-    for ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
+    for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err> + Clone,
-    F: Fn(In, &T::Service) -> R + Clone,
+    F: Fn(In, Rc<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     fn clone(&self) -> Self {
@@ -142,10 +137,10 @@ where
 }
 
 impl<T, Req, Cfg, F, R, In, Out, Err> ServiceFactory<In, Cfg>
-    for ApplyServiceFactory<T, Req, Cfg, F, R, In, Out, Err>
+    for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, &T::Service) -> R + Clone,
+    F: Fn(In, Rc<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     type Response = Out;
@@ -153,48 +148,39 @@ where
 
     type Service = Apply<T::Service, Req, F, R, In, Out, Err>;
     type InitError = T::InitError;
-    type Future = ApplyServiceFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>;
+    type Future<'f> = ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err> where Self: 'f, Cfg: 'f;
 
-    fn new_service(&self, cfg: Cfg) -> Self::Future {
-        ApplyServiceFactoryResponse::new(self.service.new_service(cfg), self.f.clone())
-    }
-}
-
-pin_project_lite::pin_project! {
-    pub struct ApplyServiceFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>
-    where
-        T: ServiceFactory<Req, Cfg, Error = Err>,
-        F: Fn(In, &T::Service) -> R,
-        R: Future<Output = Result<Out, Err>>,
-    {
-        #[pin]
-        fut: T::Future,
-        f: Option<F>,
-        r: PhantomData<(In, Out)>,
-    }
-}
-
-impl<T, Req, Cfg, F, R, In, Out, Err>
-    ApplyServiceFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>
-where
-    T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, &T::Service) -> R,
-    R: Future<Output = Result<Out, Err>>,
-{
-    fn new(fut: T::Future, f: F) -> Self {
-        Self {
-            f: Some(f),
-            fut,
-            r: PhantomData,
+    #[inline]
+    fn create(&self, cfg: Cfg) -> Self::Future<'_> {
+        ApplyFactoryResponse {
+            fut: self.service.create(cfg),
+            f: Some(self.f.clone()),
+            _t: PhantomData,
         }
     }
 }
 
-impl<T, Req, Cfg, F, R, In, Out, Err> Future
-    for ApplyServiceFactoryResponse<T, Req, Cfg, F, R, In, Out, Err>
+pin_project_lite::pin_project! {
+    pub struct ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
+    where
+        T: ServiceFactory<Req, Cfg, Error = Err>,
+        T: 'f,
+        F: Fn(In, Rc<T::Service>) -> R,
+        R: Future<Output = Result<Out, Err>>,
+        Cfg: 'f,
+    {
+        #[pin]
+        fut: T::Future<'f>,
+        f: Option<F>,
+        _t: PhantomData<(In, Out)>,
+    }
+}
+
+impl<'f, T, Req, Cfg, F, R, In, Out, Err> Future
+    for ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, &T::Service) -> R,
+    F: Fn(In, Rc<T::Service>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Output = Result<Apply<T::Service, Req, F, R, In, Out, Err>, T::InitError>;
@@ -213,7 +199,7 @@ where
 #[cfg(test)]
 mod tests {
     use ntex_util::future::{lazy, Ready};
-    use std::task::{Context, Poll};
+    use std::task::Poll;
 
     use super::*;
     use crate::{pipeline, pipeline_factory, Service, ServiceFactory};
@@ -224,13 +210,9 @@ mod tests {
     impl Service<()> for Srv {
         type Response = ();
         type Error = ();
-        type Future = Ready<(), ()>;
+        type Future<'f> = Ready<(), ()>;
 
-        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn call(&self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future<'_> {
             Ready::Ok(())
         }
     }
@@ -249,7 +231,7 @@ mod tests {
         );
 
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        let res = lazy(|cx| srv.poll_shutdown(cx, true)).await;
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
         assert_eq!(res, Poll::Ready(()));
 
         let res = srv.call("srv").await;
@@ -258,7 +240,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_new_service() {
+    async fn test_create() {
         let new_srv = pipeline_factory(
             apply_fn_factory(
                 || Ready::<_, ()>::Ok(Srv),
@@ -273,7 +255,7 @@ mod tests {
             .clone(),
         );
 
-        let srv = new_srv.new_service(()).await.unwrap();
+        let srv = new_srv.create(&()).await.unwrap();
 
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 

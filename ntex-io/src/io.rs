@@ -1,14 +1,11 @@
 use std::cell::Cell;
 use std::task::{Context, Poll};
-use std::{
-    fmt, future::Future, hash, io, marker, mem, ops::Deref, pin::Pin, ptr, rc::Rc, time,
-};
+use std::{fmt, future::Future, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc, time};
 
 use ntex_bytes::{BytesVec, PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::{
-    future::poll_fn, future::Either, task::LocalWaker, time::now, time::Millis,
-};
+use ntex_util::time::{now, Millis};
+use ntex_util::{future::poll_fn, future::Either, task::LocalWaker};
 
 use super::filter::{Base, NullFilter};
 use super::seal::Sealed;
@@ -658,6 +655,12 @@ impl<F> Io<F> {
             Poll::Pending
         }
     }
+
+    #[inline]
+    /// Register dispatch task
+    pub fn poll_dispatch(&self, cx: &mut Context<'_>) {
+        self.0 .0.dispatch_task.register(cx.waker());
+    }
 }
 
 impl<F> AsRef<IoRef> for Io<F> {
@@ -690,7 +693,7 @@ impl<F> fmt::Debug for Io<F> {
     }
 }
 
-impl<F> Deref for Io<F> {
+impl<F> ops::Deref for Io<F> {
     type Target = IoRef;
 
     #[inline]

@@ -1,13 +1,11 @@
 #![allow(clippy::type_complexity)]
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::cell::{Cell, RefCell};
-use std::{
-    any, cmp, error::Error, future::Future, io, pin::Pin, task::Context, task::Poll,
-};
+use std::{any, cmp, error::Error, io, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesVec, PoolRef};
 use ntex_io::{types, Base, Filter, FilterFactory, Io, IoRef, ReadStatus, WriteStatus};
-use ntex_util::{future::poll_fn, ready, time, time::Millis};
+use ntex_util::{future::poll_fn, future::BoxFuture, ready, time, time::Millis};
 use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
 
@@ -288,7 +286,7 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
     type Filter = SslFilter<F>;
 
     type Error = Box<dyn Error>;
-    type Future = Pin<Box<dyn Future<Output = Result<Io<Self::Filter>, Self::Error>>>>;
+    type Future = BoxFuture<'static, Result<Io<Self::Filter>, Self::Error>>;
 
     fn create(self, st: Io<F>) -> Self::Future {
         let timeout = self.timeout;
@@ -346,7 +344,7 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
     type Filter = SslFilter<F>;
 
     type Error = Box<dyn Error>;
-    type Future = Pin<Box<dyn Future<Output = Result<Io<Self::Filter>, Self::Error>>>>;
+    type Future = BoxFuture<'static, Result<Io<Self::Filter>, Self::Error>>;
 
     fn create(self, st: Io<F>) -> Self::Future {
         Box::pin(async move {

@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
 use std::{collections::VecDeque, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
-use ntex_service::{IntoService, Service, Transform};
+use ntex_service::{IntoService, Middleware, Service};
 
 use crate::{channel::oneshot, future::Either, task::LocalWaker};
 
@@ -44,22 +44,20 @@ impl<R, E> Clone for Buffer<R, E> {
     }
 }
 
-impl<R, S, E> Transform<S> for Buffer<R, E>
+impl<R, S, E> Middleware<S> for Buffer<R, E>
 where
     S: Service<R, Error = E>,
 {
     type Service = BufferService<R, S, E>;
 
-    fn new_transform(&self, service: S) -> Self::Service {
+    fn create(&self, service: S) -> Self::Service {
         BufferService {
+            service,
             size: self.buf_size,
-            inner: Rc::new(Inner {
-                service,
-                err: self.err.clone(),
-                ready: Cell::new(false),
-                waker: LocalWaker::default(),
-                buf: RefCell::new(VecDeque::with_capacity(self.buf_size)),
-            }),
+            err: self.err.clone(),
+            ready: Cell::new(false),
+            waker: LocalWaker::default(),
+            buf: RefCell::new(VecDeque::with_capacity(self.buf_size)),
         }
     }
 }
@@ -69,10 +67,6 @@ where
 /// Default number of buffered requests is 16
 pub struct BufferService<R, S: Service<R, Error = E>, E> {
     size: usize,
-    inner: Rc<Inner<R, S, E>>,
-}
-
-struct Inner<R, S: Service<R, Error = E>, E> {
     ready: Cell<bool>,
     service: S,
     waker: LocalWaker,
@@ -91,13 +85,11 @@ where
     {
         Self {
             size,
-            inner: Rc::new(Inner {
-                err: Rc::new(err),
-                ready: Cell::new(false),
-                service: service.into_service(),
-                waker: LocalWaker::default(),
-                buf: RefCell::new(VecDeque::with_capacity(size)),
-            }),
+            err: Rc::new(err),
+            ready: Cell::new(false),
+            service: service.into_service(),
+            waker: LocalWaker::default(),
+            buf: RefCell::new(VecDeque::with_capacity(size)),
         }
     }
 }
@@ -109,13 +101,11 @@ where
     fn clone(&self) -> Self {
         Self {
             size: self.size,
-            inner: Rc::new(Inner {
-                err: self.inner.err.clone(),
-                ready: Cell::new(false),
-                service: self.inner.service.clone(),
-                waker: LocalWaker::default(),
-                buf: RefCell::new(VecDeque::with_capacity(self.size)),
-            }),
+            err: self.err.clone(),
+            ready: Cell::new(false),
+            service: self.service.clone(),
+            waker: LocalWaker::default(),
+            buf: RefCell::new(VecDeque::with_capacity(self.size)),
         }
     }
 }
@@ -126,18 +116,17 @@ where
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = Either<S::Future, BufferServiceResponse<R, S, E>>;
+    type Future<'f> = Either<S::Future<'f>, BufferServiceResponse<'f, R, S, E>> where Self: 'f, R: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let inner = self.inner.as_ref();
-        inner.waker.register(cx.waker());
-        let mut buffer = inner.buf.borrow_mut();
+        self.waker.register(cx.waker());
+        let mut buffer = self.buf.borrow_mut();
 
-        if inner.service.poll_ready(cx)?.is_pending() {
+        if self.service.poll_ready(cx)?.is_pending() {
             if buffer.len() < self.size {
                 // buffer next request
-                inner.ready.set(false);
+                self.ready.set(false);
                 Poll::Ready(Ok(()))
             } else {
                 log::trace!("Buffer limit exceeded");
@@ -145,55 +134,57 @@ where
             }
         } else if let Some((sender, req)) = buffer.pop_front() {
             let _ = sender.send(req);
-            inner.ready.set(false);
+            self.ready.set(false);
             Poll::Ready(Ok(()))
         } else {
-            inner.ready.set(true);
+            self.ready.set(true);
             Poll::Ready(Ok(()))
         }
     }
 
     #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>, is_error: bool) -> Poll<()> {
-        self.inner.service.poll_shutdown(cx, is_error)
-    }
-
-    #[inline]
-    fn call(&self, req: R) -> Self::Future {
-        if self.inner.ready.get() {
-            self.inner.ready.set(false);
-            Either::Left(self.inner.service.call(req))
+    fn call(&self, req: R) -> Self::Future<'_> {
+        if self.ready.get() {
+            self.ready.set(false);
+            Either::Left(self.service.call(req))
         } else {
             let (tx, rx) = oneshot::channel();
-            self.inner.buf.borrow_mut().push_back((tx, req));
+            self.buf.borrow_mut().push_back((tx, req));
 
             Either::Right(BufferServiceResponse {
-                state: State::Tx {
-                    rx,
-                    inner: self.inner.clone(),
-                },
+                slf: self,
+                state: State::Tx { rx },
             })
         }
     }
+
+    ntex_service::forward_poll_shutdown!(service);
 }
 
 pin_project_lite::pin_project! {
     #[doc(hidden)]
-    pub struct BufferServiceResponse<R, S: Service<R, Error = E>, E> {
+    pub struct BufferServiceResponse<'f, R, S: Service<R, Error = E>, E>
+    {
+        slf: &'f BufferService<R, S, E>,
         #[pin]
-        state: State<R, S, E>,
+        state: State<R, S::Future<'f>>,
     }
 }
 
 pin_project_lite::pin_project! {
     #[project = StateProject]
-    enum State<R, S: Service<R, Error = E>, E> {
-        Tx { rx: oneshot::Receiver<R>, inner: Rc<Inner<R, S, E>> },
-        Srv { #[pin] fut: S::Future, inner: Rc<Inner<R, S, E>> },
+    enum State<R, F>
+    where F: Future,
+    {
+        Tx { rx: oneshot::Receiver<R> },
+        Srv { #[pin] fut: F },
     }
 }
 
-impl<R, S: Service<R, Error = E>, E> Future for BufferServiceResponse<R, S, E> {
+impl<'f, R, S, E> Future for BufferServiceResponse<'f, R, S, E>
+where
+    S: Service<R, Error = E>,
+{
     type Output = Result<S::Response, S::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -201,24 +192,23 @@ impl<R, S: Service<R, Error = E>, E> Future for BufferServiceResponse<R, S, E> {
 
         loop {
             match this.state.project() {
-                StateProject::Tx { rx, inner } => match Pin::new(rx).poll(cx) {
+                StateProject::Tx { rx } => match Pin::new(rx).poll(cx) {
                     Poll::Ready(Ok(req)) => {
                         let state = State::Srv {
-                            fut: inner.service.call(req),
-                            inner: inner.clone(),
+                            fut: this.slf.service.call(req),
                         };
                         this = self.as_mut().project();
                         this.state.set(state);
                     }
-                    Poll::Ready(Err(_)) => return Poll::Ready(Err((*inner.err)())),
+                    Poll::Ready(Err(_)) => return Poll::Ready(Err((*this.slf.err)())),
                     Poll::Pending => return Poll::Pending,
                 },
-                StateProject::Srv { fut, inner } => {
+                StateProject::Srv { fut } => {
                     let res = match fut.poll(cx) {
                         Poll::Ready(res) => res,
                         Poll::Pending => return Poll::Pending,
                     };
-                    inner.waker.wake();
+                    this.slf.waker.wake();
                     return Poll::Ready(res);
                 }
             }
@@ -246,7 +236,7 @@ mod tests {
     impl Service<()> for TestService {
         type Response = ();
         type Error = ();
-        type Future = Ready<(), ()>;
+        type Future<'f> = Ready<(), ()> where Self: 'f;
 
         fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.waker.register(cx.waker());
@@ -257,7 +247,7 @@ mod tests {
             }
         }
 
-        fn call(&self, _: ()) -> Self::Future {
+        fn call(&self, _: ()) -> Self::Future<'_> {
             self.0.ready.set(false);
             self.0.count.set(self.0.count.get() + 1);
             Ready::Ok(())
@@ -308,8 +298,7 @@ mod tests {
         let _ = srv.call(()).await;
         assert_eq!(inner.count.get(), 1);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-
-        assert!(lazy(|cx| srv.poll_shutdown(cx, false)).await.is_ready());
+        assert!(lazy(|cx| srv.poll_shutdown(cx)).await.is_ready());
     }
 
     #[ntex_macros::rt_test2]
@@ -325,7 +314,7 @@ mod tests {
             fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
         );
 
-        let srv = srv.new_service(&()).await.unwrap();
+        let srv = srv.create(&()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let fut1 = srv.call(());

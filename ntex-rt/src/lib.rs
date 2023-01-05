@@ -1,4 +1,6 @@
 //! A runtime implementation that runs everything on the current thread.
+use std::{cell::RefCell, ptr};
+
 mod arbiter;
 mod builder;
 mod system;
@@ -6,6 +8,34 @@ mod system;
 pub use self::arbiter::Arbiter;
 pub use self::builder::{Builder, SystemRunner};
 pub use self::system::System;
+
+thread_local! {
+    static CB: RefCell<(TBefore, TSpawn, TAfter)> = RefCell::new((
+        Box::new(|| {None}), Box::new(|_| {ptr::null()}), Box::new(|_| {}))
+    );
+}
+
+type TBefore = Box<dyn Fn() -> Option<*const ()>>;
+type TSpawn = Box<dyn Fn(*const ()) -> *const ()>;
+type TAfter = Box<dyn Fn(*const ())>;
+
+pub unsafe fn spawn_cbs<FBefore, FSpawn, FAfter>(
+    before: FBefore,
+    before_spawn: FSpawn,
+    after_spawn: FAfter,
+) where
+    FBefore: Fn() -> Option<*const ()> + 'static,
+    FSpawn: Fn(*const ()) -> *const () + 'static,
+    FAfter: Fn(*const ()) + 'static,
+{
+    CB.with(|cb| {
+        *cb.borrow_mut() = (
+            Box::new(before),
+            Box::new(before_spawn),
+            Box::new(after_spawn),
+        );
+    });
+}
 
 #[allow(dead_code)]
 #[cfg(all(feature = "glommio", target_os = "linux"))]
@@ -39,11 +69,20 @@ mod glommio {
         F: Future + 'static,
         F::Output: 'static,
     {
+        let ptr = crate::CB.with(|cb| (&cb.borrow().0)());
         JoinHandle {
             fut: Either::Left(
                 glomm_io::spawn_local(async move {
-                    glomm_io::executor().yield_now().await;
-                    f.await
+                    if let Some(ptr) = ptr {
+                        let new_ptr = crate::CB.with(|cb| (&cb.borrow().1)(ptr));
+                        glomm_io::executor().yield_now().await;
+                        let res = f.await;
+                        crate::CB.with(|cb| (&cb.borrow().2)(new_ptr));
+                        res
+                    } else {
+                        glomm_io::executor().yield_now().await;
+                        f.await
+                    }
                 })
                 .detach(),
             ),
@@ -131,7 +170,17 @@ mod tokio {
     where
         F: Future + 'static,
     {
-        tok_io::task::spawn_local(f)
+        let ptr = crate::CB.with(|cb| (&cb.borrow().0)());
+        tok_io::task::spawn_local(async move {
+            if let Some(ptr) = ptr {
+                let new_ptr = crate::CB.with(|cb| (&cb.borrow().1)(ptr));
+                let res = f.await;
+                crate::CB.with(|cb| (&cb.borrow().2)(new_ptr));
+                res
+            } else {
+                f.await
+            }
+        })
     }
 
     /// Executes a future on the current thread. This does not create a new Arbiter
@@ -175,8 +224,18 @@ mod asyncstd {
     where
         F: Future + 'static,
     {
+        let ptr = crate::CB.with(|cb| (&cb.borrow().0)());
         JoinHandle {
-            fut: async_std::task::spawn_local(f),
+            fut: async_std::task::spawn_local(async move {
+                if let Some(ptr) = ptr {
+                    let new_ptr = crate::CB.with(|cb| (&cb.borrow().1)(ptr));
+                    let res = f.await;
+                    crate::CB.with(|cb| (&cb.borrow().2)(new_ptr));
+                    res
+                } else {
+                    f.await
+                }
+            }),
         }
     }
 
