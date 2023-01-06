@@ -618,6 +618,13 @@ mod tests {
             Some(Bytes::from("test"))
         );
         assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
+
+        let mut b = BytesMut::from("test");
+        assert_eq!(
+            poll_fn(|cx| b.poll_next_chunk(cx)).await.unwrap().ok(),
+            Some(Bytes::from("test"))
+        );
+        assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
     #[crate::rt_test]
