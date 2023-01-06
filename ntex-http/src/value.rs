@@ -758,6 +758,9 @@ mod tests {
         let hdr2 = HeaderValue::from(&hdr);
         assert_eq!(hdr, hdr2);
 
+        let hdr3 = HeaderValue::from_maybe_shared(Bytes::from_static(b"upgrade")).unwrap();
+        assert_eq!(hdr, hdr3);
+
         let hdr = http::header::HeaderValue::from_bytes(b"upgrade").unwrap();
         let hdr2 = HeaderValue::from(&hdr);
         assert_eq!(hdr2.as_bytes(), b"upgrade");
@@ -767,10 +770,29 @@ mod tests {
 
         let hdr = HeaderValue::try_from("upgrade".to_string()).unwrap();
         assert_eq!(hdr.as_bytes(), b"upgrade");
+        let hdr = HeaderValue::try_from(&("upgrade".to_string())).unwrap();
+        assert_eq!(hdr.as_bytes(), b"upgrade");
         let hdr = HeaderValue::try_from(ByteString::from("upgrade")).unwrap();
         assert_eq!(hdr.as_bytes(), b"upgrade");
         let hdr = HeaderValue::try_from(&ByteString::from("upgrade")).unwrap();
         assert_eq!(hdr.as_bytes(), b"upgrade");
+        let hdr2 = HeaderValue::try_from(&ByteString::from("upgrade2")).unwrap();
+
+        assert!(hdr == hdr);
+        assert!(hdr == &hdr);
+        assert!(hdr == "upgrade");
+        assert!(hdr == "upgrade".to_string());
+        assert!("upgrade" == hdr);
+        assert!("upgrade" == &hdr);
+        assert!("upgrade".to_string() == hdr);
+        assert!(hdr < hdr2);
+        assert!(hdr < &hdr2);
+        assert!(&hdr < &hdr2);
+        assert!(&hdr < "upgrade2");
+        assert!(hdr < "upgrade2");
+        assert!(hdr < "upgrade2".to_string());
+        assert!("upgrade2" > hdr);
+        assert!("upgrade2".to_string() > hdr);
     }
 
     #[test]
