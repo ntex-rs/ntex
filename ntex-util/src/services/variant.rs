@@ -348,6 +348,7 @@ mod tests {
     #[ntex_macros::rt_test2]
     async fn test_variant() {
         let factory = variant(fn_factory(|| async { Ok::<_, ()>(Srv1) }))
+            .clone()
             .v2(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
