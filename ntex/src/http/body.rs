@@ -620,10 +620,12 @@ mod tests {
         assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
 
         let mut b = BytesMut::from("test");
+        assert_eq!(b.size(), BodySize::Sized(4));
         assert_eq!(
             poll_fn(|cx| b.poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("test"))
         );
+        assert_eq!(b.size(), BodySize::Sized(0));
         assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
