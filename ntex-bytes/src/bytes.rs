@@ -4084,30 +4084,30 @@ mod tests {
         let b = Bytes::from(BytesMut::from(LONG));
         assert_eq!(b, LONG);
 
-        let mut b = BytesMut::try_from(b).unwrap().freeze();
+        let mut b: Bytes = BytesMut::try_from(b).unwrap().freeze();
         assert_eq!(b, LONG);
-        assert_eq!(b.remaining(), LONG.len());
-        assert_eq!(b.chunk(), LONG);
-        b.advance(10);
-        assert_eq!(b.chunk(), &LONG[10..]);
+        assert_eq!(Buf::remaining(&b), LONG.len());
+        assert_eq!(Buf::chunk(&b), LONG);
+        Buf::advance(&mut b, 10);
+        assert_eq!(Buf::chunk(&b), &LONG[10..]);
 
         let mut b = BytesMut::try_from(LONG).unwrap();
         assert_eq!(b, LONG);
-        assert_eq!(b.remaining(), LONG.len());
-        assert_eq!(b.remaining_mut(), 25);
-        assert_eq!(b.chunk(), LONG);
-        b.advance(10);
-        assert_eq!(b.chunk(), &LONG[10..]);
+        assert_eq!(Buf::remaining(&b), LONG.len());
+        assert_eq!(BufMut::remaining_mut(&b), 25);
+        assert_eq!(Buf::chunk(&b), LONG);
+        Buf::advance(&mut b, 10);
+        assert_eq!(Buf::chunk(&b), &LONG[10..]);
 
         let mut b = BytesMut::with_capacity(12);
-        b.put_i8(1);
+        BufMut::put_i8(&mut b, 1);
         assert_eq!(b, b"\x01".as_ref());
-        b.put_u8(2);
+        BufMut::put_u8(&mut b, 2);
         assert_eq!(b, b"\x01\x02".as_ref());
-        b.put_slice(b"12345");
+        BufMut::put_slice(&mut b, b"12345");
         assert_eq!(b, b"\x01\x0212345".as_ref());
-        b.chunk_mut().write_byte(0, b'1');
-        unsafe { b.advance_mut(1) };
+        BufMut::chunk_mut(&mut b).write_byte(0, b'1');
+        unsafe { BufMut::advance_mut(&mut b, 1) };
         assert_eq!(b, b"\x01\x02123451".as_ref());
     }
 

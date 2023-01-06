@@ -251,7 +251,23 @@ mod tests {
         )
         .clone();
 
-        let srv = factory.create(&()).await.unwrap();
+        let srv = factory.create(&()).await.unwrap().clone();
+        let res = srv.call(10).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 20);
+
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
+        assert_eq!(res, Poll::Ready(()));
+
+        let factory =
+            crate::pipeline_factory(fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)))
+                .apply(Rc::new(Tr(marker::PhantomData).clone()))
+                .clone();
+
+        let srv = factory.create(&()).await.unwrap().clone();
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
