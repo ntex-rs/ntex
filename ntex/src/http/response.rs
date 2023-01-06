@@ -1007,6 +1007,26 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body().get_ref(), b"test");
+
+        let builder = Response::build_from(ResponseBuilder::new(StatusCode::OK))
+            .keep_alive()
+            .if_true(true, |b| {
+                b.header(CONTENT_TYPE, "ttt");
+            })
+            .if_some(Some(true), |_, b| {
+                b.header(CONTENT_TYPE, "ttt2");
+            })
+            .take();
+        let _ = builder.extensions();
+        let resp: Response = builder.into();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get_all(CONTENT_TYPE).collect::<Vec<_>>(),
+            vec![
+                HeaderValue::from_static("ttt"),
+                HeaderValue::from_static("ttt2")
+            ]
+        );
     }
 
     #[test]

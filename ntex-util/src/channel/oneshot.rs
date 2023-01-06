@@ -116,8 +116,15 @@ mod tests {
     #[ntex_macros::rt_test2]
     async fn test_oneshot() {
         let (tx, rx) = channel();
+        assert!(format!("{:?}", tx).contains("Sender"));
+        assert!(format!("{:?}", rx).contains("Receiver"));
+
         tx.send("test").unwrap();
         assert_eq!(rx.await.unwrap(), "test");
+
+        let (tx, rx) = channel();
+        tx.send("test").unwrap();
+        assert_eq!(rx.recv().await.unwrap(), "test");
 
         let (tx, rx) = channel();
         assert!(!tx.is_canceled());
