@@ -29,9 +29,13 @@ pub async fn tcp_connect_in(addr: SocketAddr, pool: PoolRef) -> Result<Io> {
 }
 
 /// Opens a TCP connection to a remote host and use specified memory pool and bind local addr.
-pub async fn tcp_bind_connect_in(addr: SocketAddr, bind_addr: Option<SocketAddr>, pool: PoolRef) -> Result<Io> {
+pub async fn tcp_bind_connect_in(
+    addr: SocketAddr,
+    bind_addr: Option<SocketAddr>,
+    pool: PoolRef,
+) -> Result<Io> {
     if let Some(bind_addr) = bind_addr {
-        let socket = match &addr{
+        let socket = match &addr {
             SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
             SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
         };
@@ -39,7 +43,7 @@ pub async fn tcp_bind_connect_in(addr: SocketAddr, bind_addr: Option<SocketAddr>
         let sock = socket.connect(addr).await?;
         sock.set_nodelay(true)?;
         Ok(Io::with_memory_pool(TcpStream(sock), pool))
-    }else{
+    } else {
         tcp_connect_in(addr, pool).await
     }
 }

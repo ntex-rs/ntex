@@ -114,7 +114,12 @@ impl<'f, T: Address> Future for ConnectServiceResponse<'f, T> {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(address) => {
                     let port = address.port();
-                    let Connect { req, addr, bind_addr, .. } = address;
+                    let Connect {
+                        req,
+                        addr,
+                        bind_addr,
+                        ..
+                    } = address;
 
                     if let Some(addr) = addr {
                         self.state = ConnectState::Connect(TcpConnectorResponse::new(
@@ -227,7 +232,11 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
 
             // try to connect
             let addr = this.addrs.as_mut().unwrap().pop_front().unwrap();
-            this.stream = Some(Box::pin(tcp_bind_connect_in(addr, this.bind_addr, this.pool)));
+            this.stream = Some(Box::pin(tcp_bind_connect_in(
+                addr,
+                this.bind_addr,
+                this.pool,
+            )));
         }
     }
 }
