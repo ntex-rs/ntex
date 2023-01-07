@@ -145,6 +145,7 @@ impl From<std::convert::Infallible> for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as StdError;
 
     #[test]
     fn inner_error_is_invalid_status_code() {
@@ -155,8 +156,12 @@ mod tests {
             assert!(ie.is::<status::InvalidStatusCode>());
             ie.downcast_ref::<status::InvalidStatusCode>().unwrap();
 
+            assert!(err.source().is_none());
             assert!(!err.is::<InvalidHeaderValue>());
             assert!(err.is::<status::InvalidStatusCode>());
+
+            let s = format!("{:?}", err);
+            assert!(s.starts_with("ntex_http::Error"));
         } else {
             panic!("Bad status allowed!");
         }

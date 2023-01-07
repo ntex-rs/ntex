@@ -4078,12 +4078,39 @@ mod tests {
         assert!(b.is_empty());
         assert!(b.len() == 0);
 
+        let b = Bytes::from(&Bytes::from(LONG));
+        assert_eq!(b, LONG);
+
         let b = Bytes::from(BytesMut::from(LONG));
         assert_eq!(b, LONG);
 
-        let b = BytesMut::try_from(b).unwrap();
+        let mut b: Bytes = BytesMut::try_from(b).unwrap().freeze();
         assert_eq!(b, LONG);
+        assert_eq!(Buf::remaining(&b), LONG.len());
+        assert_eq!(Buf::chunk(&b), LONG);
+        Buf::advance(&mut b, 10);
+        assert_eq!(Buf::chunk(&b), &LONG[10..]);
+
+        let mut b = BytesMut::try_from(LONG).unwrap();
+        assert_eq!(b, LONG);
+        assert_eq!(Buf::remaining(&b), LONG.len());
+        assert_eq!(BufMut::remaining_mut(&b), 25);
+        assert_eq!(Buf::chunk(&b), LONG);
+        Buf::advance(&mut b, 10);
+        assert_eq!(Buf::chunk(&b), &LONG[10..]);
+
+        let mut b = BytesMut::with_capacity(12);
+        BufMut::put_i8(&mut b, 1);
+        assert_eq!(b, b"\x01".as_ref());
+        BufMut::put_u8(&mut b, 2);
+        assert_eq!(b, b"\x01\x02".as_ref());
+        BufMut::put_slice(&mut b, b"12345");
+        assert_eq!(b, b"\x01\x0212345".as_ref());
+        BufMut::chunk_mut(&mut b).write_byte(0, b'1');
+        unsafe { BufMut::advance_mut(&mut b, 1) };
+        assert_eq!(b, b"\x01\x02123451".as_ref());
     }
+
     #[test]
     fn bytes_vec() {
         let bv = BytesVec::copy_from_slice(&LONG[..]);

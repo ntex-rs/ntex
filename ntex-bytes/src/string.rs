@@ -371,7 +371,7 @@ mod utf8 {
 
 #[cfg(test)]
 mod test {
-    use std::borrow::ToOwned;
+    use std::borrow::{Borrow, Cow, ToOwned};
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -384,12 +384,34 @@ mod test {
         assert_eq!(s, "test");
         assert_eq!(s, *"test");
         assert_eq!(s, "test".to_owned());
+        assert_eq!(s.as_str(), "test");
         assert_eq!(s.as_slice(), b"test");
         assert_eq!(s.as_bytes(), &Bytes::copy_from_slice(b"test"));
+        assert_eq!(Borrow::<str>::borrow(&s), "test");
 
         assert_eq!(format!("{}", s), "test");
         assert_eq!(format!("{:?}", s), "\"test\"");
-        assert_eq!(s.into_bytes(), Bytes::copy_from_slice(b"test"));
+
+        let b = s.into_bytes();
+        assert_eq!(b, Bytes::copy_from_slice(b"test"));
+
+        let s = unsafe { ByteString::from_bytes_unchecked(b) };
+        assert_eq!(s, "test");
+        assert_eq!(s.slice(0..2), "te");
+
+        let s = ByteString::from(Cow::Borrowed("test"));
+        assert_eq!(s, "test");
+        let mut s = ByteString::from(Cow::Owned("test".to_string()));
+        assert_eq!(s, "test");
+
+        s.clear();
+        assert_eq!(s, "");
+
+        assert!(ByteString::try_from(b"\xc3\x28".as_ref()).is_err());
+        assert!(ByteString::try_from(vec![b'\xc3']).is_err());
+        assert!(ByteString::try_from(Bytes::from_static(b"\xc3\x28")).is_err());
+        assert!(ByteString::try_from(&Bytes::from_static(b"\xc3\x28")).is_err());
+        assert!(ByteString::try_from(BytesMut::copy_from_slice(b"\xc3\x28")).is_err());
     }
 
     #[test]

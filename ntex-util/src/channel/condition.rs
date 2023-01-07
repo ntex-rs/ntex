@@ -135,11 +135,11 @@ mod tests {
 
     #[ntex_macros::rt_test2]
     async fn test_condition_poll() {
-        let cond = Condition::new();
+        let cond = Condition::default().clone();
         let waiter = cond.wait();
         assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Pending);
         cond.notify();
-        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Ready(()));
+        waiter.ready().await;
 
         let waiter2 = waiter.clone();
         assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Pending);

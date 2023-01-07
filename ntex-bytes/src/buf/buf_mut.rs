@@ -990,6 +990,25 @@ mod tests {
         b.put_slice(b"123");
         assert_eq!(&buf[..], b"1231111111");
 
+        let mut b: &mut [u8] = buf.as_mut();
+        let chunk = b.chunk_mut();
+        chunk.write_byte(0, b'9');
+        assert_eq!(&buf[..], b"9231111111");
+
+        let mut b = buf.as_mut();
+        let chunk = b.chunk_mut();
+        chunk.copy_from_slice(b"0000000000");
+        assert_eq!(&buf[..], b"0000000000");
+
+        let mut b = buf.as_mut();
+        assert_eq!(format!("{:?}", b.chunk_mut()), "UninitSlice[...]");
+
+        let b = buf.as_mut();
+        let mut bb = Box::new(b);
+        let chunk = bb.chunk_mut();
+        chunk.copy_from_slice(b"1111111111");
+        assert_eq!(&buf[..], b"1111111111");
+
         let mut buf = BytesMut::new();
         buf.put_u8(0x01);
         assert_eq!(buf, b"\x01"[..]);
