@@ -105,7 +105,6 @@ impl Filter for Base {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
 pub(crate) struct NullFilter;
 
 const NULL: NullFilter = NullFilter;
