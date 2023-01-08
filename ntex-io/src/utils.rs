@@ -85,7 +85,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_bytes::Bytes;
+    use ntex_bytes::{Bytes, BytesVec};
     use ntex_codec::BytesCodec;
 
     use super::*;
@@ -114,22 +114,56 @@ mod tests {
         assert_eq!(buf, b"RES".as_ref());
     }
 
+    #[derive(Copy, Clone, Debug)]
+    struct NullFilterFactory;
+
+    impl<F: Filter> FilterFactory<F> for NullFilterFactory {
+        type Filter = crate::filter::NullFilter;
+        type Error = std::convert::Infallible;
+        type Future = Ready<Io<Self::Filter>, Self::Error>;
+
+        fn create(self, st: Io<F>) -> Self::Future {
+            st.map_filter(|_| Ok(NullFilter)).into()
+        }
+    }
+
+    #[ntex::test]
+    async fn test_utils_filter() {
+        let _ = pipeline_factory(
+            filter::<_, crate::filter::Base>(NullFilterFactory)
+                .map_err(|_| ())
+                .map_init_err(|_| ()),
+        )
+        .and_then(seal(fn_service(|io: IoBoxed| async move {
+            let t = io.recv(&BytesCodec).await.unwrap().unwrap();
+            assert_eq!(t, b"REQ".as_ref());
+            io.send(Bytes::from_static(b"RES"), &BytesCodec)
+                .await
+                .unwrap();
+            Ok::<_, ()>(())
+        })))
+        .create(())
+        .await
+        .unwrap();
+    }
+
     #[ntex::test]
     async fn test_null_filter() {
         assert!(NullFilter.query(std::any::TypeId::of::<()>()).is_none());
         assert!(NullFilter.poll_shutdown().is_ready());
-
-        // fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<ReadStatus> {
-        //     Poll::Ready(ReadStatus::Terminate)
-        // fn poll_write_ready(&self, _: &mut Context<'_>) -> Poll<WriteStatus> {
-        //     Poll::Ready(WriteStatus::Terminate)
-
+        assert_eq!(
+            ntex_util::future::poll_fn(|cx| NullFilter.poll_read_ready(cx)).await,
+            crate::ReadStatus::Terminate
+        );
+        assert_eq!(
+            ntex_util::future::poll_fn(|cx| NullFilter.poll_write_ready(cx)).await,
+            crate::WriteStatus::Terminate
+        );
         assert_eq!(NullFilter.get_read_buf(), None);
         assert_eq!(NullFilter.get_write_buf(), None);
-        // fn release_read_buf(&self, _: BytesVec) {}
+        assert!(NullFilter.release_write_buf(BytesVec::new()).is_ok());
+        NullFilter.release_read_buf(BytesVec::new());
         // fn process_read_buf(&self, _: &IoRef, _: usize) -> io::Result<(usize, usize)> {
         //     Ok((0, 0))
-        // fn release_write_buf(&self, _: BytesVec) -> Result<(), io::Error> {
-        //     Ok(())
     }
 }
