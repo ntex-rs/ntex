@@ -408,14 +408,14 @@ mod tests {
             .to_http_request();
 
         assert_eq!(
-            req.url_for("unknown", &["test"]),
+            req.url_for("unknown", ["test"]),
             Err(crate::web::error::UrlGenerationError::ResourceNotFound)
         );
         assert_eq!(
-            req.url_for("index", &["test"]),
+            req.url_for("index", ["test"]),
             Err(crate::web::error::UrlGenerationError::NotEnoughElements)
         );
-        let url = req.url_for("index", &["test", "html"]);
+        let url = req.url_for("index", ["test", "html"]);
         assert_eq!(
             url.ok().unwrap().as_str(),
             "http://www.rust-lang.org/user/test.html"
@@ -456,7 +456,7 @@ mod tests {
         // assert!(rmap.has_resource("https://youtube.com/watch/unknown"));
 
         let req = TestRequest::default().rmap(rmap).to_http_request();
-        let url = req.url_for("youtube", &["oHg5SJYRHA0"]);
+        let url = req.url_for("youtube", ["oHg5SJYRHA0"]);
         assert_eq!(
             url.ok().unwrap().as_str(),
             "https://youtube.com/watch/oHg5SJYRHA0"

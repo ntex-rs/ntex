@@ -771,7 +771,7 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/2345/sdg")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/2345/sdg")), Some(1));
 
-        let re = ResourceDef::new(&("/user*".to_string()));
+        let re = ResourceDef::new("/user*".to_string());
         let tree = Tree::new(&re, 1);
         assert_eq!(tree.find(&mut Path::new("/user/profile")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/2345")), Some(1));
@@ -956,31 +956,31 @@ mod tests {
     fn test_resource_path() {
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/test");
-        assert!(resource.resource_path(&mut s, &mut (&["user1"]).iter()));
+        assert!(resource.resource_path(&mut s, &mut ["user1"].iter()));
         assert_eq!(s, "/user/user1/test");
 
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/{item2}/test");
-        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).iter()));
+        assert!(resource.resource_path(&mut s, &mut ["item", "item2"].iter()));
         assert_eq!(s, "/user/item/item2/test");
 
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/{item2}");
-        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).iter()));
+        assert!(resource.resource_path(&mut s, &mut ["item", "item2"].iter()));
         assert_eq!(s, "/user/item/item2");
 
         let mut s = String::new();
         let resource = ResourceDef::new("/user/{item1}/{item2}/");
-        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).iter()));
+        assert!(resource.resource_path(&mut s, &mut ["item", "item2"].iter()));
         assert_eq!(s, "/user/item/item2/");
 
         let mut s = String::new();
-        assert!(!resource.resource_path(&mut s, &mut (&["item"]).iter()));
+        assert!(!resource.resource_path(&mut s, &mut ["item"].iter()));
 
         let mut s = String::new();
-        assert!(resource.resource_path(&mut s, &mut (&["item", "item2"]).iter()));
+        assert!(resource.resource_path(&mut s, &mut ["item", "item2"].iter()));
         assert_eq!(s, "/user/item/item2/");
-        assert!(!resource.resource_path(&mut s, &mut (&["item"]).iter()));
+        assert!(!resource.resource_path(&mut s, &mut ["item"].iter()));
 
         let mut s = String::new();
         assert!(resource.resource_path(&mut s, &mut vec!["item", "item2"].into_iter()));

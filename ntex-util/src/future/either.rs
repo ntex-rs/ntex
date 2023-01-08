@@ -125,18 +125,19 @@ mod test {
     use super::*;
 
     #[test]
+    #[allow(clippy::unit_cmp)]
     fn either() {
         let mut e = Either::<(), ()>::Left(());
-        assert_eq!(e.is_left(), true);
-        assert_eq!(e.is_right(), false);
+        assert!(e.is_left());
+        assert!(!e.is_right());
         assert!(e.left().is_some());
         assert!(e.right().is_none());
         e.as_ref();
         e.as_mut();
 
         let e = Either::<(), ()>::Right(());
-        assert_eq!(e.is_left(), false);
-        assert_eq!(e.is_right(), true);
+        assert!(!e.is_left());
+        assert!(e.is_right());
         assert!(e.left().is_none());
         assert!(e.right().is_some());
 

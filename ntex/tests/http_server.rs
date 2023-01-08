@@ -337,17 +337,17 @@ async fn test_content_length() {
 
     {
         for i in 0..4 {
-            let req = srv.request(Method::GET, &format!("/{}", i));
+            let req = srv.request(Method::GET, format!("/{}", i));
             let response = req.send().await.unwrap();
             assert_eq!(response.headers().get(&header), None);
 
-            let req = srv.request(Method::HEAD, &format!("/{}", i));
+            let req = srv.request(Method::HEAD, format!("/{}", i));
             let response = req.send().await.unwrap();
             assert_eq!(response.headers().get(&header), None);
         }
 
         for i in 4..6 {
-            let req = srv.request(Method::GET, &format!("/{}", i));
+            let req = srv.request(Method::GET, format!("/{}", i));
             let response = req.send().await.unwrap();
             assert_eq!(response.headers().get(&header), Some(&value));
         }

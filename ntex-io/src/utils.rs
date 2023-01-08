@@ -129,22 +129,20 @@ mod tests {
 
     #[ntex::test]
     async fn test_utils_filter() {
-        let _ = pipeline_factory(
+        let (_, server) = IoTest::create();
+        let svc = pipeline_factory(
             filter::<_, crate::filter::Base>(NullFilterFactory)
                 .map_err(|_| ())
                 .map_init_err(|_| ()),
         )
         .and_then(seal(fn_service(|io: IoBoxed| async move {
-            let t = io.recv(&BytesCodec).await.unwrap().unwrap();
-            assert_eq!(t, b"REQ".as_ref());
-            io.send(Bytes::from_static(b"RES"), &BytesCodec)
-                .await
-                .unwrap();
+            let _ = io.recv(&BytesCodec).await;
             Ok::<_, ()>(())
         })))
         .create(())
         .await
         .unwrap();
+        let _ = svc.call(Io::new(server)).await;
     }
 
     #[ntex::test]
@@ -163,7 +161,12 @@ mod tests {
         assert_eq!(NullFilter.get_write_buf(), None);
         assert!(NullFilter.release_write_buf(BytesVec::new()).is_ok());
         NullFilter.release_read_buf(BytesVec::new());
-        // fn process_read_buf(&self, _: &IoRef, _: usize) -> io::Result<(usize, usize)> {
-        //     Ok((0, 0))
+
+        let (_, server) = IoTest::create();
+        let io = Io::new(server);
+        assert_eq!(
+            NullFilter.process_read_buf(&io.get_ref(), 10).unwrap(),
+            (0, 0)
+        )
     }
 }

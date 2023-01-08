@@ -576,6 +576,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_borrow)]
     fn test_basics() {
         let m = HeaderMap::default();
         assert!(m.is_empty());
@@ -599,8 +600,7 @@ mod tests {
             HeaderValue::from_static("text")
         );
 
-        let keys: Vec<_> = m.keys().collect();
-        assert!(keys.contains(&&CONTENT_TYPE));
+        assert!(m.keys().any(|x| x == CONTENT_TYPE));
         m.remove("content-type");
         assert!(m.is_empty());
     }

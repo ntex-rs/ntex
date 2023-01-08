@@ -953,7 +953,7 @@ mod tests {
 
         spawn_h1(server, |mut req: Request| async move {
             let mut p = req.take_payload();
-            while let Some(_) = stream_recv(&mut p).await {}
+            while (stream_recv(&mut p).await).is_some() {}
             Ok::<_, io::Error>(Response::Ok().finish())
         });
 
