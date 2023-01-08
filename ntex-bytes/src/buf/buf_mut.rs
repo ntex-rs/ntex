@@ -975,6 +975,7 @@ mod tests {
     use crate::{BytesMut, BytesVec};
 
     #[test]
+    #[allow(clippy::needless_borrow)]
     fn buf_mut_tests() {
         let mut buf = vec![];
         buf.put_u8(0x01);

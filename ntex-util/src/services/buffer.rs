@@ -302,6 +302,7 @@ mod tests {
     }
 
     #[ntex_macros::rt_test2]
+    #[allow(clippy::redundant_clone)]
     async fn test_newtransform() {
         let inner = Rc::new(Inner {
             ready: Cell::new(false),

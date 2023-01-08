@@ -4071,6 +4071,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::len_zero)]
     fn bytes() {
         let mut b = Bytes::from(LONG.to_vec());
         b.clear();
@@ -4113,12 +4114,12 @@ mod tests {
 
     #[test]
     fn bytes_vec() {
-        let bv = BytesVec::copy_from_slice(&LONG[..]);
+        let bv = BytesVec::copy_from_slice(LONG);
         // SharedVec size is 32
         assert_eq!(bv.capacity(), mem::size_of::<SharedVec>() * 9);
         assert_eq!(bv.len(), 263);
         assert_eq!(bv.as_ref().len(), 263);
-        assert_eq!(bv.as_ref(), &LONG[..]);
+        assert_eq!(bv.as_ref(), LONG);
 
         let mut bv = BytesVec::copy_from_slice(&b"hello"[..]);
         assert_eq!(bv.capacity(), mem::size_of::<SharedVec>());

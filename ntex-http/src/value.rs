@@ -751,6 +751,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::op_ref, clippy::cmp_owned, deprecated)]
     fn test_basics() {
         assert!(HeaderValue::from_str("").unwrap().is_empty());
 

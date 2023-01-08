@@ -499,14 +499,10 @@ async fn test_ws_transport() {
                         .await?;
 
                     // start websocket service
-                    loop {
-                        if let Some(item) =
-                            io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
-                        {
-                            io.send(item.freeze(), &BytesCodec).await.unwrap()
-                        } else {
-                            break;
-                        }
+                    while let Some(item) =
+                        io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
+                    {
+                        io.send(item.freeze(), &BytesCodec).await.unwrap()
                     }
                     Ok::<_, io::Error>(())
                 }

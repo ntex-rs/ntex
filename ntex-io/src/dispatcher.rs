@@ -541,7 +541,7 @@ mod tests {
 
         assert!(st
             .io()
-            .encode(Bytes::from_static(b"test"), &mut BytesCodec)
+            .encode(Bytes::from_static(b"test"), &BytesCodec)
             .is_ok());
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
@@ -567,10 +567,7 @@ mod tests {
         );
         state
             .io()
-            .encode(
-                Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"),
-                &mut BytesCodec,
-            )
+            .encode(Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"), &BytesCodec)
             .unwrap();
         spawn(async move {
             let _ = disp.await;
@@ -619,10 +616,7 @@ mod tests {
         let (disp, state) = Dispatcher::debug(server, BytesCodec, Srv(counter.clone()));
         state
             .io()
-            .encode(
-                Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"),
-                &mut BytesCodec,
-            )
+            .encode(Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"), &BytesCodec)
             .unwrap();
         spawn(async move {
             let _ = disp.await;
@@ -764,7 +758,6 @@ mod tests {
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[ntex::test]
     async fn test_unhandled_data() {
         let handled = Arc::new(AtomicBool::new(false));

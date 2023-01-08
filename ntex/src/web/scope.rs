@@ -1239,7 +1239,7 @@ mod tests {
                     "/",
                     web::get().to(|req: HttpRequest| async move {
                         HttpResponse::Ok().body(
-                            req.url_for("youtube", &["xxxxxx"])
+                            req.url_for("youtube", ["xxxxxx"])
                                 .unwrap()
                                 .as_str()
                                 .to_string(),
@@ -1264,7 +1264,7 @@ mod tests {
             web::scope("/b").service(web::resource("/c/{stuff}").name("c").route(
                 web::get().to(|req: HttpRequest| async move {
                     HttpResponse::Ok()
-                        .body(format!("{}", req.url_for("c", &["12345"]).unwrap()))
+                        .body(format!("{}", req.url_for("c", ["12345"]).unwrap()))
                 }),
             )),
         )))

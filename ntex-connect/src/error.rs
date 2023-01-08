@@ -44,6 +44,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::redundant_clone)]
     fn connect_error_clone() {
         let _ =
             ConnectError::Resolver(io::Error::new(io::ErrorKind::Other, "test")).clone();

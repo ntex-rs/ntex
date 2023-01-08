@@ -773,14 +773,12 @@ async fn test_client_cookie_handling() {
                         })
                         .map_err(|_| Error::new(IoError::from(ErrorKind::NotFound)));
 
-                    if let Err(e) = res {
-                        Err(e)
-                    } else {
-                        // Send some cookies back
-                        Ok::<_, Error>(
-                            HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish(),
-                        )
-                    }
+                    res?;
+
+                    // Send some cookies back
+                    Ok::<_, Error>(
+                        HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish(),
+                    )
                 }
             })),
         )

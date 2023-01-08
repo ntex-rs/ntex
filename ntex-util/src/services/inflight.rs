@@ -124,7 +124,7 @@ mod tests {
         fn call(&self, _: ()) -> Self::Future<'_> {
             let fut = crate::time::sleep(self.0);
             Box::pin(async move {
-                let _ = fut.await;
+                fut.await;
                 Ok::<_, ()>(())
             })
         }

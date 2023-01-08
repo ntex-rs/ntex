@@ -69,15 +69,15 @@ mod glommio {
         F: Future + 'static,
         F::Output: 'static,
     {
-        let ptr = crate::CB.with(|cb| (&cb.borrow().0)());
+        let ptr = crate::CB.with(|cb| (cb.borrow().0)());
         JoinHandle {
             fut: Either::Left(
                 glomm_io::spawn_local(async move {
                     if let Some(ptr) = ptr {
-                        let new_ptr = crate::CB.with(|cb| (&cb.borrow().1)(ptr));
+                        let new_ptr = crate::CB.with(|cb| (cb.borrow().1)(ptr));
                         glomm_io::executor().yield_now().await;
                         let res = f.await;
-                        crate::CB.with(|cb| (&cb.borrow().2)(new_ptr));
+                        crate::CB.with(|cb| (cb.borrow().2)(new_ptr));
                         res
                     } else {
                         glomm_io::executor().yield_now().await;
@@ -170,12 +170,12 @@ mod tokio {
     where
         F: Future + 'static,
     {
-        let ptr = crate::CB.with(|cb| (&cb.borrow().0)());
+        let ptr = crate::CB.with(|cb| (cb.borrow().0)());
         tok_io::task::spawn_local(async move {
             if let Some(ptr) = ptr {
-                let new_ptr = crate::CB.with(|cb| (&cb.borrow().1)(ptr));
+                let new_ptr = crate::CB.with(|cb| (cb.borrow().1)(ptr));
                 let res = f.await;
-                crate::CB.with(|cb| (&cb.borrow().2)(new_ptr));
+                crate::CB.with(|cb| (cb.borrow().2)(new_ptr));
                 res
             } else {
                 f.await
@@ -224,13 +224,13 @@ mod asyncstd {
     where
         F: Future + 'static,
     {
-        let ptr = crate::CB.with(|cb| (&cb.borrow().0)());
+        let ptr = crate::CB.with(|cb| (cb.borrow().0)());
         JoinHandle {
             fut: async_std::task::spawn_local(async move {
                 if let Some(ptr) = ptr {
-                    let new_ptr = crate::CB.with(|cb| (&cb.borrow().1)(ptr));
+                    let new_ptr = crate::CB.with(|cb| (cb.borrow().1)(ptr));
                     let res = f.await;
-                    crate::CB.with(|cb| (&cb.borrow().2)(new_ptr));
+                    crate::CB.with(|cb| (cb.borrow().2)(new_ptr));
                     res
                 } else {
                     f.await
