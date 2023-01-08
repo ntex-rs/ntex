@@ -2,8 +2,7 @@ use std::{any, io, task::Context, task::Poll};
 
 use ntex_bytes::BytesVec;
 
-use super::io::Flags;
-use super::{Filter, IoRef, ReadStatus, WriteStatus};
+use super::{io::Flags, Filter, IoRef, ReadStatus, WriteStatus};
 
 /// Default `Io` filter
 pub struct Base(IoRef);
@@ -106,6 +105,7 @@ impl Filter for Base {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct NullFilter;
 
 const NULL: NullFilter = NullFilter;
@@ -117,36 +117,45 @@ impl NullFilter {
 }
 
 impl Filter for NullFilter {
+    #[inline]
     fn query(&self, _: any::TypeId) -> Option<Box<dyn any::Any>> {
         None
     }
 
+    #[inline]
     fn poll_shutdown(&self) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 
+    #[inline]
     fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<ReadStatus> {
         Poll::Ready(ReadStatus::Terminate)
     }
 
+    #[inline]
     fn poll_write_ready(&self, _: &mut Context<'_>) -> Poll<WriteStatus> {
         Poll::Ready(WriteStatus::Terminate)
     }
 
+    #[inline]
     fn get_read_buf(&self) -> Option<BytesVec> {
         None
     }
 
+    #[inline]
     fn get_write_buf(&self) -> Option<BytesVec> {
         None
     }
 
+    #[inline]
     fn release_read_buf(&self, _: BytesVec) {}
 
+    #[inline]
     fn process_read_buf(&self, _: &IoRef, _: usize) -> io::Result<(usize, usize)> {
         Ok((0, 0))
     }
 
+    #[inline]
     fn release_write_buf(&self, _: BytesVec) -> Result<(), io::Error> {
         Ok(())
     }
