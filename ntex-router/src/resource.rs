@@ -771,7 +771,8 @@ mod tests {
         assert_eq!(tree.find(&mut Path::new("/2345/sdg")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/2345/sdg")), Some(1));
 
-        let re = ResourceDef::new("/user*".to_string());
+        #[allow(clippy::needless_borrow)]
+        let re = ResourceDef::new(&("/user*".to_string()));
         let tree = Tree::new(&re, 1);
         assert_eq!(tree.find(&mut Path::new("/user/profile")), Some(1));
         assert_eq!(tree.find(&mut Path::new("/user/2345")), Some(1));
