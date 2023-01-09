@@ -6,7 +6,7 @@ use ntex_io::{types, Io};
 use ntex_service::{Service, ServiceFactory};
 use ntex_util::future::{BoxFuture, Either, Ready};
 
-use crate::{net::tcp_bind_connect_in, Address, Connect, ConnectError, Resolver};
+use crate::{net::tcp_connect_in, Address, Connect, ConnectError, Resolver};
 
 pub struct Connector<T> {
     resolver: Resolver<T>,
@@ -114,16 +114,11 @@ impl<'f, T: Address> Future for ConnectServiceResponse<'f, T> {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(address) => {
                     let port = address.port();
-                    let Connect {
-                        req,
-                        addr,
-                        bind_addr,
-                        ..
-                    } = address;
+                    let Connect { req, addr, .. } = address;
 
                     if let Some(addr) = addr {
                         self.state = ConnectState::Connect(TcpConnectorResponse::new(
-                            req, port, addr, bind_addr, self.pool,
+                            req, port, addr, self.pool,
                         ));
                         self.poll(cx)
                     } else if let Some(addr) = req.addr() {
@@ -131,7 +126,6 @@ impl<'f, T: Address> Future for ConnectServiceResponse<'f, T> {
                             req,
                             addr.port(),
                             Either::Left(addr),
-                            bind_addr,
                             self.pool,
                         ));
                         self.poll(cx)
@@ -151,7 +145,6 @@ struct TcpConnectorResponse<T> {
     req: Option<T>,
     port: u16,
     addrs: Option<VecDeque<SocketAddr>>,
-    bind_addr: Option<SocketAddr>,
     #[allow(clippy::type_complexity)]
     stream: Option<BoxFuture<'static, Result<Io, io::Error>>>,
     pool: PoolRef,
@@ -162,7 +155,6 @@ impl<T: Address> TcpConnectorResponse<T> {
         req: T,
         port: u16,
         addr: Either<SocketAddr, VecDeque<SocketAddr>>,
-        bind_addr: Option<SocketAddr>,
         pool: PoolRef,
     ) -> TcpConnectorResponse<T> {
         trace!(
@@ -174,19 +166,17 @@ impl<T: Address> TcpConnectorResponse<T> {
         match addr {
             Either::Left(addr) => TcpConnectorResponse {
                 req: Some(req),
-                port,
                 addrs: None,
-                bind_addr,
-                stream: Some(Box::pin(tcp_bind_connect_in(addr, bind_addr, pool))),
+                stream: Some(Box::pin(tcp_connect_in(addr, pool))),
                 pool,
+                port,
             },
             Either::Right(addrs) => TcpConnectorResponse {
-                req: Some(req),
                 port,
-                addrs: Some(addrs),
-                bind_addr,
-                stream: None,
                 pool,
+                req: Some(req),
+                addrs: Some(addrs),
+                stream: None,
             },
         }
     }
@@ -232,11 +222,7 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
 
             // try to connect
             let addr = this.addrs.as_mut().unwrap().pop_front().unwrap();
-            this.stream = Some(Box::pin(tcp_bind_connect_in(
-                addr,
-                this.bind_addr,
-                this.pool,
-            )));
+            this.stream = Some(Box::pin(tcp_connect_in(addr, this.pool)));
         }
     }
 }

@@ -46,37 +46,6 @@ mod net_impl {
         Ok(Io::with_memory_pool(TcpStream::new(sock), pool))
     }
 
-    /// Opens a TCP connection to a remote host and use specified memory pool and bind local addr.
-    pub async fn tcp_bind_connect_in(
-        addr: SocketAddr,
-        bind_addr: Option<SocketAddr>,
-        pool: PoolRef,
-    ) -> Result<Io> {
-        if let Some(bind_addr) = bind_addr {
-            let domain = match &addr {
-                SocketAddr::V4(_) => socket2::Domain::ipv4(),
-                SocketAddr::V6(_) => socket2::Domain::ipv6(),
-            };
-            let sock = socket2::Socket::new(domain, socket2::Type::stream(), None)?;
-            sock.bind(&socket2::SockAddr::from(bind_addr))?;
-            let sock = glommio::executor()
-                .spawn_blocking(move || {
-                    match sock.connect(&socket2::SockAddr::from(addr)) {
-                        Err(e) => Err(e),
-                        Ok(()) => Ok(sock),
-                    }
-                })
-                .await?;
-            sock.set_nodelay(true)?;
-            Ok(Io::with_memory_pool(
-                TcpStream::new(glommio::net::TcpStream::from(sock)),
-                pool,
-            ))
-        } else {
-            tcp_connect_in(addr, pool).await
-        }
-    }
-
     /// Opens a unix stream connection.
     pub async fn unix_connect<P>(addr: P) -> Result<Io>
     where

@@ -29,37 +29,6 @@ pub async fn tcp_connect_in(addr: SocketAddr, pool: PoolRef) -> Result<Io> {
     Ok(Io::with_memory_pool(TcpStream(sock), pool))
 }
 
-/// Opens a TCP connection to a remote host and use specified memory pool and bind local addr.
-pub async fn tcp_bind_connect_in(
-    addr: SocketAddr,
-    bind_addr: Option<SocketAddr>,
-    pool: PoolRef,
-) -> Result<Io> {
-    if let Some(bind_addr) = bind_addr {
-        let socket = socket2::Socket::new(
-            socket2::Domain::for_address(addr),
-            socket2::Type::STREAM,
-            None,
-        )?;
-        socket.bind(&socket2::SockAddr::from(bind_addr))?;
-        let sock: std::net::TcpStream =
-            async_std::task::spawn_blocking(move || {
-                match socket.connect(&socket2::SockAddr::from(addr)) {
-                    Err(e) => Err(e),
-                    Ok(()) => Ok(socket.into()),
-                }
-            })
-            .await?;
-        sock.set_nodelay(true)?;
-        Ok(Io::with_memory_pool(
-            TcpStream(async_std::net::TcpStream::from(sock)),
-            pool,
-        ))
-    } else {
-        tcp_connect_in(addr, pool).await
-    }
-}
-
 #[cfg(unix)]
 /// Opens a unix stream connection.
 pub async fn unix_connect<P>(addr: P) -> Result<Io>

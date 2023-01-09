@@ -57,7 +57,6 @@ pub struct Connect<T> {
     pub(super) req: T,
     pub(super) port: u16,
     pub(super) addr: Option<Either<SocketAddr, VecDeque<SocketAddr>>>,
-    pub(super) bind_addr: Option<SocketAddr>,
 }
 
 impl<T: Address> Connect<T> {
@@ -68,7 +67,6 @@ impl<T: Address> Connect<T> {
             req,
             port: port.unwrap_or(0),
             addr: None,
-            bind_addr: None,
         }
     }
 
@@ -78,7 +76,6 @@ impl<T: Address> Connect<T> {
             req,
             port: 0,
             addr: Some(Either::Left(addr)),
-            bind_addr: None,
         }
     }
 
@@ -109,12 +106,6 @@ impl<T: Address> Connect<T> {
         } else {
             Some(Either::Right(addrs))
         };
-        self
-    }
-
-    ///Bind local addresses
-    pub fn set_bind_addr(mut self, addr: Option<SocketAddr>) -> Self {
-        self.bind_addr = addr;
         self
     }
 
