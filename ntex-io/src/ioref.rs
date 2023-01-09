@@ -335,6 +335,7 @@ mod tests {
     }
 
     #[ntex::test]
+    #[allow(clippy::unit_cmp)]
     async fn on_disconnect() {
         let (client, server) = IoTest::create();
         let state = Io::new(server);

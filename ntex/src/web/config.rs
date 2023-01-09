@@ -164,10 +164,8 @@ mod tests {
                 .route(
                     "/test",
                     web::get().to(|req: HttpRequest| async move {
-                        HttpResponse::Ok().body(format!(
-                            "{}",
-                            req.url_for("youtube", &["12345"]).unwrap()
-                        ))
+                        HttpResponse::Ok()
+                            .body(format!("{}", req.url_for("youtube", ["12345"]).unwrap()))
                     }),
                 ),
         )

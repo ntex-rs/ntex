@@ -177,7 +177,7 @@ fn inline() {
     a.truncate(8);
     assert!(a.is_inline());
 
-    let mut a = BytesVec::copy_from_slice(&vec![b'*'; 35]).freeze();
+    let mut a = BytesVec::copy_from_slice(vec![b'*'; 35]).freeze();
     let b = a.split_to(8);
     assert!(b.is_inline());
 }
@@ -444,6 +444,12 @@ fn split_off_to_at_gt_len() {
 }
 
 #[test]
+#[allow(
+    clippy::cmp_owned,
+    clippy::redundant_slicing,
+    clippy::iter_cloned_collect,
+    clippy::needless_borrow
+)]
 fn fns_defined_for_bytes() {
     let mut bytes = Bytes::from(&b"hello world"[..]);
     let _ = bytes.as_ptr();
@@ -452,7 +458,7 @@ fn fns_defined_for_bytes() {
     assert!(bytes > "g");
     assert!(bytes > "g".to_string());
     assert!(bytes > "g".as_bytes().to_vec());
-    assert!(bytes > Bytes::from(&"g"[..]));
+    assert!(bytes > Bytes::from("g"));
     assert!("g" > bytes);
     assert!("g".to_string() > bytes);
     assert!("g".as_bytes().to_vec() > bytes);
@@ -494,6 +500,11 @@ fn fns_defined_for_bytes() {
 }
 
 #[test]
+#[allow(
+    clippy::iter_cloned_collect,
+    clippy::redundant_slicing,
+    clippy::needless_borrow
+)]
 fn fns_defined_for_bytes_mut() {
     let mut bytes = BytesMut::from(&b"hello world"[..]);
     let _ = bytes.as_ptr();
@@ -555,6 +566,7 @@ fn fns_defined_for_bytes_mut() {
 }
 
 #[test]
+#[allow(clippy::redundant_slicing)]
 fn fns_defined_for_bytes_vec() {
     // BytesVec
     let mut bytes = BytesVec::copy_from_slice(&b"hello world"[..]);
@@ -572,13 +584,13 @@ fn fns_defined_for_bytes_vec() {
     assert_eq!("hello world", bytes);
     assert_eq!("hello world".as_bytes().to_vec(), bytes);
     assert_eq!("hello world".to_string(), bytes);
-    assert_eq!(&"hello world"[..], bytes);
+    assert_eq!("hello world", bytes);
 
     // Iterator
-    let v: Vec<u8> = (&bytes).iter().cloned().collect();
+    let v: Vec<u8> = bytes.iter().cloned().collect();
     assert_eq!(&v[..], bytes);
 
-    let v: Vec<u8> = bytes.as_ref().iter().cloned().collect();
+    let v: Vec<u8> = bytes.as_ref().to_vec();
     assert_eq!(&v[..], bytes);
 
     let v: Vec<u8> = bytes.iter().cloned().collect();
@@ -978,7 +990,7 @@ fn bytes_vec() {
     bytes.with_bytes_mut(|buf| {
         *buf = BytesMut::from(b"12345".to_vec());
     });
-    assert_eq!(bytes, &"12345"[..]);
+    assert_eq!(bytes, "12345");
 }
 
 #[test]

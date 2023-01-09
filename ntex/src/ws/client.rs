@@ -942,7 +942,7 @@ mod tests {
             .origin("test-origin")
             .max_frame_size(100)
             .server_mode()
-            .protocols(&["v1", "v2"])
+            .protocols(["v1", "v2"])
             .set_header_if_none(header::CONTENT_TYPE, "json")
             .set_header_if_none(header::CONTENT_TYPE, "text")
             .cookie(Cookie::build("cookie1", "value1").finish())
@@ -952,7 +952,7 @@ mod tests {
             "test-origin"
         );
         assert_eq!(builder.inner.as_ref().unwrap().max_size, 100);
-        assert_eq!(builder.inner.as_ref().unwrap().server_mode, true);
+        assert!(builder.inner.as_ref().unwrap().server_mode);
         assert_eq!(builder.protocols, Some("v1,v2".to_string()));
 
         let client = builder.finish().unwrap();
