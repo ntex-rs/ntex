@@ -32,10 +32,10 @@ jobs:
         run: cargo llvm-cov --no-report --all --no-default-features --features="async-std,cookie,url,compress,openssl,rustls"
 
       - name: Code coverage
-        run: cargo llvm-cov --no-report --all --doctests --no-default-features --features="tokio,cookie,url,compress,openssl,rustls"
+        run: cargo +nightly llvm-cov --no-report --all --doctests --no-default-features --features="tokio,cookie,url,compress,openssl,rustls"
 
       - name: Generate coverage report
-        run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
+        run: cargo +nightly llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
