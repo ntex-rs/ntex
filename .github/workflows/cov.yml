@@ -30,6 +30,9 @@ jobs:
       - name: Code coverage (glommio)
         run: cargo llvm-cov --no-report --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls"
 
+      - name: Code coverage (async-std)
+        run: cargo llvm-cov --no-report --all --no-default-features --features="async-std,cookie,url,compress,openssl,rustls"
+
       - name: Generate coverage report
         run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
 
