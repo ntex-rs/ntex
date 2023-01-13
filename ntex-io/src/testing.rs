@@ -665,7 +665,7 @@ mod tests {
         let res = lazy(|cx| client.poll_read_buf(cx, &mut buf)).await;
         assert!(res.is_pending());
 
-        client.read_pending();
+        server.read_pending();
         let res = lazy(|cx| server.poll_write_buf(cx, b"123")).await;
         assert!(res.is_pending());
 
