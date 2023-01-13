@@ -9,10 +9,8 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v3
-
       - name: Install Rust
-        run: rustup toolchain install stable --component llvm-tools-preview
-
+        run: rustup update nightly
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
@@ -24,14 +22,20 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v1.0.1
 
-      - name: Code coverage
-        run: cargo llvm-cov --no-report --all --no-default-features --features="tokio,cookie,url,compress,openssl,rustls"
+      - name: Clean coverage results
+        run: cargo llvm-cov clean --workspace
 
       - name: Code coverage (glommio)
         run: cargo llvm-cov --no-report --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls"
 
+      - name: Code coverage (async-std)
+        run: cargo llvm-cov --no-report --all --no-default-features --features="async-std,cookie,url,compress,openssl,rustls"
+
+      - name: Code coverage
+        run: cargo +nightly llvm-cov --no-report --all --doctests --no-default-features --features="tokio,cookie,url,compress,openssl,rustls"
+
       - name: Generate coverage report
-        run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
+        run: cargo +nightly llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3

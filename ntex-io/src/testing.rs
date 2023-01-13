@@ -648,6 +648,7 @@ pub(super) fn flush_io(
 #[allow(clippy::redundant_clone)]
 mod tests {
     use super::*;
+    use ntex_util::future::lazy;
 
     #[ntex::test]
     async fn basic() {
@@ -656,6 +657,17 @@ mod tests {
         assert_eq!(client.clone().tp, Type::ClientClone);
         assert_eq!(server.tp, Type::Server);
         assert_eq!(server.clone().tp, Type::ServerClone);
+        assert!(format!("{:?}", server).contains("IoTest"));
+        assert!(format!("{:?}", AtomicWaker::default()).contains("AtomicWaker"));
+
+        server.read_pending();
+        let mut buf = BytesVec::new();
+        let res = lazy(|cx| client.poll_read_buf(cx, &mut buf)).await;
+        assert!(res.is_pending());
+
+        server.read_pending();
+        let res = lazy(|cx| server.poll_write_buf(cx, b"123")).await;
+        assert!(res.is_pending());
 
         assert!(!server.is_client_dropped());
         drop(client);
@@ -665,5 +677,8 @@ mod tests {
         assert!(!server2.is_server_dropped());
         drop(server);
         assert!(server2.is_server_dropped());
+
+        let res = lazy(|cx| server2.poll_write_buf(cx, b"123")).await;
+        assert!(res.is_pending());
     }
 }
