@@ -1,5 +1,7 @@
 use std::{convert::TryFrom, fmt, rc::Rc};
 
+use base64::{engine::general_purpose::STANDARD as base64, Engine};
+
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::{service::Service, time::Millis};
@@ -118,7 +120,7 @@ impl ClientBuilder {
         };
         self.header(
             header::AUTHORIZATION,
-            format!("Basic {}", base64::encode(auth)),
+            format!("Basic {}", base64.encode(auth)),
         )
     }
 

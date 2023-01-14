@@ -271,10 +271,14 @@ mod tests {
         assert_eq!(*connect.get_ref(), "www.rust-lang.org");
         connect = connect.set_port(80);
         assert_eq!(connect.port(), 80);
+        let addrs = connect.addrs().clone();
+        assert_eq!(format!("{:?}", addrs), "[]");
         assert!(connect.addrs().next().is_none());
 
         let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         connect = connect.set_addrs(vec![addr]);
+        let addrs = connect.addrs().clone();
+        assert_eq!(format!("{:?}", addrs), "[127.0.0.1:8080]");
         let addrs: Vec<_> = connect.take_addrs().collect();
         assert_eq!(addrs.len(), 1);
         assert!(addrs.contains(&addr));
