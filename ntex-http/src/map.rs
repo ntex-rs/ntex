@@ -599,6 +599,7 @@ mod tests {
             *m.get_mut(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("text")
         );
+        assert!(format!("{:?}", m).contains("HeaderMap"));
 
         assert!(m.keys().any(|x| x == CONTENT_TYPE));
         m.remove("content-type");
@@ -610,9 +611,13 @@ mod tests {
         let mut map = HeaderMap::new();
 
         map.append(ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+        assert_eq!(
+            map.get_all(ACCEPT_ENCODING).collect::<Vec<_>>(),
+            vec![&HeaderValue::from_static("gzip"),]
+        );
+
         map.append(ACCEPT_ENCODING, HeaderValue::from_static("br"));
         map.append(ACCEPT_ENCODING, HeaderValue::from_static("deflate"));
-
         assert_eq!(
             map.get_all(ACCEPT_ENCODING).collect::<Vec<_>>(),
             vec![
@@ -620,6 +625,29 @@ mod tests {
                 &HeaderValue::from_static("br"),
                 &HeaderValue::from_static("deflate"),
             ]
+        );
+        assert_eq!(
+            map.get(ACCEPT_ENCODING),
+            Some(&HeaderValue::from_static("gzip"))
+        );
+        assert_eq!(
+            map.get_mut(ACCEPT_ENCODING),
+            Some(&mut HeaderValue::from_static("gzip"))
+        );
+
+        map.remove(ACCEPT_ENCODING);
+        assert_eq!(map.get(ACCEPT_ENCODING), None);
+    }
+
+    #[test]
+    fn test_from_http() {
+        let mut map = http::HeaderMap::new();
+        map.append(ACCEPT_ENCODING, http::HeaderValue::from_static("gzip"));
+
+        let map2 = HeaderMap::from(map);
+        assert_eq!(
+            map2.get(ACCEPT_ENCODING),
+            Some(&HeaderValue::from_static("gzip"))
         );
     }
 }

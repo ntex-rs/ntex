@@ -541,6 +541,8 @@ impl Bytes {
     /// let b = a.slice(2..5);
     ///
     /// assert_eq!(&b[..], b"llo");
+    /// assert_eq!(&b[..=1], b"ll");
+    /// assert_eq!(&b[1..=1], b"l");
     /// ```
     ///
     /// # Panics
@@ -4047,7 +4049,7 @@ fn abort() {
 
 #[cfg(test)]
 mod tests {
-    use std::convert::TryFrom;
+    use std::{collections::HashMap, convert::TryFrom};
 
     use super::*;
 
@@ -4087,28 +4089,33 @@ mod tests {
 
         let mut b: Bytes = BytesMut::try_from(b).unwrap().freeze();
         assert_eq!(b, LONG);
-        assert_eq!(Buf::remaining(&b), LONG.len());
-        assert_eq!(Buf::chunk(&b), LONG);
-        Buf::advance(&mut b, 10);
+        assert!(!(b > b));
+        assert_eq!(<Bytes as Buf>::remaining(&b), LONG.len());
+        assert_eq!(<Bytes as Buf>::chunk(&b), LONG);
+        <Bytes as Buf>::advance(&mut b, 10);
         assert_eq!(Buf::chunk(&b), &LONG[10..]);
+
+        let mut h: HashMap<Bytes, usize> = HashMap::default();
+        h.insert(b.clone(), 1);
+        assert_eq!(h.get(&b), Some(&1));
 
         let mut b = BytesMut::try_from(LONG).unwrap();
         assert_eq!(b, LONG);
-        assert_eq!(Buf::remaining(&b), LONG.len());
-        assert_eq!(BufMut::remaining_mut(&b), 25);
-        assert_eq!(Buf::chunk(&b), LONG);
-        Buf::advance(&mut b, 10);
-        assert_eq!(Buf::chunk(&b), &LONG[10..]);
+        assert_eq!(<BytesMut as Buf>::remaining(&b), LONG.len());
+        assert_eq!(<BytesMut as BufMut>::remaining_mut(&b), 25);
+        assert_eq!(<BytesMut as Buf>::chunk(&b), LONG);
+        <BytesMut as Buf>::advance(&mut b, 10);
+        assert_eq!(<BytesMut as Buf>::chunk(&b), &LONG[10..]);
 
         let mut b = BytesMut::with_capacity(12);
-        BufMut::put_i8(&mut b, 1);
+        <BytesMut as BufMut>::put_i8(&mut b, 1);
         assert_eq!(b, b"\x01".as_ref());
-        BufMut::put_u8(&mut b, 2);
+        <BytesMut as BufMut>::put_u8(&mut b, 2);
         assert_eq!(b, b"\x01\x02".as_ref());
-        BufMut::put_slice(&mut b, b"12345");
+        <BytesMut as BufMut>::put_slice(&mut b, b"12345");
         assert_eq!(b, b"\x01\x0212345".as_ref());
-        BufMut::chunk_mut(&mut b).write_byte(0, b'1');
-        unsafe { BufMut::advance_mut(&mut b, 1) };
+        <BytesMut as BufMut>::chunk_mut(&mut b).write_byte(0, b'1');
+        unsafe { <BytesMut as BufMut>::advance_mut(&mut b, 1) };
         assert_eq!(b, b"\x01\x02123451".as_ref());
     }
 

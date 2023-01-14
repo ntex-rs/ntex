@@ -26,10 +26,7 @@ jobs:
         run: cargo llvm-cov clean --workspace
 
       - name: Code coverage (glommio)
-        run: cargo llvm-cov --no-report --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls"
-
-      - name: Code coverage (async-std)
-        run: cargo llvm-cov --no-report --all --no-default-features --features="async-std,cookie,url,compress,openssl,rustls"
+        run: cargo +nightly llvm-cov --no-report --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls"
 
       - name: Code coverage
         run: cargo +nightly llvm-cov --no-report --all --doctests --no-default-features --features="tokio,cookie,url,compress,openssl,rustls"

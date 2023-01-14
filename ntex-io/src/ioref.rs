@@ -263,6 +263,9 @@ mod tests {
         let state = Io::new(server);
         let msg = state.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
+        assert_eq!(state.get_ref(), state.as_ref().clone());
+        assert_eq!(format!("{:?}", state), "Io { open: true }");
+        assert_eq!(format!("{:?}", state.get_ref()), "IoRef { open: true }");
 
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         assert!(res.is_pending());
@@ -293,10 +296,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::new(server);
-        state
-            .send(Bytes::from_static(b"test"), &BytesCodec)
-            .await
-            .unwrap();
+        state.write(b"test").unwrap();
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
@@ -379,14 +379,6 @@ mod tests {
         write_order: Rc<RefCell<Vec<usize>>>,
     }
     impl<F: Filter> Filter for Counter<F> {
-        fn poll_shutdown(&self) -> Poll<io::Result<()>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn query(&self, _: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
-            None
-        }
-
         fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
             self.inner.poll_read_ready(cx)
         }

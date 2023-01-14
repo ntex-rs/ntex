@@ -9,6 +9,7 @@ use super::counter::{Counter, CounterGuard};
 /// async requests.
 ///
 /// Default number of in-flight requests is 15
+#[derive(Copy, Clone, Debug)]
 pub struct InFlight {
     max_inflight: usize,
 }
@@ -131,7 +132,7 @@ mod tests {
     }
 
     #[ntex_macros::rt_test2]
-    async fn test_transform() {
+    async fn test_inflight() {
         let wait_time = Duration::from_millis(50);
 
         let srv = InFlightService::new(1, SleepService(wait_time));
@@ -146,9 +147,14 @@ mod tests {
     }
 
     #[ntex_macros::rt_test2]
-    async fn test_newtransform() {
-        let wait_time = Duration::from_millis(50);
+    async fn test_middleware() {
+        assert_eq!(InFlight::default().max_inflight, 15);
+        assert_eq!(
+            format!("{:?}", InFlight::new(1)),
+            "InFlight { max_inflight: 1 }"
+        );
 
+        let wait_time = Duration::from_millis(50);
         let srv = apply(
             InFlight::new(1),
             fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),

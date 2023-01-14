@@ -8,6 +8,7 @@ use crate::connect::rustls;
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
+use base64::{engine::general_purpose::STANDARD as base64, Engine};
 use nanorand::{Rng, WyRand};
 
 use crate::connect::{Connect, ConnectError, Connector};
@@ -112,7 +113,7 @@ impl<F, T> WsClient<F, T> {
             Some(password) => format!("{}:{}", username, password),
             None => format!("{}:", username),
         };
-        self.set_header(AUTHORIZATION, format!("Basic {}", base64::encode(auth)))
+        self.set_header(AUTHORIZATION, format!("Basic {}", base64.encode(auth)))
     }
 
     /// Set HTTP bearer authentication header
@@ -147,7 +148,7 @@ where
         // when decoded, is 16 bytes in length (RFC 6455)
         let mut sec_key: [u8; 16] = [0; 16];
         WyRand::new().fill(&mut sec_key);
-        let key = base64::encode(sec_key);
+        let key = base64.encode(sec_key);
 
         headers.insert(
             header::SEC_WEBSOCKET_KEY,
@@ -460,7 +461,7 @@ where
             Some(password) => format!("{}:{}", username, password),
             None => format!("{}:", username),
         };
-        self.header(AUTHORIZATION, format!("Basic {}", base64::encode(auth)))
+        self.header(AUTHORIZATION, format!("Basic {}", base64.encode(auth)))
     }
 
     /// Set HTTP bearer authentication header

@@ -792,8 +792,14 @@ mod tests {
         assert!(&hdr < "upgrade2");
         assert!(hdr < "upgrade2");
         assert!(hdr < "upgrade2".to_string());
+        assert!(hdr < &b"upgrade2"[..]);
+        assert!(hdr < b"upgrade2"[..]);
+        assert!(hdr != &b"upgrade2"[..]);
+        assert!(hdr != b"upgrade2"[..]);
         assert!("upgrade2" > hdr);
         assert!("upgrade2".to_string() > hdr);
+        assert!(b"upgrade2"[..] > hdr);
+        assert!("upgrade2"[..] != hdr);
     }
 
     #[test]

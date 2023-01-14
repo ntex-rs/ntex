@@ -1064,7 +1064,14 @@ async fn pool_usage() {
 
     let p_ref = PoolId::P1.set_pool_size(10 * 1024);
     let p1 = p_ref.pool();
-    let p2 = p_ref.pool();
+    let p2 = p_ref.pool().clone();
+
+    let p_ref2 = PoolRef::from(&p1);
+    assert_eq!(p_ref2.read_params_high(), 4096);
+    assert_eq!(p_ref2.write_params_high(), 4096);
+    p_ref2.id().set_spawn_fn(|f| {
+        let _ = ntex::rt::spawn(f);
+    });
 
     assert_eq!(Poll::Ready(()), util::lazy(|cx| p1.poll_ready(cx)).await);
 

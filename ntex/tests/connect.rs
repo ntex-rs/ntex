@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::{io, rc::Rc, sync::Arc};
 
 use ntex::codec::BytesCodec;
 use ntex::connect::Connect;
@@ -129,7 +129,7 @@ async fn test_openssl_read_before_error() {
         }))
         .and_then(openssl::Acceptor::new(ssl_acceptor()))
         .and_then(fn_service(|io: Io<_>| async move {
-            io.send(Bytes::from_static(b"test"), &BytesCodec)
+            io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
                 .await
                 .unwrap();
             time::sleep(time::Millis(100)).await;
@@ -143,7 +143,7 @@ async fn test_openssl_read_before_error() {
     let conn = ntex::connect::openssl::Connector::new(builder.build());
     let addr = format!("127.0.0.1:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
-    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+    let item = io.recv(&Rc::new(BytesCodec)).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
 
     io.send(Bytes::from_static(b"test"), &BytesCodec)

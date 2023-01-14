@@ -70,8 +70,17 @@ impl Extensions {
 
 impl fmt::Debug for Extensions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Extensions").finish()
+        f.debug_struct("Extensions")
+            .field("size", &self.map.len())
+            .finish()
     }
+}
+
+#[test]
+fn test_debug() {
+    let mut map = Extensions::new();
+    map.insert::<i8>(123);
+    assert_eq!(format!("{:?}", map), "Extensions { size: 1 }");
 }
 
 #[test]

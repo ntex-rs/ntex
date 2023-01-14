@@ -587,6 +587,16 @@ mod tests {
         assert_eq!(s.0, "name");
         assert_eq!(s.1, 32);
 
+        let s: (&str, ()) =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(s.0, "name");
+        assert_eq!(s.1, ());
+
+        let s: (&str, Option<u8>) =
+            de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
+        assert_eq!(s.0, "name");
+        assert_eq!(s.1, Some(32));
+
         let res: Vec<String> =
             de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!(res[0], "name".to_owned());

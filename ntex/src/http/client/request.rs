@@ -1,5 +1,6 @@
 use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc};
 
+use base64::{engine::general_purpose::STANDARD as base64, Engine};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 use serde::Serialize;
@@ -255,7 +256,7 @@ impl ClientRequest {
         };
         self.header(
             header::AUTHORIZATION,
-            format!("Basic {}", base64::encode(auth)),
+            format!("Basic {}", base64.encode(auth)),
         )
     }
 
