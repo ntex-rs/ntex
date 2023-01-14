@@ -1,4 +1,4 @@
-use std::{io, sync::Arc, rc::Rc};
+use std::{io, rc::Rc, sync::Arc};
 
 use ntex::codec::BytesCodec;
 use ntex::connect::Connect;
