@@ -25,8 +25,11 @@ jobs:
       - name: Clean coverage results
         run: cargo llvm-cov clean --workspace
 
+      - name: Code coverage (glommio)
+        run: cargo +nightly llvm-cov --no-report --all --no-default-features --features="glommio,cookie,url,compress,openssl,rustls"
+
       - name: Code coverage
-        run: cargo +nightly llvm-cov --no-report --all --doctests --no-default-features --features="glommio,cookie,url,compress,openssl,rustls"
+        run: cargo +nightly llvm-cov --no-report --all --doctests --no-default-features --features="tokio,cookie,url,compress,openssl,rustls"
 
       - name: Generate coverage report
         run: cargo +nightly llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
