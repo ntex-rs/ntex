@@ -50,7 +50,9 @@ pub enum WriteStatus {
 }
 
 pub trait Filter: 'static {
-    fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
+    fn query(&self, _: TypeId) -> Option<Box<dyn Any>> {
+        None
+    }
 
     fn get_read_buf(&self) -> Option<BytesVec>;
 
@@ -72,7 +74,9 @@ pub trait Filter: 'static {
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus>;
 
     /// Gracefully shutdown filter
-    fn poll_shutdown(&self) -> Poll<sio::Result<()>>;
+    fn poll_shutdown(&self) -> Poll<sio::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
 }
 
 /// Creates new `Filter` values.

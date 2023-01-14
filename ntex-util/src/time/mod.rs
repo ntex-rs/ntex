@@ -183,7 +183,7 @@ impl Deadline {
     /// Returns `true` if `Deadline` has elapsed.
     #[inline]
     pub fn is_elapsed(&self) -> bool {
-        self.hnd.as_ref().map(|t| t.is_elapsed()).unwrap_or(false)
+        self.hnd.as_ref().map(|t| t.is_elapsed()).unwrap_or(true)
     }
 
     #[inline]
@@ -439,6 +439,13 @@ mod tests {
         let mut dl = deadline(Millis(1));
         dl.reset(Millis::ZERO);
         assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
+
+        let mut dl = deadline(Millis(0));
+        assert!(dl.is_elapsed());
+        dl.reset(Millis(1));
+        assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
+
+        assert!(format!("{:?}", dl).contains("Deadline"));
     }
 
     #[ntex_macros::rt_test2]

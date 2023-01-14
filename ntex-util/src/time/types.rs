@@ -244,5 +244,8 @@ mod tests {
 
         let s = Seconds::new(10) + Seconds::new(10);
         assert_eq!(s.seconds(), 20);
+
+        assert_eq!(Seconds(0).map(|_| 1usize), None);
+        assert_eq!(Seconds(2).map(|_| 1usize), Some(1));
     }
 }
