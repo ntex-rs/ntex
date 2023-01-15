@@ -35,8 +35,8 @@ fn test_bind() {
     let _ = h.join();
 }
 
-#[test]
-fn test_listen() {
+#[ntex::test]
+async fn test_listen() {
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
 
@@ -44,27 +44,29 @@ fn test_listen() {
         let sys = ntex::rt::System::new("test");
         let lst = net::TcpListener::bind(addr).unwrap();
         sys.run(move || {
-            Server::build()
+            let srv = Server::build()
                 .disable_signals()
                 .workers(1)
                 .listen("test", lst, move |_| fn_service(|_| Ready::Ok::<_, ()>(())))
                 .unwrap()
                 .run();
-            let _ = tx.send(ntex::rt::System::current());
+            let _ = tx.send((srv, ntex::rt::System::current()));
             Ok(())
         })
     });
-    let sys = rx.recv().unwrap();
+    let (srv, sys) = rx.recv().unwrap();
 
     thread::sleep(time::Duration::from_millis(500));
     assert!(net::TcpStream::connect(addr).is_ok());
+
+    srv.stop(true).await;
     sys.stop();
     let _ = h.join();
 }
 
-#[test]
+#[ntex::test]
 #[cfg(unix)]
-fn test_run() {
+async fn test_run() {
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
 
@@ -117,8 +119,7 @@ fn test_run() {
     assert_eq!(buf, b"test"[..]);
 
     // stop
-    let _ = srv.stop(false);
-    thread::sleep(time::Duration::from_millis(100));
+    let _ = srv.stop(false).await;
     assert!(net::TcpStream::connect(addr).is_err());
 
     thread::sleep(time::Duration::from_millis(100));
