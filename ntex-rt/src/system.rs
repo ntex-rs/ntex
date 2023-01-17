@@ -1,7 +1,5 @@
 use async_channel::Sender;
-use std::{
-    cell::RefCell, future::Future, io, sync::atomic::AtomicUsize, sync::atomic::Ordering,
-};
+use std::{cell::RefCell, sync::atomic::AtomicUsize, sync::atomic::Ordering};
 
 use super::arbiter::{Arbiter, SystemCommand};
 use super::builder::{Builder, SystemRunner};
@@ -87,6 +85,12 @@ impl System {
 
     pub(super) fn sys(&self) -> &Sender<SystemCommand> {
         &self.sys
+    }
+
+    /// Return status of 'stop_on_panic' option which controls whether the System is stopped when an
+    /// uncaught panic is thrown from a worker thread.
+    pub fn stop_on_panic(&self) -> bool {
+        self.stop_on_panic
     }
 
     /// System arbiter
