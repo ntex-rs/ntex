@@ -89,34 +89,8 @@ impl System {
         &self.sys
     }
 
-    /// Return status of 'stop_on_panic' option which controls whether the System is stopped when an
-    /// uncaught panic is thrown from a worker thread.
-    pub fn stop_on_panic(&self) -> bool {
-        self.stop_on_panic
-    }
-
     /// System arbiter
     pub fn arbiter(&self) -> &Arbiter {
         &self.arbiter
-    }
-
-    /// This function will start async runtime and will finish once the
-    /// `System::stop()` message get called.
-    /// Function `f` get called within async runtime context.
-    pub fn run<F>(f: F) -> io::Result<()>
-    where
-        F: FnOnce() -> io::Result<()> + 'static,
-    {
-        Builder::new().finish().run(f)
-    }
-
-    /// This function will start async runtime and will finish once the
-    /// provided future completes.
-    pub fn block_on<F, R>(f: F) -> R
-    where
-        F: Future<Output = R> + 'static,
-        R: 'static,
-    {
-        Builder::new().finish().block_on(f)
     }
 }
