@@ -175,14 +175,14 @@ impl Parser {
         };
 
         if payload_len < 126 {
-            dst.reserve(p_len + 2 + if mask { 4 } else { 0 });
+            dst.reserve(p_len + 2);
             dst.extend_from_slice(&[one, two | payload_len as u8]);
         } else if payload_len <= 65_535 {
-            dst.reserve(p_len + 4 + if mask { 4 } else { 0 });
+            dst.reserve(p_len + 4);
             dst.extend_from_slice(&[one, two | 126]);
             dst.put_u16(payload_len as u16);
         } else {
-            dst.reserve(p_len + 10 + if mask { 4 } else { 0 });
+            dst.reserve(p_len + 10);
             dst.extend_from_slice(&[one, two | 127]);
             dst.put_u64(payload_len as u64);
         };
@@ -190,11 +190,11 @@ impl Parser {
         if mask {
             let mask: u32 = WyRand::new().generate();
             dst.put_u32_le(mask);
-            dst.extend_from_slice(payload.as_ref());
+            dst.extend_from_slice(payload);
             let pos = dst.len() - payload_len;
             apply_mask(&mut dst[pos..], mask);
         } else {
-            dst.extend_from_slice(payload.as_ref());
+            dst.extend_from_slice(payload);
         }
     }
 
