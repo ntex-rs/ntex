@@ -58,25 +58,6 @@ where
     }
 }
 
-impl<F, Fut, Req, Res, Err, FShut> Clone for FnShutdown<F, Fut, Req, Res, Err, FShut>
-where
-    F: Fn(Req) -> Fut + Clone,
-    FShut: FnOnce() + Clone,
-    Fut: Future<Output = Result<Res, Err>>,
-{
-    #[inline]
-    fn clone(&self) -> Self {
-        let f = self.f_shutdown.take();
-        self.f_shutdown.set(f.clone());
-
-        Self {
-            f: self.f.clone(),
-            f_shutdown: Cell::new(f),
-            _t: PhantomData,
-        }
-    }
-}
-
 impl<F, Fut, Req, Res, Err, FShut> Service<Req> for FnShutdown<F, Fut, Req, Res, Err, FShut>
 where
     F: Fn(Req) -> Fut,
@@ -109,20 +90,26 @@ mod tests {
     use super::*;
 
     #[ntex::test]
-    async fn test_fn_shutdown() {
+    async fn test_fn_shutdown_with_callback() {
         let mut is_called = false;
-        // The shutdown callback
-        let f_shutdown = || {
+        let srv = fn_shutdown(|_| async { Ok::<_, ()>("srv") }).on_shutdown(|| {
             is_called = true;
-        };
-
-        let srv = fn_shutdown(|_| async { Ok::<_, ()>("srv") }).on_shutdown(f_shutdown);
-
+        });
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
         assert_eq!(lazy(|cx| srv.poll_shutdown(cx)).await, Poll::Ready(()));
         assert!(is_called);
+    }
+
+    #[ntex::test]
+    async fn test_fn_shutdown_without_callback() {
+        let srv = fn_shutdown(|_| async { Ok::<_, ()>("srv") });
+        let res = srv.call(()).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "srv");
+        assert_eq!(lazy(|cx| srv.poll_shutdown(cx)).await, Poll::Ready(()));
     }
 }
