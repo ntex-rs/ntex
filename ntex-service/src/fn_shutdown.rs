@@ -1,4 +1,10 @@
-use std::{cell::Cell, future::Future, marker::PhantomData, pin::Pin, task::{Context, Poll}};
+use std::{
+    cell::Cell,
+    future::Future,
+    marker::PhantomData,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use crate::Service;
 
@@ -11,14 +17,16 @@ pub fn f_shutdown() {}
 pub fn fn_shutdown<F, Fut, Req, Res, Err>(f: F) -> FnShutdown<F, Fut, Req, Res, Err>
 where
     F: Fn(Req) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>, {
+    Fut: Future<Output = Result<Res, Err>>,
+{
     FnShutdown::new(f)
 }
 
 pub struct FnShutdown<F, Fut, Req, Res, Err, FShut = fn()>
 where
     F: Fn(Req) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>, {
+    Fut: Future<Output = Result<Res, Err>>,
+{
     f: F,
     f_shutdown: Cell<Option<FShut>>,
     _t: PhantomData<Req>,
@@ -27,7 +35,8 @@ where
 impl<F, Fut, Req, Res, Err> FnShutdown<F, Fut, Req, Res, Err>
 where
     F: Fn(Req) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>, {
+    Fut: Future<Output = Result<Res, Err>>,
+{
     pub(crate) fn new(f: F) -> Self {
         Self {
             f,
