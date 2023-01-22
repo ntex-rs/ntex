@@ -1,72 +1,48 @@
 use std::{
     cell::Cell,
-    future::Future,
     marker::PhantomData,
-    pin::Pin,
-    task::{Context, Poll},
+    task::{Context, Poll}, pin::Pin, future::Future,
 };
 
 use crate::Service;
 
 #[inline]
-/// Default shutdown callback for `FnShutdown` service.
-pub fn f_shutdown() {}
-
-#[inline]
 /// Create `FnShutdown` service with a on_shutdown callback.
-pub fn fn_shutdown<F, Fut, Req, Res, Err>(f: F) -> FnShutdown<F, Fut, Req, Res, Err>
+pub fn fn_shutdown<Req, Err, F>(f: F) -> FnShutdown<Req, Err, F>
 where
-    F: Fn(Req) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>,
+    F: FnOnce(),
 {
     FnShutdown::new(f)
 }
 
-pub struct FnShutdown<F, Fut, Req, Res, Err, FShut = fn()>
-where
-    F: Fn(Req) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>,
-{
-    f: F,
-    f_shutdown: Cell<Option<FShut>>,
-    _t: PhantomData<Req>,
+pub struct FnShutdown<Req, Err, F = fn()>
+where {
+    f_shutdown: Cell<Option<F>>,
+    _f: PhantomData<Req>,
+    _e: PhantomData<Err>,
 }
 
-impl<F, Fut, Req, Res, Err> FnShutdown<F, Fut, Req, Res, Err>
+impl<Req, Err, F> FnShutdown<Req, Err, F>
 where
-    F: Fn(Req) -> Fut,
-    Fut: Future<Output = Result<Res, Err>>,
+    F: FnOnce(),
 {
     pub(crate) fn new(f: F) -> Self {
         Self {
-            f,
-            f_shutdown: Cell::new(Some(f_shutdown)),
-            _t: PhantomData,
-        }
-    }
-
-    /// Set function that get called on poll_shutdown method of Service trait.
-    pub fn on_shutdown<FShut>(self, f: FShut) -> FnShutdown<F, Fut, Req, Res, Err, FShut>
-    where
-        FShut: FnOnce(),
-    {
-        FnShutdown {
-            f: self.f,
             f_shutdown: Cell::new(Some(f)),
-            _t: PhantomData,
+            _f: PhantomData,
+            _e: PhantomData,
         }
     }
 }
 
-impl<F, Fut, Req, Res, Err, FShut> Service<Req> for FnShutdown<F, Fut, Req, Res, Err, FShut>
+impl<Req, Err, F> Service<Req> for FnShutdown<Req, Err, F>
 where
-    F: Fn(Req) -> Fut,
-    FShut: FnOnce(),
-    Fut: Future<Output = Result<Res, Err>>,
+    F: FnOnce(),
+    Req: Clone + 'static,
 {
+    type Response = Req;
     type Error = Err;
-    type Response = Res;
-    type Future<'f> = Pin<Box<Fut>> where Self: 'f;
+    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>> where Self: 'f;
 
     #[inline]
     fn poll_shutdown(&self, _: &mut Context<'_>) -> Poll<()> {
@@ -76,9 +52,8 @@ where
         Poll::Ready(())
     }
 
-    #[inline]
     fn call(&self, req: Req) -> Self::Future<'_> {
-        Box::pin((self.f)(req))
+        Box::pin(async move { Ok(req) })
     }
 }
 
@@ -87,29 +62,22 @@ mod tests {
     use ntex_util::future::lazy;
     use std::task::Poll;
 
+    use crate::{pipeline, fn_service};
+
     use super::*;
 
     #[ntex::test]
-    async fn test_fn_shutdown_with_callback() {
+    async fn test_fn_shutdown() {
         let mut is_called = false;
-        let srv = fn_shutdown(|_| async { Ok::<_, ()>("srv") }).on_shutdown(|| {
-            is_called = true;
-        });
-        let res = srv.call(()).await;
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), "srv");
-        assert_eq!(lazy(|cx| srv.poll_shutdown(cx)).await, Poll::Ready(()));
-        assert!(is_called);
-    }
 
-    #[ntex::test]
-    async fn test_fn_shutdown_without_callback() {
-        let srv = fn_shutdown(|_| async { Ok::<_, ()>("srv") });
-        let res = srv.call(()).await;
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        let pipe = pipeline(fn_service(|_| async { Ok::<_, ()>("pipe") }))
+            .and_then(fn_shutdown(|| { is_called = true }));
+
+        let res = pipe.call(()).await;
+        assert_eq!(lazy(|cx| pipe.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
-        assert_eq!(res.unwrap(), "srv");
-        assert_eq!(lazy(|cx| srv.poll_shutdown(cx)).await, Poll::Ready(()));
+        assert_eq!(res.unwrap(), "pipe");
+        assert_eq!(lazy(|cx| pipe.poll_shutdown(cx)).await, Poll::Ready(()));
+        assert!(is_called);
     }
 }
