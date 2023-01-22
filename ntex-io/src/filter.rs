@@ -1,6 +1,7 @@
 use std::{any, io, task::Context, task::Poll};
 
-use super::{buf::Stack, io::Flags, FilterLayer, IoRef, ReadStatus, WriteStatus};
+use super::buf::{ReadBuf, Stack, WriteBuf};
+use super::{io::Flags, FilterLayer, IoRef, ReadStatus, WriteStatus};
 
 /// Default `Io` filter
 pub struct Base(IoRef);
@@ -117,7 +118,12 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn process_write_buf(&self, _: &IoRef, _: &mut Stack, _: usize) -> io::Result<()> {
+    fn process_write_buf(&self, _: &IoRef, s: &mut Stack, _: usize) -> io::Result<()> {
+        if let Some(buf) = s.last_write_buf() {
+            if buf.len() >= self.0.memory_pool().write_params_high() {
+                self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
+            }
+        }
         Ok(())
     }
 
@@ -140,7 +146,11 @@ where
     #[inline]
     fn shutdown(&self, io: &IoRef, stack: &mut Stack, idx: usize) -> io::Result<Poll<()>> {
         let result1 = self.0.shutdown(&mut stack.write_buf(io, idx))?;
-        let result2 = self.1.shutdown(io, stack, idx + 1)?;
+        let result2 = if F::BUFFERS {
+            self.1.shutdown(io, stack, idx + 1)?
+        } else {
+            self.1.shutdown(io, stack, idx)?
+        };
 
         if result1.is_pending() || result2.is_pending() {
             Ok(Poll::Pending)
@@ -157,9 +167,31 @@ where
         idx: usize,
         nbytes: usize,
     ) -> io::Result<usize> {
-        let nbytes = self.1.process_read_buf(io, stack, idx + 1, nbytes)?;
-        self.0
-            .process_read_buf(&mut stack.read_buf(io, idx, nbytes))
+        let nbytes = if F::BUFFERS {
+            self.1.process_read_buf(io, stack, idx + 1, nbytes)?
+        } else {
+            self.1.process_read_buf(io, stack, idx, nbytes)?
+        };
+
+        if stack.buffers.len() > idx + 1 {
+            self.0
+                .process_read_buf(&mut stack.read_buf(io, idx, nbytes))
+        } else {
+            let mut val1 = (stack.buffers[idx].0.take(), None);
+            let mut val2 = (None, stack.buffers[idx].1.take());
+
+            let mut buf = ReadBuf {
+                io,
+                nbytes,
+                curr: &mut val1,
+                next: &mut val2,
+            };
+            let result = self.0.process_read_buf(&mut buf);
+
+            stack.buffers[idx].0 = val1.0;
+            stack.buffers[idx].1 = val2.1;
+            result
+        }
     }
 
     #[inline]
@@ -169,8 +201,29 @@ where
         stack: &mut Stack,
         idx: usize,
     ) -> io::Result<()> {
-        self.0.process_write_buf(&mut stack.write_buf(io, idx))?;
-        self.1.process_write_buf(io, stack, idx + 1)
+        if stack.buffers.len() > idx + 1 {
+            self.0.process_write_buf(&mut stack.write_buf(io, idx))?;
+        } else {
+            let mut val1 = (stack.buffers[idx].0.take(), None);
+            let mut val2 = (None, stack.buffers[idx].1.take());
+
+            let mut buf = WriteBuf {
+                io,
+                curr: &mut val1,
+                next: &mut val2,
+            };
+            let result = self.0.process_write_buf(&mut buf);
+
+            stack.buffers[idx].0 = val1.0;
+            stack.buffers[idx].1 = val2.1;
+            result?
+        }
+
+        if F::BUFFERS {
+            self.1.process_write_buf(io, stack, idx + 1)
+        } else {
+            self.1.process_write_buf(io, stack, idx)
+        }
     }
 
     #[inline]

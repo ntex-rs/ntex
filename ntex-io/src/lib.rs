@@ -52,6 +52,9 @@ pub enum WriteStatus {
 
 #[allow(unused_variables)]
 pub trait FilterLayer: 'static {
+    /// Create buffers for this filter
+    const BUFFERS: bool = true;
+
     #[inline]
     /// Check readiness for read operations
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {

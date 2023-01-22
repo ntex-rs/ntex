@@ -4,7 +4,7 @@ use std::{convert::TryFrom, net, str::FromStr, sync::mpsc, thread};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
-use crate::io::{Filter, Io, Layer};
+use crate::io::{Filter, Io};
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
 use crate::{rt::System, server::Server, service::ServiceFactory};
 use crate::{time::Millis, time::Seconds, util::Bytes};
@@ -350,8 +350,10 @@ impl TestServer {
     /// Connect to a websocket server
     pub async fn wss(
         &mut self,
-    ) -> Result<WsConnection<Layer<crate::connect::openssl::SslFilter>>, WsClientError>
-    {
+    ) -> Result<
+        WsConnection<crate::io::Layer<crate::connect::openssl::SslFilter>>,
+        WsClientError,
+    > {
         self.wss_at("/").await
     }
 
@@ -360,8 +362,10 @@ impl TestServer {
     pub async fn wss_at(
         &mut self,
         path: &str,
-    ) -> Result<WsConnection<Layer<crate::connect::openssl::SslFilter>>, WsClientError>
-    {
+    ) -> Result<
+        WsConnection<crate::io::Layer<crate::connect::openssl::SslFilter>>,
+        WsClientError,
+    > {
         use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
         let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();

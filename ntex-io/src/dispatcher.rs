@@ -632,9 +632,7 @@ mod tests {
 
         // close read side
         client.close().await;
-
-        // TODO! fix
-        // assert!(client.is_server_dropped());
+        assert!(client.is_server_dropped());
 
         // service must be checked for readiness only once
         assert_eq!(counter.get(), 1);

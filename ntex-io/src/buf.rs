@@ -3,15 +3,17 @@ use smallvec::SmallVec;
 
 use crate::IoRef;
 
+#[derive(Debug)]
 pub struct Stack {
-    buffers: SmallVec<[(Option<BytesVec>, Option<BytesVec>); 4]>,
+    pub(crate) buffers: SmallVec<[(Option<BytesVec>, Option<BytesVec>); 4]>,
 }
 
 impl Stack {
     pub(crate) fn new() -> Self {
-        Self {
-            buffers: SmallVec::with_capacity(4),
-        }
+        let mut buffers = SmallVec::with_capacity(4);
+        buffers.push((None, None));
+
+        Self { buffers }
     }
 
     pub(crate) fn add_layer(&mut self) {
@@ -96,10 +98,10 @@ impl Stack {
 }
 
 pub struct ReadBuf<'a> {
-    io: &'a IoRef,
-    curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
-    next: &'a mut (Option<BytesVec>, Option<BytesVec>),
-    nbytes: usize,
+    pub(crate) io: &'a IoRef,
+    pub(crate) curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
+    pub(crate) next: &'a mut (Option<BytesVec>, Option<BytesVec>),
+    pub(crate) nbytes: usize,
 }
 
 impl<'a> ReadBuf<'a> {
@@ -208,9 +210,9 @@ impl<'a> ReadBuf<'a> {
 }
 
 pub struct WriteBuf<'a> {
-    io: &'a IoRef,
-    curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
-    next: &'a mut (Option<BytesVec>, Option<BytesVec>),
+    pub(crate) io: &'a IoRef,
+    pub(crate) curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
+    pub(crate) next: &'a mut (Option<BytesVec>, Option<BytesVec>),
 }
 
 impl<'a> WriteBuf<'a> {

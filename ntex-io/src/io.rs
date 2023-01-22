@@ -352,7 +352,9 @@ impl<F: Filter> Io<F> {
         U: FilterLayer,
     {
         // add layer to buffers
-        self.0 .0.buffer.borrow_mut().add_layer();
+        if U::BUFFERS {
+            self.0 .0.buffer.borrow_mut().add_layer();
+        }
 
         // replace current filter
         let (filter, filter_ref) = self.1.add_filter(nf);

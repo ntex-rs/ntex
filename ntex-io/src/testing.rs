@@ -344,6 +344,12 @@ impl Drop for IoTest {
             _ => (),
         }
         self.state.set(state);
+
+        let guard = self.remote.lock().unwrap();
+        let mut remote = guard.borrow_mut();
+        remote.read = IoTestState::Close;
+        remote.waker.wake();
+        log::trace!("drop remote socket");
     }
 }
 
