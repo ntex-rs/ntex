@@ -15,7 +15,7 @@ use crate::connect::{Connect, ConnectError, Connector};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use crate::http::{body::BodySize, client::ClientResponse, error::HttpError, h1};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
-use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Sealed};
+use crate::io::{Base, DispatchItem, Dispatcher, FilterLayer, Io, Sealed};
 use crate::service::{apply_fn, into_service, IntoService, Service};
 use crate::time::{timeout, Millis, Seconds};
 use crate::{channel::mpsc, rt, util::Ready, ws};
@@ -72,7 +72,7 @@ impl WsClient<Base, ()> {
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
-        F: Filter,
+        F: FilterLayer,
         T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
     {
         WsClientBuilder::new(uri).connector(connector)
@@ -127,7 +127,7 @@ impl<F, T> WsClient<F, T> {
 
 impl<F, T> WsClient<F, T>
 where
-    F: Filter,
+    F: FilterLayer,
     T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
 {
     /// Complete request construction and connect to a websockets server.
@@ -498,7 +498,7 @@ where
     /// Use custom connector
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
-        F1: Filter,
+        F1: FilterLayer,
         T1: Service<Connect<Uri>, Response = Io<F1>, Error = ConnectError>,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
@@ -775,7 +775,7 @@ impl WsConnection<Sealed> {
     }
 }
 
-impl<F: Filter> WsConnection<F> {
+impl<F: FilterLayer> WsConnection<F> {
     /// Convert I/O stream to boxed stream
     pub fn seal(self) -> WsConnection<Sealed> {
         WsConnection {

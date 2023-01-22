@@ -1,9 +1,9 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::io::{self, Read as IoRead, Write as IoWrite};
-use std::{any, cell::Cell, cell::RefCell, sync::Arc, task::Context, task::Poll};
+use std::{any, cell::Cell, cell::RefCell, sync::Arc, task::Poll};
 
-use ntex_bytes::{BufMut, BytesVec};
-use ntex_io::{types, Filter, Io, IoRef, ReadStatus, WriteStatus};
+use ntex_bytes::BufMut;
+use ntex_io::{types, Buffer, Filter, FilterLayer, Io, Layer};
 use ntex_util::{future::poll_fn, ready};
 use tls_rust::{ClientConfig, ClientConnection, ServerName};
 
@@ -12,12 +12,12 @@ use crate::rustls::{IoInner, TlsFilter, Wrapper};
 use super::{PeerCert, PeerCertChain};
 
 /// An implementation of SSL streams
-pub struct TlsClientFilter<F> {
-    inner: IoInner<F>,
+pub struct TlsClientFilter {
+    inner: IoInner,
     session: RefCell<ClientConnection>,
 }
 
-impl<F: Filter> Filter for TlsClientFilter<F> {
+impl Filter for TlsClientFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         const H2: &[u8] = b"h2";
 
@@ -52,63 +52,16 @@ impl<F: Filter> Filter for TlsClientFilter<F> {
                 None
             }
         } else {
-            self.inner.filter.query(id)
+            None
         }
     }
 
-    #[inline]
-    fn poll_shutdown(&self) -> Poll<io::Result<()>> {
-        self.inner.filter.poll_shutdown()
-    }
-
-    #[inline]
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
-        self.inner.filter.poll_read_ready(cx)
-    }
-
-    #[inline]
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
-        self.inner.filter.poll_write_ready(cx)
-    }
-
-    #[inline]
-    fn get_read_buf(&self) -> Option<BytesVec> {
-        self.inner.read_buf.take()
-    }
-
-    #[inline]
-    fn get_write_buf(&self) -> Option<BytesVec> {
-        self.inner.write_buf.take()
-    }
-
-    #[inline]
-    fn release_read_buf(&self, buf: BytesVec) {
-        self.inner.read_buf.set(Some(buf));
-    }
-
-    fn process_read_buf(&self, io: &IoRef, nbytes: usize) -> io::Result<(usize, usize)> {
+    fn process_read_buf(&self, buf: &mut Buffer<'_>, _: usize) -> io::Result<usize> {
         let mut session = self.session.borrow_mut();
 
-        // ask inner filter to process read buf
-        match self.inner.filter.process_read_buf(io, nbytes) {
-            Err(err) => io.want_shutdown(Some(err)),
-            Ok((_, 0)) => return Ok((0, 0)),
-            Ok(_) => (),
-        }
-
         // get processed buffer
-        let mut dst = if let Some(dst) = self.inner.read_buf.take() {
-            dst
-        } else {
-            self.inner.pool.get_read_buf()
-        };
+        let (dst, src) = buf.get_read_pair();
         let (hw, lw) = self.inner.pool.read_params().unpack();
-
-        let mut src = if let Some(src) = self.inner.filter.get_read_buf() {
-            src
-        } else {
-            return Ok((0, 0));
-        };
 
         let mut new_bytes = usize::from(self.inner.handshake.get());
         loop {
@@ -138,73 +91,68 @@ impl<F: Filter> Filter for TlsClientFilter<F> {
             }
         }
 
-        let dst_len = dst.len();
-        self.inner.read_buf.set(Some(dst));
-        self.inner.filter.release_read_buf(src);
-        Ok((dst_len, new_bytes))
+        Ok(new_bytes)
     }
 
-    fn release_write_buf(&self, mut src: BytesVec) -> Result<(), io::Error> {
-        let mut session = self.session.borrow_mut();
-        let mut io = Wrapper(&self.inner);
+    fn process_write_buf(&self, buf: &mut Buffer<'_>) -> io::Result<()> {
+        if let Some(mut src) = buf.take_write_src() {
+            let mut session = self.session.borrow_mut();
+            let mut io = Wrapper(&self.inner, buf);
 
-        loop {
+            loop {
+                if !src.is_empty() {
+                    let n = session.writer().write(&src)?;
+                    src.split_to(n);
+                }
+
+                let n = session.write_tls(&mut io)?;
+                if n == 0 {
+                    break;
+                }
+            }
+
             if !src.is_empty() {
-                let n = session.writer().write(&src)?;
-                src.split_to(n);
+                buf.set_write_src(Some(src));
             }
-
-            let n = session.write_tls(&mut io)?;
-            if n == 0 {
-                break;
-            }
+            Ok(())
+        } else {
+            Ok(())
         }
-
-        if !src.is_empty() {
-            self.inner.write_buf.set(Some(src));
-        }
-
-        Ok(())
     }
 }
 
-impl<F: Filter> TlsClientFilter<F> {
-    pub(crate) async fn create(
+impl TlsClientFilter {
+    pub(crate) async fn create<F: FilterLayer>(
         io: Io<F>,
         cfg: Arc<ClientConfig>,
         domain: ServerName,
-    ) -> Result<Io<TlsFilter<F>>, io::Error> {
+    ) -> Result<Io<Layer<TlsFilter, F>>, io::Error> {
         let pool = io.memory_pool();
         let session = match ClientConnection::new(cfg, domain) {
             Ok(session) => session,
             Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
         };
-        let io = io.map_filter(|filter: F| {
-            let inner = IoInner {
-                pool,
-                filter,
-                read_buf: Cell::new(None),
-                write_buf: Cell::new(None),
-                handshake: Cell::new(true),
-            };
-
-            Ok::<_, io::Error>(TlsFilter::new_client(TlsClientFilter {
-                inner,
-                session: RefCell::new(session),
-            }))
-        })?;
+        let inner = IoInner {
+            pool,
+            handshake: Cell::new(true),
+        };
+        let filter = TlsFilter::new_client(TlsClientFilter {
+            inner,
+            session: RefCell::new(session),
+        });
+        let io = io.add_filter(filter);
 
         let filter = io.filter();
         loop {
-            let (result, wants_read, handshaking) = {
+            let (result, wants_read, handshaking) = io.with_buf(|buf| {
                 let mut session = filter.client().session.borrow_mut();
-                let mut wrp = Wrapper(&filter.client().inner);
+                let mut wrp = Wrapper(&filter.client().inner, buf);
                 (
                     session.complete_io(&mut wrp),
                     session.wants_read(),
                     session.is_handshaking(),
                 )
-            };
+            })?;
             match result {
                 Ok(_) => {
                     filter.client().inner.handshake.set(false);

@@ -5,7 +5,7 @@ use std::{convert::TryFrom, net, str::FromStr, sync::mpsc, thread};
 use coo_kie::{Cookie, CookieJar};
 
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
-use crate::{io::Filter, io::Io, rt::System, server::Server, service::ServiceFactory};
+use crate::{io::FilterLayer, io::Io, rt::System, server::Server, service::ServiceFactory};
 use crate::{time::Millis, time::Seconds, util::Bytes};
 
 use super::client::{Client, ClientRequest, ClientResponse, Connector};
@@ -327,7 +327,7 @@ impl TestServer {
     }
 
     /// Connect to a websocket server
-    pub async fn ws(&mut self) -> Result<WsConnection<impl Filter>, WsClientError> {
+    pub async fn ws(&mut self) -> Result<WsConnection<impl FilterLayer>, WsClientError> {
         self.ws_at("/").await
     }
 
@@ -335,7 +335,7 @@ impl TestServer {
     pub async fn ws_at(
         &mut self,
         path: &str,
-    ) -> Result<WsConnection<impl Filter>, WsClientError> {
+    ) -> Result<WsConnection<impl FilterLayer>, WsClientError> {
         WsClient::build(self.url(path))
             .address(self.addr)
             .timeout(Seconds(30))

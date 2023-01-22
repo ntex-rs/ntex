@@ -3,9 +3,8 @@ use std::{cell::RefCell, error::Error, fmt, marker, rc::Rc, task};
 use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, OnRequest, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
-use crate::http::request::Request;
-use crate::http::response::Response;
-use crate::io::{types, Filter, Io};
+use crate::http::{request::Request, response::Response};
+use crate::io::{types, FilterLayer, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::{time::Millis, util::BoxFuture};
 
@@ -56,11 +55,11 @@ mod openssl {
     use tls_openssl::ssl::SslAcceptor;
 
     use super::*;
-    use crate::{server::SslError, service::pipeline_factory};
+    use crate::{io::Layer, server::SslError, service::pipeline_factory};
 
-    impl<F, S, B, X, U> H1Service<SslFilter<F>, S, B, X, U>
+    impl<F, S, B, X, U> H1Service<Layer<SslFilter, F>, S, B, X, U>
     where
-        F: Filter,
+        F: FilterLayer,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
@@ -69,7 +68,8 @@ mod openssl {
         X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        U: ServiceFactory<(Request, Io<SslFilter<F>>, Codec), Response = ()> + 'static,
+        U: ServiceFactory<(Request, Io<Layer<SslFilter, F>>, Codec), Response = ()>
+            + 'static,
         U::Error: fmt::Display + Error,
         U::InitError: fmt::Debug,
     {
@@ -102,11 +102,11 @@ mod rustls {
     use tls_rustls::ServerConfig;
 
     use super::*;
-    use crate::{server::SslError, service::pipeline_factory};
+    use crate::{io::Layer, server::SslError, service::pipeline_factory};
 
-    impl<F, S, B, X, U> H1Service<TlsFilter<F>, S, B, X, U>
+    impl<F, S, B, X, U> H1Service<Layer<TlsFilter, F>, S, B, X, U>
     where
-        F: Filter,
+        F: FilterLayer,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
@@ -115,7 +115,8 @@ mod rustls {
         X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        U: ServiceFactory<(Request, Io<TlsFilter<F>>, Codec), Response = ()> + 'static,
+        U: ServiceFactory<(Request, Io<Layer<TlsFilter, F>>, Codec), Response = ()>
+            + 'static,
         U::Error: fmt::Display + Error,
         U::InitError: fmt::Debug,
     {
@@ -142,7 +143,7 @@ mod rustls {
 
 impl<F, S, B, X, U> H1Service<F, S, B, X, U>
 where
-    F: Filter,
+    F: FilterLayer,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -194,7 +195,7 @@ where
 
 impl<F, S, B, X, U> ServiceFactory<Io<F>> for H1Service<F, S, B, X, U>
 where
-    F: Filter,
+    F: FilterLayer,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -256,7 +257,7 @@ pub struct H1ServiceHandler<F, S, B, X, U> {
 
 impl<F, S, B, X, U> Service<Io<F>> for H1ServiceHandler<F, S, B, X, U>
 where
-    F: Filter,
+    F: FilterLayer,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,

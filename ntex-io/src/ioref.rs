@@ -3,7 +3,7 @@ use std::{any, fmt, hash, io, time};
 use ntex_bytes::{BufMut, BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
-use super::{io::Flags, timer, types, Filter, IoRef, OnDisconnect};
+use super::{filter::FilterLayer, io::Flags, timer, types, Buffer, IoRef, OnDisconnect};
 
 impl IoRef {
     #[inline]
@@ -21,7 +21,7 @@ impl IoRef {
 
     #[inline]
     /// Get memory pool
-    pub(crate) fn filter(&self) -> &dyn Filter {
+    pub(crate) fn filter(&self) -> &dyn FilterLayer {
         self.0.filter.get()
     }
 
@@ -49,7 +49,7 @@ impl IoRef {
     /// Notify dispatcher and initiate io stream shutdown process.
     pub fn close(&self) {
         self.0.insert_flags(Flags::DSP_STOP);
-        self.0.init_shutdown(None);
+        self.0.init_shutdown(None, self);
     }
 
     #[inline]
@@ -73,7 +73,7 @@ impl IoRef {
     #[inline]
     /// Gracefully shutdown io stream
     pub fn want_shutdown(&self, err: Option<io::Error>) {
-        self.0.init_shutdown(err);
+        self.0.init_shutdown(err, self);
     }
 
     #[inline]
@@ -151,21 +151,35 @@ impl IoRef {
 
     #[inline]
     /// Get mut access to write buffer
-    pub fn with_write_buf<F, R>(&self, f: F) -> Result<R, io::Error>
+    pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut BytesVec) -> R,
     {
-        let filter = self.0.filter.get();
-        let mut buf = filter
-            .get_write_buf()
-            .unwrap_or_else(|| self.memory_pool().get_write_buf());
+        let mut buffer = self.0.buffer.borrow_mut();
+
+        let mut buf = buffer.first_write_buf(self);
         let is_write_sleep = buf.is_empty();
 
         let result = f(&mut buf);
+        // buffer.process_write_buf(self, self.0.filter.get())?;
+
         if is_write_sleep {
             self.0.write_task.wake();
         }
-        filter.release_write_buf(buf)?;
+        Ok(result)
+    }
+
+    #[inline]
+    /// Get mut access to write buffer
+    pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
+    where
+        F: FnOnce(&mut Buffer<'_>) -> R,
+    {
+        let mut b = self.0.buffer.borrow_mut();
+        let mut buf = b.buffer(self, 0);
+        let result = f(&mut buf);
+        self.0.filter.get().process_write_buf(self, &mut b, 0)?;
+        self.0.write_task.wake();
         Ok(result)
     }
 

@@ -9,7 +9,7 @@ use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
-use crate::io::{types, Filter, Io, IoBoxed, IoRef};
+use crate::io::{types, FilterLayer, Io, IoBoxed, IoRef};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::util::{poll_fn, BoxFuture, Bytes, BytesMut, Either, HashMap, Ready};
 
@@ -49,15 +49,13 @@ mod openssl {
     use ntex_tls::openssl::{Acceptor, SslFilter};
     use tls_openssl::ssl::SslAcceptor;
 
-    use crate::io::Filter;
-    use crate::server::SslError;
-    use crate::service::pipeline_factory;
+    use crate::{io::Layer, server::SslError, service::pipeline_factory};
 
     use super::*;
 
-    impl<F, S, B> H2Service<SslFilter<F>, S, B>
+    impl<F, S, B> H2Service<Layer<SslFilter, F>, S, B>
     where
-        F: Filter,
+        F: FilterLayer,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
@@ -90,11 +88,11 @@ mod rustls {
     use tls_rustls::ServerConfig;
 
     use super::*;
-    use crate::{server::SslError, service::pipeline_factory};
+    use crate::{io::Layer, server::SslError, service::pipeline_factory};
 
-    impl<F, S, B> H2Service<TlsFilter<F>, S, B>
+    impl<F, S, B> H2Service<Layer<TlsFilter, F>, S, B>
     where
-        F: Filter,
+        F: FilterLayer,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
@@ -126,7 +124,7 @@ mod rustls {
 
 impl<F, S, B> ServiceFactory<Io<F>> for H2Service<F, S, B>
 where
-    F: Filter,
+    F: FilterLayer,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -165,7 +163,7 @@ pub struct H2ServiceHandler<F, S: Service<Request>, B> {
 
 impl<F, S, B> Service<Io<F>> for H2ServiceHandler<F, S, B>
 where
-    F: Filter,
+    F: FilterLayer,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,

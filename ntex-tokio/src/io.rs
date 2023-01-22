@@ -3,8 +3,8 @@ use std::{any, cell::RefCell, cmp, future::Future, io, mem, pin::Pin, rc::Rc, rc
 
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{
-    types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, ReadStatus, WriteContext,
-    WriteStatus,
+    types, FilterLayer, Handle, Io, IoBoxed, IoStream, ReadContext, ReadStatus,
+    WriteContext, WriteStatus,
 };
 use ntex_util::{ready, time::sleep, time::Millis, time::Sleep};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -54,73 +54,37 @@ impl Future for ReadTask {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_ref();
 
-        loop {
+        this.state.with_buf(|buf, hw| {
             match ready!(this.state.poll_ready(cx)) {
                 ReadStatus::Ready => {
-                    let pool = this.state.memory_pool();
-                    let mut io = this.io.borrow_mut();
-                    let mut buf = self.state.get_read_buf();
-                    let (hw, lw) = pool.read_params().unpack();
-
                     // read data from socket
-                    let mut new_bytes = 0;
-                    let mut close = false;
-                    let mut pending = false;
+                    let mut io = this.io.borrow_mut();
                     loop {
-                        // make sure we've got room
-                        let remaining = buf.remaining_mut();
-                        if remaining < lw {
-                            buf.reserve(hw - remaining);
-                        }
-
-                        match poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
-                            Poll::Pending => {
-                                pending = true;
-                                break;
-                            }
+                        return match poll_read_buf(Pin::new(&mut *io), cx, buf) {
+                            Poll::Pending => Poll::Pending,
                             Poll::Ready(Ok(n)) => {
                                 if n == 0 {
                                     log::trace!("tokio stream is disconnected");
-                                    close = true;
+                                    Poll::Ready(Ok(()))
+                                } else if buf.len() <= hw {
+                                    continue;
                                 } else {
-                                    new_bytes += n;
-                                    if new_bytes <= hw {
-                                        continue;
-                                    }
+                                    Poll::Pending
                                 }
-                                break;
                             }
                             Poll::Ready(Err(err)) => {
                                 log::trace!("read task failed on io {:?}", err);
-                                drop(io);
-                                this.state.release_read_buf(buf, new_bytes);
-                                this.state.close(Some(err));
-                                return Poll::Ready(());
+                                Poll::Ready(Err(err))
                             }
-                        }
+                        };
                     }
-
-                    drop(io);
-                    if new_bytes == 0 && close {
-                        this.state.close(None);
-                        return Poll::Ready(());
-                    }
-                    this.state.release_read_buf(buf, new_bytes);
-                    return if close {
-                        this.state.close(None);
-                        Poll::Ready(())
-                    } else if pending {
-                        Poll::Pending
-                    } else {
-                        continue;
-                    };
                 }
                 ReadStatus::Terminate => {
                     log::trace!("read task is instructed to shutdown");
-                    return Poll::Ready(());
+                    Poll::Ready(Ok(()))
                 }
             }
-        }
+        })
     }
 }
 
@@ -398,7 +362,7 @@ impl From<IoBoxed> for TokioIoBoxed {
     }
 }
 
-impl<F: Filter> From<Io<F>> for TokioIoBoxed {
+impl<F: FilterLayer> From<Io<F>> for TokioIoBoxed {
     fn from(io: Io<F>) -> TokioIoBoxed {
         TokioIoBoxed(IoBoxed::from(io))
     }
@@ -501,73 +465,37 @@ mod unixstream {
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let this = self.as_ref();
 
-            loop {
+            this.state.with_buf(|buf, hw| {
                 match ready!(this.state.poll_ready(cx)) {
                     ReadStatus::Ready => {
-                        let pool = this.state.memory_pool();
-                        let mut io = this.io.borrow_mut();
-                        let mut buf = self.state.get_read_buf();
-                        let (hw, lw) = pool.read_params().unpack();
-
                         // read data from socket
-                        let mut new_bytes = 0;
-                        let mut close = false;
-                        let mut pending = false;
+                        let mut io = this.io.borrow_mut();
                         loop {
-                            // make sure we've got room
-                            let remaining = buf.remaining_mut();
-                            if remaining < lw {
-                                buf.reserve(hw - remaining);
-                            }
-
-                            match poll_read_buf(Pin::new(&mut *io), cx, &mut buf) {
-                                Poll::Pending => {
-                                    pending = true;
-                                    break;
-                                }
+                            return match poll_read_buf(Pin::new(&mut *io), cx, buf) {
+                                Poll::Pending => Poll::Pending,
                                 Poll::Ready(Ok(n)) => {
                                     if n == 0 {
                                         log::trace!("unix stream is disconnected");
-                                        close = true;
+                                        Poll::Ready(Ok(()))
+                                    } else if buf.len() <= hw {
+                                        continue;
                                     } else {
-                                        new_bytes += n;
-                                        if new_bytes <= hw {
-                                            continue;
-                                        }
+                                        Poll::Pending
                                     }
-                                    break;
                                 }
                                 Poll::Ready(Err(err)) => {
-                                    log::trace!("read task failed on io {:?}", err);
-                                    drop(io);
-                                    this.state.release_read_buf(buf, new_bytes);
-                                    this.state.close(Some(err));
-                                    return Poll::Ready(());
+                                    log::trace!("unix stream read task failed {:?}", err);
+                                    Poll::Ready(Err(err))
                                 }
-                            }
+                            };
                         }
-
-                        drop(io);
-                        if new_bytes == 0 && close {
-                            this.state.close(None);
-                            return Poll::Ready(());
-                        }
-                        this.state.release_read_buf(buf, new_bytes);
-                        return if close {
-                            this.state.close(None);
-                            Poll::Ready(())
-                        } else if pending {
-                            Poll::Pending
-                        } else {
-                            continue;
-                        };
                     }
                     ReadStatus::Terminate => {
                         log::trace!("read task is instructed to shutdown");
-                        return Poll::Ready(());
+                        Poll::Ready(Ok(()))
                     }
                 }
-            }
+            })
         }
     }
 

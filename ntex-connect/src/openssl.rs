@@ -4,7 +4,7 @@ pub use ntex_tls::openssl::SslFilter;
 pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
 
 use ntex_bytes::PoolId;
-use ntex_io::{Base, Io};
+use ntex_io::{FilterFactory, Io, Layer};
 use ntex_service::{Service, ServiceFactory};
 use ntex_tls::openssl::SslConnector as IoSslConnector;
 use ntex_util::future::{BoxFuture, Ready};
@@ -39,7 +39,7 @@ impl<T> Connector<T> {
 
 impl<T: Address> Connector<T> {
     /// Resolve and connect to remote host
-    pub async fn connect<U>(&self, message: U) -> Result<Io<SslFilter<Base>>, ConnectError>
+    pub async fn connect<U>(&self, message: U) -> Result<Io<Layer<SslFilter>>, ConnectError>
     where
         Connect<T>: From<U>,
     {
@@ -57,7 +57,7 @@ impl<T: Address> Connector<T> {
                 let ssl = config
                     .into_ssl(&host)
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-                match io.add_filter(IoSslConnector::new(ssl)).await {
+                match IoSslConnector::new(ssl).create(io).await {
                     Ok(io) => {
                         trace!("SSL Handshake success: {:?}", host);
                         Ok(io)
@@ -82,7 +82,7 @@ impl<T> Clone for Connector<T> {
 }
 
 impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
-    type Response = Io<SslFilter<Base>>;
+    type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
     type Service = Connector<T>;
     type InitError = ();
@@ -95,7 +95,7 @@ impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
 }
 
 impl<T: Address> Service<Connect<T>> for Connector<T> {
-    type Response = Io<SslFilter<Base>>;
+    type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
     type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 

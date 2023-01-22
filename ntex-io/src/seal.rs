@@ -1,9 +1,9 @@
 use std::ops;
 
-use crate::{Filter, Io};
+use crate::{filter::FilterLayer, Io};
 
 /// Sealed filter type
-pub struct Sealed(pub(crate) Box<dyn Filter>);
+pub struct Sealed(pub(crate) Box<dyn FilterLayer>);
 
 #[derive(Debug)]
 /// Boxed `Io` object with erased filter type
@@ -15,7 +15,7 @@ impl From<Io<Sealed>> for IoBoxed {
     }
 }
 
-impl<F: Filter> From<Io<F>> for IoBoxed {
+impl<F: FilterLayer> From<Io<F>> for IoBoxed {
     fn from(io: Io<F>) -> Self {
         Self(io.seal())
     }

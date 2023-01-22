@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use ntex_service::{fn_service, pipeline_factory, Service, ServiceFactory};
 use ntex_util::future::Ready;
 
-use crate::{Filter, FilterFactory, Io, IoBoxed};
+use crate::{FilterFactory, FilterLayer, Io, IoBoxed, Layer};
 
 /// Service that converts any Io<F> stream to IoBoxed stream
 pub fn seal<F, S, C>(
@@ -16,7 +16,7 @@ pub fn seal<F, S, C>(
     InitError = S::InitError,
 >
 where
-    F: Filter,
+    F: FilterLayer,
     S: ServiceFactory<IoBoxed, C>,
     C: Clone,
 {
@@ -30,7 +30,6 @@ where
 pub fn filter<T, F>(filter: T) -> FilterServiceFactory<T, F>
 where
     T: FilterFactory<F> + Clone,
-    F: Filter,
 {
     FilterServiceFactory {
         filter,
@@ -46,9 +45,8 @@ pub struct FilterServiceFactory<T, F> {
 impl<T, F> ServiceFactory<Io<F>> for FilterServiceFactory<T, F>
 where
     T: FilterFactory<F> + Clone,
-    F: Filter,
 {
-    type Response = Io<T::Filter>;
+    type Response = Io<Layer<T::Filter, F>>;
     type Error = T::Error;
     type Service = FilterService<T, F>;
     type InitError = ();
@@ -71,15 +69,14 @@ pub struct FilterService<T, F> {
 impl<T, F> Service<Io<F>> for FilterService<T, F>
 where
     T: FilterFactory<F> + Clone,
-    F: Filter,
 {
-    type Response = Io<T::Filter>;
+    type Response = Io<Layer<T::Filter, F>>;
     type Error = T::Error;
-    type Future<'f> = T::Future where T: 'f;
+    type Future<'f> = T::Future where T: 'f, F: 'f;
 
     #[inline]
     fn call(&self, req: Io<F>) -> Self::Future<'_> {
-        req.add_filter(self.filter.clone())
+        self.filter.clone().create(req)
     }
 }
 

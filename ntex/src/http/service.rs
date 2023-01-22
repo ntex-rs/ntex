@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{cell, error, fmt, future, marker, pin::Pin, rc::Rc};
 
-use crate::io::{types, Filter, Io};
+use crate::io::{types, FilterLayer, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
 use crate::util::BoxFuture;
@@ -40,7 +40,7 @@ where
 
 impl<F, S, B> HttpService<F, S, B>
 where
-    F: Filter,
+    F: FilterLayer,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
@@ -85,7 +85,7 @@ where
 
 impl<F, S, B, X, U> HttpService<F, S, B, X, U>
 where
-    F: Filter,
+    F: FilterLayer,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
@@ -146,12 +146,11 @@ mod openssl {
     use tls_openssl::ssl::SslAcceptor;
 
     use super::*;
-    use crate::server::SslError;
-    use crate::service::pipeline_factory;
+    use crate::{io::Layer, server::SslError, service::pipeline_factory};
 
-    impl<F, S, B, X, U> HttpService<SslFilter<F>, S, B, X, U>
+    impl<F, S, B, X, U> HttpService<Layer<SslFilter, F>, S, B, X, U>
     where
-        F: Filter,
+        F: FilterLayer,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
@@ -160,7 +159,8 @@ mod openssl {
         X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        U: ServiceFactory<(Request, Io<SslFilter<F>>, h1::Codec), Response = ()> + 'static,
+        U: ServiceFactory<(Request, Io<Layer<SslFilter, F>>, h1::Codec), Response = ()>
+            + 'static,
         U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
     {
@@ -191,11 +191,11 @@ mod rustls {
     use tls_rustls::ServerConfig;
 
     use super::*;
-    use crate::{server::SslError, service::pipeline_factory};
+    use crate::{io::Layer, server::SslError, service::pipeline_factory};
 
-    impl<F, S, B, X, U> HttpService<TlsFilter<F>, S, B, X, U>
+    impl<F, S, B, X, U> HttpService<Layer<TlsFilter, F>, S, B, X, U>
     where
-        F: Filter,
+        F: FilterLayer,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
@@ -204,7 +204,8 @@ mod rustls {
         X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        U: ServiceFactory<(Request, Io<TlsFilter<F>>, h1::Codec), Response = ()> + 'static,
+        U: ServiceFactory<(Request, Io<Layer<TlsFilter, F>>, h1::Codec), Response = ()>
+            + 'static,
         U::Error: fmt::Display + error::Error,
         U::InitError: fmt::Debug,
     {
@@ -234,7 +235,7 @@ mod rustls {
 
 impl<F, S, B, X, U> ServiceFactory<Io<F>> for HttpService<F, S, B, X, U>
 where
-    F: Filter,
+    F: FilterLayer,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
@@ -299,7 +300,7 @@ pub struct HttpServiceHandler<F, S, B, X, U> {
 
 impl<F, S, B, X, U> Service<Io<F>> for HttpServiceHandler<F, S, B, X, U>
 where
-    F: Filter,
+    F: FilterLayer,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -399,7 +400,7 @@ where
 pin_project_lite::pin_project! {
     pub struct HttpServiceHandlerResponse<F, S, B, X, U>
     where
-        F: Filter,
+        F: FilterLayer,
         S: Service<Request>,
         S: 'static,
         S::Error: ResponseError,
@@ -424,7 +425,7 @@ pin_project_lite::pin_project! {
     #[project = StateProject]
     enum ResponseState<F, S, B, X, U>
     where
-        F: Filter,
+        F: FilterLayer,
         S: Service<Request>,
         S: 'static,
         S::Error: ResponseError,
@@ -446,7 +447,7 @@ pin_project_lite::pin_project! {
 
 impl<F, S, B, X, U> future::Future for HttpServiceHandlerResponse<F, S, B, X, U>
 where
-    F: Filter,
+    F: FilterLayer,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,

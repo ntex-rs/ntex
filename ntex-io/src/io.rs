@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
 use std::{fmt, future::Future, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc, time};
 
@@ -7,10 +7,11 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::{now, Millis};
 use ntex_util::{future::poll_fn, future::Either, task::LocalWaker};
 
-use super::filter::{Base, NullFilter};
-use super::seal::Sealed;
-use super::tasks::{ReadContext, WriteContext};
-use super::{Filter, FilterFactory, Handle, IoStatusUpdate, IoStream, RecvError};
+use crate::buf::Stack;
+use crate::filter::{Base, FilterLayer, Layer, NullFilter};
+use crate::seal::Sealed;
+use crate::tasks::{ReadContext, WriteContext};
+use crate::{Filter, Handle, IoStatusUpdate, IoStream, RecvError};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -59,9 +60,8 @@ pub(crate) struct IoState {
     pub(super) read_task: LocalWaker,
     pub(super) write_task: LocalWaker,
     pub(super) dispatch_task: LocalWaker,
-    pub(super) read_buf: Cell<Option<BytesVec>>,
-    pub(super) write_buf: Cell<Option<BytesVec>>,
-    pub(super) filter: Cell<&'static dyn Filter>,
+    pub(super) buffer: RefCell<Stack>,
+    pub(super) filter: Cell<&'static dyn FilterLayer>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     #[allow(clippy::box_collection)]
     pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
@@ -121,7 +121,7 @@ impl IoState {
 
     #[inline]
     /// Gracefully shutdown read and write io tasks
-    pub(super) fn init_shutdown(&self, err: Option<io::Error>) {
+    pub(super) fn init_shutdown(&self, err: Option<io::Error>, io: &IoRef) {
         if err.is_some() {
             self.io_stopped(err);
         } else if !self
@@ -131,28 +131,28 @@ impl IoState {
         {
             log::trace!("initiate io shutdown {:?}", self.flags.get());
             self.insert_flags(Flags::IO_STOPPING_FILTERS);
-            self.shutdown_filters();
+            self.shutdown_filters(io);
         }
     }
 
     #[inline]
-    pub(super) fn shutdown_filters(&self) {
+    pub(super) fn shutdown_filters(&self, io: &IoRef) {
         if !self
             .flags
             .get()
             .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
         {
-            match self.filter.get().poll_shutdown() {
-                Poll::Ready(Ok(())) => {
+            let mut buffer = self.buffer.borrow_mut();
+            let result = self.filter.get().shutdown(io, &mut buffer, 0);
+
+            match result {
+                Ok(Poll::Ready(())) => {
                     self.read_task.wake();
                     self.write_task.wake();
                     self.dispatch_task.wake();
                     self.insert_flags(Flags::IO_STOPPING);
                 }
-                Poll::Ready(Err(err)) => {
-                    self.io_stopped(Some(err));
-                }
-                Poll::Pending => {
+                Ok(Poll::Pending) => {
                     let flags = self.flags.get();
                     // check read buffer, if buffer is not consumed it is unlikely
                     // that filter will properly complete shutdown
@@ -165,6 +165,9 @@ impl IoState {
                         self.insert_flags(Flags::IO_STOPPING);
                     }
                 }
+                Err(err) => {
+                    self.io_stopped(Some(err));
+                }
             }
         }
     }
@@ -174,19 +177,16 @@ impl IoState {
     where
         Fn: FnOnce(&mut Option<BytesVec>) -> Ret,
     {
-        let filter = self.filter.get();
-        let mut buf = filter.get_read_buf();
-        let result = f(&mut buf);
+        // use top most buffer
+        let mut buffer = self.buffer.borrow_mut();
+        let buf = buffer.first_read_buf();
+        let result = f(buf);
 
-        if let Some(buf) = buf {
-            if release {
-                // release buffer
-                if buf.is_empty() {
-                    self.pool.get().release_read_buf(buf);
-                    return result;
-                }
+        // release buffer
+        if release && buf.as_ref().map(|b| b.is_empty()).unwrap_or(false) {
+            if let Some(b) = buf.take() {
+                self.pool.get().release_read_buf(b);
             }
-            filter.release_read_buf(buf);
         }
         result
     }
@@ -196,9 +196,7 @@ impl IoState {
     where
         Fn: FnOnce(&mut Option<BytesVec>) -> Ret,
     {
-        let buf = self.write_buf.as_ptr();
-        let ref_buf = unsafe { buf.as_mut().unwrap() };
-        f(ref_buf)
+        f(self.buffer.borrow_mut().last_write_buf())
     }
 }
 
@@ -221,12 +219,7 @@ impl hash::Hash for IoState {
 impl Drop for IoState {
     #[inline]
     fn drop(&mut self) {
-        if let Some(buf) = self.read_buf.take() {
-            self.pool.get().release_read_buf(buf);
-        }
-        if let Some(buf) = self.write_buf.take() {
-            self.pool.get().release_write_buf(buf);
-        }
+        self.buffer.borrow_mut().release(self.pool.get());
     }
 }
 
@@ -248,8 +241,7 @@ impl Io {
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            read_buf: Cell::new(None),
-            write_buf: Cell::new(None),
+            buffer: RefCell::new(Stack::new()),
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
             on_disconnect: Cell::new(None),
@@ -257,8 +249,8 @@ impl Io {
         });
 
         let filter = Box::new(Base::new(IoRef(inner.clone())));
-        let filter_ref: &'static dyn Filter = unsafe {
-            let filter: &dyn Filter = filter.as_ref();
+        let filter_ref: &'static dyn FilterLayer = unsafe {
+            let filter: &dyn FilterLayer = filter.as_ref();
             std::mem::transmute(filter)
         };
         inner.filter.replace(filter_ref);
@@ -277,14 +269,7 @@ impl<F> Io<F> {
     #[inline]
     /// Set memory pool
     pub fn set_memory_pool(&self, pool: PoolRef) {
-        if let Some(mut buf) = self.0 .0.read_buf.take() {
-            pool.move_vec_in(&mut buf);
-            self.0 .0.read_buf.set(Some(buf));
-        }
-        if let Some(mut buf) = self.0 .0.write_buf.take() {
-            pool.move_vec_in(&mut buf);
-            self.0 .0.write_buf.set(Some(buf));
-        }
+        self.0 .0.buffer.borrow_mut().set_memory_pool(pool);
         self.0 .0.pool.set(pool);
     }
 
@@ -312,8 +297,7 @@ impl<F> Io<F> {
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            read_buf: Cell::new(None),
-            write_buf: Cell::new(None),
+            buffer: RefCell::new(Stack::new()),
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
             on_disconnect: Cell::new(None),
@@ -352,58 +336,33 @@ impl<F> Io<F> {
     }
 }
 
-impl<F: Filter> Io<F> {
-    #[inline]
-    /// Get referece to a filter
-    pub fn filter(&self) -> &F {
-        self.1.filter()
-    }
-
+impl<F: FilterLayer> Io<F> {
     #[inline]
     /// Convert current io stream into sealed version
     pub fn seal(mut self) -> Io<Sealed> {
-        // get current filter
-        let filter = unsafe {
-            let filter = self.1.seal();
-            let filter_ref: &'static dyn Filter = {
-                let filter: &dyn Filter = filter.0.as_ref();
-                std::mem::transmute(filter)
-            };
-            self.0 .0.filter.replace(filter_ref);
-            filter
-        };
-
-        Io(self.0.clone(), FilterItem::with_sealed(filter))
-    }
-
-    #[inline]
-    /// Create new filter and replace current one
-    pub fn add_filter<T>(self, factory: T) -> T::Future
-    where
-        T: FilterFactory<F>,
-    {
-        factory.create(self)
+        let (filter, filter_ref) = self.1.seal();
+        self.0 .0.filter.replace(filter_ref);
+        Io(self.0.clone(), filter)
     }
 
     #[inline]
     /// Map current filter with new one
-    pub fn map_filter<T, U, E>(mut self, map: U) -> Result<Io<T>, E>
+    pub fn add_filter<U>(mut self, nf: U) -> Io<Layer<U, F>>
     where
-        T: Filter,
-        U: FnOnce(F) -> Result<T, E>,
+        U: Filter,
     {
         // replace current filter
-        let filter = unsafe {
-            let filter = Box::new(map(*(self.1.get_filter()))?);
-            let filter_ref: &'static dyn Filter = {
-                let filter: &dyn Filter = filter.as_ref();
-                std::mem::transmute(filter)
-            };
-            self.0 .0.filter.replace(filter_ref);
-            filter
-        };
+        let (filter, filter_ref) = self.1.add_filter(nf);
+        self.0 .0.filter.replace(filter_ref);
+        Io(self.0.clone(), filter)
+    }
+}
 
-        Ok(Io(self.0.clone(), FilterItem::with_filter(filter)))
+impl<F: Filter, T: FilterLayer> Io<Layer<F, T>> {
+    #[inline]
+    /// Get referece to a filter
+    pub fn filter(&self) -> &F {
+        &self.1.filter().0
     }
 }
 
@@ -629,7 +588,7 @@ impl<F> Io<F> {
             }
         } else {
             if !flags.contains(Flags::IO_STOPPING_FILTERS) {
-                self.0 .0.init_shutdown(None);
+                self.0 .0.init_shutdown(None, &self.0);
             }
             self.0 .0.dispatch_task.register(cx.waker());
             Poll::Pending
@@ -759,20 +718,6 @@ impl<F> FilterItem<F> {
         slf
     }
 
-    fn with_sealed(f: Sealed) -> Self {
-        let mut slf = Self {
-            data: [0; SEALED_SIZE],
-            _t: marker::PhantomData,
-        };
-
-        unsafe {
-            let ptr = &mut slf.data as *mut _ as *mut Sealed;
-            ptr.write(f);
-            slf.data[KIND_IDX] |= KIND_SEALED;
-        }
-        slf
-    }
-
     /// Get filter, panic if it is not filter
     fn filter(&self) -> &F {
         if self.data[KIND_IDX] & KIND_PTR != 0 {
@@ -786,8 +731,8 @@ impl<F> FilterItem<F> {
         }
     }
 
-    /// Get filter, panic if it is not filter
-    fn get_filter(&mut self) -> Box<F> {
+    /// Get filter, panic if it is not set
+    fn take_filter(&mut self) -> Box<F> {
         if self.data[KIND_IDX] & KIND_PTR != 0 {
             self.data[KIND_IDX] &= KIND_UNMASK;
             let ptr = &mut self.data as *mut _ as *mut *mut F;
@@ -801,7 +746,7 @@ impl<F> FilterItem<F> {
     }
 
     /// Get sealed, panic if it is already sealed
-    fn get_sealed(&mut self) -> Sealed {
+    fn take_sealed(&mut self) -> Sealed {
         if self.data[KIND_IDX] & KIND_SEALED != 0 {
             self.data[KIND_IDX] &= KIND_UNMASK;
             let ptr = &mut self.data as *mut _ as *mut Sealed;
@@ -820,25 +765,54 @@ impl<F> FilterItem<F> {
 
     fn drop_filter(&mut self) {
         if self.data[KIND_IDX] & KIND_PTR != 0 {
-            self.get_filter();
+            self.take_filter();
         } else if self.data[KIND_IDX] & KIND_SEALED != 0 {
-            self.get_sealed();
+            self.take_sealed();
         }
     }
 }
 
-impl<F: Filter> FilterItem<F> {
-    fn seal(&mut self) -> Sealed {
-        if self.data[KIND_IDX] & KIND_PTR != 0 {
-            Sealed(Box::new(*self.get_filter()))
+impl<F: FilterLayer> FilterItem<F> {
+    fn add_filter<T: Filter>(
+        &mut self,
+        new: T,
+    ) -> (FilterItem<Layer<T, F>>, &'static dyn FilterLayer) {
+        let filter = Box::new(Layer::new(new, *self.take_filter()));
+        let filter_ref: &'static dyn FilterLayer = {
+            let filter: &dyn FilterLayer = filter.as_ref();
+            unsafe { std::mem::transmute(filter) }
+        };
+        (FilterItem::with_filter(filter), filter_ref)
+    }
+
+    fn seal(&mut self) -> (FilterItem<Sealed>, &'static dyn FilterLayer) {
+        let filter = if self.data[KIND_IDX] & KIND_PTR != 0 {
+            Sealed(Box::new(*self.take_filter()))
         } else if self.data[KIND_IDX] & KIND_SEALED != 0 {
-            self.get_sealed()
+            self.take_sealed()
         } else {
             panic!(
                 "Wrong filter item {:?} expected: {:?}",
                 self.data[KIND_IDX], KIND_PTR
             );
+        };
+
+        let filter_ref: &'static dyn FilterLayer = {
+            let filter: &dyn FilterLayer = filter.0.as_ref();
+            unsafe { std::mem::transmute(filter) }
+        };
+
+        let mut slf = FilterItem {
+            data: [0; SEALED_SIZE],
+            _t: marker::PhantomData,
+        };
+
+        unsafe {
+            let ptr = &mut slf.data as *mut _ as *mut Sealed;
+            ptr.write(filter);
+            slf.data[KIND_IDX] |= KIND_SEALED;
         }
+        (slf, filter_ref)
     }
 }
 

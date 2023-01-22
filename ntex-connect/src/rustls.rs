@@ -4,7 +4,7 @@ pub use ntex_tls::rustls::TlsFilter;
 pub use tls_rustls::{ClientConfig, ServerName};
 
 use ntex_bytes::PoolId;
-use ntex_io::{Base, Io};
+use ntex_io::{FilterFactory, Io, Layer};
 use ntex_service::{Service, ServiceFactory};
 use ntex_tls::rustls::TlsConnector;
 use ntex_util::future::{BoxFuture, Ready};
@@ -48,7 +48,7 @@ impl<T> Connector<T> {
 
 impl<T: Address + 'static> Connector<T> {
     /// Resolve and connect to remote host
-    pub async fn connect<U>(&self, message: U) -> Result<Io<TlsFilter<Base>>, ConnectError>
+    pub async fn connect<U>(&self, message: U) -> Result<Io<Layer<TlsFilter>>, ConnectError>
     where
         Connect<T>: From<U>,
     {
@@ -64,7 +64,7 @@ impl<T: Address + 'static> Connector<T> {
             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
         let connector = connector.server_name(host.clone());
 
-        match io.add_filter(connector).await {
+        match connector.create(io).await {
             Ok(io) => {
                 trace!("TLS Handshake success: {:?}", &host);
                 Ok(io)
@@ -87,7 +87,7 @@ impl<T> Clone for Connector<T> {
 }
 
 impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
-    type Response = Io<TlsFilter<Base>>;
+    type Response = Io<Layer<TlsFilter>>;
     type Error = ConnectError;
     type Service = Connector<T>;
     type InitError = ();
@@ -100,7 +100,7 @@ impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
 }
 
 impl<T: Address> Service<Connect<T>> for Connector<T> {
-    type Response = Io<TlsFilter<Base>>;
+    type Response = Io<Layer<TlsFilter>>;
     type Error = ConnectError;
     type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
