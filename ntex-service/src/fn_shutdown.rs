@@ -1,7 +1,9 @@
 use std::{
     cell::Cell,
+    future::Future,
     marker::PhantomData,
-    task::{Context, Poll}, pin::Pin, future::Future,
+    pin::Pin,
+    task::{Context, Poll},
 };
 
 use crate::Service;
@@ -15,8 +17,7 @@ where
     FnShutdown::new(f)
 }
 
-pub struct FnShutdown<Req, Err, F = fn()>
-where {
+pub struct FnShutdown<Req, Err, F = fn()> {
     f_shutdown: Cell<Option<F>>,
     _req: PhantomData<Req>,
     _e: PhantomData<Err>,
@@ -62,7 +63,7 @@ mod tests {
     use ntex_util::future::lazy;
     use std::task::Poll;
 
-    use crate::{pipeline, fn_service};
+    use crate::{fn_service, pipeline};
 
     use super::*;
 
@@ -71,7 +72,7 @@ mod tests {
         let mut is_called = false;
 
         let pipe = pipeline(fn_service(|_| async { Ok::<_, ()>("pipe") }))
-            .and_then(fn_shutdown(|| { is_called = true }));
+            .and_then(fn_shutdown(|| is_called = true));
 
         let res = pipe.call(()).await;
         assert_eq!(lazy(|cx| pipe.poll_ready(cx)).await, Poll::Ready(Ok(())));
