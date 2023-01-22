@@ -18,7 +18,7 @@ where
 pub struct FnShutdown<Req, Err, F = fn()>
 where {
     f_shutdown: Cell<Option<F>>,
-    _f: PhantomData<Req>,
+    _req: PhantomData<Req>,
     _e: PhantomData<Err>,
 }
 
@@ -29,7 +29,7 @@ where
     pub(crate) fn new(f: F) -> Self {
         Self {
             f_shutdown: Cell::new(Some(f)),
-            _f: PhantomData,
+            _req: PhantomData,
             _e: PhantomData,
         }
     }
