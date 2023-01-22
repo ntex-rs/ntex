@@ -23,6 +23,17 @@ pub struct WsTransport {
 }
 
 impl WsTransport {
+    /// Create websockets transport
+    pub fn create<F: Filter>(io: Io<F>, codec: Codec) -> Io<Layer<WsTransport, F>> {
+        let pool = io.memory_pool();
+
+        io.add_filter(WsTransport {
+            pool,
+            codec,
+            flags: Cell::new(Flags::empty()),
+        })
+    }
+
     fn insert_flags(&self, flags: Flags) {
         let mut f = self.flags.get();
         f.insert(flags);
@@ -172,17 +183,6 @@ impl WsTransportFactory {
     pub fn new(codec: Codec) -> Self {
         Self { codec }
     }
-
-    /// Create websockets transport
-    pub fn transport<F: Filter>(self, io: Io<F>) -> Io<Layer<WsTransport, F>> {
-        let pool = io.memory_pool();
-
-        io.add_filter(WsTransport {
-            pool,
-            codec: self.codec,
-            flags: Cell::new(Flags::empty()),
-        })
-    }
 }
 
 impl<F: Filter> FilterFactory<F> for WsTransportFactory {
@@ -192,6 +192,6 @@ impl<F: Filter> FilterFactory<F> for WsTransportFactory {
     type Future = Ready<Io<Layer<Self::Filter, F>>, Self::Error>;
 
     fn create(self, io: Io<F>) -> Self::Future {
-        Ready::Ok(self.transport(io))
+        Ready::Ok(WsTransport::create(io, self.codec))
     }
 }

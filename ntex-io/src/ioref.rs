@@ -179,8 +179,7 @@ impl IoRef {
         F: FnOnce(&mut WriteBuf<'_>) -> R,
     {
         let mut b = self.0.buffer.borrow_mut();
-        let mut buf = b.write_buf(self, 0);
-        let result = f(&mut buf);
+        let result = b.write_buf(self, 0, f);
         self.0.filter.get().process_write_buf(self, &mut b, 0)?;
         self.0.write_task.wake();
         Ok(result)

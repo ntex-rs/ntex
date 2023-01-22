@@ -250,7 +250,6 @@ fn test_configure_async() {
 #[cfg(feature = "tokio")]
 #[allow(unreachable_code)]
 fn test_panic_in_worker() {
-    env_logger::init();
     let counter = Arc::new(AtomicUsize::new(0));
     let counter2 = counter.clone();
 

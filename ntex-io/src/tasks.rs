@@ -38,7 +38,7 @@ impl ReadContext {
         let total = buf.len();
 
         // call provided callback
-        let result = f(&mut buf, total + hw);
+        let result = f(&mut buf, hw);
 
         // handle buffer changes
         if buf.is_empty() {
@@ -55,9 +55,7 @@ impl ReadContext {
                 {
                     Ok(nbytes) => {
                         if nbytes > 0 {
-                            if stack.first_read_buf_size()
-                                > self.0.memory_pool().read_params().high as usize
-                            {
+                            if stack.first_read_buf_size() >= hw {
                                 log::trace!(
                                     "buffer is too large {}, enable read back-pressure",
                                     total
@@ -65,9 +63,10 @@ impl ReadContext {
                                 self.0
                                      .0
                                     .insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
+                            } else {
+                                self.0 .0.insert_flags(Flags::RD_READY);
                             }
                             self.0 .0.dispatch_task.wake();
-                            self.0 .0.insert_flags(Flags::RD_READY);
                             log::trace!(
                                 "new {} bytes available, wakeup dispatcher",
                                 nbytes

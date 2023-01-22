@@ -415,12 +415,13 @@ impl Future for ReadTask {
                                 break;
                             }
                             Poll::Ready(Ok(n)) => {
+                                println!("TEST: {:?} {:?}", buf.len(), hw);
                                 if n == 0 {
                                     log::trace!("io stream is disconnected");
                                     return Poll::Ready(Ok(()));
                                 } else {
                                     new_bytes += n;
-                                    if buf.len() > hw {
+                                    if buf.remaining_mut() == 0 || buf.len() >= hw {
                                         log::trace!(
                                             "high water mark pause reading, read: {:?}",
                                             new_bytes

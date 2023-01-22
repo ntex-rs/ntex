@@ -127,17 +127,13 @@ impl TlsClientFilter {
         cfg: Arc<ClientConfig>,
         domain: ServerName,
     ) -> Result<Io<Layer<TlsFilter, F>>, io::Error> {
-        let pool = io.memory_pool();
-        let session = match ClientConnection::new(cfg, domain) {
-            Ok(session) => session,
-            Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
-        };
-        let inner = IoInner {
-            pool,
-            handshake: Cell::new(true),
-        };
+        let session = ClientConnection::new(cfg, domain)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
         let filter = TlsFilter::new_client(TlsClientFilter {
-            inner,
+            inner: IoInner {
+                pool: io.memory_pool(),
+                handshake: Cell::new(true),
+            },
             session: RefCell::new(session),
         });
         let io = io.add_filter(filter);
@@ -153,6 +149,12 @@ impl TlsClientFilter {
                     session.is_handshaking(),
                 )
             })?;
+            println!(
+                "===================== res: {:?} read: {:?} h: {:?}",
+                result, wants_read, handshaking
+            );
+            io.with_read_buf(|buf| println!("000000 BUF: {:?}", buf));
+
             match result {
                 Ok(_) => {
                     filter.client().inner.handshake.set(false);

@@ -254,9 +254,7 @@ async fn test_transport() {
                     )
                     .unwrap();
 
-                    let io = io
-                        .add_filter(ws::WsTransportFactory::new(ws::Codec::default()))
-                        .await?;
+                    let io = ws::WsTransport::create(io, ws::Codec::default());
 
                     // start websocket service
                     while let Some(item) =

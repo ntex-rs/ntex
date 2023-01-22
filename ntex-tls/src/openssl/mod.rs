@@ -1,4 +1,3 @@
-#![allow(clippy::type_complexity)]
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::cell::{Cell, RefCell};
 use std::{any, cmp, error::Error, io, task::Context, task::Poll};
@@ -70,6 +69,36 @@ impl io::Write for IoInner {
     }
 }
 
+impl SslFilter {
+    fn with_buffers<F, R>(&self, buf: &mut WriteBuf<'_>, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        self.inner.borrow_mut().get_mut().inner_write_buf = Some(buf.take_dst());
+        self.inner.borrow_mut().get_mut().inner_read_buf =
+            buf.with_read_buf(|b| b.take_src());
+        let result = f();
+        buf.set_dst(self.inner.borrow_mut().get_mut().inner_write_buf.take());
+        buf.with_read_buf(|b| {
+            b.set_src(self.inner.borrow_mut().get_mut().inner_read_buf.take())
+        });
+        result
+    }
+
+    fn set_buffers(&self, buf: &mut WriteBuf<'_>) {
+        self.inner.borrow_mut().get_mut().inner_write_buf = Some(buf.take_dst());
+        self.inner.borrow_mut().get_mut().inner_read_buf =
+            buf.with_read_buf(|b| b.take_src());
+    }
+
+    fn unset_buffers(&self, buf: &mut WriteBuf<'_>) {
+        buf.set_dst(self.inner.borrow_mut().get_mut().inner_write_buf.take());
+        buf.with_read_buf(|b| {
+            b.set_src(self.inner.borrow_mut().get_mut().inner_read_buf.take())
+        });
+    }
+}
+
 impl FilterLayer for SslFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         const H2: &[u8] = b"h2";
@@ -120,14 +149,7 @@ impl FilterLayer for SslFilter {
     }
 
     fn shutdown(&self, buf: &mut WriteBuf<'_>) -> io::Result<Poll<()>> {
-        self.inner.borrow_mut().get_mut().inner_write_buf = Some(buf.take_dst());
-        self.inner.borrow_mut().get_mut().inner_read_buf =
-            buf.with_read_buf(|b| b.take_src());
-        let ssl_result = self.inner.borrow_mut().shutdown();
-        buf.set_dst(self.inner.borrow_mut().get_mut().inner_write_buf.take());
-        buf.with_read_buf(|b| {
-            b.set_src(self.inner.borrow_mut().get_mut().inner_read_buf.take())
-        });
+        let ssl_result = self.with_buffers(buf, || self.inner.borrow_mut().shutdown());
 
         match ssl_result {
             Ok(ssl::ShutdownResult::Sent) => Ok(Poll::Pending),
@@ -146,8 +168,7 @@ impl FilterLayer for SslFilter {
     }
 
     fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
-        // get processed buffer
-        self.inner.borrow_mut().get_mut().inner_read_buf = buf.take_src();
+        buf.with_write_buf(|b| self.set_buffers(b));
 
         let dst = buf.get_dst();
         let (hw, lw) = self.pool.read_params().unpack();
@@ -184,7 +205,7 @@ impl FilterLayer for SslFilter {
                 }
             };
 
-            buf.set_src(self.inner.borrow_mut().get_mut().inner_read_buf.take());
+            buf.with_write_buf(|b| self.unset_buffers(b));
             return result;
         }
     }
@@ -192,7 +213,7 @@ impl FilterLayer for SslFilter {
     fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
         if let Some(mut src) = buf.take_src() {
             // get processed buffer
-            self.inner.borrow_mut().get_mut().inner_write_buf = Some(buf.take_dst());
+            self.set_buffers(buf);
 
             loop {
                 let ssl_result = self.inner.borrow_mut().ssl_write(&src);
@@ -205,6 +226,7 @@ impl FilterLayer for SslFilter {
                         if !src.is_empty() {
                             buf.set_src(Some(src));
                         }
+                        self.unset_buffers(buf);
                         return match e.code() {
                             ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => {
                                 buf.set_dst(
@@ -265,35 +287,42 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
     type Error = Box<dyn Error>;
     type Future = BoxFuture<'static, Result<Io<Layer<Self::Filter, F>>, Self::Error>>;
 
-    fn create(self, st: Io<F>) -> Self::Future {
+    fn create(self, io: Io<F>) -> Self::Future {
         let timeout = self.timeout;
         let ctx_result = ssl::Ssl::new(self.acceptor.context());
 
         Box::pin(async move {
             time::timeout(timeout, async {
                 let ssl = ctx_result.map_err(map_to_ioerr)?;
-                let pool = st.memory_pool();
                 let inner = IoInner {
-                    pool,
+                    pool: io.memory_pool(),
                     inner_read_buf: None,
                     inner_write_buf: None,
                 };
-                let ssl_stream = ssl::SslStream::new(ssl, inner)?;
-
                 let filter = SslFilter {
-                    pool,
+                    pool: io.memory_pool(),
                     handshake: Cell::new(true),
-                    inner: RefCell::new(ssl_stream),
+                    inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),
                 };
-                let st = st.add_filter(filter);
+                let io = io.add_filter(filter);
 
                 poll_fn(|cx| {
-                    handle_result(st.filter().inner.borrow_mut().accept(), &st, cx)
+                    let result = io
+                        .with_buf(|buf| {
+                            let filter = io.filter();
+                            filter.with_buffers(buf, || filter.inner.borrow_mut().accept())
+                        })
+                        .map_err(|err| {
+                            let err: Box<dyn Error> =
+                                io::Error::new(io::ErrorKind::Other, err).into();
+                            err
+                        })?;
+                    handle_result(result, &io, cx)
                 })
                 .await?;
 
-                st.filter().handshake.set(false);
-                Ok(st)
+                io.filter().handshake.set(false);
+                Ok(io)
             })
             .await
             .map_err(|_| {
@@ -321,26 +350,37 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
     type Error = Box<dyn Error>;
     type Future = BoxFuture<'static, Result<Io<Layer<Self::Filter, F>>, Self::Error>>;
 
-    fn create(self, st: Io<F>) -> Self::Future {
+    fn create(self, io: Io<F>) -> Self::Future {
         Box::pin(async move {
-            let ssl = self.ssl;
-            let pool = st.memory_pool();
             let inner = IoInner {
-                pool,
+                pool: io.memory_pool(),
                 inner_read_buf: None,
                 inner_write_buf: None,
             };
             let filter = SslFilter {
-                pool,
+                pool: io.memory_pool(),
                 handshake: Cell::new(true),
-                inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),
+                inner: RefCell::new(ssl::SslStream::new(self.ssl, inner)?),
             };
-            let st = st.add_filter(filter);
+            let io = io.add_filter(filter);
 
-            poll_fn(|cx| handle_result(st.filter().inner.borrow_mut().connect(), &st, cx))
-                .await?;
+            poll_fn(|cx| {
+                let result = io
+                    .with_buf(|buf| {
+                        let filter = io.filter();
+                        filter.with_buffers(buf, || filter.inner.borrow_mut().connect())
+                    })
+                    .map_err(|err| {
+                        let err: Box<dyn Error> =
+                            io::Error::new(io::ErrorKind::Other, err).into();
+                        err
+                    })?;
+                handle_result(result, &io, cx)
+            })
+            .await?;
 
-            Ok(st)
+            io.filter().handshake.set(false);
+            Ok(io)
         })
     }
 }

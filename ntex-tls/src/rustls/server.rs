@@ -133,24 +133,22 @@ impl TlsServerFilter {
         timeout: Millis,
     ) -> Result<Io<Layer<TlsFilter, F>>, io::Error> {
         time::timeout(timeout, async {
-            let pool = io.memory_pool();
-            let session = match ServerConnection::new(cfg) {
-                Ok(session) => session,
-                Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
-            };
-            let inner = IoInner {
-                pool,
-                handshake: Cell::new(true),
-            };
+            let session = ServerConnection::new(cfg)
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
             let filter = TlsFilter::new_server(TlsServerFilter {
-                inner,
                 session: RefCell::new(session),
+                inner: IoInner {
+                    pool: io.memory_pool(),
+                    handshake: Cell::new(true),
+                },
             });
             let io = io.add_filter(filter);
 
             let filter = io.filter();
             loop {
+                println!("==============================");
                 let (result, wants_read, handshaking) = io.with_buf(|buf| {
+                    println!("00000000000000 BUF: {:?}", buf);
                     let mut session = filter.server().session.borrow_mut();
                     let mut wrp = Wrapper(&filter.server().inner, buf);
                     (
@@ -159,6 +157,10 @@ impl TlsServerFilter {
                         session.is_handshaking(),
                     )
                 })?;
+                println!(
+                    "===================== res: {:?} read: {:?} h: {:?}",
+                    result, wants_read, handshaking
+                );
                 match result {
                     Ok(_) => {
                         filter.server().inner.handshake.set(false);

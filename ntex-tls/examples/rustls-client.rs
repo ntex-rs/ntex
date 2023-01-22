@@ -27,7 +27,8 @@ async fn main() -> io::Result<()> {
     // rustls connector
     let connector = connect::rustls::Connector::new(config.clone());
 
-    let io = connector.connect("www.rust-lang.org:443").await.unwrap();
+    //let io = connector.connect("www.rust-lang.org:443").await.unwrap();
+    let io = connector.connect("127.0.0.1:8443").await.unwrap();
     println!("Connected to tls server {:?}", io.query::<PeerAddr>().get());
     let result = io
         .send(Bytes::from_static(b"GET /\r\n\r\n"), &codec::BytesCodec)

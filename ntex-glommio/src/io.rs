@@ -72,7 +72,7 @@ impl Future for ReadTask {
                                 if n == 0 {
                                     log::trace!("glommio stream is disconnected");
                                     Poll::Ready(Ok(()))
-                                } else if buf.len() <= hw {
+                                } else if buf.len() < hw && buf.remaining_mut() != 0 {
                                     continue;
                                 } else {
                                     Poll::Pending
@@ -388,7 +388,7 @@ impl Future for UnixReadTask {
                                 if n == 0 {
                                     log::trace!("glommio stream is disconnected");
                                     Poll::Ready(Ok(()))
-                                } else if buf.len() <= hw {
+                                } else if buf.len() < hw && buf.remaining_mut() != 0 {
                                     continue;
                                 } else {
                                     Poll::Pending

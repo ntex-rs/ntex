@@ -626,7 +626,6 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_basics() {
-        env_logger::init();
         let store = Rc::new(RefCell::new(Vec::new()));
         let store2 = store.clone();
 

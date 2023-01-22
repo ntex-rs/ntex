@@ -95,7 +95,7 @@ async fn test_transport() {
     });
 
     // client service
-    let io = srv.ws().await.unwrap().into_transport().await;
+    let io = srv.ws().await.unwrap().into_transport();
 
     io.send(Bytes::from_static(b"text"), &BytesCodec)
         .await

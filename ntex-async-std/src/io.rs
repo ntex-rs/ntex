@@ -62,7 +62,7 @@ impl Future for ReadTask {
                                 if n == 0 {
                                     log::trace!("async-std stream is disconnected");
                                     Poll::Ready(Ok(()))
-                                } else if buf.len() <= hw {
+                                } else if buf.len() < hw && buf.remaining_mut() != 0 {
                                     continue;
                                 } else {
                                     Poll::Pending
@@ -390,7 +390,7 @@ mod unixstream {
                                     if n == 0 {
                                         log::trace!("async-std stream is disconnected");
                                         Poll::Ready(Ok(()))
-                                    } else if buf.len() <= hw {
+                                    } else if buf.len() < hw && buf.remaining_mut() != 0 {
                                         continue;
                                     } else {
                                         Poll::Pending

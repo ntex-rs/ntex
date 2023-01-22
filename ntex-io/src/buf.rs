@@ -20,27 +20,71 @@ impl Stack {
         self.buffers.push((None, None));
     }
 
-    pub(crate) fn read_buf<'a>(
-        &'a mut self,
-        io: &'a IoRef,
+    pub(crate) fn read_buf<F, R>(
+        &mut self,
+        io: &IoRef,
         idx: usize,
         nbytes: usize,
-    ) -> ReadBuf<'a> {
-        let (curr, next) = self.buffers.split_at_mut(idx);
-        ReadBuf {
-            io,
-            nbytes,
-            curr: &mut curr[0],
-            next: &mut next[0],
+        f: F,
+    ) -> R
+    where
+        F: FnOnce(&mut ReadBuf<'_>) -> R,
+    {
+        let pos = idx + 1;
+        if self.buffers.len() > pos {
+            let (curr, next) = self.buffers.split_at_mut(pos);
+            let mut buf = ReadBuf {
+                io,
+                nbytes,
+                curr: &mut curr[0],
+                next: &mut next[0],
+            };
+            f(&mut buf)
+        } else {
+            let mut val1 = (self.buffers[idx].0.take(), None);
+            let mut val2 = (None, self.buffers[idx].1.take());
+
+            let mut buf = ReadBuf {
+                io,
+                nbytes,
+                curr: &mut val1,
+                next: &mut val2,
+            };
+            let result = f(&mut buf);
+
+            self.buffers[idx].0 = val1.0;
+            self.buffers[idx].1 = val2.1;
+            result
         }
     }
 
-    pub(crate) fn write_buf<'a>(&'a mut self, io: &'a IoRef, idx: usize) -> WriteBuf<'a> {
-        let (curr, next) = self.buffers.split_at_mut(idx);
-        WriteBuf {
-            io,
-            curr: &mut curr[0],
-            next: &mut next[0],
+    pub(crate) fn write_buf<F, R>(&mut self, io: &IoRef, idx: usize, f: F) -> R
+    where
+        F: FnOnce(&mut WriteBuf<'_>) -> R,
+    {
+        let pos = idx + 1;
+        if self.buffers.len() > pos {
+            let (curr, next) = self.buffers.split_at_mut(pos);
+            let mut buf = WriteBuf {
+                io,
+                curr: &mut curr[0],
+                next: &mut next[0],
+            };
+            f(&mut buf)
+        } else {
+            let mut val1 = (self.buffers[idx].0.take(), None);
+            let mut val2 = (None, self.buffers[idx].1.take());
+
+            let mut buf = WriteBuf {
+                io,
+                curr: &mut val1,
+                next: &mut val2,
+            };
+            let result = f(&mut buf);
+
+            self.buffers[idx].0 = val1.0;
+            self.buffers[idx].1 = val2.1;
+            result
         }
     }
 
@@ -97,6 +141,7 @@ impl Stack {
     }
 }
 
+#[derive(Debug)]
 pub struct ReadBuf<'a> {
     pub(crate) io: &'a IoRef,
     pub(crate) curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
@@ -209,6 +254,7 @@ impl<'a> ReadBuf<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct WriteBuf<'a> {
     pub(crate) io: &'a IoRef,
     pub(crate) curr: &'a mut (Option<BytesVec>, Option<BytesVec>),

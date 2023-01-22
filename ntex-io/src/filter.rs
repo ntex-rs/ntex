@@ -1,7 +1,6 @@
 use std::{any, io, task::Context, task::Poll};
 
-use super::buf::{ReadBuf, Stack, WriteBuf};
-use super::{io::Flags, FilterLayer, IoRef, ReadStatus, WriteStatus};
+use super::{buf::Stack, io::Flags, FilterLayer, IoRef, ReadStatus, WriteStatus};
 
 /// Default `Io` filter
 pub struct Base(IoRef);
@@ -145,7 +144,7 @@ where
 
     #[inline]
     fn shutdown(&self, io: &IoRef, stack: &mut Stack, idx: usize) -> io::Result<Poll<()>> {
-        let result1 = self.0.shutdown(&mut stack.write_buf(io, idx))?;
+        let result1 = stack.write_buf(io, idx, |buf| self.0.shutdown(buf))?;
         let result2 = if F::BUFFERS {
             self.1.shutdown(io, stack, idx + 1)?
         } else {
@@ -172,26 +171,7 @@ where
         } else {
             self.1.process_read_buf(io, stack, idx, nbytes)?
         };
-
-        if stack.buffers.len() > idx + 1 {
-            self.0
-                .process_read_buf(&mut stack.read_buf(io, idx, nbytes))
-        } else {
-            let mut val1 = (stack.buffers[idx].0.take(), None);
-            let mut val2 = (None, stack.buffers[idx].1.take());
-
-            let mut buf = ReadBuf {
-                io,
-                nbytes,
-                curr: &mut val1,
-                next: &mut val2,
-            };
-            let result = self.0.process_read_buf(&mut buf);
-
-            stack.buffers[idx].0 = val1.0;
-            stack.buffers[idx].1 = val2.1;
-            result
-        }
+        stack.read_buf(io, idx, nbytes, |buf| self.0.process_read_buf(buf))
     }
 
     #[inline]
@@ -201,23 +181,7 @@ where
         stack: &mut Stack,
         idx: usize,
     ) -> io::Result<()> {
-        if stack.buffers.len() > idx + 1 {
-            self.0.process_write_buf(&mut stack.write_buf(io, idx))?;
-        } else {
-            let mut val1 = (stack.buffers[idx].0.take(), None);
-            let mut val2 = (None, stack.buffers[idx].1.take());
-
-            let mut buf = WriteBuf {
-                io,
-                curr: &mut val1,
-                next: &mut val2,
-            };
-            let result = self.0.process_write_buf(&mut buf);
-
-            stack.buffers[idx].0 = val1.0;
-            stack.buffers[idx].1 = val2.1;
-            result?
-        }
+        stack.write_buf(io, idx, |buf| self.0.process_write_buf(buf))?;
 
         if F::BUFFERS {
             self.1.process_write_buf(io, stack, idx + 1)
