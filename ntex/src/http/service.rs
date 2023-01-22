@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{cell, error, fmt, future, marker, pin::Pin, rc::Rc};
 
-use crate::io::{types, FilterLayer, Io};
+use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
 use crate::util::BoxFuture;
@@ -40,7 +40,7 @@ where
 
 impl<F, S, B> HttpService<F, S, B>
 where
-    F: FilterLayer,
+    F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
@@ -85,7 +85,7 @@ where
 
 impl<F, S, B, X, U> HttpService<F, S, B, X, U>
 where
-    F: FilterLayer,
+    F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
@@ -150,7 +150,7 @@ mod openssl {
 
     impl<F, S, B, X, U> HttpService<Layer<SslFilter, F>, S, B, X, U>
     where
-        F: FilterLayer,
+        F: Filter,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
@@ -195,7 +195,7 @@ mod rustls {
 
     impl<F, S, B, X, U> HttpService<Layer<TlsFilter, F>, S, B, X, U>
     where
-        F: FilterLayer,
+        F: Filter,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
@@ -235,7 +235,7 @@ mod rustls {
 
 impl<F, S, B, X, U> ServiceFactory<Io<F>> for HttpService<F, S, B, X, U>
 where
-    F: FilterLayer,
+    F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
@@ -300,7 +300,7 @@ pub struct HttpServiceHandler<F, S, B, X, U> {
 
 impl<F, S, B, X, U> Service<Io<F>> for HttpServiceHandler<F, S, B, X, U>
 where
-    F: FilterLayer,
+    F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -400,7 +400,7 @@ where
 pin_project_lite::pin_project! {
     pub struct HttpServiceHandlerResponse<F, S, B, X, U>
     where
-        F: FilterLayer,
+        F: Filter,
         S: Service<Request>,
         S: 'static,
         S::Error: ResponseError,
@@ -425,7 +425,7 @@ pin_project_lite::pin_project! {
     #[project = StateProject]
     enum ResponseState<F, S, B, X, U>
     where
-        F: FilterLayer,
+        F: Filter,
         S: Service<Request>,
         S: 'static,
         S::Error: ResponseError,
@@ -447,7 +447,7 @@ pin_project_lite::pin_project! {
 
 impl<F, S, B, X, U> future::Future for HttpServiceHandlerResponse<F, S, B, X, U>
 where
-    F: FilterLayer,
+    F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,

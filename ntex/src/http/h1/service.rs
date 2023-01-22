@@ -4,7 +4,7 @@ use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, OnRequest, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{request::Request, response::Response};
-use crate::io::{types, FilterLayer, Io};
+use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::{time::Millis, util::BoxFuture};
 
@@ -59,7 +59,7 @@ mod openssl {
 
     impl<F, S, B, X, U> H1Service<Layer<SslFilter, F>, S, B, X, U>
     where
-        F: FilterLayer,
+        F: Filter,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
@@ -106,7 +106,7 @@ mod rustls {
 
     impl<F, S, B, X, U> H1Service<Layer<TlsFilter, F>, S, B, X, U>
     where
-        F: FilterLayer,
+        F: Filter,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
@@ -143,7 +143,7 @@ mod rustls {
 
 impl<F, S, B, X, U> H1Service<F, S, B, X, U>
 where
-    F: FilterLayer,
+    F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -195,7 +195,7 @@ where
 
 impl<F, S, B, X, U> ServiceFactory<Io<F>> for H1Service<F, S, B, X, U>
 where
-    F: FilterLayer,
+    F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -257,7 +257,7 @@ pub struct H1ServiceHandler<F, S, B, X, U> {
 
 impl<F, S, B, X, U> Service<Io<F>> for H1ServiceHandler<F, S, B, X, U>
 where
-    F: FilterLayer,
+    F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,

@@ -10,7 +10,7 @@ use crate::http::h2::H2Service;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::service::HttpService;
-use crate::io::{FilterLayer, Io, IoRef};
+use crate::io::{Filter, Io, IoRef};
 use crate::service::{boxed, IntoService, IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
 
@@ -49,7 +49,7 @@ impl<F, S> HttpServiceBuilder<F, S, ExpectHandler, UpgradeHandler<F>> {
 
 impl<F, S, X, U> HttpServiceBuilder<F, S, X, U>
 where
-    F: FilterLayer,
+    F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,

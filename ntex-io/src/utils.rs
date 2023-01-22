@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use ntex_service::{fn_service, pipeline_factory, Service, ServiceFactory};
 use ntex_util::future::Ready;
 
-use crate::{FilterFactory, FilterLayer, Io, IoBoxed, Layer};
+use crate::{Filter, FilterFactory, Io, IoBoxed, Layer};
 
 /// Service that converts any Io<F> stream to IoBoxed stream
 pub fn seal<F, S, C>(
@@ -16,7 +16,7 @@ pub fn seal<F, S, C>(
     InitError = S::InitError,
 >
 where
-    F: FilterLayer,
+    F: Filter,
     S: ServiceFactory<IoBoxed, C>,
     C: Clone,
 {

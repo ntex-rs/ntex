@@ -3,7 +3,7 @@ use std::{any, fmt, hash, io, time};
 use ntex_bytes::{BufMut, BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
-use super::{filter::FilterLayer, io::Flags, timer, types, Buffer, IoRef, OnDisconnect};
+use super::{io::Flags, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
 
 impl IoRef {
     #[inline]
@@ -21,7 +21,7 @@ impl IoRef {
 
     #[inline]
     /// Get memory pool
-    pub(crate) fn filter(&self) -> &dyn FilterLayer {
+    pub(crate) fn filter(&self) -> &dyn Filter {
         self.0.filter.get()
     }
 
@@ -173,10 +173,10 @@ impl IoRef {
     /// Get mut access to write buffer
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
-        F: FnOnce(&mut Buffer<'_>) -> R,
+        F: FnOnce(&mut WriteBuf<'_>) -> R,
     {
         let mut b = self.0.buffer.borrow_mut();
-        let mut buf = b.buffer(self, 0);
+        let mut buf = b.write_buf(self, 0);
         let result = f(&mut buf);
         self.0.filter.get().process_write_buf(self, &mut b, 0)?;
         self.0.write_task.wake();

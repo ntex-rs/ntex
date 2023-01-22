@@ -1,7 +1,6 @@
 use std::{any, io, task::Context, task::Poll};
 
-use super::buf::Stack;
-use super::{io::Flags, Filter, IoRef, ReadStatus, WriteStatus};
+use super::{buf::Stack, io::Flags, FilterLayer, IoRef, ReadStatus, WriteStatus};
 
 /// Default `Io` filter
 pub struct Base(IoRef);
@@ -14,7 +13,7 @@ impl Base {
 
 pub struct Layer<F, L = Base>(pub(crate) F, L);
 
-impl<F: Filter, L: FilterLayer> Layer<F, L> {
+impl<F: FilterLayer, L: Filter> Layer<F, L> {
     pub(crate) fn new(f: F, l: L) -> Self {
         Self(f, l)
     }
@@ -25,12 +24,12 @@ pub(crate) struct NullFilter;
 const NULL: NullFilter = NullFilter;
 
 impl NullFilter {
-    pub(super) fn get() -> &'static dyn FilterLayer {
+    pub(super) fn get() -> &'static dyn Filter {
         &NULL
     }
 }
 
-pub trait FilterLayer: 'static {
+pub trait Filter: 'static {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>>;
 
     fn process_read_buf(
@@ -59,7 +58,7 @@ pub trait FilterLayer: 'static {
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus>;
 }
 
-impl FilterLayer for Base {
+impl Filter for Base {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if let Some(hnd) = self.0 .0.handle.take() {
             let res = hnd.query(id);
@@ -128,10 +127,10 @@ impl FilterLayer for Base {
     }
 }
 
-impl<F, L> FilterLayer for Layer<F, L>
+impl<F, L> Filter for Layer<F, L>
 where
-    F: Filter,
-    L: FilterLayer,
+    F: FilterLayer,
+    L: Filter,
 {
     #[inline]
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
@@ -140,7 +139,7 @@ where
 
     #[inline]
     fn shutdown(&self, io: &IoRef, stack: &mut Stack, idx: usize) -> io::Result<Poll<()>> {
-        let result1 = self.0.shutdown(&mut stack.buffer(io, idx))?;
+        let result1 = self.0.shutdown(&mut stack.write_buf(io, idx))?;
         let result2 = self.1.shutdown(io, stack, idx + 1)?;
 
         if result1.is_pending() || result2.is_pending() {
@@ -159,7 +158,8 @@ where
         nbytes: usize,
     ) -> io::Result<usize> {
         let nbytes = self.1.process_read_buf(io, stack, idx + 1, nbytes)?;
-        self.0.process_read_buf(&mut stack.buffer(io, idx), nbytes)
+        self.0
+            .process_read_buf(&mut stack.read_buf(io, idx, nbytes))
     }
 
     #[inline]
@@ -169,7 +169,7 @@ where
         stack: &mut Stack,
         idx: usize,
     ) -> io::Result<()> {
-        self.0.process_write_buf(&mut stack.buffer(io, idx))?;
+        self.0.process_write_buf(&mut stack.write_buf(io, idx))?;
         self.1.process_write_buf(io, stack, idx + 1)
     }
 
@@ -212,7 +212,7 @@ where
     }
 }
 
-impl FilterLayer for NullFilter {
+impl Filter for NullFilter {
     #[inline]
     fn query(&self, _: any::TypeId) -> Option<Box<dyn any::Any>> {
         None

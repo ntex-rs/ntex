@@ -9,7 +9,7 @@ use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
-use crate::io::{types, FilterLayer, Io, IoBoxed, IoRef};
+use crate::io::{types, Filter, Io, IoBoxed, IoRef};
 use crate::service::{IntoServiceFactory, Service, ServiceFactory};
 use crate::util::{poll_fn, BoxFuture, Bytes, BytesMut, Either, HashMap, Ready};
 
@@ -55,7 +55,7 @@ mod openssl {
 
     impl<F, S, B> H2Service<Layer<SslFilter, F>, S, B>
     where
-        F: FilterLayer,
+        F: Filter,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
@@ -92,7 +92,7 @@ mod rustls {
 
     impl<F, S, B> H2Service<Layer<TlsFilter, F>, S, B>
     where
-        F: FilterLayer,
+        F: Filter,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
         S::Response: Into<Response<B>>,
@@ -124,7 +124,7 @@ mod rustls {
 
 impl<F, S, B> ServiceFactory<Io<F>> for H2Service<F, S, B>
 where
-    F: FilterLayer,
+    F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -163,7 +163,7 @@ pub struct H2ServiceHandler<F, S: Service<Request>, B> {
 
 impl<F, S, B> Service<Io<F>> for H2ServiceHandler<F, S, B>
 where
-    F: FilterLayer,
+    F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,

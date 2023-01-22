@@ -3,7 +3,7 @@ use std::io::{self, Read as IoRead, Write as IoWrite};
 use std::{any, cell::Cell, cell::RefCell, sync::Arc, task::Poll};
 
 use ntex_bytes::BufMut;
-use ntex_io::{types, Buffer, Filter, FilterLayer, Io, Layer};
+use ntex_io::{types, Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use ntex_util::{future::poll_fn, ready, time, time::Millis};
 use tls_rust::{ServerConfig, ServerConnection};
 
@@ -18,7 +18,7 @@ pub struct TlsServerFilter {
     session: RefCell<ServerConnection>,
 }
 
-impl Filter for TlsServerFilter {
+impl FilterLayer for TlsServerFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         const H2: &[u8] = b"h2";
 
@@ -63,11 +63,11 @@ impl Filter for TlsServerFilter {
         }
     }
 
-    fn process_read_buf(&self, buf: &mut Buffer<'_>, _: usize) -> io::Result<usize> {
+    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
         let mut session = self.session.borrow_mut();
 
         // get processed buffer
-        let (dst, src) = buf.get_read_pair();
+        let (dst, src) = buf.get_pair();
         let (hw, lw) = self.inner.pool.read_params().unpack();
 
         let mut new_bytes = usize::from(self.inner.handshake.get());
@@ -101,8 +101,8 @@ impl Filter for TlsServerFilter {
         Ok(new_bytes)
     }
 
-    fn process_write_buf(&self, buf: &mut Buffer<'_>) -> io::Result<()> {
-        if let Some(mut src) = buf.take_write_src() {
+    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
+        if let Some(mut src) = buf.take_src() {
             let mut session = self.session.borrow_mut();
             let mut io = Wrapper(&self.inner, buf);
 
@@ -119,7 +119,7 @@ impl Filter for TlsServerFilter {
             }
 
             if !src.is_empty() {
-                buf.set_write_src(Some(src));
+                buf.set_src(Some(src));
             }
         }
         Ok(())
@@ -127,7 +127,7 @@ impl Filter for TlsServerFilter {
 }
 
 impl TlsServerFilter {
-    pub(crate) async fn create<F: FilterLayer>(
+    pub(crate) async fn create<F: Filter>(
         io: Io<F>,
         cfg: Arc<ServerConfig>,
         timeout: Millis,

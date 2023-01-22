@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::{any, cmp, error::Error, io, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesVec, PoolRef};
-use ntex_io::{types, Buffer, Filter, FilterFactory, FilterLayer, Io, Layer};
+use ntex_io::{types, Filter, FilterFactory, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use ntex_util::{future::poll_fn, future::BoxFuture, ready, time, time::Millis};
 use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
@@ -70,7 +70,7 @@ impl io::Write for IoInner {
     }
 }
 
-impl Filter for SslFilter {
+impl FilterLayer for SslFilter {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         const H2: &[u8] = b"h2";
 
@@ -119,12 +119,15 @@ impl Filter for SslFilter {
         }
     }
 
-    fn shutdown(&self, buf: &mut Buffer<'_>) -> io::Result<Poll<()>> {
-        self.inner.borrow_mut().get_mut().inner_read_buf = Some(buf.take_read_src());
-        self.inner.borrow_mut().get_mut().inner_write_buf = Some(buf.take_write_dst());
+    fn shutdown(&self, buf: &mut WriteBuf<'_>) -> io::Result<Poll<()>> {
+        self.inner.borrow_mut().get_mut().inner_write_buf = Some(buf.take_dst());
+        self.inner.borrow_mut().get_mut().inner_read_buf =
+            buf.with_read_buf(|b| b.take_src());
         let ssl_result = self.inner.borrow_mut().shutdown();
-        buf.set_read_src(self.inner.borrow_mut().get_mut().inner_read_buf.take());
-        buf.set_write_dst(self.inner.borrow_mut().get_mut().inner_write_buf.take());
+        buf.set_dst(self.inner.borrow_mut().get_mut().inner_write_buf.take());
+        buf.with_read_buf(|b| {
+            b.set_src(self.inner.borrow_mut().get_mut().inner_read_buf.take())
+        });
 
         match ssl_result {
             Ok(ssl::ShutdownResult::Sent) => Ok(Poll::Pending),
@@ -142,11 +145,11 @@ impl Filter for SslFilter {
         }
     }
 
-    fn process_read_buf(&self, buf: &mut Buffer<'_>, _: usize) -> io::Result<usize> {
+    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
         // get processed buffer
-        self.inner.borrow_mut().get_mut().inner_read_buf = Some(buf.take_read_src());
+        self.inner.borrow_mut().get_mut().inner_read_buf = buf.take_src();
 
-        let dst = buf.get_read_dst();
+        let dst = buf.get_dst();
         let (hw, lw) = self.pool.read_params().unpack();
 
         let mut new_bytes = usize::from(self.handshake.get());
@@ -181,15 +184,15 @@ impl Filter for SslFilter {
                 }
             };
 
-            buf.set_read_src(self.inner.borrow_mut().get_mut().inner_read_buf.take());
+            buf.set_src(self.inner.borrow_mut().get_mut().inner_read_buf.take());
             return result;
         }
     }
 
-    fn process_write_buf(&self, buf: &mut Buffer<'_>) -> io::Result<()> {
-        if let Some(mut src) = buf.take_write_src() {
+    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
+        if let Some(mut src) = buf.take_src() {
             // get processed buffer
-            self.inner.borrow_mut().get_mut().inner_write_buf = Some(buf.take_write_dst());
+            self.inner.borrow_mut().get_mut().inner_write_buf = Some(buf.take_dst());
 
             loop {
                 let ssl_result = self.inner.borrow_mut().ssl_write(&src);
@@ -200,11 +203,11 @@ impl Filter for SslFilter {
                     }
                     Err(e) => {
                         if !src.is_empty() {
-                            buf.set_write_src(Some(src));
+                            buf.set_src(Some(src));
                         }
                         return match e.code() {
                             ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => {
-                                buf.set_write_dst(
+                                buf.set_dst(
                                     self.inner
                                         .borrow_mut()
                                         .get_mut()
@@ -256,7 +259,7 @@ impl Clone for SslAcceptor {
     }
 }
 
-impl<F: FilterLayer> FilterFactory<F> for SslAcceptor {
+impl<F: Filter> FilterFactory<F> for SslAcceptor {
     type Filter = SslFilter;
 
     type Error = Box<dyn Error>;
@@ -312,7 +315,7 @@ impl SslConnector {
     }
 }
 
-impl<F: FilterLayer> FilterFactory<F> for SslConnector {
+impl<F: Filter> FilterFactory<F> for SslConnector {
     type Filter = SslFilter;
 
     type Error = Box<dyn Error>;

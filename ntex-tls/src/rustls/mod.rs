@@ -4,7 +4,8 @@ use std::{any, cell::Cell, cmp, io, sync::Arc, task::Context, task::Poll};
 
 use ntex_bytes::PoolRef;
 use ntex_io::{
-    Buffer, Filter, FilterFactory, FilterLayer, Io, Layer, ReadStatus, WriteStatus,
+    Filter, FilterFactory, FilterLayer, Io, Layer, ReadBuf, ReadStatus, WriteBuf,
+    WriteStatus,
 };
 use ntex_util::{future::BoxFuture, time::Millis};
 use tls_rust::{Certificate, ClientConfig, ServerConfig, ServerName};
@@ -60,7 +61,7 @@ impl TlsFilter {
     }
 }
 
-impl Filter for TlsFilter {
+impl FilterLayer for TlsFilter {
     #[inline]
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         match self.inner {
@@ -70,7 +71,7 @@ impl Filter for TlsFilter {
     }
 
     #[inline]
-    fn shutdown(&self, buf: &mut Buffer<'_>) -> io::Result<Poll<()>> {
+    fn shutdown(&self, buf: &mut WriteBuf<'_>) -> io::Result<Poll<()>> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.shutdown(buf),
             InnerTlsFilter::Client(ref f) => f.shutdown(buf),
@@ -94,15 +95,15 @@ impl Filter for TlsFilter {
     }
 
     #[inline]
-    fn process_read_buf(&self, buf: &mut Buffer<'_>, nbytes: usize) -> io::Result<usize> {
+    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
         match self.inner {
-            InnerTlsFilter::Server(ref f) => f.process_read_buf(buf, nbytes),
-            InnerTlsFilter::Client(ref f) => f.process_read_buf(buf, nbytes),
+            InnerTlsFilter::Server(ref f) => f.process_read_buf(buf),
+            InnerTlsFilter::Client(ref f) => f.process_read_buf(buf),
         }
     }
 
     #[inline]
-    fn process_write_buf(&self, buf: &mut Buffer<'_>) -> io::Result<()> {
+    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.process_write_buf(buf),
             InnerTlsFilter::Client(ref f) => f.process_write_buf(buf),
@@ -148,7 +149,7 @@ impl Clone for TlsAcceptor {
     }
 }
 
-impl<F: FilterLayer> FilterFactory<F> for TlsAcceptor {
+impl<F: Filter> FilterFactory<F> for TlsAcceptor {
     type Filter = TlsFilter;
 
     type Error = io::Error;
@@ -203,7 +204,7 @@ impl Clone for TlsConnectorConfigured {
     }
 }
 
-impl<F: FilterLayer> FilterFactory<F> for TlsConnectorConfigured {
+impl<F: Filter> FilterFactory<F> for TlsConnectorConfigured {
     type Filter = TlsFilter;
 
     type Error = io::Error;
@@ -222,25 +223,27 @@ pub(crate) struct IoInner {
     handshake: Cell<bool>,
 }
 
-pub(crate) struct Wrapper<'a, 'b>(&'a IoInner, &'a mut Buffer<'b>);
+pub(crate) struct Wrapper<'a, 'b>(&'a IoInner, &'a mut WriteBuf<'b>);
 
 impl<'a, 'b> io::Read for Wrapper<'a, 'b> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        let read_buf = self.1.get_read_src();
-        let len = cmp::min(read_buf.len(), dst.len());
-        let result = if len > 0 {
-            dst[..len].copy_from_slice(&read_buf.split_to(len));
-            Ok(len)
-        } else {
-            Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
-        };
-        result
+        self.1.with_read_buf(|buf| {
+            let read_buf = buf.get_src();
+            let len = cmp::min(read_buf.len(), dst.len());
+            let result = if len > 0 {
+                dst[..len].copy_from_slice(&read_buf.split_to(len));
+                Ok(len)
+            } else {
+                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+            };
+            result
+        })
     }
 }
 
 impl<'a, 'b> io::Write for Wrapper<'a, 'b> {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        let buf = self.1.get_write_dst();
+        let buf = self.1.get_dst();
         buf.reserve(src.len());
         buf.extend_from_slice(src);
         Ok(src.len())

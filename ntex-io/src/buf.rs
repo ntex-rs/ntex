@@ -14,10 +14,28 @@ impl Stack {
         }
     }
 
-    pub(crate) fn buffer<'a>(&'a mut self, io: &'a IoRef, idx: usize) -> Buffer<'a> {
-        let (curr, next) = self.buffers.split_at_mut(idx);
+    pub(crate) fn add_layer(&mut self) {
+        self.buffers.push((None, None));
+    }
 
-        Buffer {
+    pub(crate) fn read_buf<'a>(
+        &'a mut self,
+        io: &'a IoRef,
+        idx: usize,
+        nbytes: usize,
+    ) -> ReadBuf<'a> {
+        let (curr, next) = self.buffers.split_at_mut(idx);
+        ReadBuf {
+            io,
+            nbytes,
+            curr: &mut curr[0],
+            next: &mut next[0],
+        }
+    }
+
+    pub(crate) fn write_buf<'a>(&'a mut self, io: &'a IoRef, idx: usize) -> WriteBuf<'a> {
+        let (curr, next) = self.buffers.split_at_mut(idx);
+        WriteBuf {
             io,
             curr: &mut curr[0],
             next: &mut next[0],
@@ -77,13 +95,14 @@ impl Stack {
     }
 }
 
-pub struct Buffer<'a> {
+pub struct ReadBuf<'a> {
     io: &'a IoRef,
     curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
     next: &'a mut (Option<BytesVec>, Option<BytesVec>),
+    nbytes: usize,
 }
 
-impl<'a> Buffer<'a> {
+impl<'a> ReadBuf<'a> {
     #[inline]
     /// Get reference to io object
     pub fn io(&self) -> &IoRef {
@@ -91,8 +110,14 @@ impl<'a> Buffer<'a> {
     }
 
     #[inline]
+    /// Get number of newly added bytes
+    pub fn nbytes(&self) -> usize {
+        self.nbytes
+    }
+
+    #[inline]
     /// Get reference to source read buffer
-    pub fn get_read_src(&mut self) -> &mut BytesVec {
+    pub fn get_src(&mut self) -> &mut BytesVec {
         if self.next.0.is_none() {
             self.next.0 = Some(self.io.memory_pool().get_read_buf());
         }
@@ -101,25 +126,31 @@ impl<'a> Buffer<'a> {
 
     #[inline]
     /// Take source read buffer
-    pub fn take_read_src(&mut self) -> BytesVec {
+    pub fn take_src(&mut self) -> Option<BytesVec> {
         self.next
             .0
             .take()
-            .unwrap_or_else(|| self.io.memory_pool().get_read_buf())
+            .and_then(|b| if b.is_empty() { None } else { Some(b) })
     }
 
     #[inline]
     /// Set source read buffer
-    pub fn set_read_src(&mut self, src: Option<BytesVec>) {
-        if let Some(b) = self.next.0.take() {
-            Some(self.io.memory_pool().release_read_buf(b));
+    pub fn set_src(&mut self, src: Option<BytesVec>) {
+        if let Some(src) = src {
+            if src.is_empty() {
+                self.io.memory_pool().release_read_buf(src);
+            } else {
+                if let Some(b) = self.next.0.take() {
+                    Some(self.io.memory_pool().release_read_buf(b));
+                }
+                self.next.0 = Some(src);
+            }
         }
-        self.next.0 = src;
     }
 
     #[inline]
     /// Get reference to destination read buffer
-    pub fn get_read_dst(&mut self) -> &mut BytesVec {
+    pub fn get_dst(&mut self) -> &mut BytesVec {
         if self.curr.0.is_none() {
             self.curr.0 = Some(self.io.memory_pool().get_read_buf());
         }
@@ -127,8 +158,32 @@ impl<'a> Buffer<'a> {
     }
 
     #[inline]
+    /// Take destination read buffer
+    pub fn take_dst(&mut self) -> BytesVec {
+        self.curr
+            .0
+            .take()
+            .unwrap_or_else(|| self.io.memory_pool().get_read_buf())
+    }
+
+    #[inline]
+    /// Set destination read buffer
+    pub fn set_dst(&mut self, dst: Option<BytesVec>) {
+        if let Some(dst) = dst {
+            if dst.is_empty() {
+                self.io.memory_pool().release_read_buf(dst);
+            } else {
+                if let Some(b) = self.curr.0.take() {
+                    Some(self.io.memory_pool().release_read_buf(b));
+                }
+                self.curr.0 = Some(dst);
+            }
+        }
+    }
+
+    #[inline]
     /// Get reference to source and destination read buffers (src, dst)
-    pub fn get_read_pair(&mut self) -> (&mut BytesVec, &mut BytesVec) {
+    pub fn get_pair(&mut self) -> (&mut BytesVec, &mut BytesVec) {
         if self.next.0.is_none() {
             self.next.0 = Some(self.io.memory_pool().get_read_buf());
         }
@@ -139,8 +194,35 @@ impl<'a> Buffer<'a> {
     }
 
     #[inline]
+    pub fn with_write_buf<'b, F, R>(&'b mut self, f: F) -> R
+    where
+        F: FnOnce(&mut WriteBuf<'b>) -> R,
+    {
+        let mut buf = WriteBuf {
+            io: self.io,
+            curr: self.curr,
+            next: self.next,
+        };
+        f(&mut buf)
+    }
+}
+
+pub struct WriteBuf<'a> {
+    io: &'a IoRef,
+    curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
+    next: &'a mut (Option<BytesVec>, Option<BytesVec>),
+}
+
+impl<'a> WriteBuf<'a> {
+    #[inline]
+    /// Get reference to io object
+    pub fn io(&self) -> &IoRef {
+        self.io
+    }
+
+    #[inline]
     /// Get reference to source write buffer
-    pub fn get_write_src(&mut self) -> &mut BytesVec {
+    pub fn get_src(&mut self) -> &mut BytesVec {
         if self.curr.1.is_none() {
             self.curr.1 = Some(self.io.memory_pool().get_write_buf());
         }
@@ -149,13 +231,16 @@ impl<'a> Buffer<'a> {
 
     #[inline]
     /// Take source write buffer
-    pub fn take_write_src(&mut self) -> Option<BytesVec> {
-        self.curr.1.take()
+    pub fn take_src(&mut self) -> Option<BytesVec> {
+        self.curr
+            .1
+            .take()
+            .and_then(|b| if b.is_empty() { None } else { Some(b) })
     }
 
     #[inline]
     /// Set source write buffer
-    pub fn set_write_src(&mut self, src: Option<BytesVec>) {
+    pub fn set_src(&mut self, src: Option<BytesVec>) {
         if let Some(b) = self.curr.1.take() {
             Some(self.io.memory_pool().release_read_buf(b));
         }
@@ -164,7 +249,7 @@ impl<'a> Buffer<'a> {
 
     #[inline]
     /// Get reference to destination write buffer
-    pub fn get_write_dst(&mut self) -> &mut BytesVec {
+    pub fn get_dst(&mut self) -> &mut BytesVec {
         if self.next.1.is_none() {
             self.next.1 = Some(self.io.memory_pool().get_write_buf());
         }
@@ -173,7 +258,7 @@ impl<'a> Buffer<'a> {
 
     #[inline]
     /// Take destination write buffer
-    pub fn take_write_dst(&mut self) -> BytesVec {
+    pub fn take_dst(&mut self) -> BytesVec {
         self.next
             .1
             .take()
@@ -182,22 +267,42 @@ impl<'a> Buffer<'a> {
 
     #[inline]
     /// Set destination write buffer
-    pub fn set_write_dst(&mut self, src: Option<BytesVec>) {
-        if let Some(b) = self.next.1.take() {
-            Some(self.io.memory_pool().release_read_buf(b));
+    pub fn set_dst(&mut self, dst: Option<BytesVec>) {
+        if let Some(dst) = dst {
+            if dst.is_empty() {
+                self.io.memory_pool().release_write_buf(dst);
+            } else {
+                if let Some(b) = self.next.1.take() {
+                    Some(self.io.memory_pool().release_write_buf(b));
+                }
+                self.next.1 = Some(dst);
+            }
         }
-        self.next.1 = src;
     }
 
     #[inline]
     /// Get reference to source and destination buffers (src, dst)
-    pub fn get_write_pair(&mut self) -> (&mut BytesVec, &mut BytesVec) {
+    pub fn get_pair(&mut self) -> (&mut BytesVec, &mut BytesVec) {
         if self.curr.1.is_none() {
-            self.curr.1 = Some(self.io.memory_pool().get_read_buf());
+            self.curr.1 = Some(self.io.memory_pool().get_write_buf());
         }
         if self.next.1.is_none() {
-            self.next.1 = Some(self.io.memory_pool().get_read_buf());
+            self.next.1 = Some(self.io.memory_pool().get_write_buf());
         }
         (self.curr.1.as_mut().unwrap(), self.next.1.as_mut().unwrap())
+    }
+
+    #[inline]
+    pub fn with_read_buf<'b, F, R>(&'b mut self, f: F) -> R
+    where
+        F: FnOnce(&mut ReadBuf<'b>) -> R,
+    {
+        let mut buf = ReadBuf {
+            io: self.io,
+            curr: self.curr,
+            next: self.next,
+            nbytes: 0,
+        };
+        f(&mut buf)
     }
 }

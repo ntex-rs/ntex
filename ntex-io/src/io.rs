@@ -8,10 +8,10 @@ use ntex_util::time::{now, Millis};
 use ntex_util::{future::poll_fn, future::Either, task::LocalWaker};
 
 use crate::buf::Stack;
-use crate::filter::{Base, FilterLayer, Layer, NullFilter};
+use crate::filter::{Base, Filter, Layer, NullFilter};
 use crate::seal::Sealed;
 use crate::tasks::{ReadContext, WriteContext};
-use crate::{Filter, Handle, IoStatusUpdate, IoStream, RecvError};
+use crate::{FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 bitflags::bitflags! {
     pub struct Flags: u16 {
@@ -61,7 +61,7 @@ pub(crate) struct IoState {
     pub(super) write_task: LocalWaker,
     pub(super) dispatch_task: LocalWaker,
     pub(super) buffer: RefCell<Stack>,
-    pub(super) filter: Cell<&'static dyn FilterLayer>,
+    pub(super) filter: Cell<&'static dyn Filter>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     #[allow(clippy::box_collection)]
     pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
@@ -249,8 +249,8 @@ impl Io {
         });
 
         let filter = Box::new(Base::new(IoRef(inner.clone())));
-        let filter_ref: &'static dyn FilterLayer = unsafe {
-            let filter: &dyn FilterLayer = filter.as_ref();
+        let filter_ref: &'static dyn Filter = unsafe {
+            let filter: &dyn Filter = filter.as_ref();
             std::mem::transmute(filter)
         };
         inner.filter.replace(filter_ref);
@@ -336,7 +336,7 @@ impl<F> Io<F> {
     }
 }
 
-impl<F: FilterLayer> Io<F> {
+impl<F: Filter> Io<F> {
     #[inline]
     /// Convert current io stream into sealed version
     pub fn seal(mut self) -> Io<Sealed> {
@@ -349,8 +349,11 @@ impl<F: FilterLayer> Io<F> {
     /// Map current filter with new one
     pub fn add_filter<U>(mut self, nf: U) -> Io<Layer<U, F>>
     where
-        U: Filter,
+        U: FilterLayer,
     {
+        // add layer to buffers
+        self.0 .0.buffer.borrow_mut().add_layer();
+
         // replace current filter
         let (filter, filter_ref) = self.1.add_filter(nf);
         self.0 .0.filter.replace(filter_ref);
@@ -358,7 +361,7 @@ impl<F: FilterLayer> Io<F> {
     }
 }
 
-impl<F: Filter, T: FilterLayer> Io<Layer<F, T>> {
+impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
     #[inline]
     /// Get referece to a filter
     pub fn filter(&self) -> &F {
@@ -772,20 +775,20 @@ impl<F> FilterItem<F> {
     }
 }
 
-impl<F: FilterLayer> FilterItem<F> {
-    fn add_filter<T: Filter>(
+impl<F: Filter> FilterItem<F> {
+    fn add_filter<T: FilterLayer>(
         &mut self,
         new: T,
-    ) -> (FilterItem<Layer<T, F>>, &'static dyn FilterLayer) {
+    ) -> (FilterItem<Layer<T, F>>, &'static dyn Filter) {
         let filter = Box::new(Layer::new(new, *self.take_filter()));
-        let filter_ref: &'static dyn FilterLayer = {
-            let filter: &dyn FilterLayer = filter.as_ref();
+        let filter_ref: &'static dyn Filter = {
+            let filter: &dyn Filter = filter.as_ref();
             unsafe { std::mem::transmute(filter) }
         };
         (FilterItem::with_filter(filter), filter_ref)
     }
 
-    fn seal(&mut self) -> (FilterItem<Sealed>, &'static dyn FilterLayer) {
+    fn seal(&mut self) -> (FilterItem<Sealed>, &'static dyn Filter) {
         let filter = if self.data[KIND_IDX] & KIND_PTR != 0 {
             Sealed(Box::new(*self.take_filter()))
         } else if self.data[KIND_IDX] & KIND_SEALED != 0 {
@@ -797,8 +800,8 @@ impl<F: FilterLayer> FilterItem<F> {
             );
         };
 
-        let filter_ref: &'static dyn FilterLayer = {
-            let filter: &dyn FilterLayer = filter.0.as_ref();
+        let filter_ref: &'static dyn Filter = {
+            let filter: &dyn Filter = filter.0.as_ref();
             unsafe { std::mem::transmute(filter) }
         };
 

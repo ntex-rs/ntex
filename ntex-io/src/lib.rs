@@ -21,9 +21,9 @@ mod utils;
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Millis;
 
-pub use self::buf::Buffer;
+pub use self::buf::{ReadBuf, WriteBuf};
 pub use self::dispatcher::Dispatcher;
-pub use self::filter::{Base, FilterLayer, Layer};
+pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
@@ -51,7 +51,7 @@ pub enum WriteStatus {
 }
 
 #[allow(unused_variables)]
-pub trait Filter: 'static {
+pub trait FilterLayer: 'static {
     #[inline]
     /// Check readiness for read operations
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
@@ -68,10 +68,10 @@ pub trait Filter: 'static {
     ///
     /// Inner filter must process buffer before current.
     /// Returns number of new bytes.
-    fn process_read_buf(&self, buf: &mut Buffer<'_>, nbytes: usize) -> sio::Result<usize>;
+    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> sio::Result<usize>;
 
     /// Process write buffer
-    fn process_write_buf(&self, buf: &mut Buffer<'_>) -> sio::Result<()>;
+    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> sio::Result<()>;
 
     /// Query internal filter data
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>> {
@@ -79,7 +79,7 @@ pub trait Filter: 'static {
     }
 
     /// Gracefully shutdown filter
-    fn shutdown(&self, buf: &mut Buffer<'_>) -> sio::Result<Poll<()>> {
+    fn shutdown(&self, buf: &mut WriteBuf<'_>) -> sio::Result<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }
@@ -87,7 +87,7 @@ pub trait Filter: 'static {
 /// Creates new `Filter` values.
 pub trait FilterFactory<F>: Sized {
     /// The `Filter` value created by this factory
-    type Filter: Filter;
+    type Filter: FilterLayer;
     /// Errors produced while building a filter.
     type Error: fmt::Debug;
     /// The future of the `FilterFactory` instance.

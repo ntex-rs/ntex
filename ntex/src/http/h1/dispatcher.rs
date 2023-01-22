@@ -2,7 +2,7 @@
 use std::task::{Context, Poll};
 use std::{cell::RefCell, error::Error, future::Future, io, marker, mem, pin::Pin, rc::Rc};
 
-use crate::io::{FilterLayer, Io, IoBoxed, IoStatusUpdate, RecvError};
+use crate::io::{Filter, Io, IoBoxed, IoStatusUpdate, RecvError};
 use crate::{service::Service, util::ready, util::BoxFuture, util::Bytes};
 
 use crate::http;
@@ -91,7 +91,7 @@ struct DispatcherInner<F, S, B, X, U> {
 
 impl<F, S, B, X, U> Dispatcher<F, S, B, X, U>
 where
-    F: FilterLayer,
+    F: Filter,
     S: Service<Request>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -131,7 +131,7 @@ where
 
 impl<F, S, B, X, U> Future for Dispatcher<F, S, B, X, U>
 where
-    F: FilterLayer,
+    F: Filter,
     S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,
@@ -404,7 +404,7 @@ where
 
 impl<T, S, B, X, U> DispatcherInner<T, S, B, X, U>
 where
-    T: FilterLayer,
+    T: Filter,
     S: Service<Request>,
     S::Error: ResponseError + 'static,
     S::Response: Into<Response<B>>,

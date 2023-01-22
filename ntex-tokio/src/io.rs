@@ -3,8 +3,8 @@ use std::{any, cell::RefCell, cmp, future::Future, io, mem, pin::Pin, rc::Rc, rc
 
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{
-    types, FilterLayer, Handle, Io, IoBoxed, IoStream, ReadContext, ReadStatus,
-    WriteContext, WriteStatus,
+    types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, ReadStatus, WriteContext,
+    WriteStatus,
 };
 use ntex_util::{ready, time::sleep, time::Millis, time::Sleep};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -362,7 +362,7 @@ impl From<IoBoxed> for TokioIoBoxed {
     }
 }
 
-impl<F: FilterLayer> From<Io<F>> for TokioIoBoxed {
+impl<F: Filter> From<Io<F>> for TokioIoBoxed {
     fn from(io: Io<F>) -> TokioIoBoxed {
         TokioIoBoxed(IoBoxed::from(io))
     }
