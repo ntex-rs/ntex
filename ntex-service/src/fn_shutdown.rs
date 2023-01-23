@@ -1,14 +1,12 @@
-use std::{
-    cell::Cell,
-    future::{ready, Ready},
-    marker::PhantomData,
-    task::{Context, Poll},
-};
+use std::cell::Cell;
+use std::future::{ready, Ready};
+use std::marker::PhantomData;
+use std::task::{Context, Poll};
 
 use crate::Service;
 
 #[inline]
-/// Create `FnShutdown` service with a on_shutdown callback.
+/// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
 pub fn fn_shutdown<Req, Err, F>(f: F) -> FnShutdown<Req, Err, F>
 where
     F: FnOnce(),
@@ -25,6 +23,19 @@ impl<Req, Err, F> FnShutdown<Req, Err, F> {
     pub(crate) fn new(f: F) -> Self {
         Self {
             f_shutdown: Cell::new(Some(f)),
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<Req, Err, F> Clone for FnShutdown<Req, Err, F>
+where
+    F: FnOnce(),
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            f_shutdown: Cell::new(self.f_shutdown.take()),
             _t: PhantomData,
         }
     }
@@ -64,8 +75,10 @@ mod tests {
     async fn test_fn_shutdown() {
         let mut is_called = false;
 
-        let pipe = pipeline(fn_service(|_| async { Ok::<_, ()>("pipe") }))
-            .and_then(fn_shutdown(|| is_called = true));
+        let srv = fn_service(|_| async { Ok::<_, ()>("pipe") }).clone();
+        let on_shutdown = fn_shutdown(|| is_called = true).clone();
+
+        let pipe = pipeline(srv).and_then(on_shutdown);
 
         let res = pipe.call(()).await;
         assert_eq!(lazy(|cx| pipe.poll_ready(cx)).await, Poll::Ready(Ok(())));
