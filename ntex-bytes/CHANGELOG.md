@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.19] (2023-01-23)
+
+* Add PollRef::resize_read_buf() and PollRef::resize_write_buf() helpers
+
 ## [0.1.18] (2022-12-13)
 
 * Add Bytes<&Bytes> for Bytes impl

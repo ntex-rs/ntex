@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.1] - 2023-01-23
+
+* Use new Io object
+
 ## [0.2.0] - 2023-01-04
 
 * Release

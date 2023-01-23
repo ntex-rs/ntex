@@ -120,6 +120,7 @@ async fn test_run() {
 
     // stop
     let _ = srv.stop(false).await;
+    thread::sleep(time::Duration::from_millis(100));
     assert!(net::TcpStream::connect(addr).is_err());
 
     thread::sleep(time::Duration::from_millis(100));
