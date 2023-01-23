@@ -76,7 +76,6 @@ mod tests {
 
     #[ntex::test]
     async fn test_fn_shutdown() {
-
         let mut is_called = false;
         let srv = fn_service(|_| async { Ok::<_, ()>("pipe") });
         let on_shutdown = fn_shutdown(|| {
