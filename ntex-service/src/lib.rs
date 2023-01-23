@@ -367,7 +367,7 @@ pub mod dev {
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
-    pub use crate::fn_shutdown::fn_shutdown;
+    pub use crate::fn_shutdown::FnShutdown;
     pub use crate::map::{Map, MapFactory};
     pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrFactory};
