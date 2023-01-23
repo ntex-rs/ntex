@@ -57,6 +57,7 @@ where
         Poll::Ready(())
     }
 
+    #[inline]
     fn call(&self, req: Req) -> Self::Future<'_> {
         ready(Ok(req))
     }
