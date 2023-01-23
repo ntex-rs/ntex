@@ -42,7 +42,9 @@ impl ReadContext {
             let total2 = buf.len();
             let nbytes = if total2 > total { total2 - total } else { 0 };
             *stack.last_read_buf() = Some(buf);
+
             if nbytes > 0 {
+                let buf_full = nbytes >= hw;
                 match self
                     .0
                     .filter()
@@ -50,10 +52,10 @@ impl ReadContext {
                 {
                     Ok(nbytes) => {
                         if nbytes > 0 {
-                            if stack.first_read_buf_size() >= hw {
+                            if buf_full || stack.first_read_buf_size() >= hw {
                                 log::trace!(
-                                    "buffer is too large {}, enable read back-pressure",
-                                    total
+                                    "io read buffer is too large {}, enable read back-pressure",
+                                    total2
                                 );
                                 self.0
                                      .0
@@ -66,6 +68,9 @@ impl ReadContext {
                                 "new {} bytes available, wakeup dispatcher",
                                 nbytes,
                             );
+                        } else if buf_full {
+                            // read task is paused because of read back-pressure
+                            self.0 .0.read_task.wake();
                         }
                     }
                     Err(err) => {

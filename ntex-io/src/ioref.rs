@@ -161,7 +161,7 @@ impl IoRef {
         let mut buffer = self.0.buffer.borrow_mut();
         let is_write_sleep = buffer.last_write_buf_size() == 0;
 
-        let result = f(&mut buffer.first_write_buf(self));
+        let result = f(buffer.first_write_buf(self));
         self.0
             .filter
             .get()
