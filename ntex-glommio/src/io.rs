@@ -57,11 +57,17 @@ impl Future for ReadTask {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut();
 
-        this.state.with_buf(|buf, hw| {
+        this.state.with_buf(|buf, hw, lw| {
             match ready!(this.state.poll_ready(cx)) {
                 ReadStatus::Ready => {
                     // read data from socket
                     loop {
+                        // make sure we've got room
+                        let remaining = buf.remaining_mut();
+                        if remaining < lw {
+                            buf.reserve(hw - remaining);
+                        }
+
                         return match poll_read_buf(
                             Pin::new(&mut *this.io.0.borrow_mut()),
                             cx,
@@ -72,7 +78,7 @@ impl Future for ReadTask {
                                 if n == 0 {
                                     log::trace!("glommio stream is disconnected");
                                     Poll::Ready(Ok(()))
-                                } else if buf.len() < hw && buf.remaining_mut() != 0 {
+                                } else if buf.len() < hw {
                                     continue;
                                 } else {
                                     Poll::Pending
@@ -338,10 +344,6 @@ pub fn poll_read_buf<T: AsyncRead>(
     cx: &mut Context<'_>,
     buf: &mut BytesVec,
 ) -> Poll<io::Result<usize>> {
-    if !buf.has_remaining_mut() {
-        return Poll::Ready(Ok(0));
-    }
-
     let dst = unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [u8]) };
     let n = ready!(io.poll_read(cx, dst))?;
 
@@ -373,11 +375,17 @@ impl Future for UnixReadTask {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut();
 
-        this.state.with_buf(|buf, hw| {
+        this.state.with_buf(|buf, hw, lw| {
             match ready!(this.state.poll_ready(cx)) {
                 ReadStatus::Ready => {
                     // read data from socket
                     loop {
+                        // make sure we've got room
+                        let remaining = buf.remaining_mut();
+                        if remaining < lw {
+                            buf.reserve(hw - remaining);
+                        }
+
                         return match poll_read_buf(
                             Pin::new(&mut *this.io.0.borrow_mut()),
                             cx,
@@ -388,7 +396,7 @@ impl Future for UnixReadTask {
                                 if n == 0 {
                                     log::trace!("glommio stream is disconnected");
                                     Poll::Ready(Ok(()))
-                                } else if buf.len() < hw && buf.remaining_mut() != 0 {
+                                } else if buf.len() < hw {
                                     continue;
                                 } else {
                                     Poll::Pending

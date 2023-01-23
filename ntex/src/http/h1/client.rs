@@ -21,16 +21,19 @@ bitflags! {
     }
 }
 
+#[derive(Debug)]
 /// HTTP/1 Codec
 pub struct ClientCodec {
     inner: ClientCodecInner,
 }
 
+#[derive(Debug)]
 /// HTTP/1 Payload Codec
 pub struct ClientPayloadCodec {
     inner: ClientCodecInner,
 }
 
+#[derive(Debug)]
 struct ClientCodecInner {
     timer: DateService,
     decoder: decoder::MessageDecoder<ResponseHead>,

@@ -1,6 +1,6 @@
 use std::{io, task::Context, task::Poll};
 
-use ntex_bytes::{BufMut, BytesVec, PoolRef};
+use ntex_bytes::{BytesVec, PoolRef};
 
 use super::{io::Flags, IoRef, ReadStatus, WriteStatus};
 
@@ -21,7 +21,7 @@ impl ReadContext {
     /// Get read buffer
     pub fn with_buf<F>(&self, f: F) -> Poll<()>
     where
-        F: FnOnce(&mut BytesVec, usize) -> Poll<io::Result<()>>,
+        F: FnOnce(&mut BytesVec, usize, usize) -> Poll<io::Result<()>>,
     {
         let mut stack = self.0 .0.buffer.borrow_mut();
         let mut buf = stack
@@ -29,16 +29,11 @@ impl ReadContext {
             .take()
             .unwrap_or_else(|| self.0.memory_pool().get_read_buf());
 
-        // make sure we've got room
-        let (hw, lw) = self.0.memory_pool().read_params().unpack();
-        let remaining = buf.remaining_mut();
-        if remaining < lw {
-            buf.reserve(hw - remaining);
-        }
         let total = buf.len();
+        let (hw, lw) = self.0.memory_pool().read_params().unpack();
 
         // call provided callback
-        let result = f(&mut buf, hw);
+        let result = f(&mut buf, hw, lw);
 
         // handle buffer changes
         if buf.is_empty() {
@@ -46,8 +41,8 @@ impl ReadContext {
         } else {
             let total2 = buf.len();
             let nbytes = if total2 > total { total2 - total } else { 0 };
+            *stack.last_read_buf() = Some(buf);
             if nbytes > 0 {
-                *stack.last_read_buf() = Some(buf);
                 match self
                     .0
                     .filter()
@@ -69,14 +64,14 @@ impl ReadContext {
                             self.0 .0.dispatch_task.wake();
                             log::trace!(
                                 "new {} bytes available, wakeup dispatcher",
-                                nbytes
+                                nbytes,
                             );
                         }
                     }
                     Err(err) => {
                         self.0 .0.dispatch_task.wake();
                         self.0 .0.insert_flags(Flags::RD_READY);
-                        self.0.want_shutdown(Some(err));
+                        self.0 .0.init_shutdown(Some(err), &self.0);
                     }
                 }
             }
@@ -94,6 +89,7 @@ impl ReadContext {
             Poll::Pending => Poll::Pending,
         };
 
+        drop(stack);
         if self.0.flags().contains(Flags::IO_STOPPING_FILTERS) {
             self.0 .0.shutdown_filters(&self.0);
         }

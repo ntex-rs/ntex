@@ -17,7 +17,7 @@ impl Stack {
     }
 
     pub(crate) fn add_layer(&mut self) {
-        self.buffers.push((None, None));
+        self.buffers.insert(0, (None, None));
     }
 
     pub(crate) fn read_buf<F, R>(
@@ -36,7 +36,7 @@ impl Stack {
             let mut buf = ReadBuf {
                 io,
                 nbytes,
-                curr: &mut curr[0],
+                curr: &mut curr[idx],
                 next: &mut next[0],
             };
             f(&mut buf)
@@ -67,7 +67,7 @@ impl Stack {
             let (curr, next) = self.buffers.split_at_mut(pos);
             let mut buf = WriteBuf {
                 io,
-                curr: &mut curr[0],
+                curr: &mut curr[idx],
                 next: &mut next[0],
             };
             f(&mut buf)
@@ -88,7 +88,7 @@ impl Stack {
         }
     }
 
-    pub(crate) fn first_read_buf_size(&mut self) -> usize {
+    pub(crate) fn first_read_buf_size(&self) -> usize {
         self.buffers[0].0.as_ref().map(|b| b.len()).unwrap_or(0)
     }
 
@@ -111,6 +111,11 @@ impl Stack {
     pub(crate) fn last_write_buf(&mut self) -> &mut Option<BytesVec> {
         let idx = self.buffers.len() - 1;
         &mut self.buffers[idx].1
+    }
+
+    pub(crate) fn last_write_buf_size(&self) -> usize {
+        let idx = self.buffers.len() - 1;
+        self.buffers[idx].1.as_ref().map(|b| b.len()).unwrap_or(0)
     }
 
     pub(crate) fn set_last_write_buf(&mut self, buf: BytesVec) {
@@ -188,7 +193,7 @@ impl<'a> ReadBuf<'a> {
                 self.io.memory_pool().release_read_buf(src);
             } else {
                 if let Some(b) = self.next.0.take() {
-                    Some(self.io.memory_pool().release_read_buf(b));
+                    self.io.memory_pool().release_read_buf(b);
                 }
                 self.next.0 = Some(src);
             }
@@ -221,7 +226,7 @@ impl<'a> ReadBuf<'a> {
                 self.io.memory_pool().release_read_buf(dst);
             } else {
                 if let Some(b) = self.curr.0.take() {
-                    Some(self.io.memory_pool().release_read_buf(b));
+                    self.io.memory_pool().release_read_buf(b);
                 }
                 self.curr.0 = Some(dst);
             }
@@ -290,7 +295,7 @@ impl<'a> WriteBuf<'a> {
     /// Set source write buffer
     pub fn set_src(&mut self, src: Option<BytesVec>) {
         if let Some(b) = self.curr.1.take() {
-            Some(self.io.memory_pool().release_read_buf(b));
+            self.io.memory_pool().release_read_buf(b);
         }
         self.curr.1 = src;
     }
@@ -321,7 +326,7 @@ impl<'a> WriteBuf<'a> {
                 self.io.memory_pool().release_write_buf(dst);
             } else {
                 if let Some(b) = self.next.1.take() {
-                    Some(self.io.memory_pool().release_write_buf(b));
+                    self.io.memory_pool().release_write_buf(b);
                 }
                 self.next.1 = Some(dst);
             }

@@ -104,7 +104,6 @@ impl IoState {
         }
     }
 
-    #[inline]
     pub(super) fn io_stopped(&self, err: Option<io::Error>) {
         if err.is_some() {
             self.error.set(err);
@@ -119,7 +118,6 @@ impl IoState {
         );
     }
 
-    #[inline]
     /// Gracefully shutdown read and write io tasks
     pub(super) fn init_shutdown(&self, err: Option<io::Error>, io: &IoRef) {
         if err.is_some() {
@@ -135,7 +133,6 @@ impl IoState {
         }
     }
 
-    #[inline]
     pub(super) fn shutdown_filters(&self, io: &IoRef) {
         if !self
             .flags
@@ -143,9 +140,7 @@ impl IoState {
             .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
         {
             let mut buffer = self.buffer.borrow_mut();
-            let result = self.filter.get().shutdown(io, &mut buffer, 0);
-
-            match result {
+            match self.filter.get().shutdown(io, &mut buffer, 0) {
                 Ok(Poll::Ready(())) => {
                     self.read_task.wake();
                     self.write_task.wake();
@@ -168,11 +163,11 @@ impl IoState {
                 Err(err) => {
                     self.io_stopped(Some(err));
                 }
-            }
+            };
+            self.write_task.wake();
         }
     }
 
-    #[inline]
     pub(super) fn with_read_buf<Fn, Ret>(&self, release: bool, f: Fn) -> Ret
     where
         Fn: FnOnce(&mut Option<BytesVec>) -> Ret,
@@ -191,7 +186,6 @@ impl IoState {
         result
     }
 
-    #[inline]
     pub(super) fn with_write_buf<Fn, Ret>(&self, f: Fn) -> Ret
     where
         Fn: FnOnce(&mut Option<BytesVec>) -> Ret,
@@ -595,6 +589,8 @@ impl<F> Io<F> {
             if !flags.contains(Flags::IO_STOPPING_FILTERS) {
                 self.0 .0.init_shutdown(None, &self.0);
             }
+
+            self.0 .0.read_task.wake();
             self.0 .0.dispatch_task.register(cx.waker());
             Poll::Pending
         }

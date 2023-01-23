@@ -82,14 +82,10 @@ impl FilterLayer for WsTransport {
         if let Some(mut src) = buf.take_src() {
             let mut dst = buf.take_dst();
             let dst_len = dst.len();
-            let (hw, lw) = self.pool.read_params().unpack();
 
             loop {
                 // make sure we've got room
-                let remaining = dst.remaining_mut();
-                if remaining < lw {
-                    dst.reserve(hw - remaining);
-                }
+                self.pool.resize_read_buf(&mut dst);
 
                 let frame = if let Some(frame) =
                     self.codec.decode_vec(&mut src).map_err(|e| {
@@ -140,7 +136,7 @@ impl FilterLayer for WsTransport {
                     }
                     Frame::Pong(_) => (),
                     Frame::Close(_) => {
-                        buf.io().want_shutdown(None);
+                        buf.io().want_shutdown();
                         break;
                     }
                 };

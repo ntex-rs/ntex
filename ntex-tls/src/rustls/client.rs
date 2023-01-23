@@ -60,16 +60,11 @@ impl FilterLayer for TlsClientFilter {
         let mut session = self.session.borrow_mut();
 
         // get processed buffer
-        let (dst, src) = buf.get_pair();
-        let (hw, lw) = self.inner.pool.read_params().unpack();
-
+        let (src, dst) = buf.get_pair();
         let mut new_bytes = usize::from(self.inner.handshake.get());
         loop {
             // make sure we've got room
-            let remaining = dst.remaining_mut();
-            if remaining < lw {
-                dst.reserve(hw - remaining);
-            }
+            self.inner.pool.resize_read_buf(dst);
 
             let mut cursor = io::Cursor::new(&src);
             let n = session.read_tls(&mut cursor)?;
@@ -105,8 +100,9 @@ impl FilterLayer for TlsClientFilter {
                     src.split_to(n);
                 }
 
-                let n = session.write_tls(&mut io)?;
-                if n == 0 {
+                if session.wants_write() {
+                    session.complete_io(&mut io)?;
+                } else {
                     break;
                 }
             }
@@ -143,17 +139,20 @@ impl TlsClientFilter {
             let (result, wants_read, handshaking) = io.with_buf(|buf| {
                 let mut session = filter.client().session.borrow_mut();
                 let mut wrp = Wrapper(&filter.client().inner, buf);
-                (
+                let mut result = (
                     session.complete_io(&mut wrp),
                     session.wants_read(),
                     session.is_handshaking(),
-                )
+                );
+
+                while session.wants_write() {
+                    result.0 = session.complete_io(&mut wrp);
+                    if result.0.is_err() {
+                        break;
+                    }
+                }
+                result
             })?;
-            println!(
-                "===================== res: {:?} read: {:?} h: {:?}",
-                result, wants_read, handshaking
-            );
-            io.with_read_buf(|buf| println!("000000 BUF: {:?}", buf));
 
             match result {
                 Ok(_) => {

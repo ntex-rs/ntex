@@ -10,7 +10,7 @@
 //!
 //!    let response = client.get("http://www.rust-lang.org") // <- Create request builder
 //!        .header("User-Agent", "ntex::web")
-//!        .send()                             // <- Send http request
+//!        .send()                                           // <- Send http request
 //!        .await;
 //!
 //!     println!("Response: {:?}", response);

@@ -1,6 +1,6 @@
 use std::{any, fmt, hash, io, time};
 
-use ntex_bytes::{BufMut, BytesVec, PoolRef};
+use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
 use super::{io::Flags, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
@@ -72,8 +72,16 @@ impl IoRef {
 
     #[inline]
     /// Gracefully shutdown io stream
-    pub fn want_shutdown(&self, err: Option<io::Error>) {
-        self.0.init_shutdown(err, self);
+    pub fn want_shutdown(&self) {
+        if !self
+            .0
+            .flags
+            .get()
+            .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
+        {
+            log::trace!("initiate io shutdown {:?}", self.0.flags.get());
+            self.0.insert_flags(Flags::IO_STOPPING_FILTERS);
+        }
     }
 
     #[inline]
@@ -96,13 +104,8 @@ impl IoRef {
 
         if !flags.contains(Flags::IO_STOPPING) {
             self.with_write_buf(|buf| {
-                let (hw, lw) = self.memory_pool().write_params().unpack();
-
                 // make sure we've got room
-                let remaining = buf.remaining_mut();
-                if remaining < lw {
-                    buf.reserve(hw - remaining);
-                }
+                self.memory_pool().resize_write_buf(buf);
 
                 // encode item and wake write task
                 codec.encode_vec(item, buf)
@@ -156,17 +159,15 @@ impl IoRef {
         F: FnOnce(&mut BytesVec) -> R,
     {
         let mut buffer = self.0.buffer.borrow_mut();
+        let is_write_sleep = buffer.last_write_buf_size() == 0;
 
-        let mut buf = buffer.first_write_buf(self);
-        let is_write_sleep = buf.is_empty();
-
-        let result = f(&mut buf);
-
+        let result = f(&mut buffer.first_write_buf(self));
         self.0
             .filter
             .get()
             .process_write_buf(self, &mut buffer, 0)?;
-        if is_write_sleep {
+
+        if is_write_sleep && buffer.last_write_buf_size() != 0 {
             self.0.write_task.wake();
         }
         Ok(result)

@@ -54,19 +54,24 @@ impl Future for ReadTask {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_ref();
 
-        this.state.with_buf(|buf, hw| {
+        this.state.with_buf(|buf, hw, lw| {
             match ready!(this.state.poll_ready(cx)) {
                 ReadStatus::Ready => {
                     // read data from socket
                     let mut io = this.io.borrow_mut();
                     loop {
+                        // make sure we've got room
+                        let remaining = buf.remaining_mut();
+                        if remaining < lw {
+                            buf.reserve(hw - remaining);
+                        }
                         return match poll_read_buf(Pin::new(&mut *io), cx, buf) {
                             Poll::Pending => Poll::Pending,
                             Poll::Ready(Ok(n)) => {
                                 if n == 0 {
                                     log::trace!("tokio stream is disconnected");
                                     Poll::Ready(Ok(()))
-                                } else if buf.len() < hw && buf.remaining_mut() != 0 {
+                                } else if buf.len() < hw {
                                     continue;
                                 } else {
                                     Poll::Pending
@@ -308,7 +313,7 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
                 }
             }
         }
-        log::trace!("flushed {} bytes", written);
+        // log::trace!("flushed {} bytes", written);
 
         // remove written data
         let result = if written == len {
@@ -465,19 +470,25 @@ mod unixstream {
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let this = self.as_ref();
 
-            this.state.with_buf(|buf, hw| {
+            this.state.with_buf(|buf, hw, lw| {
                 match ready!(this.state.poll_ready(cx)) {
                     ReadStatus::Ready => {
                         // read data from socket
                         let mut io = this.io.borrow_mut();
                         loop {
+                            // make sure we've got room
+                            let remaining = buf.remaining_mut();
+                            if remaining < lw {
+                                buf.reserve(hw - remaining);
+                            }
+
                             return match poll_read_buf(Pin::new(&mut *io), cx, buf) {
                                 Poll::Pending => Poll::Pending,
                                 Poll::Ready(Ok(n)) => {
                                     if n == 0 {
                                         log::trace!("tokio unix stream is disconnected");
                                         Poll::Ready(Ok(()))
-                                    } else if buf.len() < hw && buf.remaining_mut() != 0 {
+                                    } else if buf.len() < hw {
                                         continue;
                                     } else {
                                         Poll::Pending
@@ -663,10 +674,6 @@ pub fn poll_read_buf<T: AsyncRead>(
     cx: &mut Context<'_>,
     buf: &mut BytesVec,
 ) -> Poll<io::Result<usize>> {
-    if !buf.has_remaining_mut() {
-        return Poll::Ready(Ok(0));
-    }
-
     let n = {
         let dst =
             unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [mem::MaybeUninit<u8>]) };

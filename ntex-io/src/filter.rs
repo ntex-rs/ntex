@@ -145,6 +145,8 @@ where
     #[inline]
     fn shutdown(&self, io: &IoRef, stack: &mut Stack, idx: usize) -> io::Result<Poll<()>> {
         let result1 = stack.write_buf(io, idx, |buf| self.0.shutdown(buf))?;
+        self.process_write_buf(io, stack, idx)?;
+
         let result2 = if F::BUFFERS {
             self.1.shutdown(io, stack, idx + 1)?
         } else {

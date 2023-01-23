@@ -171,15 +171,10 @@ impl FilterLayer for SslFilter {
         buf.with_write_buf(|b| self.set_buffers(b));
 
         let dst = buf.get_dst();
-        let (hw, lw) = self.pool.read_params().unpack();
-
         let mut new_bytes = usize::from(self.handshake.get());
         loop {
             // make sure we've got room
-            let remaining = dst.remaining_mut();
-            if remaining < lw {
-                dst.reserve(hw - remaining);
-            }
+            self.pool.resize_read_buf(dst);
 
             let chunk: &mut [u8] = unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
             let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
@@ -196,7 +191,7 @@ impl FilterLayer for SslFilter {
                     Ok(new_bytes)
                 }
                 Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                    buf.io().want_shutdown(None);
+                    buf.io().want_shutdown();
                     Ok(new_bytes)
                 }
                 Err(e) => {
@@ -212,10 +207,13 @@ impl FilterLayer for SslFilter {
 
     fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
         if let Some(mut src) = buf.take_src() {
-            // get processed buffer
             self.set_buffers(buf);
 
             loop {
+                if src.is_empty() {
+                    self.unset_buffers(buf);
+                    return Ok(());
+                }
                 let ssl_result = self.inner.borrow_mut().ssl_write(&src);
                 match ssl_result {
                     Ok(v) => {
