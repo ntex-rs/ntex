@@ -1,8 +1,7 @@
 use std::{
     cell::Cell,
-    future::Future,
+    future::{ready, Ready},
     marker::PhantomData,
-    pin::Pin,
     task::{Context, Poll},
 };
 
@@ -19,19 +18,14 @@ where
 
 pub struct FnShutdown<Req, Err, F = fn()> {
     f_shutdown: Cell<Option<F>>,
-    _req: PhantomData<Req>,
-    _e: PhantomData<Err>,
+    _t: PhantomData<(Req, Err)>,
 }
 
-impl<Req, Err, F> FnShutdown<Req, Err, F>
-where
-    F: FnOnce(),
-{
+impl<Req, Err, F> FnShutdown<Req, Err, F> {
     pub(crate) fn new(f: F) -> Self {
         Self {
             f_shutdown: Cell::new(Some(f)),
-            _req: PhantomData,
-            _e: PhantomData,
+            _t: PhantomData,
         }
     }
 }
@@ -39,11 +33,10 @@ where
 impl<Req, Err, F> Service<Req> for FnShutdown<Req, Err, F>
 where
     F: FnOnce(),
-    Req: Clone + 'static,
 {
     type Response = Req;
     type Error = Err;
-    type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>> where Self: 'f;
+    type Future<'f> = Ready<Result<Req, Err>> where Self: 'f, Req: 'f;
 
     #[inline]
     fn poll_shutdown(&self, _: &mut Context<'_>) -> Poll<()> {
@@ -54,7 +47,7 @@ where
     }
 
     fn call(&self, req: Req) -> Self::Future<'_> {
-        Box::pin(async move { Ok(req) })
+        ready(Ok(req))
     }
 }
 
