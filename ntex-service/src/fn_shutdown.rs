@@ -14,7 +14,7 @@ where
     FnShutdown::new(f)
 }
 
-pub struct FnShutdown<Req, Err, F = fn()> {
+pub struct FnShutdown<Req, Err, F> {
     f_shutdown: Cell<Option<F>>,
     _t: PhantomData<(Req, Err)>,
 }
@@ -30,12 +30,14 @@ impl<Req, Err, F> FnShutdown<Req, Err, F> {
 
 impl<Req, Err, F> Clone for FnShutdown<Req, Err, F>
 where
-    F: FnOnce(),
+    F: Clone,
 {
     #[inline]
     fn clone(&self) -> Self {
+        let f = self.f_shutdown.take();
+        self.f_shutdown.set(f.clone());
         Self {
-            f_shutdown: Cell::new(self.f_shutdown.take()),
+            f_shutdown: Cell::new(f),
             _t: PhantomData,
         }
     }
@@ -74,10 +76,12 @@ mod tests {
 
     #[ntex::test]
     async fn test_fn_shutdown() {
-        let mut is_called = false;
 
-        let srv = fn_service(|_| async { Ok::<_, ()>("pipe") }).clone();
-        let on_shutdown = fn_shutdown(|| is_called = true).clone();
+        let mut is_called = false;
+        let srv = fn_service(|_| async { Ok::<_, ()>("pipe") });
+        let on_shutdown = fn_shutdown(|| {
+            is_called = true;
+        });
 
         let pipe = pipeline(srv).and_then(on_shutdown);
 
