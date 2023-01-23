@@ -86,7 +86,7 @@ impl Future for ReadTask {
                             }
                             Poll::Ready(Err(err)) => {
                                 log::trace!("read task failed on io {:?}", err);
-                                Poll::Ready(Err(()))
+                                Poll::Ready(Err(err))
                             }
                         };
                     }

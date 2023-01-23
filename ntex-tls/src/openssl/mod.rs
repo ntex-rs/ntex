@@ -191,7 +191,7 @@ impl FilterLayer for SslFilter {
                     Ok(new_bytes)
                 }
                 Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                    buf.io().want_shutdown();
+                    buf.want_shutdown();
                     Ok(new_bytes)
                 }
                 Err(e) => {

@@ -156,15 +156,15 @@ pub struct ReadBuf<'a> {
 
 impl<'a> ReadBuf<'a> {
     #[inline]
-    /// Get reference to io object
-    pub fn io(&self) -> &IoRef {
-        self.io
-    }
-
-    #[inline]
     /// Get number of newly added bytes
     pub fn nbytes(&self) -> usize {
         self.nbytes
+    }
+
+    #[inline]
+    /// Initiate graceful io stream shutdown
+    pub fn want_shutdown(&self) {
+        self.io.want_shutdown()
     }
 
     #[inline]
@@ -268,9 +268,9 @@ pub struct WriteBuf<'a> {
 
 impl<'a> WriteBuf<'a> {
     #[inline]
-    /// Get reference to io object
-    pub fn io(&self) -> &IoRef {
-        self.io
+    /// Initiate graceful io stream shutdown
+    pub fn want_shutdown(&self) {
+        self.io.want_shutdown()
     }
 
     #[inline]
