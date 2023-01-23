@@ -13,61 +13,92 @@ impl ReadContext {
     }
 
     #[inline]
-    /// Return memory pool for this context
-    pub fn memory_pool(&self) -> PoolRef {
-        self.0.memory_pool()
-    }
-
-    #[inline]
     /// Check readiness for read operations
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         self.0.filter().poll_read_ready(cx)
     }
 
-    #[inline]
     /// Get read buffer
-    pub fn get_read_buf(&self) -> BytesVec {
-        self.0
-             .0
-            .read_buf
+    pub fn with_buf<F>(&self, f: F) -> Poll<()>
+    where
+        F: FnOnce(&mut BytesVec, usize, usize) -> Poll<io::Result<()>>,
+    {
+        let mut stack = self.0 .0.buffer.borrow_mut();
+        let mut buf = stack
+            .last_read_buf()
             .take()
-            .unwrap_or_else(|| self.0.memory_pool().get_read_buf())
-    }
+            .unwrap_or_else(|| self.0.memory_pool().get_read_buf());
 
-    #[inline]
-    /// Release read buffer after io read operations
-    pub fn release_read_buf(&self, buf: BytesVec, nbytes: usize) {
+        let total = buf.len();
+        let (hw, lw) = self.0.memory_pool().read_params().unpack();
+
+        // call provided callback
+        let result = f(&mut buf, hw, lw);
+
+        // handle buffer changes
         if buf.is_empty() {
             self.0.memory_pool().release_read_buf(buf);
         } else {
-            self.0 .0.read_buf.set(Some(buf));
-            let filter = self.0.filter();
-            match filter.process_read_buf(&self.0, nbytes) {
-                Ok((total, nbytes)) => {
-                    if nbytes > 0 {
-                        if total > self.0.memory_pool().read_params().high as usize {
+            let total2 = buf.len();
+            let nbytes = if total2 > total { total2 - total } else { 0 };
+            *stack.last_read_buf() = Some(buf);
+
+            if nbytes > 0 {
+                let buf_full = nbytes >= hw;
+                match self
+                    .0
+                    .filter()
+                    .process_read_buf(&self.0, &mut stack, 0, nbytes)
+                {
+                    Ok(nbytes) => {
+                        if nbytes > 0 {
+                            if buf_full || stack.first_read_buf_size() >= hw {
+                                log::trace!(
+                                    "io read buffer is too large {}, enable read back-pressure",
+                                    total2
+                                );
+                                self.0
+                                     .0
+                                    .insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
+                            } else {
+                                self.0 .0.insert_flags(Flags::RD_READY);
+                            }
+                            self.0 .0.dispatch_task.wake();
                             log::trace!(
-                                "buffer is too large {}, enable read back-pressure",
-                                total
+                                "new {} bytes available, wakeup dispatcher",
+                                nbytes,
                             );
-                            self.0 .0.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
+                        } else if buf_full {
+                            // read task is paused because of read back-pressure
+                            self.0 .0.read_task.wake();
                         }
+                    }
+                    Err(err) => {
                         self.0 .0.dispatch_task.wake();
                         self.0 .0.insert_flags(Flags::RD_READY);
-                        log::trace!("new {} bytes available, wakeup dispatcher", nbytes);
+                        self.0 .0.init_shutdown(Some(err), &self.0);
                     }
-                }
-                Err(err) => {
-                    self.0 .0.dispatch_task.wake();
-                    self.0 .0.insert_flags(Flags::RD_READY);
-                    self.0.want_shutdown(Some(err));
                 }
             }
         }
 
+        let result = match result {
+            Poll::Ready(Ok(())) => {
+                self.0 .0.io_stopped(None);
+                Poll::Ready(())
+            }
+            Poll::Ready(Err(e)) => {
+                self.0 .0.io_stopped(Some(e));
+                Poll::Ready(())
+            }
+            Poll::Pending => Poll::Pending,
+        };
+
+        drop(stack);
         if self.0.flags().contains(Flags::IO_STOPPING_FILTERS) {
-            self.0 .0.shutdown_filters();
+            self.0 .0.shutdown_filters(&self.0);
         }
+        result
     }
 
     #[inline]
@@ -100,7 +131,7 @@ impl WriteContext {
     #[inline]
     /// Get write buffer
     pub fn get_write_buf(&self) -> Option<BytesVec> {
-        self.0 .0.write_buf.take()
+        self.0 .0.buffer.borrow_mut().last_write_buf().take()
     }
 
     #[inline]
@@ -125,11 +156,11 @@ impl WriteContext {
                 self.0.set_flags(flags);
                 self.0 .0.dispatch_task.wake();
             }
-            self.0 .0.write_buf.set(Some(buf))
+            self.0 .0.buffer.borrow_mut().set_last_write_buf(buf);
         }
 
         if self.0.flags().contains(Flags::IO_STOPPING_FILTERS) {
-            self.0 .0.shutdown_filters();
+            self.0 .0.shutdown_filters(&self.0);
         }
 
         Ok(())

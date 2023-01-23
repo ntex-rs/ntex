@@ -206,6 +206,7 @@ struct H2ClientInner {
     streams: RefCell<HashMap<frame::StreamId, StreamInfo>>,
 }
 
+#[derive(Debug)]
 struct StreamInfo {
     tx: Option<oneshot::Sender<Result<(ResponseHead, Payload), SendRequestError>>>,
     stream: Option<h2::Stream>,

@@ -146,7 +146,7 @@ const DATE_VALUE_DEFAULT: [u8; DATE_VALUE_LENGTH_HDR] = [
     b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'\r', b'\n', b'\r', b'\n',
 ];
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DateService(Rc<DateServiceInner>);
 
 impl Default for DateService {
@@ -155,6 +155,7 @@ impl Default for DateService {
     }
 }
 
+#[derive(Debug)]
 struct DateServiceInner {
     current: Cell<bool>,
     current_time: Cell<time::Instant>,

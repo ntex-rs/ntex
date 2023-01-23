@@ -1,6 +1,6 @@
 use std::ops;
 
-use crate::{Filter, Io};
+use crate::{filter::Filter, Io};
 
 /// Sealed filter type
 pub struct Sealed(pub(crate) Box<dyn Filter>);

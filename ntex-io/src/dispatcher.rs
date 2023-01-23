@@ -316,18 +316,15 @@ where
                 }
                 // shutdown service
                 DispatcherState::Shutdown => {
-                    let err = slf.error.take();
-
                     return if this.inner.shared.service.poll_shutdown(cx).is_ready() {
                         log::trace!("service shutdown is completed, stop");
 
-                        Poll::Ready(if let Some(err) = err {
+                        Poll::Ready(if let Some(err) = slf.error.take() {
                             Err(err)
                         } else {
                             Ok(())
                         })
                     } else {
-                        slf.error.set(err);
                         Poll::Pending
                     };
                 }
@@ -632,9 +629,7 @@ mod tests {
 
         // close read side
         client.close().await;
-
-        // TODO! fix
-        // assert!(client.is_server_dropped());
+        assert!(client.is_server_dropped());
 
         // service must be checked for readiness only once
         assert_eq!(counter.get(), 1);

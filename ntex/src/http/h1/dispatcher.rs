@@ -1015,8 +1015,8 @@ mod tests {
     }
 
     #[crate::rt_test]
-    /// /// h1 dispatcher still processes all incoming requests
-    /// /// but it does not write any data to socket
+    /// h1 dispatcher still processes all incoming requests
+    /// but it does not write any data to socket
     async fn test_write_disconnected() {
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
@@ -1039,6 +1039,7 @@ mod tests {
         assert_eq!(num.load(Ordering::Relaxed), 1);
     }
 
+    /// max http message size is 32k (no payload)
     #[crate::rt_test]
     async fn test_read_large_message() {
         let (client, server) = Io::create();

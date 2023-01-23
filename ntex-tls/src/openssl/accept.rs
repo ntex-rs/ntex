@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{error::Error, future::Future, marker::PhantomData, pin::Pin};
 
-use ntex_io::{Filter, FilterFactory, Io};
+use ntex_io::{Filter, FilterFactory, Io, Layer};
 use ntex_service::{Service, ServiceFactory};
 use ntex_util::{future::Ready, time::Millis};
 use tls_openssl::ssl::SslAcceptor;
@@ -53,7 +53,7 @@ impl<F> Clone for Acceptor<F> {
 }
 
 impl<F: Filter, C: 'static> ServiceFactory<Io<F>, C> for Acceptor<F> {
-    type Response = Io<SslFilter<F>>;
+    type Response = Io<Layer<SslFilter, F>>;
     type Error = Box<dyn Error>;
     type Service = AcceptorService<F>;
     type InitError = ();
@@ -81,7 +81,7 @@ pub struct AcceptorService<F> {
 }
 
 impl<F: Filter> Service<Io<F>> for AcceptorService<F> {
-    type Response = Io<SslFilter<F>>;
+    type Response = Io<Layer<SslFilter, F>>;
     type Error = Box<dyn Error>;
     type Future<'f> = AcceptorServiceResponse<F>;
 
@@ -115,7 +115,7 @@ pin_project_lite::pin_project! {
 }
 
 impl<F: Filter> Future for AcceptorServiceResponse<F> {
-    type Output = Result<Io<SslFilter<F>>, Box<dyn Error>>;
+    type Output = Result<Io<Layer<SslFilter, F>>, Box<dyn Error>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.project().fut.poll(cx)

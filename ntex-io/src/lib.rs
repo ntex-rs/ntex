@@ -7,6 +7,7 @@ use std::{
 pub mod testing;
 pub mod types;
 
+mod buf;
 mod dispatcher;
 mod filter;
 mod framed;
@@ -17,12 +18,12 @@ mod tasks;
 mod timer;
 mod utils;
 
-use ntex_bytes::BytesVec;
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Millis;
 
+pub use self::buf::{ReadBuf, WriteBuf};
 pub use self::dispatcher::Dispatcher;
-pub use self::filter::Base;
+pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
@@ -49,44 +50,51 @@ pub enum WriteStatus {
     Terminate,
 }
 
-pub trait Filter: 'static {
-    fn query(&self, _: TypeId) -> Option<Box<dyn Any>> {
-        None
+#[allow(unused_variables)]
+pub trait FilterLayer: 'static {
+    /// Create buffers for this filter
+    const BUFFERS: bool = true;
+
+    #[inline]
+    /// Check readiness for read operations
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
+        Poll::Ready(ReadStatus::Ready)
     }
 
-    fn get_read_buf(&self) -> Option<BytesVec>;
-
-    fn release_read_buf(&self, buf: BytesVec);
+    #[inline]
+    /// Check readiness for write operations
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
+        Poll::Ready(WriteStatus::Ready)
+    }
 
     /// Process read buffer
     ///
-    /// Returns tuple (total bytes, new bytes)
-    fn process_read_buf(&self, io: &IoRef, n: usize) -> sio::Result<(usize, usize)>;
+    /// Inner filter must process buffer before current.
+    /// Returns number of new bytes.
+    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> sio::Result<usize>;
 
-    fn get_write_buf(&self) -> Option<BytesVec>;
+    /// Process write buffer
+    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> sio::Result<()>;
 
-    fn release_write_buf(&self, buf: BytesVec) -> sio::Result<()>;
-
-    /// Check readiness for read operations
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus>;
-
-    /// Check readiness for write operations
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus>;
+    /// Query internal filter data
+    fn query(&self, id: TypeId) -> Option<Box<dyn Any>> {
+        None
+    }
 
     /// Gracefully shutdown filter
-    fn poll_shutdown(&self) -> Poll<sio::Result<()>> {
-        Poll::Ready(Ok(()))
+    fn shutdown(&self, buf: &mut WriteBuf<'_>) -> sio::Result<Poll<()>> {
+        Ok(Poll::Ready(()))
     }
 }
 
 /// Creates new `Filter` values.
-pub trait FilterFactory<F: Filter>: Sized {
+pub trait FilterFactory<F>: Sized {
     /// The `Filter` value created by this factory
-    type Filter: Filter;
+    type Filter: FilterLayer;
     /// Errors produced while building a filter.
     type Error: fmt::Debug;
     /// The future of the `FilterFactory` instance.
-    type Future: Future<Output = Result<Io<Self::Filter>, Self::Error>>;
+    type Future: Future<Output = Result<Io<Layer<Self::Filter, F>>, Self::Error>>;
 
     /// Create and return a new filter value asynchronously.
     fn create(self, st: Io<F>) -> Self::Future;

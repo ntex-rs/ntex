@@ -15,13 +15,13 @@ use crate::connect::{Connect, ConnectError, Connector};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use crate::http::{body::BodySize, client::ClientResponse, error::HttpError, h1};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
-use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Sealed};
+use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Sealed};
 use crate::service::{apply_fn, into_service, IntoService, Service};
 use crate::time::{timeout, Millis, Seconds};
 use crate::{channel::mpsc, rt, util::Ready, ws};
 
 use super::error::{WsClientBuilderError, WsClientError, WsError};
-use super::transport::{WsTransport, WsTransportFactory};
+use super::transport::WsTransport;
 
 /// `WebSocket` client builder
 pub struct WsClient<F, T> {
@@ -527,7 +527,7 @@ where
     pub fn openssl(
         &mut self,
         connector: openssl::SslConnector,
-    ) -> WsClientBuilder<openssl::SslFilter, openssl::Connector<Uri>> {
+    ) -> WsClientBuilder<Layer<openssl::SslFilter>, openssl::Connector<Uri>> {
         self.connector(openssl::Connector::new(connector))
     }
 
@@ -536,7 +536,7 @@ where
     pub fn rustls(
         &mut self,
         config: std::sync::Arc<rustls::ClientConfig>,
-    ) -> WsClientBuilder<rustls::TlsFilter, rustls::Connector<Uri>> {
+    ) -> WsClientBuilder<Layer<rustls::TlsFilter>, rustls::Connector<Uri>> {
         self.connector(rustls::Connector::from(config))
     }
 
@@ -787,12 +787,8 @@ impl<F: Filter> WsConnection<F> {
     }
 
     /// Convert to ws stream to plain io stream
-    pub async fn into_transport(self) -> Io<WsTransport<F>> {
-        // WsTransportFactory is infallible
-        self.io
-            .add_filter(WsTransportFactory::new(self.codec))
-            .await
-            .unwrap()
+    pub fn into_transport(self) -> Io<Layer<WsTransport, F>> {
+        WsTransport::create(self.io, self.codec)
     }
 }
 

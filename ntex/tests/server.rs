@@ -120,6 +120,7 @@ async fn test_run() {
 
     // stop
     let _ = srv.stop(false).await;
+    thread::sleep(time::Duration::from_millis(100));
     assert!(net::TcpStream::connect(addr).is_err());
 
     thread::sleep(time::Duration::from_millis(100));
@@ -250,7 +251,6 @@ fn test_configure_async() {
 #[cfg(feature = "tokio")]
 #[allow(unreachable_code)]
 fn test_panic_in_worker() {
-    env_logger::init();
     let counter = Arc::new(AtomicUsize::new(0));
     let counter2 = counter.clone();
 

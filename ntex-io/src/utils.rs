@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use ntex_service::{fn_service, pipeline_factory, Service, ServiceFactory};
 use ntex_util::future::Ready;
 
-use crate::{Filter, FilterFactory, Io, IoBoxed};
+use crate::{Filter, FilterFactory, Io, IoBoxed, Layer};
 
 /// Service that converts any Io<F> stream to IoBoxed stream
 pub fn seal<F, S, C>(
@@ -30,7 +30,6 @@ where
 pub fn filter<T, F>(filter: T) -> FilterServiceFactory<T, F>
 where
     T: FilterFactory<F> + Clone,
-    F: Filter,
 {
     FilterServiceFactory {
         filter,
@@ -46,9 +45,8 @@ pub struct FilterServiceFactory<T, F> {
 impl<T, F> ServiceFactory<Io<F>> for FilterServiceFactory<T, F>
 where
     T: FilterFactory<F> + Clone,
-    F: Filter,
 {
-    type Response = Io<T::Filter>;
+    type Response = Io<Layer<T::Filter, F>>;
     type Error = T::Error;
     type Service = FilterService<T, F>;
     type InitError = ();
@@ -71,25 +69,28 @@ pub struct FilterService<T, F> {
 impl<T, F> Service<Io<F>> for FilterService<T, F>
 where
     T: FilterFactory<F> + Clone,
-    F: Filter,
 {
-    type Response = Io<T::Filter>;
+    type Response = Io<Layer<T::Filter, F>>;
     type Error = T::Error;
-    type Future<'f> = T::Future where T: 'f;
+    type Future<'f> = T::Future where T: 'f, F: 'f;
 
     #[inline]
     fn call(&self, req: Io<F>) -> Self::Future<'_> {
-        req.add_filter(self.filter.clone())
+        self.filter.clone().create(req)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use ntex_bytes::{Bytes, BytesVec};
+    use std::io;
+
+    use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{filter::NullFilter, testing::IoTest};
+    use crate::{
+        buf::Stack, filter::NullFilter, testing::IoTest, FilterLayer, ReadBuf, WriteBuf,
+    };
 
     #[ntex::test]
     async fn test_utils() {
@@ -114,16 +115,28 @@ mod tests {
         assert_eq!(buf, b"RES".as_ref());
     }
 
-    #[derive(Copy, Clone, Debug)]
-    struct NullFilterFactory;
+    pub(crate) struct TestFilter;
 
-    impl<F: Filter> FilterFactory<F> for NullFilterFactory {
-        type Filter = crate::filter::NullFilter;
+    impl FilterLayer for TestFilter {
+        fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
+            Ok(buf.nbytes())
+        }
+
+        fn process_write_buf(&self, _: &mut WriteBuf<'_>) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Copy, Clone, Debug)]
+    struct TestFilterFactory;
+
+    impl<F: Filter> FilterFactory<F> for TestFilterFactory {
+        type Filter = TestFilter;
         type Error = std::convert::Infallible;
-        type Future = Ready<Io<Self::Filter>, Self::Error>;
+        type Future = Ready<Io<Layer<TestFilter, F>>, Self::Error>;
 
         fn create(self, st: Io<F>) -> Self::Future {
-            st.map_filter(|_| Ok(NullFilter)).into()
+            Ready::Ok(st.add_filter(TestFilter).into())
         }
     }
 
@@ -131,7 +144,7 @@ mod tests {
     async fn test_utils_filter() {
         let (_, server) = IoTest::create();
         let svc = pipeline_factory(
-            filter::<_, crate::filter::Base>(NullFilterFactory)
+            filter::<_, crate::filter::Base>(TestFilterFactory)
                 .map_err(|_| ())
                 .map_init_err(|_| ()),
         )
@@ -147,8 +160,15 @@ mod tests {
 
     #[ntex::test]
     async fn test_null_filter() {
+        let (_, server) = IoTest::create();
+        let io = Io::new(server);
+        let ioref = io.get_ref();
+        let mut stack = Stack::new();
         assert!(NullFilter.query(std::any::TypeId::of::<()>()).is_none());
-        assert!(NullFilter.poll_shutdown().is_ready());
+        assert!(NullFilter
+            .shutdown(&ioref, &mut stack, 0)
+            .unwrap()
+            .is_ready());
         assert_eq!(
             ntex_util::future::poll_fn(|cx| NullFilter.poll_read_ready(cx)).await,
             crate::ReadStatus::Terminate
@@ -157,16 +177,12 @@ mod tests {
             ntex_util::future::poll_fn(|cx| NullFilter.poll_write_ready(cx)).await,
             crate::WriteStatus::Terminate
         );
-        assert_eq!(NullFilter.get_read_buf(), None);
-        assert_eq!(NullFilter.get_write_buf(), None);
-        assert!(NullFilter.release_write_buf(BytesVec::new()).is_ok());
-        NullFilter.release_read_buf(BytesVec::new());
-
-        let (_, server) = IoTest::create();
-        let io = Io::new(server);
+        assert!(NullFilter.process_write_buf(&ioref, &mut stack, 0).is_ok());
         assert_eq!(
-            NullFilter.process_read_buf(&io.get_ref(), 10).unwrap(),
-            (0, 0)
+            NullFilter
+                .process_read_buf(&ioref, &mut stack, 0, 0)
+                .unwrap(),
+            (0)
         )
     }
 }

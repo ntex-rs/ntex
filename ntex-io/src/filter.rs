@@ -1,8 +1,6 @@
 use std::{any, io, task::Context, task::Poll};
 
-use ntex_bytes::BytesVec;
-
-use super::{io::Flags, Filter, IoRef, ReadStatus, WriteStatus};
+use super::{buf::Stack, io::Flags, FilterLayer, IoRef, ReadStatus, WriteStatus};
 
 /// Default `Io` filter
 pub struct Base(IoRef);
@@ -13,8 +11,54 @@ impl Base {
     }
 }
 
+pub struct Layer<F, L = Base>(pub(crate) F, L);
+
+impl<F: FilterLayer, L: Filter> Layer<F, L> {
+    pub(crate) fn new(f: F, l: L) -> Self {
+        Self(f, l)
+    }
+}
+
+pub(crate) struct NullFilter;
+
+const NULL: NullFilter = NullFilter;
+
+impl NullFilter {
+    pub(super) fn get() -> &'static dyn Filter {
+        &NULL
+    }
+}
+
+pub trait Filter: 'static {
+    fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>>;
+
+    fn process_read_buf(
+        &self,
+        io: &IoRef,
+        stack: &mut Stack,
+        idx: usize,
+        nbytes: usize,
+    ) -> io::Result<usize>;
+
+    /// Process write buffer
+    fn process_write_buf(
+        &self,
+        io: &IoRef,
+        stack: &mut Stack,
+        idx: usize,
+    ) -> io::Result<()>;
+
+    /// Gracefully shutdown filter
+    fn shutdown(&self, io: &IoRef, stack: &mut Stack, idx: usize) -> io::Result<Poll<()>>;
+
+    /// Check readiness for read operations
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus>;
+
+    /// Check readiness for write operations
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus>;
+}
+
 impl Filter for Base {
-    #[inline]
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if let Some(hnd) = self.0 .0.handle.take() {
             let res = hnd.query(id);
@@ -23,11 +67,6 @@ impl Filter for Base {
         } else {
             None
         }
-    }
-
-    #[inline]
-    fn poll_shutdown(&self) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
     }
 
     #[inline]
@@ -67,51 +106,128 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn get_read_buf(&self) -> Option<BytesVec> {
-        self.0 .0.read_buf.take()
+    fn process_read_buf(
+        &self,
+        _: &IoRef,
+        _: &mut Stack,
+        _: usize,
+        nbytes: usize,
+    ) -> io::Result<usize> {
+        Ok(nbytes)
     }
 
     #[inline]
-    fn get_write_buf(&self) -> Option<BytesVec> {
-        self.0 .0.write_buf.take()
-    }
-
-    #[inline]
-    fn release_read_buf(&self, buf: BytesVec) {
-        self.0 .0.read_buf.set(Some(buf));
-    }
-
-    #[inline]
-    fn process_read_buf(&self, _: &IoRef, n: usize) -> io::Result<(usize, usize)> {
-        let buf = self.0 .0.read_buf.as_ptr();
-        let ref_buf = unsafe { buf.as_ref().unwrap() };
-        let total = ref_buf.as_ref().map(|v| v.len()).unwrap_or(0);
-        Ok((total, n))
-    }
-
-    #[inline]
-    fn release_write_buf(&self, buf: BytesVec) -> Result<(), io::Error> {
-        let pool = self.0.memory_pool();
-        if buf.is_empty() {
-            pool.release_write_buf(buf);
-        } else {
-            if buf.len() >= pool.write_params_high() {
+    fn process_write_buf(&self, _: &IoRef, s: &mut Stack, _: usize) -> io::Result<()> {
+        if let Some(buf) = s.last_write_buf() {
+            if buf.len() >= self.0.memory_pool().write_params_high() {
                 self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
             }
-            self.0 .0.write_buf.set(Some(buf));
-            self.0 .0.write_task.wake();
         }
         Ok(())
     }
+
+    #[inline]
+    fn shutdown(&self, _: &IoRef, _: &mut Stack, _: usize) -> io::Result<Poll<()>> {
+        Ok(Poll::Ready(()))
+    }
 }
 
-pub(crate) struct NullFilter;
+impl<F, L> Filter for Layer<F, L>
+where
+    F: FilterLayer,
+    L: Filter,
+{
+    #[inline]
+    fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+        self.0.query(id).or_else(|| self.1.query(id))
+    }
 
-const NULL: NullFilter = NullFilter;
+    #[inline]
+    fn shutdown(&self, io: &IoRef, stack: &mut Stack, idx: usize) -> io::Result<Poll<()>> {
+        let result1 = stack.write_buf(io, idx, |buf| self.0.shutdown(buf))?;
+        self.process_write_buf(io, stack, idx)?;
 
-impl NullFilter {
-    pub(super) fn get() -> &'static dyn Filter {
-        &NULL
+        let result2 = if F::BUFFERS {
+            self.1.shutdown(io, stack, idx + 1)?
+        } else {
+            self.1.shutdown(io, stack, idx)?
+        };
+
+        if result1.is_pending() || result2.is_pending() {
+            Ok(Poll::Pending)
+        } else {
+            Ok(Poll::Ready(()))
+        }
+    }
+
+    #[inline]
+    fn process_read_buf(
+        &self,
+        io: &IoRef,
+        stack: &mut Stack,
+        idx: usize,
+        nbytes: usize,
+    ) -> io::Result<usize> {
+        let nbytes = if F::BUFFERS {
+            self.1.process_read_buf(io, stack, idx + 1, nbytes)?
+        } else {
+            self.1.process_read_buf(io, stack, idx, nbytes)?
+        };
+        stack.read_buf(io, idx, nbytes, |buf| self.0.process_read_buf(buf))
+    }
+
+    #[inline]
+    fn process_write_buf(
+        &self,
+        io: &IoRef,
+        stack: &mut Stack,
+        idx: usize,
+    ) -> io::Result<()> {
+        stack.write_buf(io, idx, |buf| self.0.process_write_buf(buf))?;
+
+        if F::BUFFERS {
+            self.1.process_write_buf(io, stack, idx + 1)
+        } else {
+            self.1.process_write_buf(io, stack, idx)
+        }
+    }
+
+    #[inline]
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
+        let res1 = self.0.poll_read_ready(cx);
+        let res2 = self.1.poll_read_ready(cx);
+
+        match res1 {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(ReadStatus::Ready) => res2,
+            Poll::Ready(ReadStatus::Terminate) => Poll::Ready(ReadStatus::Terminate),
+        }
+    }
+
+    #[inline]
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
+        let res1 = self.0.poll_write_ready(cx);
+        let res2 = self.1.poll_write_ready(cx);
+
+        match res1 {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(WriteStatus::Ready) => res2,
+            Poll::Ready(WriteStatus::Terminate) => Poll::Ready(WriteStatus::Terminate),
+            Poll::Ready(WriteStatus::Shutdown(t)) => {
+                if res2 == Poll::Ready(WriteStatus::Terminate) {
+                    Poll::Ready(WriteStatus::Terminate)
+                } else {
+                    Poll::Ready(WriteStatus::Shutdown(t))
+                }
+            }
+            Poll::Ready(WriteStatus::Timeout(t)) => match res2 {
+                Poll::Ready(WriteStatus::Terminate) => Poll::Ready(WriteStatus::Terminate),
+                Poll::Ready(WriteStatus::Shutdown(t)) => {
+                    Poll::Ready(WriteStatus::Shutdown(t))
+                }
+                _ => Poll::Ready(WriteStatus::Timeout(t)),
+            },
+        }
     }
 }
 
@@ -119,11 +235,6 @@ impl Filter for NullFilter {
     #[inline]
     fn query(&self, _: any::TypeId) -> Option<Box<dyn any::Any>> {
         None
-    }
-
-    #[inline]
-    fn poll_shutdown(&self) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
     }
 
     #[inline]
@@ -137,25 +248,23 @@ impl Filter for NullFilter {
     }
 
     #[inline]
-    fn get_read_buf(&self) -> Option<BytesVec> {
-        None
+    fn process_read_buf(
+        &self,
+        _: &IoRef,
+        _: &mut Stack,
+        _: usize,
+        _: usize,
+    ) -> io::Result<usize> {
+        Ok(0)
     }
 
     #[inline]
-    fn get_write_buf(&self) -> Option<BytesVec> {
-        None
-    }
-
-    #[inline]
-    fn release_read_buf(&self, _: BytesVec) {}
-
-    #[inline]
-    fn process_read_buf(&self, _: &IoRef, _: usize) -> io::Result<(usize, usize)> {
-        Ok((0, 0))
-    }
-
-    #[inline]
-    fn release_write_buf(&self, _: BytesVec) -> Result<(), io::Error> {
+    fn process_write_buf(&self, _: &IoRef, _: &mut Stack, _: usize) -> io::Result<()> {
         Ok(())
+    }
+
+    #[inline]
+    fn shutdown(&self, _: &IoRef, _: &mut Stack, _: usize) -> io::Result<Poll<()>> {
+        Ok(Poll::Ready(()))
     }
 }

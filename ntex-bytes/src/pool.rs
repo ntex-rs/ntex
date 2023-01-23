@@ -6,7 +6,7 @@ use std::{cell::Cell, cell::RefCell, fmt, future::Future, mem, pin::Pin, ptr, rc
 
 use futures_core::task::__internal::AtomicWaker;
 
-use crate::{BytesMut, BytesVec};
+use crate::{BufMut, BytesMut, BytesVec};
 
 pub struct Pool {
     idx: Cell<usize>,
@@ -295,6 +295,17 @@ impl PoolRef {
 
     #[doc(hidden)]
     #[inline]
+    /// Resize read buffer
+    pub fn resize_read_buf(self, buf: &mut BytesVec) {
+        let (hw, lw) = self.0.write_wm.get().unpack();
+        let remaining = buf.remaining_mut();
+        if remaining < lw {
+            buf.reserve(hw - remaining);
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline]
     /// Release read buffer, buf must be allocated from this pool
     pub fn release_read_buf(self, mut buf: BytesVec) {
         let cap = buf.capacity();
@@ -315,6 +326,17 @@ impl PoolRef {
             buf
         } else {
             BytesVec::with_capacity_in(self.0.write_wm.get().high as usize, self)
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    /// Resize write buffer
+    pub fn resize_write_buf(self, buf: &mut BytesVec) {
+        let (hw, lw) = self.0.write_wm.get().unpack();
+        let remaining = buf.remaining_mut();
+        if remaining < lw {
+            buf.reserve(hw - remaining);
         }
     }
 

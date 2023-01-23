@@ -1,9 +1,9 @@
 use std::{any, fmt, hash, io, time};
 
-use ntex_bytes::{BufMut, BytesVec, PoolRef};
+use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
-use super::{io::Flags, timer, types, Filter, IoRef, OnDisconnect};
+use super::{io::Flags, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
 
 impl IoRef {
     #[inline]
@@ -49,7 +49,7 @@ impl IoRef {
     /// Notify dispatcher and initiate io stream shutdown process.
     pub fn close(&self) {
         self.0.insert_flags(Flags::DSP_STOP);
-        self.0.init_shutdown(None);
+        self.0.init_shutdown(None, self);
     }
 
     #[inline]
@@ -72,8 +72,16 @@ impl IoRef {
 
     #[inline]
     /// Gracefully shutdown io stream
-    pub fn want_shutdown(&self, err: Option<io::Error>) {
-        self.0.init_shutdown(err);
+    pub fn want_shutdown(&self) {
+        if !self
+            .0
+            .flags
+            .get()
+            .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
+        {
+            log::trace!("initiate io shutdown {:?}", self.0.flags.get());
+            self.0.insert_flags(Flags::IO_STOPPING_FILTERS);
+        }
     }
 
     #[inline]
@@ -96,13 +104,8 @@ impl IoRef {
 
         if !flags.contains(Flags::IO_STOPPING) {
             self.with_write_buf(|buf| {
-                let (hw, lw) = self.memory_pool().write_params().unpack();
-
                 // make sure we've got room
-                let remaining = buf.remaining_mut();
-                if remaining < lw {
-                    buf.reserve(hw - remaining);
-                }
+                self.memory_pool().resize_write_buf(buf);
 
                 // encode item and wake write task
                 codec.encode_vec(item, buf)
@@ -151,21 +154,35 @@ impl IoRef {
 
     #[inline]
     /// Get mut access to write buffer
-    pub fn with_write_buf<F, R>(&self, f: F) -> Result<R, io::Error>
+    pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut BytesVec) -> R,
     {
-        let filter = self.0.filter.get();
-        let mut buf = filter
-            .get_write_buf()
-            .unwrap_or_else(|| self.memory_pool().get_write_buf());
-        let is_write_sleep = buf.is_empty();
+        let mut buffer = self.0.buffer.borrow_mut();
+        let is_write_sleep = buffer.last_write_buf_size() == 0;
 
-        let result = f(&mut buf);
-        if is_write_sleep {
+        let result = f(buffer.first_write_buf(self));
+        self.0
+            .filter
+            .get()
+            .process_write_buf(self, &mut buffer, 0)?;
+
+        if is_write_sleep && buffer.last_write_buf_size() != 0 {
             self.0.write_task.wake();
         }
-        filter.release_write_buf(buf)?;
+        Ok(result)
+    }
+
+    #[inline]
+    /// Get mut access to write buffer
+    pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
+    where
+        F: FnOnce(&mut WriteBuf<'_>) -> R,
+    {
+        let mut b = self.0.buffer.borrow_mut();
+        let result = b.write_buf(self, 0, f);
+        self.0.filter.get().process_write_buf(self, &mut b, 0)?;
+        self.0.write_task.wake();
         Ok(result)
     }
 
@@ -240,16 +257,15 @@ impl fmt::Debug for IoRef {
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
-    use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
+    use std::{future::Future, pin::Pin, rc::Rc, task::Poll};
 
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
-    use ntex_util::future::{lazy, poll_fn, Ready};
+    use ntex_util::future::{lazy, poll_fn};
     use ntex_util::time::{sleep, Millis};
 
     use super::*;
-    use crate::testing::IoTest;
-    use crate::{Filter, FilterFactory, Io, ReadStatus, WriteStatus};
+    use crate::{testing::IoTest, FilterLayer, Io, ReadBuf, WriteBuf};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -370,87 +386,28 @@ mod tests {
         assert_eq!(waiter.await, ());
     }
 
-    struct Counter<F> {
+    struct Counter {
         idx: usize,
-        inner: F,
         in_bytes: Rc<Cell<usize>>,
         out_bytes: Rc<Cell<usize>>,
         read_order: Rc<RefCell<Vec<usize>>>,
         write_order: Rc<RefCell<Vec<usize>>>,
     }
-    impl<F: Filter> Filter for Counter<F> {
-        fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
-            self.inner.poll_read_ready(cx)
-        }
 
-        fn get_read_buf(&self) -> Option<BytesVec> {
-            self.inner.get_read_buf()
-        }
+    impl FilterLayer for Counter {
+        const BUFFERS: bool = false;
 
-        fn release_read_buf(&self, buf: BytesVec) {
-            self.inner.release_read_buf(buf)
-        }
-
-        fn process_read_buf(&self, io: &IoRef, n: usize) -> io::Result<(usize, usize)> {
-            let result = self.inner.process_read_buf(io, n)?;
+        fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
             self.read_order.borrow_mut().push(self.idx);
-            self.in_bytes.set(self.in_bytes.get() + result.1);
-            Ok(result)
+            self.in_bytes.set(self.in_bytes.get() + buf.nbytes());
+            Ok(buf.nbytes())
         }
 
-        fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
-            self.inner.poll_write_ready(cx)
-        }
-
-        fn get_write_buf(&self) -> Option<BytesVec> {
-            if let Some(buf) = self.inner.get_write_buf() {
-                self.out_bytes.set(self.out_bytes.get() - buf.len());
-                Some(buf)
-            } else {
-                None
-            }
-        }
-
-        fn release_write_buf(&self, buf: BytesVec) -> Result<(), io::Error> {
+        fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
             self.write_order.borrow_mut().push(self.idx);
-            self.out_bytes.set(self.out_bytes.get() + buf.len());
-            self.inner.release_write_buf(buf)
-        }
-    }
-
-    struct CounterFactory(
-        usize,
-        Rc<Cell<usize>>,
-        Rc<Cell<usize>>,
-        Rc<RefCell<Vec<usize>>>,
-        Rc<RefCell<Vec<usize>>>,
-    );
-
-    impl<F: Filter> FilterFactory<F> for CounterFactory {
-        type Filter = Counter<F>;
-
-        type Error = ();
-        type Future = Ready<Io<Counter<F>>, Self::Error>;
-
-        fn create(self, io: Io<F>) -> Self::Future {
-            let idx = self.0;
-            let in_bytes = self.1.clone();
-            let out_bytes = self.2.clone();
-            let read_order = self.3.clone();
-            let write_order = self.4;
-            Ready::Ok(
-                io.map_filter(|inner| {
-                    Ok::<_, ()>(Counter {
-                        idx,
-                        inner,
-                        in_bytes,
-                        out_bytes,
-                        read_order,
-                        write_order,
-                    })
-                })
-                .unwrap(),
-            )
+            self.out_bytes
+                .set(self.out_bytes.get() + buf.get_dst().len());
+            Ok(())
         }
     }
 
@@ -460,24 +417,22 @@ mod tests {
         let out_bytes = Rc::new(Cell::new(0));
         let read_order = Rc::new(RefCell::new(Vec::new()));
         let write_order = Rc::new(RefCell::new(Vec::new()));
-        let factory = CounterFactory(
-            1,
-            in_bytes.clone(),
-            out_bytes.clone(),
-            read_order.clone(),
-            write_order.clone(),
-        );
 
         let (client, server) = IoTest::create();
-        let state = Io::new(server).add_filter(factory).await.unwrap();
+        let io = Io::new(server).add_filter(Counter {
+            idx: 1,
+            in_bytes: in_bytes.clone(),
+            out_bytes: out_bytes.clone(),
+            read_order: read_order.clone(),
+            write_order: write_order.clone(),
+        });
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
-        let msg = state.recv(&BytesCodec).await.unwrap().unwrap();
+        let msg = io.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
 
-        state
-            .send(Bytes::from_static(b"test"), &BytesCodec)
+        io.send(Bytes::from_static(b"test"), &BytesCodec)
             .await
             .unwrap();
         let buf = client.read().await.unwrap();
@@ -496,24 +451,20 @@ mod tests {
 
         let (client, server) = IoTest::create();
         let state = Io::new(server)
-            .add_filter(CounterFactory(
-                1,
-                in_bytes.clone(),
-                out_bytes.clone(),
-                read_order.clone(),
-                write_order.clone(),
-            ))
-            .await
-            .unwrap()
-            .add_filter(CounterFactory(
-                2,
-                in_bytes.clone(),
-                out_bytes.clone(),
-                read_order.clone(),
-                write_order.clone(),
-            ))
-            .await
-            .unwrap();
+            .add_filter(Counter {
+                idx: 1,
+                in_bytes: in_bytes.clone(),
+                out_bytes: out_bytes.clone(),
+                read_order: read_order.clone(),
+                write_order: write_order.clone(),
+            })
+            .add_filter(Counter {
+                idx: 2,
+                in_bytes: in_bytes.clone(),
+                out_bytes: out_bytes.clone(),
+                read_order: read_order.clone(),
+                write_order: write_order.clone(),
+            });
         let state = state.seal();
 
         client.remote_buffer_cap(1024);

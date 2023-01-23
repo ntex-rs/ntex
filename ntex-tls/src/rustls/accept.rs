@@ -3,7 +3,7 @@ use std::{future::Future, io, marker::PhantomData, pin::Pin, sync::Arc};
 
 use tls_rust::ServerConfig;
 
-use ntex_io::{Filter, FilterFactory, Io};
+use ntex_io::{Filter, FilterFactory, Io, Layer};
 use ntex_service::{Service, ServiceFactory};
 use ntex_util::{future::Ready, time::Millis};
 
@@ -52,7 +52,7 @@ impl<F> Clone for Acceptor<F> {
 }
 
 impl<F: Filter, C: 'static> ServiceFactory<Io<F>, C> for Acceptor<F> {
-    type Response = Io<TlsFilter<F>>;
+    type Response = Io<Layer<TlsFilter, F>>;
     type Error = io::Error;
     type Service = AcceptorService<F>;
 
@@ -79,7 +79,7 @@ pub struct AcceptorService<F> {
 }
 
 impl<F: Filter> Service<Io<F>> for AcceptorService<F> {
-    type Response = Io<TlsFilter<F>>;
+    type Response = Io<Layer<TlsFilter, F>>;
     type Error = io::Error;
     type Future<'f> = AcceptorServiceFut<F>;
 
@@ -113,7 +113,7 @@ pin_project_lite::pin_project! {
 }
 
 impl<F: Filter> Future for AcceptorServiceFut<F> {
-    type Output = Result<Io<TlsFilter<F>>, io::Error>;
+    type Output = Result<Io<Layer<TlsFilter, F>>, io::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.project().fut.poll(cx)
