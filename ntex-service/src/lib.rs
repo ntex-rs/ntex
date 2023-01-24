@@ -11,6 +11,7 @@ mod and_then;
 mod apply;
 pub mod boxed;
 mod fn_service;
+mod fn_shutdown;
 mod macros;
 mod map;
 mod map_config;
@@ -22,6 +23,7 @@ mod then;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
+pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{apply, Identity, Middleware, Stack};
 pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
@@ -365,6 +367,7 @@ pub mod dev {
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
+    pub use crate::fn_shutdown::FnShutdown;
     pub use crate::map::{Map, MapFactory};
     pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrFactory};
