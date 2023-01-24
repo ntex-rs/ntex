@@ -1,6 +1,6 @@
 # Changes
 
-## [1.0.1] - 2023-1-23
+## [1.0.1] - 2023-01-24
 
 * Add `FnShutdown` service to provide on_shutdown callback
 

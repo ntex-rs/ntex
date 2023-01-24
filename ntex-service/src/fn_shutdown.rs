@@ -68,7 +68,7 @@ where
 #[cfg(test)]
 mod tests {
     use ntex_util::future::lazy;
-    use std::task::Poll;
+    use std::{rc::Rc, task::Poll};
 
     use crate::{fn_service, pipeline};
 
@@ -76,19 +76,20 @@ mod tests {
 
     #[ntex::test]
     async fn test_fn_shutdown() {
-        let mut is_called = false;
+        let is_called = Rc::new(Cell::new(false));
         let srv = fn_service(|_| async { Ok::<_, ()>("pipe") });
+        let is_called2 = is_called.clone();
         let on_shutdown = fn_shutdown(|| {
-            is_called = true;
+            is_called2.set(true);
         });
 
-        let pipe = pipeline(srv).and_then(on_shutdown);
+        let pipe = pipeline(srv).and_then(on_shutdown).clone();
 
         let res = pipe.call(()).await;
         assert_eq!(lazy(|cx| pipe.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "pipe");
         assert_eq!(lazy(|cx| pipe.poll_shutdown(cx)).await, Poll::Ready(()));
-        assert!(is_called);
+        assert!(is_called.get());
     }
 }
