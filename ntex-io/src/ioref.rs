@@ -406,7 +406,7 @@ mod tests {
         fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
             self.write_order.borrow_mut().push(self.idx);
             self.out_bytes
-                .set(self.out_bytes.get() + buf.get_dst().len());
+                .set(self.out_bytes.get() + buf.with_dst_buf(|b| b.len()));
             Ok(())
         }
     }

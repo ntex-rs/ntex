@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.2] - 2023-01-24
+
+* Process write buffer if filter wrote to write buffer during reading
+
 ## [0.2.1] - 2023-01-23
 
 * Refactor Io and Filter types

@@ -24,6 +24,7 @@ impl ReadContext {
         F: FnOnce(&mut BytesVec, usize, usize) -> Poll<io::Result<()>>,
     {
         let mut stack = self.0 .0.buffer.borrow_mut();
+        let is_write_sleep = stack.last_write_buf_size() == 0;
         let mut buf = stack
             .last_read_buf()
             .take()
@@ -50,8 +51,8 @@ impl ReadContext {
                     .filter()
                     .process_read_buf(&self.0, &mut stack, 0, nbytes)
                 {
-                    Ok(nbytes) => {
-                        if nbytes > 0 {
+                    Ok(status) => {
+                        if status.nbytes > 0 {
                             if buf_full || stack.first_read_buf_size() >= hw {
                                 log::trace!(
                                     "io read buffer is too large {}, enable read back-pressure",
@@ -70,7 +71,26 @@ impl ReadContext {
                             );
                         } else if buf_full {
                             // read task is paused because of read back-pressure
+                            // but there is no new data in top most read buffer
+                            // so we need to wake up read task to read more data
+                            // otherwise read task would sleep forever
                             self.0 .0.read_task.wake();
+                        }
+
+                        // while reading, filter wrote some data
+                        // in that case filters need to process write buffers
+                        // and potentialy wake write task
+                        if status.need_write {
+                            if let Err(err) =
+                                self.0.filter().process_write_buf(&self.0, &mut stack, 0)
+                            {
+                                self.0 .0.dispatch_task.wake();
+                                self.0 .0.insert_flags(Flags::RD_READY);
+                                self.0 .0.init_shutdown(Some(err), &self.0);
+                            }
+                            if is_write_sleep && stack.last_write_buf_size() != 0 {
+                                self.0 .0.write_task.wake();
+                            }
                         }
                     }
                     Err(err) => {

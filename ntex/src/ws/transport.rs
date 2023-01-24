@@ -67,13 +67,15 @@ impl FilterLayer for WsTransport {
             } else {
                 CloseCode::Normal
             };
-            let _ = self.codec.encode_vec(
-                Message::Close(Some(CloseReason {
-                    code,
-                    description: None,
-                })),
-                buf.get_dst(),
-            );
+            let _ = buf.with_dst_buf(|buf| {
+                self.codec.encode_vec(
+                    Message::Close(Some(CloseReason {
+                        code,
+                        description: None,
+                    })),
+                    buf,
+                )
+            });
         }
         Ok(Poll::Ready(()))
     }
@@ -131,7 +133,7 @@ impl FilterLayer for WsTransport {
                     }
                     Frame::Ping(msg) => {
                         let _ = buf.with_write_buf(|b| {
-                            self.codec.encode_vec(Message::Pong(msg), b.get_dst())
+                            b.with_dst_buf(|b| self.codec.encode_vec(Message::Pong(msg), b))
                         });
                     }
                     Frame::Pong(_) => (),
@@ -153,17 +155,17 @@ impl FilterLayer for WsTransport {
 
     fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
         if let Some(src) = buf.take_src() {
-            let dst = buf.get_dst();
+            buf.with_dst_buf(|dst| {
+                // make sure we've got room
+                let (hw, lw) = self.pool.write_params().unpack();
+                let remaining = dst.remaining_mut();
+                if remaining < lw {
+                    dst.reserve(cmp::max(hw, dst.len() + 12) - remaining);
+                }
 
-            // make sure we've got room
-            let (hw, lw) = self.pool.write_params().unpack();
-            let remaining = dst.remaining_mut();
-            if remaining < lw {
-                dst.reserve(cmp::max(hw, dst.len() + 12) - remaining);
-            }
-
-            // Encoder ws::Codec do not fail
-            let _ = self.codec.encode_vec(Message::Binary(src.freeze()), dst);
+                // Encoder ws::Codec do not fail
+                let _ = self.codec.encode_vec(Message::Binary(src.freeze()), dst);
+            });
         }
         Ok(())
     }

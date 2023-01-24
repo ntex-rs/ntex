@@ -29,6 +29,12 @@ impl NullFilter {
     }
 }
 
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub struct FilterReadStatus {
+    pub nbytes: usize,
+    pub need_write: bool,
+}
+
 pub trait Filter: 'static {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>>;
 
@@ -38,7 +44,7 @@ pub trait Filter: 'static {
         stack: &mut Stack,
         idx: usize,
         nbytes: usize,
-    ) -> io::Result<usize>;
+    ) -> io::Result<FilterReadStatus>;
 
     /// Process write buffer
     fn process_write_buf(
@@ -112,8 +118,11 @@ impl Filter for Base {
         _: &mut Stack,
         _: usize,
         nbytes: usize,
-    ) -> io::Result<usize> {
-        Ok(nbytes)
+    ) -> io::Result<FilterReadStatus> {
+        Ok(FilterReadStatus {
+            nbytes,
+            need_write: false,
+        })
     }
 
     #[inline]
@@ -167,13 +176,18 @@ where
         stack: &mut Stack,
         idx: usize,
         nbytes: usize,
-    ) -> io::Result<usize> {
-        let nbytes = if F::BUFFERS {
+    ) -> io::Result<FilterReadStatus> {
+        let status = if F::BUFFERS {
             self.1.process_read_buf(io, stack, idx + 1, nbytes)?
         } else {
             self.1.process_read_buf(io, stack, idx, nbytes)?
         };
-        stack.read_buf(io, idx, nbytes, |buf| self.0.process_read_buf(buf))
+        stack.read_buf(io, idx, status.nbytes, |buf| {
+            self.0.process_read_buf(buf).map(|nbytes| FilterReadStatus {
+                nbytes,
+                need_write: status.need_write || buf.need_write,
+            })
+        })
     }
 
     #[inline]
@@ -254,8 +268,8 @@ impl Filter for NullFilter {
         _: &mut Stack,
         _: usize,
         _: usize,
-    ) -> io::Result<usize> {
-        Ok(0)
+    ) -> io::Result<FilterReadStatus> {
+        Ok(Default::default())
     }
 
     #[inline]

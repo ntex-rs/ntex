@@ -242,7 +242,7 @@ impl<'a, 'b> io::Read for Wrapper<'a, 'b> {
 
 impl<'a, 'b> io::Write for Wrapper<'a, 'b> {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.1.get_dst().extend_from_slice(src);
+        self.1.with_dst_buf(|buf| buf.extend_from_slice(src));
         Ok(src.len())
     }
 

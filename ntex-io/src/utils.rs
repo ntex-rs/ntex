@@ -182,7 +182,7 @@ mod tests {
             NullFilter
                 .process_read_buf(&ioref, &mut stack, 0, 0)
                 .unwrap(),
-            (0)
+            Default::default()
         )
     }
 }
