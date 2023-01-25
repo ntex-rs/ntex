@@ -181,7 +181,6 @@ fn shutdown_filters(io: &IoRef) {
 
     if !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
         let mut buffer = st.buffer.borrow_mut();
-        let is_write_sleep = buffer.last_write_buf_size() == 0;
         match io.filter().shutdown(io, &mut buffer, 0) {
             Ok(Poll::Ready(())) => {
                 st.dispatch_task.wake();
@@ -201,8 +200,6 @@ fn shutdown_filters(io: &IoRef) {
                 st.io_stopped(Some(err));
             }
         }
-        if is_write_sleep && buffer.last_write_buf_size() != 0 {
-            st.write_task.wake();
-        }
+        st.write_task.wake();
     }
 }
