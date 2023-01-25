@@ -53,8 +53,7 @@ impl io::Read for IoInner {
 
 impl io::Write for IoInner {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        let mut buf = if let Some(mut buf) = self.destination.take() {
-            buf.reserve(src.len());
+        let mut buf = if let Some(buf) = self.destination.take() {
             buf
         } else {
             BytesVec::with_capacity_in(src.len(), self.pool)
@@ -216,15 +215,10 @@ impl FilterLayer for SslFilter {
                         continue;
                     }
                     Err(e) => {
-                        if !src.is_empty() {
-                            buf.set_src(Some(src));
-                        }
+                        buf.set_src(Some(src));
                         self.unset_buffers(buf);
                         return match e.code() {
                             ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => {
-                                buf.set_dst(
-                                    self.inner.borrow_mut().get_mut().destination.take(),
-                                );
                                 Ok(())
                             }
                             _ => Err(map_to_ioerr(e)),

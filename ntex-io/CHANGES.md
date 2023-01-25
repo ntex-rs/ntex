@@ -1,8 +1,10 @@
 # Changes
 
-## [0.2.3] - 2023-01-xx
+## [0.2.3] - 2023-01-25
 
 * Optimize buffers layout
+
+* Release empty buffers
 
 ## [0.2.2] - 2023-01-24
 

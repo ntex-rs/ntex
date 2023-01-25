@@ -114,9 +114,7 @@ impl FilterLayer for TlsServerFilter {
                 }
             }
 
-            if !src.is_empty() {
-                buf.set_src(Some(src));
-            }
+            buf.set_src(Some(src));
         }
         Ok(())
     }

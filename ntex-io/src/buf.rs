@@ -3,13 +3,12 @@ use ntex_util::future::Either;
 
 use crate::IoRef;
 
+type CacheLine = (Option<BytesVec>, Option<BytesVec>);
+
 #[derive(Debug)]
 pub struct Stack {
     len: usize,
-    buffers: Either<
-        [(Option<BytesVec>, Option<BytesVec>); 3],
-        Vec<(Option<BytesVec>, Option<BytesVec>)>,
-    >,
+    buffers: Either<[CacheLine; 3], Vec<CacheLine>>,
 }
 
 impl Stack {
@@ -26,8 +25,8 @@ impl Stack {
                 if self.len == 3 {
                     // move to vec
                     let mut vec = vec![(None, None)];
-                    for idx in 0..self.len {
-                        vec.push((b[idx].0.take(), b[idx].1.take()));
+                    for item in b.iter_mut().take(self.len) {
+                        vec.push((item.0.take(), item.1.take()));
                     }
                     self.len += 1;
                     self.buffers = Either::Right(vec);
@@ -51,10 +50,7 @@ impl Stack {
 
     fn get_buffers<F, R>(&mut self, idx: usize, f: F) -> R
     where
-        F: FnOnce(
-            &mut (Option<BytesVec>, Option<BytesVec>),
-            &mut (Option<BytesVec>, Option<BytesVec>),
-        ) -> R,
+        F: FnOnce(&mut CacheLine, &mut CacheLine) -> R,
     {
         let buffers = match self.buffers {
             Either::Left(ref mut b) => &mut b[..],
@@ -76,14 +72,14 @@ impl Stack {
         }
     }
 
-    fn get_first_level(&mut self) -> &mut (Option<BytesVec>, Option<BytesVec>) {
+    fn get_first_level(&mut self) -> &mut CacheLine {
         match &mut self.buffers {
             Either::Left(b) => &mut b[0],
             Either::Right(b) => &mut b[0],
         }
     }
 
-    fn get_last_level(&mut self) -> &mut (Option<BytesVec>, Option<BytesVec>) {
+    fn get_last_level(&mut self) -> &mut CacheLine {
         match &mut self.buffers {
             Either::Left(b) => &mut b[self.len - 1],
             Either::Right(b) => &mut b[self.len - 1],
@@ -164,7 +160,7 @@ impl Stack {
     }
 
     pub(crate) fn set_last_write_buf(&mut self, buf: BytesVec) {
-        *(&mut self.get_last_level().1) = Some(buf);
+        self.get_last_level().1 = Some(buf);
     }
 
     pub(crate) fn release(&mut self, pool: PoolRef) {
@@ -202,8 +198,8 @@ impl Stack {
 #[derive(Debug)]
 pub struct ReadBuf<'a> {
     pub(crate) io: &'a IoRef,
-    pub(crate) curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
-    pub(crate) next: &'a mut (Option<BytesVec>, Option<BytesVec>),
+    pub(crate) curr: &'a mut CacheLine,
+    pub(crate) next: &'a mut CacheLine,
     pub(crate) nbytes: usize,
     pub(crate) need_write: bool,
 }
@@ -242,13 +238,13 @@ impl<'a> ReadBuf<'a> {
     #[inline]
     /// Set source read buffer
     pub fn set_src(&mut self, src: Option<BytesVec>) {
+        if let Some(buf) = self.next.0.take() {
+            self.io.memory_pool().release_read_buf(buf);
+        }
         if let Some(src) = src {
             if src.is_empty() {
                 self.io.memory_pool().release_read_buf(src);
             } else {
-                if let Some(b) = self.next.0.take() {
-                    self.io.memory_pool().release_read_buf(b);
-                }
                 self.next.0 = Some(src);
             }
         }
@@ -275,13 +271,13 @@ impl<'a> ReadBuf<'a> {
     #[inline]
     /// Set destination read buffer
     pub fn set_dst(&mut self, dst: Option<BytesVec>) {
+        if let Some(buf) = self.curr.0.take() {
+            self.io.memory_pool().release_read_buf(buf);
+        }
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.memory_pool().release_read_buf(dst);
             } else {
-                if let Some(b) = self.curr.0.take() {
-                    self.io.memory_pool().release_read_buf(b);
-                }
                 self.curr.0 = Some(dst);
             }
         }
@@ -319,8 +315,8 @@ impl<'a> ReadBuf<'a> {
 #[derive(Debug)]
 pub struct WriteBuf<'a> {
     pub(crate) io: &'a IoRef,
-    pub(crate) curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
-    pub(crate) next: &'a mut (Option<BytesVec>, Option<BytesVec>),
+    pub(crate) curr: &'a mut CacheLine,
+    pub(crate) next: &'a mut CacheLine,
     pub(crate) need_write: bool,
 }
 
@@ -352,10 +348,16 @@ impl<'a> WriteBuf<'a> {
     #[inline]
     /// Set source write buffer
     pub fn set_src(&mut self, src: Option<BytesVec>) {
-        if let Some(b) = self.curr.1.take() {
-            self.io.memory_pool().release_read_buf(b);
+        if let Some(buf) = self.curr.1.take() {
+            self.io.memory_pool().release_read_buf(buf);
         }
-        self.curr.1 = src;
+        if let Some(buf) = src {
+            if buf.is_empty() {
+                self.io.memory_pool().release_read_buf(buf);
+            } else {
+                self.curr.1 = Some(buf);
+            }
+        }
     }
 
     #[inline]
@@ -385,13 +387,13 @@ impl<'a> WriteBuf<'a> {
     #[inline]
     /// Set destination write buffer
     pub fn set_dst(&mut self, dst: Option<BytesVec>) {
+        if let Some(buf) = self.next.1.take() {
+            self.io.memory_pool().release_write_buf(buf);
+        }
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.memory_pool().release_write_buf(dst);
             } else {
-                if let Some(b) = self.next.1.take() {
-                    self.io.memory_pool().release_write_buf(b);
-                }
                 self.need_write |= !dst.is_empty();
                 self.next.1 = Some(dst);
             }
