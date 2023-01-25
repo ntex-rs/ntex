@@ -242,13 +242,13 @@ impl<'a> ReadBuf<'a> {
     #[inline]
     /// Set source read buffer
     pub fn set_src(&mut self, src: Option<BytesVec>) {
+        if let Some(buf) = self.next.0.take() {
+            self.io.memory_pool().release_read_buf(buf);
+        }
         if let Some(src) = src {
             if src.is_empty() {
                 self.io.memory_pool().release_read_buf(src);
             } else {
-                if let Some(b) = self.next.0.take() {
-                    self.io.memory_pool().release_read_buf(b);
-                }
                 self.next.0 = Some(src);
             }
         }
@@ -275,13 +275,13 @@ impl<'a> ReadBuf<'a> {
     #[inline]
     /// Set destination read buffer
     pub fn set_dst(&mut self, dst: Option<BytesVec>) {
+        if let Some(buf) = self.curr.0.take() {
+            self.io.memory_pool().release_read_buf(buf);
+        }
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.memory_pool().release_read_buf(dst);
             } else {
-                if let Some(b) = self.curr.0.take() {
-                    self.io.memory_pool().release_read_buf(b);
-                }
                 self.curr.0 = Some(dst);
             }
         }
@@ -352,10 +352,16 @@ impl<'a> WriteBuf<'a> {
     #[inline]
     /// Set source write buffer
     pub fn set_src(&mut self, src: Option<BytesVec>) {
-        if let Some(b) = self.curr.1.take() {
-            self.io.memory_pool().release_read_buf(b);
+        if let Some(buf) = self.curr.1.take() {
+            self.io.memory_pool().release_read_buf(buf);
         }
-        self.curr.1 = src;
+        if let Some(buf) = src {
+            if buf.is_empty() {
+                self.io.memory_pool().release_read_buf(buf);
+            } else {
+                self.curr.1 = Some(buf);
+            }
+        }
     }
 
     #[inline]
@@ -385,13 +391,13 @@ impl<'a> WriteBuf<'a> {
     #[inline]
     /// Set destination write buffer
     pub fn set_dst(&mut self, dst: Option<BytesVec>) {
+        if let Some(buf) = self.next.1.take() {
+            self.io.memory_pool().release_write_buf(buf);
+        }
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.memory_pool().release_write_buf(dst);
             } else {
-                if let Some(b) = self.next.1.take() {
-                    self.io.memory_pool().release_write_buf(b);
-                }
                 self.need_write |= !dst.is_empty();
                 self.next.1 = Some(dst);
             }

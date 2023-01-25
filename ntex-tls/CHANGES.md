@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.3] - 2023-01-25
+
+* Fix double buf cleanup
+
 ## [0.2.2] - 2023-01-24
 
 * Update ntex-io to 0.2.2
