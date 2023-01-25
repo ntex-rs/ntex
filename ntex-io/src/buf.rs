@@ -3,13 +3,12 @@ use ntex_util::future::Either;
 
 use crate::IoRef;
 
+type CacheLine = (Option<BytesVec>, Option<BytesVec>);
+
 #[derive(Debug)]
 pub struct Stack {
     len: usize,
-    buffers: Either<
-        [(Option<BytesVec>, Option<BytesVec>); 3],
-        Vec<(Option<BytesVec>, Option<BytesVec>)>,
-    >,
+    buffers: Either<[CacheLine; 3], Vec<CacheLine>>,
 }
 
 impl Stack {
@@ -26,8 +25,8 @@ impl Stack {
                 if self.len == 3 {
                     // move to vec
                     let mut vec = vec![(None, None)];
-                    for idx in 0..self.len {
-                        vec.push((b[idx].0.take(), b[idx].1.take()));
+                    for item in b.iter_mut().take(self.len) {
+                        vec.push((item.0.take(), item.1.take()));
                     }
                     self.len += 1;
                     self.buffers = Either::Right(vec);
@@ -51,10 +50,7 @@ impl Stack {
 
     fn get_buffers<F, R>(&mut self, idx: usize, f: F) -> R
     where
-        F: FnOnce(
-            &mut (Option<BytesVec>, Option<BytesVec>),
-            &mut (Option<BytesVec>, Option<BytesVec>),
-        ) -> R,
+        F: FnOnce(&mut CacheLine, &mut CacheLine) -> R,
     {
         let buffers = match self.buffers {
             Either::Left(ref mut b) => &mut b[..],
@@ -76,14 +72,14 @@ impl Stack {
         }
     }
 
-    fn get_first_level(&mut self) -> &mut (Option<BytesVec>, Option<BytesVec>) {
+    fn get_first_level(&mut self) -> &mut CacheLine {
         match &mut self.buffers {
             Either::Left(b) => &mut b[0],
             Either::Right(b) => &mut b[0],
         }
     }
 
-    fn get_last_level(&mut self) -> &mut (Option<BytesVec>, Option<BytesVec>) {
+    fn get_last_level(&mut self) -> &mut CacheLine {
         match &mut self.buffers {
             Either::Left(b) => &mut b[self.len - 1],
             Either::Right(b) => &mut b[self.len - 1],
@@ -164,7 +160,7 @@ impl Stack {
     }
 
     pub(crate) fn set_last_write_buf(&mut self, buf: BytesVec) {
-        *(&mut self.get_last_level().1) = Some(buf);
+        self.get_last_level().1 = Some(buf);
     }
 
     pub(crate) fn release(&mut self, pool: PoolRef) {
@@ -202,8 +198,8 @@ impl Stack {
 #[derive(Debug)]
 pub struct ReadBuf<'a> {
     pub(crate) io: &'a IoRef,
-    pub(crate) curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
-    pub(crate) next: &'a mut (Option<BytesVec>, Option<BytesVec>),
+    pub(crate) curr: &'a mut CacheLine,
+    pub(crate) next: &'a mut CacheLine,
     pub(crate) nbytes: usize,
     pub(crate) need_write: bool,
 }
@@ -319,8 +315,8 @@ impl<'a> ReadBuf<'a> {
 #[derive(Debug)]
 pub struct WriteBuf<'a> {
     pub(crate) io: &'a IoRef,
-    pub(crate) curr: &'a mut (Option<BytesVec>, Option<BytesVec>),
-    pub(crate) next: &'a mut (Option<BytesVec>, Option<BytesVec>),
+    pub(crate) curr: &'a mut CacheLine,
+    pub(crate) next: &'a mut CacheLine,
     pub(crate) need_write: bool,
 }
 

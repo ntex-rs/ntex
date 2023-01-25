@@ -53,7 +53,7 @@ impl io::Read for IoInner {
 
 impl io::Write for IoInner {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        let mut buf = if let Some(mut buf) = self.destination.take() {
+        let mut buf = if let Some(buf) = self.destination.take() {
             buf
         } else {
             BytesVec::with_capacity_in(src.len(), self.pool)
