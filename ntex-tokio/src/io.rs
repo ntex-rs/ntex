@@ -69,7 +69,7 @@ impl Future for ReadTask {
                             Poll::Pending => Poll::Pending,
                             Poll::Ready(Ok(n)) => {
                                 if n == 0 {
-                                    log::trace!("tokio stream is disconnected");
+                                    log::trace!("tcp stream is disconnected");
                                     Poll::Ready(Ok(()))
                                 } else if buf.len() < hw {
                                     continue;
@@ -244,9 +244,7 @@ impl Future for WriteTask {
                                     Poll::Pending => {
                                         *count += read_buf.filled().len() as u16;
                                         if *count > 4096 {
-                                            log::trace!(
-                                                "tokio write task is stopped, too much input"
-                                            );
+                                            log::trace!("tokio write task is stopped, too much input");
                                             this.state.close(None);
                                             return Poll::Ready(());
                                         }

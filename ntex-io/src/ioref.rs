@@ -49,7 +49,7 @@ impl IoRef {
     /// Notify dispatcher and initiate io stream shutdown process.
     pub fn close(&self) {
         self.0.insert_flags(Flags::DSP_STOP);
-        self.0.init_shutdown(None, self);
+        self.0.init_shutdown(None);
     }
 
     #[inline]
@@ -81,6 +81,7 @@ impl IoRef {
         {
             log::trace!("initiate io shutdown {:?}", self.0.flags.get());
             self.0.insert_flags(Flags::IO_STOPPING_FILTERS);
+            self.0.read_task.wake();
         }
     }
 

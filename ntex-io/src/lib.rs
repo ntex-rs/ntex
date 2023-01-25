@@ -76,11 +76,13 @@ pub trait FilterLayer: 'static {
     /// Process write buffer
     fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> sio::Result<()>;
 
+    #[inline]
     /// Query internal filter data
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>> {
         None
     }
 
+    #[inline]
     /// Gracefully shutdown filter
     fn shutdown(&self, buf: &mut WriteBuf<'_>) -> sio::Result<Poll<()>> {
         Ok(Poll::Ready(()))
