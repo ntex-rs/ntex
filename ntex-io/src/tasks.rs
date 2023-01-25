@@ -23,7 +23,8 @@ impl ReadContext {
     where
         F: FnOnce(&mut BytesVec, usize, usize) -> Poll<io::Result<()>>,
     {
-        let mut stack = self.0 .0.buffer.borrow_mut();
+        let inner = &self.0 .0;
+        let mut stack = inner.buffer.borrow_mut();
         let is_write_sleep = stack.last_write_buf_size() == 0;
         let mut buf = stack
             .last_read_buf()
@@ -46,85 +47,70 @@ impl ReadContext {
 
             if nbytes > 0 {
                 let buf_full = nbytes >= hw;
-                match self
-                    .0
-                    .filter()
-                    .process_read_buf(&self.0, &mut stack, 0, nbytes)
-                {
-                    Ok(status) => {
+                let filter = self.0.filter();
+                let _ = filter.process_read_buf(&self.0, &mut stack, 0, nbytes)
+                    .and_then(|status| {
                         if status.nbytes > 0 {
                             if buf_full || stack.first_read_buf_size() >= hw {
                                 log::trace!(
                                     "io read buffer is too large {}, enable read back-pressure",
                                     total2
                                 );
-                                self.0
-                                     .0
-                                    .insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
+                                inner.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
                             } else {
-                                self.0 .0.insert_flags(Flags::RD_READY);
+                                inner.insert_flags(Flags::RD_READY);
                             }
-                            self.0 .0.dispatch_task.wake();
                             log::trace!(
                                 "new {} bytes available, wakeup dispatcher",
                                 nbytes,
                             );
+                            inner.dispatch_task.wake();
                         } else if buf_full {
                             // read task is paused because of read back-pressure
                             // but there is no new data in top most read buffer
                             // so we need to wake up read task to read more data
                             // otherwise read task would sleep forever
-                            self.0 .0.read_task.wake();
+                            inner.read_task.wake();
                         }
 
                         // while reading, filter wrote some data
                         // in that case filters need to process write buffers
                         // and potentialy wake write task
                         if status.need_write {
-                            if let Err(err) =
-                                self.0.filter().process_write_buf(&self.0, &mut stack, 0)
-                            {
-                                self.0 .0.dispatch_task.wake();
-                                self.0 .0.insert_flags(Flags::RD_READY);
-                                self.0 .0.init_shutdown(Some(err), &self.0);
-                            }
+                            let result = filter.process_write_buf(&self.0, &mut stack, 0);
                             if is_write_sleep && stack.last_write_buf_size() != 0 {
-                                self.0 .0.write_task.wake();
+                                inner.write_task.wake();
                             }
+                            result
+                        } else {
+                            Ok(())
                         }
-                    }
-                    Err(err) => {
-                        self.0 .0.dispatch_task.wake();
-                        self.0 .0.insert_flags(Flags::RD_READY);
-                        self.0 .0.init_shutdown(Some(err), &self.0);
-                    }
-                }
+                    })
+                    .map_err(|err| {
+                        inner.dispatch_task.wake();
+                        inner.insert_flags(Flags::RD_READY);
+                        inner.init_shutdown(Some(err));
+                    });
             }
         }
+        drop(stack);
 
-        let result = match result {
+        match result {
             Poll::Ready(Ok(())) => {
-                self.0 .0.io_stopped(None);
+                inner.io_stopped(None);
                 Poll::Ready(())
             }
             Poll::Ready(Err(e)) => {
-                self.0 .0.io_stopped(Some(e));
+                inner.io_stopped(Some(e));
                 Poll::Ready(())
             }
-            Poll::Pending => Poll::Pending,
-        };
-
-        drop(stack);
-        if self.0.flags().contains(Flags::IO_STOPPING_FILTERS) {
-            self.0 .0.shutdown_filters(&self.0);
+            Poll::Pending => {
+                if inner.flags.get().contains(Flags::IO_STOPPING_FILTERS) {
+                    shutdown_filters(&self.0);
+                }
+                Poll::Pending
+            }
         }
-        result
-    }
-
-    #[inline]
-    /// Indicate that io task is stopped
-    pub fn close(&self, err: Option<io::Error>) {
-        self.0 .0.io_stopped(err);
     }
 }
 
@@ -179,10 +165,6 @@ impl WriteContext {
             self.0 .0.buffer.borrow_mut().set_last_write_buf(buf);
         }
 
-        if self.0.flags().contains(Flags::IO_STOPPING_FILTERS) {
-            self.0 .0.shutdown_filters(&self.0);
-        }
-
         Ok(())
     }
 
@@ -190,5 +172,37 @@ impl WriteContext {
     /// Indicate that io task is stopped
     pub fn close(&self, err: Option<io::Error>) {
         self.0 .0.io_stopped(err);
+    }
+}
+
+fn shutdown_filters(io: &IoRef) {
+    let st = &io.0;
+    let flags = st.flags.get();
+
+    if !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
+        let mut buffer = st.buffer.borrow_mut();
+        let is_write_sleep = buffer.last_write_buf_size() == 0;
+        match io.filter().shutdown(io, &mut buffer, 0) {
+            Ok(Poll::Ready(())) => {
+                st.dispatch_task.wake();
+                st.insert_flags(Flags::IO_STOPPING);
+            }
+            Ok(Poll::Pending) => {
+                // check read buffer, if buffer is not consumed it is unlikely
+                // that filter will properly complete shutdown
+                if flags.contains(Flags::RD_PAUSED)
+                    || flags.contains(Flags::RD_BUF_FULL | Flags::RD_READY)
+                {
+                    st.dispatch_task.wake();
+                    st.insert_flags(Flags::IO_STOPPING);
+                }
+            }
+            Err(err) => {
+                st.io_stopped(Some(err));
+            }
+        }
+        if is_write_sleep && buffer.last_write_buf_size() != 0 {
+            st.write_task.wake();
+        }
     }
 }

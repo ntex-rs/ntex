@@ -119,7 +119,7 @@ impl IoState {
     }
 
     /// Gracefully shutdown read and write io tasks
-    pub(super) fn init_shutdown(&self, err: Option<io::Error>, io: &IoRef) {
+    pub(super) fn init_shutdown(&self, err: Option<io::Error>) {
         if err.is_some() {
             self.io_stopped(err);
         } else if !self
@@ -129,42 +129,7 @@ impl IoState {
         {
             log::trace!("initiate io shutdown {:?}", self.flags.get());
             self.insert_flags(Flags::IO_STOPPING_FILTERS);
-            self.shutdown_filters(io);
-        }
-    }
-
-    pub(super) fn shutdown_filters(&self, io: &IoRef) {
-        if !self
-            .flags
-            .get()
-            .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
-        {
-            let mut buffer = self.buffer.borrow_mut();
-            match self.filter.get().shutdown(io, &mut buffer, 0) {
-                Ok(Poll::Ready(())) => {
-                    self.read_task.wake();
-                    self.write_task.wake();
-                    self.dispatch_task.wake();
-                    self.insert_flags(Flags::IO_STOPPING);
-                }
-                Ok(Poll::Pending) => {
-                    let flags = self.flags.get();
-                    // check read buffer, if buffer is not consumed it is unlikely
-                    // that filter will properly complete shutdown
-                    if flags.contains(Flags::RD_PAUSED)
-                        || flags.contains(Flags::RD_BUF_FULL | Flags::RD_READY)
-                    {
-                        self.read_task.wake();
-                        self.write_task.wake();
-                        self.dispatch_task.wake();
-                        self.insert_flags(Flags::IO_STOPPING);
-                    }
-                }
-                Err(err) => {
-                    self.io_stopped(Some(err));
-                }
-            };
-            self.write_task.wake();
+            self.read_task.wake();
         }
     }
 
@@ -587,7 +552,7 @@ impl<F> Io<F> {
             }
         } else {
             if !flags.contains(Flags::IO_STOPPING_FILTERS) {
-                self.0 .0.init_shutdown(None, &self.0);
+                self.0 .0.init_shutdown(None);
             }
 
             self.0 .0.read_task.wake();

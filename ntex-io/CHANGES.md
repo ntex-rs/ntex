@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.3] - 2023-01-xx
+
+* Optimize buffers layout
+
 ## [0.2.2] - 2023-01-24
 
 * Process write buffer if filter wrote to write buffer during reading
