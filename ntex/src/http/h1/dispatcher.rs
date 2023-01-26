@@ -429,7 +429,7 @@ where
 
     fn unregister_keepalive(&mut self) {
         if self.flags.contains(Flags::KEEPALIVE_REG) {
-            self.io.remove_keepalive_timer();
+            self.io.stop_keepalive_timer();
             self.flags.remove(Flags::KEEPALIVE | Flags::KEEPALIVE_REG);
         }
     }
@@ -474,7 +474,7 @@ where
                     // keep-alive timer
                     if self.flags.contains(Flags::KEEPALIVE_REG) {
                         self.flags.remove(Flags::KEEPALIVE_REG);
-                        self.io.remove_keepalive_timer();
+                        self.io.stop_keepalive_timer();
                     }
 
                     // configure request payload

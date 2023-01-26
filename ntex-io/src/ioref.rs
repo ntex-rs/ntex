@@ -49,7 +49,7 @@ impl IoRef {
     /// Notify dispatcher and initiate io stream shutdown process.
     pub fn close(&self) {
         self.0.insert_flags(Flags::DSP_STOP);
-        self.0.init_shutdown(None);
+        self.0.init_shutdown();
     }
 
     #[inline]
@@ -132,11 +132,13 @@ impl IoRef {
     where
         U: Decoder,
     {
-        self.0.with_read_buf(false, |buf| {
-            buf.as_mut()
-                .map(|b| codec.decode_vec(b))
-                .unwrap_or(Ok(None))
-        })
+        self.0
+            .buffer
+            .borrow_mut()
+            .first_read_buf()
+            .as_mut()
+            .map(|b| codec.decode_vec(b))
+            .unwrap_or(Ok(None))
     }
 
     #[inline]
@@ -173,9 +175,12 @@ impl IoRef {
     where
         F: FnOnce(&mut WriteBuf<'_>) -> R,
     {
-        let mut b = self.0.buffer.borrow_mut();
-        let result = b.write_buf(self, 0, f);
-        self.0.filter.get().process_write_buf(self, &mut b, 0)?;
+        let mut buffer = self.0.buffer.borrow_mut();
+        let result = buffer.write_buf(self, 0, f);
+        self.0
+            .filter
+            .get()
+            .process_write_buf(self, &mut buffer, 0)?;
         Ok(result)
     }
 
@@ -185,13 +190,22 @@ impl IoRef {
     where
         F: FnOnce(&mut BytesVec) -> R,
     {
-        self.0.with_read_buf(true, |buf| {
-            // set buf
-            if buf.is_none() {
-                *buf = Some(self.memory_pool().get_read_buf());
+        // use top most buffer
+        let mut buffer = self.0.buffer.borrow_mut();
+        let buf = buffer.first_read_buf();
+        if buf.is_none() {
+            *buf = Some(self.memory_pool().get_read_buf());
+        }
+
+        let result = f(buf.as_mut().unwrap());
+
+        // release buffer
+        if buf.as_ref().map(|b| b.is_empty()).unwrap_or(false) {
+            if let Some(b) = buf.take() {
+                self.0.pool.get().release_read_buf(b);
             }
-            f(buf.as_mut().unwrap())
-        })
+        }
+        result
     }
 
     #[inline]

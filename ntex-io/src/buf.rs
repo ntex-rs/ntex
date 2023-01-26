@@ -3,12 +3,12 @@ use ntex_util::future::Either;
 
 use crate::IoRef;
 
-type CacheLine = (Option<BytesVec>, Option<BytesVec>);
+type BufferLine = (Option<BytesVec>, Option<BytesVec>);
 
 #[derive(Debug)]
 pub struct Stack {
     len: usize,
-    buffers: Either<[CacheLine; 3], Vec<CacheLine>>,
+    buffers: Either<[BufferLine; 3], Vec<BufferLine>>,
 }
 
 impl Stack {
@@ -50,7 +50,7 @@ impl Stack {
 
     fn get_buffers<F, R>(&mut self, idx: usize, f: F) -> R
     where
-        F: FnOnce(&mut CacheLine, &mut CacheLine) -> R,
+        F: FnOnce(&mut BufferLine, &mut BufferLine) -> R,
     {
         let buffers = match self.buffers {
             Either::Left(ref mut b) => &mut b[..],
@@ -72,14 +72,14 @@ impl Stack {
         }
     }
 
-    fn get_first_level(&mut self) -> &mut CacheLine {
+    fn get_first_level(&mut self) -> &mut BufferLine {
         match &mut self.buffers {
             Either::Left(b) => &mut b[0],
             Either::Right(b) => &mut b[0],
         }
     }
 
-    fn get_last_level(&mut self) -> &mut CacheLine {
+    fn get_last_level(&mut self) -> &mut BufferLine {
         match &mut self.buffers {
             Either::Left(b) => &mut b[self.len - 1],
             Either::Right(b) => &mut b[self.len - 1],
@@ -186,8 +186,8 @@ impl Stack {
 #[derive(Debug)]
 pub struct ReadBuf<'a> {
     pub(crate) io: &'a IoRef,
-    pub(crate) curr: &'a mut CacheLine,
-    pub(crate) next: &'a mut CacheLine,
+    pub(crate) curr: &'a mut BufferLine,
+    pub(crate) next: &'a mut BufferLine,
     pub(crate) nbytes: usize,
     pub(crate) need_write: bool,
 }
@@ -303,8 +303,8 @@ impl<'a> ReadBuf<'a> {
 #[derive(Debug)]
 pub struct WriteBuf<'a> {
     pub(crate) io: &'a IoRef,
-    pub(crate) curr: &'a mut CacheLine,
-    pub(crate) next: &'a mut CacheLine,
+    pub(crate) curr: &'a mut BufferLine,
+    pub(crate) next: &'a mut BufferLine,
     pub(crate) need_write: bool,
 }
 

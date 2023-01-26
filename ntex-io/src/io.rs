@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::task::{Context, Poll};
 use std::{fmt, future::Future, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc, time};
 
-use ntex_bytes::{BytesVec, PoolId, PoolRef};
+use ntex_bytes::{PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::{now, Millis};
 use ntex_util::{future::poll_fn, future::Either, task::LocalWaker};
@@ -71,21 +71,18 @@ pub(crate) struct IoState {
 }
 
 impl IoState {
-    #[inline]
     pub(super) fn insert_flags(&self, f: Flags) {
         let mut flags = self.flags.get();
         flags.insert(f);
         self.flags.set(flags);
     }
 
-    #[inline]
     pub(super) fn remove_flags(&self, f: Flags) {
         let mut flags = self.flags.get();
         flags.remove(f);
         self.flags.set(flags);
     }
 
-    #[inline]
     pub(super) fn notify_keepalive(&self) {
         log::trace!("keep-alive timeout, notify dispatcher");
         let mut flags = self.flags.get();
@@ -97,7 +94,6 @@ impl IoState {
         self.flags.set(flags);
     }
 
-    #[inline]
     pub(super) fn notify_disconnect(&self) {
         if let Some(on_disconnect) = self.on_disconnect.take() {
             for item in on_disconnect.into_iter() {
@@ -121,10 +117,8 @@ impl IoState {
     }
 
     /// Gracefully shutdown read and write io tasks
-    pub(super) fn init_shutdown(&self, err: Option<io::Error>) {
-        if err.is_some() {
-            self.io_stopped(err);
-        } else if !self
+    pub(super) fn init_shutdown(&self) {
+        if !self
             .flags
             .get()
             .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
@@ -133,31 +127,6 @@ impl IoState {
             self.insert_flags(Flags::IO_STOPPING_FILTERS);
             self.read_task.wake();
         }
-    }
-
-    pub(super) fn with_read_buf<Fn, Ret>(&self, release: bool, f: Fn) -> Ret
-    where
-        Fn: FnOnce(&mut Option<BytesVec>) -> Ret,
-    {
-        // use top most buffer
-        let mut buffer = self.buffer.borrow_mut();
-        let buf = buffer.first_read_buf();
-        let result = f(buf);
-
-        // release buffer
-        if release && buf.as_ref().map(|b| b.is_empty()).unwrap_or(false) {
-            if let Some(b) = buf.take() {
-                self.pool.get().release_read_buf(b);
-            }
-        }
-        result
-    }
-
-    pub(super) fn with_write_buf<Fn, Ret>(&self, f: Fn) -> Ret
-    where
-        Fn: FnOnce(&mut Option<BytesVec>) -> Ret,
-    {
-        f(self.buffer.borrow_mut().last_write_buf())
     }
 }
 
@@ -287,6 +256,7 @@ impl<F> Io<F> {
 
     #[inline]
     #[doc(hidden)]
+    #[deprecated]
     pub fn remove_keepalive_timer(&self) {
         self.stop_keepalive_timer()
     }
@@ -294,6 +264,14 @@ impl<F> Io<F> {
     /// Get current io error
     fn error(&self) -> Option<io::Error> {
         self.0 .0.error.take()
+    }
+}
+
+impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
+    #[inline]
+    /// Get referece to a filter
+    pub fn filter(&self) -> &F {
+        &self.1.filter().0
     }
 }
 
@@ -321,14 +299,6 @@ impl<F: Filter> Io<F> {
         let (filter, filter_ref) = self.1.add_filter(nf);
         self.0 .0.filter.replace(filter_ref);
         Io(self.0.clone(), filter)
-    }
-}
-
-impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
-    #[inline]
-    /// Get referece to a filter
-    pub fn filter(&self) -> &F {
-        &self.1.filter().0
     }
 }
 
@@ -518,25 +488,27 @@ impl<F> Io<F> {
         if flags.contains(Flags::IO_STOPPED) {
             Poll::Ready(self.error().map(Err).unwrap_or(Ok(())))
         } else {
-            let len = self
-                .0
-                 .0
-                .with_write_buf(|buf| buf.as_ref().map(|b| b.len()).unwrap_or(0));
+            let inner = &self.0 .0;
+            let len = inner
+                .buffer
+                .borrow_mut()
+                .last_write_buf()
+                .as_ref()
+                .map(|b| b.len())
+                .unwrap_or(0);
 
             if len > 0 {
                 if full {
-                    self.0 .0.insert_flags(Flags::WR_WAIT);
-                    self.0 .0.dispatch_task.register(cx.waker());
+                    inner.insert_flags(Flags::WR_WAIT);
+                    inner.dispatch_task.register(cx.waker());
                     return Poll::Pending;
-                } else if len >= self.0.memory_pool().write_params_high() << 1 {
-                    self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
-                    self.0 .0.dispatch_task.register(cx.waker());
+                } else if len >= inner.pool.get().write_params_high() << 1 {
+                    inner.insert_flags(Flags::WR_BACKPRESSURE);
+                    inner.dispatch_task.register(cx.waker());
                     return Poll::Pending;
                 }
             }
-            self.0
-                 .0
-                .remove_flags(Flags::WR_WAIT | Flags::WR_BACKPRESSURE);
+            inner.remove_flags(Flags::WR_WAIT | Flags::WR_BACKPRESSURE);
             Poll::Ready(Ok(()))
         }
     }
@@ -554,7 +526,7 @@ impl<F> Io<F> {
             }
         } else {
             if !flags.contains(Flags::IO_STOPPING_FILTERS) {
-                self.0 .0.init_shutdown(None);
+                self.0 .0.init_shutdown();
             }
 
             self.0 .0.read_task.wake();
@@ -592,6 +564,7 @@ impl<F> Io<F> {
 }
 
 impl<F> AsRef<IoRef> for Io<F> {
+    #[inline]
     fn as_ref(&self) -> &IoRef {
         &self.0
     }

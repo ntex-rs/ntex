@@ -84,7 +84,7 @@ impl ReadContext {
                     .map_err(|err| {
                         inner.dispatch_task.wake();
                         inner.insert_flags(Flags::RD_READY);
-                        inner.init_shutdown(Some(err));
+                        inner.io_stopped(Some(err));
                     });
             }
         }

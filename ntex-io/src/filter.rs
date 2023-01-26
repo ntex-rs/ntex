@@ -79,7 +79,7 @@ impl Filter for Base {
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         let flags = self.0.flags();
 
-        if flags.intersects(Flags::IO_STOPPING) {
+        if flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
             Poll::Ready(ReadStatus::Terminate)
         } else if flags.intersects(Flags::RD_PAUSED | Flags::RD_BUF_FULL) {
             self.0 .0.read_task.register(cx.waker());
