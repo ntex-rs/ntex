@@ -155,6 +155,21 @@ impl IoRef {
 
     #[inline]
     /// Get mut access to write buffer
+    pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
+    where
+        F: FnOnce(&mut WriteBuf<'_>) -> R,
+    {
+        let mut buffer = self.0.buffer.borrow_mut();
+        let result = buffer.write_buf(self, 0, f);
+        self.0
+            .filter
+            .get()
+            .process_write_buf(self, &mut buffer, 0)?;
+        Ok(result)
+    }
+
+    #[inline]
+    /// Get mut access to write buffer
     pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut BytesVec) -> R,
@@ -166,21 +181,6 @@ impl IoRef {
             .get()
             .process_write_buf(self, &mut buffer, 0)?;
 
-        Ok(result)
-    }
-
-    #[inline]
-    /// Get mut access to write buffer
-    pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
-    where
-        F: FnOnce(&mut WriteBuf<'_>) -> R,
-    {
-        let mut buffer = self.0.buffer.borrow_mut();
-        let result = buffer.write_buf(self, 0, f);
-        self.0
-            .filter
-            .get()
-            .process_write_buf(self, &mut buffer, 0)?;
         Ok(result)
     }
 
@@ -197,15 +197,7 @@ impl IoRef {
             *buf = Some(self.memory_pool().get_read_buf());
         }
 
-        let result = f(buf.as_mut().unwrap());
-
-        // release buffer
-        if buf.as_ref().map(|b| b.is_empty()).unwrap_or(false) {
-            if let Some(b) = buf.take() {
-                self.0.pool.get().release_read_buf(b);
-            }
-        }
-        result
+        f(buf.as_mut().unwrap())
     }
 
     #[inline]
