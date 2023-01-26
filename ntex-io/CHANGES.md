@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.4] - 2023-01-26
+
+* Refactor write task management
+
 ## [0.2.3] - 2023-01-25
 
 * Optimize buffers layout

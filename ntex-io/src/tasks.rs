@@ -25,7 +25,6 @@ impl ReadContext {
     {
         let inner = &self.0 .0;
         let mut stack = inner.buffer.borrow_mut();
-        let is_write_sleep = stack.last_write_buf_size() == 0;
         let mut buf = stack
             .last_read_buf()
             .take()
@@ -77,11 +76,7 @@ impl ReadContext {
                         // in that case filters need to process write buffers
                         // and potentialy wake write task
                         if status.need_write {
-                            let result = filter.process_write_buf(&self.0, &mut stack, 0);
-                            if is_write_sleep && stack.last_write_buf_size() != 0 {
-                                inner.write_task.wake();
-                            }
-                            result
+                            filter.process_write_buf(&self.0, &mut stack, 0)
                         } else {
                             Ok(())
                         }
@@ -134,42 +129,57 @@ impl WriteContext {
         self.0.filter().poll_write_ready(cx)
     }
 
-    #[inline]
-    /// Get write buffer
-    pub fn get_write_buf(&self) -> Option<BytesVec> {
-        self.0 .0.buffer.borrow_mut().last_write_buf().take()
-    }
+    /// Get read buffer
+    pub fn with_buf<F>(&self, f: F) -> Poll<io::Result<()>>
+    where
+        F: FnOnce(&mut Option<BytesVec>) -> Poll<io::Result<()>>,
+    {
+        let inner = &self.0 .0;
+        let mut stack = inner.buffer.borrow_mut();
+        let buf = stack.last_write_buf();
 
-    #[inline]
-    /// Release write buffer after io write operations
-    pub fn release_write_buf(&self, buf: BytesVec) -> Result<(), io::Error> {
-        let pool = self.0.memory_pool();
-        let mut flags = self.0.flags();
+        // call provided callback
+        let result = f(buf);
 
-        if buf.is_empty() {
-            pool.release_write_buf(buf);
-            if flags.intersects(Flags::WR_WAIT | Flags::WR_BACKPRESSURE) {
-                flags.remove(Flags::WR_WAIT | Flags::WR_BACKPRESSURE);
-                self.0.set_flags(flags);
-                self.0 .0.dispatch_task.wake();
+        let mut len = 0;
+        if let Some(b) = buf {
+            if b.is_empty() {
+                inner.pool.get().release_write_buf(buf.take().unwrap());
+            } else {
+                len = b.len();
             }
-        } else {
-            // if write buffer is smaller than high watermark value, turn off back-pressure
-            if flags.contains(Flags::WR_BACKPRESSURE)
-                && buf.len() < pool.write_params_high() << 1
-            {
-                flags.remove(Flags::WR_BACKPRESSURE);
-                self.0.set_flags(flags);
-                self.0 .0.dispatch_task.wake();
-            }
-            self.0 .0.buffer.borrow_mut().set_last_write_buf(buf);
         }
 
-        Ok(())
+        // if write buffer is smaller than high watermark value, turn off back-pressure
+        let mut flags = inner.flags.get();
+        let mut wake_dispatcher = false;
+        if flags.contains(Flags::WR_BACKPRESSURE)
+            && len < inner.pool.get().write_params_high() << 1
+        {
+            flags.remove(Flags::WR_BACKPRESSURE);
+            wake_dispatcher = true;
+        }
+        if flags.contains(Flags::WR_WAIT) && len == 0 {
+            flags.remove(Flags::WR_WAIT);
+            wake_dispatcher = true;
+        }
+
+        match result {
+            Poll::Pending => flags.remove(Flags::WR_PAUSED),
+            Poll::Ready(Ok(())) => flags.insert(Flags::WR_PAUSED),
+            Poll::Ready(Err(_)) => {}
+        }
+
+        inner.flags.set(flags);
+        if wake_dispatcher {
+            inner.dispatch_task.wake();
+        }
+
+        result
     }
 
     #[inline]
-    /// Indicate that io task is stopped
+    /// Indicate that write io task is stopped
     pub fn close(&self, err: Option<io::Error>) {
         self.0 .0.io_stopped(err);
     }

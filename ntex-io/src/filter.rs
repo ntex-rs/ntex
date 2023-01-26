@@ -128,7 +128,12 @@ impl Filter for Base {
     #[inline]
     fn process_write_buf(&self, _: &IoRef, s: &mut Stack, _: usize) -> io::Result<()> {
         if let Some(buf) = s.last_write_buf() {
-            if buf.len() >= self.0.memory_pool().write_params_high() {
+            let len = buf.len();
+            if len > 0 && self.0.flags().contains(Flags::WR_PAUSED) {
+                self.0 .0.remove_flags(Flags::WR_PAUSED);
+                self.0 .0.write_task.wake();
+            }
+            if len >= self.0.memory_pool().write_params_high() {
                 self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
             }
         }

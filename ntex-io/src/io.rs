@@ -32,17 +32,19 @@ bitflags::bitflags! {
         const RD_BUF_FULL         = 0b0000_0000_0100_0000;
 
         /// wait write completion
-        const WR_WAIT             = 0b0000_0000_1000_0000;
+        const WR_WAIT             = 0b0000_0001_0000_0000;
         /// write buffer is full
-        const WR_BACKPRESSURE     = 0b0000_0001_0000_0000;
+        const WR_BACKPRESSURE     = 0b0000_0010_0000_0000;
+        /// write task paused
+        const WR_PAUSED           = 0b0000_0100_0000_0000;
 
         /// dispatcher is marked stopped
-        const DSP_STOP            = 0b0000_0010_0000_0000;
+        const DSP_STOP            = 0b0001_0000_0000_0000;
         /// keep-alive timeout occured
-        const DSP_KEEPALIVE       = 0b0000_0100_0000_0000;
+        const DSP_KEEPALIVE       = 0b0010_0000_0000_0000;
 
         /// keep-alive timeout started
-        const KEEPALIVE           = 0b0001_0000_0000_0000;
+        const KEEPALIVE           = 0b0100_0000_0000_0000;
     }
 }
 
@@ -194,7 +196,7 @@ impl Io {
     pub fn with_memory_pool<I: IoStream>(io: I, pool: PoolRef) -> Self {
         let inner = Rc::new(IoState {
             pool: Cell::new(pool),
-            flags: Cell::new(Flags::empty()),
+            flags: Cell::new(Flags::WR_PAUSED),
             error: Cell::new(None),
             disconnect_timeout: Cell::new(Millis::ONE_SEC),
             dispatch_task: LocalWaker::new(),
