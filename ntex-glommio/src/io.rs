@@ -285,7 +285,6 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
             let mut written = 0;
             let result = loop {
                 break match Pin::new(&mut *io).poll_write(cx, &buf[written..]) {
-                    Poll::Pending => Poll::Pending,
                     Poll::Ready(Ok(n)) => {
                         if n == 0 {
                             log::trace!("Disconnected during flush, written {}", written);
@@ -296,11 +295,17 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
                         } else {
                             written += n;
                             if written == len {
+                                buf.clear();
                                 Poll::Ready(Ok(()))
                             } else {
                                 continue;
                             }
                         }
+                    }
+                    Poll::Pending => {
+                        // remove written data
+                        buf.advance(written);
+                        Poll::Pending
                     }
                     Poll::Ready(Err(e)) => {
                         log::trace!("Error during flush: {}", e);

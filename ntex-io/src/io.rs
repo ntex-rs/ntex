@@ -196,7 +196,7 @@ impl Io {
     pub fn with_memory_pool<I: IoStream>(io: I, pool: PoolRef) -> Self {
         let inner = Rc::new(IoState {
             pool: Cell::new(pool),
-            flags: Cell::new(Flags::WR_PAUSED),
+            flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
             disconnect_timeout: Cell::new(Millis::ONE_SEC),
             dispatch_task: LocalWaker::new(),
@@ -558,6 +558,7 @@ impl<F> Io<F> {
             }
 
             self.0 .0.read_task.wake();
+            self.0 .0.write_task.wake();
             self.0 .0.dispatch_task.register(cx.waker());
             Poll::Pending
         }

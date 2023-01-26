@@ -1,7 +1,7 @@
 use std::{any, cell::RefCell, future::Future, io, pin::Pin, task::Context, task::Poll};
 
 use async_std::io::{Read, Write};
-use ntex_bytes::{BufMut, BytesVec};
+use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{
     types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
 };
@@ -270,7 +270,6 @@ pub(super) fn flush_io<T: Read + Write + Unpin>(
             let mut written = 0;
             let result = loop {
                 break match Pin::new(&mut *io).poll_write(cx, &buf[written..]) {
-                    Poll::Pending => Poll::Pending,
                     Poll::Ready(Ok(n)) => {
                         if n == 0 {
                             log::trace!("Disconnected during flush, written {}", written);
@@ -281,11 +280,17 @@ pub(super) fn flush_io<T: Read + Write + Unpin>(
                         } else {
                             written += n;
                             if written == len {
+                                buf.clear();
                                 Poll::Ready(Ok(()))
                             } else {
                                 continue;
                             }
                         }
+                    }
+                    Poll::Pending => {
+                        // remove written data
+                        buf.advance(written);
+                        Poll::Pending
                     }
                     Poll::Ready(Err(e)) => {
                         log::trace!("Error during flush: {}", e);

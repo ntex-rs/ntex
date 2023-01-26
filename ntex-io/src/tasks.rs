@@ -190,8 +190,9 @@ fn shutdown_filters(io: &IoRef) {
     let flags = st.flags.get();
 
     if !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
+        let filter = io.filter();
         let mut buffer = st.buffer.borrow_mut();
-        match io.filter().shutdown(io, &mut buffer, 0) {
+        match filter.shutdown(io, &mut buffer, 0) {
             Ok(Poll::Ready(())) => {
                 st.dispatch_task.wake();
                 st.insert_flags(Flags::IO_STOPPING);
@@ -210,6 +211,8 @@ fn shutdown_filters(io: &IoRef) {
                 st.io_stopped(Some(err));
             }
         }
-        st.write_task.wake();
+        if let Err(err) = filter.process_write_buf(io, &mut buffer, 0) {
+            st.io_stopped(Some(err));
+        }
     }
 }

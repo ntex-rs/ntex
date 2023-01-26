@@ -646,7 +646,7 @@ where
                 }
             }
             None => {
-                trace!("response payload eof");
+                trace!("response payload eof {:?}", self.flags);
                 if let Err(err) = self.io.encode(Message::Chunk(None), &self.codec) {
                     self.error = Some(DispatchError::Encode(err));
                     Some(State::Stop)
@@ -785,7 +785,7 @@ mod tests {
     use crate::http::{body, Request, ResponseHead, StatusCode};
     use crate::io::{self as nio, Base};
     use crate::service::{boxed, fn_service, IntoService};
-    use crate::util::{lazy, stream_recv, Bytes, BytesMut};
+    use crate::util::{lazy, poll_fn, stream_recv, Bytes, BytesMut};
     use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis, time::Seconds};
 
     const BUFFER_SIZE: usize = 32_768;
@@ -847,7 +847,6 @@ mod tests {
         decoder.decode(buf).unwrap().unwrap()
     }
 
-    #[cfg(feature = "tokio")]
     #[crate::rt_test]
     async fn test_on_request() {
         let (client, server) = Io::create();
@@ -882,13 +881,12 @@ mod tests {
         );
         sleep(Millis(50)).await;
         let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await;
-
-        sleep(Millis(50)).await;
-        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         sleep(Millis(50)).await;
 
         client.local_buffer(|buf| assert_eq!(&buf[..15], b"HTTP/1.0 200 OK"));
         client.close().await;
+
+        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
         assert!(data.get());
     }
 
@@ -906,7 +904,7 @@ mod tests {
         let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready();
         sleep(Millis(50)).await;
 
-        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
         assert!(h1.inner.io.is_closed());
         sleep(Millis(50)).await;
 
@@ -1233,13 +1231,9 @@ mod tests {
                 Err::<Response<()>, _>(io::Error::new(io::ErrorKind::Other, "error"))
             })
         });
-        sleep(Millis(50)).await;
         // required because io shutdown is async oper
-        let _ = lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready();
-        sleep(Millis(50)).await;
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
-        assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_ready());
-        sleep(Millis(50)).await;
         assert!(h1.inner.io.is_closed());
         let buf = client.local_buffer(|buf| buf.split());
         assert_eq!(&buf[..28], b"HTTP/1.1 500 Internal Server");
