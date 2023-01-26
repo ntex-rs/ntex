@@ -204,11 +204,11 @@ impl Future for WriteTask {
                             let mut io = this.io.0.borrow_mut();
                             match this.state.with_buf(|buf| flush_io(&mut *io, buf, cx)) {
                                 Poll::Ready(Ok(())) => {
-                                    if let Some(err) = ready!(fut.poll(cx)) {
+                                    if let Err(err) = ready!(fut.poll(cx)) {
                                         this.state.close(Some(err));
                                         return Poll::Ready(());
                                     }
-                                    *st = Shutdown::Flushed;
+                                    *st = Shutdown::Stopping(0);
                                     continue;
                                 }
                                 Poll::Ready(Err(err)) => {
@@ -506,11 +506,11 @@ impl Future for UnixWriteTask {
                             let mut io = this.io.0.borrow_mut();
                             match this.state.with_buf(|buf| flush_io(&mut *io, buf, cx)) {
                                 Poll::Ready(Ok(())) => {
-                                    if let Some(err) = ready!(fut.poll(cx)) {
+                                    if let Err(err) = ready!(fut.poll(cx)) {
                                         this.state.close(Some(err));
                                         return Poll::Ready(());
                                     }
-                                    *st = Shutdown::Flushed;
+                                    *st = Shutdown::Stopping(0);
                                     continue;
                                 }
                                 Poll::Ready(Err(err)) => {
