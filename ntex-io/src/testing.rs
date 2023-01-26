@@ -1,7 +1,7 @@
 //! utilities and helpers for testing
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use std::task::{ready, Context, Poll, Waker};
 use std::{any, cmp, fmt, future::Future, io, mem, net, pin::Pin, rc::Rc};
 
 use ntex_bytes::{Buf, BufMut, Bytes, BytesVec};
@@ -480,9 +480,12 @@ impl Future for WriteTask {
                 match this.state.poll_ready(cx) {
                     Poll::Ready(WriteStatus::Ready) => {
                         // flush framed instance
-                        match flush_io(&this.io, &this.state, cx) {
-                            Poll::Pending | Poll::Ready(true) => Poll::Pending,
-                            Poll::Ready(false) => Poll::Ready(()),
+                        match ready!(flush_io(&this.io, &this.state, cx)) {
+                            Ok(()) => Poll::Pending,
+                            Err(e) => {
+                                this.state.close(Some(e));
+                                Poll::Ready(())
+                            }
                         }
                     }
                     Poll::Ready(WriteStatus::Timeout(time)) => {
@@ -527,18 +530,19 @@ impl Future for WriteTask {
                         Shutdown::None => {
                             // flush write buffer
                             match flush_io(&this.io, &this.state, cx) {
-                                Poll::Ready(true) => {
+                                Poll::Ready(Ok(())) => {
                                     *st = Shutdown::Flushed;
                                     continue;
                                 }
-                                Poll::Ready(false) => {
+                                Poll::Ready(Err(err)) => {
                                     log::trace!(
-                                        "write task is closed with err during flush"
+                                        "write task is closed with err during flush {:?}",
+                                        err
                                     );
-                                    this.state.close(None);
+                                    this.state.close(Some(err));
                                     return Poll::Ready(());
                                 }
-                                _ => (),
+                                Poll::Pending => (),
                             }
                         }
                         Shutdown::Flushed => {
@@ -596,58 +600,54 @@ pub(super) fn flush_io(
     io: &IoTest,
     state: &WriteContext,
     cx: &mut Context<'_>,
-) -> Poll<bool> {
-    let mut buf = if let Some(buf) = state.get_write_buf() {
-        buf
-    } else {
-        return Poll::Ready(true);
-    };
-    let len = buf.len();
+) -> Poll<io::Result<()>> {
+    state.with_buf(|buf| {
+        if let Some(buf) = buf {
+            let len = buf.len();
 
-    if len != 0 {
-        log::trace!("flushing framed transport: {}", len);
+            if len != 0 {
+                log::trace!("flushing framed transport: {}", len);
 
-        let mut written = 0;
-        while written < len {
-            match io.poll_write_buf(cx, &buf[written..]) {
-                Poll::Ready(Ok(n)) => {
-                    if n == 0 {
-                        log::trace!("disconnected during flush, written {}", written);
-                        let _ = state.release_write_buf(buf);
-                        state.close(Some(io::Error::new(
-                            io::ErrorKind::WriteZero,
-                            "failed to write frame to transport",
-                        )));
-                        return Poll::Ready(false);
-                    } else {
-                        written += n
-                    }
-                }
-                Poll::Pending => break,
-                Poll::Ready(Err(e)) => {
-                    log::trace!("error during flush: {}", e);
-                    let _ = state.release_write_buf(buf);
-                    state.close(Some(e));
-                    return Poll::Ready(false);
-                }
+                let mut written = 0;
+                let result = loop {
+                    break match io.poll_write_buf(cx, &buf[written..]) {
+                        Poll::Ready(Ok(n)) => {
+                            if n == 0 {
+                                log::trace!(
+                                    "disconnected during flush, written {}",
+                                    written
+                                );
+                                Poll::Ready(Err(io::Error::new(
+                                    io::ErrorKind::WriteZero,
+                                    "failed to write frame to transport",
+                                )))
+                            } else {
+                                written += n;
+                                if written == len {
+                                    buf.clear();
+                                    Poll::Ready(Ok(()))
+                                } else {
+                                    continue;
+                                }
+                            }
+                        }
+                        Poll::Pending => {
+                            // remove written data
+                            buf.advance(written);
+                            Poll::Pending
+                        }
+                        Poll::Ready(Err(e)) => {
+                            log::trace!("error during flush: {}", e);
+                            Poll::Ready(Err(e))
+                        }
+                    };
+                };
+                log::trace!("flushed {} bytes", written);
+                return result;
             }
         }
-        log::trace!("flushed {} bytes", written);
-
-        // remove written data
-        if written == len {
-            buf.clear();
-            let _ = state.release_write_buf(buf);
-            Poll::Ready(true)
-        } else {
-            buf.advance(written);
-            let _ = state.release_write_buf(buf);
-            Poll::Pending
-        }
-    } else {
-        let _ = state.release_write_buf(buf);
-        Poll::Ready(true)
-    }
+        Poll::Ready(Ok(()))
+    })
 }
 
 #[cfg(test)]

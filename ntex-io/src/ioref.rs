@@ -145,9 +145,7 @@ impl IoRef {
         let flags = self.0.flags.get();
 
         if !flags.intersects(Flags::IO_STOPPING) {
-            self.with_write_buf(|buf| {
-                buf.extend_from_slice(src);
-            })
+            self.with_write_buf(|buf| buf.extend_from_slice(src))
         } else {
             Ok(())
         }
@@ -160,17 +158,12 @@ impl IoRef {
         F: FnOnce(&mut BytesVec) -> R,
     {
         let mut buffer = self.0.buffer.borrow_mut();
-        let is_write_sleep = buffer.last_write_buf_size() == 0;
-
         let result = f(buffer.first_write_buf(self));
         self.0
             .filter
             .get()
             .process_write_buf(self, &mut buffer, 0)?;
 
-        if is_write_sleep && buffer.last_write_buf_size() != 0 {
-            self.0.write_task.wake();
-        }
         Ok(result)
     }
 
@@ -183,7 +176,6 @@ impl IoRef {
         let mut b = self.0.buffer.borrow_mut();
         let result = b.write_buf(self, 0, f);
         self.0.filter.get().process_write_buf(self, &mut b, 0)?;
-        self.0.write_task.wake();
         Ok(result)
     }
 

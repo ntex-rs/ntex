@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.2] - 2023-01-26
+
+* Update io api usage
+
 ## [0.2.0] - 2023-01-04
 
 * Release

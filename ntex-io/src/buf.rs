@@ -151,18 +151,6 @@ impl Stack {
         &mut self.get_last_level().1
     }
 
-    pub(crate) fn last_write_buf_size(&mut self) -> usize {
-        self.get_last_level()
-            .1
-            .as_ref()
-            .map(|b| b.len())
-            .unwrap_or(0)
-    }
-
-    pub(crate) fn set_last_write_buf(&mut self, buf: BytesVec) {
-        self.get_last_level().1 = Some(buf);
-    }
-
     pub(crate) fn release(&mut self, pool: PoolRef) {
         let items = match &mut self.buffers {
             Either::Left(b) => &mut b[..],

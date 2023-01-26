@@ -32,17 +32,19 @@ bitflags::bitflags! {
         const RD_BUF_FULL         = 0b0000_0000_0100_0000;
 
         /// wait write completion
-        const WR_WAIT             = 0b0000_0000_1000_0000;
+        const WR_WAIT             = 0b0000_0001_0000_0000;
         /// write buffer is full
-        const WR_BACKPRESSURE     = 0b0000_0001_0000_0000;
+        const WR_BACKPRESSURE     = 0b0000_0010_0000_0000;
+        /// write task paused
+        const WR_PAUSED           = 0b0000_0100_0000_0000;
 
         /// dispatcher is marked stopped
-        const DSP_STOP            = 0b0000_0010_0000_0000;
+        const DSP_STOP            = 0b0001_0000_0000_0000;
         /// keep-alive timeout occured
-        const DSP_KEEPALIVE       = 0b0000_0100_0000_0000;
+        const DSP_KEEPALIVE       = 0b0010_0000_0000_0000;
 
         /// keep-alive timeout started
-        const KEEPALIVE           = 0b0001_0000_0000_0000;
+        const KEEPALIVE           = 0b0100_0000_0000_0000;
     }
 }
 
@@ -556,6 +558,7 @@ impl<F> Io<F> {
             }
 
             self.0 .0.read_task.wake();
+            self.0 .0.write_task.wake();
             self.0 .0.dispatch_task.register(cx.waker());
             Poll::Pending
         }
