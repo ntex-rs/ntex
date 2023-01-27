@@ -131,6 +131,20 @@ impl Stack {
             .unwrap_or(0)
     }
 
+    pub(crate) fn with_rw_buf<F, R>(&mut self, io: &IoRef, f: F) -> R
+    where
+        F: FnOnce(&mut BytesVec, &mut BytesVec) -> R,
+    {
+        let lvl = self.get_first_level();
+        if lvl.0.is_none() {
+            lvl.0 = Some(io.memory_pool().get_read_buf());
+        }
+        if lvl.1.is_none() {
+            lvl.1 = Some(io.memory_pool().get_write_buf());
+        }
+        f(lvl.0.as_mut().unwrap(), lvl.1.as_mut().unwrap())
+    }
+
     pub(crate) fn first_read_buf(&mut self) -> &mut Option<BytesVec> {
         &mut self.get_first_level().0
     }

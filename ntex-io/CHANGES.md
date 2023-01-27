@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.6] - 2023-01-27
+
+* Add IoRef::with_rw_buf() helper
+
 ## [0.2.5] - 2023-01-27
 
 * Custom panic message for nested buffer borrow

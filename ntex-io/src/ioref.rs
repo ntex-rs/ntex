@@ -1,9 +1,9 @@
-use std::{any, cell, fmt, hash, io, time};
+use std::{any, fmt, hash, io, time, cell};
 
 use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
-use super::{buf::Stack, io::Flags, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
+use super::{io::Flags, buf::Stack, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
 
 impl IoRef {
     #[inline]
@@ -196,6 +196,15 @@ impl IoRef {
         }
 
         f(buf.as_mut().unwrap())
+    }
+
+    #[inline]
+    /// Get mut access to read and write buffer
+    pub fn with_rw_buf<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut BytesVec, &mut BytesVec) -> R,
+    {
+        borrow_buffer(&self.0.buffer).with_rw_buf(self, f)
     }
 
     #[inline]
