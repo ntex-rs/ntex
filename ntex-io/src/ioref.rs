@@ -1,9 +1,9 @@
-use std::{any, fmt, hash, io, time, cell};
+use std::{any, cell, fmt, hash, io, time};
 
 use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
-use super::{io::Flags, buf::Stack, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
+use super::{buf::Stack, io::Flags, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
 
 impl IoRef {
     #[inline]
