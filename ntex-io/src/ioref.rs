@@ -1,9 +1,9 @@
-use std::{any, fmt, hash, io, time};
+use std::{any, cell, fmt, hash, io, time};
 
 use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
-use super::{io::Flags, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
+use super::{buf::Stack, io::Flags, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
 
 impl IoRef {
     #[inline]
@@ -132,9 +132,7 @@ impl IoRef {
     where
         U: Decoder,
     {
-        self.0
-            .buffer
-            .borrow_mut()
+        borrow_buffer(&self.0.buffer)
             .first_read_buf()
             .as_mut()
             .map(|b| codec.decode_vec(b))
@@ -159,7 +157,7 @@ impl IoRef {
     where
         F: FnOnce(&mut WriteBuf<'_>) -> R,
     {
-        let mut buffer = self.0.buffer.borrow_mut();
+        let mut buffer = borrow_buffer(&self.0.buffer);
         let result = buffer.write_buf(self, 0, f);
         self.0
             .filter
@@ -174,7 +172,7 @@ impl IoRef {
     where
         F: FnOnce(&mut BytesVec) -> R,
     {
-        let mut buffer = self.0.buffer.borrow_mut();
+        let mut buffer = borrow_buffer(&self.0.buffer);
         let result = f(buffer.first_write_buf(self));
         self.0
             .filter
@@ -191,7 +189,7 @@ impl IoRef {
         F: FnOnce(&mut BytesVec) -> R,
     {
         // use top most buffer
-        let mut buffer = self.0.buffer.borrow_mut();
+        let mut buffer = borrow_buffer(&self.0.buffer);
         let buf = buffer.first_read_buf();
         if buf.is_none() {
             *buf = Some(self.memory_pool().get_read_buf());
@@ -250,6 +248,14 @@ impl fmt::Debug for IoRef {
         f.debug_struct("IoRef")
             .field("open", &!self.is_closed())
             .finish()
+    }
+}
+
+fn borrow_buffer(buf: &cell::RefCell<Stack>) -> cell::RefMut<'_, Stack> {
+    if let Ok(r) = buf.try_borrow_mut() {
+        r
+    } else {
+        panic!("Nested access to read/write buffers are not allowed");
     }
 }
 
