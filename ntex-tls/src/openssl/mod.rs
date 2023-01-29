@@ -2,7 +2,7 @@
 use std::cell::{Cell, RefCell};
 use std::{any, cmp, error::Error, io, task::Context, task::Poll};
 
-use ntex_bytes::{BufMut, BytesVec, PoolRef};
+use ntex_bytes::{BufMut, BytesVec};
 use ntex_io::{types, Filter, FilterFactory, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use ntex_util::{future::poll_fn, future::BoxFuture, ready, time, time::Millis};
 use tls_openssl::ssl::{self, NameType, SslStream};
@@ -30,19 +30,16 @@ pub struct SslFilter {
 struct IoInner {
     source: Option<BytesVec>,
     destination: Option<BytesVec>,
-    pool: PoolRef,
 }
 
 impl io::Read for IoInner {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        if let Some(mut buf) = self.source.take() {
+        if let Some(ref mut buf) = self.source {
             if buf.is_empty() {
-                self.pool.release_read_buf(buf);
                 Err(io::Error::from(io::ErrorKind::WouldBlock))
             } else {
                 let len = cmp::min(buf.len(), dst.len());
                 dst[..len].copy_from_slice(&buf.split_to(len));
-                self.source = Some(buf);
                 Ok(len)
             }
         } else {
@@ -53,13 +50,7 @@ impl io::Read for IoInner {
 
 impl io::Write for IoInner {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        let mut buf = if let Some(buf) = self.destination.take() {
-            buf
-        } else {
-            BytesVec::with_capacity_in(src.len(), self.pool)
-        };
-        buf.extend_from_slice(src);
-        self.destination = Some(buf);
+        self.destination.as_mut().unwrap().extend_from_slice(src);
         Ok(src.len())
     }
 
@@ -265,7 +256,6 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
             time::timeout(timeout, async {
                 let ssl = ctx_result.map_err(map_to_ioerr)?;
                 let inner = IoInner {
-                    pool: io.memory_pool(),
                     source: None,
                     destination: None,
                 };
@@ -322,7 +312,6 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
     fn create(self, io: Io<F>) -> Self::Future {
         Box::pin(async move {
             let inner = IoInner {
-                pool: io.memory_pool(),
                 source: None,
                 destination: None,
             };
