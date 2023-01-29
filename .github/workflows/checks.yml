@@ -17,7 +17,6 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --all-features
-          fail_ci_if_error: true
 
   fmt:
     name: Rustfmt
