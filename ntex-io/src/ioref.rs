@@ -1,9 +1,9 @@
-use std::{any, cell, fmt, hash, io, time};
+use std::{any, fmt, hash, io, time};
 
 use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
-use super::{buf::Stack, io::Flags, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
+use super::{io::Flags, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
 
 impl IoRef {
     #[inline]
@@ -132,11 +132,9 @@ impl IoRef {
     where
         U: Decoder,
     {
-        borrow_buffer(&self.0.buffer)
-            .first_read_buf()
-            .as_mut()
-            .map(|b| codec.decode_vec(b))
-            .unwrap_or(Ok(None))
+        self.0.buffer.with_read_destination(|buf| {
+            buf.map(|b| codec.decode_vec(b)).unwrap_or(Ok(None))
+        })
     }
 
     #[inline]
@@ -152,59 +150,40 @@ impl IoRef {
     }
 
     #[inline]
-    /// Get mut access to write buffer
+    /// Get access to write buffer
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
-        F: FnOnce(&mut WriteBuf<'_>) -> R,
+        F: FnOnce(&WriteBuf<'_>) -> R,
     {
-        let mut buffer = borrow_buffer(&self.0.buffer);
-        let result = buffer.write_buf(self, 0, f);
+        let result = self.0.buffer.write_buf(self, 0, f);
         self.0
             .filter
             .get()
-            .process_write_buf(self, &mut buffer, 0)?;
+            .process_write_buf(self, &self.0.buffer, 0)?;
         Ok(result)
     }
 
     #[inline]
-    /// Get mut access to write buffer
+    /// Get mut access to source write buffer
     pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut BytesVec) -> R,
     {
-        let mut buffer = borrow_buffer(&self.0.buffer);
-        let result = f(buffer.first_write_buf(self));
+        let result = self.0.buffer.with_write_source(self, f);
         self.0
             .filter
             .get()
-            .process_write_buf(self, &mut buffer, 0)?;
-
+            .process_write_buf(self, &self.0.buffer, 0)?;
         Ok(result)
     }
 
     #[inline]
-    /// Get mut access to read buffer
+    /// Get mut access to source read buffer
     pub fn with_read_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytesVec) -> R,
     {
-        // use top most buffer
-        let mut buffer = borrow_buffer(&self.0.buffer);
-        let buf = buffer.first_read_buf();
-        if buf.is_none() {
-            *buf = Some(self.memory_pool().get_read_buf());
-        }
-
-        f(buf.as_mut().unwrap())
-    }
-
-    #[inline]
-    /// Get mut access to read and write buffer
-    pub fn with_rw_buf<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut BytesVec, &mut BytesVec) -> R,
-    {
-        borrow_buffer(&self.0.buffer).with_rw_buf(self, f)
+        self.0.buffer.with_read_source(self, f)
     }
 
     #[inline]
@@ -257,14 +236,6 @@ impl fmt::Debug for IoRef {
         f.debug_struct("IoRef")
             .field("open", &!self.is_closed())
             .finish()
-    }
-}
-
-fn borrow_buffer(buf: &cell::RefCell<Stack>) -> cell::RefMut<'_, Stack> {
-    if let Ok(r) = buf.try_borrow_mut() {
-        r
-    } else {
-        panic!("Nested access to read/write buffers are not allowed");
     }
 }
 
@@ -411,16 +382,16 @@ mod tests {
     impl FilterLayer for Counter {
         const BUFFERS: bool = false;
 
-        fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
+        fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
             self.read_order.borrow_mut().push(self.idx);
             self.in_bytes.set(self.in_bytes.get() + buf.nbytes());
             Ok(buf.nbytes())
         }
 
-        fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
+        fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
             self.write_order.borrow_mut().push(self.idx);
             self.out_bytes
-                .set(self.out_bytes.get() + buf.with_dst_buf(|b| b.len()));
+                .set(self.out_bytes.get() + buf.with_dst(|b| b.len()));
             Ok(())
         }
     }

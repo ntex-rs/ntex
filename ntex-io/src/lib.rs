@@ -71,10 +71,10 @@ pub trait FilterLayer: 'static {
     ///
     /// Inner filter must process buffer before current.
     /// Returns number of new bytes.
-    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> sio::Result<usize>;
+    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> sio::Result<usize>;
 
     /// Process write buffer
-    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> sio::Result<()>;
+    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> sio::Result<()>;
 
     #[inline]
     /// Query internal filter data
@@ -84,7 +84,7 @@ pub trait FilterLayer: 'static {
 
     #[inline]
     /// Gracefully shutdown filter
-    fn shutdown(&self, buf: &mut WriteBuf<'_>) -> sio::Result<Poll<()>> {
+    fn shutdown(&self, buf: &WriteBuf<'_>) -> sio::Result<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }

@@ -58,6 +58,7 @@ fn ssl_acceptor() -> SslAcceptor {
 
 #[ntex::test]
 async fn test_h2() -> io::Result<()> {
+    env_logger::init();
     let srv = test_server(move || {
         HttpService::build()
             .h2(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))

@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::task::{Context, Poll};
 use std::{fmt, future::Future, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc, time};
 
@@ -62,7 +62,7 @@ pub(crate) struct IoState {
     pub(super) read_task: LocalWaker,
     pub(super) write_task: LocalWaker,
     pub(super) dispatch_task: LocalWaker,
-    pub(super) buffer: RefCell<Stack>,
+    pub(super) buffer: Stack,
     pub(super) filter: Cell<&'static dyn Filter>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     #[allow(clippy::box_collection)]
@@ -149,7 +149,7 @@ impl hash::Hash for IoState {
 impl Drop for IoState {
     #[inline]
     fn drop(&mut self) {
-        self.buffer.borrow_mut().release(self.pool.get());
+        self.buffer.release(self.pool.get());
     }
 }
 
@@ -171,7 +171,7 @@ impl Io {
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            buffer: RefCell::new(Stack::new()),
+            buffer: Stack::new(),
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
             on_disconnect: Cell::new(None),
@@ -199,7 +199,7 @@ impl<F> Io<F> {
     #[inline]
     /// Set memory pool
     pub fn set_memory_pool(&self, pool: PoolRef) {
-        self.0 .0.buffer.borrow_mut().set_memory_pool(pool);
+        self.0 .0.buffer.set_memory_pool(pool);
         self.0 .0.pool.set(pool);
     }
 
@@ -227,7 +227,7 @@ impl<F> Io<F> {
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            buffer: RefCell::new(Stack::new()),
+            buffer: Stack::new(),
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
             on_disconnect: Cell::new(None),
@@ -292,7 +292,9 @@ impl<F: Filter> Io<F> {
     {
         // add layer to buffers
         if U::BUFFERS {
-            self.0 .0.buffer.borrow_mut().add_layer();
+            unsafe { &mut *(Rc::as_ptr(&self.0 .0) as *mut IoState) }
+                .buffer
+                .add_layer();
         }
 
         // replace current filter
@@ -489,14 +491,7 @@ impl<F> Io<F> {
             Poll::Ready(self.error().map(Err).unwrap_or(Ok(())))
         } else {
             let inner = &self.0 .0;
-            let len = inner
-                .buffer
-                .borrow_mut()
-                .last_write_buf()
-                .as_ref()
-                .map(|b| b.len())
-                .unwrap_or(0);
-
+            let len = inner.buffer.write_destination_size();
             if len > 0 {
                 if full {
                     inner.insert_flags(Flags::WR_WAIT);

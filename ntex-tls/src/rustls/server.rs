@@ -63,40 +63,41 @@ impl FilterLayer for TlsServerFilter {
         }
     }
 
-    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
+    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
         let mut session = self.session.borrow_mut();
+        let mut new_bytes = usize::from(self.inner.handshake.get());
 
         // get processed buffer
-        let (src, dst) = buf.get_pair();
-        let mut new_bytes = usize::from(self.inner.handshake.get());
-        loop {
-            // make sure we've got room
-            self.inner.pool.resize_read_buf(dst);
+        if let Some(mut src) = buf.take_src() {
+            buf.with_dst(|dst| {
+                loop {
+                    let mut cursor = io::Cursor::new(&src);
+                    let n = session.read_tls(&mut cursor)?;
+                    src.split_to(n);
+                    let state = session
+                        .process_new_packets()
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-            let mut cursor = io::Cursor::new(&src);
-            let n = session.read_tls(&mut cursor)?;
-            src.split_to(n);
-            let state = session
-                .process_new_packets()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-            let new_b = state.plaintext_bytes_to_read();
-            if new_b > 0 {
-                dst.reserve(new_b);
-                let chunk: &mut [u8] =
-                    unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
-                let v = session.reader().read(chunk)?;
-                unsafe { dst.advance_mut(v) };
-                new_bytes += v;
-            } else {
-                break;
-            }
+                    let new_b = state.plaintext_bytes_to_read();
+                    if new_b > 0 {
+                        dst.reserve(new_b);
+                        let chunk: &mut [u8] =
+                            unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
+                        let v = session.reader().read(chunk)?;
+                        unsafe { dst.advance_mut(v) };
+                        new_bytes += v;
+                    } else {
+                        break;
+                    }
+                }
+                Ok::<_, io::Error>(())
+            })?;
+            buf.set_src(Some(src));
         }
-
         Ok(new_bytes)
     }
 
-    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
+    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
         if let Some(mut src) = buf.take_src() {
             let mut session = self.session.borrow_mut();
             let mut io = Wrapper(&self.inner, buf);
@@ -132,7 +133,6 @@ impl TlsServerFilter {
             let filter = TlsFilter::new_server(TlsServerFilter {
                 session: RefCell::new(session),
                 inner: IoInner {
-                    pool: io.memory_pool(),
                     handshake: Cell::new(true),
                 },
             });

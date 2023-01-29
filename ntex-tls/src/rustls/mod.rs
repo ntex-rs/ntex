@@ -2,7 +2,6 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::{any, cell::Cell, cmp, io, sync::Arc, task::Context, task::Poll};
 
-use ntex_bytes::PoolRef;
 use ntex_io::{
     Filter, FilterFactory, FilterLayer, Io, Layer, ReadBuf, ReadStatus, WriteBuf,
     WriteStatus,
@@ -71,7 +70,7 @@ impl FilterLayer for TlsFilter {
     }
 
     #[inline]
-    fn shutdown(&self, buf: &mut WriteBuf<'_>) -> io::Result<Poll<()>> {
+    fn shutdown(&self, buf: &WriteBuf<'_>) -> io::Result<Poll<()>> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.shutdown(buf),
             InnerTlsFilter::Client(ref f) => f.shutdown(buf),
@@ -95,7 +94,7 @@ impl FilterLayer for TlsFilter {
     }
 
     #[inline]
-    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
+    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.process_read_buf(buf),
             InnerTlsFilter::Client(ref f) => f.process_read_buf(buf),
@@ -103,7 +102,7 @@ impl FilterLayer for TlsFilter {
     }
 
     #[inline]
-    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
+    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
         match self.inner {
             InnerTlsFilter::Server(ref f) => f.process_write_buf(buf),
             InnerTlsFilter::Client(ref f) => f.process_write_buf(buf),
@@ -219,30 +218,30 @@ impl<F: Filter> FilterFactory<F> for TlsConnectorConfigured {
 }
 
 pub(crate) struct IoInner {
-    pool: PoolRef,
     handshake: Cell<bool>,
 }
 
-pub(crate) struct Wrapper<'a, 'b>(&'a IoInner, &'a mut WriteBuf<'b>);
+pub(crate) struct Wrapper<'a, 'b>(&'a IoInner, &'a WriteBuf<'b>);
 
 impl<'a, 'b> io::Read for Wrapper<'a, 'b> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
         self.1.with_read_buf(|buf| {
-            let read_buf = buf.get_src();
-            let len = cmp::min(read_buf.len(), dst.len());
-            if len > 0 {
-                dst[..len].copy_from_slice(&read_buf.split_to(len));
-                Ok(len)
-            } else {
-                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
-            }
+            buf.with_src(|read_buf| {
+                let len = cmp::min(read_buf.len(), dst.len());
+                if len > 0 {
+                    dst[..len].copy_from_slice(&read_buf.split_to(len));
+                    Ok(len)
+                } else {
+                    Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+                }
+            })
         })
     }
 }
 
 impl<'a, 'b> io::Write for Wrapper<'a, 'b> {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.1.with_dst_buf(|buf| buf.extend_from_slice(src));
+        self.1.with_dst(|buf| buf.extend_from_slice(src));
         Ok(src.len())
     }
 

@@ -24,71 +24,60 @@ impl ReadContext {
         F: FnOnce(&mut BytesVec, usize, usize) -> Poll<io::Result<()>>,
     {
         let inner = &self.0 .0;
-        let mut stack = inner.buffer.borrow_mut();
-        let mut buf = stack
-            .last_read_buf()
-            .take()
-            .unwrap_or_else(|| self.0.memory_pool().get_read_buf());
-
-        let total = buf.len();
         let (hw, lw) = self.0.memory_pool().read_params().unpack();
+        let (result, nbytes, total) = inner.buffer.with_read_source(&self.0, |buf| {
+            let total = buf.len();
 
-        // call provided callback
-        let result = f(&mut buf, hw, lw);
+            // call provided callback
+            let result = f(buf, hw, lw);
 
-        // handle buffer changes
-        if buf.is_empty() {
-            self.0.memory_pool().release_read_buf(buf);
-        } else {
             let total2 = buf.len();
             let nbytes = if total2 > total { total2 - total } else { 0 };
-            *stack.last_read_buf() = Some(buf);
+            (result, nbytes, total2)
+        });
 
-            if nbytes > 0 {
-                let buf_full = nbytes >= hw;
-                let filter = self.0.filter();
-                let _ = filter.process_read_buf(&self.0, &mut stack, 0, nbytes)
-                    .and_then(|status| {
-                        if status.nbytes > 0 {
-                            if buf_full || stack.first_read_buf_size() >= hw {
-                                log::trace!(
-                                    "io read buffer is too large {}, enable read back-pressure",
-                                    total2
-                                );
-                                inner.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
-                            } else {
-                                inner.insert_flags(Flags::RD_READY);
-                            }
+        // handle buffer changes
+        if nbytes > 0 {
+            let buf_full = nbytes >= hw;
+            let filter = self.0.filter();
+            let _ = filter
+                .process_read_buf(&self.0, &inner.buffer, 0, nbytes)
+                .and_then(|status| {
+                    if status.nbytes > 0 {
+                        if buf_full || inner.buffer.read_destination_size() >= hw {
                             log::trace!(
-                                "new {} bytes available, wakeup dispatcher",
-                                nbytes,
+                                "io read buffer is too large {}, enable read back-pressure",
+                                total
                             );
-                            inner.dispatch_task.wake();
-                        } else if buf_full {
-                            // read task is paused because of read back-pressure
-                            // but there is no new data in top most read buffer
-                            // so we need to wake up read task to read more data
-                            // otherwise read task would sleep forever
-                            inner.read_task.wake();
-                        }
-
-                        // while reading, filter wrote some data
-                        // in that case filters need to process write buffers
-                        // and potentialy wake write task
-                        if status.need_write {
-                            filter.process_write_buf(&self.0, &mut stack, 0)
+                            inner.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
                         } else {
-                            Ok(())
+                            inner.insert_flags(Flags::RD_READY);
                         }
-                    })
-                    .map_err(|err| {
+                        log::trace!("new {} bytes available, wakeup dispatcher", nbytes,);
                         inner.dispatch_task.wake();
-                        inner.insert_flags(Flags::RD_READY);
-                        inner.io_stopped(Some(err));
-                    });
-            }
+                    } else if buf_full {
+                        // read task is paused because of read back-pressure
+                        // but there is no new data in top most read buffer
+                        // so we need to wake up read task to read more data
+                        // otherwise read task would sleep forever
+                        inner.read_task.wake();
+                    }
+
+                    // while reading, filter wrote some data
+                    // in that case filters need to process write buffers
+                    // and potentialy wake write task
+                    if status.need_write {
+                        filter.process_write_buf(&self.0, &inner.buffer, 0)
+                    } else {
+                        Ok(())
+                    }
+                })
+                .map_err(|err| {
+                    inner.dispatch_task.wake();
+                    inner.insert_flags(Flags::RD_READY);
+                    inner.io_stopped(Some(err));
+                });
         }
-        drop(stack);
 
         match result {
             Poll::Ready(Ok(())) => {
@@ -135,20 +124,21 @@ impl WriteContext {
         F: FnOnce(&mut Option<BytesVec>) -> Poll<io::Result<()>>,
     {
         let inner = &self.0 .0;
-        let mut stack = inner.buffer.borrow_mut();
-        let buf = stack.last_write_buf();
 
         // call provided callback
-        let result = f(buf);
+        let (result, len) = inner.buffer.with_write_destination(|buf| {
+            let result = f(buf);
 
-        let mut len = 0;
-        if let Some(b) = buf {
-            if b.is_empty() {
-                inner.pool.get().release_write_buf(buf.take().unwrap());
-            } else {
-                len = b.len();
+            let mut len = 0;
+            if let Some(b) = buf {
+                if b.is_empty() {
+                    inner.pool.get().release_write_buf(buf.take().unwrap());
+                } else {
+                    len = b.len();
+                }
             }
-        }
+            (result, len)
+        });
 
         // if write buffer is smaller than high watermark value, turn off back-pressure
         let mut flags = inner.flags.get();
@@ -191,8 +181,7 @@ fn shutdown_filters(io: &IoRef) {
 
     if !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
         let filter = io.filter();
-        let mut buffer = st.buffer.borrow_mut();
-        match filter.shutdown(io, &mut buffer, 0) {
+        match filter.shutdown(io, &st.buffer, 0) {
             Ok(Poll::Ready(())) => {
                 st.dispatch_task.wake();
                 st.insert_flags(Flags::IO_STOPPING);
@@ -211,7 +200,7 @@ fn shutdown_filters(io: &IoRef) {
                 st.io_stopped(Some(err));
             }
         }
-        if let Err(err) = filter.process_write_buf(io, &mut buffer, 0) {
+        if let Err(err) = filter.process_write_buf(io, &st.buffer, 0) {
             st.io_stopped(Some(err));
         }
     }

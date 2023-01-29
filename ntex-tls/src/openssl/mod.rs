@@ -24,7 +24,6 @@ pub struct PeerCertChain(pub Vec<X509>);
 /// An implementation of SSL streams
 pub struct SslFilter {
     inner: RefCell<SslStream<IoInner>>,
-    pool: PoolRef,
     handshake: Cell<bool>,
 }
 
@@ -69,7 +68,7 @@ impl io::Write for IoInner {
 }
 
 impl SslFilter {
-    fn with_buffers<F, R>(&self, buf: &mut WriteBuf<'_>, f: F) -> R
+    fn with_buffers<F, R>(&self, buf: &WriteBuf<'_>, f: F) -> R
     where
         F: FnOnce() -> R,
     {
@@ -81,12 +80,12 @@ impl SslFilter {
         result
     }
 
-    fn set_buffers(&self, buf: &mut WriteBuf<'_>) {
+    fn set_buffers(&self, buf: &WriteBuf<'_>) {
         self.inner.borrow_mut().get_mut().destination = Some(buf.take_dst());
         self.inner.borrow_mut().get_mut().source = buf.with_read_buf(|b| b.take_src());
     }
 
-    fn unset_buffers(&self, buf: &mut WriteBuf<'_>) {
+    fn unset_buffers(&self, buf: &WriteBuf<'_>) {
         buf.set_dst(self.inner.borrow_mut().get_mut().destination.take());
         buf.with_read_buf(|b| b.set_src(self.inner.borrow_mut().get_mut().source.take()));
     }
@@ -141,7 +140,7 @@ impl FilterLayer for SslFilter {
         }
     }
 
-    fn shutdown(&self, buf: &mut WriteBuf<'_>) -> io::Result<Poll<()>> {
+    fn shutdown(&self, buf: &WriteBuf<'_>) -> io::Result<Poll<()>> {
         let ssl_result = self.with_buffers(buf, || self.inner.borrow_mut().shutdown());
 
         match ssl_result {
@@ -160,46 +159,43 @@ impl FilterLayer for SslFilter {
         }
     }
 
-    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
+    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
         buf.with_write_buf(|b| self.set_buffers(b));
+        buf.with_dst(|dst| {
+            let mut new_bytes = usize::from(self.handshake.get());
+            loop {
+                let chunk: &mut [u8] =
+                    unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
+                let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
+                let result = match ssl_result {
+                    Ok(v) => {
+                        unsafe { dst.advance_mut(v) };
+                        new_bytes += v;
+                        continue;
+                    }
+                    Err(ref e)
+                        if e.code() == ssl::ErrorCode::WANT_READ
+                            || e.code() == ssl::ErrorCode::WANT_WRITE =>
+                    {
+                        Ok(new_bytes)
+                    }
+                    Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
+                        buf.want_shutdown();
+                        Ok(new_bytes)
+                    }
+                    Err(e) => {
+                        log::trace!("SSL Error: {:?}", e);
+                        Err(map_to_ioerr(e))
+                    }
+                };
 
-        let dst = buf.get_dst();
-        //let mut new_bytes = usize::from(self.handshake.get());
-        let mut new_bytes = 1;
-        loop {
-            // make sure we've got room
-            self.pool.resize_read_buf(dst);
-
-            let chunk: &mut [u8] = unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
-            let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
-            let result = match ssl_result {
-                Ok(v) => {
-                    unsafe { dst.advance_mut(v) };
-                    new_bytes += v;
-                    continue;
-                }
-                Err(ref e)
-                    if e.code() == ssl::ErrorCode::WANT_READ
-                        || e.code() == ssl::ErrorCode::WANT_WRITE =>
-                {
-                    Ok(new_bytes)
-                }
-                Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                    buf.want_shutdown();
-                    Ok(new_bytes)
-                }
-                Err(e) => {
-                    log::trace!("SSL Error: {:?}", e);
-                    Err(map_to_ioerr(e))
-                }
-            };
-
-            buf.with_write_buf(|b| self.unset_buffers(b));
-            return result;
-        }
+                buf.with_write_buf(|b| self.unset_buffers(b));
+                return result;
+            }
+        })
     }
 
-    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
+    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
         if let Some(mut src) = buf.take_src() {
             self.set_buffers(buf);
 
@@ -283,7 +279,6 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
                     destination: None,
                 };
                 let filter = SslFilter {
-                    pool: io.memory_pool(),
                     handshake: Cell::new(true),
                     inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),
                 };
@@ -341,7 +336,6 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
                 destination: None,
             };
             let filter = SslFilter {
-                pool: io.memory_pool(),
                 handshake: Cell::new(true),
                 inner: RefCell::new(ssl::SslStream::new(self.ssl, inner)?),
             };
