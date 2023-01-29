@@ -10,13 +10,14 @@ jobs:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
         with:
-            toolchain: stable
+            toolchain: beta
             components: clippy
             override: true
       - uses: actions-rs/clippy-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --all-features
+          fail_ci_if_error: true
 
   fmt:
     name: Rustfmt
