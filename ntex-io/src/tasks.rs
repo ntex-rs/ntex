@@ -126,18 +126,9 @@ impl WriteContext {
         let inner = &self.0 .0;
 
         // call provided callback
-        let (result, len) = inner.buffer.with_write_destination(|buf| {
+        let (result, len) = inner.buffer.with_write_destination(&self.0, |buf| {
             let result = f(buf);
-
-            let mut len = 0;
-            if let Some(b) = buf {
-                if b.is_empty() {
-                    inner.pool.get().release_write_buf(buf.take().unwrap());
-                } else {
-                    len = b.len();
-                }
-            }
-            (result, len)
+            (result, buf.as_ref().map(|b| b.len()).unwrap_or(0))
         });
 
         // if write buffer is smaller than high watermark value, turn off back-pressure

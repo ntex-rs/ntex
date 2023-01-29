@@ -79,16 +79,6 @@ impl SslFilter {
         buf.with_read_buf(|b| b.set_src(self.inner.borrow_mut().get_mut().source.take()));
         result
     }
-
-    fn set_buffers(&self, buf: &WriteBuf<'_>) {
-        self.inner.borrow_mut().get_mut().destination = Some(buf.take_dst());
-        self.inner.borrow_mut().get_mut().source = buf.with_read_buf(|b| b.take_src());
-    }
-
-    fn unset_buffers(&self, buf: &WriteBuf<'_>) {
-        buf.set_dst(self.inner.borrow_mut().get_mut().destination.take());
-        buf.with_read_buf(|b| b.set_src(self.inner.borrow_mut().get_mut().source.take()));
-    }
 }
 
 impl FilterLayer for SslFilter {
@@ -160,71 +150,69 @@ impl FilterLayer for SslFilter {
     }
 
     fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
-        buf.with_write_buf(|b| self.set_buffers(b));
-        buf.with_dst(|dst| {
-            let mut new_bytes = usize::from(self.handshake.get());
-            loop {
-                let chunk: &mut [u8] =
-                    unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
-                let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
-                let result = match ssl_result {
-                    Ok(v) => {
-                        unsafe { dst.advance_mut(v) };
-                        new_bytes += v;
-                        continue;
+        buf.with_write_buf(|b| {
+            self.with_buffers(b, || {
+                buf.with_dst(|dst| {
+                    let mut new_bytes = usize::from(self.handshake.get());
+                    loop {
+                        let chunk: &mut [u8] =
+                            unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
+                        let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
+                        let result = match ssl_result {
+                            Ok(v) => {
+                                unsafe { dst.advance_mut(v) };
+                                new_bytes += v;
+                                continue;
+                            }
+                            Err(ref e)
+                                if e.code() == ssl::ErrorCode::WANT_READ
+                                    || e.code() == ssl::ErrorCode::WANT_WRITE =>
+                            {
+                                Ok(new_bytes)
+                            }
+                            Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
+                                buf.want_shutdown();
+                                Ok(new_bytes)
+                            }
+                            Err(e) => {
+                                log::trace!("SSL Error: {:?}", e);
+                                Err(map_to_ioerr(e))
+                            }
+                        };
+                        return result;
                     }
-                    Err(ref e)
-                        if e.code() == ssl::ErrorCode::WANT_READ
-                            || e.code() == ssl::ErrorCode::WANT_WRITE =>
-                    {
-                        Ok(new_bytes)
-                    }
-                    Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                        buf.want_shutdown();
-                        Ok(new_bytes)
-                    }
-                    Err(e) => {
-                        log::trace!("SSL Error: {:?}", e);
-                        Err(map_to_ioerr(e))
-                    }
-                };
-
-                buf.with_write_buf(|b| self.unset_buffers(b));
-                return result;
-            }
+                })
+            })
         })
     }
 
-    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
-        if let Some(mut src) = buf.take_src() {
-            self.set_buffers(buf);
-
-            loop {
-                if src.is_empty() {
-                    self.unset_buffers(buf);
-                    return Ok(());
-                }
-                let ssl_result = self.inner.borrow_mut().ssl_write(&src);
-                match ssl_result {
-                    Ok(v) => {
-                        src.split_to(v);
-                        continue;
+    fn process_write_buf(&self, wb: &WriteBuf<'_>) -> io::Result<()> {
+        wb.with_src(|b| {
+            if let Some(src) = b {
+                self.with_buffers(wb, || loop {
+                    if src.is_empty() {
+                        return Ok(());
                     }
-                    Err(e) => {
-                        buf.set_src(Some(src));
-                        self.unset_buffers(buf);
-                        return match e.code() {
-                            ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => {
-                                Ok(())
-                            }
-                            _ => Err(map_to_ioerr(e)),
-                        };
+                    let ssl_result = self.inner.borrow_mut().ssl_write(src);
+                    match ssl_result {
+                        Ok(v) => {
+                            src.split_to(v);
+                            continue;
+                        }
+                        Err(e) => {
+                            return match e.code() {
+                                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => {
+                                    Ok(())
+                                }
+                                _ => Err(map_to_ioerr(e)),
+                            };
+                        }
                     }
-                }
+                })
+            } else {
+                Ok(())
             }
-        } else {
-            Ok(())
-        }
+        })
     }
 }
 

@@ -129,19 +129,33 @@ impl Stack {
         if rb.is_none() {
             rb = Some(io.memory_pool().get_read_buf());
         }
+
         let result = f(rb.as_mut().unwrap());
-        item.0.set(rb);
+        if let Some(b) = rb {
+            if b.is_empty() {
+                io.memory_pool().release_read_buf(b);
+            } else {
+                item.0.set(Some(b));
+            }
+        }
         result
     }
 
-    pub(crate) fn with_read_destination<F, R>(&self, f: F) -> R
+    pub(crate) fn with_read_destination<F, R>(&self, io: &IoRef, f: F) -> R
     where
-        F: FnOnce(Option<&mut BytesVec>) -> R,
+        F: FnOnce(&mut Option<BytesVec>) -> R,
     {
         let item = self.get_first_level();
         let mut rb = item.0.take();
-        let result = f(rb.as_mut());
-        item.0.set(rb);
+
+        let result = f(&mut rb);
+        if let Some(b) = rb {
+            if b.is_empty() {
+                io.memory_pool().release_read_buf(b);
+            } else {
+                item.0.set(Some(b));
+            }
+        }
         result
     }
 
@@ -154,19 +168,33 @@ impl Stack {
         if wb.is_none() {
             wb = Some(io.memory_pool().get_write_buf());
         }
+
         let result = f(wb.as_mut().unwrap());
-        item.1.set(wb);
+        if let Some(b) = wb {
+            if b.is_empty() {
+                io.memory_pool().release_write_buf(b);
+            } else {
+                item.1.set(Some(b));
+            }
+        }
         result
     }
 
-    pub(crate) fn with_write_destination<F, R>(&self, f: F) -> R
+    pub(crate) fn with_write_destination<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut Option<BytesVec>) -> R,
     {
         let item = self.get_last_level();
         let mut wb = item.1.take();
+
         let result = f(&mut wb);
-        item.1.set(wb);
+        if let Some(b) = wb {
+            if b.is_empty() {
+                io.memory_pool().release_write_buf(b);
+            } else {
+                item.1.set(Some(b));
+            }
+        }
         result
     }
 
@@ -246,14 +274,18 @@ impl<'a> ReadBuf<'a> {
     /// Get reference to source read buffer
     pub fn with_src<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesVec) -> R,
+        F: FnOnce(&mut Option<BytesVec>) -> R,
     {
         let mut item = self.next.0.take();
-        if item.is_none() {
-            item = Some(self.io.memory_pool().get_read_buf());
+        let result = f(&mut item);
+
+        if let Some(b) = item {
+            if b.is_empty() {
+                self.io.memory_pool().release_read_buf(b);
+            } else {
+                self.next.0.set(Some(b));
+            }
         }
-        let result = f(item.as_mut().unwrap());
-        self.next.0.set(item);
         result
     }
 
@@ -273,7 +305,13 @@ impl<'a> ReadBuf<'a> {
                 .resize_read_buf(item.as_mut().unwrap());
         }
         let result = f(item.as_mut().unwrap());
-        self.curr.0.set(item);
+        if let Some(b) = item {
+            if b.is_empty() {
+                self.io.memory_pool().release_read_buf(b);
+            } else {
+                self.curr.0.set(Some(b));
+            }
+        }
         result
     }
 
@@ -282,7 +320,7 @@ impl<'a> ReadBuf<'a> {
     pub fn take_src(&self) -> Option<BytesVec> {
         self.next.0.take().and_then(|b| {
             if b.is_empty() {
-                self.90.memory_pool().release(b);
+                self.io.memory_pool().release_read_buf(b);
                 None
             } else {
                 Some(b)
@@ -365,14 +403,17 @@ impl<'a> WriteBuf<'a> {
     /// Get reference to source write buffer
     pub fn with_src<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesVec) -> R,
+        F: FnOnce(&mut Option<BytesVec>) -> R,
     {
         let mut item = self.curr.1.take();
-        if item.is_none() {
-            item = Some(self.io.memory_pool().get_write_buf());
+        let result = f(&mut item);
+        if let Some(b) = item {
+            if b.is_empty() {
+                self.io.memory_pool().release_write_buf(b);
+            } else {
+                self.curr.1.set(Some(b));
+            }
         }
-        let result = f(item.as_mut().unwrap());
-        self.curr.1.set(item);
         result
     }
 
@@ -387,10 +428,17 @@ impl<'a> WriteBuf<'a> {
             item = Some(self.io.memory_pool().get_write_buf());
         }
         let buf = item.as_mut().unwrap();
-        let r = f(buf);
-        self.need_write.set(self.need_write.get() | !buf.is_empty());
-        self.next.1.set(item);
-        r
+        let total = buf.len();
+        let result = f(buf);
+
+        if buf.is_empty() {
+            self.io.memory_pool().release_write_buf(item.unwrap());
+        } else {
+            self.need_write
+                .set(self.need_write.get() | (total != buf.len()));
+            self.next.1.set(item);
+        }
+        result
     }
 
     #[inline]

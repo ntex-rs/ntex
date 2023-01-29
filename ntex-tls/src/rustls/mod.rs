@@ -226,14 +226,15 @@ pub(crate) struct Wrapper<'a, 'b>(&'a IoInner, &'a WriteBuf<'b>);
 impl<'a, 'b> io::Read for Wrapper<'a, 'b> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
         self.1.with_read_buf(|buf| {
-            buf.with_src(|read_buf| {
-                let len = cmp::min(read_buf.len(), dst.len());
-                if len > 0 {
-                    dst[..len].copy_from_slice(&read_buf.split_to(len));
-                    Ok(len)
-                } else {
-                    Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+            buf.with_src(|buf| {
+                if let Some(buf) = buf {
+                    let len = cmp::min(buf.len(), dst.len());
+                    if len > 0 {
+                        dst[..len].copy_from_slice(&buf.split_to(len));
+                        return Ok(len);
+                    }
                 }
+                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
             })
         })
     }

@@ -121,8 +121,8 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn process_write_buf(&self, _: &IoRef, s: &Stack, _: usize) -> io::Result<()> {
-        s.with_write_destination(|buf| {
+    fn process_write_buf(&self, io: &IoRef, s: &Stack, _: usize) -> io::Result<()> {
+        s.with_write_destination(io, |buf| {
             if let Some(buf) = buf {
                 let len = buf.len();
                 if len > 0 && self.0.flags().contains(Flags::WR_PAUSED) {

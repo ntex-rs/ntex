@@ -132,8 +132,10 @@ impl IoRef {
     where
         U: Decoder,
     {
-        self.0.buffer.with_read_destination(|buf| {
-            buf.map(|b| codec.decode_vec(b)).unwrap_or(Ok(None))
+        self.0.buffer.with_read_destination(self, |buf| {
+            buf.as_mut()
+                .map(|b| codec.decode_vec(b))
+                .unwrap_or(Ok(None))
         })
     }
 
@@ -183,7 +185,12 @@ impl IoRef {
     where
         F: FnOnce(&mut BytesVec) -> R,
     {
-        self.0.buffer.with_read_source(self, f)
+        self.0.buffer.with_read_destination(self, |buf| {
+            if buf.is_none() {
+                *buf = Some(self.memory_pool().get_read_buf());
+            }
+            f(buf.as_mut().unwrap())
+        })
     }
 
     #[inline]

@@ -61,58 +61,55 @@ impl FilterLayer for TlsClientFilter {
         let mut new_bytes = usize::from(self.inner.handshake.get());
 
         // get processed buffer
-        if let Some(mut src) = buf.take_src() {
-            buf.with_dst(|dst| {
-                loop {
-                    let mut cursor = io::Cursor::new(&src);
-                    let n = session.read_tls(&mut cursor)?;
-                    src.split_to(n);
-                    let state = session
-                        .process_new_packets()
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        buf.with_src(|src| {
+            if let Some(src) = src {
+                buf.with_dst(|dst| {
+                    loop {
+                        let mut cursor = io::Cursor::new(&src);
+                        let n = session.read_tls(&mut cursor)?;
+                        src.split_to(n);
+                        let state = session
+                            .process_new_packets()
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-                    let new_b = state.plaintext_bytes_to_read();
-                    if new_b > 0 {
-                        dst.reserve(new_b);
-                        let chunk: &mut [u8] =
-                            unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
-                        let v = session.reader().read(chunk)?;
-                        unsafe { dst.advance_mut(v) };
-                        new_bytes += v;
+                        let new_b = state.plaintext_bytes_to_read();
+                        if new_b > 0 {
+                            dst.reserve(new_b);
+                            let chunk: &mut [u8] =
+                                unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
+                            let v = session.reader().read(chunk)?;
+                            unsafe { dst.advance_mut(v) };
+                            new_bytes += v;
+                        } else {
+                            break;
+                        }
+                    }
+                    Ok::<_, io::Error>(())
+                })?;
+            }
+            Ok(new_bytes)
+        })
+    }
+
+    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
+        buf.with_src(|src| {
+            if let Some(src) = src {
+                let mut session = self.session.borrow_mut();
+                let mut io = Wrapper(&self.inner, buf);
+
+                loop {
+                    if !src.is_empty() {
+                        src.split_to(session.writer().write(src)?);
+                    }
+                    if session.wants_write() {
+                        session.complete_io(&mut io)?;
                     } else {
                         break;
                     }
                 }
-                Ok::<_, io::Error>(())
-            })?;
-            buf.set_src(Some(src));
-        }
-        Ok(new_bytes)
-    }
-
-    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
-        if let Some(mut src) = buf.take_src() {
-            let mut session = self.session.borrow_mut();
-            let mut io = Wrapper(&self.inner, buf);
-
-            loop {
-                if !src.is_empty() {
-                    let n = session.writer().write(&src)?;
-                    src.split_to(n);
-                }
-
-                if session.wants_write() {
-                    session.complete_io(&mut io)?;
-                } else {
-                    break;
-                }
             }
-
-            buf.set_src(Some(src));
             Ok(())
-        } else {
-            Ok(())
-        }
+        })
     }
 }
 
