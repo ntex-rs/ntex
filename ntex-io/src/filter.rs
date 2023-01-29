@@ -41,21 +41,16 @@ pub trait Filter: 'static {
     fn process_read_buf(
         &self,
         io: &IoRef,
-        stack: &mut Stack,
+        stack: &Stack,
         idx: usize,
         nbytes: usize,
     ) -> io::Result<FilterReadStatus>;
 
     /// Process write buffer
-    fn process_write_buf(
-        &self,
-        io: &IoRef,
-        stack: &mut Stack,
-        idx: usize,
-    ) -> io::Result<()>;
+    fn process_write_buf(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<()>;
 
     /// Gracefully shutdown filter
-    fn shutdown(&self, io: &IoRef, stack: &mut Stack, idx: usize) -> io::Result<Poll<()>>;
+    fn shutdown(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<Poll<()>>;
 
     /// Check readiness for read operations
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus>;
@@ -115,7 +110,7 @@ impl Filter for Base {
     fn process_read_buf(
         &self,
         _: &IoRef,
-        _: &mut Stack,
+        _: &Stack,
         _: usize,
         nbytes: usize,
     ) -> io::Result<FilterReadStatus> {
@@ -126,22 +121,24 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn process_write_buf(&self, _: &IoRef, s: &mut Stack, _: usize) -> io::Result<()> {
-        if let Some(buf) = s.last_write_buf() {
-            let len = buf.len();
-            if len > 0 && self.0.flags().contains(Flags::WR_PAUSED) {
-                self.0 .0.remove_flags(Flags::WR_PAUSED);
-                self.0 .0.write_task.wake();
+    fn process_write_buf(&self, io: &IoRef, s: &Stack, _: usize) -> io::Result<()> {
+        s.with_write_destination(io, |buf| {
+            if let Some(buf) = buf {
+                let len = buf.len();
+                if len > 0 && self.0.flags().contains(Flags::WR_PAUSED) {
+                    self.0 .0.remove_flags(Flags::WR_PAUSED);
+                    self.0 .0.write_task.wake();
+                }
+                if len >= self.0.memory_pool().write_params_high() {
+                    self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
+                }
             }
-            if len >= self.0.memory_pool().write_params_high() {
-                self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
-            }
-        }
+        });
         Ok(())
     }
 
     #[inline]
-    fn shutdown(&self, _: &IoRef, _: &mut Stack, _: usize) -> io::Result<Poll<()>> {
+    fn shutdown(&self, _: &IoRef, _: &Stack, _: usize) -> io::Result<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }
@@ -157,7 +154,7 @@ where
     }
 
     #[inline]
-    fn shutdown(&self, io: &IoRef, stack: &mut Stack, idx: usize) -> io::Result<Poll<()>> {
+    fn shutdown(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<Poll<()>> {
         let result1 = stack.write_buf(io, idx, |buf| self.0.shutdown(buf))?;
         self.process_write_buf(io, stack, idx)?;
 
@@ -178,7 +175,7 @@ where
     fn process_read_buf(
         &self,
         io: &IoRef,
-        stack: &mut Stack,
+        stack: &Stack,
         idx: usize,
         nbytes: usize,
     ) -> io::Result<FilterReadStatus> {
@@ -190,18 +187,13 @@ where
         stack.read_buf(io, idx, status.nbytes, |buf| {
             self.0.process_read_buf(buf).map(|nbytes| FilterReadStatus {
                 nbytes,
-                need_write: status.need_write || buf.need_write,
+                need_write: status.need_write || buf.need_write.get(),
             })
         })
     }
 
     #[inline]
-    fn process_write_buf(
-        &self,
-        io: &IoRef,
-        stack: &mut Stack,
-        idx: usize,
-    ) -> io::Result<()> {
+    fn process_write_buf(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<()> {
         stack.write_buf(io, idx, |buf| self.0.process_write_buf(buf))?;
 
         if F::BUFFERS {
@@ -270,7 +262,7 @@ impl Filter for NullFilter {
     fn process_read_buf(
         &self,
         _: &IoRef,
-        _: &mut Stack,
+        _: &Stack,
         _: usize,
         _: usize,
     ) -> io::Result<FilterReadStatus> {
@@ -278,12 +270,12 @@ impl Filter for NullFilter {
     }
 
     #[inline]
-    fn process_write_buf(&self, _: &IoRef, _: &mut Stack, _: usize) -> io::Result<()> {
+    fn process_write_buf(&self, _: &IoRef, _: &Stack, _: usize) -> io::Result<()> {
         Ok(())
     }
 
     #[inline]
-    fn shutdown(&self, _: &IoRef, _: &mut Stack, _: usize) -> io::Result<Poll<()>> {
+    fn shutdown(&self, _: &IoRef, _: &Stack, _: usize) -> io::Result<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }

@@ -56,62 +56,60 @@ impl FilterLayer for TlsClientFilter {
         }
     }
 
-    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
+    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
         let mut session = self.session.borrow_mut();
+        let mut new_bytes = usize::from(self.inner.handshake.get());
 
         // get processed buffer
-        let (src, dst) = buf.get_pair();
-        let mut new_bytes = usize::from(self.inner.handshake.get());
-        loop {
-            // make sure we've got room
-            self.inner.pool.resize_read_buf(dst);
+        buf.with_src(|src| {
+            if let Some(src) = src {
+                buf.with_dst(|dst| {
+                    loop {
+                        let mut cursor = io::Cursor::new(&src);
+                        let n = session.read_tls(&mut cursor)?;
+                        src.split_to(n);
+                        let state = session
+                            .process_new_packets()
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-            let mut cursor = io::Cursor::new(&src);
-            let n = session.read_tls(&mut cursor)?;
-            src.split_to(n);
-            let state = session
-                .process_new_packets()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-            let new_b = state.plaintext_bytes_to_read();
-            if new_b > 0 {
-                dst.reserve(new_b);
-                let chunk: &mut [u8] =
-                    unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
-                let v = session.reader().read(chunk)?;
-                unsafe { dst.advance_mut(v) };
-                new_bytes += v;
-            } else {
-                break;
+                        let new_b = state.plaintext_bytes_to_read();
+                        if new_b > 0 {
+                            dst.reserve(new_b);
+                            let chunk: &mut [u8] =
+                                unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
+                            let v = session.reader().read(chunk)?;
+                            unsafe { dst.advance_mut(v) };
+                            new_bytes += v;
+                        } else {
+                            break;
+                        }
+                    }
+                    Ok::<_, io::Error>(())
+                })?;
             }
-        }
-
-        Ok(new_bytes)
+            Ok(new_bytes)
+        })
     }
 
-    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
-        if let Some(mut src) = buf.take_src() {
-            let mut session = self.session.borrow_mut();
-            let mut io = Wrapper(&self.inner, buf);
+    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
+        buf.with_src(|src| {
+            if let Some(src) = src {
+                let mut session = self.session.borrow_mut();
+                let mut io = Wrapper(&self.inner, buf);
 
-            loop {
-                if !src.is_empty() {
-                    let n = session.writer().write(&src)?;
-                    src.split_to(n);
-                }
-
-                if session.wants_write() {
-                    session.complete_io(&mut io)?;
-                } else {
-                    break;
+                loop {
+                    if !src.is_empty() {
+                        src.split_to(session.writer().write(src)?);
+                    }
+                    if session.wants_write() {
+                        session.complete_io(&mut io)?;
+                    } else {
+                        break;
+                    }
                 }
             }
-
-            buf.set_src(Some(src));
             Ok(())
-        } else {
-            Ok(())
-        }
+        })
     }
 }
 
@@ -125,7 +123,6 @@ impl TlsClientFilter {
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
         let filter = TlsFilter::new_client(TlsClientFilter {
             inner: IoInner {
-                pool: io.memory_pool(),
                 handshake: Cell::new(true),
             },
             session: RefCell::new(session),

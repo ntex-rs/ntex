@@ -118,11 +118,11 @@ mod tests {
     pub(crate) struct TestFilter;
 
     impl FilterLayer for TestFilter {
-        fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
+        fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
             Ok(buf.nbytes())
         }
 
-        fn process_write_buf(&self, _: &mut WriteBuf<'_>) -> io::Result<()> {
+        fn process_write_buf(&self, _: &WriteBuf<'_>) -> io::Result<()> {
             Ok(())
         }
     }

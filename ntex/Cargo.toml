@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.6.2"
+version = "0.6.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -58,8 +58,8 @@ ntex-util = "0.2.0"
 ntex-bytes = "0.1.19"
 ntex-h2 = "0.2.1"
 ntex-rt = "0.4.7"
-ntex-io = "0.2.3"
-ntex-tls = "0.2.3"
+ntex-io = "0.2.7"
+ntex-tls = "0.2.4"
 ntex-tokio = { version = "0.2.1", optional = true }
 ntex-glommio = { version = "0.2.1", optional = true }
 ntex-async-std = { version = "0.2.1", optional = true }

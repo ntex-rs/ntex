@@ -58,7 +58,7 @@ impl WsTransport {
 
 impl FilterLayer for WsTransport {
     #[inline]
-    fn shutdown(&self, buf: &mut WriteBuf<'_>) -> io::Result<Poll<()>> {
+    fn shutdown(&self, buf: &WriteBuf<'_>) -> io::Result<Poll<()>> {
         let flags = self.flags.get();
         if !flags.contains(Flags::CLOSED) {
             self.insert_flags(Flags::CLOSED);
@@ -67,7 +67,7 @@ impl FilterLayer for WsTransport {
             } else {
                 CloseCode::Normal
             };
-            let _ = buf.with_dst_buf(|buf| {
+            let _ = buf.with_dst(|buf| {
                 self.codec.encode_vec(
                     Message::Close(Some(CloseReason {
                         code,
@@ -80,7 +80,7 @@ impl FilterLayer for WsTransport {
         Ok(Poll::Ready(()))
     }
 
-    fn process_read_buf(&self, buf: &mut ReadBuf<'_>) -> io::Result<usize> {
+    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
         if let Some(mut src) = buf.take_src() {
             let mut dst = buf.take_dst();
             let dst_len = dst.len();
@@ -133,7 +133,7 @@ impl FilterLayer for WsTransport {
                     }
                     Frame::Ping(msg) => {
                         let _ = buf.with_write_buf(|b| {
-                            b.with_dst_buf(|b| self.codec.encode_vec(Message::Pong(msg), b))
+                            b.with_dst(|b| self.codec.encode_vec(Message::Pong(msg), b))
                         });
                     }
                     Frame::Pong(_) => (),
@@ -153,9 +153,9 @@ impl FilterLayer for WsTransport {
         }
     }
 
-    fn process_write_buf(&self, buf: &mut WriteBuf<'_>) -> io::Result<()> {
+    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
         if let Some(src) = buf.take_src() {
-            buf.with_dst_buf(|dst| {
+            buf.with_dst(|dst| {
                 // make sure we've got room
                 let (hw, lw) = self.pool.write_params().unpack();
                 let remaining = dst.remaining_mut();
