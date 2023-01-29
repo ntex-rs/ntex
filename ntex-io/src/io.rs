@@ -292,6 +292,9 @@ impl<F: Filter> Io<F> {
     {
         // add layer to buffers
         if U::BUFFERS {
+            // Safety: .add_layer() modifies internal buffers
+            // there is no api that holds references into buffers storage
+            // all apis first removes buffer from storage and then work with it
             unsafe { &mut *(Rc::as_ptr(&self.0 .0) as *mut IoState) }
                 .buffer
                 .add_layer();
