@@ -37,6 +37,7 @@ impl io::Read for IoInner {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
         if let Some(mut buf) = self.source.take() {
             if buf.is_empty() {
+                self.pool.release_read_buf(buf);
                 Err(io::Error::from(io::ErrorKind::WouldBlock))
             } else {
                 let len = cmp::min(buf.len(), dst.len());
@@ -155,6 +156,8 @@ impl FilterLayer for SslFilter {
                 buf.with_dst(|dst| {
                     let mut new_bytes = usize::from(self.handshake.get());
                     loop {
+                        buf.resize_buf(dst);
+
                         let chunk: &mut [u8] =
                             unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
                         let ssl_result = self.inner.borrow_mut().ssl_read(chunk);

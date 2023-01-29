@@ -23,8 +23,8 @@ impl Stack {
     pub(crate) fn add_layer(&mut self) {
         match &mut self.buffers {
             Either::Left(b) => {
+                // move to vec
                 if self.len == 3 {
-                    // move to vec
                     let mut vec = vec![(Cell::new(None), Cell::new(None))];
                     for item in b.iter_mut().take(self.len) {
                         vec.push((Cell::new(item.0.take()), Cell::new(item.1.take())));
@@ -143,12 +143,15 @@ impl Stack {
 
     pub(crate) fn with_read_destination<F, R>(&self, io: &IoRef, f: F) -> R
     where
-        F: FnOnce(&mut Option<BytesVec>) -> R,
+        F: FnOnce(&mut BytesVec) -> R,
     {
         let item = self.get_first_level();
         let mut rb = item.0.take();
+        if rb.is_none() {
+            rb = Some(io.memory_pool().get_read_buf());
+        }
 
-        let result = f(&mut rb);
+        let result = f(rb.as_mut().unwrap());
         if let Some(b) = rb {
             if b.is_empty() {
                 io.memory_pool().release_read_buf(b);
@@ -271,6 +274,12 @@ impl<'a> ReadBuf<'a> {
     }
 
     #[inline]
+    /// Make sure buffer has enough free space
+    pub fn resize_buf(&self, buf: &mut BytesVec) {
+        self.io.memory_pool().resize_read_buf(buf);
+    }
+
+    #[inline]
     /// Get reference to source read buffer
     pub fn with_src<F, R>(&self, f: F) -> R
     where
@@ -298,11 +307,6 @@ impl<'a> ReadBuf<'a> {
         let mut item = self.curr.0.take();
         if item.is_none() {
             item = Some(self.io.memory_pool().get_read_buf());
-        } else {
-            // make sure we've got room
-            self.io
-                .memory_pool()
-                .resize_read_buf(item.as_mut().unwrap());
         }
         let result = f(item.as_mut().unwrap());
         if let Some(b) = item {
@@ -397,6 +401,12 @@ impl<'a> WriteBuf<'a> {
     /// Initiate graceful io stream shutdown
     pub fn want_shutdown(&self) {
         self.io.want_shutdown()
+    }
+
+    #[inline]
+    /// Make sure buffer has enough free space
+    pub fn resize_buf(&self, buf: &mut BytesVec) {
+        self.io.memory_pool().resize_write_buf(buf);
     }
 
     #[inline]

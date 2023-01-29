@@ -30,7 +30,6 @@ impl ReadContext {
 
             // call provided callback
             let result = f(buf, hw, lw);
-
             let total2 = buf.len();
             let nbytes = if total2 > total { total2 - total } else { 0 };
             (result, nbytes, total2)

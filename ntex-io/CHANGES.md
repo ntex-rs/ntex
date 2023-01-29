@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.7] - 2023-01-29
+
+* Refactor buffer api
+
 ## [0.2.6] - 2023-01-27
 
 * Add IoRef::with_rw_buf() helper

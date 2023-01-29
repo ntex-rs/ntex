@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.4] - 2023-01-29
+
+* Update buffer api
+
 ## [0.2.3] - 2023-01-25
 
 * Fix double buf cleanup

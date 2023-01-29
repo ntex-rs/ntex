@@ -684,8 +684,7 @@ where
                 // read request payload
                 let mut updated = false;
                 loop {
-                    let res = io.poll_recv(&payload.0, cx);
-                    match res {
+                    match io.poll_recv(&payload.0, cx) {
                         Poll::Ready(Ok(PayloadItem::Chunk(chunk))) => {
                             updated = true;
                             payload.1.feed_data(chunk);
@@ -945,6 +944,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_pipeline_with_payload() {
+        env_logger::init();
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
