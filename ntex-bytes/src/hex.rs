@@ -6,7 +6,7 @@ struct BytesRef<'a>(&'a [u8]);
 impl<'a> LowerHex for BytesRef<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         for b in self.0 {
-            write!(f, "{:02x}", b)?;
+            write!(f, "{b:02x}")?;
         }
         Ok(())
     }
@@ -15,7 +15,7 @@ impl<'a> LowerHex for BytesRef<'a> {
 impl<'a> UpperHex for BytesRef<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         for b in self.0 {
-            write!(f, "{:02X}", b)?;
+            write!(f, "{b:02X}")?;
         }
         Ok(())
     }
