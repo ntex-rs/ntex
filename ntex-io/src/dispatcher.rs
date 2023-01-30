@@ -71,7 +71,7 @@ enum DispatcherError<S, U> {
 
 enum PollService<U: Encoder + Decoder> {
     Item(DispatchItem<U>),
-    ServiceError,
+    Continue,
     Ready,
 }
 
@@ -244,7 +244,7 @@ where
                             }
                         }
                         PollService::Item(item) => item,
-                        PollService::ServiceError => continue,
+                        PollService::Continue => continue,
                     };
 
                     // call service
@@ -269,7 +269,7 @@ where
                             }
                         }
                         PollService::Item(item) => item,
-                        PollService::ServiceError => continue,
+                        PollService::Continue => continue,
                     };
 
                     // call service
@@ -357,7 +357,7 @@ where
                         }
                         DispatcherError::Service(err) => {
                             self.error.set(Some(err));
-                            PollService::ServiceError
+                            PollService::Continue
                         }
                     }
                 } else {
@@ -375,7 +375,7 @@ where
                 self.st.set(DispatcherState::Stop);
                 self.error.set(Some(err));
                 self.insert_flags(Flags::READY_ERR);
-                Poll::Ready(PollService::ServiceError)
+                Poll::Ready(PollService::Continue)
             }
         }
     }
@@ -390,7 +390,7 @@ where
             IoStatusUpdate::Stop => {
                 log::trace!("dispatcher is instructed to stop during pause");
                 self.st.set(DispatcherState::Stop);
-                Poll::Ready(PollService::ServiceError)
+                Poll::Ready(PollService::Continue)
             }
             IoStatusUpdate::PeerGone(err) => {
                 log::trace!("peer is gone during pause, stopping dispatcher: {:?}", err);
