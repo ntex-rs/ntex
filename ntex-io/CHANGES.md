@@ -1,5 +1,11 @@
 # Changes
 
+## [0.2.9] - 2023-01-31
+
+* Register Dispatcher waker when service is not ready
+
+* Add Io::poll_read_pause() method, pauses read task and check io status
+
 ## [0.2.8] - 2023-01-30
 
 * Check for nested io operations

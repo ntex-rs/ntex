@@ -71,7 +71,7 @@ enum DispatcherError<S, U> {
 
 enum PollService<U: Encoder + Decoder> {
     Item(DispatchItem<U>),
-    ServiceError,
+    Continue,
     Ready,
 }
 
@@ -244,7 +244,7 @@ where
                             }
                         }
                         PollService::Item(item) => item,
-                        PollService::ServiceError => continue,
+                        PollService::Continue => continue,
                     };
 
                     // call service
@@ -269,7 +269,7 @@ where
                             }
                         }
                         PollService::Item(item) => item,
-                        PollService::ServiceError => continue,
+                        PollService::Continue => continue,
                     };
 
                     // call service
@@ -357,7 +357,7 @@ where
                         }
                         DispatcherError::Service(err) => {
                             self.error.set(Some(err));
-                            PollService::ServiceError
+                            PollService::Continue
                         }
                     }
                 } else {
@@ -367,8 +367,27 @@ where
             // pause io read task
             Poll::Pending => {
                 log::trace!("service is not ready, register dispatch task");
-                io.pause();
-                Poll::Pending
+                match ready!(io.poll_read_pause(cx)) {
+                    IoStatusUpdate::KeepAlive => {
+                        log::trace!("keep-alive error, stopping dispatcher during pause");
+                        self.st.set(DispatcherState::Stop);
+                        Poll::Ready(PollService::Item(DispatchItem::KeepAliveTimeout))
+                    }
+                    IoStatusUpdate::Stop => {
+                        log::trace!("dispatcher is instructed to stop during pause");
+                        self.st.set(DispatcherState::Stop);
+                        Poll::Ready(PollService::Continue)
+                    }
+                    IoStatusUpdate::PeerGone(err) => {
+                        log::trace!(
+                            "peer is gone during pause, stopping dispatcher: {:?}",
+                            err
+                        );
+                        self.st.set(DispatcherState::Stop);
+                        Poll::Ready(PollService::Item(DispatchItem::Disconnect(err)))
+                    }
+                    IoStatusUpdate::WriteBackpressure => Poll::Pending,
+                }
             }
             // handle service readiness error
             Poll::Ready(Err(err)) => {
@@ -376,7 +395,7 @@ where
                 self.st.set(DispatcherState::Stop);
                 self.error.set(Some(err));
                 self.insert_flags(Flags::READY_ERR);
-                Poll::Ready(PollService::ServiceError)
+                Poll::Ready(PollService::Continue)
             }
         }
     }
@@ -704,7 +723,6 @@ mod tests {
 
     #[ntex::test]
     async fn test_disconnect_during_read_backpressure() {
-        env_logger::init();
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
 
