@@ -152,6 +152,13 @@ impl Stack {
         }
 
         let result = f(rb.as_mut().unwrap());
+
+        // check nested updates
+        if item.0.take().is_some() {
+            log::error!("Nested read io operation is detected");
+            io.force_close();
+        }
+
         if let Some(b) = rb {
             if b.is_empty() {
                 io.memory_pool().release_read_buf(b);
@@ -191,6 +198,13 @@ impl Stack {
         let mut wb = item.1.take();
 
         let result = f(&mut wb);
+
+        // check nested updates
+        if item.1.take().is_some() {
+            log::error!("Nested write io operation is detected");
+            io.force_close();
+        }
+
         if let Some(b) = wb {
             if b.is_empty() {
                 io.memory_pool().release_write_buf(b);

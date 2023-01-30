@@ -76,6 +76,9 @@ impl Filter for Base {
 
         if flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
             Poll::Ready(ReadStatus::Terminate)
+        } else if flags.intersects(Flags::IO_STOPPING_FILTERS) {
+            self.0 .0.read_task.register(cx.waker());
+            Poll::Ready(ReadStatus::Ready)
         } else if flags.intersects(Flags::RD_PAUSED | Flags::RD_BUF_FULL) {
             self.0 .0.read_task.register(cx.waker());
             Poll::Pending
