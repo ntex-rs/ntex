@@ -407,13 +407,10 @@ mod tests {
 
     use ntex_bytes::{Bytes, PoolId, PoolRef};
     use ntex_codec::BytesCodec;
-    use ntex_util::future::Ready;
-    use ntex_util::time::{sleep, Millis};
-
-    use crate::testing::IoTest;
-    use crate::{io::Flags, Io, IoRef, IoStream};
+    use ntex_util::{future::Ready, time::sleep, time::Millis, time::Seconds};
 
     use super::*;
+    use crate::{io::Flags, testing::IoTest, Io, IoRef, IoStream};
 
     pub(crate) struct State(IoRef);
 
@@ -703,6 +700,55 @@ mod tests {
 
         // backpressure disabled
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1, 2]);
+    }
+
+    #[ntex::test]
+    async fn test_disconnect_during_read_backpressure() {
+        env_logger::init();
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+
+        let (disp, state) = Dispatcher::debug(
+            server,
+            BytesCodec,
+            ntex_util::services::inflight::InFlightService::new(
+                1,
+                ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| async move {
+                    match msg {
+                        DispatchItem::Item(_) => {
+                            sleep(Millis(500)).await;
+                            return Ok::<_, ()>(None);
+                        }
+                        _ => (),
+                    }
+                    Ok(None)
+                }),
+            ),
+        );
+        let disp = disp.keepalive_timeout(Seconds::ZERO);
+        let pool = PoolId::P10.pool_ref();
+        pool.set_read_params(1024, 512);
+        state.set_memory_pool(pool);
+
+        let (tx, rx) = ntex::channel::oneshot::channel();
+        ntex::rt::spawn(async move {
+            let _ = disp.await;
+            let _ = tx.send(());
+        });
+
+        let bytes = rand::thread_rng()
+            .sample_iter(&rand::distributions::Alphanumeric)
+            .take(1024)
+            .map(char::from)
+            .collect::<String>();
+        client.write(bytes.clone());
+        sleep(Millis(25)).await;
+        client.write(bytes);
+        sleep(Millis(25)).await;
+
+        // close read side
+        state.close();
+        let _ = rx.recv().await;
     }
 
     #[ntex::test]

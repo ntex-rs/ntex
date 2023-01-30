@@ -196,6 +196,8 @@ impl IoRef {
             log::debug!("start keep-alive timeout {:?}", timeout);
             self.0.insert_flags(Flags::KEEPALIVE);
             self.0.keepalive.set(timer::register(timeout, self));
+        } else {
+            self.0.remove_flags(Flags::KEEPALIVE);
         }
     }
 

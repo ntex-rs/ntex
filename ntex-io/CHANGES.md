@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.8] - 2023-01-30
+
+* Check for nested io operations
+
 ## [0.2.7] - 2023-01-29
 
 * Refactor buffer api

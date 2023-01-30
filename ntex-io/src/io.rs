@@ -350,8 +350,10 @@ impl<F> Io<F> {
     #[inline]
     /// Pause read task
     pub fn pause(&self) {
-        self.0 .0.read_task.wake();
-        self.0 .0.insert_flags(Flags::RD_PAUSED);
+        if !self.0.flags().contains(Flags::RD_PAUSED) {
+            self.0 .0.read_task.wake();
+            self.0 .0.insert_flags(Flags::RD_PAUSED);
+        }
     }
 
     #[inline]
