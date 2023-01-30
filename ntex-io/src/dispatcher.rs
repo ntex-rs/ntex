@@ -367,8 +367,7 @@ where
             // pause io read task
             Poll::Pending => {
                 log::trace!("service is not ready, register dispatch task");
-                io.pause();
-                Poll::Pending
+                self.poll_pause(cx, io)
             }
             // handle service readiness error
             Poll::Ready(Err(err)) => {
@@ -378,6 +377,27 @@ where
                 self.insert_flags(Flags::READY_ERR);
                 Poll::Ready(PollService::ServiceError)
             }
+        }
+    }
+
+    fn poll_pause(&self, cx: &mut Context<'_>, io: &IoBoxed) -> Poll<PollService<U>> {
+        match ready!(io.poll_read_pause(cx)) {
+            IoStatusUpdate::KeepAlive => {
+                log::trace!("keep-alive error, stopping dispatcher during pause");
+                self.st.set(DispatcherState::Stop);
+                Poll::Ready(PollService::Item(DispatchItem::KeepAliveTimeout))
+            }
+            IoStatusUpdate::Stop => {
+                log::trace!("dispatcher is instructed to stop during pause");
+                self.st.set(DispatcherState::Stop);
+                Poll::Ready(PollService::ServiceError)
+            }
+            IoStatusUpdate::PeerGone(err) => {
+                log::trace!("peer is gone during pause, stopping dispatcher: {:?}", err);
+                self.st.set(DispatcherState::Stop);
+                Poll::Ready(PollService::Item(DispatchItem::Disconnect(err)))
+            }
+            IoStatusUpdate::WriteBackpressure => Poll::Pending,
         }
     }
 

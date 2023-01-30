@@ -537,6 +537,19 @@ impl<F> Io<F> {
     }
 
     #[inline]
+    /// Pause read task
+    ///
+    /// Returns status updates
+    pub fn poll_read_pause(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
+        self.pause();
+        let result = self.poll_status_update(cx);
+        if result.is_pending() {
+            self.0 .0.dispatch_task.register(cx.waker());
+        }
+        result
+    }
+
+    #[inline]
     /// Wait for status updates
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let flags = self.flags();
