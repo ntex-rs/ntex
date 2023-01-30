@@ -543,7 +543,7 @@ impl<F> Io<F> {
     pub fn poll_read_pause(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         self.pause();
         let result = self.poll_status_update(cx);
-        if result.is_pending() {
+        if !result.is_pending() {
             self.0 .0.dispatch_task.register(cx.waker());
         }
         result
