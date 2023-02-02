@@ -1,5 +1,5 @@
 //! A UTF-8 encoded read-only string using Bytes as storage.
-use std::{borrow, convert::TryFrom, fmt, hash, ops, slice, str};
+use std::{borrow, fmt, hash, ops, slice, str};
 
 use crate::{Bytes, BytesMut, BytesVec};
 

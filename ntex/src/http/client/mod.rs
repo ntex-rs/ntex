@@ -16,7 +16,7 @@
 //!     println!("Response: {:?}", response);
 //! }
 //! ```
-use std::{convert::TryFrom, rc::Rc};
+use std::rc::Rc;
 
 mod builder;
 mod connect;

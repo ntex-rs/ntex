@@ -1,5 +1,5 @@
 //! Websockets client
-use std::{cell::RefCell, convert::TryFrom, fmt, marker, net, rc::Rc, str};
+use std::{cell::RefCell, fmt, marker, net, rc::Rc, str};
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl;

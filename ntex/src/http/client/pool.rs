@@ -617,7 +617,7 @@ impl Drop for Acquired {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, convert::TryFrom, rc::Rc};
+    use std::{cell::RefCell, rc::Rc};
 
     use super::*;
     use crate::{

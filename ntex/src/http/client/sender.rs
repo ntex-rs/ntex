@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{convert::TryFrom, error::Error, future::Future, net, pin::Pin, rc::Rc};
+use std::{error::Error, future::Future, net, pin::Pin, rc::Rc};
 
 use serde::Serialize;
 

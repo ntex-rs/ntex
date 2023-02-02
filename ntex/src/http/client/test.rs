@@ -1,6 +1,4 @@
 //! Test helpers for ntex http client to use during testing.
-use std::convert::TryFrom;
-
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 

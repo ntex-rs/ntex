@@ -1,4 +1,4 @@
-use std::{convert::TryInto, net::SocketAddr, rc::Rc, task::Context, task::Poll};
+use std::{net::SocketAddr, rc::Rc, task::Context, task::Poll};
 
 use log::error;
 

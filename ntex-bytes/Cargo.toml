@@ -9,7 +9,7 @@ repository = "https://github.com/ntex-rs"
 readme = "README.md"
 keywords = ["buffers", "zero-copy", "io"]
 categories = ["network-programming", "data-structures"]
-edition = "2018"
+edition = "2021"
 
 [features]
 default = []

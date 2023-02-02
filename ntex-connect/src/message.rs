@@ -1,5 +1,5 @@
 use std::collections::{vec_deque, VecDeque};
-use std::{fmt, iter::FromIterator, iter::FusedIterator, net::SocketAddr};
+use std::{fmt, iter::FusedIterator, net::SocketAddr};
 
 use ntex_util::future::Either;
 

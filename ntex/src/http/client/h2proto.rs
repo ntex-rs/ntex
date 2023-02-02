@@ -1,4 +1,4 @@
-use std::{cell::RefCell, convert::TryFrom, io, rc::Rc};
+use std::{cell::RefCell, io, rc::Rc};
 
 use ntex_h2::{self as h2, client::Client, frame};
 

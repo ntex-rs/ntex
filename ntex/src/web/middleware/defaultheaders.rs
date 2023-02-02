@@ -1,5 +1,5 @@
 //! Middleware for setting default response headers
-use std::{convert::TryFrom, rc::Rc};
+use std::rc::Rc;
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};

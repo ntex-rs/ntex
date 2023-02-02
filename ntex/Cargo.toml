@@ -11,7 +11,7 @@ categories = ["network-programming", "asynchronous",
               "web-programming::http-server",
               "web-programming::websocket"]
 license = "MIT"
-edition = "2018"
+edition = "2021"
 
 [package.metadata.docs.rs]
 features = ["tokio", "openssl", "rustls", "compress", "cookie"]

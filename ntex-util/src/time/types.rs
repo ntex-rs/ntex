@@ -1,4 +1,4 @@
-use std::{convert::TryInto, ops};
+use std::ops;
 
 /// A Duration type to represent a span of time.
 ///

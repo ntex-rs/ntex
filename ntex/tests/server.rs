@@ -119,7 +119,7 @@ async fn test_run() {
     assert_eq!(buf, b"test"[..]);
 
     // stop
-    let _ = srv.stop(false).await;
+    srv.stop(false).await;
     thread::sleep(time::Duration::from_millis(100));
     assert!(net::TcpStream::connect(addr).is_err());
 

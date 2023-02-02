@@ -638,7 +638,6 @@ mod tests {
     #[test]
     fn test_parse_urlencoded() {
         use http::Uri;
-        use std::convert::TryFrom;
 
         let tree = Tree::new(&ResourceDef::new("/user/{id}/test"), 1);
         let uri = Uri::try_from("/user/2345/test").unwrap();
@@ -677,7 +676,6 @@ mod tests {
     #[test]
     fn test_extract_path_decode() {
         use http::Uri;
-        use std::convert::TryFrom;
 
         let tree = Tree::new(&ResourceDef::new("/{id}/"), 1);
 

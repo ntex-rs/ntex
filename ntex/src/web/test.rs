@@ -1,7 +1,5 @@
 //! Various helpers for ntex applications to use during testing.
-use std::{
-    convert::TryFrom, error::Error, fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread,
-};
+use std::{error::Error, fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread};
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;

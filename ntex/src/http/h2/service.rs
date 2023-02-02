@@ -1,5 +1,5 @@
 use std::{cell::RefCell, io, task::Context, task::Poll};
-use std::{convert::TryFrom, marker::PhantomData, mem, rc::Rc};
+use std::{marker::PhantomData, mem, rc::Rc};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
