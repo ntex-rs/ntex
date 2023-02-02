@@ -732,14 +732,12 @@ mod tests {
             ntex_util::services::inflight::InFlightService::new(
                 1,
                 ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| async move {
-                    match msg {
-                        DispatchItem::Item(_) => {
-                            sleep(Millis(500)).await;
-                            return Ok::<_, ()>(None);
-                        }
-                        _ => (),
+                    if let DispatchItem::Item(_) = msg {
+                        sleep(Millis(500)).await;
+                        Ok::<_, ()>(None)
+                    } else {
+                        Ok(None)
                     }
-                    Ok(None)
                 }),
             ),
         );

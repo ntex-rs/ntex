@@ -136,7 +136,7 @@ mod tests {
         type Future = Ready<Io<Layer<TestFilter, F>>, Self::Error>;
 
         fn create(self, st: Io<F>) -> Self::Future {
-            Ready::Ok(st.add_filter(TestFilter).into())
+            Ready::Ok(st.add_filter(TestFilter))
         }
     }
 
@@ -163,12 +163,9 @@ mod tests {
         let (_, server) = IoTest::create();
         let io = Io::new(server);
         let ioref = io.get_ref();
-        let mut stack = Stack::new();
+        let stack = Stack::new();
         assert!(NullFilter.query(std::any::TypeId::of::<()>()).is_none());
-        assert!(NullFilter
-            .shutdown(&ioref, &mut stack, 0)
-            .unwrap()
-            .is_ready());
+        assert!(NullFilter.shutdown(&ioref, &stack, 0).unwrap().is_ready());
         assert_eq!(
             ntex_util::future::poll_fn(|cx| NullFilter.poll_read_ready(cx)).await,
             crate::ReadStatus::Terminate
@@ -177,11 +174,9 @@ mod tests {
             ntex_util::future::poll_fn(|cx| NullFilter.poll_write_ready(cx)).await,
             crate::WriteStatus::Terminate
         );
-        assert!(NullFilter.process_write_buf(&ioref, &mut stack, 0).is_ok());
+        assert!(NullFilter.process_write_buf(&ioref, &stack, 0).is_ok());
         assert_eq!(
-            NullFilter
-                .process_read_buf(&ioref, &mut stack, 0, 0)
-                .unwrap(),
+            NullFilter.process_read_buf(&ioref, &stack, 0, 0).unwrap(),
             Default::default()
         )
     }
