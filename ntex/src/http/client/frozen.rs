@@ -1,4 +1,4 @@
-use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc};
+use std::{error::Error, fmt, net, rc::Rc};
 
 use crate::http::body::Body;
 use crate::http::error::HttpError;

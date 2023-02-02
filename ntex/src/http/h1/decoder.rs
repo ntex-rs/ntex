@@ -1,4 +1,4 @@
-use std::{cell::Cell, convert::TryFrom, marker::PhantomData, mem, task::Poll};
+use std::{cell::Cell, marker::PhantomData, mem, task::Poll};
 
 use ntex_http::header::{HeaderName, HeaderValue};
 use ntex_http::{header, Method, StatusCode, Uri, Version};

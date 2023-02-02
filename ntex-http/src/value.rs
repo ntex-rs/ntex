@@ -4,7 +4,7 @@
     clippy::no_effect,
     clippy::missing_safety_doc
 )]
-use std::{cmp, convert::TryFrom, error::Error, fmt, str, str::FromStr};
+use std::{cmp, error::Error, fmt, str, str::FromStr};
 
 use ntex_bytes::{ByteString, Bytes};
 

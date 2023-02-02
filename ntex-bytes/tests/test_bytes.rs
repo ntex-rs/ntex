@@ -96,7 +96,6 @@ fn fmt() {
 #[test]
 fn fmt_write() {
     use std::fmt::Write;
-    use std::iter::FromIterator;
     let s = String::from_iter((0..10).map(|_| "abcdefg"));
 
     let mut a = BytesMut::with_capacity(64);

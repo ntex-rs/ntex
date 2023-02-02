@@ -1,4 +1,4 @@
-use std::{convert::TryFrom, error::Error, fmt, net, rc::Rc};
+use std::{error::Error, fmt, net, rc::Rc};
 
 use base64::{engine::general_purpose::STANDARD as base64, Engine};
 #[cfg(feature = "cookie")]

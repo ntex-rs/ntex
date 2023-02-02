@@ -256,8 +256,6 @@ async fn test_create() {
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_uri() {
-    use std::convert::TryFrom;
-
     let srv = test_server(|| {
         fn_service(|io: Io| async move {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
@@ -278,8 +276,6 @@ async fn test_uri() {
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_uri() {
-    use std::convert::TryFrom;
-
     let srv = test_server(|| {
         fn_service(|io: Io| async move {
             io.send(Bytes::from_static(b"test"), &BytesCodec)

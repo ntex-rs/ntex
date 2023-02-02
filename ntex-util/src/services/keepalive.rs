@@ -1,8 +1,5 @@
 use std::task::{Context, Poll};
-use std::{
-    cell::Cell, convert::Infallible, convert::TryInto, marker, time::Duration,
-    time::Instant,
-};
+use std::{cell::Cell, convert::Infallible, marker, time::Duration, time::Instant};
 
 use ntex_service::{Service, ServiceFactory};
 

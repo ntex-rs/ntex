@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{convert::TryFrom, future::Future, marker::PhantomData, pin::Pin};
+use std::{future::Future, marker::PhantomData, pin::Pin};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue};

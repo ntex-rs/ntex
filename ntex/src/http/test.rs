@@ -1,5 +1,5 @@
 //! Test helpers to use during testing.
-use std::{convert::TryFrom, net, str::FromStr, sync::mpsc, thread};
+use std::{net, str::FromStr, sync::mpsc, thread};
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};

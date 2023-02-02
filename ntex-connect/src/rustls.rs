@@ -1,4 +1,4 @@
-use std::{convert::TryFrom, io};
+use std::io;
 
 pub use ntex_tls::rustls::TlsFilter;
 pub use tls_rustls::{ClientConfig, ServerName};

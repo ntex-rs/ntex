@@ -1,5 +1,5 @@
 //! Http response
-use std::{cell::Ref, cell::RefMut, convert::TryFrom, error::Error, fmt, str};
+use std::{cell::Ref, cell::RefMut, error::Error, fmt, str};
 
 use serde::Serialize;
 

@@ -1,5 +1,4 @@
 use std::borrow::{Borrow, BorrowMut};
-use std::iter::{FromIterator, Iterator};
 use std::ops::{Deref, DerefMut, RangeBounds};
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
@@ -4049,7 +4048,7 @@ fn abort() {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, convert::TryFrom};
+    use std::collections::HashMap;
 
     use super::*;
 

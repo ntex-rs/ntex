@@ -1,6 +1,6 @@
 //! Request logging middleware
 use std::task::{Context, Poll};
-use std::{convert::TryFrom, env, error::Error, future::Future, pin::Pin, rc::Rc, time};
+use std::{env, error::Error, future::Future, pin::Pin, rc::Rc, time};
 use std::{fmt, fmt::Display, marker::PhantomData};
 
 use regex::Regex;

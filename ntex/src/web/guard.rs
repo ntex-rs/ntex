@@ -26,7 +26,6 @@
 //! }
 //! ```
 #![allow(non_snake_case)]
-use std::convert::TryFrom;
 
 use crate::http::{header, Method, RequestHead, Uri};
 

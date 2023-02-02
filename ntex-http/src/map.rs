@@ -1,5 +1,4 @@
 use std::collections::{self, hash_map, hash_map::Entry, VecDeque};
-use std::{convert::TryFrom, iter::FromIterator};
 
 use crate::{HeaderName, HeaderValue};
 
