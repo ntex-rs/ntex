@@ -7,11 +7,11 @@ use flate2::Compression;
 use rand::{distributions::Alphanumeric, Rng};
 use thiserror::Error;
 
-use ntex::http::body::Body;
 use ntex::http::header::{
     ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
     TRANSFER_ENCODING,
 };
+use ntex::http::{body::Body, client};
 use ntex::http::{Method, StatusCode};
 use ntex::time::{sleep, Millis, Seconds, Sleep};
 use ntex::util::{ready, Bytes, Ready, Stream};
@@ -1158,4 +1158,44 @@ async fn test_custom_error() {
 
     let tp = response.headers().get(CONTENT_TYPE).unwrap();
     assert_eq!("application/json", tp.to_str().unwrap());
+}
+
+#[ntex::test]
+async fn test_web_server() {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let sys = ntex::rt::System::new("test-server");
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let local_addr = tcp.local_addr().unwrap();
+        tx.send((sys.system(), local_addr)).unwrap();
+
+        let _ = sys.block_on(async move {
+            web::server(|| {
+                App::new().service(
+                    web::resource("/")
+                        .route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+                )
+            })
+            .client_timeout(Seconds(1))
+            .disconnect_timeout(Seconds(1))
+            .memory_pool(ntex_bytes::PoolId::P1)
+            .listen(tcp)
+            .unwrap()
+            .run()
+            .await
+        });
+    });
+    let (system, addr) = rx.recv().unwrap();
+
+    let client = client::Client::build().timeout(Seconds(30)).finish();
+
+    let response = client
+        .request(Method::GET, format!("http://{:?}/", addr))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+
+    system.stop();
 }

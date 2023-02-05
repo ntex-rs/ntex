@@ -1,7 +1,7 @@
 //! Request logging middleware
-use std::task::{Context, Poll};
-use std::{env, error::Error, future::Future, pin::Pin, rc::Rc, time};
-use std::{fmt, fmt::Display, marker::PhantomData};
+use std::task::{ready, Context, Poll};
+use std::{env, error::Error, future::Future};
+use std::{fmt, fmt::Display, marker::PhantomData, pin::Pin, rc::Rc, time};
 
 use regex::Regex;
 
@@ -184,12 +184,7 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
-        let res = match this.fut.poll(cx) {
-            Poll::Ready(Ok(res)) => res,
-            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-            Poll::Pending => return Poll::Pending,
-        };
-
+        let res = ready!(this.fut.poll(cx)?);
         if let Some(ref mut format) = this.format {
             for unit in &mut format.0 {
                 unit.render_response(res.response());
@@ -392,7 +387,8 @@ impl FormatText {
     fn render_request<E>(&mut self, now: time::SystemTime, req: &WebRequest<E>) {
         match *self {
             FormatText::RequestLine => {
-                *self = if req.query_string().is_empty() {
+                let q = req.query_string();
+                *self = if q.is_empty() {
                     FormatText::Str(format!(
                         "{} {} {:?}",
                         req.method(),
@@ -404,7 +400,7 @@ impl FormatText {
                         "{} {}?{} {:?}",
                         req.method(),
                         req.path(),
-                        req.query_string(),
+                        q,
                         req.version()
                     ))
                 };
@@ -478,7 +474,7 @@ mod tests {
 
         let req = TestRequest::with_header(
             header::USER_AGENT,
-            header::HeaderValue::from_static("NTEX-WEB"),
+            header::HeaderValue::from_static("NTEX"),
         )
         .to_srv_request();
         let res = srv.call(req).await.unwrap();
@@ -494,11 +490,41 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn test_request_line() {
+        let mut format = Format::new("%r");
+        let req = TestRequest::with_header(
+            header::USER_AGENT,
+            header::HeaderValue::from_static("NTEX"),
+        )
+        .uri("/test/route/yeah?q=test")
+        .to_srv_request();
+
+        let now = time::SystemTime::now();
+        for unit in &mut format.0 {
+            unit.render_request(now, &req);
+        }
+
+        let resp = HttpResponse::build(StatusCode::OK).force_close().finish();
+        for unit in &mut format.0 {
+            unit.render_response(&resp);
+        }
+
+        let render = |fmt: &mut fmt::Formatter<'_>| {
+            for unit in &format.0 {
+                unit.render(fmt, 1024, now)?;
+            }
+            Ok(())
+        };
+        let s = format!("{}", FormatDisplay(&render));
+        assert_eq!(s, "GET /test/route/yeah?q=test HTTP/1.1");
+    }
+
+    #[crate::rt_test]
     async fn test_url_path() {
         let mut format = Format::new("%T %U");
         let req = TestRequest::with_header(
             header::USER_AGENT,
-            header::HeaderValue::from_static("ACTIX-WEB"),
+            header::HeaderValue::from_static("NTEX"),
         )
         .uri("/test/route/yeah?q=test")
         .to_srv_request();
@@ -529,7 +555,7 @@ mod tests {
 
         let req = TestRequest::with_header(
             header::USER_AGENT,
-            header::HeaderValue::from_static("ACTIX-WEB"),
+            header::HeaderValue::from_static("NTEX"),
         )
         .to_srv_request();
 
@@ -553,7 +579,7 @@ mod tests {
         let s = format!("{}", FormatDisplay(&render));
         assert!(s.contains("GET / HTTP/1.1"));
         assert!(s.contains("200 1024"));
-        assert!(s.contains("ACTIX-WEB"));
+        assert!(s.contains("NTEX"));
     }
 
     #[crate::rt_test]

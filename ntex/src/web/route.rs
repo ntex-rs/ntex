@@ -263,11 +263,11 @@ array_routes!(12, a, b, c, d, e, f, g, h, i, j, k, l);
 
 #[cfg(test)]
 mod tests {
-    use crate::http::{Method, StatusCode};
+    use crate::http::{header, Method, StatusCode};
     use crate::time::{sleep, Millis};
     use crate::util::Bytes;
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
-    use crate::web::{self, error, App, DefaultError, HttpResponse};
+    use crate::web::{self, error, guard, App, DefaultError, HttpResponse};
 
     #[derive(serde::Serialize, PartialEq, Debug)]
     struct MyObject {
@@ -279,21 +279,26 @@ mod tests {
         let srv = init_service(
             App::new()
                 .service(web::resource("/test").route(vec![
-                    web::get().to(|| async { HttpResponse::Ok() }),
-                    web::put().to(|| async {
-                        Err::<HttpResponse, _>(error::ErrorBadRequest::<_, DefaultError>(
-                            "err",
-                        ))
-                    }),
-                    web::post().to(|| async {
-                        sleep(Millis(100)).await;
-                        HttpResponse::Created()
-                    }),
-                    web::delete().to(|| async {
-                        sleep(Millis(100)).await;
-                        Err::<HttpResponse, _>(error::ErrorBadRequest("err"))
-                    }),
-                ]))
+                        web::get().to(|| async { HttpResponse::Ok() }),
+                        web::put().to(|| async {
+                            Err::<HttpResponse, _>(
+                                error::ErrorBadRequest::<_, DefaultError>("err"),
+                            )
+                        }),
+                        web::post().to(|| async {
+                            sleep(Millis(100)).await;
+                            HttpResponse::Created()
+                        }),
+                        web::patch()
+                            .guard(guard::fn_guard(|req|
+                                req.headers().contains_key("content-type")
+                            ))
+                            .to(|| async { HttpResponse::Conflict() }),
+                        web::delete().to(|| async {
+                            sleep(Millis(100)).await;
+                            Err::<HttpResponse, _>(error::ErrorBadRequest("err"))
+                        }),
+                    ]))
                 .service(web::resource("/json").route(web::get().to(|| async {
                     sleep(Millis(25)).await;
                     web::types::Json(MyObject {
@@ -320,6 +325,19 @@ mod tests {
             .to_request();
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let req = TestRequest::with_uri("/test")
+            .method(Method::PATCH)
+            .to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+        let req = TestRequest::with_uri("/test")
+            .method(Method::PATCH)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .to_request();
+        let resp = call_service(&srv, req).await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
 
         let req = TestRequest::with_uri("/test")
             .method(Method::DELETE)
