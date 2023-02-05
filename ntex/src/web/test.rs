@@ -1,5 +1,5 @@
 //! Various helpers for ntex applications to use during testing.
-use std::{error::Error, fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread};
+use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread};
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
@@ -189,9 +189,9 @@ pub async fn read_body(mut res: WebResponse) -> Bytes {
 }
 
 /// Reads response's body and combines it to a Bytes objects
-pub async fn load_stream<S>(mut stream: S) -> Result<Bytes, Box<dyn Error>>
+pub async fn load_stream<S, E>(mut stream: S) -> Result<Bytes, E>
 where
-    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
+    S: Stream<Item = Result<Bytes, E>> + Unpin,
 {
     let mut data = BytesMut::new();
     while let Some(item) = stream_recv(&mut stream).await {
@@ -983,13 +983,18 @@ mod tests {
             .to_http_request();
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
         assert!(req.headers().contains_key(header::DATE));
-        // assert_eq!(req.peer_addr(), Some("127.0.0.1:8081".parse().unwrap()));
+        assert_eq!(req.peer_addr(), None);
         assert_eq!(&req.match_info()["test"], "123");
         assert_eq!(req.version(), Version::HTTP_2);
         let data = req.app_state::<u64>().unwrap();
         assert_eq!(*data, 20);
-
         assert_eq!(format!("{:?}", StreamType::Tcp), "StreamType::Tcp");
+
+        let mut req = TestRequest::with_header(header::CONTENT_TYPE, "application/json")
+            .to_srv_request();
+        let pl = req.take_payload();
+        let res = load_stream(pl).await.unwrap();
+        assert_eq!(res, &b""[..]);
     }
 
     #[crate::rt_test]

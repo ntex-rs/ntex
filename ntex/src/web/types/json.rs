@@ -462,6 +462,20 @@ mod tests {
         let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
         assert!(format!("{}", s.err().unwrap())
             .contains("Json payload size is bigger than allowed"));
+
+        let (req, mut pl) = TestRequest::default()
+            .header(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/json"),
+            )
+            .header(
+                header::CONTENT_LENGTH,
+                header::HeaderValue::from_static("16"),
+            )
+            .set_payload(Bytes::from_static(b"--name-: -test--"))
+            .to_http_parts();
+        let s = from_request::<Json<serde_json::Value>>(&req, &mut pl).await;
+        assert!(format!("{:?}", s.err().unwrap()).contains("Deserialize(Error("));
     }
 
     #[crate::rt_test]

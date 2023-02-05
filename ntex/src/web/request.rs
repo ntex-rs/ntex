@@ -326,13 +326,23 @@ mod tests {
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("text"),
         );
+        req.headers_mut().insert(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_static("text"),
+        );
         req.headers_mut().remove(header::CONTENT_TYPE);
         assert!(!req.headers().contains_key(header::CONTENT_TYPE));
         assert!(!req.message_headers().contains_key(header::CONTENT_TYPE));
+
+        let pl = req.take_payload();
+        req.set_payload(pl);
 
         req.extensions_mut().insert("TEXT".to_string());
         assert_eq!(req.message_extensions().get::<String>().unwrap(), "TEXT");
         req.message_extensions_mut().remove::<String>();
         assert!(!req.extensions().contains::<String>());
+
+        let t = format!("{:?}", req);
+        assert!(t.contains("\"authorization\": <REDACTED>"));
     }
 }

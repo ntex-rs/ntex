@@ -493,4 +493,16 @@ mod tests {
         assert!(Any(Get()).or(Trace()).check(r.head()));
         assert!(!Any(Get()).or(Get()).check(r.head()));
     }
+
+    #[test]
+    fn test_fn_guard() {
+        let req =
+            TestRequest::with_header(header::CONTENT_TYPE, "text/plain").to_http_request();
+
+        let g = fn_guard(|req| req.headers().contains_key("content-type"));
+        assert!(g.check(req.head()));
+
+        let g = |req: &RequestHead| req.headers().contains_key("content-type");
+        assert!(g.check(req.head()));
+    }
 }

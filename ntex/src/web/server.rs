@@ -221,7 +221,7 @@ where
     /// Set memory pool.
     ///
     /// Use specified memory pool for memory allocations.
-    pub fn memory_pool(&mut self, id: PoolId) -> &mut Self {
+    pub fn memory_pool(self, id: PoolId) -> Self {
         self.config.lock().unwrap().pool = id;
         self
     }

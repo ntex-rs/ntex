@@ -416,7 +416,9 @@ mod tests {
     #[crate::rt_test]
     async fn test_payload_config() {
         let req = TestRequest::default().to_http_request();
-        let cfg = PayloadConfig::default().mimetype(mime::APPLICATION_JSON);
+        let cfg = PayloadConfig::default()
+            .limit(5)
+            .mimetype(mime::APPLICATION_JSON);
         assert!(cfg.check_mimetype(&req).is_err());
 
         let req = TestRequest::with_header(
