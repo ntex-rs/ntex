@@ -264,6 +264,8 @@ mod tests {
         client.write(TEXT);
 
         let state = Io::new(server);
+        assert_eq!(state.get_ref(), state.get_ref());
+
         let msg = state.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
         assert_eq!(state.get_ref(), state.as_ref().clone());

@@ -835,3 +835,33 @@ impl Future for OnDisconnect {
         self.poll_ready(cx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ntex_codec::BytesCodec;
+
+    use super::*;
+    use crate::testing::IoTest;
+
+    #[ntex::test]
+    async fn test_recv() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let server = Io::new(server);
+        assert!(server.eq(&server));
+
+        server.0 .0.notify_keepalive();
+        let err = server.recv(&BytesCodec).await.err().unwrap();
+        assert!(format!("{:?}", err).contains("Keep-alive"));
+
+        server.0 .0.insert_flags(Flags::DSP_STOP);
+        let err = server.recv(&BytesCodec).await.err().unwrap();
+        assert!(format!("{:?}", err).contains("Dispatcher stopped"));
+
+        client.write("GET /test HTTP/1");
+        server.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
+        let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
+        assert_eq!(item, "GET /test HTTP/1");
+    }
+}
