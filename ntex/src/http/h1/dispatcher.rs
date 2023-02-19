@@ -219,6 +219,9 @@ where
                                     }
                                 }
                                 None
+                            } else if this.inner.flags.contains(Flags::UPGRADE_HND) {
+                                // continue on upgrade handler processing
+                                return Poll::Pending;
                             } else if this.inner.poll_io_closed(cx) {
                                 // check if io is closed
                                 *this.st = State::Stop;
