@@ -1,5 +1,9 @@
 # Changes
 
+## [0.6.3] - unreleased
+
+* http: Add `ClientResponse::headers_mut()` method
+
 ## [0.6.2] - 2023-01-24
 
 * Update ntex-io, ntex-tls deps
