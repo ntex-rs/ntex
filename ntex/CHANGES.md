@@ -3,6 +3,7 @@
 ## [0.6.3] - unreleased
 
 * http: Add `ClientResponse::headers_mut()` method
+* web: `AppConfig` can be created with custom parameters via `new()`
 
 ## [0.6.2] - 2023-01-24
 

@@ -19,7 +19,8 @@ struct AppConfigInner {
 }
 
 impl AppConfig {
-    pub(crate) fn new(secure: bool, addr: SocketAddr, host: String) -> Self {
+    /// Create an AppConfig instance.
+    pub fn new(secure: bool, addr: SocketAddr, host: String) -> Self {
         AppConfig(Rc::new(AppConfigInner { secure, host, addr }))
     }
 
