@@ -50,7 +50,7 @@ pub enum ConnectError {
     NoRecords,
 
     /// Connecting took too long
-    #[error("Timeout out while establishing connection")]
+    #[error("Timeout while establishing connection")]
     Timeout,
 
     /// Connector has been disconnected
@@ -115,7 +115,7 @@ pub enum SendRequestError {
     #[error("Http2 error {0}")]
     H2(#[from] ntex_h2::OperationError),
     /// Response took too long
-    #[error("Timeout out while waiting for response")]
+    #[error("Timeout while waiting for response")]
     Timeout,
     /// Tunnels are not supported for http2 connection
     #[error("Tunnels are not supported for http2 connection")]
