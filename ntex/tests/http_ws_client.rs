@@ -4,6 +4,8 @@ use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
 use ntex::io::{DispatchItem, Dispatcher, Io};
+use ntex::service::{fn_factory_with_config, fn_service};
+use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
 use ntex::{time::Seconds, util::ByteString, util::Bytes, util::Ready};
 
@@ -147,4 +149,38 @@ async fn test_keepalive_timeout() {
 
     let item = rx.recv().await;
     assert!(item.is_none());
+}
+
+#[ntex::test]
+async fn test_upgrade_handler_with_await() {
+    async fn service(_: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
+        Ok(None)
+    }
+
+    let srv = test_server(|| {
+        HttpService::build().finish(App::new().service(web::resource("/").route(web::to(
+            |req: HttpRequest| async move {
+                // some async context switch
+                ntex::time::sleep(ntex::time::Seconds::ZERO).await;
+
+                web::ws::start::<_, _, web::Error>(
+                    req,
+                    fn_factory_with_config(|_| async {
+                        Ok::<_, web::Error>(fn_service(service))
+                    }),
+                )
+                .await
+            },
+        ))))
+    });
+
+    let _ = ws::WsClient::build(srv.url("/"))
+        .address(srv.addr())
+        .timeout(Seconds(1))
+        .keepalive_timeout(Seconds(1))
+        .finish()
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
 }
