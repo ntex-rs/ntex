@@ -153,6 +153,7 @@ mod tokio {
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
         let rt = tok_io::runtime::Builder::new_current_thread()
             .enable_all()
+            .enable_timer()
             // .unhandled_panic(tok_io::runtime::UnhandledPanic::ShutdownRuntime)
             .build()
             .unwrap();

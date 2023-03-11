@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "0.4.7"
+version = "0.4.8"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -33,7 +33,7 @@ async-channel = "1.8.0"
 futures-core = "0.3"
 log = "0.4"
 
-tok-io = { version = "1", package = "tokio", default-features = false, features = ["rt", "net"], optional = true }
+tok-io = { version = "1", package = "tokio", default-features = false, features = ["rt", "net", "timer"], optional = true }
 async_std = { version = "1", package = "async-std", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

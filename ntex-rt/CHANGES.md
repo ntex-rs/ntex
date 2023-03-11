@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.8] - 2023-03-11
+
+* Enable tokio timer
+
 ## [0.4.7] - 2023-01-03
 
 * Add callback for task spawning
