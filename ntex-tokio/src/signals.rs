@@ -112,7 +112,7 @@ impl Future for Signals {
         {
             for (sig, stream, kind) in self.signals.iter_mut() {
                 loop {
-                    if let Poll::Ready(res) = Pin::new(&mut *stream).poll_recv(cx) {
+                    if Pin::new(&mut *stream).poll_recv(cx).is_ready() {
                         let handlers = SHANDLERS.with(|h| mem::take(&mut *h.borrow_mut()));
                         for sender in handlers {
                             let _ = sender.send(*sig);
