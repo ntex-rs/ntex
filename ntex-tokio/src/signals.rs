@@ -42,7 +42,11 @@ struct Signals {
     #[cfg(not(unix))]
     signal: Pin<Box<dyn Future<Output = std::io::Result<()>>>>,
     #[cfg(unix)]
-    signals: Vec<(Signal, tokio::signal::unix::Signal)>,
+    signals: Vec<(
+        Signal,
+        tokio::signal::unix::Signal,
+        tokio::signal::unix::SignalKind,
+    )>,
 }
 
 impl Signals {
@@ -70,7 +74,7 @@ impl Signals {
             let mut signals = Vec::new();
             for (kind, sig) in sig_map.iter() {
                 match unix::signal(*kind) {
-                    Ok(stream) => signals.push((*sig, stream)),
+                    Ok(stream) => signals.push((*sig, stream, *kind)),
                     Err(e) => log::error!(
                         "Cannot initialize stream handler for {:?} err: {}",
                         sig,
@@ -106,12 +110,26 @@ impl Future for Signals {
         }
         #[cfg(unix)]
         {
-            for (sig, fut) in self.signals.iter_mut() {
-                if Pin::new(fut).poll_recv(cx).is_ready() {
-                    let handlers = SHANDLERS.with(|h| mem::take(&mut *h.borrow_mut()));
-                    for sender in handlers {
-                        let _ = sender.send(*sig);
+            for (sig, stream, kind) in self.signals.iter_mut() {
+                loop {
+                    if let Poll::Ready(res) = Pin::new(&mut *stream).poll_recv(cx) {
+                        let handlers = SHANDLERS.with(|h| mem::take(&mut *h.borrow_mut()));
+                        for sender in handlers {
+                            let _ = sender.send(*sig);
+                        }
+                        match tokio::signal::unix::signal(*kind) {
+                            Ok(s) => {
+                                *stream = s;
+                                continue;
+                            }
+                            Err(e) => log::error!(
+                                "Cannot initialize stream handler for {:?} err: {}",
+                                sig,
+                                e
+                            ),
+                        }
                     }
+                    break;
                 }
             }
             Poll::Pending
