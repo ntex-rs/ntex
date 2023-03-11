@@ -3,6 +3,9 @@
 ## [0.6.3] - unreleased
 
 * http: Add `ClientResponse::headers_mut()` method
+
+* http: Don't stop h1 dispatcher on upgrade handler with await #178
+
 * web: `AppConfig` can be created with custom parameters via `new()`
 
 ## [0.6.2] - 2023-01-24
