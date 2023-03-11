@@ -1,6 +1,6 @@
 # Changes
 
-## [0.6.3] - unreleased
+## [0.6.3] - 2023-03-11
 
 * http: Add `ClientResponse::headers_mut()` method
 
