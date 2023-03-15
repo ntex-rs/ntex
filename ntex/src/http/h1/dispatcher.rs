@@ -9,7 +9,7 @@ use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::config::{DispatcherConfig, OnRequest};
 use crate::http::error::{DispatchError, ParseError, PayloadError, ResponseError};
-use crate::http::message::CurrentIo;
+use crate::http::message::{ConnectionType, CurrentIo};
 use crate::http::request::Request;
 use crate::http::response::Response;
 
@@ -58,6 +58,11 @@ enum State<B> {
     ReadPayload,
     #[error("State::SendPayload")]
     SendPayload { body: ResponseBody<B> },
+    #[error("State::SendPayloadAndStop")]
+    SendPayloadAndStop {
+        body: ResponseBody<B>,
+        boxed_io: Option<Box<(IoBoxed, Codec)>>,
+    },
     #[error("State::Upgrade")]
     Upgrade(Option<Request>),
     #[error("State::StopIo")]
@@ -187,23 +192,33 @@ where
                             match ready!(fut.poll(cx)) {
                                 Ok(res) => {
                                     let (msg, body) = res.into().into_parts();
-                                    let item = if let Some(item) = msg.head().take_io() {
+                                    let io = if let Some(item) = msg.head().take_io() {
                                         item
                                     } else {
-                                        log::trace!("Handler service consumed io, exit");
+                                        log::trace!("Handler service consumed io, stop");
                                         return Poll::Ready(Ok(()));
                                     };
 
-                                    let _ = item
+                                    io.1.set_ctype(ConnectionType::Close);
+                                    io.1.unset_streaming();
+                                    let result = io
                                         .0
-                                        .encode(Message::Item((msg, body.size())), &item.1);
-                                    match body.size() {
-                                        BodySize::None | BodySize::Empty => {}
-                                        _ => {
-                                            log::error!("Stream responses are not supported for upgrade requests");
+                                        .encode(Message::Item((msg, body.size())), &io.1);
+                                    if result.is_ok() {
+                                        match body.size() {
+                                            BodySize::None | BodySize::Empty => {
+                                                *this.st = State::StopIo(io)
+                                            }
+                                            _ => {
+                                                *this.st = State::SendPayloadAndStop {
+                                                    body,
+                                                    boxed_io: Some(io),
+                                                }
+                                            }
                                         }
+                                    } else {
+                                        *this.st = State::StopIo(io);
                                     }
-                                    *this.st = State::StopIo(item);
                                 }
                                 Err(e) => {
                                     log::error!(
@@ -309,6 +324,51 @@ where
                                 *this.st = st;
                                 break;
                             }
+                        }
+                    }
+                }
+                // send response body
+                State::SendPayloadAndStop {
+                    ref mut body,
+                    ref mut boxed_io,
+                } => {
+                    let io = boxed_io.as_ref().unwrap();
+
+                    if io.0.is_closed() {
+                        *this.st = State::Stop;
+                    } else {
+                        if let Poll::Ready(Err(err)) =
+                            _poll_request_payload(&io.0, &mut this.inner.payload, cx)
+                        {
+                            this.inner.error = Some(err);
+                        }
+                        loop {
+                            let _ = ready!(io.0.poll_flush(cx, false));
+                            let item = ready!(body.poll_next_chunk(cx));
+                            match item {
+                                Some(Ok(item)) => {
+                                    trace!("got response chunk: {:?}", item.len());
+                                    if let Err(e) =
+                                        io.0.encode(Message::Chunk(Some(item)), &io.1)
+                                    {
+                                        trace!("Cannot encode chunk: {:?}", e);
+                                    } else {
+                                        continue;
+                                    }
+                                }
+                                None => {
+                                    trace!("response payload eof {:?}", this.inner.flags);
+                                    if let Err(e) = io.0.encode(Message::Chunk(None), &io.1)
+                                    {
+                                        trace!("Cannot encode payload eof: {:?}", e);
+                                    }
+                                }
+                                Some(Err(e)) => {
+                                    trace!("error during response body poll: {:?}", e);
+                                }
+                            }
+                            *this.st = State::StopIo(boxed_io.take().unwrap());
+                            break;
                         }
                     }
                 }
@@ -647,89 +707,7 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), DispatchError>> {
-        // check if payload data is required
-        let payload = if let Some(ref mut payload) = self.payload {
-            payload
-        } else {
-            return Poll::Ready(Ok(()));
-        };
-        match payload.1.poll_data_required(cx) {
-            PayloadStatus::Read => {
-                let io = &self.io;
-
-                // read request payload
-                let mut updated = false;
-                loop {
-                    match io.poll_recv(&payload.0, cx) {
-                        Poll::Ready(Ok(PayloadItem::Chunk(chunk))) => {
-                            updated = true;
-                            payload.1.feed_data(chunk);
-                        }
-                        Poll::Ready(Ok(PayloadItem::Eof)) => {
-                            updated = true;
-                            payload.1.feed_eof();
-                            self.payload = None;
-                            break;
-                        }
-                        Poll::Ready(Err(err)) => {
-                            let err = match err {
-                                RecvError::WriteBackpressure => {
-                                    if io.poll_flush(cx, false)?.is_pending() {
-                                        break;
-                                    } else {
-                                        continue;
-                                    }
-                                }
-                                RecvError::KeepAlive => {
-                                    payload.1.set_error(PayloadError::EncodingCorrupted);
-                                    self.payload = None;
-                                    io::Error::new(io::ErrorKind::Other, "Keep-alive")
-                                        .into()
-                                }
-                                RecvError::Stop => {
-                                    payload.1.set_error(PayloadError::EncodingCorrupted);
-                                    self.payload = None;
-                                    io::Error::new(
-                                        io::ErrorKind::Other,
-                                        "Dispatcher stopped",
-                                    )
-                                    .into()
-                                }
-                                RecvError::PeerGone(err) => {
-                                    payload.1.set_error(PayloadError::EncodingCorrupted);
-                                    self.payload = None;
-                                    if let Some(err) = err {
-                                        DispatchError::PeerGone(Some(err))
-                                    } else {
-                                        ParseError::Incomplete.into()
-                                    }
-                                }
-                                RecvError::Decoder(e) => {
-                                    payload.1.set_error(PayloadError::EncodingCorrupted);
-                                    self.payload = None;
-                                    DispatchError::Parse(e)
-                                }
-                            };
-                            return Poll::Ready(Err(err));
-                        }
-                        Poll::Pending => break,
-                    }
-                }
-                if updated {
-                    Poll::Ready(Ok(()))
-                } else {
-                    Poll::Pending
-                }
-            }
-            PayloadStatus::Pause => Poll::Pending,
-            PayloadStatus::Dropped => {
-                // service call is not interested in payload
-                // wait until future completes and then close
-                // connection
-                self.payload = None;
-                Poll::Ready(Err(DispatchError::PayloadIsNotConsumed))
-            }
-        }
+        _poll_request_payload(&self.io, &mut self.payload, cx)
     }
 
     /// check for io changes, could close while waiting for service call
@@ -742,6 +720,91 @@ where
                 | IoStatusUpdate::PeerGone(_),
             ) => true,
             Poll::Ready(IoStatusUpdate::WriteBackpressure) => false,
+        }
+    }
+}
+
+/// Process request's payload
+fn _poll_request_payload<F>(
+    io: &Io<F>,
+    slf_payload: &mut Option<(PayloadDecoder, PayloadSender)>,
+    cx: &mut Context<'_>,
+) -> Poll<Result<(), DispatchError>> {
+    // check if payload data is required
+    let payload = if let Some(ref mut payload) = slf_payload {
+        payload
+    } else {
+        return Poll::Ready(Ok(()));
+    };
+    match payload.1.poll_data_required(cx) {
+        PayloadStatus::Read => {
+            // read request payload
+            let mut updated = false;
+            loop {
+                match io.poll_recv(&payload.0, cx) {
+                    Poll::Ready(Ok(PayloadItem::Chunk(chunk))) => {
+                        updated = true;
+                        payload.1.feed_data(chunk);
+                    }
+                    Poll::Ready(Ok(PayloadItem::Eof)) => {
+                        updated = true;
+                        payload.1.feed_eof();
+                        *slf_payload = None;
+                        break;
+                    }
+                    Poll::Ready(Err(err)) => {
+                        let err = match err {
+                            RecvError::WriteBackpressure => {
+                                if io.poll_flush(cx, false)?.is_pending() {
+                                    break;
+                                } else {
+                                    continue;
+                                }
+                            }
+                            RecvError::KeepAlive => {
+                                payload.1.set_error(PayloadError::EncodingCorrupted);
+                                *slf_payload = None;
+                                io::Error::new(io::ErrorKind::Other, "Keep-alive").into()
+                            }
+                            RecvError::Stop => {
+                                payload.1.set_error(PayloadError::EncodingCorrupted);
+                                *slf_payload = None;
+                                io::Error::new(io::ErrorKind::Other, "Dispatcher stopped")
+                                    .into()
+                            }
+                            RecvError::PeerGone(err) => {
+                                payload.1.set_error(PayloadError::EncodingCorrupted);
+                                *slf_payload = None;
+                                if let Some(err) = err {
+                                    DispatchError::PeerGone(Some(err))
+                                } else {
+                                    ParseError::Incomplete.into()
+                                }
+                            }
+                            RecvError::Decoder(e) => {
+                                payload.1.set_error(PayloadError::EncodingCorrupted);
+                                *slf_payload = None;
+                                DispatchError::Parse(e)
+                            }
+                        };
+                        return Poll::Ready(Err(err));
+                    }
+                    Poll::Pending => break,
+                }
+            }
+            if updated {
+                Poll::Ready(Ok(()))
+            } else {
+                Poll::Pending
+            }
+        }
+        PayloadStatus::Pause => Poll::Pending,
+        PayloadStatus::Dropped => {
+            // service call is not interested in payload
+            // wait until future completes and then close
+            // connection
+            *slf_payload = None;
+            Poll::Ready(Err(DispatchError::PayloadIsNotConsumed))
         }
     }
 }
