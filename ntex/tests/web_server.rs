@@ -11,15 +11,12 @@ use ntex::http::header::{
     ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
     TRANSFER_ENCODING,
 };
-use ntex::http::{body::Body, client};
-use ntex::http::{Method, StatusCode};
+use ntex::http::{body::Body, client, ConnectionType, Method, StatusCode};
 use ntex::time::{sleep, Millis, Seconds, Sleep};
 use ntex::util::{ready, Bytes, Ready, Stream};
 
-use ntex::web::middleware::Compress;
-use ntex::web::{
-    self, test, App, BodyEncoding, HttpRequest, HttpResponse, WebResponseError,
-};
+use ntex::web::{self, middleware::Compress, test};
+use ntex::web::{App, BodyEncoding, HttpRequest, HttpResponse, WebResponseError};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -1198,4 +1195,44 @@ async fn test_web_server() {
     assert!(response.status().is_success());
 
     system.stop();
+}
+
+#[ntex::test]
+async fn web_no_ws_payload() {
+    let srv = test::server_with(test::config().h1(), || {
+        App::new()
+            .service(web::resource("/").route(web::get().to(move || async {
+                HttpResponse::Ok()
+                    .streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
+            })))
+            .service(
+                web::resource("/f")
+                    .route(web::get().to(move || async { HttpResponse::Ok().body(STR) })),
+            )
+    });
+
+    let client = client::Client::build().timeout(Seconds(30)).finish();
+    let mut response = client
+        .request(Method::GET, format!("http://{:?}/f", srv.addr()))
+        .header("sec-websocket-version", "13")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-key", "ld75/p3D5ju5UhWsNMcJHA==")
+        .set_connection_type(ConnectionType::Upgrade)
+        .send()
+        .await
+        .unwrap();
+    let body = response.body().await.unwrap();
+    assert_eq!(body, STR);
+
+    let mut response = client
+        .request(Method::GET, format!("http://{:?}/", srv.addr()))
+        .header("sec-websocket-version", "13")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-key", "ld75/p3D5ju5UhWsNMcJHA==")
+        .set_connection_type(ConnectionType::Upgrade)
+        .send()
+        .await
+        .unwrap();
+    let body = response.body().await.unwrap();
+    assert_eq!(body, STR);
 }

@@ -55,7 +55,13 @@ impl Clone for Codec {
 
 impl fmt::Debug for Codec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "h1::Codec({:?})", self.flags)
+        f.debug_struct("h1::Codec")
+            .field("version", &self.version)
+            .field("flags", &self.flags)
+            .field("ctype", &self.ctype)
+            .field("encoder", &self.encoder)
+            .field("decoder", &self.decoder)
+            .finish()
     }
 }
 
@@ -111,6 +117,12 @@ impl Codec {
     fn insert_flags(&self, f: Flags) {
         let mut flags = self.flags.get();
         flags.insert(f);
+        self.flags.set(flags);
+    }
+
+    pub(super) fn unset_streaming(&self) {
+        let mut flags = self.flags.get();
+        flags.remove(Flags::STREAM);
         self.flags.set(flags);
     }
 }

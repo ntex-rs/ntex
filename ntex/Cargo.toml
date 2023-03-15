@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.6.4"
+version = "0.6.5"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -76,7 +76,7 @@ pin-project-lite = "0.2"
 regex = { version = "1.7.0", default-features = false, features = ["std"] }
 sha-1 = "0.10"
 serde = { version = "1.0", features=["derive"] }
-socket2 = "0.4"
+socket2 = "0.5"
 thiserror = "1.0"
 
 # http/web framework

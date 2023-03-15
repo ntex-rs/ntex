@@ -217,6 +217,13 @@ impl ClientRequest {
         self
     }
 
+    #[inline]
+    /// Set connection type of the message
+    pub fn set_connection_type(mut self, ctype: ConnectionType) -> Self {
+        self.head.set_connection_type(ctype);
+        self
+    }
+
     /// Force close connection instead of returning it back to connections pool.
     /// This setting affect only http/1 connections.
     #[inline]

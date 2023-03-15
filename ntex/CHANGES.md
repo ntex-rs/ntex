@@ -1,5 +1,9 @@
 # Changes
 
+## [0.6.5] - 2023-03-15
+
+* web: Proper handling responses from ws web handler
+
 ## [0.6.4] - 2023-03-11
 
 * http: Add `ClientResponse::headers_mut()` method

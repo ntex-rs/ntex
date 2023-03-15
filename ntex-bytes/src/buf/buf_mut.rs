@@ -970,6 +970,7 @@ impl BufMut for &mut [u8] {
 fn _assert_trait_object(_b: &dyn BufMut) {}
 
 #[cfg(test)]
+#[allow(unused_allocation, warnings)]
 mod tests {
     use super::*;
     use crate::{BytesMut, BytesVec};
