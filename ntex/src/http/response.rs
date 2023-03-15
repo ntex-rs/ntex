@@ -452,7 +452,7 @@ impl ResponseBuilder {
     ///         .finish()
     /// }
     /// ```
-    pub fn cookie<'c>(&mut self, cookie: Cookie<'c>) -> &mut Self {
+    pub fn cookie(&mut self, cookie: Cookie<'_>) -> &mut Self {
         if self.cookies.is_none() {
             let mut jar = CookieJar::new();
             jar.add(cookie.into_owned());
@@ -479,7 +479,7 @@ impl ResponseBuilder {
     ///     builder.finish()
     /// }
     /// ```
-    pub fn del_cookie<'c>(&mut self, cookie: &Cookie<'c>) -> &mut Self {
+    pub fn del_cookie(&mut self, cookie: &Cookie<'_>) -> &mut Self {
         if self.cookies.is_none() {
             self.cookies = Some(CookieJar::new())
         }
