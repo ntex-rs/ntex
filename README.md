@@ -34,7 +34,8 @@ ntex = { version = "0.6", features = ["glommio"] }
 
 ## Documentation & community resources
 
-* [Documentation](https://docs.rs/ntex)
+* [Documentation](https://ntex.rs)
+* [Docs.rs](https://docs.rs/ntex)
 * Minimum supported Rust version: 1.65 or later
 
 ## License
