@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.8] - 2023-04-06
+
+* Add enter/exit fn for spawn_cbs #195
+
 ## [0.4.7] - 2023-01-03
 
 * Add callback for task spawning
