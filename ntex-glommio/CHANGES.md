@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.3] - 2023-04-08
+
+* Chore upgrade glommio to 0.8
+
 ## [0.2.2] - 2023-01-26
 
 * Update io api usage

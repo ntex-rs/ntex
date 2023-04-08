@@ -24,4 +24,4 @@ futures-lite = "1.12"
 log = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-glommio = "0.7"
+glommio = "0.8"

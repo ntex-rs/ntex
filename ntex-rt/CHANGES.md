@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.8] - 2023-04-08
+
+* Chore upgrade glommio to 0.8
+
 ## [0.4.7] - 2023-01-03
 
 * Add callback for task spawning
