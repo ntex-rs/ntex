@@ -1,6 +1,6 @@
 [package]
 name = "ntex-glommio"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "glommio intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
