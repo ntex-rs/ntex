@@ -1,5 +1,10 @@
 # Changes
 
+
+## [0.4.9] - 2023-04-08
+
+* Chore upgrade glommio to 0.8
+
 ## [0.4.8] - 2023-04-06
 
 * Add enter/exit fn for spawn_cbs #195

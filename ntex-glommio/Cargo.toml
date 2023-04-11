@@ -1,6 +1,6 @@
 [package]
 name = "ntex-glommio"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "glommio intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -24,4 +24,4 @@ futures-lite = "1.12"
 log = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-glommio = "0.7"
+glommio = "0.8"

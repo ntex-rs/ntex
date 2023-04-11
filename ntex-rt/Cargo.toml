@@ -33,9 +33,12 @@ async-channel = "1.8.0"
 futures-core = "0.3"
 log = "0.4"
 
-tok-io = { version = "1", package = "tokio", default-features = false, features = ["rt", "net"], optional = true }
+tok-io = { version = "1", package = "tokio", default-features = false, features = [
+    "rt",
+    "net",
+], optional = true }
 async_std = { version = "1", package = "async-std", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-glomm-io = { version = "0.7", package = "glommio", optional = true }
+glomm-io = { version = "0.8", package = "glommio", optional = true }
 futures-channel = { version = "0.3", optional = true }
