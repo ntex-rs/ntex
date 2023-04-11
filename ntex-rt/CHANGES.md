@@ -1,7 +1,6 @@
 # Changes
 
-
-## [0.4.9] - 2023-04-08
+## [0.4.9] - 2023-04-11
 
 * Chore upgrade glommio to 0.8
 
