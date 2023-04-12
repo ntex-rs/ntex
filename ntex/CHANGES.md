@@ -1,5 +1,9 @@
 # Changes
 
+## [0.6.6] - 2023-04-11
+
+* http: Better http2 config handling
+
 ## [0.6.5] - 2023-03-15
 
 * web: Proper handling responses from ws web handler
