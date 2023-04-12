@@ -19,7 +19,6 @@ use super::payload::{Payload, PayloadSender};
 pub struct H2Service<F, S, B> {
     srv: S,
     cfg: ServiceConfig,
-    h2config: h2::Config,
     _t: PhantomData<(F, B)>,
 }
 
@@ -38,7 +37,6 @@ where
         H2Service {
             cfg,
             srv: service.into_factory(),
-            h2config: h2::Config::server(),
             _t: PhantomData,
         }
     }
@@ -139,7 +137,6 @@ where
     fn create(&self, _: ()) -> Self::Future<'_> {
         let fut = self.srv.create(());
         let cfg = self.cfg.clone();
-        let h2config = self.h2config.clone();
 
         Box::pin(async move {
             let service = fut.await?;
@@ -147,7 +144,6 @@ where
 
             Ok(H2ServiceHandler {
                 config,
-                h2config,
                 _t: PhantomData,
             })
         })
@@ -157,7 +153,6 @@ where
 /// `Service` implementation for http/2 transport
 pub struct H2ServiceHandler<F, S: Service<Request>, B> {
     config: Rc<DispatcherConfig<S, (), ()>>,
-    h2config: h2::Config,
     _t: PhantomData<(F, B)>,
 }
 
@@ -192,18 +187,13 @@ where
             io.query::<types::PeerAddr>().get()
         );
 
-        Box::pin(handle(
-            io.into(),
-            self.config.clone(),
-            self.h2config.clone(),
-        ))
+        Box::pin(handle(io.into(), self.config.clone()))
     }
 }
 
 pub(in crate::http) async fn handle<S, B, X, U>(
     io: IoBoxed,
     config: Rc<DispatcherConfig<S, X, U>>,
-    h2config: h2::Config,
 ) -> Result<(), DispatchError>
 where
     S: Service<Request> + 'static,
@@ -218,7 +208,7 @@ where
 
     let _ = server::handle_one(
         io,
-        h2config,
+        config.h2config.clone(),
         ControlService::new(),
         PublishService::new(ioref, config),
     )

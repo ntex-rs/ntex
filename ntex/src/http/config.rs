@@ -107,6 +107,7 @@ pub(super) struct DispatcherConfig<S, X, U> {
     pub(super) keep_alive: Duration,
     pub(super) client_timeout: Duration,
     pub(super) client_disconnect: Seconds,
+    pub(super) h2config: h2::Config,
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
     pub(super) on_request: Option<OnRequest>,
@@ -129,6 +130,7 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
             client_timeout: Duration::from(cfg.0.client_timeout),
             client_disconnect: cfg.0.client_disconnect,
             ka_enabled: cfg.0.ka_enabled,
+            h2config: cfg.0.h2config.clone(),
             timer: cfg.0.timer.clone(),
         }
     }

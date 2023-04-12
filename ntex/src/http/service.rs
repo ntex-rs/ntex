@@ -279,11 +279,9 @@ where
                 None
             };
 
-            let h2config = cfg.0.h2config.clone();
             let config = DispatcherConfig::new(cfg, service, expect, upgrade, on_request);
 
             Ok(HttpServiceHandler {
-                h2config,
                 config: Rc::new(config),
                 _t: marker::PhantomData,
             })
@@ -294,7 +292,6 @@ where
 /// `Service` implementation for http transport
 pub struct HttpServiceHandler<F, S, B, X, U> {
     config: Rc<DispatcherConfig<S, X, U>>,
-    h2config: ntex_h2::Config,
     _t: marker::PhantomData<(F, B)>,
 }
 
@@ -380,11 +377,7 @@ where
         if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2) {
             HttpServiceHandlerResponse {
                 state: ResponseState::H2 {
-                    fut: Box::pin(h2::handle(
-                        io.into(),
-                        self.config.clone(),
-                        self.h2config.clone(),
-                    )),
+                    fut: Box::pin(h2::handle(io.into(), self.config.clone())),
                 },
             }
         } else {
