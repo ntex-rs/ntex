@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.1] - 2023-04-14
+
+* Add SharedService, a service that can be checked for readiness by multiple tasks
+
 ## [0.2.0] - 2023-01-04
 
 * Release
